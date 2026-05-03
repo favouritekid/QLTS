@@ -158,6 +158,20 @@ class AdmissionPath(Base):
         ),
     )
 
+    # phase1_02 (#184 Wave 1) — path-level bonus rule override above
+    # the method default. Same JSONB shape as
+    # AdmissionMethod.default_bonus_rule. NULL = inherit from method.
+    # Resolution precedence (PLAN line 787-789):
+    #   effective = path.bonus_rule_override
+    #               ?? method.default_bonus_rule
+    #               ?? {"apply_area_bonus": false, "apply_subject_bonus": false}
+    bonus_rule_override = Column(
+        JSONB,
+        nullable=True,
+        comment="Path-level bonus rule override above method default. "
+                "NULL = inherit from admission_method.default_bonus_rule."
+    )
+
     @property
     def requires_application_fee(self) -> bool:
         """Check if this admission path requires application fee payment."""

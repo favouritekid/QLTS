@@ -92,9 +92,45 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 Trade-off: smaller PRs (~2-3h each) vs more review cycles.
 
-**Pending user chốt before code starts:**
-- 3-PR split (recommended) hay 4-PR split?
-- After split chốt: implementer preflight PR-1A → code → review cycle.
+**Pending user chốt before code starts:** ~~3-PR vs 4-PR split~~ → user chốt **4-PR split** 2026-05-03.
+
+### #184 Wave 1 PR-1A — phase1_01 + phase1_02 (PR open, awaiting review/merge)
+
+**Branch / Commit / PR:**
+- Branch `feature/admission-184-pr-1a` off parent `2864df20` (preflight tracking).
+- PR [#205](https://github.com/favouritekid/QLTS/pull/205) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `83d05150`.
+- 2 migrations + 3 model updates + 1 unit test file.
+- Squash title: `[#184 Wave1] feat(schema): phase1_01 degree_level FK + phase1_02 bonus_rule`.
+
+**Migrations shipped:**
+1. `phase1_01_add_degree_level_fk_to_major_program.py`
+   - `revision='phase1_01'`, `down_revision='phase1_19b'` (chronological chain).
+   - ADD COLUMN `major_program.degree_level_id INT NULL FK → config_degree_level.id ON DELETE SET NULL`.
+   - Index `ix_major_program_degree_level_id` on FK column.
+   - Backfill SQL: JOIN `lower(trim(name))` between legacy text + config table; per-row idempotent guard `WHERE degree_level_id IS NULL`.
+   - Legacy `major_program.degree_level` text column STAYS — Phase 4 retire later.
+2. `phase1_02_add_bonus_rule_to_method_and_path.py`
+   - `revision='phase1_02'`, `down_revision='phase1_01'`.
+   - ADD COLUMN `admission_method.default_bonus_rule JSONB NULL`.
+   - ADD COLUMN `admission_path.bonus_rule_override JSONB NULL`.
+   - Pure additive — no backfill. Existing rows keep NULL = bonus disabled fallback per the precedence rule (PLAN line 787-789).
+
+**Model updates** (ORM parity với schema):
+- `MajorProgram.degree_level_id` (FK) added; legacy `degree_level` text comment updated to mark Phase 4 retire candidate.
+- `AdmissionMethod.default_bonus_rule` (JSONB) added with precedence-rule comment.
+- `AdmissionPath.bonus_rule_override` (JSONB) added with precedence-rule comment.
+
+**Tested / Rehearsed:**
+- Live dev DB roundtrip on parent branch HEAD: `alembic upgrade head` `phase1_19b → phase1_01 → phase1_02` clean; both columns + FK + index verified via `information_schema.columns`.
+- Backfill verified: 12 "Cao đẳng" + 8 "Trung cấp" rows correctly mapped to FK ids (22, 21).
+- Downgrade roundtrip: `alembic downgrade phase1_19b` → 0 columns left → re-upgrade `head` → 3 columns back. Symmetric.
+- Unit test `tests/unit/test_phase1_01_02_revision_chain.py`: **20 passed (0.98s)** locks: revision id + down_revision chain + linear (no branch labels) + idempotency guard substring + JSONB type + ORM model parity (FK column, JSONB columns, nullable=True) + downgrade DDL order + sanity upgrade/downgrade callables.
+- Live: AST lint 0 violations across 148 files; coverage script `--allow-deferred` exit 0 (no admission status / event surface touched in PR-1A).
+
+**Pending:**
+- Reviewer review + squash merge PR [#205](https://github.com/favouritekid/QLTS/pull/205).
+- Post-merge: parent tracking commit citing squash SHA + start PR-1B' (path advanced + BE schema + service + FE Zod).
 
 ---
 
