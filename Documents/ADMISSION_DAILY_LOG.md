@@ -56,10 +56,12 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
-### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (CODE_DONE local, push pending)
+### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (PR open, awaiting review/merge)
 
-**Branch / Commit:**
+**Branch / Commit / PR:**
 - Branch `feature/admission-ci-tooling` off parent `d5a01ba8` (post-#16 tracking).
+- PR [#204](https://github.com/favouritekid/QLTS/pull/204) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `d1d79f2c`.
 - Atomic 1-PR per user chốt — wraps CI-status + CI-event + CI-workflow + pre-commit hook to share 1 review cycle and avoid intermediate parent state where one extension landed without the integration glue.
 
 **Scope (3 of 3 CI rows on issue #183):**
@@ -92,8 +94,9 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Live: coverage script with `--allow-deferred --strict-namespace`: exit 1 (1 cohabitation pair elevated to FAIL — confirms the Phase 4 flip path).
 
 **Pending:**
-- Push approval từ user.
-- Sub-PR open base `feat/admission-full-cutover`.
+- Reviewer review + squash merge PR [#204](https://github.com/favouritekid/QLTS/pull/204).
+- Post-merge: tick `[x] **CI-status**`, `[x] **CI-event**`, `[x] **CI-workflow**` checkboxes on issue #183.
+- Post-merge: card #183 (`[Phase 1 Code]` thematic) moves `In Progress → Done` (all 7 sub-tasks ticked).
 
 ---
 
