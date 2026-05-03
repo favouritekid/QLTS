@@ -56,6 +56,36 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
+### B2.4 / T0-4b — sub-PR merged (post-merge sync)
+
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#200](https://github.com/favouritekid/QLTS/pull/200) — `[B2.4/T0-4b] feat(notification): replace outbox skeleton with real worker` — squash `737eb1bc` (mergedAt `2026-05-03T03:40:37Z`). Parent advanced `87685ff4 → 737eb1bc`.
+
+**Tested / Rehearsed:**
+- Post-merge full notification regression on parent HEAD `737eb1bc`:
+  ```
+  pytest tests/unit/test_outbox_worker.py \
+         tests/unit/test_outbox_skeleton.py \
+         tests/unit/test_dispatch_event_wrapper.py \
+         tests/unit/test_coverage_script_raw_dispatch.py \
+         tests/unit/test_notification_outbox_model.py \
+         tests/unit/test_notification_contract.py \
+         tests/unit/test_b2_1_admission_milestone_events.py \
+         tests/unit/test_celery_task_registry.py \
+         tests/api/test_notification_event_groups_api.py -q
+  → 177 passed, 1 skipped in 58.95s
+  ```
+- Coverage invariant: `raw_violations=0`, `no_dispatch=12`, `outbox=7`, `outbox_raw_sites=[]`. The 12 `no-dispatch-site` gaps remain expected until #16 wires `state_service.transition()` callers.
+- Alembic head unchanged: `phase1_19a (head)`.
+
+**Tracker / board:**
+- TRACKER: T0-4b → TESTED; B2 → TESTED; B2 blocker row CLOSED / TESTED.
+- Issue #183: `[x] **B2**` ticked after post-merge sync; card #183 stays In Progress because B1, #15, #16 and CI tooling remain open.
+- Task 0 card #181 can move to Done only after the team accepts TESTED-with-staging-smoke-pending as board Done; otherwise keep In Progress until D12-D14 staging smoke.
+
+**Next:**
+- **Start B1 — Casbin deny-first.** #16 remains blocked until B1 + B2 are both TESTED; #15 can follow B2 but the agreed sequence remains B2.1 → B2.4 → B1 → #15 → #16.
+
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
 - PR [#197](https://github.com/favouritekid/QLTS/pull/197) — `[ADM-B2.1] feat(notification): 12 ADMISSION milestone events catalog + group + seed` — squash `df2111a9` (mergedAt `2026-05-03T00:05:57Z`, mergedBy `favouritekid` via `gh pr merge --squash --delete-branch=false`). Parent advanced `910d2c4d → df2111a9`.
 
