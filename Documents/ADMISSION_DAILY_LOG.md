@@ -56,11 +56,12 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
-### #16 — admission_state_service.py + 11 caller refactor (CODE_DONE local, push pending)
+### #16 — admission_state_service.py + 11 caller refactor (PR open, awaiting review/merge)
 
-**Branch / Commit:**
+**Branch / Commit / PR:**
 - Branch `feature/admission-issue-16` off parent `3f7ead4d` (post-#15 tracking).
-- Commit on branch HEAD (pre-PR; see PR for authoritative squash SHA).
+- PR [#203](https://github.com/favouritekid/QLTS/pull/203) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `f25b6a1a`. (Subsequent commits on the branch — including this doc sync entry — will advance the head; squash merge will collapse to a single new SHA on parent.)
 - Atomic 1-PR per user chốt — avoids unused transition service intermediate state + parent state where caller refactor lands but coverage/lint truth doesn't.
 
 **Scope (8 of 12 ADMISSION_* events wired; 4 deferred to Phase 3):**
@@ -115,8 +116,9 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Service tests `tests/services/test_admission_service.py` + `test_admission_quota.py`: **45 errors at fixture setup** verified PRE-EXISTING on parent `3f7ead4d` (stash + same single test errors with same fixture marker). Memory `[test-debt-admission-workflow-e2e]` covers a subset (6 known); the broader 45 erroring tests are pre-existing finance fixture / dirty-state / Casbin drift debt — out of #16 scope per ATOMIC_PR rationale.
 
 **Pending:**
-- Push approval từ user.
-- Sub-PR open base `feat/admission-full-cutover`.
+- Reviewer review + squash merge PR [#203](https://github.com/favouritekid/QLTS/pull/203).
+- Post-merge: tick `[x] **#16**` checkbox on issue #183, parent tracking commit citing squash SHA.
+- Follow-up: open `test-debt/admission-fixture-isolation` PR (fixture race / `DeadlockDetectedError` + `pipeline_stage_order_key` UniqueViolation) — pre-existing per memory `[test-debt-admission-workflow-e2e]` 2026-04-30; broader scope than the 6-failure subset memory tracks.
 
 ---
 
