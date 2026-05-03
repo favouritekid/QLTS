@@ -264,6 +264,81 @@ The first cut of `_scan_raw_dispatch_calls()` only walked `node.keywords` for `e
 
 ---
 
+### B2.4 / T0-4b — `dispatch_pending_outbox` real worker (sub-PR opened)
+
+**Branch:** `feature/admission-b2-4` off parent `87685ff4` (= post B2.3 tracking commit, one commit beyond the `f2f0d62b` PR #199 squash). Strict scope: replace T0-4a no-op skeleton with the real claim/dispatch/finalize worker — KHÔNG touch `state_service` / admission service callers (#16 owns that wiring), Casbin/B1, or board checkbox B2.
+
+**Sub-PR opened:** [#200](https://github.com/favouritekid/QLTS/pull/200) — base `feat/admission-full-cutover`, head `feature/admission-b2-4` (head SHA `e806597a`). Mergeable: `MERGEABLE`, mergeStateStatus: `CLEAN`. **Do not merge** — review-only until further approval. Reviewer must NOT tick the `[ ] **B2**` checkbox on issue #183 — it stays unticked until this PR merges + post-merge tests pass on parent.
+
+**Implementation (`Backend_FastAPI/app/tasks/notification_outbox_tasks.py`):**
+
+Three-step pattern per PLAN §3.3.f. Module-level constants surface the tunables:
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `BATCH_LIMIT` | 100 | Max rows claimed per tick |
+| `MAX_ATTEMPTS` | 5 | DLQ threshold — rows ≥ this attempts excluded from claim filter |
+| `PER_ROW_TIMEOUT_SECONDS` | 5 | Lease seconds per claimed row |
+| `CLAIM_TIMEOUT_CAP_SECONDS` | 600 | Lease cap (10 min) |
+| `TASK_ID` | `"T0-4b"` | Result-dict discriminator (was `"T0-4a"` for skeleton) |
+
+- **Step 1 — `_claim_batch(session)`**: short tx with 2-step CTE. Inner CTE `candidates` does `SELECT id ... FOR UPDATE SKIP LOCKED ORDER BY created_at LIMIT 100` filtering `dispatched_at IS NULL AND attempts < MAX_ATTEMPTS AND (claimed_until IS NULL OR claimed_until < NOW())`. Outer `UPDATE ... WHERE id IN (SELECT id FROM candidates)` sets `claimed_at = NOW()`, `claimed_until = NOW() + (interval '1 second' * LEAST((SELECT COUNT(*) FROM candidates) * PER_ROW_TIMEOUT_SECONDS, CLAIM_TIMEOUT_CAP_SECONDS))`, `attempts = attempts + 1`, `RETURNING id, event_code, payload, idempotency_key`. Adaptive lease scales with actual claimed rowcount via the inline CTE `COUNT(*)` (Postgres materializes `candidates` once per statement, so the count + the `WHERE id IN (SELECT id ...)` share one rowset — no double-lock). The 2-step CTE matches PLAN's v2.3-fix pattern (avoids the v2.2 `UPDATE ... RETURNING ... fetchmany(100)` bug that mutated every pending row before the client cap kicked in).
+- **Step 2 — `_dispatch_each(session, pending)`**: per-row dispatch loop, NO claim lock held (Step 1's tx already committed before Step 2 starts; `task_db_session()` reuses session for connection efficiency). For each row: cast `event_code` string → `SystemEvents` enum (mark error if not in enum); `get_event(event)` lookup (mark error if not in catalog); call `dispatch(db=session, event=event, payload=payload, dedupe_key=idem_key, skip_preference_check=event_def.bypass_consent_check, strict=True)`; await `session.commit()`; await post-commit callback (best-effort — callback failures are logged but don't fail the row, mirroring `safe_dispatch()` convention). On exception: `session.rollback()` + record `(row_id, "error", str(e)[:1000])`. `strict=True` ensures persistence errors propagate so this loop can mark the row as failed instead of silently rolling back (memory `dispatch-bundle-strict-required`).
+- **Step 3 — `_finalize(session, results)`**: short tx, per-row UPDATE. `ok` rows: `dispatched_at = NOW(), claimed_until = NULL, last_error = NULL` (terminal — never re-claimed; `last_error` cleared so a successfully-retried row does not carry stale failure text). `error` rows: `last_error = :err, claimed_until = NULL` (release claim for retry until `attempts >= MAX_ATTEMPTS`).
+
+Worker uses raw `dispatch()` (not `dispatch_event()` wrapper) — IT IS the dispatcher for outbox events. Worker module is allowlisted in `app/scripts/check_notification_event_coverage.py::RAW_DISPATCH_ALLOWLIST` (per B2.3) so this raw call does not trigger the `raw-dispatch-of-outbox-event` gap.
+
+**Test surface:**
+
+- `tests/unit/test_outbox_skeleton.py` — RETIRED 2 skeleton-specific tests (`test_skeleton_module_does_not_reference_notification_outbox_in_code` + `test_skeleton_call_returns_stable_no_op_shape`); KEPT 8 registration / discoverability / package-init AST guards (beat schedule + cadence, `conf.include` lock, cold-import subprocess test, after-import register sanity, package re-export, autodiscover smoke, zero-required-arg signature, tasks-package init NotificationOutbox-free guard). File docstring rewritten to reflect the post-T0-4b purpose (registration contract that survived the body swap).
+- `tests/unit/test_outbox_worker.py` (NEW, 10 tests against real `qlts_test` DB via `setup_test_database` + `AsyncSessionLocal` seeding):
+  - `test_empty_queue_returns_zero_claimed`: empty table → `status=ok, claimed=0, task_id=T0-4b, reason=queue_empty`.
+  - `test_single_pending_row_dispatched_ok_marks_dispatched_at`: seeds 1 row, mocks `dispatch` returning `([], None)`, asserts dispatch called with right kwargs (`strict=True`, `skip_preference_check=True` for `ADMISSION_DECISION_ADMITTED` whose `bypass_consent_check=True`), row `dispatched_at` set, `claimed_until` cleared, `attempts=1`, `last_error` NULL.
+  - `test_post_commit_callback_is_awaited_when_dispatch_returns_one`: dispatch returns callable callback → worker awaits it (verified via `AsyncMock.assert_awaited_once`).
+  - `test_dispatch_failure_increments_attempts_writes_last_error`: mock `dispatch` raises → row `dispatched_at` NULL, `claimed_until` NULL, `attempts=1`, `last_error` contains the message.
+  - `test_expired_claim_is_re_claimable`: row pre-seeded with `claimed_until=2020-01-01` + `attempts=1` → worker re-claims, `attempts=2` after run.
+  - `test_active_claim_is_not_re_claimed`: row pre-seeded with `claimed_until=2099-01-01` → worker returns `claimed=0`, dispatch never called, row state unchanged.
+  - `test_max_attempts_excludes_row_from_claim`: row with `attempts=MAX_ATTEMPTS=5` → worker returns `claimed=0`, dispatch never called (DLQ).
+  - `test_retry_success_clears_prior_last_error`: pre-failed row (last_error set, expired lease, attempts=1) re-claimed and dispatched ok → `last_error` cleared along with `dispatched_at` set + `claimed_until` NULL + `attempts=2`. Locks the Step-3 ok-branch contract that a successful retry must not carry stale failure text.
+  - `test_single_row_claim_lease_is_per_row_seconds`: seed 1 row, call `_claim_batch` directly, inspect `claimed_until - claimed_at` ≈ `PER_ROW_TIMEOUT_SECONDS` (~5s) — NOT `BATCH_LIMIT * PER_ROW_TIMEOUT_SECONDS` (~500s). Locks the adaptive-lease contract: a 1-row claim holds a 5s lease, not the worst-case 500s.
+  - `test_mixed_batch_marks_each_row_independently`: 3 rows, dispatch alternates ok/fail/ok → `claimed=3 dispatched=2 failed=1`; row 0+2 dispatched, row 1 has `last_error`; per-row commit/rollback isolation verified (dispatch failure on row N does not poison N+1, N+2 in same batch).
+
+**Patches applied during review (Codex catch on 2026-05-03 before push):**
+
+1. **Step 3 ok branch must clear `last_error`**: a successfully-retried row would otherwise carry stale failure text from the prior attempt, making the operator chase non-existent issues. Added `last_error = NULL` to the ok-branch UPDATE alongside `dispatched_at = NOW()` + `claimed_until = NULL`. Locked by `test_retry_success_clears_prior_last_error`.
+2. **Adaptive lease per actual claim count**: the prior shape used `min(BATCH_LIMIT * PER_ROW_TIMEOUT_SECONDS, CLAIM_TIMEOUT_CAP_SECONDS)` for every claim — a 1-row claim got a 500s lease, blocking recovery for far longer than the work warranted. Refactored Step-1 SQL to compute the lease inline via `LEAST((SELECT COUNT(*) FROM candidates) * PER_ROW_TIMEOUT_SECONDS, CLAIM_TIMEOUT_CAP_SECONDS)` so the lease scales with the actual rowcount. Postgres materializes the CTE once per statement, so `COUNT(*)` and `WHERE id IN (SELECT id ...)` read the same materialized rowset — no double-locking. Locked by `test_single_row_claim_lease_is_per_row_seconds`.
+
+**Verification:**
+
+- `docker compose exec -T backend python -m pytest tests/unit/test_outbox_worker.py -q` → **10 passed in ~25s**.
+- `docker compose exec -T backend python -m pytest tests/unit/test_outbox_skeleton.py -q` → **8 passed in ~4s** (after retire of 2 skeleton-specific tests).
+- Full notification regression: `tests/unit/test_outbox_worker.py + test_outbox_skeleton.py + test_dispatch_event_wrapper.py + test_coverage_script_raw_dispatch.py + test_notification_outbox_model.py + test_notification_contract.py + test_b2_1_admission_milestone_events.py + test_celery_task_registry.py + tests/api/test_notification_event_groups_api.py` → **177 passed, 1 skipped in 58.62s** (the 1 skip = uncatalogued-enum branch in dispatch_event wrapper test, pre-existing).
+- Coverage script invariant (B2.3 detector unchanged):
+  - `python -m app.scripts.check_notification_event_coverage` → exit `1` with **12 expected `no-dispatch-site`** (admission_*, baseline preserved); will green after #16 wires `state_service.transition()` callers.
+  - **0 `raw-dispatch-of-outbox-event` violations** — worker's raw `dispatch()` call does not trigger the gap because `app/tasks/notification_outbox_tasks.py` is in `RAW_DISPATCH_ALLOWLIST` (per B2.3 design).
+- Alembic head unchanged: `phase1_19a (head)` (B2.4 doesn't touch DB schema).
+
+**Concurrency note (no-double-claim):**
+
+The worker relies on Postgres `FOR UPDATE SKIP LOCKED` at the connection level: two workers competing for the same row will see one of them claim it; the other's `SELECT ... FOR UPDATE SKIP LOCKED` skips the locked row. The tests cover the same guarantee from the SQL filter side — the active-lease test proves a row with `claimed_until > NOW()` is excluded by the predicate, which is what `FOR UPDATE SKIP LOCKED` resolves to during contention. A true two-process race test would require a multi-process harness; deferred to staging smoke (D12-D14) with two `celery-worker` replicas.
+
+**Out of scope (next code tasks, sequenced):**
+
+- **B1** Casbin deny-first — IS the next code task after B2.4 merge.
+- **#15** `approved → admitted` workflow remap + helpers — depends on B2.
+- **#16** — wire `state_service.transition()` to call `dispatch_event()` for the 12 admission events. **Blocked until B1 + B2 are both TESTED.** That's where the 12 `no-dispatch-site` gaps finally close.
+
+**Blocked / decisions cần:**
+
+- Review/merge PR [#200](https://github.com/favouritekid/QLTS/pull/200). Branch already pushed; sub-PR open against parent. Reviewer **MUST NOT** tick the `[ ] **B2**` checkbox on issue #183 — stays unticked until this PR merges + post-merge tests pass on parent.
+
+**Tomorrow plan (sau merge B2.4):**
+
+- Tick `[ ] **B2**` checkbox on issue #183 (B2 wave + T0-4b both close at the same merge — single thematic checkbox covers all four B2.x sub-PRs per project SOP).
+- **Start B1 — Casbin deny-first.** **#16 remains blocked until B1 + B2 are both TESTED**; then proceed #15 / #16 per sequence. Coverage script stays red with 12 `no-dispatch-site` until #16 wires `state_service.transition()` through `dispatch_event()`.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
