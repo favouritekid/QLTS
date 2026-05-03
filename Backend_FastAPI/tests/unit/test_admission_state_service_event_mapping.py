@@ -1,0 +1,173 @@
+"""Lock the ``LEGACY_STATUS_TO_EVENT`` mapping + the deferred set
++ the coverage-script anchor docstring (Cold Cutover #16).
+
+The contract this test enforces:
+
+  1. The exact 9 mapping rows (8 distinct events) are present —
+     ``approved`` and ``overridden`` both fire ADMISSION_DECISION_
+     ADMITTED, the rest map 1:1 to their T-numbered event.
+  2. The exact 4 deferred events match the user's chốt set; growing
+     or shrinking either side without touching the test forces the
+     change to land alongside an explicit audit.
+  3. Mapping + deferred sets are disjoint — a status cannot be both
+     mapped (writer exists) and deferred (writer missing).
+  4. The dispatch-anchor docstring (``_DISPATCH_ANCHORS``) lists each
+     mapped event's literal ``event=SystemEvents.<NAME>`` form so the
+     coverage script's grep picks them up; deferred events are NOT
+     in the anchor block (they intentionally show as
+     ``no-dispatch-site`` until Phase 3 wires the writers).
+"""
+from __future__ import annotations
+
+import re
+
+import pytest
+
+from app.core.events import SystemEvents
+from app.services import admission_state_service as state_service
+
+
+# ---------------------------------------------------------------------------
+# Mapping content
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_status_to_event_locked_set() -> None:
+    """Adding / removing a row here is a behaviour change — every
+    addition must come with the matching legacy write site refactor
+    + caller refactor + dispatch-anchor docstring update.
+
+    9 rows total: 8 distinct events; ``approved`` and ``overridden``
+    both fire T7 (the override site adds ``override=True`` payload
+    metadata so consumers can distinguish).
+    """
+    assert state_service.LEGACY_STATUS_TO_EVENT == {
+        "submitted":          SystemEvents.ADMISSION_PROFILE_SUBMITTED,        # T1
+        "revision_requested": SystemEvents.ADMISSION_REVISION_REQUESTED,       # T3/T4
+        "resubmitted":        SystemEvents.ADMISSION_RESUBMITTED,              # T5
+        "approved":           SystemEvents.ADMISSION_DECISION_ADMITTED,        # T7
+        "overridden":         SystemEvents.ADMISSION_DECISION_ADMITTED,        # T7 + override=True
+        "rejected":           SystemEvents.ADMISSION_DECISION_REJECTED,        # T9
+        "confirmed":          SystemEvents.ADMISSION_CONFIRMED,                # T12
+        "enrolled":           SystemEvents.ADMISSION_ENROLLED,                 # T13
+        "withdrawn":          SystemEvents.ADMISSION_WITHDRAWN,                # T14/T15/T16
+    }
+
+
+def test_legacy_status_to_event_has_8_distinct_events() -> None:
+    """Catches the case where someone breaks the approved↔overridden
+    aliasing by re-pointing one of them at a different event."""
+    distinct = set(state_service.LEGACY_STATUS_TO_EVENT.values())
+    assert len(distinct) == 8
+
+
+def test_approved_and_overridden_share_admitted_event() -> None:
+    """Locks the user's chốt § 2 — ``overridden`` fires T7 with
+    ``override=True`` metadata, NOT T17 ROLLED_BACK (different
+    semantic). Phase 3 will introduce a dedicated rollback event +
+    writer when the choice-engine ships."""
+    assert (
+        state_service.LEGACY_STATUS_TO_EVENT["approved"]
+        == state_service.LEGACY_STATUS_TO_EVENT["overridden"]
+        == SystemEvents.ADMISSION_DECISION_ADMITTED
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deferred set
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_admission_events_locked_set() -> None:
+    """4 events with no current legacy writer — Phase 3 choice-engine
+    routes will wire them when those flows ship.
+
+    Set this assertion is what the coverage script's ``--allow-deferred``
+    flag is calibrated against: callers pass exactly these four names.
+    """
+    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
+        "ADMISSION_RESULT_PUBLISHED",     # T6 — admin batch broadcast
+        "ADMISSION_DECISION_WAITLISTED",  # T8 — choice-engine waitlist
+        "ADMISSION_WAITLIST_PROMOTED",    # T10 — promote-from-waitlist
+        "ADMISSION_ROLLED_BACK",          # T17 — admin rollback
+    })
+
+
+def test_deferred_set_is_frozenset() -> None:
+    assert isinstance(state_service.DEFERRED_ADMISSION_EVENTS, frozenset)
+
+
+def test_deferred_events_all_exist_in_systemevents() -> None:
+    """Catches the case where an enum is renamed or removed without
+    updating the deferred set."""
+    enum_names = {member.name for member in SystemEvents}
+    for name in state_service.DEFERRED_ADMISSION_EVENTS:
+        assert name in enum_names, f"Deferred event {name!r} not in SystemEvents"
+
+
+# ---------------------------------------------------------------------------
+# Mapping ↔ Deferred disjointness
+# ---------------------------------------------------------------------------
+
+
+def test_mapping_and_deferred_are_disjoint() -> None:
+    """A status cannot be both ``deferred`` (writer missing) and
+    ``mapped`` (writer present). If both sets ever overlap, either
+    the deferred set should drop the row OR the mapping should drop
+    the row — coverage and lint contracts get inconsistent otherwise.
+    """
+    mapped_event_names = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
+    overlap = mapped_event_names & set(state_service.DEFERRED_ADMISSION_EVENTS)
+    assert overlap == set(), f"Events both mapped and deferred: {overlap!r}"
+
+
+def test_total_admission_events_is_12() -> None:
+    """B2.1 catalog ships 12 ADMISSION_* milestone events; #16
+    accounts for all of them — 8 mapped + 4 deferred."""
+    mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
+    deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
+    total = len(mapped | deferred)
+    assert total == 12
+
+
+# ---------------------------------------------------------------------------
+# Dispatch-anchor docstring parity
+# ---------------------------------------------------------------------------
+
+
+_ANCHOR_PATTERN = re.compile(r"event\s*=\s*SystemEvents\.([A-Z_][A-Z0-9_]*)")
+
+
+def test_dispatch_anchors_match_mapping() -> None:
+    """The anchor docstring is what makes the coverage script's grep
+    detect dispatch sites — every mapped event MUST appear, and every
+    deferred event MUST NOT (deferred events stay at no-dispatch-site
+    until Phase 3 wires the writers).
+    """
+    anchor_text = state_service._DISPATCH_ANCHORS
+    found = set(_ANCHOR_PATTERN.findall(anchor_text))
+
+    expected_mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
+    assert found == expected_mapped, (
+        f"Dispatch anchor docstring out of sync with LEGACY_STATUS_TO_EVENT.\n"
+        f"  Expected (mapped): {sorted(expected_mapped)}\n"
+        f"  Found in anchors:  {sorted(found)}\n"
+        "Fix: edit _DISPATCH_ANCHORS in admission_state_service.py to add "
+        "or remove ``event=SystemEvents.<NAME>`` lines so they match the "
+        "mapping. Without parity the coverage script will misreport "
+        "no-dispatch-site for events the runtime actually dispatches."
+    )
+
+
+def test_deferred_events_not_in_anchor_block() -> None:
+    """Deferred events must NOT appear in the anchor block — adding
+    them would mark them as ``ok`` in the coverage script and silence
+    the gap that ``--allow-deferred`` is meant to surface."""
+    anchor_text = state_service._DISPATCH_ANCHORS
+    found = set(_ANCHOR_PATTERN.findall(anchor_text))
+    overlap = found & set(state_service.DEFERRED_ADMISSION_EVENTS)
+    assert overlap == set(), (
+        f"Deferred events present in dispatch anchor block: {overlap!r}. "
+        "Remove them — the coverage script must keep reporting them as "
+        "no-dispatch-site until Phase 3 ships the writers."
+    )

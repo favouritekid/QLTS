@@ -56,6 +56,72 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
+### #16 — admission_state_service.py + 11 caller refactor (PR open, awaiting review/merge)
+
+**Branch / Commit / PR:**
+- Branch `feature/admission-issue-16` off parent `3f7ead4d` (post-#15 tracking).
+- PR [#203](https://github.com/favouritekid/QLTS/pull/203) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `f25b6a1a`. (Subsequent commits on the branch — including this doc sync entry — will advance the head; squash merge will collapse to a single new SHA on parent.)
+- Atomic 1-PR per user chốt — avoids unused transition service intermediate state + parent state where caller refactor lands but coverage/lint truth doesn't.
+
+**Scope (8 of 12 ADMISSION_* events wired; 4 deferred to Phase 3):**
+
+| Site | Status | Event (T#) | Outbox |
+|---|---|---|---|
+| `submit_and_evaluate` (router-level dispatch helper) | submitted | `ADMISSION_PROFILE_SUBMITTED` (T1) | ❌ |
+| `request_revision` | revision_requested | `ADMISSION_REVISION_REQUESTED` (T3/T4) | ❌ |
+| `resubmit_profile` | resubmitted | `ADMISSION_RESUBMITTED` (T5) | ❌ |
+| `approve_profile` + `bulk_approve` | approved | `ADMISSION_DECISION_ADMITTED` (T7) | ✅ |
+| `reject_profile` + `bulk_reject` | rejected | `ADMISSION_DECISION_REJECTED` (T9) | ✅ |
+| `override_profile` | overridden | `ADMISSION_DECISION_ADMITTED` (T7) + `override=true` payload | ✅ |
+| `verify_and_confirm` (magic-link) | confirmed | `ADMISSION_CONFIRMED` (T12) | ❌ |
+| `enroll_student` | enrolled | `ADMISSION_ENROLLED` (T13) | ✅ |
+| `withdraw_profile` | withdrawn | `ADMISSION_WITHDRAWN` (T14/T15/T16) | ❌ |
+
+11 write sites → 9 transition() entries → 8 distinct events (approved + overridden share T7). T7 outbox-event dedupe key uses `new_status` (`admission:{id}:approved` vs `admission:{id}:overridden`) so the two routes get distinct outbox rows.
+
+**Deferred (4 events, --allow-deferred set):**
+- `ADMISSION_RESULT_PUBLISHED` (T6) — admin batch broadcast endpoint not yet shipped
+- `ADMISSION_DECISION_WAITLISTED` (T8) — choice-engine waitlist write not yet shipped
+- `ADMISSION_WAITLIST_PROMOTED` (T10) — promote-from-waitlist endpoint not yet shipped
+- `ADMISSION_ROLLED_BACK` (T17) — admin rollback path semantically distinct from legacy `overridden`; defers to Phase 3 dedicated endpoint
+
+**Implementation:**
+
+1. **`app/services/admission_state_service.py`** (new) — single mutation point. `transition()` validates via state machine, captures old_status, writes status+version+updated_at+extra_fields, calls audit_service.log_status_change (skip via `skip_audit=True` for override path which writes log_changes), dispatches mapped ADMISSION_* event via `dispatch_event()`. Returns `(profile, post_commit_callback)`. Public exports: `transition`, `LEGACY_STATUS_TO_EVENT` (9 entries), `DEFERRED_ADMISSION_EVENTS` (4 entries frozenset).
+
+2. **Coverage-script anchor docstring** (`_DISPATCH_ANCHORS`) — the script greps `event=SystemEvents.<NAME>` line literals; `transition()` resolves the event from a mapping dict so the call site reads `event=event` (variable). The anchor docstring repeats each mapped event's literal form so the grep finds them. Parity locked by `tests/unit/test_admission_state_service_event_mapping.py`.
+
+3. **`app/services/admission_service.py`** — 11 sites refactored. All direct `profile.status = ...` writes replaced with `await state_transition(...)`. Caller-specific extra_fields (`approved_at`/`approved_by_id`/`rejection_reason`/etc.) flow through the helper's `extra_fields` arg. Local `from ..services import audit_service` + `await audit_service.log_status_change(...)` blocks removed (transition() handles audit). Override site keeps its richer `log_changes` audit row (broader change-set per ADM-014); transition() called with `skip_audit=True` to avoid duplicate audit row.
+
+4. **`app/routers/admissions.py`** — added `safe_dispatch(ADMISSION_PROFILE_SUBMITTED)` next to existing `safe_dispatch(APPLICATION_STATUS_CHANGED)` for the submit flow because `submit_and_evaluate` returns a dict (not the V3 `(result, callback)` tuple) and has no callback channel — the service uses `skip_dispatch=True` and the matching ADMISSION_* event fires from the router after `db.commit()` (same fire-and-forget semantics as the legacy bundle).
+
+5. **`app/scripts/check_notification_event_coverage.py`** — new `--allow-deferred` flag with strict semantics:
+   - Each name MUST exist in SystemEvents (typo → fail)
+   - Each name MUST have EXACTLY the single gap `no-dispatch-site` (wired or extra-gap → fail)
+   - Verdict prints `Deferred (allow-listed)` block listing each deferred event so the gap stays visible
+   - Allow-list never silences `raw-dispatch-of-outbox-event` or `rule-has-zero-actions`
+
+6. **`app/scripts/check_status_assignment.py`** (new) — AST lint blocking direct `profile.status = ...` writes outside `app/services/admission_state_service.py` allow-list. Detects three patterns: direct assignment, augmented assignment (`+=`), and dynamic `setattr(<alias>, "status", ...)`. Restricted to leftmost-name `ADMISSION_PROFILE_VAR_NAMES` covering 6 aliases — `profile` (canonical, all 11 legacy sites use this), plus `locked_profile`, `admission_profile`, `current_profile`, `profile_row`, `prof` (forward-prevention; codebase audit 2026-05-03 confirmed zero existing alias write sites). Restriction avoids false positives on Fee/User/ZaloDelivery `.status` writes. Initial run pre-restriction reported 5+ false positives across services tree; post-restriction: **0 violations** across 148 scanned files.
+
+**NOT wired in #16** (per user chốt §5):
+- Pre-commit hook integration → defers to TRACKER #183 row CI-tooling.
+- Github Action workflow `admission-contract-check.yml` → same.
+
+**Tested / Rehearsed:**
+- Target 4 file pytest: **51 passed (2.74s)** — `test_admission_state_service.py` + `test_admission_state_service_event_mapping.py` + `test_check_status_assignment.py` + `test_check_notification_event_coverage_deferred.py`.
+- Lint script live: 0 violations across 148 scanned files (`scan()` exit 0).
+- Coverage script live: with `--allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK` → exit 0, 8 events ok + 4 events deferred (allow-listed).
+- Wide unit + integration regression: **1768 passed + 8 pre-existing fail + 1 deselected** in 247s. 8 fail + 1 deselected verified pre-existing on parent `3f7ead4d` (stash + re-run identical) — same notification surface debt + zalo phase 1 debt + immediate-fixes debt category as #15.
+- Service tests `tests/services/test_admission_service.py` + `test_admission_quota.py`: **45 errors at fixture setup** verified PRE-EXISTING on parent `3f7ead4d` (stash + same single test errors with same fixture marker). Memory `[test-debt-admission-workflow-e2e]` covers a subset (6 known); the broader 45 erroring tests are pre-existing finance fixture / dirty-state / Casbin drift debt — out of #16 scope per ATOMIC_PR rationale.
+
+**Pending:**
+- Reviewer review + squash merge PR [#203](https://github.com/favouritekid/QLTS/pull/203).
+- Post-merge: tick `[x] **#16**` checkbox on issue #183, parent tracking commit citing squash SHA.
+- Follow-up: open `test-debt/admission-fixture-isolation` PR (fixture race / `DeadlockDetectedError` + `pipeline_stage_order_key` UniqueViolation) — pre-existing per memory `[test-debt-admission-workflow-e2e]` 2026-04-30; broader scope than the 6-failure subset memory tracks.
+
+---
+
 ### #15 — choice-engine status bridge (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**

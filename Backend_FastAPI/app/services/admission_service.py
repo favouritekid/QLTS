@@ -45,6 +45,7 @@ from ..core.admission_correction_constants import (
 )
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole
+from .admission_state_service import transition as state_transition
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
     NotificationIntent,
@@ -3915,16 +3916,31 @@ async def submit_and_evaluate(
             "validation_errors": errors,  # ✅ FIX: Match schema field name
         }
     else:
-        # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED)
-        # ✅ CRITICAL FIX #1.3: Validate transition DRAFT -> SUBMITTED
-        from .admission_state_machine import validate_transition
+        # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED).
+        # transition() validates DRAFT → SUBMITTED via the state machine
+        # and raises BusinessRuleViolation if illegal — caller maps to
+        # 400 the same way BadRequest did before.
+        #
+        # ``skip_dispatch=True`` here is intentional: this service path
+        # returns a dict (not the V3 ``(result, callback)`` tuple), so
+        # there is no callback channel to surface the
+        # ADMISSION_PROFILE_SUBMITTED post-commit callback. The router
+        # already fires APPLICATION_STATUS_CHANGED via ``safe_dispatch``
+        # after ``db.commit()`` for this flow; the matching
+        # ADMISSION_PROFILE_SUBMITTED dispatch is added side-by-side in
+        # the router as part of #16 so the dispatch happens AFTER the
+        # commit instead of inside an open transaction.
         try:
-            validate_transition(profile.status, "submitted")
-        except ValueError as e:
+            profile, _ = await state_transition(
+                db,
+                profile,
+                "submitted",
+                actor=current_user,
+                source="api",
+                skip_dispatch=True,
+            )
+        except BusinessRuleViolation as e:
             raise BadRequest(str(e))
-        
-        profile.status = "submitted"  # ✅ CRITICAL FIX: submitted, not approved
-        profile.version += 1  # Increment version on status change
 
         # ✅ PIPELINE SYNC: Create system consultation for admission milestone
         if profile.lead:
@@ -3937,15 +3953,6 @@ async def submit_and_evaluate(
             )
 
         await db.flush()
-
-        # Audit trail: log submission
-        from ..services import audit_service
-        await audit_service.log_status_change(
-            db, "AdmissionProfile", profile.id,
-            old_status="draft", new_status=profile.status,
-            actor_user_id=current_user.id,
-            source="api",
-        )
 
         log.info(
             "Admission profile submitted successfully",
@@ -5017,11 +5024,26 @@ async def _perform_enrollment_core(
                 )
                 db.add(doc)
 
-            # Step 4: Update AdmissionProfile status
+            # Step 4: Update AdmissionProfile status — caller still
+            # captures pre-transition status because the function
+            # returns a 4-tuple including ``_old_status_for_enroll``
+            # for downstream notification dispatch by the router.
             _old_status_for_enroll = profile.status
-            profile.status = "enrolled"
-            profile.updated_at = datetime.now(timezone.utc)
-            profile.version += 1  # Increment version on enrollment
+
+            # ADMISSION_ENROLLED is an outbox event; transition() INSERTs
+            # the NotificationOutbox row in this same transaction (the
+            # savepoint), so the row commits atomically with the
+            # student/student-document writes above. ``transition_callback``
+            # is None for outbox events — caller does not need to
+            # thread it through.
+            profile, _ = await state_transition(
+                db,
+                profile,
+                "enrolled",
+                actor=current_user,
+                source="api",
+                event_metadata={"student_code": student_code},
+            )
 
             # Step 5: ✅ PIPELINE SYNC: Create system consultation for enrollment milestone
             await _create_admission_milestone_consultation(
@@ -5034,15 +5056,6 @@ async def _perform_enrollment_core(
             )
 
             await db.flush()
-
-            # Audit trail: log enrollment
-            from ..services import audit_service
-            await audit_service.log_status_change(
-                db, "AdmissionProfile", profile.id,
-                old_status=_old_status_for_enroll, new_status="enrolled",
-                actor_user_id=current_user.id,
-                source="api",
-            )
 
             # ✅ SYNC: Update lead consultation status to match admission status (enrolled → sts11)
             from .lead_admission_sync import sync_lead_from_admission
@@ -5320,14 +5333,23 @@ async def approve_profile(
         transition="approve",
     )
 
-    # STATE CHANGE
+    # STATE CHANGE — caller still captures old_status for the legacy
+    # bundle + commission callback below.
     _old_status_for_audit = profile.status
-    profile.status = "approved"
-    profile.approved_at = datetime.now(timezone.utc)
-    profile.approved_by_id = approver.id
-    profile.approval_notes = data.get("notes")
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "approved",
+        actor=approver,
+        reason=data.get("notes"),
+        source="api",
+        extra_fields={
+            "approved_at": datetime.now(timezone.utc),
+            "approved_by_id": approver.id,
+            "approval_notes": data.get("notes"),
+        },
+    )
 
     # ✅ PIPELINE SYNC: Create system consultation for approval milestone
     if profile.lead:
@@ -5343,16 +5365,6 @@ async def approve_profile(
 
     # Populate transient computed fields so the mutation response matches GET.
     await _populate_response_fields(db, profile, approver)
-
-    # Audit trail: log approval
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="approved",
-        actor_user_id=approver.id,
-        reason=data.get("notes"),
-        source="api",
-    )
 
     # ✅ SYNC: Update lead consultation status to match admission status (approved → sts09)
     from .lead_admission_sync import sync_lead_from_admission
@@ -5430,7 +5442,7 @@ async def approve_profile(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_approve",
-        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback],
     )
 
     return profile, final_callback
@@ -5520,14 +5532,23 @@ async def reject_profile(
             "Please refresh and try again."
         )
 
-    # STATE CHANGE
+    # STATE CHANGE — caller still captures old_status for the legacy
+    # bundle + commission callback below.
     _old_status_for_audit = profile.status
-    profile.status = "rejected"
-    profile.rejected_at = datetime.now(timezone.utc)
-    profile.rejected_by_id = rejector.id
-    profile.rejection_reason = data["reason"]
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "rejected",
+        actor=rejector,
+        reason=data["reason"],
+        source="api",
+        extra_fields={
+            "rejected_at": datetime.now(timezone.utc),
+            "rejected_by_id": rejector.id,
+            "rejection_reason": data["reason"],
+        },
+    )
 
     # ✅ PIPELINE SYNC: Create system consultation for rejection milestone
     if profile.lead:
@@ -5544,16 +5565,6 @@ async def reject_profile(
 
     # Populate transient computed fields so the mutation response matches GET.
     await _populate_response_fields(db, profile, rejector)
-
-    # Audit trail: log rejection
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="rejected",
-        actor_user_id=rejector.id,
-        reason=data["reason"],
-        source="api",
-    )
 
     # ✅ SYNC: Update lead consultation status to match admission status (rejected → sts16)
     from .lead_admission_sync import sync_lead_from_admission
@@ -5630,7 +5641,7 @@ async def reject_profile(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_reject",
-        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback],
     )
 
     return profile, final_callback
@@ -5712,13 +5723,24 @@ async def request_revision(
             "Please refresh and try again."
         )
 
+    # Caller still captures old_status for the legacy notification
+    # bundle + commission callback below; transition() also captures
+    # internally for its own audit + ADMISSION_* dispatch payload.
     _old_status_for_audit = profile.status
-    profile.status = "revision_requested"
-    profile.revision_requested_at = datetime.now(timezone.utc)
-    profile.revision_requested_by_id = reviewer.id
-    profile.revision_reason = data["reason"]
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "revision_requested",
+        actor=reviewer,
+        reason=data["reason"],
+        source="api",
+        extra_fields={
+            "revision_requested_at": datetime.now(timezone.utc),
+            "revision_requested_by_id": reviewer.id,
+            "revision_reason": data["reason"],
+        },
+    )
 
     # PIPELINE SYNC: Create system consultation for revision milestone
     if profile.lead:
@@ -5735,16 +5757,6 @@ async def request_revision(
 
     # Populate transient computed fields so the mutation response matches GET.
     await _populate_response_fields(db, profile, reviewer)
-
-    # Audit trail
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="revision_requested",
-        actor_user_id=reviewer.id,
-        reason=data["reason"],
-        source="api",
-    )
 
     # SYNC: Update lead consultation status (revision_requested -> sts17)
     from .lead_admission_sync import sync_lead_from_admission
@@ -5821,7 +5833,7 @@ async def request_revision(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_request_revision",
-        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback],
     )
 
     return profile, final_callback
@@ -6088,14 +6100,24 @@ async def resubmit_profile(
             "Please refresh and try again."
         )
 
-    # STATE CHANGE
+    # STATE CHANGE — caller still captures old_status for the legacy
+    # bundle + commission callback below; transition() also captures
+    # internally for audit + ADMISSION_* dispatch.
     _old_status_for_audit = profile.status
-    profile.status = "resubmitted"
-    profile.resubmitted_at = datetime.now(timezone.utc)
-    profile.resubmitted_by_id = officer.id
-    profile.resubmit_notes = data.get("notes")
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "resubmitted",
+        actor=officer,
+        reason=data.get("notes"),
+        source="api",
+        extra_fields={
+            "resubmitted_at": datetime.now(timezone.utc),
+            "resubmitted_by_id": officer.id,
+            "resubmit_notes": data.get("notes"),
+        },
+    )
 
     # Clear reviewer assignment on resubmit (manager can re-claim)
     old_reviewer = profile.assigned_reviewer_id
@@ -6136,15 +6158,6 @@ async def resubmit_profile(
 
     # Populate transient computed fields so the mutation response matches GET.
     await _populate_response_fields(db, profile, officer)
-
-    # Audit trail: log resubmission
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="resubmitted",
-        actor_user_id=officer.id,
-        source="api",
-    )
 
     log.info(
         "Admission profile resubmitted",
@@ -6211,7 +6224,7 @@ async def resubmit_profile(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_resubmit",
-        callbacks=[_audit_log_callback, bundle_callback, commission_callback],
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback],
     )
 
     return profile, final_callback
@@ -6284,17 +6297,35 @@ async def override_profile(
             "Please refresh and try again."
         )
 
-    # ADM-014: capture pre-mutation state for the audit row.
+    # ADM-014: capture pre-mutation state for the audit row written
+    # below via ``log_changes`` (richer than the standard
+    # ``log_status_change``); ``skip_audit=True`` on transition() avoids
+    # writing a duplicate status-only audit row.
     _audit_old_status = profile.status
     _audit_old_version = profile.version
 
-    # STATE CHANGE
-    profile.status = "overridden"
-    profile.overridden_at = datetime.now(timezone.utc)
-    profile.overridden_by_id = admin.id
-    profile.override_reason = data["reason"]
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+    # STATE CHANGE — overridden maps to ADMISSION_DECISION_ADMITTED (T7)
+    # with ``override=True`` payload metadata so consumers can
+    # distinguish admin force-approve from the regular approve path.
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "overridden",
+        actor=admin,
+        reason=data["reason"],
+        source="api",
+        extra_fields={
+            "overridden_at": datetime.now(timezone.utc),
+            "overridden_by_id": admin.id,
+            "override_reason": data["reason"],
+        },
+        event_metadata={
+            "override": True,
+            "override_reason": data["reason"],
+            "bypass_rules": list(data.get("bypass_rules") or []),
+        },
+        skip_audit=True,  # log_changes below covers the change-set
+    )
 
     # Invalidate stale magic-link tokens (profile leaving approved state)
     from app.repositories import AdmissionRepository
@@ -6369,12 +6400,21 @@ async def override_profile(
     # Admins can configure notification rules with condition filters
     # (e.g. {"new_status": "overridden"}) targeting compliance-team users.
     # This closure remains as a hook for future service-level side effects.
-    async def post_commit():
+    async def _post_commit_hook():
         """No-op hook; compliance alerting runs in the router after commit."""
         log.debug(
             "Post-commit hook: override (alerting handled by router dispatch)",
             profile_id=profile.id,
         )
+
+    # ADMISSION_DECISION_ADMITTED is an outbox event so transition_callback
+    # is None for the override path; compose for symmetry with the other
+    # status-change service functions and so a future routing change to
+    # best-effort would surface a callback to the router automatically.
+    post_commit = compose_post_commit_callbacks(
+        label="admission_override",
+        callbacks=[_post_commit_hook, transition_callback],
+    )
 
     return profile, post_commit
 
@@ -6866,10 +6906,17 @@ async def withdraw_profile(
             "Please refresh and try again."
         )
 
+    # Caller still captures old_status for the legacy bundle below.
     _old_status_for_audit = profile.status
-    profile.status = "withdrawn"
-    profile.version += 1
-    profile.updated_at = datetime.now(timezone.utc)
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "withdrawn",
+        actor=actor,
+        reason=data["reason"],
+        source="api",
+    )
 
     # PIPELINE SYNC: Create system consultation for withdrawal milestone
     if profile.lead:
@@ -6883,16 +6930,6 @@ async def withdraw_profile(
         )
 
     await db.flush()
-
-    # Audit trail
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="withdrawn",
-        actor_user_id=actor.id,
-        reason=data["reason"],
-        source="api",
-    )
 
     # SYNC: Update lead consultation status (withdrawn → sts08)
     from .lead_admission_sync import sync_lead_from_admission
@@ -6959,7 +6996,7 @@ async def withdraw_profile(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_withdraw",
-        callbacks=[_audit_log_callback, bundle_callback],
+        callbacks=[_audit_log_callback, bundle_callback, transition_callback],
     )
 
     return profile, final_callback
@@ -7793,24 +7830,29 @@ async def verify_and_confirm(
             "Hồ sơ đã được xử lý hoặc trạng thái đã thay đổi."
         )
 
+    # state_transition validates ``profile.status → "confirmed"`` via
+    # the state machine; it raises ``BusinessRuleViolation`` (not the
+    # ``ValueError`` the legacy validate_transition raised), so the
+    # caller maps to BadRequest with the same message. Pre-transition
+    # status capture moves into transition() — the helper handles both
+    # legacy ``approved`` and choice-engine ``admitted`` upstream
+    # consistently for the audit row + ADMISSION_CONFIRMED dispatch
+    # payload's ``old_status`` field.
     try:
-        validate_transition(profile.status, "confirmed")
-    except ValueError as e:
+        profile, transition_callback = await state_transition(
+            db,
+            profile,
+            "confirmed",
+            actor=None,  # public flow, no authenticated actor
+            reason="Magic-link confirmation",
+            source="magic_link",
+            extra_fields={
+                "confirmed_at": now,
+                "confirmed_via": "magic_link",
+            },
+        )
+    except BusinessRuleViolation as e:
         raise BadRequest(str(e))
-
-    # Capture pre-transition status BEFORE the write so the audit log
-    # records the actual prior state (legacy ``approved`` or choice-engine
-    # ``admitted``). Reading ``profile.status`` after line 7802 would
-    # always return ``"confirmed"`` and silently misattribute the
-    # transition source.
-    _old_status_for_audit = profile.status
-
-    # STATE CHANGE — token-based confirmation flow
-    profile.status = "confirmed"
-    profile.confirmed_at = now
-    profile.confirmed_via = "magic_link"
-    profile.version += 1
-    profile.updated_at = now
 
     # Mark token as consumed (no longer changes profile status)
     await repo.mark_token_used(token_obj)
@@ -7832,17 +7874,6 @@ async def verify_and_confirm(
         profile=profile,
         changed_by_user_id=None,
         reason="Applicant confirmed via magic link",
-    )
-
-    # Audit trail — use captured pre-transition status so ``admitted``
-    # (choice-engine) profiles do not get logged as ``approved``.
-    from ..services import audit_service
-    await audit_service.log_status_change(
-        db, "AdmissionProfile", profile.id,
-        old_status=_old_status_for_audit, new_status="confirmed",
-        actor_user_id=None,
-        reason="Magic-link confirmation",
-        source="magic_link",
     )
 
     await db.flush()
@@ -7890,7 +7921,12 @@ async def verify_and_confirm(
                 exc_info=True,
             )
 
-    return profile, _notification_callback
+    final_callback = compose_post_commit_callbacks(
+        label="admission_confirm_magic_link",
+        callbacks=[_notification_callback, transition_callback],
+    )
+
+    return profile, final_callback
 
 
 # ==============================================================================
@@ -8012,15 +8048,24 @@ async def bulk_approve(
                 errors[profile_id] = str(quota_err)
                 continue
 
-            # STATE CHANGE
+            # STATE CHANGE — caller still captures old_status for the
+            # legacy bundle + commission callback below.
             now = datetime.now(timezone.utc)
             _old_status = profile.status
-            profile.status = "approved"
-            profile.approved_at = now
-            profile.approved_by_id = approver.id
-            profile.approval_notes = notes
-            profile.version += 1
-            profile.updated_at = now
+
+            profile, transition_callback = await state_transition(
+                db,
+                profile,
+                "approved",
+                actor=approver,
+                reason=notes,
+                source="bulk_api",
+                extra_fields={
+                    "approved_at": now,
+                    "approved_by_id": approver.id,
+                    "approval_notes": notes,
+                },
+            )
 
             # Milestone consultation
             if profile.lead:
@@ -8038,14 +8083,6 @@ async def bulk_approve(
                 profile=profile,
                 changed_by_user_id=approver.id,
                 reason="Admission profile approved (bulk)",
-            )
-
-            # Audit trail
-            await audit_service.log_status_change(
-                db, "AdmissionProfile", profile.id,
-                old_status=_old_status, new_status="approved",
-                actor_user_id=approver.id,
-                source="bulk_api",
             )
 
             # Per-profile bundle + commission (Path C / Arch-3)
@@ -8102,7 +8139,7 @@ async def bulk_approve(
 
             per_profile_cb = compose_post_commit_callbacks(
                 label=f"admission_bulk_approve:{profile.id}",
-                callbacks=[bundle_callback, commission_callback],
+                callbacks=[bundle_callback, commission_callback, transition_callback],
             )
             per_profile_callbacks.append(per_profile_cb)
 
@@ -8232,15 +8269,24 @@ async def bulk_reject(
                 )
                 continue
 
-            # STATE CHANGE
+            # STATE CHANGE — caller still captures old_status for the
+            # legacy bundle + commission callback below.
             now = datetime.now(timezone.utc)
             _old_status = profile.status
-            profile.status = "rejected"
-            profile.rejected_at = now
-            profile.rejected_by_id = rejector.id
-            profile.rejection_reason = reason
-            profile.version += 1
-            profile.updated_at = now
+
+            profile, transition_callback = await state_transition(
+                db,
+                profile,
+                "rejected",
+                actor=rejector,
+                reason=reason,
+                source="bulk_api",
+                extra_fields={
+                    "rejected_at": now,
+                    "rejected_by_id": rejector.id,
+                    "rejection_reason": reason,
+                },
+            )
 
             # Milestone consultation
             if profile.lead:
@@ -8259,15 +8305,6 @@ async def bulk_reject(
                 profile=profile,
                 changed_by_user_id=rejector.id,
                 reason=f"Admission profile rejected (bulk): {reason[:50]}",
-            )
-
-            # Audit trail
-            await audit_service.log_status_change(
-                db, "AdmissionProfile", profile.id,
-                old_status=_old_status, new_status="rejected",
-                actor_user_id=rejector.id,
-                reason=reason,
-                source="bulk_api",
             )
 
             # Per-profile bundle + commission (Path C / Arch-3)
@@ -8322,7 +8359,7 @@ async def bulk_reject(
 
             per_profile_cb = compose_post_commit_callbacks(
                 label=f"admission_bulk_reject:{profile.id}",
-                callbacks=[bundle_callback, commission_callback],
+                callbacks=[bundle_callback, commission_callback, transition_callback],
             )
             per_profile_callbacks.append(per_profile_cb)
 

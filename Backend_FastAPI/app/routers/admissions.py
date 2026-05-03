@@ -760,6 +760,29 @@ async def submit_admission_profile(
                 rooms=_rooms_for_lead(_submit_lead),
             )
 
+            # #16: ADMISSION_PROFILE_SUBMITTED (T1, non-outbox) is the
+            # new ADMISSION_* surface kept side-by-side with the legacy
+            # APPLICATION_STATUS_CHANGED bundle. The service used
+            # ``skip_dispatch=True`` because submit_and_evaluate returns
+            # a dict instead of the V3 (result, callback) tuple — so
+            # there's no callback channel through the service layer.
+            # Firing the matching event here keeps the dispatch
+            # AFTER ``db.commit()`` and uses ``safe_dispatch`` for the
+            # same fire-and-forget semantics as the legacy bundle.
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.ADMISSION_PROFILE_SUBMITTED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": profile_row.lead_id if profile_row else None,
+                    "old_status": "draft",
+                    "new_status": "submitted",
+                    "actor_id": current_user.id,
+                },
+                dedupe_key=f"admission:{profile_id}:submitted",
+                rooms=_rooms_for_lead(_submit_lead),
+            )
+
         return result
 
     except ResourceNotFoundError as e:
