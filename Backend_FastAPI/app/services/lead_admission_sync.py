@@ -40,6 +40,7 @@ log = structlog.get_logger(__name__)
 
 ADMISSION_TO_LEAD_STATUS_MAP = {
     # Admission Status    → Lead ConsultationStatus ID
+    # ----- Legacy vocabulary (currently writable; CHECK constraint allowed) -----
     "draft":        "sts06",   # Đồng ý tư vấn (chưa nộp, chỉ khởi tạo)
     "submitted":    "sts07",   # Đã tiếp nhận (đã nộp, chờ duyệt)
     "resubmitted":  "sts07",   # Đã tiếp nhận (nộp lại sau reject)
@@ -50,7 +51,60 @@ ADMISSION_TO_LEAD_STATUS_MAP = {
     "revision_requested": "sts17",  # Yêu cầu bổ sung hồ sơ
     "enrolled":     "sts11",   # Đã xác nhận nhập học (terminal)
     "withdrawn":    "sts08",   # Từ chối tư vấn (rút hồ sơ, terminal)
+    # ----- Choice-engine vocabulary (forward-compat for #15 / Phase 1) -----
+    # NOT YET WRITABLE: CHECK constraint ck_admission_profile_status still
+    # rejects these strings on prod. Sites that READ this map therefore
+    # behave correctly the moment Phase 1 ships the constraint extension
+    # and #16 wires the writes — no follow-up patch required here.
+    "admitted":     "sts09",   # Equivalent of legacy approved/overridden
+    "reviewing":    "sts07",   # FLOOR — see PRE_APPLICATION_LEAD_STATUSES
+    "waitlisted":   "sts07",   # FLOOR — see PRE_APPLICATION_LEAD_STATUSES
+    # ``result_published`` is intentionally absent. It is a future
+    # intermediate state / T6 broadcast marker; ``sync_lead_from_admission``
+    # short-circuits it as an explicit no-op so the lead pipeline is never
+    # mutated when the choice-engine state machine lands the string on
+    # ``profile.status`` (per PLAN). See _RESULT_PUBLISHED_NO_OP below.
 }
+
+# Profile statuses that should only floor a lead UP from a pre-application
+# consultation status, never DOWN from a later admission/fee/enrolled state.
+# Rationale: a profile being re-evaluated (``reviewing``) or that enters the
+# waitlist (``waitlisted``) must not regress a lead already past sts07
+# (e.g. ``sts09`` Đủ điều kiện, ``sts10`` Đã hoàn tất học phí, ``sts11`` Đã
+# nhập học). Floor only applies when the lead is still in the consultation
+# phase or has no consultation status set.
+FLOOR_FROM_PROFILE_STATUSES: frozenset[str] = frozenset({"reviewing", "waitlisted"})
+
+# Lead consultation statuses considered "below the admission floor".
+# Values come from the canonical seed (``scripts/data/consultation_status_v3.csv``):
+# the consultation-phase ids plus ``None`` for newly created leads. Universal
+# statuses (sts01/sts15/sts19) are NOT included — they overlay an underlying
+# pipeline_stage_id that may already be at sts07+, so flooring them up could
+# overwrite a valid mid-admission state.
+PRE_APPLICATION_LEAD_STATUSES: frozenset = frozenset({
+    None, "sts00", "sts02", "sts03", "sts04", "sts05", "sts06",
+})
+
+# Sentinel for ``profile.status == "result_published"``. Kept as a constant
+# so the test suite can lock the no-op contract without restringifying the
+# value at the call site.
+_RESULT_PUBLISHED_NO_OP: str = "result_published"
+
+
+def _should_apply_admission_floor(
+    profile_status: str,
+    lead_consultation_status_id: Optional[str],
+) -> bool:
+    """Pure decision rule for floor-only profile statuses.
+
+    Returns ``True`` when the sync should proceed (lead still below the
+    admission floor) and ``False`` to preserve a later lead state.
+    Non-floor statuses always return ``True`` so the existing fall-through
+    logic applies unchanged.
+    """
+    if profile_status not in FLOOR_FROM_PROFILE_STATUSES:
+        return True
+    return lead_consultation_status_id in PRE_APPLICATION_LEAD_STATUSES
 
 # Application fee status from event mapping (Single Source of Truth)
 # Uses admission_event_mapping.py -> "application_fee_paid" event
@@ -99,9 +153,6 @@ async def sync_lead_from_admission(
         )
         return False
 
-    # Get target consultation status from mapping
-    target_status_id = ADMISSION_TO_LEAD_STATUS_MAP.get(profile.status)
-
     # Skip draft — milestone consultation is the canonical sync for profile creation.
     # Avoids double LeadStatusHistory records when create_profile() calls both
     # sync_lead_from_admission() and _create_admission_milestone_consultation().
@@ -112,11 +163,44 @@ async def sync_lead_from_admission(
         )
         return False
 
+    # Explicit no-op for ``result_published``. Treated as a future
+    # intermediate state / T6 broadcast marker — the per-profile lead
+    # transition is owned by the subsequent T7 (``admitted``) / T8
+    # (``waitlisted``) / T9 (``rejected``) status. Short-circuiting
+    # here keeps the sync silent during the broadcast and prevents an
+    # unmapped fall-through from logging a misleading "unknown status"
+    # warning if a future state machine lands the string transiently
+    # on ``profile.status``.
+    if profile.status == _RESULT_PUBLISHED_NO_OP:
+        log.debug(
+            "sync_lead_from_admission: result_published is a future intermediate "
+            "state / T6 broadcast marker — explicit no-op for lead sync",
+            profile_id=profile.id,
+        )
+        return False
+
+    # Get target consultation status from mapping
+    target_status_id = ADMISSION_TO_LEAD_STATUS_MAP.get(profile.status)
+
     if not target_status_id:
         log.warning(
             "sync_lead_from_admission: Unknown admission status",
             profile_id=profile.id,
             admission_status=profile.status,
+        )
+        return False
+
+    # Floor-only statuses (``reviewing`` / ``waitlisted``) must not regress
+    # a lead that already advanced past sts07. See FLOOR_FROM_PROFILE_STATUSES
+    # docstring for the rationale.
+    if not _should_apply_admission_floor(profile.status, lead.consultation_status_id):
+        log.debug(
+            "sync_lead_from_admission: Floor-only status, lead already past "
+            "pre-application phase — preserving later state",
+            lead_id=lead.id,
+            profile_id=profile.id,
+            profile_status=profile.status,
+            current_lead_status=lead.consultation_status_id,
         )
         return False
 

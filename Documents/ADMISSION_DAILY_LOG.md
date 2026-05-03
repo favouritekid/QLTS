@@ -56,6 +56,74 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
+### #15 — choice-engine status bridge (CODE_DONE local, push pending)
+
+**Branch / Commit:**
+- Branch `feature/admission-issue-15` off parent `f382bc6b` (B1 post-merge tracking).
+- Commit on branch HEAD (pre-PR amend final, see PR for authoritative squash SHA). 13 files changed, 789 insertions(+), 27 deletions(-): 3 file mới (`app/utils/admission_status.py` + 2 test) + 7 file sửa (`lead_admission_sync.py`, `lead_profile_sync.py`, `phase_manager.py`, `admission_service.py`, `admission_tasks.py`, `routers/fees.py`, `tests/integration/test_lead_admission_sync.py`) + 3 doc sync (`ADMISSION_DAILY_LOG.md`, `ADMISSION_IMPLEMENTATION_TRACKER.md`, `ADMISSION_REFACTOR_PLAN.md`).
+- Strict scope ship qua reviewer: helpers + map extension + caller refactor read-only. KHÔNG đụng profile.status write site, DB CHECK constraint, /api/v2 wiring, Casbin diamond, hoặc CommissionRecord/LeadClaim non-admission "approved". (Exception: 1 audit-log fix — capture pre-transition status in `verify_and_confirm` so choice-engine ``admitted`` profiles don't get logged as ``approved``; the actual ``profile.status = "confirmed"`` write site stays untouched.)
+
+**User chốt 7 deviation từ PLAN line 3380-3395 (matrix sau prod audit qlts.tnpc.edu.vn):**
+| # | Quyết định | PLAN nguyên gốc | User chốt | Lý do |
+|---|---|---|---|---|
+| 1 | `admitted →` | sts09 | **sts09** ✓ | UNAMBIGUOUS — same as legacy approved. |
+| 2 | `reviewing →` | sts06 | **sts07 (floor)** | sts06 = consultation phase pre-submission; reviewing = officer xét hồ sơ ĐÃ NỘP → MUST ở admission phase sts07. PLAN sts06 sẽ regress lead, vi phạm pipeline forward-only. |
+| 3 | `waitlisted →` | sts06 | **sts07 (floor)** | Same logic — đã nộp + xét + chờ ghế → admission phase sts07. |
+| 4 | `result_published →` | sts09 (PLAN list as map entry) | **explicit no-op** | Future intermediate state / T6 broadcast marker, không phải per-profile mutation. Not added to MAP; sync function short-circuits với `_RESULT_PUBLISHED_NO_OP` sentinel. |
+| 5 | `is_admitted_like()` set | (PLAN spec) | **{approved, overridden, admitted}** ✓ | Khớp PLAN spec. |
+| 6 | `LOCKED_PROFILE_STATUSES` | (silent) | **+ "admitted"** | Forward-compat; identity field freeze at admitted state. |
+| 7 | `PHASE_STATUSES` | (silent) | **không thêm** | PHASE_STATUSES map LeadPhase→consultation_status_id (sts0x), KHÔNG dùng profile.status. Out of scope. |
+
+Prod audit evidence (qlts.tnpc.edu.vn via SSH 2026-05-03):
+- 9 hồ sơ tổng (8 draft + 1 submitted). 0 approved/confirmed/enrolled. Risk dữ liệu ≈ 0.
+- DB CHECK `ck_admission_profile_status` chấp nhận 10 status legacy; KHÔNG có `admitted/reviewing/waitlisted/result_published`. Forward-compat strict.
+- consultation_status seed khớp 100% CSV; sts06 = consultation phase stg02, sts07 = admission phase stg03 — confirm sự khác biệt semantic giữa PLAN sts06 vs đề xuất sts07.
+
+**Floor rule design (regress prevention):**
+- `FLOOR_FROM_PROFILE_STATUSES = frozenset({"reviewing", "waitlisted"})` — hai status này chỉ FLOOR UP lead từ pre-application; KHÔNG được DOWN-grade lead đã ở sts07+.
+- `PRE_APPLICATION_LEAD_STATUSES = frozenset({None, sts00, sts02, sts03, sts04, sts05, sts06})` — 6 consultation status + NULL. Universal sts01/sts15/sts19 KHÔNG include (chúng overlay underlying pipeline_stage có thể đã ở sts07+; flooring sẽ đè).
+- Pure decision rule `_should_apply_admission_floor()` testable không cần DB; non-floor status passthrough → existing logic không thay đổi.
+- Lý do thiết kế này (so với raw PLAN sts06): Pipeline progression đi 1 chiều CONSULTATION → ADMISSION → FEE → ENROLLED. Nếu lead đã ở sts09 (Đủ điều kiện) hoặc sts10 (Đã đóng học phí) mà profile transient back về `reviewing` (ví dụ admin re-evaluate), KHÔNG được phép kéo lead về sts07. Floor rule preserve later state.
+
+**Codex reviewer Patch round (Pre-push):**
+- Patch P1 — split `is_admitted_like` vs `is_confirmation_eligible`:
+  - User flagged: `is_admitted_like(profile)` áp dụng cho TẤT CẢ 4 magic-link site (send_confirmation, generate_confirmation_token, get_token_info, verify_and_confirm) sẽ accept `overridden` profile vào confirmation flow. **NHƯNG state machine route `overridden → enrolled` direct, bypass `confirmed`** — không có successor state cho overridden+confirmed pair.
+  - Patch: thêm `CONFIRMATION_ELIGIBLE_STATUSES = frozenset({"approved", "admitted"})` + helper `is_confirmation_eligible()`. 4 magic-link site swap sang helper mới. 5 site khác (eligibility, minor_correction permission/state/whitelist, calculate_fee, fee_calc_authorized) giữ `is_admitted_like` (overridden vẫn là admitted-like cho phase/fee/quota/read).
+  - Test lock invariant `CONFIRMATION_ELIGIBLE_STATUSES < ADMITTED_LIKE_STATUSES` + delta = `{overridden}`.
+- Patch P2 — wording về `result_published`: replace "not a status" → "future intermediate state / T6 broadcast marker; explicit no-op for lead sync" trong helper module + sync module + 2 test docstring + integration test docstring.
+
+**Tested / Rehearsed:**
+- Target 3 file pytest: **232 passed, 6 warnings (137.45s)** — `tests/unit/test_admission_status_helpers.py` + `tests/unit/test_lead_admission_sync_extended_map.py` + `tests/integration/test_lead_admission_sync.py`. (Per-file breakdown intentionally omitted — total reflects the single-shot run; rerun with `-v` if per-file counts needed.)
+- Wide unit + service regression (admission/status/phase/confirmation/magic_link keyword filter): **705 passed + 2 failed** trong 73s. 2 failed = pre-existing zalo_phase1_review_findings (verify trên parent f382bc6b stash → cùng 2 fail).
+- Full unit + service regression: **1697 passed + 8 failed + 1 deselected + 1 skipped** trong 237s. 8 fail + 1 deselected = pre-existing trên parent (stash + re-run trên `f382bc6b` cho cùng test list ra **8 failed + 19 passed** trong 1.90s), bằng chứng:
+  ```
+  tests/unit/test_channel_normalization.py::TestCanonicalChannelsConstant::test_contains_four_values
+    AssertionError: assert frozenset({'b...', 'zalo_bot'}) == {'browser', '...', 'sms', 'zalo'}
+  tests/unit/test_dispatcher_per_action.py::TestBuildActionSnapshot::test_inherit_default
+    AssertionError: assert None == '/default'
+  tests/unit/test_entrypoint_ordering.py::TestEntrypointOrdering::test_alembic_before_sync
+    AssertionError: alembic must run before sync
+  tests/unit/test_notification_e2.py::TestRenderTemplateSnapshot::test_render_from_template
+    AssertionError: assert None == '/leads/42'
+  tests/unit/test_notification_e2.py::TestCRUDIntegration::test_create_rule_with_invalid_template_code_raises
+    AssertionError: Regex pattern did not match.
+  tests/unit/test_notification_e2.py::TestCRUDIntegration::test_create_rule_without_template_code_passes_validation
+    BadRequest: Unknown event 'LEAD_ASSIGNED'
+  tests/unit/test_zalo_phase1_review_findings.py::test_confirm_token_dispatches_only_application_status_changed
+    TypeError: tracking_dispatch() got an unexpected keyword argument 'rooms'
+  tests/unit/test_zalo_phase1_review_findings.py::test_application_deleted_seed_rule_exists
+    KeyError: 'channels'
+  ```
+  Plus 1 deselected: `tests/unit/test_immediate_fixes.py::TestConsultationCascadeDispatch::test_all_admission_transitions_have_dispatch` (verified pre-existing trên parent stash run).
+- Note vs `[test-debt-admission-workflow-e2e]` memory record (6 known failure): các 8 failure ở đây thuộc category KHÁC (notification surface debt + zalo phase 1 debt + immediate-fixes debt), KHÔNG overlap với 6 e2e finance/casbin/dirty-state failure. 8 + 9 thực tế là 2 lớp test debt riêng biệt, đều pre-existing không do #15.
+
+**Pending:**
+- Push approval từ user.
+- Sub-PR open base `feat/admission-full-cutover`.
+- Post-merge: tick `[x]` checkbox `#15` trên issue #183, project board status comment.
+
+---
+
 ### B2.4 / T0-4b — sub-PR merged (post-merge sync)
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**

@@ -72,6 +72,7 @@ def check_admission_surveys_due_task(self):
         from ..models.program_offering import ProgramOffering
         from ..services import notification_dispatcher
         from ..services.notification_payloads import EventPayload
+        from ..utils.admission_status import ADMITTED_LIKE_STATUSES
 
         result = {"checked": 0, "sent": 0, "failed": 0, "skipped_no_phone": 0}
 
@@ -108,8 +109,14 @@ def check_admission_surveys_due_task(self):
                 )
 
         async with task_db_session() as session:
+            # ``ADMITTED_LIKE_STATUSES`` covers legacy ``approved`` /
+            # ``overridden`` and choice-engine ``admitted``. ``in_`` accepts
+            # the helper's frozenset directly. ``approved_at`` stays the
+            # eligibility timestamp regardless of which path landed the
+            # status; the choice-engine T7 transition reuses this column
+            # per PLAN.
             conditions = [
-                AdmissionProfile.status == "approved",
+                AdmissionProfile.status.in_(ADMITTED_LIKE_STATUSES),
                 AdmissionProfile.approved_at.isnot(None),
                 AdmissionProfile.approved_at <= due_before,
                 AdmissionProfile.survey_sent_at.is_(None),

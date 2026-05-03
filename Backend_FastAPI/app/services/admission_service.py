@@ -57,6 +57,7 @@ from .admission_correction_helpers import (
     post_parse_business_check,
     safe_serialize,
 )
+from ..utils.admission_status import is_admitted_like, is_confirmation_eligible
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -306,8 +307,13 @@ def _check_idor_access(
 # This matches the legal/compliance reading that quota = seats consumed,
 # not seats currently active.
 QUOTA_OCCUPYING_STATUSES = (
+    # Admitted-equivalent (legacy + choice-engine). ``admitted`` lands here
+    # forward-compat for #15 — Phase 1 widens the CHECK constraint and #16
+    # wires the writes; the moment the new string can land on the column,
+    # quota accounting is already correct without touching this site again.
     "approved",
     "overridden",
+    "admitted",
     "confirmed",
     "enrolled",
 )
@@ -1083,7 +1089,9 @@ def _compute_completion_percent(
 
     # Eligibility (simplified — mirrors _compute_frontend_fields logic)
     has_any_validation_error = gpa_error or len(doc_errors) > 0 or len(missing_personal) > 0
-    is_ineligible = has_any_validation_error and profile.status not in ("approved", "enrolled")
+    is_ineligible = has_any_validation_error and not (
+        is_admitted_like(profile) or profile.status == "enrolled"
+    )
 
     cccd_error = not profile.citizen_id
     personal_required = ["full_name", "phone", "citizen_id"]
@@ -1273,7 +1281,7 @@ async def _resolve_minor_correction_state(
     if current_user is None or not getattr(profile, "permissions", None):
         return
 
-    if profile.status not in ("approved", "confirmed"):
+    if not (is_admitted_like(profile) or profile.status == "confirmed"):
         profile.permissions["minor_correction"] = False
         _sync_available_actions(profile)
         return
@@ -1413,7 +1421,7 @@ def _compute_frontend_fields(
         # Equivalent client-side: assigned officer, unit manager, or admin.
         # Only meaningful while waiting on the applicant — after `confirmed`,
         # no more tokens are generated.
-        "send_confirmation": status == "approved" and (is_owner or is_manager or is_admin),
+        "send_confirmation": is_confirmation_eligible(profile) and (is_owner or is_manager or is_admin),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
@@ -1436,7 +1444,7 @@ def _compute_frontend_fields(
         # don't create finance records for profiles that might still flip
         # to rejected.
         "calculate_fee": (
-            status in ("approved", "confirmed", "enrolled")
+            (is_admitted_like(profile) or status in ("confirmed", "enrolled"))
             and (
                 is_admin
                 or (
@@ -1461,7 +1469,7 @@ def _compute_frontend_fields(
         # this back to False if the per-path effective allowlist is
         # empty, so FE never sees a button without renderable fields.
         "minor_correction": (
-            status in ("approved", "confirmed")
+            (is_admitted_like(profile) or status == "confirmed")
             and (profile.applied_rules or {}).get("admission_path_id") is not None
             and (
                 is_admin
@@ -7000,8 +7008,9 @@ async def apply_minor_correction(
     from ..schemas.admission import MinorCorrectionRequest  # noqa: F401
     from ..services import audit_service
 
-    # 1. Status whitelist
-    if profile.status not in {"approved", "confirmed"}:
+    # 1. Status whitelist — admitted-like (legacy approved/overridden +
+    # choice-engine admitted) plus confirmed.
+    if not (is_admitted_like(profile) or profile.status == "confirmed"):
         raise BusinessRuleViolation(
             "Hiệu chỉnh chỉ áp dụng cho hồ sơ đã duyệt (approved) hoặc đã xác nhận (confirmed)"
         )
@@ -7363,11 +7372,15 @@ async def generate_confirmation_token(
     from app.config import settings
     from app.repositories import AdmissionRepository
     
-    # Validate profile status
-    if profile.status != "approved":
+    # Validate profile status — confirmation-eligible only (legacy
+    # ``approved`` + choice-engine ``admitted``). ``overridden`` is
+    # intentionally excluded: the admin-override transition routes
+    # directly to ``enrolled`` and must NOT surface a candidate-facing
+    # confirmation flow.
+    if not is_confirmation_eligible(profile):
         raise BadRequest(
             f"Cannot generate confirmation token for profile with status '{profile.status}'. "
-            "Only approved profiles can receive confirmation links."
+            "Only approved/admitted profiles can receive confirmation links."
         )
 
     # ADM-023 / Q9-C2 (2026-04-29): per-profile resend cap. The same
@@ -7527,10 +7540,13 @@ async def get_token_info(
     if token_obj.profile and token_obj.profile.lead:
         profile_name = token_obj.profile.lead.full_name or profile_name
     
-    # Token is only valid if profile is still in approved state
+    # Token is only valid if profile is still in a confirmation-eligible
+    # state (legacy ``approved`` + choice-engine ``admitted``).
+    # ``overridden`` is excluded — admin force-approval skips the
+    # candidate confirmation step (state machine: overridden → enrolled).
     profile_not_approved = (
         token_obj.profile is not None
-        and token_obj.profile.status != "approved"
+        and not is_confirmation_eligible(token_obj.profile)
     )
 
     return {
@@ -7765,9 +7781,9 @@ async def verify_and_confirm(
     # CCCD matches — validate profile state before confirming
     from .admission_state_machine import validate_transition
 
-    if profile.status != "approved":
+    if not is_confirmation_eligible(profile):
         log.warning(
-            "Magic-link confirm rejected: profile not in approved state",
+            "Magic-link confirm rejected: profile not in confirmation-eligible state",
             profile_id=profile.id,
             current_status=profile.status,
             token_id=token_obj.id,
@@ -7781,6 +7797,13 @@ async def verify_and_confirm(
         validate_transition(profile.status, "confirmed")
     except ValueError as e:
         raise BadRequest(str(e))
+
+    # Capture pre-transition status BEFORE the write so the audit log
+    # records the actual prior state (legacy ``approved`` or choice-engine
+    # ``admitted``). Reading ``profile.status`` after line 7802 would
+    # always return ``"confirmed"`` and silently misattribute the
+    # transition source.
+    _old_status_for_audit = profile.status
 
     # STATE CHANGE — token-based confirmation flow
     profile.status = "confirmed"
@@ -7811,11 +7834,12 @@ async def verify_and_confirm(
         reason="Applicant confirmed via magic link",
     )
 
-    # Audit trail
+    # Audit trail — use captured pre-transition status so ``admitted``
+    # (choice-engine) profiles do not get logged as ``approved``.
     from ..services import audit_service
     await audit_service.log_status_change(
         db, "AdmissionProfile", profile.id,
-        old_status="approved", new_status="confirmed",
+        old_status=_old_status_for_audit, new_status="confirmed",
         actor_user_id=None,
         reason="Magic-link confirmation",
         source="magic_link",

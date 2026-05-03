@@ -213,10 +213,22 @@ class TestMappingConfiguration:
     """Test that the mapping configuration is correct."""
 
     def test_mapping_has_all_required_statuses(self):
-        """Verify mapping contains all expected admission statuses (10 total)."""
+        """Verify mapping contains every expected admission status.
+
+        Cold Cutover Task #15 added three forward-compat choice-engine
+        entries (``admitted`` / ``reviewing`` / ``waitlisted``) on top of
+        the ten legacy statuses. ``result_published`` is intentionally
+        absent — it is a future intermediate state / T6 broadcast
+        marker, handled as an explicit no-op for lead sync; see the
+        unit-level test ``test_map_does_not_contain_result_published``.
+        """
         expected_statuses = {
+            # Legacy vocabulary
             "draft", "submitted", "approved", "rejected", "revision_requested",
             "resubmitted", "confirmed", "overridden", "enrolled", "withdrawn",
+            # Choice-engine vocabulary (Phase 1 schema migration will allow
+            # writes; #15 only ensures the read side is forward-compatible).
+            "admitted", "reviewing", "waitlisted",
         }
         assert set(ADMISSION_TO_LEAD_STATUS_MAP.keys()) == expected_statuses
 
