@@ -56,12 +56,12 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
-### #16 — admission_state_service.py + 11 caller refactor (PR open, awaiting review/merge)
+### #16 — admission_state_service.py + 11 caller refactor (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**
 - Branch `feature/admission-issue-16` off parent `3f7ead4d` (post-#15 tracking).
-- PR [#203](https://github.com/favouritekid/QLTS/pull/203) opened 2026-05-03 base `feat/admission-full-cutover`.
-- Head SHA at PR open: `f25b6a1a`. (Subsequent commits on the branch — including this doc sync entry — will advance the head; squash merge will collapse to a single new SHA on parent.)
+- PR [#203](https://github.com/favouritekid/QLTS/pull/203) — `[#16] refactor(admission): centralize status transitions + wire admission events` — squash `a7b6c5c9` (mergedAt `2026-05-03T11:33:39Z`, mergedBy `favouritekid` via `gh pr merge 203 --squash --delete-branch=false`). Parent advanced `3f7ead4d → a7b6c5c9`.
+- Pre-merge fix landed via `aca9f83c` (transition() dedupe key includes `:v{post_version}` suffix; legal cycle `rejected → resubmitted → rejected` regression test added) — collapsed into the squash SHA above.
 - Atomic 1-PR per user chốt — avoids unused transition service intermediate state + parent state where caller refactor lands but coverage/lint truth doesn't.
 
 **Scope (8 of 12 ADMISSION_* events wired; 4 deferred to Phase 3):**
@@ -109,16 +109,19 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Github Action workflow `admission-contract-check.yml` → same.
 
 **Tested / Rehearsed:**
-- Target 4 file pytest: **51 passed (2.74s)** — `test_admission_state_service.py` + `test_admission_state_service_event_mapping.py` + `test_check_status_assignment.py` + `test_check_notification_event_coverage_deferred.py`.
+- Target 4 file pytest: **51 passed (2.74s)** baseline → **58 passed (3.24s)** post-alias-extension → **59 passed (2.28s)** post-dedupe-key — `test_admission_state_service.py` + `test_admission_state_service_event_mapping.py` + `test_check_status_assignment.py` + `test_check_notification_event_coverage_deferred.py`.
+- Post-merge re-run on parent HEAD `a7b6c5c9`: **59 passed (1.86s)** — same 4 file. Confirms squash collapsed cleanly without test drift.
+- Post-merge AST lint live: 0 violations across 148 files (exit 0).
+- Post-merge coverage script live with `--allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK`: exit 0 (8 wired + 4 deferred allow-listed).
 - Lint script live: 0 violations across 148 scanned files (`scan()` exit 0).
 - Coverage script live: with `--allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK` → exit 0, 8 events ok + 4 events deferred (allow-listed).
 - Wide unit + integration regression: **1768 passed + 8 pre-existing fail + 1 deselected** in 247s. 8 fail + 1 deselected verified pre-existing on parent `3f7ead4d` (stash + re-run identical) — same notification surface debt + zalo phase 1 debt + immediate-fixes debt category as #15.
 - Service tests `tests/services/test_admission_service.py` + `test_admission_quota.py`: **45 errors at fixture setup** verified PRE-EXISTING on parent `3f7ead4d` (stash + same single test errors with same fixture marker). Memory `[test-debt-admission-workflow-e2e]` covers a subset (6 known); the broader 45 erroring tests are pre-existing finance fixture / dirty-state / Casbin drift debt — out of #16 scope per ATOMIC_PR rationale.
 
 **Pending:**
-- Reviewer review + squash merge PR [#203](https://github.com/favouritekid/QLTS/pull/203).
-- Post-merge: tick `[x] **#16**` checkbox on issue #183, parent tracking commit citing squash SHA.
-- Follow-up: open `test-debt/admission-fixture-isolation` PR (fixture race / `DeadlockDetectedError` + `pipeline_stage_order_key` UniqueViolation) — pre-existing per memory `[test-debt-admission-workflow-e2e]` 2026-04-30; broader scope than the 6-failure subset memory tracks.
+- (After this entry commits) tick `[x] **#16**` checkbox on issue #183 thematic line.
+- Project board card #183 (`[Phase 1 Code]` thematic) stays in `In Progress` until the 3 CI tooling rows close (gates B1+B2+#15+#16 done; CI-status + CI-event + CI-workflow remain).
+- Follow-up: open `test-debt/admission-fixture-isolation` PR (fixture race / `DeadlockDetectedError` + `pipeline_stage_order_key` UniqueViolation) — pre-existing per memory `[test-debt-admission-workflow-e2e]` 2026-04-30; broader scope than the 6-failure subset memory tracks. Update memory with the broader scope after the cleanup PR ships.
 
 ---
 
