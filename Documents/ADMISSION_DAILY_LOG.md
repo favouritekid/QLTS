@@ -56,6 +56,48 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
+### #184 Phase 1 Schema — preflight chốt + Wave 1 start
+
+**6-question chốt user 2026-05-03 (post-CI-tooling merge):**
+
+| # | Question | Answer | Rationale |
+|---|---|---|---|
+| Q1 | Wave order | **C — start small** | Ship Wave 1 (8 active migrations) first; eval pace + scope before committing Wave 2-6. Avoids scope creep on multi-week project. |
+| Q2 | Naming collision `phase1_19b` (casbin shipped vs spec event catalog seed) | **A — rename + push down** | spec's `phase1_19b` event catalog seed → `phase1_19c`; spec's `phase1_19c` celery beat → `phase1_19d`; spec's `phase1_19d` notification rules → `phase1_19e`. PLAN deviation log Phần 9 cite. |
+| Q3 | `phase1_XX` slot assignments | **`phase1_13`** = system_config (PATCH-14); **`phase1_16`** = archived_admission_profile (PATCH-20); **`phase1_17`** = archived_outbox (PATCH-20) | All 4 slots (13/14/15a/16/17/18) verified free via `alembic ScriptDirectory.walk_revisions()` audit. `phase1_14` left free as future-reserve gap. |
+| Q4 | Soak window Wave 4 (Lead 1-many) | **A — accept 3w wall-clock** | Spec line 3468-3473 mandate 1w soak between 15a / 15b / 15c. Total wall-clock ≈ 3 weeks. Accepted because Lead-Profile relationship change is structurally breaking; rollback-able per stage outweighs faster ship. |
+| Q5 | Production rehearsal Wave 3 ONE-WAY | **Verify D12-D14 staging clone ready BEFORE Wave 3 ship** | Wave 3 has 4 ONE-WAY migrations (`phase1_11`, `phase1_15a`, `phase1_18`, `phase1_12` backfill). Staging clone with prod DB shape required for rehearsal; ops sign-off gate before prod deploy per RUNBOOK §7.2. |
+| Q6 | Start Wave 1 now? | **A — start now** | Implementer begins Wave 1 preflight + sub-PR split proposal in this session; Wave 1 ship may complete this session if pace allows. |
+
+**Branch / Setup:**
+- Continue on parent `feat/admission-full-cutover` HEAD `d1f38725` (post-CI-tooling tracking).
+- No code changes yet — preflight only.
+- PLAN deviation log Phần 9 added new sub-section "#184 Phase 1 Schema — slot assignments + naming deviations" with the Q2/Q3 chốt + audit-empty evidence.
+
+**Wave 1 sub-PR split — proposed (3 PRs)**:
+
+| PR | Migrations | Scope | Effort |
+|---|---|---|---|
+| **PR-1A** "Major program + Method/Path schema additive" | `phase1_01` (degree_level FK to major_program) + `phase1_02` (bonus_rule on method + path) | 2 simple `add_column` migrations; no BE/FE work | ~2-3h |
+| **PR-1B** "Path advanced features + subject kind seed" | `phase1_03` (applicable_to + method_quota on path; **+ BE schema + service + FE Zod**) + `phase1_05` (subject_kind + score bounds; **+ seed 6 subject ảo TB_HK1_L12, DGNL_DHQGHN, …**) + `phase1_06` (path_id FK on document_group; 3-tier resolution) | 3 migrations + BE schema + FE Zod + 6-row seed | ~5-6h |
+| **PR-1C** "Audit table + Profile flag + System config" | `phase1_07b` (backfill_exceptions audit table) + `phase1_08` (choice_engine flag on profile) + `phase1_13` (system_config + admin endpoint UPDATE + seed `current_intake_year=2026`) | 3 migrations: 2 simple + 1 with admin endpoint | ~3-4h |
+
+**Total Wave 1 effort estimate**: 10-13h ≈ 1.5-2 ngày làm việc.
+
+**Alternative split (4 PRs)** — split heavy PR-1B further:
+- PR-1A: phase1_01 + phase1_02 (simple)
+- PR-1B': phase1_03 only (heavy — BE + FE)
+- PR-1C': phase1_05 + phase1_06 (subject seed + document_group)
+- PR-1D: phase1_07b + phase1_08 + phase1_13 (audit + profile + config)
+
+Trade-off: smaller PRs (~2-3h each) vs more review cycles.
+
+**Pending user chốt before code starts:**
+- 3-PR split (recommended) hay 4-PR split?
+- After split chốt: implementer preflight PR-1A → code → review cycle.
+
+---
+
 ### CI-tooling — patterns 1.3/1.4 + namespace collision + GH Action + pre-commit (TESTED, merged 2026-05-03)
 
 **Branch / Commit / PR:**

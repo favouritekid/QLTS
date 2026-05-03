@@ -4480,3 +4480,18 @@ PLAN section §4 task #15 line 3380-3395 quy định một mapping cụ thể. K
 `admitted → sts09` (PLAN unchanged), `is_admitted_like` set `{approved, overridden, admitted}` (PLAN unchanged), `LEGACY_TO_NEW_STATUS_MAP` 3-entry (PLAN unchanged) đều giữ nguyên. Codex reviewer round thêm `is_confirmation_eligible` strict subset `{approved, admitted}` cho 4 magic-link site (overridden excluded vì state machine route `overridden → enrolled` direct, bypass `confirmed`).
 
 Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-03 #15 entry — 7-question matrix với rationale từng quyết định.
+
+### #184 Phase 1 Schema — slot assignments + naming deviations (2026-05-03)
+
+PLAN section §4 Phase 1 chain ordering uses placeholder revision IDs (`phase1_XX`) for migrations whose slot was reserved but not numbered (PATCH-14 system_config + PATCH-20 archive tables). The user-facing chốt 2026-05-03 + verified-empty audit assigns concrete IDs:
+
+| Spec migration | Assigned revision ID | Wave | Notes |
+|---|---|---|---|
+| `phase1_XX_create_system_config_table` (PATCH-14) | **`phase1_13`** | Wave 1 | `current_intake_year=2026` seed; admin UPDATE endpoint |
+| `phase1_XX_create_archived_admission_profile_table` (PATCH-20) | **`phase1_16`** | Wave 5 | 90-day archive policy (line 168) + round end_date+6m archive cron (line 195) |
+| `phase1_XX_create_archived_outbox_table` (PATCH-20) | **`phase1_17`** | Wave 5 | Outbox archive companion |
+| `phase1_19b_seed_event_catalog_db_rows` (spec) | **`phase1_19c`** | Wave 5 | **Naming deviation** — slot `phase1_19b` was claimed by B1's `phase1_19b_backfill_casbin_eft_and_seed_deny_rules` (PR #201, 6 deny rules per PLAN line 1411-1415; 16 referenced in #183 issue body is a cosmetic drift). The remaining notification-rule chain shifts: spec's `phase1_19c` → `phase1_19d`; spec's `phase1_19d` → `phase1_19e`. |
+
+Slot `phase1_14` left free as a future-reserve gap; `phase1_15a/15b/15c` reserved for Wave 4 lead-1-many sub-PR split (DDL drop + soak 1w + model+repo + soak 1w + FE migrate per PLAN line 3468-3473).
+
+Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-03 #184 preflight entry — 6-question matrix + Q1=C / Q2=A / Q3=phase1_13/16/17 / Q4=accept 3w / Q5=verify D12-D14 / Q6=start Wave 1 now.
