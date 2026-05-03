@@ -280,16 +280,24 @@ async def transition(
                 # keys above stay authoritative for downstream consumers.
                 payload = {**payload, **event_metadata}
 
-            # Dedupe key: ``admission:{id}:{new_status}`` — distinct per
-            # transition, even when two new_status values map to the
-            # same event (approved + overridden both → T7 but get
-            # distinct dedupe rows so neither suppresses the other).
+            # Dedupe key: ``admission:{id}:{new_status}:v{post_version}``.
+            # The ``v{...}`` suffix uses ``profile.version`` AFTER the
+            # ``+= 1`` write above, so each transition gets a unique
+            # idempotency key even when the same legal edge is traversed
+            # repeatedly. Without the version suffix, a legal cycle like
+            # ``rejected → resubmitted → rejected`` would collide on
+            # ``admission:{id}:rejected`` — the second outbox INSERT
+            # would suppress as a duplicate, and the second rejection
+            # would fail to dispatch ADMISSION_DECISION_REJECTED.
+            # Approve + overridden also stay distinct: they map to the
+            # same event T7 but the version increments through the
+            # transition so the keys never collide.
             from .notification_dispatcher import dispatch_event
             callback = await dispatch_event(
                 db,
                 event=event,
                 payload=payload,
-                dedupe_key=f"admission:{profile.id}:{new_status}",
+                dedupe_key=f"admission:{profile.id}:{new_status}:v{profile.version}",
             )
 
     # ``event`` is structlog's internal positional kwarg name (it

@@ -251,6 +251,7 @@ async def test_transition_dispatches_mapped_event(
     test below locks the full mapping."""
     _, dispatch_mock = patched_audit_and_dispatch
     profile = _profile(status="submitted")
+    profile.version = 3
     actor = _actor()
 
     await state_service.transition(db_session, profile, "approved", actor=actor)
@@ -264,9 +265,11 @@ async def test_transition_dispatches_mapped_event(
     assert payload["old_status"] == "submitted"
     assert payload["new_status"] == "approved"
     assert payload["actor_id"] == actor.id
-    # Dedupe key is deterministic per transition; outbox events use
-    # this as the ``idempotency_key``.
-    assert kwargs["dedupe_key"] == f"admission:{profile.id}:approved"
+    # Dedupe key includes ``v{post_transition_version}`` so repeated
+    # legal cycles (rejected → resubmitted → rejected) get distinct
+    # idempotency_key values; the cycle regression test below proves it.
+    # ``profile.version`` was 3 before the call, so post-transition is 4.
+    assert kwargs["dedupe_key"] == f"admission:{profile.id}:approved:v4"
 
 
 @pytest.mark.asyncio
@@ -278,6 +281,7 @@ async def test_transition_event_metadata_merged_into_payload(
     overridden → T7 + override=True contract."""
     _, dispatch_mock = patched_audit_and_dispatch
     profile = _profile(status="approved")
+    profile.version = 5
 
     await state_service.transition(
         db_session,
@@ -293,9 +297,61 @@ async def test_transition_event_metadata_merged_into_payload(
     payload = kwargs["payload"]
     assert payload["override"] is True
     assert payload["override_reason"] == "Special case"
-    # Dedupe key uses ``new_status`` so override + approved get
-    # distinct rows even though both fire T7.
-    assert kwargs["dedupe_key"] == f"admission:{profile.id}:overridden"
+    # Dedupe key includes ``new_status`` AND ``v{post_version}`` — even
+    # though approved + overridden both fire T7, the new_status segment
+    # ("overridden" vs "approved") + version (post-write) keeps the two
+    # outbox rows distinct.
+    assert kwargs["dedupe_key"] == f"admission:{profile.id}:overridden:v6"
+
+
+@pytest.mark.asyncio
+async def test_transition_dedupe_key_includes_version_for_legal_cycle(
+    db_session, patched_audit_and_dispatch
+):
+    """Legal cycle ``rejected → resubmitted → rejected`` MUST produce
+    distinct dedupe keys for each ``rejected`` outbox row.
+
+    Without the ``v{post_version}`` suffix, both rejection rows would
+    share ``admission:{id}:rejected`` and the second outbox INSERT
+    would suppress as a duplicate (the dedupe contract treats same key
+    as same event), causing the second
+    ``ADMISSION_DECISION_REJECTED`` to silently drop. This is the
+    bug class the patch closes.
+    """
+    _, dispatch_mock = patched_audit_and_dispatch
+
+    # Profile starts at ``submitted`` (version 1) — submit → reject →
+    # resubmit → reject is the canonical cycle the state machine
+    # allows when an applicant fixes documents and re-submits.
+    profile = _profile(status="submitted", profile_id=42)
+    actor = _actor()
+
+    # First rejection: submitted → rejected (version 1 → 2)
+    await state_service.transition(
+        db_session, profile, "rejected", actor=actor,
+    )
+    first_reject_key = dispatch_mock.await_args.kwargs["dedupe_key"]
+
+    # Resubmit: rejected → resubmitted (version 2 → 3)
+    await state_service.transition(
+        db_session, profile, "resubmitted", actor=actor,
+    )
+
+    # Second rejection: resubmitted → rejected (version 3 → 4)
+    await state_service.transition(
+        db_session, profile, "rejected", actor=actor,
+    )
+    second_reject_key = dispatch_mock.await_args.kwargs["dedupe_key"]
+
+    # Same profile.id + same new_status, but DIFFERENT post-transition
+    # versions → DIFFERENT dedupe keys.
+    assert first_reject_key == "admission:42:rejected:v2"
+    assert second_reject_key == "admission:42:rejected:v4"
+    assert first_reject_key != second_reject_key, (
+        "Legal cycle rejected → resubmitted → rejected MUST produce "
+        "distinct dedupe keys; without the v{post_version} suffix the "
+        "second outbox row would collide with the first."
+    )
 
 
 @pytest.mark.asyncio
