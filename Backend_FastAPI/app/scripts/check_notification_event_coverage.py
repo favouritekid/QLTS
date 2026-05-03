@@ -394,14 +394,91 @@ def _print_json(statuses: Iterable[EventStatus]) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _summarize(statuses: List[EventStatus]) -> int:
-    failing = [st for st in statuses if st.gaps]
-    if not failing:
-        print("\nOK — every notification event is fully wired.", file=sys.stderr)
+def _summarize(
+    statuses: List[EventStatus],
+    allow_deferred: Optional[Set[str]] = None,
+) -> int:
+    """Print the verdict + return the CI exit code.
+
+    ``allow_deferred`` (Cold Cutover #16): a caller-supplied set of
+    enum names whose only gap is ``no-dispatch-site`` and which are
+    intentionally awaiting a future writer (Phase 3 choice-engine
+    routes for waitlist / promote / rollback / batch-publish). The
+    script ALWAYS prints a separate ``Deferred (allow-listed)``
+    block listing them so the gap stays visible to operators — the
+    flag silences the failure exit code, never the report.
+
+    Strict semantics:
+    * Every name in ``allow_deferred`` must actually exist in
+      ``SystemEvents`` AND be in the catalog AND have exactly the
+      single gap ``no-dispatch-site`` — otherwise the allow-list
+      misuses fail loud (extra gaps + unknown names + wired-but-
+      allow-listed events all surface in the failing list).
+    * Allow-list never hides ``raw-dispatch-of-outbox-event`` or
+      ``rule-has-zero-actions`` etc. — those remain blocking.
+    """
+    allow_deferred = allow_deferred or set()
+    by_name = {st.name: st for st in statuses}
+
+    deferred_recognised: List[EventStatus] = []
+    deferred_misuse: List[str] = []
+    for name in sorted(allow_deferred):
+        st = by_name.get(name)
+        if st is None:
+            deferred_misuse.append(
+                f"{name} (--allow-deferred name not in SystemEvents)"
+            )
+            continue
+        if st.gaps != ["no-dispatch-site"]:
+            # Either no gaps (already wired — drop from list) or
+            # more than just dispatch-site gap (hiding a real bug).
+            deferred_misuse.append(
+                f"{name} (gaps={st.gaps or ['ok']!r}; allow-deferred only "
+                "covers events with the single gap no-dispatch-site)"
+            )
+            continue
+        deferred_recognised.append(st)
+
+    deferred_names = {st.name for st in deferred_recognised}
+    failing = [
+        st for st in statuses
+        if st.gaps and st.name not in deferred_names
+    ]
+
+    if deferred_recognised:
+        print(
+            f"\nDeferred (allow-listed) — {len(deferred_recognised)} event(s) "
+            "intentionally awaiting a future writer:",
+            file=sys.stderr,
+        )
+        for st in deferred_recognised:
+            print(f"  ~ {st.name}: no-dispatch-site (allow-deferred)", file=sys.stderr)
+
+    if deferred_misuse:
+        # Misuse counts as a failure regardless of allow-list intent
+        # so silently typoing or mis-listing an event never silences
+        # a real gap.
+        print(
+            f"\n{len(deferred_misuse)} --allow-deferred misuse(s):",
+            file=sys.stderr,
+        )
+        for line in deferred_misuse:
+            print(f"  ! {line}", file=sys.stderr)
+
+    if not failing and not deferred_misuse:
+        if deferred_recognised:
+            print(
+                f"\nOK — every notification event is wired or explicitly "
+                f"deferred ({len(deferred_recognised)} allow-listed).",
+                file=sys.stderr,
+            )
+        else:
+            print("\nOK — every notification event is fully wired.", file=sys.stderr)
         return 0
-    print(f"\n{len(failing)} event(s) with gaps:", file=sys.stderr)
-    for st in failing:
-        print(f"  - {st.name}: {', '.join(st.gaps)}", file=sys.stderr)
+    if failing:
+        print(f"\n{len(failing)} event(s) with gaps:", file=sys.stderr)
+        for st in failing:
+            print(f"  - {st.name}: {', '.join(st.gaps)}", file=sys.stderr)
     return 1
 
 
@@ -417,7 +494,24 @@ def main() -> int:
         action="store_true",
         help="Emit JSON instead of TSV.",
     )
+    parser.add_argument(
+        "--allow-deferred",
+        default="",
+        help=(
+            "Comma-separated SystemEvents enum names whose ``no-dispatch-site`` "
+            "gap is intentionally deferred (Phase 3 future writers). The verdict "
+            "stays exit 0 only when every listed event has EXACTLY the single "
+            "gap ``no-dispatch-site``; deferred events still appear in the "
+            "summary so the gap is visible. Example: "
+            "``--allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,"
+            "ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK``."
+        ),
+    )
     args = parser.parse_args()
+
+    allow_deferred: Set[str] = {
+        name.strip() for name in args.allow_deferred.split(",") if name.strip()
+    }
 
     db_data: Optional[dict[str, tuple[bool, int]]] = None
     if args.check_db:
@@ -428,7 +522,7 @@ def main() -> int:
         _print_json(statuses)
     else:
         _print_text(statuses, check_db=args.check_db)
-    return _summarize(statuses)
+    return _summarize(statuses, allow_deferred=allow_deferred)
 
 
 if __name__ == "__main__":
