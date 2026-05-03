@@ -94,12 +94,14 @@ Trade-off: smaller PRs (~2-3h each) vs more review cycles.
 
 **Pending user chốt before code starts:** ~~3-PR vs 4-PR split~~ → user chốt **4-PR split** 2026-05-03.
 
-### #184 Wave 1 PR-1A — phase1_01 + phase1_02 (CODE_DONE local, push pending)
+### #184 Wave 1 PR-1A — phase1_01 + phase1_02 (PR open, awaiting review/merge)
 
-**Branch / Commit:**
+**Branch / Commit / PR:**
 - Branch `feature/admission-184-pr-1a` off parent `2864df20` (preflight tracking).
+- PR [#205](https://github.com/favouritekid/QLTS/pull/205) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `83d05150`.
 - 2 migrations + 3 model updates + 1 unit test file.
-- Squash title (when PR opens): `[#184 Wave1] feat(schema): phase1_01_degree_level + phase1_02_bonus_rule`.
+- Squash title: `[#184 Wave1] feat(schema): phase1_01 degree_level FK + phase1_02 bonus_rule`.
 
 **Migrations shipped:**
 1. `phase1_01_add_degree_level_fk_to_major_program.py`
@@ -127,8 +129,8 @@ Trade-off: smaller PRs (~2-3h each) vs more review cycles.
 - Live: AST lint 0 violations across 148 files; coverage script `--allow-deferred` exit 0 (no admission status / event surface touched in PR-1A).
 
 **Pending:**
-- Push approval từ user.
-- Sub-PR #205 open base `feat/admission-full-cutover`.
+- Reviewer review + squash merge PR [#205](https://github.com/favouritekid/QLTS/pull/205).
+- Post-merge: parent tracking commit citing squash SHA + start PR-1B' (path advanced + BE schema + service + FE Zod).
 
 ---
 
