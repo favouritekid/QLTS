@@ -133,6 +133,36 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+### B2.2 / M-1-19a — sub-PR merged (post-merge sync)
+
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#198](https://github.com/favouritekid/QLTS/pull/198) — `[B2.2/M-1-19a] feat(notification): NotificationOutbox model + create-table migration` — squash `e05732c2` (mergedAt `2026-05-03T01:12:39Z`, mergedBy `favouritekid` via `gh pr merge --squash --delete-branch=false`). Parent advanced `acdffc8e → e05732c2`.
+
+**Tested / Rehearsed:**
+- Post-merge re-run trên parent HEAD `e05732c2` (Docker `qlts-backend-1`):
+  ```
+  pytest tests/unit/test_notification_outbox_model.py \
+         tests/unit/test_outbox_skeleton.py \
+         tests/unit/test_celery_task_registry.py -q
+  → 26 passed in 4.29s
+  ```
+- Breakdown: 14 model+migration parity + 10 outbox skeleton (canary slot empty post-retire) + 2 celery_task_registry regression.
+- Live alembic upgrade trên parent: dev DB `phase0br01 → phase1_19a (head)` ✓. Pre-merge roundtrip evidence (downgrade -1 → re-upgrade head idempotent) on local branch trước khi push.
+
+**Mức 1 board:**
+- Card #183 [Phase 1 Code] vẫn ở In Progress (đã move sang trong session trước qua Chrome MCP).
+- **B2 thematic checkbox `[ ] **B2**` NOT ticked** — đúng SOP, chỉ tick khi B2.4/T0-4b close (single checkbox covers all 4 sub-PR B2.1..B2.4).
+
+**Tomorrow plan (sau B2.2 merge):**
+- B2.3 — `dispatch_event()` wrapper. Branch `feature/admission-b2-3` off updated parent `e05732c2`. Scope: gọi `dispatch(..., strict=True)` + return post-commit callback; honor `requires_outbox` / `bypass_consent_check` flag từ `event_catalog.py`; INSERT `NotificationOutbox` cho 7 outbox-flagged events.
+- B2.4 / T0-4b — replace `notification_outbox_tasks.py` body với 3-step claim/dispatch/finalize loop per PLAN §3.3.f.
+
+**Notes / surprises:**
+- Squash convention `[B2.2/M-1-19a] feat(notification): ... (#198)` đúng pattern cutover SOP. Branch `feature/admission-b2-2-m-1-19a` giữ remote (`--delete-branch=false`) cho rollback / cherry-pick.
+- Stale local `feature/admission-b2-2` (off original `df2111a9`, abandoned mid-implementation) vẫn còn — local-only, never pushed; an toàn `git branch -d feature/admission-b2-2` cleanup.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
