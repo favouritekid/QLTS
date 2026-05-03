@@ -54,6 +54,43 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+## 2026-05-03
+
+**Sub-PR merged today (vào `feat/admission-full-cutover`):**
+- PR [#197](https://github.com/favouritekid/QLTS/pull/197) — `[ADM-B2.1] feat(notification): 12 ADMISSION milestone events catalog + group + seed` — squash `df2111a9` (mergedAt `2026-05-03T00:05:57Z`, mergedBy `favouritekid` via `gh pr merge --squash --delete-branch=false`). Parent advanced `910d2c4d → df2111a9`.
+
+**Scope landed:**
+- 4-file notification surface sync: `events.py` (12 new `SystemEvents` enum) + `event_catalog.py` (12 `EVENT_CATALOG` entries, `EventDefinition` extended với `requires_outbox` + `bypass_consent_check` defaults `False`) + `event_groups.py` (12 → `NotificationEventGroup.APPLICATION`) + `notification_seed_defaults.py` (12 Vietnamese seed defaults theo PLAN §3.3.d audience matrix).
+- Outbox / bypass-consent matrix (PLAN §3.3.d): 7 outbox · 5 bypass-consent.
+- 65 lock-in tests `test_b2_1_admission_milestone_events.py` (enum + dataclass + cross-file parity + matrix).
+- 2 lock tests trong `test_notification_contract.py` cho `_PENDING_DISPATCH_EVENTS` split (P2 fix): `test_pending_dispatch_events_disjoint_from_dispatched` + `test_pending_dispatch_events_locked_to_b2_1_admission_set`.
+
+**Tested / Rehearsed:**
+- Post-merge re-run trên parent HEAD `df2111a9` (Docker `qlts-backend-1`):
+  ```
+  pytest tests/unit/test_b2_1_admission_milestone_events.py \
+         tests/unit/test_notification_contract.py \
+         tests/api/test_notification_event_groups_api.py -q
+  → 103 passed in 34.89s
+  ```
+- Breakdown: 65 B2.1 lock-in + 34 notification_contract (incl. 2 lock tests pending split) + 4 event_groups_api regression.
+- Coverage script `app/scripts/check_notification_event_coverage.py` exits `1` với đúng 12 `no-dispatch-site` cho `admission_*` events — đây là **intentional gap cho B2.1**, sẽ green sau B2.3 wrapper + `#16` `state_service.transition()` wiring. `_PENDING_DISPATCH_EVENTS` removal-gate trong test giữ honest contract.
+
+**Blocked / decisions cần:**
+- B2.2 push approval (sau khi đề xuất scope: `NotificationOutbox` model + migration `phase1_19a` với `down_revision='phase0br01'` + retire canary `test_models_package_still_lacks_notification_outbox` cùng PR).
+
+**Tomorrow plan (B2 sequential):**
+- B2.2 `NotificationOutbox` model + migration `phase1_19a` (idempotent guards + retire canary).
+- B2.3 `dispatch_event()` wrapper (gọi `dispatch(..., strict=True)` + return post-commit callback; honor `requires_outbox` / `bypass_consent_check` flag từ catalog).
+- B2.4 / T0-4b real `notification_outbox_drain` worker (replaces T0-4a no-op skeleton).
+
+**Notes / surprises:**
+- Squash convention `[ADM-B2.1] feat(notification): ... (#197)` đúng pattern cutover SOP. Branch `feature/admission-b2-1` giữ lại (delete-branch=false) cho rollback / cherry-pick nếu cần.
+- gh CLI cache + raw API ban đầu báo PR open ngay sau user xác nhận merged — lý do: merge thực tế xảy ra **sau** confirmation. Khi user approve `gh pr merge` qua CLI, raw API + git fetch đều confirm `merged: true` + parent advance ngay tức thì. Pattern: trust git fetch + raw API trước UI claim.
+- Mức 1 board: B2 thuộc thematic card **#183 [Phase 1 Code] B1+B2+#15+#16 + CI tooling** (NOT #185 — `#185` is the Phase 2 multi-round card, unrelated). Card #183 column expected In Progress từ T0 wave; verify thủ công vì gh CLI thiếu `read:project` scope. Issue body của #183 có **1 checkbox cho B2 duy nhất** (covers all 4 sub-PR B2.1+B2.2+B2.3+B2.4) — KHÔNG tick `[x]` ở wave này; chỉ tick khi B2.4 / T0-4b close (per `admission-cutover-subpr-sop` 4-step post-merge).
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**

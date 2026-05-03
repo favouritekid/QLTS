@@ -5,7 +5,7 @@
 **Risk log:** `Documents/ADMISSION_REFACTOR_RISK_REVIEW.md`
 **Branch:** `feat/admission-full-cutover` (parent của sub-feature branches)
 
-**Last updated:** 2026-05-01 (round 22 cleanup: Q11 closed, Q9 defer 3 task, phase3_02/03 SUPERSEDED, sequencing fix #17/LS-map/FE Zod, blocker ID standardize, "9 → 11" direct sites, "Phase 3 = 2 → 1" align)
+**Last updated:** 2026-05-03 (B2.1 merged via [#197](https://github.com/favouritekid/QLTS/pull/197) squash `df2111a9` — 12 ADMISSION_* events catalog + group + seed + `EventDefinition` extension; 103/103 post-merge re-run on parent; coverage script intentionally red until B2.3 + #16)
 **Current sprint focus:** Task 0 prerequisites (T0-1, T0-2, T0-3, T0-4a/4b, T0-5) + maintenance window timing lock + 7 stakeholder sign-off
 
 ---
@@ -66,7 +66,7 @@
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
 | B1 | Casbin auth_model deny-first + adapter v3 mapping + 16 deny rules accountant | BE | TODO | | U:- I:- R:- (4×14 matrix) | | PLAN §3.3.b RBAC + RISK_REVIEW B1 |
-| B2 | EventDefinition extend (`requires_outbox`, `bypass_consent_check`) + 12 ADMISSION_* enum + EVENT_CATALOG seed + `dispatch_event` wrapper + `NotificationOutbox` model + migration. **Split 4 sub-PR**: B2.1 (catalog + group + seed) → B2.2 (model + migration) → B2.3 (wrapper) → B2.4 (T0-4b worker). | BE | IN_PROGRESS (B2.1 commit local on `feature/admission-b2-1`) | B2.1: feature/admission-b2-1 (local); B2.2-4: TODO | B2.1 U:✓ 101/101 (65 B2.1 contract + parity + outbox/bypass matrix + 36 regression notification_contract + event_groups_api); coverage script reports `no-dispatch-site` for 12 events (expected — dispatch sites land in #16). | B2.2/3/4 chờ B2.1 merge | PLAN §3.3.d-f + RISK_REVIEW B2 |
+| B2 | EventDefinition extend (`requires_outbox`, `bypass_consent_check`) + 12 ADMISSION_* enum + EVENT_CATALOG seed + `dispatch_event` wrapper + `NotificationOutbox` model + migration. **Split 4 sub-PR**: B2.1 (catalog + group + seed) → B2.2 (model + migration) → B2.3 (wrapper) → B2.4 (T0-4b worker). | BE | IN_PROGRESS (B2.1 TESTED 2026-05-03; B2.2/3/4 TODO) | B2.1: [#197](https://github.com/favouritekid/QLTS/pull/197) merged 2026-05-03 squash `df2111a9`; B2.2-4: TODO | B2.1 U:✓ 103/103 post-merge re-run on parent `df2111a9` (34.89s): 65 B2.1 lock-in (enum + dataclass + cross-file parity + outbox/bypass matrix per PLAN §3.3.d) + 34 notification_contract (incl. P2 fix `_PENDING_DISPATCH_EVENTS` split + 2 lock tests `disjoint` + `locked-to-12-set`, bite-verified) + 4 event_groups_api regression. Coverage script `app/scripts/check_notification_event_coverage.py` exits `1` with 12 expected `no-dispatch-site` (admission_*); will green after B2.3 wrapper + #16 transition wiring. | B2.2/3/4 sequential: B2.2 (model + migration `phase1_19a`) → B2.3 (wrapper) → B2.4 (T0-4b worker, replaces T0-4a no-op skeleton) | PLAN §3.3.d-f + RISK_REVIEW B2 |
 | #15 | `approved → admitted` workflow remap 23 file caller + `is_admitted_like()` + `effective_status()` helpers | BE | TODO | | U:- I:- | B2 ship trước (event mapping) | PLAN §4 task #15 |
 | #16 | Refactor 11 direct `profile.status = '...'` sang `state_service.transition()` + lint rule AST check | BE | TODO | | U:- I:- R:- (lint rule) | B1 + B2 ship trước | PLAN §4 task #16 + RISK_REVIEW B5 |
 
