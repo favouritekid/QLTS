@@ -36,7 +36,20 @@ class MajorProgram(Base):
     degree_level = Column(
         String(50),
         nullable=False,
-        comment="Trình độ (vd: 'Cao đẳng', 'Đại học')"
+        comment="Trình độ (vd: 'Cao đẳng', 'Đại học'). LEGACY text column "
+                "— stays for Phase 4 retire. New code paths use "
+                "degree_level_id FK below."
+    )
+    # phase1_01 (#184 Wave 1) — FK to config_degree_level. Canonical
+    # lookup for new code paths; legacy ``degree_level`` text column
+    # stays in parallel for Phase 4 retire.
+    degree_level_id = Column(
+        Integer,
+        ForeignKey("config_degree_level.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="FK to config_degree_level. Canonical lookup; "
+                "backfilled from legacy degree_level text column."
     )
     code = Column(
         String(50),
