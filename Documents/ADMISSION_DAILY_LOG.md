@@ -91,6 +91,48 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+### B2.2 / M-1-19a — `NotificationOutbox` model + migration (local, pending push)
+
+**Branch:** `feature/admission-b2-2-m-1-19a` off parent `acdffc8e` (= post B2.1 tracking commit `docs(admission): B2.1 post-merge tracking — TESTED + #183 board correction`). The earlier branch `feature/admission-b2-2` off `df2111a9` was abandoned mid-implementation after Codex caught a scope leak — working tree had B2.1 post-merge tracking + B2.2 implementation mixed; the rename + reroot puts B2.2 on a clean parent state and aligns the branch name with the tracker convention `[B2.2/M-1-19a]`.
+
+**Scope (B2.2 strict, no leak into B2.3/B2.4):**
+- `Backend_FastAPI/app/models/notification_outbox.py` — new `NotificationOutbox` model. 10 cột match PLAN §3.3.e + §3.3.f: `id BIGSERIAL PK`, `event_code VARCHAR(64) NOT NULL`, `payload JSONB NOT NULL`, `idempotency_key VARCHAR(128) NOT NULL`, `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `dispatched_at TIMESTAMPTZ NULL`, `attempts INT NOT NULL DEFAULT 0`, `last_error TEXT NULL`, `claimed_at TIMESTAMPTZ NULL`, `claimed_until TIMESTAMPTZ NULL`. Named `UniqueConstraint("idempotency_key", name="uq_notification_outbox_idempotency_key")`. Two `Index(...)` với `postgresql_where=text("dispatched_at IS NULL")` cho `ix_outbox_pending(created_at)` + `ix_outbox_claim(claimed_until)` — partial index keeps the hot path cheap as the table grows.
+- `Backend_FastAPI/alembic/versions/phase1_19a_create_notification_outbox.py` — new migration. `revision='phase1_19a'`, `down_revision='phase0br01'`. Idempotent guards `table_exists` + `index_exists` (mirror `phase0sg01` precedent). Upgrade creates table với 10 cột + named UNIQUE + 2 partial-WHERE indexes. Downgrade short-circuits nếu table đã gone, ngược lại drop indexes + table theo thứ tự đảo. Stable name constants `TABLE`, `INDEX_PENDING`, `INDEX_CLAIM`, `UNIQUE_IDEMPOTENCY` được import bởi test file để lock parity.
+- `Backend_FastAPI/app/models/__init__.py` — re-export `NotificationOutbox` (import + thêm vào `__all__` ngay cluster Notification, alphabetical giữa `NotificationConsentHistory` và `NotificationQuota`).
+- `Backend_FastAPI/tests/unit/test_notification_outbox_model.py` (new) — 14 lock-in tests: importable + `__all__` membership + tablename + column shape (name/nullable/PK 10 entries) + `id` is `BigInteger` + `payload` is `JSONB` (not generic JSON) + named UNIQUE constraint single-col `idempotency_key` + 2 partial indexes present + each on correct column + WHERE clause filters `dispatched_at IS NULL` + migration module loads + revision chain `phase1_19a → phase0br01` + no other migration declares phase1_19a as `down_revision` (= currently the head) + ORM ⇄ migration constants parity (TABLE / INDEX_PENDING / INDEX_CLAIM / UNIQUE_IDEMPOTENCY).
+- `Backend_FastAPI/tests/unit/test_outbox_skeleton.py` — retire T0-4a canary `test_models_package_still_lacks_notification_outbox` (single delete, replaced với inline comment giải thích arc + pointer sang `test_notification_outbox_model.py`). 2 AST guards (`test_skeleton_module_does_not_reference_notification_outbox_in_code` + `test_tasks_package_init_does_not_reference_notification_outbox_in_code`) giữ nguyên — B2.2 KHÔNG touch skeleton task body hay `app/tasks/__init__.py` (vẫn locked cho B2.4 / T0-4b).
+
+**Verification:**
+- `docker compose exec -T backend python -m pytest tests/unit/test_notification_outbox_model.py tests/unit/test_outbox_skeleton.py tests/unit/test_celery_task_registry.py -q` → **26 / 26 PASS in ~3.5s**: 14 model+migration parity + 10 outbox skeleton (canary slot now empty) + 2 celery_task_registry regression. Đã re-run lần 2 trên branch sau pop stash + commit để xác nhận no regression.
+- Live alembic roundtrip dev DB (`qlts_dev`):
+  - `alembic current` → `phase0br01` (post B2.1 baseline).
+  - `alembic upgrade head` → `phase1_19a (head)`. `\d notification_outbox` shows 10 cột + 4 indexes (PK + 2 partial WHERE + 1 named UNIQUE). Column shape exact match PLAN spec.
+  - `alembic downgrade -1` → `phase0br01`. `\d notification_outbox` returns "Did not find any relation".
+  - `alembic upgrade head` → `phase1_19a (head)`. `SELECT to_regclass('public.notification_outbox') IS NOT NULL` returns `t` ✓ idempotent re-apply.
+  - **Sau verify đã downgrade lại về `phase0br01`** (per Codex hướng dẫn) để dev DB không đi trước parent unmerged. B2.2 PR merge xong sẽ re-upgrade trên dev sau.
+- AST guards retained trong `test_outbox_skeleton.py` PASS — skeleton task body chưa reference model (B2.4 sẽ thay).
+
+**Out of scope (next sub-PR):**
+- B2.3 — `dispatch_event()` wrapper (gọi `dispatch(..., strict=True)` + return post-commit callback; honor `requires_outbox` / `bypass_consent_check` flag từ catalog).
+- B2.4 / T0-4b — replace `notification_outbox_tasks.py` body với 3-step claim/dispatch/finalize loop per PLAN §3.3.f.
+- B1 Casbin deny-first — separate sub-PR, không ràng buộc với B2.
+
+**Process correction (Codex catch):**
+- Working tree mid-implementation đã trộn 2 scope: B2.1 post-merge tracking docs + B2.2 implementation. Tôi định roll cả 2 vào một PR duy nhất, Codex chặn: scope creep, B2.1 docs phải land trước trên parent qua direct commit, B2.2 trên branch riêng theo SOP.
+- Sửa: stash B2.2 implementation 5 file, checkout parent, commit B2.1 tracking + drift fix `acdffc8e`, push parent, branch lại `feature/admission-b2-2-m-1-19a` off `acdffc8e`, pop stash. Stash đã drop sạch (no leftover).
+- Drift fix kèm: original notes claim card #185 = Notification Surface; thực tế `gh issue view 185 --json title` returns "[Phase 2] Multi-round + admission_round + path swap". Sửa wording sang #183 [Phase 1 Code] với 1 checkbox B2 covering 4 sub-PR (B2.1..B2.4), không tick cho đến B2.4 close.
+
+**Blocked / decisions cần:**
+- B2.2 push approval cho `feature/admission-b2-2-m-1-19a` + sub-PR creation → `feat/admission-full-cutover` với title `[B2.2/M-1-19a] feat(notification): NotificationOutbox model + create-table migration`.
+
+**Tomorrow plan (sau merge B2.2):**
+- B2.3 wrapper `dispatch_event()` — branch `feature/admission-b2-3` off updated parent.
+- Coverage script vẫn red 12 `no-dispatch-site` cho đến #16 (B2.3 ship wrapper, #16 wires `state_service.transition()`).
+
+**Board correction (append-only, 2026-05-03):** card #183 [Phase 1 Code] thực tế vẫn ở Todo trước phiên này; đã move thủ công Todo → In Progress sau khi verify board qua Chrome MCP. Entry B2.1 trong `acdffc8e` ghi "expected In Progress" là giả định chưa xác minh tại thời điểm viết, không phải trạng thái đã kiểm chứng.
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
