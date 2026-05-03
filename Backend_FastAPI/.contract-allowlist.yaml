@@ -1,0 +1,53 @@
+# Admission contract enforcement allow-list (Cold Cutover #16 + CI tooling).
+#
+# Glob patterns of files where direct ``profile.status = ...`` writes are
+# intentional and the AST lint
+# ``app/scripts/check_status_assignment.py`` MUST NOT flag them.
+#
+# Spec source: ``Documents/archive/PR_DRAFTS_2026-05-01.md`` line 108 +
+# ``Documents/ADMISSION_REFACTOR_RISK_REVIEW.md`` Phần 8.
+#
+# Why each entry:
+# * ``app/services/admission_state_service.py`` — THE centralized writer
+#   the lint protects; every legal status write happens through this
+#   single module's ``transition()`` function.
+# * ``alembic/versions/**/*.py`` — data migrations legitimately rewrite
+#   status columns during cold-cutover or schema-evolution work; the
+#   lint covers code paths, not migrations.
+# * ``tests/**/*.py`` — fixture setup + test scaffolds; lint enforcement
+#   applies to runtime code.
+#
+# Editing this file is intentional — adding a new path opens a hole in
+# the centralized-writer contract. The lock test
+# ``test_check_status_assignment.py::test_allowlist_locked`` keeps the
+# list explicit so additions are an audited decision.
+
+allowlist:
+  - "app/services/admission_state_service.py"
+  # Python's fnmatch (used by the lint) does NOT special-case ``**``;
+  # ``*`` is greedy and matches across directory separators in fnmatch
+  # terms, so ``tests/*.py`` actually matches nested test paths too.
+  # The explicit ``tests/*/*.py`` line below covers the canonical
+  # ``tests/<scope>/test_*.py`` layout, and ``tests/*/*/*.py`` covers
+  # one extra nesting level (``tests/api/v1/test_foo.py``). Add more
+  # depths only if a real path needs them — keeps the lint surface
+  # tight.
+  - "alembic/versions/*.py"
+  - "tests/*.py"
+  - "tests/*/*.py"
+  - "tests/*/*/*.py"
+
+# Admission-profile variable names — leftmost identifier the lint
+# considers when deciding whether a ``.status = ...`` write is on an
+# AdmissionProfile. Without static type info we cannot prove ``foo.status
+# = ...`` writes an ``AdmissionProfile``; the canonical list below is a
+# tight match against the codebase audit (2026-05-03 — zero existing
+# alias writes; the list is forward-prevention so future callers that
+# pick a non-canonical name still get blocked).
+profile_var_names:
+  - "profile"            # canonical (all 11 legacy sites use this)
+  - "locked_profile"     # identity-lock branches
+  - "admission_profile"  # router-level fanout
+  - "current_profile"    # resolver helpers
+  - "profile_row"        # result-set iteration
+  - "prof"               # short alias in tight loops
