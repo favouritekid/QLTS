@@ -96,6 +96,21 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.ADMISSION_CONFIRMATION_REMINDER_24H: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_CONFIRMATION_REMINDER_6H: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_CONFIRMATION_HARD_LOCKED: NotificationEventGroup.APPLICATION,
+    # B2.1 (admission cold-cutover refactor): 12 milestone events. All in
+    # APPLICATION group so admin notification UI clusters them with the
+    # existing application/profile lifecycle events.
+    SystemEvents.ADMISSION_PROFILE_SUBMITTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_REVISION_REQUESTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_RESUBMITTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_RESULT_PUBLISHED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_DECISION_ADMITTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_DECISION_WAITLISTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_DECISION_REJECTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_WAITLIST_PROMOTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_CONFIRMED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_ENROLLED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_WITHDRAWN: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_ROLLED_BACK: NotificationEventGroup.APPLICATION,
 
     # Finance events
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,

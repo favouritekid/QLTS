@@ -1188,6 +1188,69 @@ class SystemEvents(str, Enum):
     Recipients: Assigned officer + unit managers + admins.
     """
 
+    # =========================================================================
+    # ADMISSION 12 milestone events (B2.1) — admission cold-cutover refactor.
+    # See `Documents/ADMISSION_REFACTOR_PLAN.md` §3.3.d table line 1644-1657.
+    # 7 of the 12 (RESULT_PUBLISHED / DECISION_ADMITTED / DECISION_WAITLISTED
+    # / DECISION_REJECTED / WAITLIST_PROMOTED / ENROLLED / ROLLED_BACK) carry
+    # `requires_outbox=True` in EVENT_CATALOG — workflow guarantee delivery.
+    # 5 of the 12 (RESULT_PUBLISHED / DECISION_ADMITTED / DECISION_WAITLISTED
+    # / DECISION_REJECTED / ENROLLED) carry `bypass_consent_check=True` for
+    # in-app + email channels per Quy chế Bộ GD&ĐT. Zalo/SMS bypass remains
+    # FUTURE-GATED — the `zalo_template_approved` legal flag from Q7 chốt
+    # 2026-05-01 does not exist in the codebase yet; B2.3 / B2.4 must either
+    # honor consent for Zalo/SMS until that flag ships or wire the flag at
+    # that time.
+    # `APPLICATION_*` legacy namespace stays — see `notification_dispatcher`
+    # for backward-compat dispatch pattern.
+    # =========================================================================
+
+    ADMISSION_PROFILE_SUBMITTED = "admission_profile_submitted"
+    """T1 candidate submit. Audience: officer + candidate. requires_outbox=False."""
+
+    ADMISSION_REVISION_REQUESTED = "admission_revision_requested"
+    """T3, T4 officer asks revision. Audience: candidate. requires_outbox=False."""
+
+    ADMISSION_RESUBMITTED = "admission_resubmitted"
+    """T5 candidate resubmit after revision. Audience: officer. requires_outbox=False."""
+
+    ADMISSION_RESULT_PUBLISHED = "admission_result_published"
+    """T6 admin publishes admission result. Audience: officer + candidate.
+    requires_outbox=True, bypass_consent_check=True (in-app + email)."""
+
+    ADMISSION_DECISION_ADMITTED = "admission_decision_admitted"
+    """T7 system marks profile admitted. Audience: candidate.
+    requires_outbox=True, bypass_consent_check=True (in-app + email)."""
+
+    ADMISSION_DECISION_WAITLISTED = "admission_decision_waitlisted"
+    """T8 system marks profile waitlisted. Audience: candidate.
+    requires_outbox=True, bypass_consent_check=True (in-app + email)."""
+
+    ADMISSION_DECISION_REJECTED = "admission_decision_rejected"
+    """T9 system marks profile rejected. Audience: candidate.
+    requires_outbox=True, bypass_consent_check=True (in-app + email)."""
+
+    ADMISSION_WAITLIST_PROMOTED = "admission_waitlist_promoted"
+    """T10 admin promotes waitlist → admitted. Audience: candidate.
+    requires_outbox=True, bypass_consent_check=False."""
+
+    ADMISSION_CONFIRMED = "admission_confirmed"
+    """T12 candidate / officer / admin confirms admission. Audience: officer.
+    requires_outbox=False. Distinct from ADMISSION_CONFIRMATION_REMINDER_*
+    (those are reminder events; this fires when the confirm action lands)."""
+
+    ADMISSION_ENROLLED = "admission_enrolled"
+    """T13 system enrolls confirmed profile. Audience: officer + candidate.
+    requires_outbox=True, bypass_consent_check=True (in-app + email)."""
+
+    ADMISSION_WITHDRAWN = "admission_withdrawn"
+    """T14, T15, T16 candidate / admin withdraws. Audience: officer.
+    requires_outbox=False."""
+
+    ADMISSION_ROLLED_BACK = "admission_rolled_back"
+    """T17 admin override rollback. Audience: officer + candidate.
+    requires_outbox=True, bypass_consent_check=False."""
+
 
 # =============================================================================
 # EVENT DISPATCHER PATTERN

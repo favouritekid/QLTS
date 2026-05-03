@@ -66,7 +66,7 @@
 | ID | Task | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
 | B1 | Casbin auth_model deny-first + adapter v3 mapping + 16 deny rules accountant | BE | TODO | | U:- I:- R:- (4×14 matrix) | | PLAN §3.3.b RBAC + RISK_REVIEW B1 |
-| B2 | EventDefinition extend (`requires_outbox`, `bypass_consent_check`) + 12 ADMISSION_* enum + EVENT_CATALOG seed + `dispatch_event` wrapper + `NotificationOutbox` model + migration | BE | TODO | | U:- I:- | | PLAN §3.3.d-f + RISK_REVIEW B2 |
+| B2 | EventDefinition extend (`requires_outbox`, `bypass_consent_check`) + 12 ADMISSION_* enum + EVENT_CATALOG seed + `dispatch_event` wrapper + `NotificationOutbox` model + migration. **Split 4 sub-PR**: B2.1 (catalog + group + seed) → B2.2 (model + migration) → B2.3 (wrapper) → B2.4 (T0-4b worker). | BE | IN_PROGRESS (B2.1 commit local on `feature/admission-b2-1`) | B2.1: feature/admission-b2-1 (local); B2.2-4: TODO | B2.1 U:✓ 101/101 (65 B2.1 contract + parity + outbox/bypass matrix + 36 regression notification_contract + event_groups_api); coverage script reports `no-dispatch-site` for 12 events (expected — dispatch sites land in #16). | B2.2/3/4 chờ B2.1 merge | PLAN §3.3.d-f + RISK_REVIEW B2 |
 | #15 | `approved → admitted` workflow remap 23 file caller + `is_admitted_like()` + `effective_status()` helpers | BE | TODO | | U:- I:- | B2 ship trước (event mapping) | PLAN §4 task #15 |
 | #16 | Refactor 11 direct `profile.status = '...'` sang `state_service.transition()` + lint rule AST check | BE | TODO | | U:- I:- R:- (lint rule) | B1 + B2 ship trước | PLAN §4 task #16 + RISK_REVIEW B5 |
 

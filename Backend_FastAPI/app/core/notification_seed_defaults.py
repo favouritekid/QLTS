@@ -501,6 +501,150 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "info",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },
+    # =========================================================================
+    # B2.1 — admission cold-cutover refactor: 12 milestone events.
+    # Each entry mirrors the EVENT_CATALOG metadata (audience / priority)
+    # in `app/core/event_catalog.py`. The seeder reads `default_channels`
+    # from EVENT_CATALOG; this dict only carries content + recipient_config.
+    # `coverage_script` requires every `notification_class="user"` event to
+    # have a row here — see `check_notification_event_coverage.py:65`.
+    # =========================================================================
+
+    SystemEvents.ADMISSION_PROFILE_SUBMITTED: {
+        "title_template": "Hồ sơ tuyển sinh đã nộp",
+        "message_template": "Hồ sơ #${application_id} đã được nộp lúc ${submitted_at_iso}.",
+        "notification_type": "info",
+        "recipient_config": {
+            "resolver_type": "actor_excluded",
+            "params": {
+                "inner_resolver": {
+                    "resolver_type": "composite",
+                    "params": {"resolvers": [
+                        {"resolver_type": "lead_owner", "params": {}},
+                        {"resolver_type": "all_admins", "params": {}},
+                    ]},
+                },
+            },
+        },
+    },
+    SystemEvents.ADMISSION_REVISION_REQUESTED: {
+        "title_template": "Yêu cầu bổ sung hồ sơ",
+        "message_template": "Hồ sơ #${application_id} cần bổ sung. Lý do: ${revision_reason}.",
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_RESUBMITTED: {
+        "title_template": "Hồ sơ đã được nộp lại",
+        "message_template": "Hồ sơ #${application_id} đã được candidate nộp lại sau yêu cầu bổ sung.",
+        "notification_type": "info",
+        "recipient_config": {
+            "resolver_type": "actor_excluded",
+            "params": {
+                "inner_resolver": {
+                    "resolver_type": "composite",
+                    "params": {"resolvers": [
+                        {"resolver_type": "lead_owner", "params": {}},
+                        {"resolver_type": "all_admins", "params": {}},
+                    ]},
+                },
+            },
+        },
+    },
+    SystemEvents.ADMISSION_RESULT_PUBLISHED: {
+        "title_template": "Công bố kết quả tuyển sinh",
+        "message_template": "Kết quả hồ sơ #${application_id} đã được công bố lúc ${published_at_iso}.",
+        "notification_type": "success",
+        "recipient_config": {
+            "resolver_type": "composite",
+            "params": {"resolvers": [
+                {"resolver_type": "lead_owner", "params": {}},
+                {"resolver_type": "specific_users", "params": {}},
+            ]},
+        },
+    },
+    SystemEvents.ADMISSION_DECISION_ADMITTED: {
+        "title_template": "Trúng tuyển",
+        "message_template": "Chúc mừng! Hồ sơ #${application_id} đã được trúng tuyển.",
+        "notification_type": "success",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_DECISION_WAITLISTED: {
+        "title_template": "Trong danh sách dự bị",
+        "message_template": "Hồ sơ #${application_id} đang ở danh sách dự bị (hạng ${waitlist_rank}).",
+        "notification_type": "info",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_DECISION_REJECTED: {
+        "title_template": "Không trúng tuyển",
+        "message_template": "Hồ sơ #${application_id} không đạt yêu cầu xét tuyển đợt này.",
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_WAITLIST_PROMOTED: {
+        "title_template": "Được gọi từ danh sách dự bị",
+        "message_template": "Hồ sơ #${application_id} đã được gọi từ danh sách dự bị lúc ${promoted_at_iso}.",
+        "notification_type": "success",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.ADMISSION_CONFIRMED: {
+        "title_template": "Xác nhận nhập học",
+        "message_template": "Hồ sơ #${application_id} đã xác nhận nhập học (qua ${confirmed_via}).",
+        "notification_type": "success",
+        "recipient_config": {
+            "resolver_type": "actor_excluded",
+            "params": {
+                "inner_resolver": {
+                    "resolver_type": "composite",
+                    "params": {"resolvers": [
+                        {"resolver_type": "lead_owner", "params": {}},
+                        {"resolver_type": "all_admins", "params": {}},
+                    ]},
+                },
+            },
+        },
+    },
+    SystemEvents.ADMISSION_ENROLLED: {
+        "title_template": "Đã nhập học",
+        "message_template": "Hồ sơ #${application_id} đã hoàn tất nhập học (sinh viên #${student_id}).",
+        "notification_type": "success",
+        "recipient_config": {
+            "resolver_type": "composite",
+            "params": {"resolvers": [
+                {"resolver_type": "lead_owner", "params": {}},
+                {"resolver_type": "specific_users", "params": {}},
+            ]},
+        },
+    },
+    SystemEvents.ADMISSION_WITHDRAWN: {
+        "title_template": "Hồ sơ đã rút",
+        "message_template": "Hồ sơ #${application_id} đã được rút (từ trạng thái ${from_status}, bởi ${withdrawn_by_role}).",
+        "notification_type": "warning",
+        "recipient_config": {
+            "resolver_type": "actor_excluded",
+            "params": {
+                "inner_resolver": {
+                    "resolver_type": "composite",
+                    "params": {"resolvers": [
+                        {"resolver_type": "lead_owner", "params": {}},
+                        {"resolver_type": "all_admins", "params": {}},
+                    ]},
+                },
+            },
+        },
+    },
+    SystemEvents.ADMISSION_ROLLED_BACK: {
+        "title_template": "Hồ sơ được khôi phục về nháp (admin)",
+        "message_template": "Admin đã khôi phục hồ sơ #${application_id} từ trạng thái ${from_status} về nháp. Lý do: ${override_reason}.",
+        "notification_type": "warning",
+        "recipient_config": {
+            "resolver_type": "composite",
+            "params": {"resolvers": [
+                {"resolver_type": "lead_owner", "params": {}},
+                {"resolver_type": "specific_users", "params": {}},
+                {"resolver_type": "all_admins", "params": {}},
+            ]},
+        },
+    },
 }
 
 

@@ -538,6 +538,80 @@ Phase 0 wave migration #2; trigger function update — KHÔNG đụng schema/col
 
 ---
 
+### B2.1 — admission 12 milestone events catalog + group + seed (commit local, branch chưa push)
+
+**Branch:** `feature/admission-b2-1` off `feat/admission-full-cutover` HEAD `910d2c4d`. Phase 1 Code wave sub-PR đầu tiên (B2.1 of 4 split: B2.1 catalog + group + seed → B2.2 model+migration → B2.3 wrapper → B2.4 T0-4b worker). Card #183 [Phase 1 Code] sẽ move Todo → In Progress khi push.
+
+**Decision arc — scope corrections post initial-plan review:**
+- User catch (verified-from-code): tôi miss `event_groups.py` + `notification_seed_defaults.py` trong scope đầu. Coverage script `check_notification_event_coverage.py:65` `requires_seed = in_catalog and notification_class == "user" and not retired` — user-class events PHẢI có seed defaults. 12 event mới default class=user → bắt buộc 4 file thay vì 2.
+- User catch: `APPLICATION_SUBMITTED` không tồn tại trong code. PLAN table 3.3.d wording "APPLICATION_SUBMITTED (legacy, giữ + alias)" stale; thực tế submit dùng `APPLICATION_STATUS_CHANGED`. 12 event mới `ADMISSION_*` namespace KHÔNG alias gì legacy.
+- User catch: `safe_dispatch` line 1853 không có `strict` param. B2.3 wrapper sẽ dùng `dispatch(..., strict=True)` cho callback path, KHÔNG `safe_dispatch(strict=True)`. Tracked cho B2.3 (không scope B2.1).
+- Sequence chốt: B2.1 → B2.2 → B2.3 → B2.4 (T0-4b) → B1 → #15 → #16. B2 split để additive risk thấp + unblock T0-4b sớm.
+
+**Scope B2.1 (4 file):**
+- `Backend_FastAPI/app/core/events.py`: thêm 12 SystemEvents enum mới (`ADMISSION_PROFILE_SUBMITTED`, `_REVISION_REQUESTED`, `_RESUBMITTED`, `_RESULT_PUBLISHED`, `_DECISION_ADMITTED`, `_DECISION_WAITLISTED`, `_DECISION_REJECTED`, `_WAITLIST_PROMOTED`, `_CONFIRMED`, `_ENROLLED`, `_WITHDRAWN`, `_ROLLED_BACK`) sau `ADMISSION_CONFIRMATION_HARD_LOCKED` block với docstring per-event.
+- `Backend_FastAPI/app/core/event_catalog.py`: extend `EventDefinition` dataclass thêm 2 field optional `requires_outbox: bool = False` + `bypass_consent_check: bool = False` (additive, default False — 200+ existing entries untouched). Add 12 EVENT_CATALOG entries vào `_ADMISSION_EVENTS` tuple với cluster comment + per-event variables/resolver/channels/priority/dedup_key.
+- `Backend_FastAPI/app/core/event_groups.py`: thêm 12 entries vào `EVENT_GROUP_MAPPING` (all → `NotificationEventGroup.APPLICATION` — admin notification UI cluster).
+- `Backend_FastAPI/app/core/notification_seed_defaults.py`: thêm 12 entries vào `NOTIFICATION_SEED_DEFAULTS` với title_template/message_template/notification_type/recipient_config (Vietnamese display, recipient_config theo audience PLAN §3.3.d).
+
+**Outbox/bypass routing matrix (verified match PLAN §3.3.d table line 1644-1657):**
+- 7 events `requires_outbox=True`: RESULT_PUBLISHED, DECISION_ADMITTED, DECISION_WAITLISTED, DECISION_REJECTED, WAITLIST_PROMOTED, ENROLLED, ROLLED_BACK.
+- 5 events `bypass_consent_check=True`: RESULT_PUBLISHED, DECISION_ADMITTED, DECISION_WAITLISTED, DECISION_REJECTED, ENROLLED.
+- 5 events neither (best-effort + consent honored): PROFILE_SUBMITTED, REVISION_REQUESTED, RESUBMITTED, CONFIRMED, WITHDRAWN.
+
+**Scope KHÔNG đụng:**
+- KHÔNG `dispatch_event()` wrapper (B2.3).
+- KHÔNG `NotificationOutbox` model/migration (B2.2).
+- KHÔNG service caller wiring (B2.3 + #16).
+- KHÔNG B1 Casbin.
+
+**Tested:**
+- `pytest tests/unit/test_b2_1_admission_milestone_events.py -v` PASS **65/65** (0.98s):
+  - 1 enum value lock (12 enum + canonical string values).
+  - 1 EventDefinition fields exist (`requires_outbox` + `bypass_consent_check`).
+  - 1 existing 4 events default False (additive non-regression).
+  - 12 `test_event_present_in_catalog`.
+  - 12 `test_event_present_in_group_mapping` (→ APPLICATION).
+  - 12 `test_event_present_in_seed_defaults` (4 required keys per entry).
+  - 12 `test_requires_outbox_flag_matches_plan` (7 True + 5 False).
+  - 12 `test_bypass_consent_check_flag_matches_plan` (5 True + 7 False).
+  - 1 total outbox count = 7.
+  - 1 total bypass count = 5.
+- Regression: `pytest tests/unit/test_notification_contract.py tests/api/test_notification_event_groups_api.py` PASS **36/36** (34.22s) sau khi update `_DISPATCHED_EVENTS` whitelist với 12 entry mới + cluster comment ghi rõ "dispatch sites land #16".
+- Coverage script `python -m app.scripts.check_notification_event_coverage`: 12 event mới hiện `Cat=Y / Class=user / Seed=Y / Dispatch=0 / Gaps=no-dispatch-site` — **expected gap** sẽ close khi #16 wire `state_service.transition() → dispatch_event()`. Exit code 1 = expected during multi-PR wave; tracked rõ trong PR body.
+
+**Files changed:** 5 (4 modified + 1 new test file)
+- `Backend_FastAPI/app/core/events.py` (+~70 lines: 12 enum + docstring per event)
+- `Backend_FastAPI/app/core/event_catalog.py` (+~270 lines: 2 field extension + 12 EVENT_CATALOG entries)
+- `Backend_FastAPI/app/core/event_groups.py` (+~15 lines: 12 mapping entries)
+- `Backend_FastAPI/app/core/notification_seed_defaults.py` (+~140 lines: 12 seed entries)
+- `Backend_FastAPI/tests/unit/test_b2_1_admission_milestone_events.py` (new, ~200 lines: 65 lock-in tests)
+- `Backend_FastAPI/tests/unit/test_notification_contract.py` (+15 lines: whitelist 12 events với cluster marker comment)
+- `Documents/ADMISSION_IMPLEMENTATION_TRACKER.md` (B2 row split status update)
+- `Documents/ADMISSION_DAILY_LOG.md` (entry này)
+
+**Blocked / decisions cần:**
+- Push approval cho `feature/admission-b2-1` + sub-PR creation → `feat/admission-full-cutover`.
+
+**Tomorrow plan (sau merge B2.1):**
+- B2.2: NotificationOutbox model + migration `phase1_19a` (down `phase0br01`) + retire T0-4a canary `test_models_package_still_lacks_notification_outbox`.
+- B2.3: `dispatch_event()` wrapper với `dispatch(..., strict=True)` cho callback path + coverage script extend `check_outbox_consistency()`.
+- B2.4 = T0-4b: real worker wiring 3-step claim/dispatch/finalize replace skeleton.
+
+**Notes:**
+- Pattern catch B2.1: 4 file của notification system (events + catalog + groups + seed defaults) phải sync. Coverage script `check_notification_event_coverage.py` là source of truth — báo gap nếu một trong 3 surface (catalog/group/seed) miss + dispatch site count.
+- 12 `ADMISSION_*` namespace mới hoàn toàn — KHÔNG alias `APPLICATION_*` legacy (memory `notification-coverage-roadmap` ghi 6 APPLICATION_* legacy giữ backward-compat cho payload key `application_id` per Backend_FastAPI/CLAUDE.md). Phase 4 deprecate APPLICATION_* khi 0 caller production.
+- `category="application"` cho cả 12 — admin notification UI grouping. Convention từ existing ADMISSION_CONFIRMATION_* events.
+- `ADMISSION_CONFIRMED` (T12) distinct với existing `ADMISSION_CONFIRMATION_REMINDER_24H/_6H/_HARD_LOCKED` — 3 event cũ là reminder/lock awareness, T12 fires khi confirm action thực sự land.
+
+**Review feedback applied (post-commit `802bad4f`):**
+- **P2** (test contract honesty) — User catch: ban đầu tôi gộp 12 admission event vào `_DISPATCHED_EVENTS` whitelist trong `test_notification_contract.py:462-482` cùng comment "land in #16". Test xanh nhưng **nói dối** — assertion "Every notification_class=user event must be dispatched somewhere in app/" không còn đúng nghĩa vì 12 event chưa có caller thật. Sửa: tách `_PENDING_DISPATCH_EVENTS` frozenset riêng (12 admission events), assertion `excused = _DISPATCHED_EVENTS | _PENDING_DISPATCH_EVENTS` — pending list explicit + comment removal-gate per cluster ("admission_*: remove in #16"). Add 2 lock test mới: `test_pending_dispatch_events_disjoint_from_dispatched` (event chỉ ở 1 list) + `test_pending_dispatch_events_locked_to_b2_1_admission_set` (count + names lock to exact 12, fail loudly nếu thêm hoặc quên xóa khi #16 ship).
+- **Bite-verified P2 fix**: temporarily empty `_PENDING_DISPATCH_EVENTS` → 3 fail (`test_user_events_have_dispatch_in_codebase`, `test_dispatched_set_covers_all_user_events`, `test_pending_dispatch_events_locked_to_b2_1_admission_set`); restore → 4/4 PASS. Pending set là real regression catcher, không tautology.
+- **Soft-fix `zalo_template_approved` comment** (note non-block): comment đầu tiên ở `event_catalog.py` field declaration nhắc flag `zalo_template_approved` cho Q7 chốt; flag KHÔNG tồn tại trong codebase hiện tại. Sửa wording sang "FUTURE-GATED — does NOT exist in the codebase yet" + ghi rõ B2.3/B2.4 phải either honor consent for Zalo/SMS until flag ships OR wire flag at that time. Đồng bộ wording trong `events.py` cluster comment cùng PR.
+- **Test count**: 101 → 103 (+2 lock tests cho pending set). Total `pytest tests/unit/test_b2_1_admission_milestone_events.py tests/unit/test_notification_contract.py tests/api/test_notification_event_groups_api.py` → **103/103 PASS** (33.26s).
+
+---
+
 **Pattern correction — GitHub Project board (chốt 2026-05-02):**
 - User catch logic conflict: nếu mỗi sub-PR auto-add vào board → 8 thematic card → 50+ card pollution sau full cutover (revert về Mức 2 đã reject ban đầu).
 - Action: disabled "Auto-add to project" workflow (sidebar count 7 → 6 enabled); manually removed PR #189 card (Todo count 9 → 8).
