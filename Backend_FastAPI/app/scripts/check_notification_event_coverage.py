@@ -13,6 +13,17 @@ points wired up:
   4. (Optional, --check-db) at least one ``notification_rule`` row
      with ≥1 ``notification_action`` row
 
+Plus, after B2.3 (the ``dispatch_event()`` wrapper):
+
+  5. For events flagged ``requires_outbox=True`` in the catalog,
+     no service-level call site may use raw ``dispatch()`` /
+     ``safe_dispatch()`` — those calls must go through
+     ``dispatch_event()`` so the outbox INSERT happens inside the
+     caller's transaction. The check allow-lists the dispatcher
+     module itself and the outbox worker (T0-4a / T0-4b), where
+     raw calls are intentional. Any other raw call on an outbox
+     event is reported as ``raw-dispatch-of-outbox-event``.
+
 Output is a per-event grid plus a summary. Exit code is 0 when no
 required mount point is missing, 1 otherwise — suitable for CI.
 
@@ -30,13 +41,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import json
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, List, Optional, Set, Tuple
 
 from app.core.event_catalog import EVENT_CATALOG
 from app.core.events import SystemEvents
@@ -46,6 +58,19 @@ from app.core.notification_seed_defaults import NOTIFICATION_SEED_DEFAULTS
 REPO_ROOT = Path(__file__).resolve().parents[2]  # Backend_FastAPI/
 SCAN_DIRS = ("app/services", "app/tasks", "app/routers", "app/scripts")
 DISPATCH_PATTERN = re.compile(r"event\s*=\s*SystemEvents\.([A-Z_][A-Z0-9_]*)")
+
+# B2.3: raw-dispatch detector — files where ``dispatch()`` /
+# ``safe_dispatch()`` calls on outbox events are intentional and must
+# NOT be flagged. ``notification_dispatcher.py`` defines all three
+# primitives (dispatch / safe_dispatch / dispatch_event); the outbox
+# worker module hosts the T0-4a skeleton today and B2.4 / T0-4b will
+# add a real ``dispatch()`` / ``safe_dispatch()`` call in the same
+# file when it drains the outbox queue per row.
+RAW_DISPATCH_ALLOWLIST: Tuple[str, ...] = (
+    "app/services/notification_dispatcher.py",
+    "app/tasks/notification_outbox_tasks.py",
+)
+RAW_DISPATCH_FUNCS: Set[str] = {"dispatch", "safe_dispatch"}
 
 
 @dataclass
@@ -58,6 +83,12 @@ class EventStatus:
     dispatch_sites: List[str] = field(default_factory=list)
     db_rule_present: Optional[bool] = None
     db_action_count: Optional[int] = None
+    # B2.3: outbox-routing surface. Populated for every catalog event;
+    # ``raw_dispatch_sites`` lists call sites that bypass
+    # ``dispatch_event()`` AFTER the allowlist filter is applied, so a
+    # non-empty list is a real violation.
+    requires_outbox: bool = False
+    raw_dispatch_sites: List[str] = field(default_factory=list)
 
     @property
     def requires_seed(self) -> bool:
@@ -90,6 +121,12 @@ class EventStatus:
             and (self.db_action_count or 0) == 0
         ):
             out.append("rule-has-zero-actions")
+        # B2.3: Any outbox event with a raw dispatch / safe_dispatch
+        # call site outside the allowlist is a routing violation. Such
+        # callers must use ``dispatch_event()`` so the outbox INSERT
+        # happens in the caller's transaction.
+        if self.requires_outbox and self.raw_dispatch_sites:
+            out.append("raw-dispatch-of-outbox-event")
         return out
 
 
@@ -118,6 +155,112 @@ def _scan_dispatch_sites() -> dict[str, List[str]]:
                     name = match.group(1)
                     rel = py_file.relative_to(REPO_ROOT).as_posix()
                     hits.setdefault(name, []).append(f"{rel}:{lineno}")
+    return hits
+
+
+def _extract_systemevents_from_event_arg(node: ast.Call) -> Optional[str]:
+    """Return the ``SystemEvents.<NAME>`` enum member passed as ``event``
+    on this Call node, or ``None`` if the event is parameterized
+    (e.g. ``event=some_var``) or absent.
+
+    Both ``dispatch()`` and ``safe_dispatch()`` use the same signature
+    head — ``(db, event, payload, ...)`` — so a raw call may pass
+    ``event`` either as a keyword (``safe_dispatch(db, event=SystemEvents.X)``)
+    or as the second positional argument
+    (``safe_dispatch(db, SystemEvents.X, ...)``). The detector covers
+    both forms; missing the positional form was the bug user caught
+    after the B2.3 first-cut.
+
+    Parameterized values (``event=event_var`` or ``args[1]==Name``) are
+    intentionally skipped — they cannot be statically resolved to an
+    enum member; the detector errs on the side of fewer false
+    positives at the cost of letting some indirect calls slip.
+    """
+    # Keyword form: event=SystemEvents.X
+    for kw in node.keywords:
+        if kw.arg != "event":
+            continue
+        if (
+            isinstance(kw.value, ast.Attribute)
+            and isinstance(kw.value.value, ast.Name)
+            and kw.value.value.id == "SystemEvents"
+        ):
+            return kw.value.attr
+        # Other keyword forms (event=event_var, event=fn()) are not
+        # statically resolvable — bail without checking positional.
+        return None
+
+    # Positional form: dispatch(db, event, payload, ...) — event is
+    # positional index 1 for both dispatch() and safe_dispatch().
+    if len(node.args) >= 2:
+        arg = node.args[1]
+        if (
+            isinstance(arg, ast.Attribute)
+            and isinstance(arg.value, ast.Name)
+            and arg.value.id == "SystemEvents"
+        ):
+            return arg.attr
+    return None
+
+
+def _scan_raw_dispatch_calls() -> dict[str, List[str]]:
+    """B2.3 — find raw ``dispatch()`` / ``safe_dispatch()`` call sites
+    keyed by the ``SystemEvents.<NAME>`` member they pass.
+
+    Walks the AST so the detector matches the full ``Call`` node and
+    knows which function name is being invoked. The line-by-line grep
+    in ``_scan_dispatch_sites`` cannot tell ``dispatch_event()`` apart
+    from ``dispatch()`` — both lines may contain
+    ``event=SystemEvents.X`` — so AST is required here.
+
+    Both keyword (``event=SystemEvents.X``) and positional
+    (``safe_dispatch(db, SystemEvents.X, ...)``) forms are detected
+    via ``_extract_systemevents_from_event_arg``. Calls passing a
+    parameterized variable in either slot are not flagged — they
+    cannot be statically resolved to an enum member.
+
+    Files in ``RAW_DISPATCH_ALLOWLIST`` are skipped: the dispatcher
+    module owns the primitives, and the outbox worker (T0-4a / T0-4b)
+    is the legitimate consumer of raw ``dispatch`` / ``safe_dispatch``
+    when draining the outbox queue.
+
+    Returns ``{enum_name: ["<rel-path>:<lineno>", ...]}`` for every
+    raw call hit; events with no raw calls do not appear in the dict.
+    """
+    hits: dict[str, List[str]] = {}
+    for sub in SCAN_DIRS:
+        base = REPO_ROOT / sub
+        if not base.exists():
+            continue
+        for py_file in base.rglob("*.py"):
+            rel = py_file.relative_to(REPO_ROOT).as_posix()
+            if rel in RAW_DISPATCH_ALLOWLIST:
+                continue
+            if py_file.resolve() == _SELF_PATH:
+                continue
+            try:
+                source = py_file.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=rel)
+            except (OSError, SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                # Match call name: bare ``dispatch(...)`` /
+                # ``safe_dispatch(...)`` (Name node) OR
+                # ``module.dispatch(...)`` (Attribute node).
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                else:
+                    continue
+                if func_name not in RAW_DISPATCH_FUNCS:
+                    continue
+                enum_name = _extract_systemevents_from_event_arg(node)
+                if enum_name is None:
+                    continue
+                hits.setdefault(enum_name, []).append(f"{rel}:{node.lineno}")
     return hits
 
 
@@ -150,6 +293,7 @@ def _build_statuses(
     db_data: Optional[dict[str, tuple[bool, int]]] = None,
 ) -> List[EventStatus]:
     dispatch_sites = _scan_dispatch_sites()
+    raw_dispatch_sites = _scan_raw_dispatch_calls()
     catalog_by_name = {ev.value: defn for ev, defn in EVENT_CATALOG.items()}
     seed_keys: Set[str] = {ev.value for ev in NOTIFICATION_SEED_DEFAULTS}
 
@@ -164,8 +308,10 @@ def _build_statuses(
             st.in_catalog = True
             st.notification_class = defn.notification_class
             st.retired = defn.retired
+            st.requires_outbox = bool(getattr(defn, "requires_outbox", False))
         st.in_seed_defaults = member.value in seed_keys
         st.dispatch_sites = dispatch_sites.get(member.name, [])
+        st.raw_dispatch_sites = raw_dispatch_sites.get(member.name, [])
         if db_data is not None:
             present, count = db_data.get(member.value, (False, 0))
             st.db_rule_present = present
@@ -237,6 +383,8 @@ def _print_json(statuses: Iterable[EventStatus]) -> None:
             "requires_seed": st.requires_seed,
             "in_seed_defaults": st.in_seed_defaults,
             "dispatch_sites": st.dispatch_sites,
+            "requires_outbox": st.requires_outbox,
+            "raw_dispatch_sites": st.raw_dispatch_sites,
             "db_rule_present": st.db_rule_present,
             "db_action_count": st.db_action_count,
             "gaps": st.gaps,

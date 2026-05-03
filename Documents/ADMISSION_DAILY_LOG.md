@@ -163,6 +163,77 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+### B2.3 — `dispatch_event()` wrapper (sub-PR opened)
+
+**Branch:** `feature/admission-b2-3` off parent `31f7e001` (post B2.2 tracking commit). Strict scope: wrapper + tests + coverage-script extension only — KHÔNG touch worker body, state service / admission transition call-sites, Casbin/B1, hay board checkbox B2.
+
+**Sub-PR opened:** [#199](https://github.com/favouritekid/QLTS/pull/199) — base `feat/admission-full-cutover`, head `feature/admission-b2-3`. Mergeable: `MERGEABLE`, mergeStateStatus: `CLEAN`. Pending review/merge approval at open time; B2 checkbox remains unticked until B2.4/T0-4b.
+
+**Contract verification (resolved doc drift before code):**
+
+User flagged B2.3 must verify the dispatcher contract before implementing because PLAN §3.3.f sample uses `safe_dispatch()` while DAILY_LOG (and PLAN-internal note) suggested `dispatch(..., strict=True)`. Verified ground-truth signatures in `Backend_FastAPI/app/services/notification_dispatcher.py`:
+
+| Primitive | Line | `strict` param | Returns | Use case |
+|---|---|---|---|---|
+| `dispatch(...)` | 593 | yes (default `False`) | `(notif_ids, post_commit_callback)` — caller commits then awaits callback | Service body within caller's tx; `strict=True` for `dispatch_bundle()` savepoint pattern |
+| `safe_dispatch(...)` | 1853 | **no** | `notif_ids` | Router AFTER `db.commit()` — owns own commit + swallows errors |
+
+**Decision: B2.3 wrapper uses `safe_dispatch()` (no `strict`) inside the best-effort callback.** Reasoning:
+
+1. The post-commit callback runs in the **router after `await db.commit()`**, exactly the use case `safe_dispatch()` doc (line 1864-1866) describes — own commit + swallow errors.
+2. **No outer transaction** to protect with savepoints — memory `dispatch-bundle-strict-required` (3 internal `db.rollback()` paths in `dispatch()`) only applies when wrapping `dispatch()` in `begin_nested()`. The post-commit callback path doesn't have that wrapping.
+3. RISK_REVIEW PATCH-11 wording `safe_dispatch(... strict=True, ...)` is itself drift — `safe_dispatch()` doesn't accept a `strict` param (verified at line 1853-1859). Ground-truth signatures govern the implementation; aspirational doc notes do not. Documented this rationale in the wrapper docstring + commit message.
+4. Outbox path (7 events, `requires_outbox=True`) **doesn't call dispatch/safe_dispatch at all** — it INSERTs a `NotificationOutbox` row in the caller's tx and returns `None`. The Celery beat task (`dispatch_pending_outbox`, T0-4a skeleton today, B2.4/T0-4b real worker) drains the table out-of-band.
+
+**Catalog matrix correction (post-implementation discovery):**
+
+Mid-test it became clear the actual `EVENT_CATALOG` matrix differs from the early PLAN draft / B2.1 PR body table. Live snapshot via `python -c "from app.core.event_catalog import EVENT_CATALOG; ..."`:
+
+- **Outbox (7)**: `RESULT_PUBLISHED`, `DECISION_ADMITTED`, `DECISION_WAITLISTED`, `DECISION_REJECTED`, `WAITLIST_PROMOTED`, `ENROLLED`, `ROLLED_BACK` (5 of these have `bypass_consent_check=True`).
+- **Best-effort (5)**: `PROFILE_SUBMITTED`, `REVISION_REQUESTED`, `RESUBMITTED`, `CONFIRMED`, `WITHDRAWN` (all `bypass_consent_check=False`).
+
+The B2.1 PR body table and B2.2 commit message had an aspirational matrix that didn't match the catalog as merged. B2.3 tests pin the actual matrix; future PRs that re-tune the catalog must update the test parametrize lists to match. No production behavior change — this is documentation drift in PR descriptions, not code.
+
+**Scope (B2.3 strict, no leak into B2.4):**
+
+- `Backend_FastAPI/app/services/notification_dispatcher.py` — add `dispatch_event()` at end of file (after `safe_dispatch`). Signature: `async def dispatch_event(db, *, event: SystemEvents, payload: dict, dedupe_key: Optional[str] = None) -> Optional[Callable[[], Awaitable[None]]]`. Body: `isinstance(event, SystemEvents)` guard (raw str rejected because `SystemEvents(str, Enum)` would otherwise dict-lookup successfully via str hashing) → `get_event(event)` catalog lookup → outbox branch (`db.add(NotificationOutbox(event_code=event.value, payload=payload, idempotency_key=dedupe_key))` + return None; raises if `dedupe_key is None`) OR best-effort branch (return closure that calls `safe_dispatch(db=captured_db, event=captured_event, payload=captured_payload, dedupe_key=captured_dedupe, skip_preference_check=event_def.bypass_consent_check)`). Add `Awaitable` to typing import.
+- `Backend_FastAPI/tests/unit/test_dispatch_event_wrapper.py` (new) — 27 lock-in tests in 4 classes:
+  - `TestDispatchEventOutboxPath` (7 events × 2 + 1 sanity = 15 cases): outbox event inserts row + returns None; missing dedupe_key raises ValueError mentioning event name; outbox path doesn't call safe_dispatch (mock).
+  - `TestDispatchEventBestEffortPath` (5 events + 2 forwarding = 7 cases): best-effort returns callable + no outbox row; callback awaits safe_dispatch with full kwargs (mock); bypass_consent True-case via `get_event` patch with MagicMock(spec=EventDefinition).
+  - `TestDispatchEventInputValidation` (3 cases): raw string rejected; non-enum int rejected; unknown SystemEvents member raises (skip if catalog complete — currently SKIPPED because all 12 admission events are in catalog).
+  - `TestDispatchEventApiSurface` (2 cases): `dispatch_event` exported from dispatcher module + signature has keyword-only `event/payload/dedupe_key`.
+- `Backend_FastAPI/app/scripts/check_notification_event_coverage.py` — extend with `_scan_raw_dispatch_calls()` AST walker that finds `dispatch()` / `safe_dispatch()` call sites passing `event=SystemEvents.<NAME>` outside the allowlist (`app/services/notification_dispatcher.py` + `app/tasks/notification_outbox_tasks.py`). Add `requires_outbox` + `raw_dispatch_sites` fields to `EventStatus`. New gap type `raw-dispatch-of-outbox-event` triggers when any outbox-flagged event has a raw call site outside the allowlist. Munge wrapper docstring example to use `<OUTBOX_EVENT>` placeholder so the legacy regex-based `_scan_dispatch_sites` doesn't false-positive on the docstring.
+
+**Coverage detector — both keyword and positional forms (Codex catch during amend):**
+
+The first cut of `_scan_raw_dispatch_calls()` only walked `node.keywords` for `event=SystemEvents.X`, so it silently missed the positional form `safe_dispatch(db, SystemEvents.X, payload={})`. Codex caught this between the first commit and approval. Refactored: extracted `_extract_systemevents_from_event_arg(node)` covering both forms (keyword takes precedence; if keyword is parameterized, do NOT fall through to args[1]). The signatures of `dispatch()` and `safe_dispatch()` both have `event` at positional index 1, so the helper checks `args[1]` only. Added `Backend_FastAPI/tests/unit/test_coverage_script_raw_dispatch.py` (14 tests) to lock both forms + the allowlist + the parameterized-skip + the gap-surfacing integration so the next refactor can't quietly regress.
+
+**Verification:**
+
+- `docker compose exec -T backend python -m pytest tests/unit/test_dispatch_event_wrapper.py -v` → **26 passed, 1 skipped in 1.09s** (skip = `test_unknown_systemevents_member_raises_valueerror` because all events are catalogued — correct behavior).
+- `docker compose exec -T backend python -m pytest tests/unit/test_coverage_script_raw_dispatch.py -v` → **14 / 14 passed in 0.83s**.
+- Full notification regression: `test_dispatch_event_wrapper.py + test_coverage_script_raw_dispatch.py + test_notification_outbox_model.py + test_outbox_skeleton.py + test_notification_contract.py + test_b2_1_admission_milestone_events.py + test_celery_task_registry.py + tests/api/test_notification_event_groups_api.py` → **169 passed, 1 skipped in 36.92s** (1 skip same as above).
+- Coverage script:
+  - `python -m app.scripts.check_notification_event_coverage` → exit `1` with **12 expected `no-dispatch-site`** (admission_*, unchanged baseline; will green after #16 wires `state_service.transition()` callers).
+  - JSON output verified: 7 outbox events tracked, `total_raw_dispatch_sites_for_outbox_events=0`, `raw_dispatch_of_outbox_violations=0`. Detector dormant (correct — nothing to flag).
+  - **Bite-verified twice (keyword + positional)**: keyword stub `safe_dispatch(event=SystemEvents.ADMISSION_DECISION_ADMITTED, ...)` AND positional stub `safe_dispatch(db, SystemEvents.ADMISSION_DECISION_REJECTED, {})` each in non-allowlisted files produced exactly the expected `raw-dispatch-of-outbox-event` gap; removing each stub returned the script to baseline (12 `no-dispatch-site`, 0 raw-dispatch).
+- Alembic head unchanged: `phase1_19a (head)` (B2.3 doesn't touch DB — model + migration shipped in B2.2).
+
+**Out of scope (next sub-PR):**
+
+- B2.4 / T0-4b — replace `notification_outbox_tasks.py` body with 3-step claim/dispatch/finalize loop per PLAN §3.3.f. Worker is the legitimate raw `dispatch()` caller (allowlisted in coverage script). #16 separately wires `state_service.transition()` to call `dispatch_event()` — that's a B-cluster code task, not a B2 sub-PR.
+
+**Blocked / decisions cần:**
+
+- Review/merge PR [#199](https://github.com/favouritekid/QLTS/pull/199). Branch already pushed; sub-PR open against parent. Reviewer **MUST NOT** tick the `[ ] **B2**` checkbox on issue #183 — that single box covers all four B2 sub-PRs and stays unticked until B2.4 / T0-4b closes the wave.
+
+**Tomorrow plan (sau merge B2.3):**
+
+- B2.4 / T0-4b — branch `feature/admission-b2-4` off updated parent. Replace skeleton task body with 2-step CTE claim + 3-step dispatch/finalize per PLAN §3.3.f. Tests: concurrency rig (2 workers don't double-claim) + crash-recovery (claim_until expiry) + dispatch-error-path (last_error populated).
+- After B2.4 merge → tick `[ ] **B2**` checkbox on issue #183 (entire B2 wave closed).
+
+---
+
 ## 2026-05-02
 
 **Sub-PR merged today (vào `feat/admission-full-cutover`):**
