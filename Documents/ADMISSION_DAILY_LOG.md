@@ -56,11 +56,13 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-03
 
-### #15 — choice-engine status bridge (CODE_DONE local, push pending)
+### #15 — choice-engine status bridge (PR open, awaiting review/merge)
 
-**Branch / Commit:**
+**Branch / Commit / PR:**
 - Branch `feature/admission-issue-15` off parent `f382bc6b` (B1 post-merge tracking).
-- Commit on branch HEAD (pre-PR amend final, see PR for authoritative squash SHA). 13 files changed, 789 insertions(+), 27 deletions(-): 3 file mới (`app/utils/admission_status.py` + 2 test) + 7 file sửa (`lead_admission_sync.py`, `lead_profile_sync.py`, `phase_manager.py`, `admission_service.py`, `admission_tasks.py`, `routers/fees.py`, `tests/integration/test_lead_admission_sync.py`) + 3 doc sync (`ADMISSION_DAILY_LOG.md`, `ADMISSION_IMPLEMENTATION_TRACKER.md`, `ADMISSION_REFACTOR_PLAN.md`).
+- PR [#202](https://github.com/favouritekid/QLTS/pull/202) opened 2026-05-03 base `feat/admission-full-cutover`.
+- Head SHA at PR open: `471becd5`. (Subsequent commits on the branch — including this doc sync entry — will advance the head; squash merge will collapse to a single new SHA on parent.)
+- 13 files changed, 789 insertions(+), 27 deletions(-): 3 file mới (`app/utils/admission_status.py` + 2 test) + 7 file sửa (`lead_admission_sync.py`, `lead_profile_sync.py`, `phase_manager.py`, `admission_service.py`, `admission_tasks.py`, `routers/fees.py`, `tests/integration/test_lead_admission_sync.py`) + 3 doc sync (`ADMISSION_DAILY_LOG.md`, `ADMISSION_IMPLEMENTATION_TRACKER.md`, `ADMISSION_REFACTOR_PLAN.md`).
 - Strict scope ship qua reviewer: helpers + map extension + caller refactor read-only. KHÔNG đụng profile.status write site, DB CHECK constraint, /api/v2 wiring, Casbin diamond, hoặc CommissionRecord/LeadClaim non-admission "approved". (Exception: 1 audit-log fix — capture pre-transition status in `verify_and_confirm` so choice-engine ``admitted`` profiles don't get logged as ``approved``; the actual ``profile.status = "confirmed"`` write site stays untouched.)
 
 **User chốt 7 deviation từ PLAN line 3380-3395 (matrix sau prod audit qlts.tnpc.edu.vn):**
@@ -118,9 +120,8 @@ Prod audit evidence (qlts.tnpc.edu.vn via SSH 2026-05-03):
 - Note vs `[test-debt-admission-workflow-e2e]` memory record (6 known failure): các 8 failure ở đây thuộc category KHÁC (notification surface debt + zalo phase 1 debt + immediate-fixes debt), KHÔNG overlap với 6 e2e finance/casbin/dirty-state failure. 8 + 9 thực tế là 2 lớp test debt riêng biệt, đều pre-existing không do #15.
 
 **Pending:**
-- Push approval từ user.
-- Sub-PR open base `feat/admission-full-cutover`.
-- Post-merge: tick `[x]` checkbox `#15` trên issue #183, project board status comment.
+- Reviewer review + squash merge PR [#202](https://github.com/favouritekid/QLTS/pull/202).
+- Post-merge: tick `[x]` checkbox `#15` trên issue #183, parent tracking commit citing squash SHA, project board status comment.
 
 ---
 
