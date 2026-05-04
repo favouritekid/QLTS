@@ -56,6 +56,66 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 FE-wave3-display — A1 14-state display readiness SHIPPED
+
+**PR**: [#212](https://github.com/favouritekid/QLTS/pull/212) merged squash `2c411306` (FE-only — Wave 3 PR-3A bundle preflight A1 per Codex round 16 revised scope).
+
+**Parent advance**: `0d986009` (FE-zod-eligibility tracking) → `2c411306`.
+
+**Scope shipped (7 file)**:
+- `lib/ui-config/status-badge.config.ts` (MOD): `AdmissionStatus` widen 11 → 14 + `ADMISSION_BADGE_CONFIG` 3 entries (admitted/waitlisted/result_published).
+- `components/common/status/StatusBadge.tsx` (MOD): `ADMISSION_STATUS_MAP` legacy fallback path 3 entries.
+- `hooks/admissions/types.ts` (MOD): `AdmissionStatus` widen 10 → 14 (was missing reviewing + 3 new).
+- `app/(dashboard)/admissions/_components/AdmissionsClient.tsx` (MOD): `STATUS_OPTIONS` 8 → 14 (added 6: 3 new + 3 missing legacy: reviewing/revision_requested/withdrawn) + `STATUS_TABS` extend (admitted into approved tab, new "waitlisted" tab, result_published intentionally NOT tab-specific).
+- `hooks/admissions/useAdmissionsFilter.ts` (MOD): `STATUS_TABS` sync với AdmissionsClient declaration.
+- 2 test file (16 case): badge coverage + status-tabs sync drift guard.
+
+**Codex round 16 revised scope (catch + fix)**:
+- ❌ → ✅ Original draft only touched AdmissionsClient.tsx + status-badge.config; missing: `useAdmissionsFilter.STATUS_TABS` (drift = filter inconsistency across page reload), `hooks/admissions/types.ts.AdmissionStatus` (10 legacy + missing reviewing), `StatusBadge.ADMISSION_STATUS_MAP` (legacy fallback 3 missing entries).
+- ❌ → ✅ Test filename `status-badge.config.test.ts` matched vitest exclude `**/*.config.*` → renamed `status-badge-coverage.test.ts`.
+- ❌ → ✅ STATUS_TABS source-text parser regex started at first `[` after "STATUS_TABS" — hit type annotation `readonly string[]` not value declaration → fixed parser to find `=` first.
+
+**Codex Q1-Q3 chốt**:
+- Q1 `result_published` → NOT trong tab cụ thể (broadcast marker per PLAN; reachable via "Tất cả" + STATUS_OPTIONS dropdown only).
+- Q2 `admitted` → merged `approved` tab.
+- Q3 `waitlisted` → dedicated tab "Chờ ghế".
+
+**Workflow chronology preserved**:
+```
+approved (5) → admitted (5.5) → waitlisted (5.7) → result_published (5.9) → rejected (6)
+```
+
+**Stage 3a vs Stage 3b split**:
+- Stage 3a (THIS PR): pure additive display readiness. KHÔNG break legacy permissive parse từ FE-zod-eligibility (Stage 1).
+- Stage 3b DEFERRED Wave 3 PR-3A bundle: `admissions.ts` Zod `z.union([enum legacy, z.string()])` → `z.enum([14 strict])` re-tighten. **MUST atomic** với BE M-1-11 ship per PLAN line 3061-3070.
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (BE only) không match FE scope. 0 check chạy.
+- Manual verification pre-push: 16/16 vitest + tsc 0 error + lint 0 error in scope.
+
+**Test result**:
+- FE: 34/34 passed post-squash (16 PR-212 new + 18 FE-zod-eligibility regression).
+- FE tsc --noEmit: 0 error.
+
+**Tracker / board / issue**:
+- TRACKER `FE-badge` + `FE-tabs` rows → **TESTED** (Codex round 16 catches in row notes).
+- TRACKER `FE-zod-status` row → STAY STAGE 1 SHIPPED (Stage 3b strict re-tighten still TODO trong Wave 3 PR-3A bundle).
+- Issue #184 không cần update (FE Zod 14 state work tracked qua TRACKER Section 8).
+
+**Wave 3 PR-3A bundle pre-ship checklist** (Stage 3b atomic):
+- [x] Wave 1 + Wave 2 BE shipped.
+- [x] Stage 1 FE Zod permissive shipped (PR #211).
+- [x] **A1 FE-wave3-display readiness shipped (this PR)**.
+- [ ] Staging clone D12-D14 dry rehearsal (Q5 chốt 2026-05-03 — ops gate).
+- [ ] Wave 3 PR-3A bundle: BE M-1-11 status CHECK extend + FE Zod strict re-tighten (`z.enum([14])`) + LS-map 4 new state mapping (PLAN line 314).
+
+**Tomorrow plan**:
+1. **Coordinate D12-D14 staging clone** với DBA — hard gate Wave 3 ONE-WAY.
+2. Optional: Wave 5 phase1_19c-19e + archive seed (low risk, Wave 5 không gate Wave 3).
+3. Wave 3 PR-3A start CHỈ sau D12-D14 ready + sign-off.
+
+---
+
 ### #184 FE-zod-eligibility — Stage 1 permissive status + 4 eligibility fields SHIPPED
 
 **PR**: [#211](https://github.com/favouritekid/QLTS/pull/211) merged squash `d9631ad5` (FE-only — Stage 1 deploy choreography per PLAN line 3049-3055).
