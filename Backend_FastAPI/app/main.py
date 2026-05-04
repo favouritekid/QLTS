@@ -41,6 +41,7 @@ from .routers import (
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
+    admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admissions,  # ✅ NEW: Admission Profile workflow
     auth,
     collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
@@ -781,6 +782,7 @@ fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Pr
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
+fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes

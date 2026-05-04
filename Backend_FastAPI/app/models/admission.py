@@ -396,6 +396,26 @@ class AdmissionProfile(Base):
         comment="Reason for dropping out"
     )
 
+    # phase1_08 (#184 Wave 1 PR-1D) — multi-NV gate. Determines
+    # whether this profile flows through the legacy single-NV
+    # ProfileSubjectScore engine (false) or the Phase 3 multi-NV
+    # AdmissionProfileChoice + ProfileChoiceScore engine (true).
+    # PLAN line 821-826: must be an explicit flag (not inferred
+    # from count(choices)) because Phase 3 backfill creates one
+    # choice per existing profile, after which count >= 1 for
+    # every row and can no longer distinguish legacy from new.
+    uses_choice_engine: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment=(
+            "Phase 3 multi-NV gate. false = legacy single-NV "
+            "ProfileSubjectScore flow; true = AdmissionProfileChoice "
+            "+ ProfileChoiceScore flow."
+        ),
+    )
+
     # Relationships (Eager Loading to Prevent N+1 Queries)
     lead: Mapped["Lead"] = relationship(
         "Lead",
