@@ -45,7 +45,7 @@ def _validate_minor_correction_allowlist(
 
 AdmissionPathStatus = Literal["draft", "active", "inactive", "archived"]
 VisibilityStatus = Literal["internal", "public"]
-DocumentSource = Literal["shared", "method_override"]
+DocumentSource = Literal["shared", "method_override", "path_override"]
 
 
 # =============================================================================

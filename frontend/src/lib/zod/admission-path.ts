@@ -350,10 +350,18 @@ export type AcademicYearListResponse = z.infer<typeof academicYearListResponseSc
 /**
  * Resolved Document Response
  * Used for GET /api/admission-config/paths/{id}/documents
- * 
- * The `source` field indicates whether document config comes from:
- * - "shared": Applies to all methods (admission_method_id = NULL)
- * - "method_override": Method-specific config that overrides shared
+ *
+ * The `source` field indicates which tier of the 3-tier resolution
+ * (phase1_06 / #184 Wave 1 PR-1C') provided the document config:
+ * - "path_override": Tier 1 — path-specific group (admission_path_id = X)
+ * - "method_override": Tier 2 — method-specific override
+ *   (admission_path_id NULL, admission_method_id = path.method)
+ * - "shared": Tier 3 — shared offering-type fallback
+ *   (admission_path_id NULL, admission_method_id NULL)
+ *
+ * Precedence: tier 1 fully wins if present; else tier 2 fully
+ * wins; else tier 3. Within a tier, mandatory-wins on duplicate
+ * document_type.
  */
 export const resolvedDocumentResponseSchema = z.object({
   document_type_id: z.number(),
@@ -363,7 +371,7 @@ export const resolvedDocumentResponseSchema = z.object({
   requires_upload: z.boolean(),
   submission_format: z.string().nullable(),
   display_order: z.number(),
-  source: z.enum(["shared", "method_override"]),
+  source: z.enum(["shared", "method_override", "path_override"]),
 })
 
 export type ResolvedDocumentResponse = z.infer<typeof resolvedDocumentResponseSchema>

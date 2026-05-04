@@ -328,22 +328,60 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     async def get_document_groups_for_path(
         self,
         offering_type_id: int,
-        admission_method_id: int
-    ) -> Tuple[List[DocumentGroup], List[DocumentGroup]]:
+        admission_method_id: int,
+        admission_path_id: int | None = None,
+    ) -> Tuple[List[DocumentGroup], List[DocumentGroup], List[DocumentGroup]]:
         """
-        Get document groups for resolution.
-        
-        Returns:
-            Tuple of (shared_groups, method_specific_groups)
-            - shared_groups: admission_method_id IS NULL
-            - method_specific_groups: admission_method_id = given method
+        Get document groups for 3-tier resolution
+        (phase1_06 / #184 Wave 1 PR-1C').
+
+        Returns a triple ordered from highest to lowest precedence:
+            (path_groups, method_specific_groups, shared_groups)
+
+        * **Tier 1** — ``admission_path_id = X`` (when caller passes
+          ``admission_path_id``). Path-specific override; wins over
+          everything else when present. Empty list when caller passes
+          ``None`` (legacy callers, e.g. profile creation pre-PR-1C').
+        * **Tier 2** — ``admission_path_id IS NULL`` AND
+          ``admission_method_id = Y``. Existing legacy method-specific
+          override; preserved for backward-compat with shared/method
+          configs not yet migrated to path-level.
+        * **Tier 3** — ``admission_path_id IS NULL`` AND
+          ``admission_method_id IS NULL`` AND ``offering_type_id = Z``.
+          Default offering-type-wide shared bucket.
+
+        The caller (``admission_path_service.resolve_documents_for_path``)
+        applies the precedence: tier 1 wins fully if present; else
+        tier 2 wins fully; else tier 3.
         """
-        # Shared groups (applies to all methods)
+        # Tier 1 — path-specific (only when caller passes a path id;
+        # legacy callers send None and skip this query entirely).
+        path_groups: List[DocumentGroup] = []
+        if admission_path_id is not None:
+            path_query = (
+                select(DocumentGroup)
+                .where(
+                    DocumentGroup.admission_path_id == admission_path_id,
+                    DocumentGroup.is_active == True,
+                )
+                .options(
+                    selectinload(DocumentGroup.items).selectinload(
+                        DocumentGroupItem.document_type
+                    )
+                )
+            )
+            path_result = await self.db.execute(path_query)
+            path_groups = list(path_result.scalars().all())
+
+        # Tier 3 — shared (applies to all methods of the offering type).
+        # Note: admission_path_id IS NULL filter required to keep
+        # path-level rows out of the shared bucket once they exist.
         shared_query = (
             select(DocumentGroup)
             .where(
                 DocumentGroup.offering_type_id == offering_type_id,
                 DocumentGroup.admission_method_id == None,  # noqa: E711
+                DocumentGroup.admission_path_id == None,  # noqa: E711
                 DocumentGroup.is_active == True
             )
             .options(
@@ -352,13 +390,14 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 )
             )
         )
-        
-        # Method-specific groups (override)
+
+        # Tier 2 — method-specific, NOT path-specific.
         method_query = (
             select(DocumentGroup)
             .where(
                 DocumentGroup.offering_type_id == offering_type_id,
                 DocumentGroup.admission_method_id == admission_method_id,
+                DocumentGroup.admission_path_id == None,  # noqa: E711
                 DocumentGroup.is_active == True
             )
             .options(
@@ -367,13 +406,14 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 )
             )
         )
-        
+
         shared_result = await self.db.execute(shared_query)
         method_result = await self.db.execute(method_query)
-        
+
         return (
+            path_groups,
+            list(method_result.scalars().all()),
             list(shared_result.scalars().all()),
-            list(method_result.scalars().all())
         )
     
     # =========================================================================

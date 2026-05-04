@@ -67,11 +67,16 @@ class DocumentGroupCreate(BaseModel):
     """Request schema for creating a document group."""
     offering_type_id: int
     admission_method_id: Optional[int] = None  # NULL = shared
+    # phase1_06 (#184 Wave 1 PR-1C') — path-level override (tier 1
+    # of 3-tier resolution). NULL = legacy method/shared override.
+    # Service raises BusinessRuleViolation if set + offering_type
+    # / method don't match the path.
+    admission_path_id: Optional[int] = None
     code: str
     name: str
     description: Optional[str] = None
     is_active: Optional[bool] = True
-    
+
     # Items to add
     items: Optional[List[DocumentGroupItemCreate]] = None
 
@@ -81,7 +86,12 @@ class DocumentGroupUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
-    
+    # phase1_06 — admin can re-target a group to a different path
+    # (or clear it back to method/shared with explicit ``null``).
+    # ``model_dump(exclude_unset=True)`` distinguishes "key absent"
+    # (= leave unchanged) from "key=null" (= clear path FK).
+    admission_path_id: Optional[int] = None
+
     # Replace all items
     items: Optional[List[DocumentGroupItemCreate]] = None
 
@@ -89,18 +99,21 @@ class DocumentGroupUpdate(BaseModel):
 class DocumentGroupResponse(BaseModel):
     """Response schema for document group."""
     model_config = ConfigDict(from_attributes=True)
-    
+
     id: int
     offering_type_id: int
     admission_method_id: Optional[int] = None
+    # phase1_06 — REQUIRED in response (no default) so Pydantic /
+    # FE Zod parse fails loudly when BE forgets to map the column.
+    admission_path_id: Optional[int]
     code: str
     name: str
     description: Optional[str] = None
     is_active: bool
-    
+
     # Nested method (for display)
     admission_method: Optional[AdmissionMethodNested] = None
-    
+
     # Items
     items: List[DocumentGroupItemResponse] = []
 
