@@ -76,8 +76,8 @@
 
 | ID | Migration | Owner | Status | Branch/PR | Tests | Blocker | Plan ref |
 |---|---|---|---|---|---|---|---|
-| M-1-01 | `phase1_01_add_degree_level_fk_to_major_program` | BE | TODO | | M:- | | PLAN §4 P1 #01 |
-| M-1-02 | `phase1_02_add_bonus_rule_to_method_and_path` | BE | TODO | | M:- | | PLAN §4 P1 #02 |
+| M-1-01 | `phase1_01_add_degree_level_fk_to_major_program` | BE | TESTED (PR merged 2026-05-03, chờ staging clone D12-D14 → DONE) | [#205](https://github.com/favouritekid/QLTS/pull/205) merged 2026-05-03 squash `a50cdb79` (Wave 1 PR-1A bundle phase1_01 + phase1_02). | M:✓ 20-row backfill 100% match (12 Cao đẳng + 8 Trung cấp); idempotency re-apply no-op verified. | | PLAN §4 P1 #01 |
+| M-1-02 | `phase1_02_add_bonus_rule_to_method_and_path` | BE | TESTED (PR merged 2026-05-03, chờ staging clone D12-D14 → DONE) | [#205](https://github.com/favouritekid/QLTS/pull/205) merged 2026-05-03 squash `a50cdb79` (Wave 1 PR-1A bundle phase1_01 + phase1_02). | M:✓ JSONB nullable add + drop roundtrip clean; ORM fields wired `method.py:80` + `admission_path.py:168`. | | PLAN §4 P1 #02 |
 | M-1-03 | `phase1_03_add_applicable_to_method_quota_to_path` (kèm BE schema + service + FE Zod) | BE+FE | TODO | | M:- I:- | | PLAN §4 P1 #03 |
 | ~~M-1-04~~ | ~~`phase1_04_add_extra_thresholds_to_criteria`~~ | — | **DEFERRED Q1/2027** | | | Q9 defer per PLAN §8 cheat sheet line 4402 + Phần 7.1 | Phase 4 Section 13 |
 | M-1-05 | `phase1_05_add_subject_kind_and_score_bounds` (+ seed 6 subject ảo TB_HK1_L12, DGNL_DHQGHN, ...) | BE | TODO | | M:- | | PLAN §4 P1 #05 |
@@ -186,11 +186,11 @@
 
 | Plan Blocker ID | Description (PLAN line 57-65) | Tracker active task IDs | Status | Notes |
 |---|---|---|---|---|
-| **B1** | Casbin `auth_model.conf` không support deny effect | `B1` (Section 3) + `M-1-casbin` (Section 4) | TODO | OPEN — code task B1 ship trước M-1-casbin migration. PATCH-16. |
+| **B1** | Casbin `auth_model.conf` không support deny effect | `B1` (Section 3) + `M-1-casbin` (Section 4) | **CLOSED / TESTED 2026-05-03** | Code gate closed via PR #201 squash `6eac329e` (Section 3 row B1 TESTED). `M-1-casbin` Section 4 row remains separate downstream task for cutover backfill. PATCH-16. |
 | **B2** | `EventDefinition` thiếu `requires_outbox`/`bypass_consent_check` + 12 SystemEvents enum chưa có | `B2` (Section 3) + `M-1-19a` (Section 4) | **CLOSED / TESTED 2026-05-03** | Code gate closed via #197-#200; `M-1-19a` model/migration shipped. Downstream notification seed migrations `M-1-19b/c/d` remain Section 4 tasks, not B2 blocker. |
 | ~~B3~~ | ~~T17 cascade Student~~ | (none — Q1 strict reject) | **CLOSED** | Resolved Q1 chốt 2026-05-01 — Student schema unchanged. |
 | **B4** | `system_config` table + `current_intake_year` không tồn tại | `M-1-systemconfig` (Section 4) | TODO | OPEN — bundle với LS-projection (Section 7). |
-| **B5** | **11 direct** `profile.status = '...'` ở `admission_service.py` (3918, 5014, 5317, 5517, 5708, 6085, 6284, 6862, 7786, 7994, 8214) | `#16` (Section 3) | TODO | OPEN — task #16 PR scope cập nhật cover 11 sites. |
+| **B5** | **11 direct** `profile.status = '...'` ở `admission_service.py` (3918, 5014, 5317, 5517, 5708, 6085, 6284, 6862, 7786, 7994, 8214) | `#16` (Section 3) | **CLOSED / TESTED 2026-05-03** | Closed via PR #203 squash `a7b6c5c9` — 11 sites refactored sang `state_service.transition()` + AST lint `check_status_assignment.py` 0 violations across 148 files. |
 | **B6** | `lead_admission_sync.py:121` `return False` cho unknown status (NOT `sts13` fallback per round 20 verify) | `LS-map` (Section 7) | TODO | OPEN — bundle với caller audit + soft-fatal wrap. |
 | ~~B7~~ | ~~Effort 15w buffer 0~~ | (none — strategy deprecated) | **CLOSED** | Resolved 2026-05-01: cold cutover full scope ~13 weeks per cutover plan. |
 | **B8** | PR Phase 1 #15 lead one-to-many bundle scope quá lớn | `M-1-15` + `M-1-15-model` + `M-1-15-fe` (Section 4) | TODO | OPEN — atomic local implementation, KHÔNG staged 3 PR sequence + soak windows. |
@@ -226,9 +226,9 @@
 ### 12.3. Production readiness (Task 0 prerequisites)
 | Check | Status | Mapped task |
 |---|---|---|
-| T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TODO | T0-1 |
-| T0-2 ADMISSION_FROZEN middleware shipped (3 prefix verified-from-code, path-segment match) | TODO | T0-2 |
-| T0-3 Nginx admission block shipped (envsubst-driven, regex match T0-2) | TODO | T0-3 |
+| T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TESTED | T0-1 |
+| T0-2 ADMISSION_FROZEN middleware shipped (3 prefix verified-from-code, path-segment match) | TESTED | T0-2 |
+| T0-3 Nginx admission block shipped (envsubst-driven, regex match T0-2) | TESTED | T0-3 |
 | T0-4a dispatch_pending_outbox skeleton (no-op safe) | TESTED | T0-4a |
 | T0-4b dispatch_pending_outbox real worker wiring (sau B2 + M-1-19a) | TESTED | T0-4b |
 | T0-5 Casbin reload endpoint shipped (current-process scope; fleet reload = restart backend §7.2 T+3:15) | TESTED | T0-5 |
