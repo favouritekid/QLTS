@@ -679,24 +679,54 @@ class AdmissionPathService:
         """
         Resolve document requirements for a path.
 
-        Override Resolution Rule:
-        1. Load shared groups (admission_method_id = NULL)
-        2. Load method-specific groups (admission_method_id = path.method)
-        3. Merge: method-specific OVERRIDES shared for same document_type
+        phase1_06 (#184 Wave 1 PR-1C') — 3-tier resolution rule
+        per PLAN line 619-623:
+
+        1. **Tier 1**: ``WHERE admission_path_id = path.id`` →
+           if any rows match, USE THIS TIER FULLY (ignore tier 2 + 3).
+        2. **Tier 2**: ``WHERE admission_method_id = path.method
+           AND admission_path_id IS NULL`` → if any rows match,
+           USE THIS TIER FULLY (ignore tier 3).
+        3. **Tier 3**: ``WHERE offering_type_id = X AND
+           admission_method_id IS NULL AND admission_path_id IS NULL``
+           → fallback shared bucket.
+
+        Within a tier, multiple groups merge with mandatory-wins
+        (existing precedence preserved). Source indicators on the
+        response surface which tier provided each document so the
+        FE / admin can debug drift.
 
         Returns:
             List of resolved documents with source indicator
+            (``path_override`` / ``method_override`` / ``shared``).
         """
-        shared_groups, method_groups = await self.repo.get_document_groups_for_path(
-            offering_type_id, path.admission_method_id
+        path_groups, method_groups, shared_groups = (
+            await self.repo.get_document_groups_for_path(
+                offering_type_id,
+                path.admission_method_id,
+                admission_path_id=path.id,
+            )
         )
 
-        # Build document map: document_type_id -> (item, source)
+        # Build document map: document_type_id -> (item, source).
+        # Tier precedence: highest tier with non-empty groups wins
+        # FULLY; lower tiers are ignored (admin "deletes" default
+        # items by configuring a higher tier).
         doc_map: dict = {}
 
-        if method_groups:
-            # Case 1: Method-specific config exists -> FULL OVERRIDE
-            # We ignore shared groups completely to allow "deleting" default items
+        if path_groups:
+            # Tier 1 — path-specific (PR-1C' new). Mandatory-wins
+            # within the tier so two path groups can layer.
+            for group in path_groups:
+                for item in group.items:
+                    existing = doc_map.get(item.document_type_id)
+                    if existing is None:
+                        doc_map[item.document_type_id] = (item, "path_override")
+                    elif item.is_mandatory and not existing[0].is_mandatory:
+                        doc_map[item.document_type_id] = (item, "path_override")
+        elif method_groups:
+            # Tier 2 — method-specific. Existing legacy bucket;
+            # behavior unchanged from pre-PR-1C'.
             for group in method_groups:
                 for item in group.items:
                     existing = doc_map.get(item.document_type_id)
@@ -705,7 +735,7 @@ class AdmissionPathService:
                     elif item.is_mandatory and not existing[0].is_mandatory:
                         doc_map[item.document_type_id] = (item, "method_override")
         else:
-            # Case 2: No specific config -> Use Shared Defaults
+            # Tier 3 — shared offering-type fallback.
             for group in shared_groups:
                 for item in group.items:
                     existing = doc_map.get(item.document_type_id)

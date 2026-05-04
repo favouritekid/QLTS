@@ -49,6 +49,23 @@ class DocumentGroup(Base):
         index=True,
         comment="NULL = all methods, non-NULL = method-specific override"
     )
+    # phase1_06 (#184 Wave 1 PR-1C') — path-level override (tier 1
+    # of 3-tier resolution). NULL = legacy method/shared override.
+    # ON DELETE SET NULL so deleting a path doesn't cascade-kill
+    # its document groups; they fall back to the lower tiers.
+    # Service-layer invariant (NOT enforced by DB) — when this is
+    # set, the row's offering_type_id + admission_method_id MUST
+    # match the path's; ``DocumentGroupService.create``/``update``
+    # raise BusinessRuleViolation on drift.
+    admission_path_id = Column(
+        Integer,
+        ForeignKey("admission_path.id", ondelete="SET NULL"),
+        nullable=True,
+        comment=(
+            "Path-level override (tier 1). NULL = legacy "
+            "method/shared override."
+        ),
+    )
     code = Column(
         String(50),
         nullable=False,
@@ -75,6 +92,10 @@ class DocumentGroup(Base):
     # Relationships
     offering_type = relationship("ConfigOfferingType", back_populates="document_groups")
     admission_method = relationship("AdmissionMethod", back_populates="document_groups")
+    admission_path = relationship(
+        "AdmissionPath",
+        foreign_keys=[admission_path_id],
+    )
     items = relationship(
         "DocumentGroupItem",
         back_populates="document_group",

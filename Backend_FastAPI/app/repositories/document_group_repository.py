@@ -131,12 +131,14 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         name: str,
         description: str | None = None,
         admission_method_id: int | None = None,
+        admission_path_id: int | None = None,
         is_active: bool = True,
     ) -> DocumentGroup:
         """Create new document group."""
         group = DocumentGroup(
             offering_type_id=offering_type_id,
             admission_method_id=admission_method_id,
+            admission_path_id=admission_path_id,
             code=code,
             name=name,
             description=description,
@@ -152,12 +154,16 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         **updates
     ) -> DocumentGroup:
         """Update existing document group."""
-        allowed_fields = {"name", "description", "is_active"}
-        
+        # phase1_06 (#184 Wave 1 PR-1C') — admission_path_id editable
+        # so admin can re-target a group between path / method / shared
+        # tiers. Service layer is responsible for the invariant check
+        # before this method runs.
+        allowed_fields = {"name", "description", "is_active", "admission_path_id"}
+
         for field, value in updates.items():
             if field in allowed_fields:
                 setattr(group, field, value)
-        
+
         await self.db.flush()
         return group
 
