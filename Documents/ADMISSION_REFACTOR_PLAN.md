@@ -3459,8 +3459,13 @@ Thêm field nullable, không phá schema, không breaking change.
   → phase1_XX_create_system_config_table                 (PATCH-14 v2.13 — Q4 dependency)
                                                           Table system_config + admin endpoint UPDATE
                                                           + seed current_intake_year=2026.
-  → phase1_XX_create_archived_admission_profile_table    (PATCH-20 v2.13 — Phần 7.5 archive)
-  → phase1_XX_create_archived_outbox_table               (PATCH-20 v2.13 — outbox archive)
+  → phase1_16_create_archived_admission_profile_table    (PATCH-20 v2.13 — Phần 7.5 archive;
+                                                          slot assignment §8 line 4491 chốt 2026-05-03)
+  → phase1_17_create_archived_outbox_table               (PATCH-20 v2.13 — outbox archive companion;
+                                                          table tên `_archived_notification_outbox`
+                                                          per Phần 1 #08 fix line 168-178; chứa cả
+                                                          dispatched + failed outbox archived 90d,
+                                                          KHÔNG chỉ failed; slot §8 line 4492)
   ─── CODE TASK #16 GATE (PR riêng): workflow contract boundary audit ─────────────────
   ─── CODE TASK #15 (PR riêng): approved→admitted workflow remap 23 file caller ──────
   → phase1_11_extend_profile_status_check_constraint     (BE+FE Zod 14 state strict atomic deploy)
@@ -3475,12 +3480,20 @@ Thêm field nullable, không phá schema, không breaking change.
   → phase1_19a_create_outbox_table                       (PATCH-13 v2.13 — tách 4 migration)
                                                           notification_outbox table + 2 column claim
                                                           + index ix_outbox_pending + ix_outbox_claim.
-  → phase1_19b_seed_event_catalog_db_rows                 12 EVENT_CATALOG DB rows cho admin UI
+  → phase1_19b_backfill_casbin_eft_and_seed_deny_rules     CHIẾM SLOT 19b (PR #201 squash 6eac329e
+                                                          ship 2026-05-03 trong Wave 1 Code track B1).
+                                                          210 row v3='allow' backfill + 6 deny accountant.
+                                                          KHÔNG phải là spec phase1_19b — cascade Q2
+                                                          push-down 3 spec migration sang slot 19c/d/e.
+  → phase1_19c_seed_event_catalog_db_rows                 (renamed từ spec phase1_19b per Q2 cascade)
+                                                          12 EVENT_CATALOG DB rows cho admin UI
                                                           (notification_rule + notification_template).
                                                           Module-level Python dict đã ship ở B2.
-  → phase1_19c_register_celery_beat_archive_task          dispatch_pending_outbox (10s) +
+  → phase1_19d_register_celery_beat_archive_task          (renamed từ spec phase1_19c per Q2 cascade)
+                                                          dispatch_pending_outbox (10s) +
                                                           archive_outbox_dispatched_task (weekly 90d).
-  → phase1_19d_seed_notification_rules                    Rule rows định tuyến channel (Zalo/email/in-app)
+  → phase1_19e_seed_notification_rules                    (renamed từ spec phase1_19d per Q2 cascade)
+                                                          Rule rows định tuyến channel (Zalo/email/in-app)
                                                           theo audience từng event.
   ─── CODE TASK #17 (PR riêng): public_admissions_service migrate sang round+audience ─
   → phase2_01_create_offering_admission_round            (PATCH-06 v2.13 thêm admit_quota field)
