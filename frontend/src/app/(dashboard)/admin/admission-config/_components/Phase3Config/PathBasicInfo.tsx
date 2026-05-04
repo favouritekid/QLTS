@@ -12,8 +12,16 @@ import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateAdmissionPath, useUpdateAdmissionPath } from "@/hooks/admissions/useAdmissionPaths";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  AUDIENCE_LABELS_VI,
+  AUDIENCE_OPTIONS,
+} from "@/lib/constants/admission-audience";
 import { FIELD_GROUPS_VI, FIELD_LABELS_VI } from "@/lib/constants/minor-correction";
-import type { AdmissionPathResponse } from "@/lib/zod/admission-path";
+import type {
+  AdmissionAudience,
+  AdmissionPathResponse,
+  BonusRuleOverride,
+} from "@/lib/zod/admission-path";
 import type { AdmissionMethod } from "../shared/types";
 import type { AxiosError } from "axios";
 
@@ -42,6 +50,40 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
   const [allowedFields, setAllowedFields] = useState<Set<string>>(
     new Set(path?.minor_correction_allowed_fields ?? [])
   );
+
+  // phase1_03 (#184 Wave 1 PR-1B'-FE) — audience filter. Multi-select
+  // checkbox grid (5 element enum); empty Set = NULL on the wire =
+  // applicable to every audience (Phase 1+2 contract, see
+  // ``frontend/src/lib/zod/admission-path.ts`` and PLAN line 2649-2655).
+  const [applicableTo, setApplicableTo] = useState<Set<AdmissionAudience>>(
+    new Set(path?.applicable_to ?? [])
+  );
+
+  // phase1_03 — per-method quota tier. Empty input → null on wire =
+  // no method-level cap. ``string`` state lets the user clear the
+  // input without it snapping back to 0; we coerce on save.
+  const [methodQuotaInput, setMethodQuotaInput] = useState<string>(
+    path?.method_quota != null ? String(path.method_quota) : ""
+  );
+
+  // phase1_02 wired in PR-1B'-FE — typed bonus_rule_override (NOT raw
+  // JSON editor per Codex P2). Admin first toggles whether to override
+  // the method default at all; only when toggle is ON do the 3 sub-
+  // fields appear. Toggle OFF → null on wire = inherit method default.
+  const [bonusOverrideEnabled, setBonusOverrideEnabled] = useState<boolean>(
+    path?.bonus_rule_override != null
+  );
+  const [applyAreaBonus, setApplyAreaBonus] = useState<boolean>(
+    path?.bonus_rule_override?.apply_area_bonus ?? false
+  );
+  const [applySubjectBonus, setApplySubjectBonus] = useState<boolean>(
+    path?.bonus_rule_override?.apply_subject_bonus ?? false
+  );
+  const [maxTotalBonusInput, setMaxTotalBonusInput] = useState<string>(
+    path?.bonus_rule_override?.max_total_bonus != null
+      ? String(path.bonus_rule_override.max_total_bonus)
+      : ""
+  );
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const allowedFieldsArray = useMemo(
@@ -64,6 +106,80 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
     });
   }
 
+  function toggleAudience(audience: AdmissionAudience) {
+    setApplicableTo((prev) => {
+      const next = new Set(prev);
+      if (next.has(audience)) {
+        next.delete(audience);
+      } else {
+        next.add(audience);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Build the wire payload for ``applicable_to``.
+   *
+   * Empty Set → ``null`` (NULL on the wire = applicable to every
+   * audience). Backend treats null and missing-key the same on
+   * Create (default = null); Update uses ``model_dump(exclude_unset=
+   * True)`` so we always send the key explicitly to make the
+   * "clear filter" semantic unambiguous.
+   */
+  function buildApplicableToPayload(): AdmissionAudience[] | null {
+    return applicableTo.size > 0 ? Array.from(applicableTo) : null;
+  }
+
+  /**
+   * Build the wire payload for ``method_quota``.
+   *
+   * BE column is ``Integer`` and Pydantic ``ge=0``. Floor decimal
+   * input (e.g. ``"1.5"`` → ``1``) so the BE doesn't reject the
+   * payload with a Pydantic ValidationError 400. Negative or
+   * non-numeric input → null (admin's intent is "clear the cap").
+   */
+  function buildMethodQuotaPayload(): number | null {
+    if (methodQuotaInput.trim() === "") return null;
+    const parsed = Number(methodQuotaInput);
+    if (!Number.isFinite(parsed) || parsed < 0) return null;
+    return Math.floor(parsed);
+  }
+
+  /**
+   * Build the wire payload for ``bonus_rule_override``.
+   *
+   * Toggle OFF → null (= inherit method default). Toggle ON →
+   * full 3-field shape; ``max_total_bonus`` empty → null (no cap).
+   *
+   * Range guard: BE Pydantic shape has ``ge=0, le=10``. We clamp
+   * (rather than reject + null) because admin's intent at the UI
+   * boundary is "I typed 11.5, please cap me", not "drop the cap
+   * entirely". Clamping keeps the form auto-correcting; admins
+   * who really want NULL clear the input.
+   */
+  function buildBonusOverridePayload(): BonusRuleOverride | null {
+    if (!bonusOverrideEnabled) return null;
+    const trimmed = maxTotalBonusInput.trim();
+    let maxTotal: number | null;
+    if (trimmed === "") {
+      maxTotal = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed)) {
+        maxTotal = null;
+      } else {
+        // Clamp into [0, 10] — BE Pydantic enforces the same range.
+        maxTotal = Math.min(10, Math.max(0, parsed));
+      }
+    }
+    return {
+      apply_area_bonus: applyAreaBonus,
+      apply_subject_bonus: applySubjectBonus,
+      max_total_bonus: maxTotal,
+    };
+  }
+
   const handleSave = async () => {
     if (!selectedMethodId) {
       toast.error("Vui lòng chọn phương thức tuyển sinh");
@@ -72,6 +188,15 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
 
     try {
       let savedId: number;
+
+      // phase1_03 (#184 Wave 1 PR-1B'-FE) — 3 new path fields. Admin-
+      // only governance same as ``minor_correction_allowed_fields``:
+      // server rejects non-admin submission via BusinessRuleViolation,
+      // so the FE has to omit the keys entirely for managers. Treat
+      // bonus_rule_override identically to the allowlist field.
+      const applicableToPayload = buildApplicableToPayload();
+      const methodQuotaPayload = buildMethodQuotaPayload();
+      const bonusOverridePayload = buildBonusOverridePayload();
 
       if (path) {
         // Update existing — only admin sends the allowlist field. Server
@@ -85,7 +210,12 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
             visibility: visibility,
             allow_unverified_submission: allowUnverified,
             ...(isAdmin
-              ? { minor_correction_allowed_fields: allowedFieldsArray }
+              ? {
+                  minor_correction_allowed_fields: allowedFieldsArray,
+                  applicable_to: applicableToPayload,
+                  method_quota: methodQuotaPayload,
+                  bonus_rule_override: bonusOverridePayload,
+                }
               : {}),
           },
         });
@@ -103,6 +233,12 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
           // Only admin can seed the allowlist on create. Manager
           // creating a new path always gets the empty default.
           minor_correction_allowed_fields: isAdmin ? allowedFieldsArray : [],
+          // Same admin-only governance for the phase1_03 fields.
+          // Manager creating a new path gets nulls (= legacy / no
+          // method cap / inherit method bonus default).
+          applicable_to: isAdmin ? applicableToPayload : null,
+          method_quota: isAdmin ? methodQuotaPayload : null,
+          bonus_rule_override: isAdmin ? bonusOverridePayload : null,
         });
         savedId = newPath.id;
         toast.success("Tạo đợt tuyển sinh thành công");
@@ -265,6 +401,162 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* phase1_03 (#184 Wave 1 PR-1B'-FE) — Audience filter.
+              Empty selection = applicable to every audience (Phase 1+2
+              contract). Admin-only same as minor_correction_allowed_fields. */}
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="space-y-1">
+              <Label className="text-sm font-medium">
+                Đối tượng áp dụng
+                {!isAdmin && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    (chỉ admin)
+                  </span>
+                )}
+              </Label>
+              <p className="text-xs text-muted-foreground max-w-lg">
+                Chọn nhóm thí sinh có thể đăng ký path này. Bỏ trống tất
+                cả = áp dụng cho mọi đối tượng (mặc định mùa cũ); admin
+                tick từng đối tượng để bật bộ lọc theo trình độ ứng tuyển.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {AUDIENCE_OPTIONS.map((audience) => (
+                <label
+                  key={audience}
+                  className="flex items-start gap-2 text-sm cursor-pointer"
+                >
+                  <Checkbox
+                    id={`audience-${audience}`}
+                    checked={applicableTo.has(audience)}
+                    onCheckedChange={() => toggleAudience(audience)}
+                    disabled={!isAdmin}
+                    aria-label={AUDIENCE_LABELS_VI[audience]}
+                  />
+                  <span className="leading-tight">
+                    {AUDIENCE_LABELS_VI[audience]}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* phase1_03 — Method quota. Nullable integer; empty input =
+              no method-level cap, fall back to round.admit_quota
+              (Phase 2) or group_quota. */}
+          <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="methodQuota" className="text-sm font-medium">
+                Chỉ tiêu phương thức
+                {!isAdmin && (
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    (chỉ admin)
+                  </span>
+                )}
+              </Label>
+              <p className="text-xs text-muted-foreground max-w-lg">
+                Số lượng tối đa thí sinh được tuyển qua phương thức này
+                trong path. Để trống = không giới hạn ở tầng phương thức
+                (sẽ kế thừa từ chỉ tiêu đợt tuyển sinh ở Phase 2).
+              </p>
+            </div>
+            <Input
+              id="methodQuota"
+              type="number"
+              value={methodQuotaInput}
+              onChange={(e) => setMethodQuotaInput(e.target.value)}
+              min={0}
+              placeholder="Để trống nếu không giới hạn"
+              disabled={!isAdmin}
+            />
+          </div>
+
+          {/* phase1_02 wired in PR-1B'-FE — typed bonus_rule_override.
+              NEVER raw JSON editor per Codex P2 review on PR-1B'-BE:
+              the structured form rejects malformed shapes at the form
+              boundary instead of surfacing them as Pydantic
+              ValidationError 400 from the API. */}
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <Label className="text-sm font-medium">
+                  Quy tắc cộng điểm tùy chỉnh
+                  {!isAdmin && (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      (chỉ admin)
+                    </span>
+                  )}
+                </Label>
+                <p className="text-xs text-muted-foreground max-w-lg">
+                  Tắt = path này dùng quy tắc cộng điểm mặc định của phương
+                  thức. Bật để override: tích cộng điểm khu vực và/hoặc cộng
+                  điểm môn ưu tiên, đặt trần tổng cộng điểm (0..10) — bỏ
+                  trống trần = không giới hạn.
+                </p>
+              </div>
+              <Switch
+                id="bonus-override-enabled"
+                checked={bonusOverrideEnabled}
+                onCheckedChange={setBonusOverrideEnabled}
+                disabled={!isAdmin}
+                aria-label="Bật quy tắc cộng điểm tùy chỉnh"
+              />
+            </div>
+            {bonusOverrideEnabled && (
+              <div className="space-y-3 pl-3 border-l-2">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="apply-area-bonus"
+                    checked={applyAreaBonus}
+                    onCheckedChange={(v) => setApplyAreaBonus(v === true)}
+                    disabled={!isAdmin}
+                    aria-label="Cộng điểm khu vực"
+                  />
+                  <Label
+                    htmlFor="apply-area-bonus"
+                    className="text-sm cursor-pointer"
+                  >
+                    Cộng điểm khu vực (KV1 / KV2_NT / KV2 / KV3)
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="apply-subject-bonus"
+                    checked={applySubjectBonus}
+                    onCheckedChange={(v) => setApplySubjectBonus(v === true)}
+                    disabled={!isAdmin}
+                    aria-label="Cộng điểm môn ưu tiên"
+                  />
+                  <Label
+                    htmlFor="apply-subject-bonus"
+                    className="text-sm cursor-pointer"
+                  >
+                    Cộng điểm đối tượng ưu tiên (mã 01..07)
+                  </Label>
+                </div>
+                <div className="space-y-1">
+                  <Label
+                    htmlFor="max-total-bonus"
+                    className="text-sm font-medium"
+                  >
+                    Trần tổng cộng điểm (0..10)
+                  </Label>
+                  <Input
+                    id="max-total-bonus"
+                    type="number"
+                    value={maxTotalBonusInput}
+                    onChange={(e) => setMaxTotalBonusInput(e.target.value)}
+                    min={0}
+                    max={10}
+                    step={0.25}
+                    placeholder="Để trống = không giới hạn"
+                    disabled={!isAdmin}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end pt-4">

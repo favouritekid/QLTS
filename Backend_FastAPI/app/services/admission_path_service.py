@@ -151,16 +151,34 @@ class AdmissionPathService:
                 f"method={data.admission_method_id}"
             )
 
-        # Governance guard: minor_correction_allowed_fields is admin-only,
-        # same rule as on update. Manager creating a draft path always
-        # gets an empty allowlist regardless of what they submit. FE
-        # already disables the section for non-admins; this is the
-        # belt-and-braces server side.
-        if data.minor_correction_allowed_fields and user.role != UserRole.ADMIN:
-            raise BusinessRuleViolation(
-                "Chỉ admin được set allowlist minor_correction khi tạo path. "
-                "Manager liên hệ admin nếu cần thay đổi."
-            )
+        # Governance guard: 4 fields are admin-only on create — the
+        # ``minor_correction_allowed_fields`` allowlist (decides which
+        # fields officer can post-edit on approved profiles) plus the
+        # phase1_03 trio (``applicable_to`` / ``method_quota`` /
+        # ``bonus_rule_override``) which together gate audience filter,
+        # method-level quota cap, and bonus engine override. Manager
+        # creating a draft path gets default values (empty / null) for
+        # all four regardless of what they submit. FE already hides /
+        # disables these sections for non-admins; this is the belt-
+        # and-braces server side. Reject (not silent-drop) so the FE
+        # form / API caller surfaces the failure rather than the admin
+        # thinking the value was saved.
+        if user.role != UserRole.ADMIN:
+            forbidden_keys: list[str] = []
+            if data.minor_correction_allowed_fields:
+                forbidden_keys.append("minor_correction_allowed_fields")
+            if data.applicable_to is not None:
+                forbidden_keys.append("applicable_to")
+            if data.method_quota is not None:
+                forbidden_keys.append("method_quota")
+            if data.bonus_rule_override is not None:
+                forbidden_keys.append("bonus_rule_override")
+            if forbidden_keys:
+                raise BusinessRuleViolation(
+                    "Chỉ admin được set governance fields khi tạo path "
+                    f"({', '.join(forbidden_keys)}). Manager liên hệ admin nếu "
+                    "cần thay đổi."
+                )
 
         # Create path
         path = await self.repo.create(
@@ -178,6 +196,23 @@ class AdmissionPathService:
                 # filtered out non-SAFE entries before reaching here.
                 "minor_correction_allowed_fields": list(
                     data.minor_correction_allowed_fields or []
+                ),
+                # phase1_03 (#184 Wave 1 PR-1B'-FE/BE micro-patch) — 3
+                # admin-only fields. Pydantic shape already validated
+                # the audience ENUM + method_quota ge=0 + BonusRuleOverride
+                # range; convert the typed shape back to a JSONB-friendly
+                # dict for the JSONB column. None passes through unchanged
+                # (= legacy / no method cap / inherit method bonus default).
+                "applicable_to": (
+                    list(data.applicable_to)
+                    if data.applicable_to is not None
+                    else None
+                ),
+                "method_quota": data.method_quota,
+                "bonus_rule_override": (
+                    data.bonus_rule_override.model_dump()
+                    if data.bonus_rule_override is not None
+                    else None
                 ),
             }
         )
@@ -206,20 +241,48 @@ class AdmissionPathService:
 
         update_data = data.model_dump(exclude_unset=True)
 
-        # Governance guard: minor_correction_allowed_fields is admin-only.
-        # Manager can edit a draft path's display name / fee / etc. but
-        # must not flip the per-path correction allowlist — that's a
-        # security setting (decides which fields officer can post-edit
-        # on approved profiles). Reject the field rather than silently
-        # drop it so the FE form / API caller surfaces the failure.
+        # Governance guard: 4 fields are admin-only on update — same set
+        # as on create. Manager can edit a draft path's display_name /
+        # fee / display_order / visibility / allow_unverified_submission
+        # freely, but must not flip the security / governance fields
+        # (correction allowlist + audience filter + method quota +
+        # bonus engine override). Reject (not silent-drop) so the FE
+        # form / API caller surfaces the failure.
+        if user.role != UserRole.ADMIN:
+            admin_only_keys = {
+                "minor_correction_allowed_fields",
+                "applicable_to",
+                "method_quota",
+                "bonus_rule_override",
+            }
+            forbidden = admin_only_keys & set(update_data.keys())
+            if forbidden:
+                raise BusinessRuleViolation(
+                    "Chỉ admin được sửa governance fields "
+                    f"({', '.join(sorted(forbidden))}). Manager liên hệ admin "
+                    "nếu cần thay đổi."
+                )
+
+        # phase1_03 — convert BonusRuleOverride Pydantic shape back to
+        # a plain JSONB dict for the column. Pydantic ``model_dump`` on
+        # the inner shape only fires when the key is present + non-None;
+        # ``exclude_unset=True`` above means absent keys stay absent.
         if (
-            "minor_correction_allowed_fields" in update_data
-            and user.role != UserRole.ADMIN
+            "bonus_rule_override" in update_data
+            and update_data["bonus_rule_override"] is not None
         ):
-            raise BusinessRuleViolation(
-                "Chỉ admin được sửa allowlist minor_correction. "
-                "Manager liên hệ admin nếu cần thay đổi."
-            )
+            inner = update_data["bonus_rule_override"]
+            # Pydantic v2 already converts nested models in model_dump,
+            # but defend against direct BaseModel passthrough by checking
+            # for the .model_dump method.
+            if hasattr(inner, "model_dump"):
+                update_data["bonus_rule_override"] = inner.model_dump()
+        if (
+            "applicable_to" in update_data
+            and update_data["applicable_to"] is not None
+        ):
+            # Convert any iterable form back to list for the ARRAY column.
+            update_data["applicable_to"] = list(update_data["applicable_to"])
 
         path = await self.repo.update(path, update_data)
 
