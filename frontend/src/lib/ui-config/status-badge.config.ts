@@ -43,6 +43,16 @@ export type AdmissionStatus =
   | "resubmitted"
   | "reviewing"
   | "approved"
+  // phase1_11 (#184 Wave 3 PR-3A) — 3 new states from Phase 3
+  // multi-NV choice engine. ``admitted`` = candidate đậu (T7),
+  // similar to ``approved`` but for choice-engine flow.
+  // ``waitlisted`` = chờ ghế (T8). ``result_published`` = T6
+  // broadcast marker (announces result publication; not a per-
+  // profile per-record state but still appears in API responses
+  // during the publish window).
+  | "admitted"
+  | "waitlisted"
+  | "result_published"
   | "rejected"
   | "revision_requested"
   | "confirmed"
@@ -138,6 +148,45 @@ export const ADMISSION_BADGE_CONFIG: Record<AdmissionStatus, StatusBadgeConfig> 
     variant: "default",
     description: "Hồ sơ đã được phê duyệt",
     order: 5,
+  },
+  // phase1_11 (#184 Wave 3 PR-3A) — admitted = candidate đậu via
+  // Phase 3 choice engine. Reuses approved styling (green/check)
+  // because admin queue treats both as positive admission outcomes;
+  // distinct order keeps them grouped sequentially.
+  admitted: {
+    label: "Đậu",
+    shortLabel: "Đậu",
+    icon: CheckCircle,
+    className: "bg-admission-approved-bg text-admission-approved-fg border-admission-approved-border",
+    variant: "default",
+    description: "Thí sinh đã trúng tuyển qua choice engine (Phase 3 multi-NV)",
+    order: 5.5,
+  },
+  // phase1_11 — waitlisted = chờ ghế (T8). Amber/orange for
+  // pending-but-not-rejected semantic. Distinct order between
+  // approved (5/5.5) and rejected (6) reflects the workflow
+  // position: candidate đã được xét nhưng chờ slot.
+  waitlisted: {
+    label: "Chờ ghế",
+    shortLabel: "Chờ",
+    icon: Clock,
+    className: "bg-orange-50 text-orange-700 border-orange-200",
+    variant: "outline",
+    description: "Thí sinh chờ ghế (đã xét, chưa có slot)",
+    order: 5.7,
+  },
+  // phase1_11 — result_published = T6 broadcast marker. Info
+  // styling because it's announcement-level (not per-profile
+  // mutation). Order 5.9 sits between admitted batch and
+  // rejected to surface the publish event in chronological view.
+  result_published: {
+    label: "Đã công bố KQ",
+    shortLabel: "Công bố",
+    icon: Send,
+    className: "bg-info-50 text-info-700 border-info-200",
+    variant: "outline",
+    description: "Kết quả tuyển sinh đã được công bố (T6 broadcast)",
+    order: 5.9,
   },
   rejected: {
     label: "Từ chối",
