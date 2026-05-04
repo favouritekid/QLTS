@@ -8,8 +8,9 @@ Provides data access for AdmissionPath entities with:
 - No business logic (pure data access)
 """
 
-from typing import Iterable, List, Optional, Tuple
-from sqlalchemy import select, func, distinct
+from typing import Iterable, List, Optional, Sequence, Tuple
+from sqlalchemy import select, func, distinct, or_, cast
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,6 +26,24 @@ from app.models.admission_config import (
 from app.models.offering_academic_info import OfferingAcademicInfo
 from app.models.program_offering import ProgramOffering
 from app.repositories.base import BaseRepository
+
+
+# phase1_03 (#184 Wave 1 PR-1B') — typed array element for ``@>`` /
+# ``&&`` casts. ``create_type=False`` because the migration owns the
+# DDL. ``literal_column("admission_audience")`` was the first cut but
+# fails compile (AttributeError on ``_variant_mapping`` per Codex
+# review on PR-1B'); the real type expression is needed for SQLA to
+# render the proper ``CAST(... AS admission_audience[])``.
+_AUDIENCE_ENUM_TYPE = postgresql.ENUM(
+    "POST_THCS",
+    "POST_THPT",
+    "LIEN_THONG_TC",
+    "LIEN_THONG_CD",
+    "VLVH",
+    name="admission_audience",
+    create_type=False,
+)
+_AUDIENCE_ARRAY_TYPE = postgresql.ARRAY(_AUDIENCE_ENUM_TYPE)
 
 
 class AdmissionPathRepository(BaseRepository[AdmissionPath]):
@@ -141,6 +160,112 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         )
         result = await self.db.execute(query)
         return result.scalars().first()
+
+    async def list_paths_by_audience(
+        self,
+        audience: str,
+        *,
+        academic_info_id: Optional[int] = None,
+        include_legacy_null: bool = True,
+    ) -> List[AdmissionPath]:
+        """List active paths visible to a single ``admission_audience``.
+
+        phase1_03 (#184 Wave 1 PR-1B') — uses PostgreSQL containment
+        operator ``@>`` so the query hits the
+        ``ix_admission_path_applicable_to`` GIN index. NEVER rewrite
+        this as ``WHERE :audience = ANY(applicable_to)`` — that
+        operator yields the same logical result but the planner
+        cannot pick a GIN index for ``= ANY(arr)``, so the storefront
+        endpoint would seq-scan the entire ``admission_path`` table
+        (PLAN line 2646-2657 anti-pattern).
+
+        ``include_legacy_null=True`` (default) ORs in paths whose
+        ``applicable_to`` is NULL — required for Phase 1+2 because
+        legacy / not-yet-backfilled paths must remain visible.
+        Phase 3 flips this to ``False`` after the validator gate
+        ("X path null applicable_to → admin set trước") completes.
+        """
+        # CAST([:audience] AS admission_audience[]) — typed PG ENUM
+        # array so the @> operator hits the GIN index. Using
+        # ``literal_column("admission_audience")`` for the inner type
+        # fails compile on SQLAlchemy 2.x; the real type expression
+        # ``postgresql.ARRAY(postgresql.ENUM(...))`` is required.
+        audience_array = cast([audience], _AUDIENCE_ARRAY_TYPE)
+        contains = AdmissionPath.applicable_to.op("@>")(audience_array)
+
+        if include_legacy_null:
+            audience_filter = or_(
+                AdmissionPath.applicable_to.is_(None),
+                contains,
+            )
+        else:
+            audience_filter = contains
+
+        query = (
+            select(AdmissionPath)
+            .where(audience_filter)
+            .options(
+                selectinload(AdmissionPath.admission_method),
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
+            )
+            .order_by(AdmissionPath.display_order, AdmissionPath.id)
+        )
+        if academic_info_id is not None:
+            query = query.where(AdmissionPath.academic_info_id == academic_info_id)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def list_paths_by_audiences_overlap(
+        self,
+        audiences: Sequence[str],
+        *,
+        academic_info_id: Optional[int] = None,
+        include_legacy_null: bool = True,
+    ) -> List[AdmissionPath]:
+        """List active paths whose audience overlaps any of ``audiences``.
+
+        phase1_03 (#184 Wave 1 PR-1B') — uses PostgreSQL overlap
+        operator ``&&`` so the query hits the GIN index. Same
+        anti-pattern guard as ``list_paths_by_audience``: NEVER use
+        ``= ANY()`` (planner can't pick GIN).
+
+        Empty input → returns no paths (matches "audience filter
+        active but caller passed no buckets" semantic). Caller
+        wanting "all audiences" should not invoke this method.
+        """
+        if not audiences:
+            return []
+
+        audience_array = cast(list(audiences), _AUDIENCE_ARRAY_TYPE)
+        overlaps = AdmissionPath.applicable_to.op("&&")(audience_array)
+
+        if include_legacy_null:
+            audience_filter = or_(
+                AdmissionPath.applicable_to.is_(None),
+                overlaps,
+            )
+        else:
+            audience_filter = overlaps
+
+        query = (
+            select(AdmissionPath)
+            .where(audience_filter)
+            .options(
+                selectinload(AdmissionPath.admission_method),
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
+            )
+            .order_by(AdmissionPath.display_order, AdmissionPath.id)
+        )
+        if academic_info_id is not None:
+            query = query.where(AdmissionPath.academic_info_id == academic_info_id)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
     
     async def get_active_paths_by_offering_id(
         self,
