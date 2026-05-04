@@ -63,6 +63,10 @@ from .notification_consent import NotificationConsent
 from .notification_consent_history import NotificationConsentHistory
 from .notification_outbox import NotificationOutbox
 from .notification_quota import NotificationQuota
+
+# phase1_13 (#184 Wave 1 PR-1D) — runtime config key/value store.
+# Closes B4 P0 blocker. Admin-only mutation via SystemConfigService.
+from .system_config import SystemConfig
 from .zalo_token_store import ZaloTokenStore
 from .staff_zalo_bot_link import StaffZaloBotLink
 
