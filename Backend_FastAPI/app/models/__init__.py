@@ -35,6 +35,8 @@ from .lead_phone import LeadPhoneIdentity
 
 # Admission models (NEW: Replacement for Application)
 from .admission import AdmissionProfile, AdmissionConfirmationToken
+# phase1_10 (#184 Wave 2 PR-2A) — status transition audit trail.
+from .admission_profile_status_history import AdmissionProfileStatusHistory
 from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 
