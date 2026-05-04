@@ -56,6 +56,54 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 Phase 1 Schema Wave 1 PR-1C' — phase1_05 subject_kind + 6 seed + phase1_06 doc_group path FK + 3-tier resolution SHIPPED
+
+**PR**: [#208](https://github.com/favouritekid/QLTS/pull/208) merged squash `2bf8b5f1` (Wave 1 PR-1C' — fourth Wave 1 sub-PR; off remote parent `aff47d61` per Codex pre-flight P2 catch).
+
+**Parent advance**: `aff47d61` (PR-1B'-FE post-merge tracking) → `2bf8b5f1`.
+
+**Scope shipped (14 file)**:
+- 2 migration: `phase1_05_add_subject_kind_and_score_bounds.py` (Subject 3 cột + ENUM 4 value + 6 seed) + `phase1_06_add_path_id_to_document_group.py` (FK + partial index).
+- 8 BE code: Subject + DocumentGroup model; DocumentGroup + AdmissionPath schema; DocumentGroupService (invariant) + AdmissionPathService (3-tier resolution); 2 repository.
+- 1 FE Zod: ResolvedDocumentResponse.source enum extend `path_override`.
+- 3 test file (37 case): revision chain + invariant + resolution 3-tier.
+
+**Catch + fix in-flight (live alembic smoke)**:
+- ❌ → ✅ Seed missing `display_order` NOT NULL → fixed với explicit values (>=100 để không xung đột legacy academic subjects).
+- ❌ → ✅ SQL Server `N'..'` prefix syntax → removed (PG dùng UTF-8 plain literal).
+- 1 cleanup cycle cần thiết: alembic env.py có `isolation_level=AUTOCOMMIT` → DDL không rollback khi seed fail; manual cleanup partial state (DROP COLUMN / DROP TYPE) trước khi re-upgrade.
+
+**3-tier resolution chốt**:
+- **Tier 1 (path)**: `WHERE admission_path_id = path.id` → wins fully if any rows match.
+- **Tier 2 (method)**: `WHERE admission_method_id = path.method AND admission_path_id IS NULL` → wins fully if no path-level rows.
+- **Tier 3 (shared)**: `WHERE offering_type_id = X AND admission_method_id IS NULL AND admission_path_id IS NULL` → fallback shared offering-type bucket.
+- Within-tier mandatory-wins preserved từ pre-PR-1C'.
+- ResolvedDocumentResponse.source: `path_override` / `method_override` / `shared`.
+
+**Service invariant (DocumentGroupService)**:
+- Tạo / update DocumentGroup ref path → validate `offering_type_id == path.offering.offering_type_id` + `admission_method_id` is None OR equals `path.admission_method_id`.
+- Drift → BusinessRuleViolation (cheaper to catch pre-resolution than silently corrupt resolution rule).
+- Path NULL → skip invariant (legacy method/shared groups unchanged).
+
+**Test result**:
+- BE: 172/172 passed in 7.15s post-squash on parent `2bf8b5f1` (37 PR-1C' new + 18 PR-1B'-FE governance + 117 phase1_03 + path/migration regression).
+- FE tsc --noEmit: 0 error.
+
+**Live alembic roundtrip on dev DB**:
+- `alembic upgrade phase1_06` clean → schema applied (3 subject column + ENUM 4 value + 6 seed row + DocumentGroup FK + partial index verified).
+- `alembic downgrade phase1_03` clean → ENUM/column/FK/index/6 seed all dropped no orphan.
+- Re-upgrade idempotent.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-05 + M-1-06 → TESTED (cite PR + SHA + test evidence + catch).
+- Issue #184 body M-1-05 + M-1-06 ticked `[x]` với PR #208 + SHA + 17+12+8 test breakdown + catch in-flight notes.
+- Board card #184 vẫn In Progress (5/29 sub-task done; 24 còn lại).
+
+**Tomorrow plan** (Wave 1 còn 1 PR — last):
+- **PR-1D** (BE additive cuối Wave 1): `phase1_07b_create_backfill_exceptions_table.py` (audit table cho M-1-12 + M-3-01 backfill exception — required cho insert exceptions sau) + `phase1_08_add_uses_choice_engine_flag_to_profile.py` (boolean default false NOT NULL — flag distinguish legacy single-NV vs multi-NV per profile) + `phase1_13_create_system_config_table.py` + admin endpoint + seed `current_intake_year=2026` (**closes B4 P0 blocker**). Off parent post PR-1C'. Estimated 1d.
+
+---
+
 ### #184 Phase 1 Schema Wave 1 PR-1B'-FE — admin form UI + BE governance SHIPPED
 
 **PR**: [#207](https://github.com/favouritekid/QLTS/pull/207) merged squash `efb64ec8` (Wave 1 PR-1B'-FE — admin form UI 3 field + BE micro-patch).
