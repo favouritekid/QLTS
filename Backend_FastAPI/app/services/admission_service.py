@@ -2770,6 +2770,24 @@ async def create_profile(
         "allow_unverified_submission": bool(
             getattr(admission_path, "allow_unverified_submission", False)
         ),
+
+        # =====================================================================
+        # GROUP 8: phase1_03 / phase1_02 wired (#184 Wave 1 PR-1B')
+        # =====================================================================
+        # Snapshot the audience filter + per-method quota + bonus rule
+        # override at profile creation so later admin changes to the path
+        # don't retroactively re-classify or re-cap profiles already in
+        # flight. Read sites: scoring engine (bonus_rule_override
+        # precedence), quota guard (method_quota tier-3 — Phase 2),
+        # storefront audience filter (applicable_to legacy NULL fallback).
+        # NULL passes through as None so consumers can rely on the
+        # ``getattr`` / ``.get()`` is-None contract instead of probing
+        # presence.
+        "applicable_to": list(admission_path.applicable_to)
+        if getattr(admission_path, "applicable_to", None)
+        else None,
+        "method_quota": getattr(admission_path, "method_quota", None),
+        "bonus_rule_override": getattr(admission_path, "bonus_rule_override", None),
     }
 
 
