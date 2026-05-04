@@ -56,6 +56,56 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 FE-zod-eligibility — Stage 1 permissive status + 4 eligibility fields SHIPPED
+
+**PR**: [#211](https://github.com/favouritekid/QLTS/pull/211) merged squash `d9631ad5` (FE-only — Stage 1 deploy choreography per PLAN line 3049-3055).
+
+**Parent advance**: `e46cf5fc` (Wave 2 complete tracking) → `d9631ad5`.
+
+**Scope shipped (2 file)**:
+- `frontend/src/lib/zod/admissions.ts` (MOD): `admissionProfileResponseSchema.status` từ strict enum sang permissive `z.union([z.enum([...10 legacy]), z.string()])`. Plus 4 eligibility fields: `gpa_overall` (coerce 0..10), `conduct` (TB/KHA/TOT), `health_category` (int 1..4), `graduation_year` (int 1900..2100). All nullable + optional.
+- `frontend/src/lib/zod/admissions.eligibility.test.ts` (NEW): 18 vitest case (10 legacy strict + 3 unknown status + non-string reject + 4 fields range/null/coerce + combined Wave 2+M-1-11 deploy).
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (`Backend_FastAPI/app/services/admission*.py` etc.) **không match** FE-only scope. 0 check chạy.
+- Manual verification pre-push: 18/18 vitest + tsc 0 error + lint 0 error in scope.
+
+**Why Stage 1 only — NOT full closure of FE-zod-status**:
+Per PLAN line 3049-3060 deploy choreography:
+- **Stage 1 (Day 1)** — FE Zod permissive deploy ONLY. Status badge fallback render generic gray cho state lạ. KHÔNG đổi BE. ← **THIS PR**.
+- **Stage 2 (Day 2)** — BE migration #11 + service trả state mới. FE catchall enum chấp nhận. ← Wave 3 PR-3A.
+- **Stage 3** — FE re-tighten Zod sang strict 14-state + FE-badge config 14 status + FE-tabs filter 14 status + i18n inline 25 keys. ← Wave 3 wave bundle (FE-zod-status + FE-badge + FE-tabs đồng thời).
+
+**Status badge fallback (verified existing)**:
+- `components/common/status/StatusBadge.tsx:166` — `getStatusConfig` returns `{ label: status, variant: "neutral" }` cho unknown.
+- `lib/ui-config/status-badge.config.ts:380` — `DEFAULT_BADGE_CONFIG` neutral/outline + raw status string + AlertCircle icon.
+- → Unknown status renders gray badge với raw text. Stage 1 không cần thêm fallback code.
+
+**Codex Guard 4 contract honored**: M-1-11 unblocked. Wave 3 ONE-WAY ⚠ ship sequentially: Stage 1 (this PR) → Stage 2 (Wave 3 BE migration #11) → Stage 3 (Wave 3 FE wave bundle re-tighten).
+
+**Test result**:
+- FE: 18/18 passed in 1.80s post-squash on parent `d9631ad5`.
+- FE tsc --noEmit: 0 error.
+- FE lint: 0 error in scope (206 pre-existing warnings).
+
+**Tracker / board / issue**:
+- TRACKER `FE-zod-status` row → **STAGE 1 SHIPPED** (Stage 3 strict re-tighten TODO trong Wave 3 bundle).
+- TRACKER `FE-badge` + `FE-tabs` rows → STAY TODO (must ship cùng/trước M-1-11 final flip).
+- Issue #184 chưa cần update — FE Zod deferred note đã có sẵn trong M-1-09a row body từ PR-2A merge.
+
+**Next gate** — Wave 3 ONE-WAY ⚠ pre-ship checklist:
+- [x] Wave 1 + Wave 2 BE shipped.
+- [x] Stage 1 FE Zod permissive shipped (this PR).
+- [ ] Staging clone D12-D14 dry rehearsal (Q5 chốt 2026-05-03).
+- [ ] Wave 3 FE wave bundle (FE-zod-status strict + FE-badge config + FE-tabs filter + i18n keys) — atomic with M-1-11.
+
+**Tomorrow plan**:
+1. Coordinate D12-D14 staging clone setup with DBA (ops timeline).
+2. Optional defer: Wave 4 (Lead 1-many) hoặc Wave 5 (Notification + Archive seed) trước Wave 3 nếu staging gate còn xa.
+3. Wave 3 PR-3A start CHỈ sau khi (a) staging clone ready + (b) Wave 3 FE wave bundle đã sẵn sàng atomic deploy.
+
+---
+
 ### #184 Phase 1 Schema Wave 2 PR-2A — phase1_09a eligibility scalars + phase1_10 status_history SHIPPED — **WAVE 2 COMPLETE**
 
 **PR**: [#210](https://github.com/favouritekid/QLTS/pull/210) merged squash `2d8b52f1` (Wave 2 PR-2A — first & only Wave 2 sub-PR; off remote parent `5feb3c07`).
