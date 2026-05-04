@@ -53,6 +53,15 @@ const mockAdmissionPathResponse: AdmissionPathResponse = {
   // Minor-correction allowlist — empty by default for fresh paths
   // (admin opts in field-by-field after path creation).
   minor_correction_allowed_fields: [],
+  // phase1_03 (#184 Wave 1 PR-1B') — 3 new fields shipped in BE
+  // PR #206 + Zod parse parity. Defaults mirror BE Create behavior:
+  // null for all three (= legacy / no audience filter / no method
+  // cap / inherit method bonus default). Fixture must include them
+  // because Response schema marks them REQUIRED no-default to
+  // catch BE-forgot-to-emit drift.
+  applicable_to: null,
+  method_quota: null,
+  bonus_rule_override: null,
 };
 
 /** The shape that PUT /paths/:id/documents returns. */
