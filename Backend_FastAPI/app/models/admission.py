@@ -16,8 +16,8 @@ Architecture:
 
 from datetime import date, datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 from .base import Base
@@ -394,6 +394,39 @@ class AdmissionProfile(Base):
     dropped_reason: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True,
         comment="Reason for dropping out"
+    )
+
+    # phase1_09a (#184 Wave 2 PR-2A) — eligibility scalars. 4
+    # nullable columns. gpa_overall + graduation_year backfilled
+    # from academic_history JSON via LATERAL + range guard;
+    # conduct + health_category STAY NULL (no JSON source — admin
+    # reviews qua UI Phase 1+2 per PLAN line 2813-2814).
+    # Lock-after-draft trigger (phase1_09b) is DEFERRED Q1/2027
+    # per Q9 chốt 2026-05-01; service guard provides basic
+    # protection in 2026 cutover.
+    gpa_overall: Mapped[Optional[float]] = mapped_column(
+        Numeric(precision=4, scale=2),
+        nullable=True,
+        comment="Overall GPA (0.00..10.00). Backfilled from academic_history.",
+    )
+    conduct: Mapped[Optional[str]] = mapped_column(
+        ENUM(
+            "TB", "KHA", "TOT",
+            name="conduct_grade",
+            create_type=False,
+        ),
+        nullable=True,
+        comment="Đạo đức (TB/KHA/TOT). NULL post-migration; admin UI Phase 1+2.",
+    )
+    health_category: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="Phân loại sức khỏe (1..4 — 1 tốt nhất). NULL post-migration.",
+    )
+    graduation_year: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="Năm tốt nghiệp (1900..2100). Backfilled from MAX(year_to).",
     )
 
     # phase1_08 (#184 Wave 1 PR-1D) — multi-NV gate. Determines
