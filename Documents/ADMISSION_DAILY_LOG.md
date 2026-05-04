@@ -56,6 +56,56 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 Phase 1 Schema Wave 1 PR-1D — phase1_07b + phase1_08 + phase1_13 SHIPPED — **WAVE 1 COMPLETE** + **B4 P0 CLOSED**
+
+**PR**: [#209](https://github.com/favouritekid/QLTS/pull/209) merged squash `c47b7e58` (Wave 1 PR-1D — 5th & last Wave 1 sub-PR; off remote parent `124486f1` per SOP).
+
+**Parent advance**: `124486f1` (PR-1C' post-merge tracking) → `c47b7e58`.
+
+**Scope shipped (12 file)**:
+- 3 migration: `phase1_07b_create_backfill_exceptions_table.py` (audit sink), `phase1_08_add_uses_choice_engine_flag_to_profile.py` (Phase 3 multi-NV gate), `phase1_13_create_system_config_table.py` (B4 P0 closer + seed).
+- 7 BE code: AdmissionProfile.uses_choice_engine column; SystemConfig model + schema (extra="forbid", value REQUIRED) + service (admin-only update guard + read-permissive getters) + router (GET authenticated-read, PATCH admin-only); main.py router include.
+- 2 test file (33 case): migration revision chain + service admin-only governance + key-not-found contract.
+
+**B4 P0 CLOSED**:
+- system_config table + `current_intake_year=2026` seed live.
+- Admin endpoint `/api/v2/admin/system-config` (GET authenticated-read, PATCH admin-only via Depends(require_admin) + service BusinessRuleViolation defense-in-depth).
+- Tracker B4 row flipped TODO → CLOSED/TESTED.
+
+**CI no-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (admission*.py / notification*.py / events*.py) didn't trigger because PR-1D KHÔNG đụng các file đó (chỉ alembic + system_config + admin_v2 mới).
+- Manual verification: 205/205 BE pre-merge + 205/205 post-squash on parent + live alembic upgrade/downgrade/re-upgrade idempotent.
+
+**Test result**:
+- BE: 205/205 passed in 8.14s post-squash on parent `c47b7e58` (33 PR-1D + 37 PR-1C' + 18 PR-1B'-FE governance + 117 phase1_03 + path/migration regression).
+- FE: skip — no FE Zod/UI changes. Admin form for system_config defer to PR riêng sau cutover.
+
+**Live alembic roundtrip on dev DB**:
+- `alembic upgrade phase1_13` clean → 3 new tables/columns + seed verified.
+- `alembic downgrade phase1_06` clean → 2 tables dropped + column dropped + seed gone.
+- Re-upgrade idempotent.
+
+**Tracker / board / issue (P2 cleanup per Codex round 9)**:
+- TRACKER M-1-07b + M-1-08 + M-1-systemconfig → TESTED.
+- TRACKER B4 P0 → CLOSED/TESTED.
+- Issue #184 body M-1-07b + M-1-08 + M-1-systemconfig ticked `[x]` với PR #209 + SHA + test breakdown.
+- **Deferred items strikethrough** (Codex P2 fix on previous review): M-1-04, M-1-07, M-1-09b → ~~strikethrough + DEFERRED Q1/2027~~ per Q9 chốt 2026-05-01.
+
+**Wave 1 progress (FINAL)**:
+- ✅ PR-1A `a50cdb79` — phase1_01 + phase1_02
+- ✅ PR-1B'-BE `4547f881` — phase1_03 schema/service/repo/zod
+- ✅ PR-1B'-FE `efb64ec8` — admin form UI + BE governance
+- ✅ PR-1C' `2bf8b5f1` — phase1_05 + phase1_06 + 3-tier resolution
+- ✅ **PR-1D `c47b7e58` — phase1_07b + phase1_08 + phase1_13 (B4 closer)**
+- → **WAVE 1 SHIPPED 2026-05-04**: 8 active migrations + 4 sub-PR + 1 last sub-PR. 5 PR total over 1 day.
+
+**Tomorrow plan** (Wave 2):
+- **Wave 2 — Eligibility + status_history** (PLAN line 3463-3469): `phase1_09a_add_eligibility_scalars_and_backfill` (gpa_overall + graduation_year backfill từ academic_history JSON; lock-after-draft trigger DEFERRED Q1/2027) + `phase1_10_create_status_history_table_and_backfill` (status_history table + 1 row/profile + 5 scattered scalar audit migrate per RISK_REVIEW P1 fix #1).
+- Wave 2 estimated 1-2d (backfill scripts heavy — `LATERAL jsonb_array_elements + WITH ORDINALITY` cho gpa, regex length-bounded + range guard).
+- **Wave 3 ONE-WAY ⚠ unblocked** sau Wave 2: phase1_11 status CHECK extend 14 state, phase1_12 backfill_selected_subject_group_id, phase1_15a DROP unique → composite, phase1_18 token multi-action. Wave 3 gate B1+B2+#15+#16 ✅ + Wave 2 ✅. Verify D12-D14 staging clone ready BEFORE Wave 3 ship per Q5 chốt 2026-05-03.
+
+---
+
 ### #184 Phase 1 Schema Wave 1 PR-1C' — phase1_05 subject_kind + 6 seed + phase1_06 doc_group path FK + 3-tier resolution SHIPPED
 
 **PR**: [#208](https://github.com/favouritekid/QLTS/pull/208) merged squash `2bf8b5f1` (Wave 1 PR-1C' — fourth Wave 1 sub-PR; off remote parent `aff47d61` per Codex pre-flight P2 catch).
