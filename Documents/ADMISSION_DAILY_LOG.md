@@ -56,6 +56,43 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 Phase 1 Schema Wave 1 PR-1B'-FE — admin form UI + BE governance SHIPPED
+
+**PR**: [#207](https://github.com/favouritekid/QLTS/pull/207) merged squash `efb64ec8` (Wave 1 PR-1B'-FE — admin form UI 3 field + BE micro-patch).
+
+**Parent advance**: `7aaed879` (tracker FE-zod-path drift fix) → `efb64ec8`.
+
+**Codex round 5 P1+P2 catch + fix**:
+- **P1** BE create_path silently drops 3 phase1_03 field (FE toast success nhưng DB null) → service dict thêm 3 field; convert `BonusRuleOverride` → JSONB dict.
+- **P1** Manager governance bypass: guard chỉ cover `minor_correction_allowed_fields`, không cover 3 phase1_03 field → guard extend 4 admin-only field (create + update); reject (not silent-drop) với `BusinessRuleViolation`.
+- **P2** `method_quota` decimal (1.5) → BE 400 → FE `Math.floor(parsed)`.
+- **P2** `max_total_bonus` >10 → BE 400 → FE `Math.min(10, Math.max(0, parsed))` clamp.
+
+**Scope shipped (7 file)**:
+- FE: `admission-audience.ts` constants + i18n labels + 6-case test; `PathBasicInfo.tsx` extend 3 form section (audience checkbox grid, method_quota integer input, BonusRuleOverride toggle + 3 sub-field structured form, NEVER raw JSON editor) + 19-case payload builder test; `useAdmissionPaths.test.tsx` fixture extend.
+- BE: `admission_path_service.py` create_path persist 3 field + 4-field governance guard (create + update); 18-case governance test.
+
+**KHÔNG ship trong PR-1B'-FE** (defer):
+- FE update form (chỉ extend create wizard).
+- Manager API caller smoke test (defer pre-cutover manual Postman).
+- Staging clone D12-D14 strict GIN auto-pick smoke (Wave 1 batch).
+
+**Test result**:
+- BE: 135 passed in 5.36s post-squash (PR-1B'-BE 117 + PR-1B'-FE 18 governance new).
+- FE: 25 passed in 2.32s (6 audience constants + 19 payload builder). tsc 0 error.
+- UI smoke Chrome MCP: 3 form section render với Vietnamese diacritics đầy đủ; toggle bonus override hiển thị 3 sub-field; console 0 error/warn.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-03 + FE-form-path-admin → TESTED (cite PR + SHA + test evidence).
+- Issue #184 body M-1-03 update với cả 2 PR (#206 + #207) cited.
+- Board card #184 vẫn In Progress (3/29 sub-task done; 26 còn lại — Wave 1 còn PR-1C' + PR-1D, Wave 2/3/4/5 chưa start).
+
+**Tomorrow plan** (Wave 1 còn 2 PR):
+- **PR-1C'** (BE additive): `phase1_05_add_subject_kind_and_score_bounds` (subject_kind ENUM + 6-row seed: TB_HK1_L12, TB_HK2_L12, TB_CN_L12, DGNL_DHQGHN, V_ACT, IELTS) + `phase1_06_add_path_id_to_document_group` (3-tier resolution rule + service invariant). Off parent `efb64ec8`. Ước tính 0.5-1d.
+- **PR-1D** (BE additive cuối Wave 1): `phase1_07b` (backfill_exceptions audit table) + `phase1_08` (uses_choice_engine flag) + `phase1_13` (system_config + admin endpoint + seed `current_intake_year=2026` — B4 P0 closer). Off parent post PR-1C'.
+
+---
+
 ### #184 Phase 1 Schema Wave 1 PR-1B'-BE — phase1_03 SHIPPED
 
 **PR**: [#206](https://github.com/favouritekid/QLTS/pull/206) merged squash `4547f881` (Wave 1 third sub-PR, post 4-round Codex supervising review).
