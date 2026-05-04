@@ -54,6 +54,59 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+## 2026-05-04
+
+### #184 Phase 1 Schema Wave 1 PR-1B'-BE — phase1_03 SHIPPED
+
+**PR**: [#206](https://github.com/favouritekid/QLTS/pull/206) merged squash `4547f881` (Wave 1 third sub-PR, post 4-round Codex supervising review).
+
+**Parent advance**: `f344a6e3` (tracker drift repair) → `4547f881`.
+
+**Q1/Q2/Q3 chốt 2026-05-04 sau Codex review**:
+- Q1 `admission_round_id` ship Phase 1 hay 2? → **defer Phase 2** (Phase 1 chưa có `offering_admission_round` table → phantom field).
+- Q2 Service duplicate check thay đổi? → **GIỮ NGUYÊN** (DB unique còn → bỏ service check biến `DuplicateResourceError` thành DB IntegrityError 500). Codex P1.
+- Q3 FE split? → **Zod ship cùng BE PR (parse parity); UI form tách PR-1B'-FE riêng**. Codex P1.
+
+**Codex round 4 catch + fix** (post-implementation, pre-commit):
+- Source-grep tests passed nhưng `ARRAY(literal_column("admission_audience"))` fail compile với `AttributeError: '_variant_mapping'`.
+- Fix: typed `_AUDIENCE_ARRAY_TYPE = postgresql.ARRAY(postgresql.ENUM(..., name="admission_audience", create_type=False))`.
+- Compile probe verify: `@> CAST(ARRAY['POST_THPT'] AS admission_audience[])` + `&& CAST(...)` clean.
+- Added 4 compile-dialect tests asserting `@>`/`&&`/`CAST AS admission_audience[]`/no `ANY` contract.
+
+**Scope shipped**:
+- Migration `phase1_03_add_applicable_to_method_quota_to_path.py`: ENUM `admission_audience` 5 values + `applicable_to admission_audience[]` nullable + `method_quota integer` nullable + GIN `ix_admission_path_applicable_to`.
+- Model `admission_path.py`: 2 column wired (`bonus_rule_override` đã có từ phase1_02).
+- Schema `admission_path.py`: `AdmissionAudience` Literal + typed `BonusRuleOverride` shape (`extra="forbid"`, range 0..10) + Create/Update/Response wire 3 field; Response REQUIRED no-default.
+- Service `admission_service.py`: `applied_rules` Group 8 thêm 3 key đọc từ path attribute.
+- Repository `admission_path_repository.py`: `list_paths_by_audience` (`@>`) + `list_paths_by_audiences_overlap` (`&&`). NEVER `.any()`. `include_legacy_null` Phase 3 cutover knob + OR NULL branch.
+- Frontend Zod `admission-path.ts`: `admissionAudienceEnum` + `bonusRuleOverrideSchema.strict()` + 3 field wired.
+
+**KHÔNG ship trong PR-1B'-BE** (per Q1/Q3):
+- `admission_round_id` field (Phase 2 PR-2A).
+- Bỏ duplicate check service-side (Phase 2 swap unique mới remove).
+- FE form admin UI 3 field (PR-1B'-FE riêng off `4547f881`).
+
+**Test result**:
+- 117 passed in 6.54s (4 new file 59 case + 5 regression file 58 case `tests/unit/test_admission_path_*.py`).
+- Re-run on parent post-squash `4547f881`: 117 passed in 6.82s — confirm squash collapsed cleanly.
+- Live alembic upgrade `phase1_03` clean → schema applied.
+- Live alembic downgrade `phase1_02` clean → column + index + enum dropped no orphan; `pg_type` không còn `admission_audience`.
+- Re-upgrade idempotent.
+- `uq_admission_path_offering_method` + `uq_admission_path_criteria_id` PRESERVED live verify.
+- EXPLAIN smoke: dev DB nhỏ → Seq Scan (Codex P2 expected); `enable_seqscan=off` → `Bitmap Index Scan on ix_admission_path_applicable_to` (GIN reachable; auto-pick gate trên staging clone D12-D14).
+
+**Tracker / board / issue**:
+- TRACKER row M-1-03 → TESTED (PR + squash SHA + test evidence cited).
+- Issue #184 body M-1-03 ticked `[x]` với PR + SHA + test result + Codex round 4 callout.
+- Board card #184 vẫn In Progress (3/29 sub-task done; 26 còn lại).
+
+**Tomorrow plan**:
+- Tùy user chốt 1 trong 2 path:
+  - **PR-1B'-FE-UI** (admin form 3 field — audience multi-select + method quota input + BonusRuleOverride structured form, KHÔNG raw JSON editor per Codex P2). Off parent `4547f881`. Branch `feature/admission-184-pr-1b-fe`.
+  - **PR-1C'** (Wave 1 thứ 4 BE): `phase1_05_add_subject_kind_and_score_bounds` (subject_kind ENUM + 6-row seed) + `phase1_06_add_path_id_to_document_group` (3-tier resolution rule). Off parent `4547f881`.
+
+---
+
 ## 2026-05-03
 
 ### #184 Phase 1 Schema — preflight chốt + Wave 1 start
