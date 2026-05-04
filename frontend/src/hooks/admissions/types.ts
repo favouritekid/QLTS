@@ -36,7 +36,15 @@ export type AdmissionStatus =
   | "draft"
   | "submitted"
   | "resubmitted"
+  // phase1_11 (#184 Wave 3 PR-3A) — 4 new states from Phase 3
+  // choice engine. ``reviewing`` = officer xét hồ sơ đã nộp;
+  // ``admitted`` = đậu via choice engine; ``waitlisted`` = chờ
+  // ghế; ``result_published`` = T6 broadcast marker.
+  | "reviewing"
   | "approved"
+  | "admitted"
+  | "waitlisted"
+  | "result_published"
   | "rejected"
   | "revision_requested"
   | "confirmed"

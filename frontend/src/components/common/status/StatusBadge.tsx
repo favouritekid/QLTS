@@ -113,6 +113,17 @@ export const ADMISSION_STATUS_MAP: Record<string, StatusConfig> = {
   resubmitted: { label: "Nộp lại", variant: "admission-submitted" },
   reviewing: { label: "Đang xét", variant: "admission-reviewing" },
   approved: { label: "Đã duyệt", variant: "admission-approved" },
+  // phase1_11 (#184 Wave 3 PR-3A) — 3 new states. ``admitted``
+  // shares ``admission-approved`` variant since it's a positive
+  // admission outcome via choice engine. ``waitlisted`` uses
+  // warning (chờ slot). ``result_published`` uses info (broadcast
+  // marker). All 3 also have detailed config in
+  // ``status-badge.config.ts:ADMISSION_BADGE_CONFIG`` —
+  // AdmissionBadge component reads from that source. This map is
+  // the simpler StatusFromMap fallback path.
+  admitted: { label: "Đậu", variant: "admission-approved" },
+  waitlisted: { label: "Chờ ghế", variant: "warning" },
+  result_published: { label: "Đã công bố KQ", variant: "info" },
   rejected: { label: "Từ chối", variant: "admission-rejected" },
   revision_requested: { label: "Yêu cầu bổ sung", variant: "warning" },
   confirmed: { label: "Đã xác nhận", variant: "success" },
