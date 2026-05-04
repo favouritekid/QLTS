@@ -56,6 +56,54 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+### #184 Phase 1 Schema Wave 2 PR-2A — phase1_09a eligibility scalars + phase1_10 status_history SHIPPED — **WAVE 2 COMPLETE**
+
+**PR**: [#210](https://github.com/favouritekid/QLTS/pull/210) merged squash `2d8b52f1` (Wave 2 PR-2A — first & only Wave 2 sub-PR; off remote parent `5feb3c07`).
+
+**Parent advance**: `5feb3c07` (Wave 1 complete tracking) → `2d8b52f1`.
+
+**Scope shipped (6 file)**:
+- 2 migration: phase1_09a (eligibility scalars + 2-field backfill + 4 exception sinks) + phase1_10 (status_history + 6 backfill blocks).
+- 3 BE code: AdmissionProfile 4 new col; AdmissionProfileStatusHistory new model với 3 ENUM mirror + CheckConstraint + Python attr `metadata_` rename (avoid SQLAlchemy DeclarativeBase.metadata collision); models __init__ export.
+- 1 test file (25 case).
+
+**Catch + fix in-flight (Codex round 12 + 13)**:
+- ❌ → ✅ Migration phase1_09a missing 2 grad year exception sinks (INVALID_GRADUATION_YEAR + MISSING_GRADUATION_YEAR) → added per PLAN line 2791-2811.
+- ❌ → ✅ Year range [1990, 2030] quá hẹp (rejects legitimate older grads + future-dated transfers) → fixed [1900, 2100] (SQL + comment + model docstring) per PLAN line 2795.
+- ❌ → ✅ Phase1_10 scattered scalar backfill 5 blocks vỡ CHECK khi `*_by_id IS NULL` (legacy: audit timestamp set nhưng actor scalar NULL) → `CASE WHEN <actor>_by_id IS NULL THEN 'system'` fallback cho all 3 role cols + `actor_fallback` metadata flag.
+- ❌ → ✅ exception_type `GPA_OUT_OF_RANGE` lệch SOT → renamed `INVALID_GPA_VALUE` per PLAN line 354+2746.
+- ❌ → ✅ alembic env.py `isolation_level=AUTOCOMMIT` → TEMP TABLE không survivable → refactored gpa backfill thành single-statement CTE chain.
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (admission*.py services + notification*.py + events*.py + event_catalog/notification_seed_defaults) **không match** PR-2A scope (chỉ alembic + models + tests). 0 check chạy.
+- Manual verification pre-push: 230/230 BE wide regression + live alembic upgrade/downgrade/re-upgrade idempotent on dev DB + 4 exception types reverted clean.
+
+**Test result**:
+- BE: 230/230 passed in 8.54s post-squash on parent `2d8b52f1` (25 PR-2A new + 33 PR-1D + 37 PR-1C' + 18 PR-1B'-FE + 117 phase1_03 + path/migration regression).
+- FE: skip — DB/model only per Codex Guard 4(b). FE Zod parity DEFERRED.
+
+**Live alembic roundtrip on dev DB**:
+- `alembic upgrade phase1_10` clean → 4 columns + ENUM + table + 6 backfill blocks all applied.
+- `alembic downgrade phase1_13` clean → table dropped + columns dropped + 4 ENUM types dropped + 4 exception_types deleted.
+- Re-upgrade idempotent.
+
+**Tracker / board / issue**:
+- TRACKER M-1-09a + M-1-10 → TESTED (cite PR + SHA + 25 test breakdown + Codex round 12 fixes).
+- Issue #184 body M-1-09a + M-1-10 ticked `[x]` với PR #210 + SHA + scope details.
+- Board card #184 vẫn In Progress (Wave 1 + Wave 2 done; Wave 3 ONE-WAY ⚠ + Wave 4 Lead 1-many + Wave 5 Notification + Wave 6 storefront chưa start).
+
+**Wave 2 progress (FINAL)**:
+- ✅ PR-2A `2d8b52f1` — phase1_09a + phase1_10
+- → **WAVE 2 COMPLETE 2026-05-04**
+
+**Tomorrow plan — Wave 3 ONE-WAY ⚠ gate verify**:
+Wave 3 unblocked sau Wave 2 (gate B1+B2+#15+#16 ✅ + Wave 2 ✅). Trước khi ship Wave 3 PR-3A:
+1. **Verify D12-D14 staging clone ready** (Q5 chốt 2026-05-03) — clone production DB + run dry rehearsal of phase1_11/12/15a/18 ONE-WAY migrations.
+2. **FE Zod eligibility parity** (defer từ PR-2A per Codex Guard 4) — must ship BEFORE M-1-11 CHECK extend (Phase 3 deploy choreography: FE permissive Zod Day 1 → BE migration #11 Day 2 → FE strict Day 3).
+3. Wave 3 4 ONE-WAY migrations: phase1_11 (status CHECK 14 state) + phase1_12 (backfill_selected_subject_group_id decision tree) + phase1_15a (DROP unique → composite lead_id+academic_year) + phase1_18 (token multi-action).
+
+---
+
 ### #184 Phase 1 Schema Wave 1 PR-1D — phase1_07b + phase1_08 + phase1_13 SHIPPED — **WAVE 1 COMPLETE** + **B4 P0 CLOSED**
 
 **PR**: [#209](https://github.com/favouritekid/QLTS/pull/209) merged squash `c47b7e58` (Wave 1 PR-1D — 5th & last Wave 1 sub-PR; off remote parent `124486f1` per SOP).
