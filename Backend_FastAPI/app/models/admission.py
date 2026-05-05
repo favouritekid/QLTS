@@ -44,8 +44,14 @@ class AdmissionProfile(Base):
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
         Index('ix_admission_profile_citizen_year', 'citizen_id', 'academic_year'),
+        # Wave 3-A (M-1-11) extends 10-state CHECK to 14-state, adding the
+        # 4 choice-engine milestone states (reviewing / result_published /
+        # admitted / waitlisted). Migration owner:
+        # ``alembic/versions/phase1_11_extend_profile_status_check_constraint.py``.
+        # Test DB (``Base.metadata.create_all()``) reads this declaration —
+        # keeping it in sync with the migration prevents test-vs-prod drift.
         CheckConstraint(
-            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn')",
+            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn','reviewing','result_published','admitted','waitlisted')",
             name="ck_admission_profile_status"
         ),
         CheckConstraint(
