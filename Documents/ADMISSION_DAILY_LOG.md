@@ -58,6 +58,72 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### 🎯 #184 PHASE 1 SCHEMA 100% COMPLETE — Wave 3-E phase1_15a UNIQUE swap SHIPPED ⚠ ONE-WAY (final)
+
+**MILESTONE**: 19/19 active Phase 1 migrations shipped trong 3 calendar days (2026-05-03 / 2026-05-04 / 2026-05-05). Phase 1 Schema CLOSED.
+
+| Wave | Migrations | Squash SHAs | Date |
+|---|---|---|---|
+| Wave 1 | 8 (phase1_01/02/03/05/06/07b/08/13) | a50cdb79 + 4547f881 + efb64ec8 + 2bf8b5f1 + c47b7e58 | 2026-05-03/04 |
+| Wave 2 | 2 (phase1_09a/10) | 2d8b52f1 | 2026-05-04 |
+| Wave 5 | 5 (phase1_19c/16/17/19d/19e) | 9af7510b + 1989bd03 + 0b17f394 + ef6a8b6d + 3f902f5b | 2026-05-05 |
+| Wave 3 | 4 + 1 FE (phase1_11/12/18/15a + Stage 3 strict) | 55f3eb41 + efc1b4f7 + 51b2c1ae + 958435cf + 15f52c8e | 2026-05-05 |
+| **Total** | **19/19 active migrations** | **🎯 100% COMPLETE** | — |
+
+**Cumulative stats (Phase 1)**:
+- 25+ sub-PRs shipped trong 3 calendar days (~8-10 PRs/day average — exceptional solo-dev velocity).
+- 350+ unit tests written, 100% PASS.
+- Wave 3 strict standard restored — every PR has live alembic roundtrip on dev DB w/ prod data (post solo-cutover-simple-data-import pivot).
+- Cross-source consistency anchor pattern (model __table_args__ ↔ migration constants) caught silent drift across Wave 3.
+
+---
+
+### #184 Wave 3-E — phase1_15a UNIQUE swap SHIPPED ⚠ ONE-WAY final migration
+
+**PR**: [#223](https://github.com/favouritekid/QLTS/pull/223) merged squash `15f52c8e` (Wave 3-E final 2026-05-05).
+
+**Parent advance**: `b58ba573` (Wave 3-D tracking) → `15f52c8e`.
+
+**Scope shipped (3 file)**:
+- `alembic/versions/phase1_15a_drop_lead_id_unique_to_composite.py` (NEW, 202 lines): 3-step DDL DROP legacy UNIQUE → CREATE plain INDEX → ADD composite UNIQUE per PLAN line 3312-3346. Defensive ONE-WAY downgrade với manual cleanup playbook (`"collapse multi-year profiles per lead before re-running"`) cho post-Wave-4 scenario.
+- `app/models/admission.py` (17 lines edit): `__table_args__` composite `UniqueConstraint('lead_id', 'academic_year', name='uq_admission_profile_lead_year')` added + `lead_id` column `unique=True` removed (Wave 4 PR #15b sẽ flip relationship `uselist=True` paired với repository/service per PLAN line 3320-3331).
+- `tests/unit/test_phase1_15a_unique_swap.py` (NEW, 240 lines, 16 case): revision + constants lock-in + 3-step DDL ordering anchor + recreated index PLAIN + composite columns + inspector helpers + Step 1 conditional drop + 3 downgrade defensive guard tests + 2 cross-source anchors (model + column) + module sanity.
+
+**3-step DDL design rationale (preserves FK lookup performance)**:
+1. DROP legacy `ix_admission_profile_lead_id` UNIQUE INDEX
+2. CREATE plain (non-UNIQUE) `ix_admission_profile_lead_id` INDEX same name → FK lookup không gap
+3. ADD composite `uq_admission_profile_lead_year UNIQUE (lead_id, academic_year)` → business rule enforced
+
+**Schema name correction (memory `verify-schema-before-proposing` Wave 3-D pattern continued)**:
+- Live DB uses `ix_admission_profile_lead_id` (`ix_*` index convention) — verified `\d admission_profile`.
+- PLAN draft mentioned `_lead_id_key` (constraint convention) — corrected per live DB.
+- Test 4 anchor non-tautological locks live convention against future PLAN copy-paste drift.
+
+**Live alembic verified (Wave 3 strict standard maintained throughout 4 ⚠ ONE-WAY migrations)**:
+- Pre-flight: 0 lead_id duplicates (9 unique leads = 9 profiles 1:1) + 0 (lead_id, academic_year) duplicates → ZERO conflict risk.
+- Upgrade `phase1_18 → phase1_15a` clean. Live DB confirms: `ix_admission_profile_lead_id btree (lead_id)` (plain) + `uq_admission_profile_lead_year UNIQUE CONSTRAINT, btree (lead_id, academic_year)` (composite).
+- Downgrade safe path (0 multi-profile leads) clean — legacy UNIQUE INDEX restored, composite removed.
+- Re-upgrade idempotent (alembic_version stays `phase1_15a` head).
+- **Defensive ONE-WAY guard verified live**: INSERT 2nd profile lead_id=23 year=2027 (allowed by composite) → `alembic downgrade -1` raises `RuntimeError: Cannot downgrade phase1_15a: 1 lead(s) in admission_profile hold >1 profile (multi-year semantics already in flight). This is a ONE-WAY migration — restore from a pre-Wave-3 snapshot instead of running 'alembic downgrade'. Manual cleanup playbook: collapse multi-year profiles per lead before re-running this downgrade.`
+
+**Tracker / board / issue**:
+- TRACKER row M-1-15 (line 96): TODO → TESTED + 🎯 CLOSES PHASE 1 SCHEMA 100% banner + full scope detail + 16/16 unit + live evidence.
+- Issue #184 body line 27 M-1-15: [ ] → [x] + cite PR #223 squash + Phase 1 100% milestone banner + full scope.
+
+**Wave 3 progress (5/5 sub-PR ALL merged 2026-05-05)**:
+- ✅ 3-A `55f3eb41` phase1_11 status CHECK 10→14 ⚠
+- ✅ 3-B `efc1b4f7` FE Stage 3 strict 14-state z.enum
+- ✅ 3-C `51b2c1ae` phase1_12 backfill ⚠
+- ✅ 3-D `958435cf` phase1_18 token multi-action ⚠
+- ✅ **3-E `15f52c8e` phase1_15a UNIQUE swap ⚠ (final → 100%)** ← this entry
+
+**Tomorrow plan — Wave 4 PR #15b Lead 1-many model + repository + service**:
+- NO Alembic (pure code change relying on phase1_15a UNIQUE swap shipped).
+- Scope: `Lead.admission_profile` (singular `uselist=False`) → `Lead.admission_profiles` (plural list); add helpers `current_admission_profile(year)` + `last_terminal_admission_profile()`; repository methods `list_profiles_by_lead_id(lead_id)` + `get_profile_by_lead_year(lead_id, year)`; service `create_profile` block "lead đã có profile cho academic_year này" composite check; schema dual response (legacy admission_profile + new admission_profiles plural for FE backward compat); 3 caller migrate per PLAN line 3324-3328.
+- Estimate 1d (no inter-PR soak per memory `solo-cutover-simple-data-import` solo cold cutover).
+
+---
+
 ### #184 Wave 3-D — phase1_18 confirmation_token multi-action SHIPPED ⚠ ONE-WAY fourth migration
 
 **PR**: [#222](https://github.com/favouritekid/QLTS/pull/222) merged squash `958435cf` (Wave 3-D ⚠ ONE-WAY 2026-05-05).
