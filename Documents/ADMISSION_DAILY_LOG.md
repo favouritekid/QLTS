@@ -58,6 +58,78 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 3-C — phase1_12 backfill_selected_subject_group_id SHIPPED ⚠ ONE-WAY third migration
+
+**PR**: [#221](https://github.com/favouritekid/QLTS/pull/221) merged squash `51b2c1ae` (Wave 3-C ⚠ ONE-WAY backfill 2026-05-05).
+
+**Parent advance**: `efc1b4f7` (Wave 3-B FE Stage 3 strict) → `51b2c1ae`.
+
+**Scope shipped (2 file)**:
+- `alembic/versions/phase1_12_backfill_selected_subject_group_id.py` (NEW, 272 lines): backfills `admission_profile.selected_subject_group_id` (column owned Phase 0 `admstrict01`, NULL on all historical rows) via 3-rule decision tree per PLAN line 394 + 3122-3242 SQL spec.
+  - **Rule (a)** auto-map: path có exactly 1 `criteria_subject_group` → no ambiguity, auto-assign sole group. CTE split for cast guard (regex before int cast).
+  - **Rule (b)** scoped infer: gate match by `path_allowed_groups` JOIN + `group_completeness` (`matched_count = required_count` AND `required_count > 0`) + `unique_complete_groups` (`HAVING COUNT(*) = 1`).
+  - **Rule (c)** exception report: 2 distinct exception types — `AMBIGUOUS_SELECTED_GROUP` (admin picks via UI) + `INSUFFICIENT_DATA_FOR_BACKFILL` (data quality fix needed). Both scoped `status NOT IN ('draft', 'withdrawn')` để không flood admin queue with abandoned drafts.
+  - Pre-flight `information_schema.columns` check raises `RuntimeError` với Phase 0 hint nếu column missing (chain misuse).
+  - Idempotent: UPDATE guards `WHERE selected_subject_group_id IS NULL` + exception INSERTs use `ON CONFLICT (profile_id, exception_type) DO NOTHING`.
+  - ONE-WAY downgrade raises `RuntimeError` với snapshot-restore hint — reverting NULL would dangle Phase 3 `AdmissionProfileChoice` FKs.
+- `tests/unit/test_phase1_12_backfill_selected_subject_group.py` (NEW, 215 lines, 15 case): revision chain + pre-flight column check + Rule (a) single-group path + CTE cast guard + Rule (b) scope + completeness + uniqueness + Rule (c) 2 exception types + scope skip draft/withdrawn + idempotent ON CONFLICT (2 occurrences) + UPDATE guards NULL only + downgrade ONE-WAY raises + module sanity.
+
+**Live alembic backfill executed (Wave 3 strict standard maintained)**:
+- Pre-state: 9 profiles, 0 với selected_subject_group_id, 0 exceptions.
+- Post-upgrade: **8/9 profiles backfilled** unambiguously via Rule (a) or (b) — IDs 14/15/16/17/18/19/22/23 với group_ids 878/929/923/859/878/859/859/878 (diverse paths matched).
+- Profile id=20 (status=draft, has_scores=false) correctly remained NULL — Rule (c) scope excludes drafts.
+- **0 exceptions** generated — data clean enough for unambiguous resolution.
+- Re-upgrade idempotent (no double-backfill, alembic_version stays `phase1_12`).
+- Defensive ONE-WAY downgrade verified live: `alembic downgrade -1` raises `RuntimeError: Cannot downgrade phase1_12: backfill is ONE-WAY. Reverting selected_subject_group_id to NULL would dangle Phase 3 AdmissionProfileChoice FKs and force re-review of every backfilled profile. Restore from a pre-Wave-3 snapshot if a real rollback is required.`
+
+**Tracker / board / issue (batched với Wave 3-B SOP)**:
+- TRACKER row M-1-12 (line 95): TODO → TESTED + full scope detail + 15/15 unit + live evidence.
+- TRACKER row FE-zod-status (line 150): **STAGE 1 SHIPPED** → **STAGE 1 + STAGE 3 SHIPPED** + cite PR #220 squash `efc1b4f7` + Stage 3 18 refactored test breakdown + atomic BE↔FE contract enforcement note.
+- Issue #184 body: M-1-12 không có sub-task row trong issue body (only in TRACKER) — skipped.
+
+---
+
+### #184 Wave 3-B — Stage 3 strict re-tighten 14-state z.enum SHIPPED (atomic complement với Wave 3-A)
+
+**PR**: [#220](https://github.com/favouritekid/QLTS/pull/220) merged squash `efc1b4f7` (Wave 3-B FE Stage 3 strict 2026-05-05).
+
+**Parent advance**: `7b1e414d` (Wave 3-A post-merge tracking) → `efc1b4f7`.
+
+**Scope shipped (2 file)**:
+- `frontend/src/lib/zod/admissions.ts` (status enum permissive → strict): Stage 1 `z.union([z.enum([10 legacy]), z.string()])` (PR #211) → Stage 3 `z.enum([14 strict])` lock-in. 10 legacy + 4 new (`reviewing`/`result_published`/`admitted`/`waitlisted`).
+- `frontend/src/lib/zod/admissions.eligibility.test.ts` (describe block flipped permissive → strict): 5 status tests refactored — keeps "10 legacy strict" + adds "4 new states strict" (loop) + FLIPS "parses arbitrary unknown" → "rejects unknown post-strict" + keeps non-string reject + adds "locks 14 entries drift guard anchor non-tautological".
+
+**Atomic complement với Wave 3-A**: per PLAN line 188-191 v2.10 fix #7 deploy choreography:
+- Stage 1 (PR #211): FE Zod permissive — accepts any string so BE can deploy migration without FE crash window.
+- Stage 2 (PR #219 Wave 3-A): BE migration phase1_11 + state machine emits 4 new states.
+- Stage 3 (PR #220 this Wave 3-B): FE Zod strict re-tighten — closes the `z.string()` catchall, force BE↔FE 14-state contract enforcement end-to-end. Drift guard test catches future BE state additions at CI.
+
+**Surfaces verified pre-flight (no FE follow-up needed)**:
+- ✅ `status-badge.config.ts`: 14 entries (PR #212 squash 2c411306 Wave 5-A pre-flight).
+- ✅ `AdmissionsClient.tsx` STATUS_TABS + STATUS_OPTIONS: 14 entries (PR #212).
+- ✅ `useAdmissionsFilter.ts` STATUS_TABS sync: 14 entries (PR #212; drift-guarded by `AdmissionsClient.status-tabs.test`).
+
+**Test results**: 18/18 admissions.eligibility.test.ts (refactored) + 45/45 targeted FE regression (admissions/finance/AdmissionsClient/status-badge-coverage all preserved).
+
+**Pre-existing TS error transparently disclosed**: `useAdmissionPaths.test.tsx:31` fixture missing `applicable_to`/`method_quota`/`bonus_rule_override` — root cause PR #207 (Wave 1 PR-1B'-FE), NOT caused by Wave 3-B. Tracked as separate test-debt follow-up.
+
+---
+
+**Wave 3 progress (3/5 sub-PR shipped — ALL 3 merged)**:
+- ✅ Wave 3-A `55f3eb41` phase1_11 status CHECK 10→14 ⚠ ONE-WAY (PR #219)
+- ✅ Wave 3-B `efc1b4f7` FE Stage 3 strict 14-state z.enum (PR #220)
+- ✅ **Wave 3-C `51b2c1ae` phase1_12 backfill_selected_subject_group_id ⚠ ONE-WAY** (PR #221) ← this entry
+- ⏳ Wave 3-D phase1_18 confirmation_token multi-action ⚠ ONE-WAY
+- ⏳ Wave 3-E phase1_15a DROP UNIQUE → composite ⚠ ONE-WAY
+
+**Tomorrow plan — Wave 3-D phase1_18 confirmation_token multi-action**:
+- Scope: extend `confirmation_token` schema với `action_type` column (ENUM submit/confirm/...) + partial UNIQUE constraint per (profile_id, action_type) where revoked_at IS NULL + `revoked_at` audit column.
+- Pre-implement grep: PLAN §3.3.g + §4 P1 #18 spec + confirmation_token model schema current state + table prod data row count + token use cases (link với #15 magic link + Wave 4 submit token TTL 7d).
+- Live alembic backfill rehearse on dev DB w/ prod data per memory `solo-cutover-simple-data-import`.
+- Estimate 0.5d.
+
+---
+
 ### #184 Wave 3-A — phase1_11 status CHECK 10→14 state SHIPPED ⚠ ONE-WAY first migration
 
 **PR**: [#219](https://github.com/favouritekid/QLTS/pull/219) merged squash `55f3eb41` (Wave 3-A first ⚠ ONE-WAY migration 2026-05-05).
