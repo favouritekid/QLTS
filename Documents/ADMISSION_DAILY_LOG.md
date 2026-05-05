@@ -58,6 +58,54 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 5-D — phase1_16 archived_admission_profile table SHIPPED — second Wave 5 sub-PR
+
+**PR**: [#214](https://github.com/favouritekid/QLTS/pull/214) merged squash `1989bd03` (Wave 5-D D-i scope per Codex round 19 chốt 2026-05-05).
+
+**Parent advance**: `e04c978f` (B-pre-mini ship-order reorder docs sweep) → `1989bd03`.
+
+**Wave 5 ship-order reorder rationale**: Codex round 19 phát hiện Wave 5-B `phase1_19d` archive task body cần `_archived_notification_outbox` table → table này tạo trong `phase1_17` (Wave 5-E). Numeric file order (16/17 < 19d/e) misalign với chain dependency. Alembic chain dùng string-based `down_revision`, không phụ thuộc numeric. Re-link an toàn không cần rename file. Final order: phase1_19c (5-A ✅) → **phase1_16 (5-D this PR)** → phase1_17 (5-E) → phase1_19d (5-B) → phase1_19e (5-C).
+
+**Scope shipped (2 file)**:
+- `alembic/versions/phase1_16_create_archived_admission_profile_table.py` (NEW): mirror 64 admission_profile col + 1 archive metadata `archived_at TIMESTAMPTZ NOT NULL DEFAULT now()` + composite index `ix_archived_profile_lead_year (lead_id, academic_year)` per PLAN line 933-934. NO FK / UQ / CHECK preserve historical violators (Wave 4 lead_id UNIQUE swap + Wave 3 status CHECK extend roundtrip safe). `conduct conduct_grade` ENUM column reuses type owned by phase1_09a via `create_type=False`. Idempotent guards: `table_exists` + `index_exists` mirror phase1_19a template.
+- `tests/unit/test_phase1_16_archived_admission_profile.py` (NEW, 17 case): revision chain + underscore-prefixed table name + mirror parity (re-derived from `AdmissionProfile.__table__.columns` — anchor non-tautological per memory `pattern-change-impact-audit`) + archived_at shape + composite IX exact column order + no FK/UQ/CHECK strings + ENUM `create_type=False` + idempotent guards + downgrade short-circuit + drop_index trước drop_table.
+
+**Codex round 19 D-i scope chốt — 2 fields dropped from earlier preview**:
+- `archive_reason VARCHAR(50)` — single trigger only (round end_date + 6m per PLAN line 195/562-571), no discriminator needed.
+- `original_round_id INTEGER` — cron derives at run-time via `(applied_rules->>'admission_round_id')::int` JSONB extract per PLAN line 564; archive table mirrors `applied_rules` so the same pattern works on the archive side.
+
+**Live alembic roundtrip — DEFERRED to staging clone D12-D14**:
+- Dev DB drift detected pre-test: `alembic_version=phase1_19c` stamped but admission_profile schema thiếu Wave 2 artifacts (phase1_09a 4 cols + `conduct_grade` ENUM, phase1_10 `admission_profile_status_history` table). Likely manual `alembic stamp` workflow without upgrade body execution.
+- Migration code đúng — ENUM reference resolves trên production where chain ran properly.
+- Mitigation: 17 unit tests + template parity từ phase1_19a (PR #198 ✅) + phase1_19c (PR #213 ✅) + Option C (skip live test) per Codex round 20 risk evaluation chốt.
+- Ops follow-up: dev DB drift fix tracked separately (DBA task — restore proper alembic chain on dev environment).
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter không match PR scope (alembic + test only). 0 check chạy.
+- Manual verification pre-push: 17/17 unit pass.
+
+**Test result**:
+- Targeted Wave5-D: 17/17 passed in 1.95s on dev container post-merge re-run on parent.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-archive-profile (line 92): TODO → TESTED + PR/SHA cite + 17 test breakdown + ORM/cron defer note + dev DB drift roundtrip-deferred note.
+- Issue #184 body line 22 split: combined `M-1-archive-profile + M-1-archive-outbox` → 2 separate rows. M-1-archive-profile ticked `[x]` với PR #214 + SHA + scope summary. M-1-archive-outbox `[ ]` next ship.
+
+**Wave 5 progress (2/5 sub-PR shipped)**:
+- ✅ Wave 5-A `9af7510b` — phase1_19c (event_catalog seed)
+- ✅ **Wave 5-D `1989bd03` — phase1_16 (archived_admission_profile)** ← this PR
+- ⏳ Wave 5-E — phase1_17 (archived_outbox) ← NEXT
+- ⏳ Wave 5-B — phase1_19d (celery beat archive task — needs Wave 5-E ship trước for `_archived_notification_outbox` table)
+- ⏳ Wave 5-C — phase1_19e (notification rules)
+
+**Tomorrow plan — Wave 5-E `phase1_17_create_archived_outbox_table`**:
+- D-i scope parallel 5-D pattern: mirror notification_outbox 10 col + `archived_at` + likely 1 IX cho time-range admin queries (`ix_archived_outbox_archived_at` — PLAN không spec, Codex chốt option). NO FK / UQ (drop idempotency_key UNIQUE) / CHECK / partial IX (worker-only). NO ENUM (cleaner mirror — notification_outbox không có ENUM).
+- Cron behavior khác 5-D: outbox archive cron MOVES rows (DELETE + INSERT via RETURNING per PLAN line 168-178), profile archive COPIES (INSERT only line 562 KHÔNG xoá source).
+- Pre-flight grep done: 0 ORM match cho `_archived_notification_outbox` / `ArchivedNotificationOutbox` (defer paired Wave 5 follow-up).
+- Estimate 0.5d (cùng template; thực tế nhanh hơn 5-D nhờ 10 col vs 64 + no ENUM).
+
+---
+
 ### #184 Wave 5-A — phase1_19c seed event_catalog DB rows SHIPPED — first Wave 5 sub-PR
 
 **PR**: [#213](https://github.com/favouritekid/QLTS/pull/213) merged squash `9af7510b` (Wave 5-A; first Wave 5 sub-PR per Codex round 18 chốt scope b2).
