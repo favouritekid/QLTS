@@ -56,6 +56,73 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-06
+
+### 🎯 #184 WAVE 4 COMPLETE — Lead 1-many migrate done end-to-end (BE + FE + hotfix)
+
+**MILESTONE**: Wave 4 sequence ALL CLOSED. Lead 1-many semantic shipped from DB schema → BE model/repo/service → FE consumers in 4 PRs over 2026-05-05/06.
+
+| Component | PR | Squash | Date |
+|---|---|---|---|
+| Wave 3-E phase1_15a UNIQUE swap (foundation) | [#223](https://github.com/favouritekid/QLTS/pull/223) | `15f52c8e` | 2026-05-05 |
+| Wave 4 #15b BE Lead 1-many model + repo + service | [#224](https://github.com/favouritekid/QLTS/pull/224) | `966d5f5f` | 2026-05-05 |
+| Wave 4 #15b hotfix multi-year race-check | [#226](https://github.com/favouritekid/QLTS/pull/226) | `e5b0a411` | 2026-05-05 |
+| **Wave 4 #15c FE plural migrate** | [#225](https://github.com/favouritekid/QLTS/pull/225) | `50ac3d5c` | 2026-05-05/06 |
+
+**Cutover gates remaining**:
+- ✅ Phase 1 Schema 100% (Wave 1 + 2 + 3 + 5 = 19/19 migrations)
+- ✅ Wave 4 Lead 1-many migrate (BE + FE done end-to-end)
+- ⏳ Wave 6 PR #17 storefront refactor (final remaining)
+- ⏳ Cutover dry-run + maintenance window deploy
+
+---
+
+### #184 Wave 4 #15c FE plural migrate SHIPPED — Wave 4 closure
+
+**PR**: [#225](https://github.com/favouritekid/QLTS/pull/225) merged squash `50ac3d5c` (Wave 4 #15c 2026-05-05/06).
+
+**Parent advance**: `2b250e3c` (PLAN v2.13.2 + Wave 4 #15b post-merge) → `50ac3d5c`.
+
+**Scope shipped (5 file)**:
+- `frontend/src/types/lead.types.ts`: `admission_profiles?: AdmissionProfileShallow[]` plural canonical added + `@deprecated` JSDoc on legacy `admission_profile` field. Comment narrates dual-response window + Wave 4 #15d removal trigger.
+- `frontend/src/app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx`: hoist `currentProfile` const at component top → 4 callsites consume it (header button + 2 callback closures + 1 navigate).
+- `frontend/src/app/(dashboard)/leads/[id]/_components/LeadInfoTabs.tsx`: IIFE wraps Profile tab conditional → 5 inline references switched to `profile` const.
+- `frontend/src/components/leads/AdmissionReadinessChecklist.tsx`: dual-read at 2 sites (`deriveAdmissionChecklist` + `hasProfile` flag).
+- `frontend/src/components/leads/AdmissionReadinessChecklist.wave4-15c.test.ts` (NEW, 2 case): drift guard text-grep (plural-first ordering) + TS shape assertion.
+
+**Dual-read pattern** uniform across 3 components:
+```typescript
+const profile = lead.admission_profiles?.[0] ?? lead.admission_profile;
+```
+- Plural first → forward-compat post-Wave-4 #15d when BE drops legacy field.
+- Legacy fallback → backward-compat trong migration window (BE schema dual response từ #15b auto-populates singular).
+
+**FE wrapper evidence (PLAN v2.13.2 substitute gate)**:
+- Vitest 26/26 PASS (2 Wave 4 #15c drift guard + 6 admissions subject_weights schema regression + 18 admissions eligibility status strict + eligibility scalars).
+- TypeScript compile: clean (only pre-existing `useAdmissionPaths.test.tsx:31` error from PR #207 — unrelated test-debt, not Wave 4 #15c).
+
+**Path filter no-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` không match FE-only files. 0 check chạy.
+- Manual evidence trong PR body + this DAILY_LOG entry per substitute evidence gate.
+
+**Process integrity timeline**:
+1. Wave 4 #15b PR #224 merged 2026-05-05 13:33 (squash `966d5f5f`).
+2. Hotfix PR #226 merged 2026-05-05 14:52 (squash `e5b0a411`).
+3. PLAN v2.13.2 patch + Wave 4 #15b SOP commit `2b250e3c` parent push 2026-05-05.
+4. PR #225 merged 2026-05-05/06 23:28 (squash `50ac3d5c`) **PLAN-compliant under v2.13.2**.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-15-fe (line 98): TODO → TESTED + 🎯 CLOSES WAVE 4 banner + full scope + 26/26 vitest + tsc clean + soak WAIVED reference.
+- Issue #184 body line 29 M-1-15-fe: [ ] → [x] + cite PR #225 squash + Wave 4 COMPLETE banner + dual-read pattern.
+
+**Tomorrow plan — Wave 6 PR #17 public storefront refactor**:
+- NO Alembic (pure code change). Last cutover gate.
+- Scope: `public_admissions_service` migrate sang round + audience filter + 3-tier doc resolution per PLAN line 3485 + line 3514 (MERGE BEFORE phase2_02b).
+- Pre-implement grep: `app/services/public_admissions_service.py` current state + PLAN §6 storefront spec + round/audience filter logic + 3-tier doc resolution path → method → shared.
+- Estimate 1d.
+
+---
+
 ## 2026-05-05
 
 ### #184 Wave 4 #15b SHIPPED + P0 hotfix multi-year regression — PLAN v2.13.2 soak waiver formalized
