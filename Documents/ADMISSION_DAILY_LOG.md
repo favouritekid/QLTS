@@ -58,6 +58,61 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 3-A — phase1_11 status CHECK 10→14 state SHIPPED ⚠ ONE-WAY first migration
+
+**PR**: [#219](https://github.com/favouritekid/QLTS/pull/219) merged squash `55f3eb41` (Wave 3-A first ⚠ ONE-WAY migration 2026-05-05).
+
+**Parent advance**: `43806e5f` (Rehearsal post-merge tracking + solo-dev cutover pivot) → `55f3eb41`.
+
+**Scope shipped (3 file)**:
+- `alembic/versions/phase1_11_extend_profile_status_check_constraint.py` (NEW, 152 lines): status CHECK 10→14 state extend với 4 choice-engine milestone states (reviewing/result_published/admitted/waitlisted) per PLAN §3.3.b workflow remap. OLD_STATES + NEW_STATES + ALL_STATES tuple lock-in. `_check_predicate()` SQL-safe helper via `repr`. Upgrade: drop_constraint + create_check_constraint với ALL_STATES (DROP+ADD pattern vì Postgres không hỗ trợ ALTER CHECK). Defensive downgrade: COUNT new-state rows BEFORE drop → raise RuntimeError với clear ONE-WAY hint nếu >0 rows; safe path recreates 10-state CHECK nếu 0 rows.
+- `app/models/admission.py:48-58` (8 lines): `__table_args__` `CheckConstraint` declaration string updated từ 10 → 14 state literals. Test DB (`Base.metadata.create_all()`) reads this — keeping in sync với migration prevents drift symptom per memory `test-db-schema-source`.
+- `tests/unit/test_phase1_11_status_check_extend.py` (NEW, 234 lines, 15 case): revision chain + constraint name + table name + OLD/NEW/ALL_STATES tuple lock-in + predicate helper + upgrade body shape + downgrade defensive guard contract (COUNT BEFORE drop + raise + ONE-WAY mention + safe path) + module sanity + **cross-source consistency anchor** `AdmissionProfile.__table_args__` lists all 14 states (catches migration↔model drift, anchor non-tautological).
+
+**Wave 3 prerequisites verified pre-draft**:
+- B1 Casbin auth_model rewrite — PR #201 squash `6eac329e` ✓
+- #15 `is_admitted_like()` helper — used in 9+ files (fees + admission_service + phase_manager) — PR #202 squash `e3b09eaa` ✓
+- #16 workflow contract boundary — `check_status_assignment.py` AST lint live in CI — PR #203 squash `a7b6c5c9` ✓
+- LS-map 4 new state coverage — `lead_admission_sync.py:51,59,61,88-91,166-176` ✓
+- FE Stage 1 permissive Zod — PR #211 squash `d9631ad5` ✓
+- FE-badge + FE-tabs config 14 state — PR #212 squash `2c411306` ✓
+
+**Live alembic roundtrip executed (Wave 5 drift workaround pattern broken — strict standard restored)**:
+- Upgrade `phase1_19e → phase1_11` clean; CHECK constraint extended to 14 values verified via `pg_get_constraintdef`.
+- `INSERT INTO admission_profile (..., status='reviewing')` SUCCEEDS post upgrade (id=24 returned).
+- `alembic downgrade -1` clean back to phase1_19e (10-state CHECK restored) when 0 new-state rows.
+- Re-upgrade `phase1_19e → phase1_11` idempotent.
+- **Defensive guard verified live**: `INSERT ... status='admitted'` (id=25) → `alembic downgrade -1` raises `RuntimeError: Cannot downgrade phase1_11: 1 row(s) in admission_profile hold a new-state value (reviewing, result_published, admitted, waitlisted). This is a ONE-WAY migration — restore from a pre-Wave-3 snapshot instead of running alembic downgrade.`
+
+**Solo-dev cutover rehearsal context** (memory `solo-cutover-simple-data-import`):
+- Dev DB imported prod data via `scripts/import-prod-to-dev.sh` (4.76 MB dump, 392 leads + 9 profiles + 238 casbin rules preserved).
+- Pre-draft live state verified: 10-state baseline exact match + status distribution `draft=8, submitted=1` (zero break risk for 14-state extend; all 9 profiles satisfy new constraint trivially).
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter không match PR scope (alembic + model + test only). 0 check chạy.
+- Manual verification pre-push: 15/15 unit pass + live alembic roundtrip + defensive guard verified.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-11 (line 94): TODO → TESTED + full scope detail + 15/15 + live evidence.
+- Issue #184 body line 26 M-1-11: [ ] → [x] + cite PR #219 squash + 15/15 + live test results + prerequisites all verified.
+
+**Wave 3 progress (1/5 sub-PR shipped)**:
+- ✅ **Wave 3-A `55f3eb41` — phase1_11 status CHECK 10→14 state** ← this PR
+- ⏳ Wave 3-B — FE Stage 3 strict re-tighten (Z.enum 14 lock + final FE-badge/tabs) — atomic complement với 3-A
+- ⏳ Wave 3-C — phase1_12 backfill_selected_subject_group_id (decision tree 3 rule)
+- ⏳ Wave 3-D — phase1_18 confirmation_token multi-action
+- ⏳ Wave 3-E — phase1_15a DROP UNIQUE → composite (lead_id, academic_year)
+
+**Tomorrow plan — Wave 3-B FE Stage 3 strict re-tighten**:
+- Atomic complement với phase1_11 BE migration per PLAN line 188-191 v2.10 fix #7 deploy choreography.
+- `frontend/src/lib/zod/admissions.ts`: `admissionProfileResponseSchema.status` từ `z.union([z.enum([10 legacy]), z.string()])` (Stage 1 permissive PR #211) → `z.enum([14 strict])` lock-in.
+- Verify `frontend/src/lib/ui-config/status-badge.config.ts` đã có 14 entries (PR #212 ship).
+- `frontend/src/app/(dashboard)/admissions/_components/AdmissionsClient.tsx`: STATUS_TABS + STATUS_OPTIONS final review.
+- Test parity: extend existing FE-zod-eligibility (PR #211, 18 case) + FE-wave3-display (PR #212, 16 case) với strict assertions.
+- Estimate 0.5d (FE-only, build on existing PR #211 + #212 surface).
+
+---
+
 ### #184 Rehearsal — REHEARSAL_LOG D12-D14 runbook extend Wave 5 SHIPPED
 
 **PR**: [#218](https://github.com/favouritekid/QLTS/pull/218) merged squash `962c2e36` (Wave 5 closure follow-up — extend D12-D14 runbook để ops/DBA visibility cho Wave 3 staging gate).
