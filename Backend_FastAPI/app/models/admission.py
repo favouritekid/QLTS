@@ -44,6 +44,15 @@ class AdmissionProfile(Base):
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
         Index('ix_admission_profile_citizen_year', 'citizen_id', 'academic_year'),
+        # Wave 3-E (M-1-15a) replaces the legacy single-profile-per-lead
+        # UNIQUE on ``lead_id`` with a composite ``(lead_id, academic_year)``
+        # UNIQUE so a lead can apply for multiple academic years (one
+        # profile per year per lead). Migration owner:
+        # ``alembic/versions/phase1_15a_drop_lead_id_unique_to_composite.py``.
+        # Test DB (``Base.metadata.create_all``) reads this declaration —
+        # keeping it in sync với migration prevents drift symptom per
+        # memory ``test-db-schema-source``.
+        UniqueConstraint('lead_id', 'academic_year', name='uq_admission_profile_lead_year'),
         # Wave 3-A (M-1-11) extends 10-state CHECK to 14-state, adding the
         # 4 choice-engine milestone states (reviewing / result_published /
         # admitted / waitlisted). Migration owner:
@@ -64,11 +73,17 @@ class AdmissionProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
     # Foreign Key to Lead (One-to-One relationship)
+    # Wave 3-E (M-1-15a) DROPPED the single-profile-per-lead UNIQUE
+    # in favor of composite ``uq_admission_profile_lead_year`` declared
+    # above. Lead can now hold one profile PER academic_year. Wave 4
+    # PR #15b will flip ``Lead.admission_profile`` from
+    # ``uselist=False`` to plural ``admission_profiles`` paired with
+    # repository/service updates; until then the application contract
+    # remains 1-profile-per-lead via the composite constraint.
     lead_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("lead.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # One lead can only have one admission profile
         index=True,
         comment="Link to Lead (IDOR check point: lead.unit_id)"
     )
