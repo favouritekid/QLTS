@@ -58,6 +58,70 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 5-E — phase1_17 archived_outbox table SHIPPED — third Wave 5 sub-PR
+
+**PR**: [#215](https://github.com/favouritekid/QLTS/pull/215) merged squash `0b17f394` (Wave 5-E D-i scope per Codex round 20 chốt 2026-05-05).
+
+**Parent advance**: `12250bb5` (Wave5-E pre-merge sync — M-1-archive-outbox annotate PR open) → `0b17f394`.
+
+**Scope shipped (2 file)**:
+- `alembic/versions/phase1_17_create_archived_outbox_table.py` (NEW): mirror 10 notification_outbox col + 1 archive metadata `archived_at TIMESTAMPTZ NOT NULL DEFAULT now()` + 1 single-col index `ix_archived_outbox_archived_at` on `archived_at` (Option II chốt 2026-05-05). NO FK / NO UQ (drop source `idempotency_key` UNIQUE) / NO CHECK / NO partial IX (drop worker-only `ix_outbox_pending`/`ix_outbox_claim` filtered WHERE `dispatched_at IS NULL` — archived rows by definition `dispatched_at IS NOT NULL`). Idempotent guards: `table_exists` + `index_exists` mirror phase1_19a/phase1_16 templates.
+- `tests/unit/test_phase1_17_archived_outbox.py` (NEW, 17 case): revision chain + underscore-prefixed table name + index name Option II + mirror parity (re-derived from `NotificationOutbox.__table__.columns` — anchor non-tautological per memory `pattern-change-impact-audit`) + archived_at shape + single-col IX (NOT composite) + no FK + dropped UQ idempotency_key + no CHECK + dropped worker partial IX in `upgrade()` body (docstring rationale exception) + idempotent guards + downgrade short-circuit + drop_index trước drop_table.
+
+**Codex round 19/20 D-i scope chốt — schema parity rules**:
+- Mirror ALL 10 columns of `notification_outbox` exactly (types + nullability + server_default) so cron CTE INSERT has perfect column alignment with `DELETE...RETURNING *` source.
+- Archive metadata: 1 col `archived_at` only — NO `archive_reason` discriminator (single trigger only — 90-day dispatched).
+- Index Option II `ix_archived_outbox_archived_at` chốt: PLAN không spec archive index; admin time-range debug ("what archived in window X-Y") cần index. Option I (no index) rejected — seq scan toward 60-180k row 5-year ceiling. Option III (`dispatched_at`) rejected — every archived row có `dispatched_at < NOW() - 90 days` by definition (low selectivity).
+
+**Cron MOVE semantic (PLAN line 170-176) — different from Wave 5-D COPY**:
+```sql
+WITH archived AS (
+    DELETE FROM notification_outbox
+    WHERE dispatched_at IS NOT NULL
+      AND dispatched_at < NOW() - INTERVAL '90 days'
+    RETURNING *
+)
+INSERT INTO _archived_notification_outbox SELECT * FROM archived;
+```
+Atomic move via `DELETE...RETURNING *` snapshot — no second SELECT. Wave 5-D admission profile archive uses INSERT ... SELECT pattern preserving source per PLAN line 558-572.
+
+**Live alembic roundtrip — DEFERRED to staging clone D12-D14 (same workaround as Wave 5-D)**:
+- Dev DB drift inherited: `alembic_version=phase1_19c→phase1_16→phase1_17` stamped but admission_profile schema thiếu Wave 2 artifacts (phase1_09a + phase1_10).
+- Migration code đúng — column references resolve trên production proper chain.
+- Mitigation: 17 unit tests + template parity từ phase1_19a (PR #198) + phase1_19c (PR #213) + phase1_16 (PR #214 unit-only same workaround).
+
+**Mid-flight catch + fix**:
+- ❌ → ✅ Test `test_phase1_17_does_not_mirror_worker_partial_indexes` initially scanned ENTIRE source — failed because docstring rationale text mentions `ix_outbox_pending`/`ix_outbox_claim` as dropped names. Refined to scope assertion only the executable body between `def upgrade():` and `def downgrade():`.
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (services/admission* + notification* + events* + scripts/check_*) **không match** PR scope (alembic + test only). 0 check chạy.
+- Manual verification pre-push: 17/17 unit pass.
+
+**Test result**:
+- Targeted Wave5-E: 17/17 passed in 2.24s on dev container.
+
+**Tracker / board / issue**:
+- Pre-merge sync (commit `12250bb5`): Issue body line 23 + TRACKER row M-1-archive-outbox (line 93) annotate "PR #215 OPEN" + Option II + 17/17 unit test summary để collaborator visibility.
+- Post-merge SOP (this entry): Issue body line 23 [ ] → [x] + cite squash 0b17f394 + 17 test breakdown. TRACKER row TODO — PR OPEN → TESTED + PR cite + chờ D12-D14.
+
+**Wave 5 progress (3/5 sub-PR shipped — ALL 3 merged)**:
+- ✅ Wave 5-A `9af7510b` — phase1_19c (event_catalog seed)
+- ✅ Wave 5-D `1989bd03` — phase1_16 (archived_admission_profile)
+- ✅ **Wave 5-E `0b17f394` — phase1_17 (archived_outbox)** ← this PR
+- ⏳ Wave 5-B — phase1_19d **NOW UNBLOCKED** (archive table phase1_17 tồn tại post-merge → archive task body có target)
+- ⏳ Wave 5-C — phase1_19e (notification rules seed)
+
+**Tomorrow plan — Wave 5-B `phase1_19d_register_celery_beat_archive_task`**:
+- Pattern B-i marker migration + paired Celery code (no DatabaseScheduler — confirmed `app/celery_app.py:118-255` static dict).
+- Migration body: revision=phase1_19d, down_revision=phase1_17, upgrade/downgrade no-op.
+- `app/celery_app.py`: thêm 1 entry `"archive-outbox-dispatched"` schedule `crontab(hour=2, minute=0, day_of_week="sunday")` Sunday 02:00 VN (no slot conflict).
+- `app/tasks/notification_outbox_tasks.py`: thêm task body `archive_outbox_dispatched_task` dùng `task_db_session()` + `run_async_task()` helper, single CTE `DELETE...RETURNING * + INSERT INTO _archived_notification_outbox`. Result dict: status + archived_count + task_id.
+- Test count target ~10-12: marker migration + beat schedule entry + task callable + empty source 0 + 90-day filter + pending row preservation + archive shape + source DELETE post-archive + atomic transaction + result dict shape + async session safety pattern.
+- Memory gates: `notification-event-gate-required-locally` (N/A — archive ≠ dispatch), `async-session-gather` (use task_db_session, không gather), `audit-before-fix` (read existing T0-4b pattern).
+- Estimate 0.5-1d.
+
+---
+
 ### #184 Wave 5-D — phase1_16 archived_admission_profile table SHIPPED — second Wave 5 sub-PR
 
 **PR**: [#214](https://github.com/favouritekid/QLTS/pull/214) merged squash `1989bd03` (Wave 5-D D-i scope per Codex round 19 chốt 2026-05-05).
