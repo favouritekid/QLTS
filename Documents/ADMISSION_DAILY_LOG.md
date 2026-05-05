@@ -58,6 +58,43 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 4 #15b SHIPPED + P0 hotfix multi-year regression — PLAN v2.13.2 soak waiver formalized
+
+**PRs**:
+- Wave 4 #15b BE Lead 1-many: [#224](https://github.com/favouritekid/QLTS/pull/224) merged squash `966d5f5f`.
+- **P0 hotfix multi-year race-check**: [#226](https://github.com/favouritekid/QLTS/pull/226) merged squash `e5b0a411`.
+
+**Bug discovered post-merge**: `create_profile():2484` race-safe DB check inside redis lock used deprecated `get_profile_by_lead_id` returning latest year regardless. Lead với profile year=2026 → POST academic_year=2027 falsely raised `ConflictError`. Wave 3-E composite UNIQUE allowed at DB level, but service-level redis-lock check rejected. Net: multi-year regression — leads cannot apply across academic years even though composite UNIQUE permits.
+
+**Fix (PR #226 squash `e5b0a411`)**: replaced với year-aware `get_profile_by_lead_year(lead_id, academic_year)` + `current_intake_year` fallback (mirrors eligibility check at line 2497) + year-scoped `ConflictError` message for operator UX. 4 hotfix tests + 15 Wave 4 #15b regression PASS.
+
+**PLAN amendment v2.13.2 (this commit)**: formal soak waiver for solo cold cutover deploy model.
+
+PLAN cheat sheet line 3473-3478 originally specified "Soak 1 tuần" between sub-PRs `phase1_15a` / `15b` / `15c`. Memory `solo-cutover-simple-data-import` saved 2026-05-05 pivot documents the actual deploy model is single-maintenance-window cold cutover (frozen prod → drop DB → restore + alembic upgrade → resume traffic) — soak windows yield 0 functional signal because there's no concurrent production traffic between sub-PRs.
+
+PLAN changelog v2.13.2 codifies:
+- ~~Soak 1 tuần~~ struck-through line 3473-3478 với WAIVED markers.
+- Substitute evidence gate (multi-year regression test + same-year duplicate test + live alembic + FE smoke + wrapper checks + tracker/issue/memory sync).
+- Process precedent: applies to solo cold cutover sub-PR sequences trên `feat/admission-full-cutover`. Future team-mode rollouts re-evaluate.
+
+**Process integrity**: PLAN patch ships BEFORE PR #225 merge (Wave 4 #15c FE plural migrate) to avoid retroactive amendment. PR #225 merges PLAN-compliant post-patch.
+
+**Tracker M-1-15-model row**: TODO → TESTED + cite both squash SHAs + full scope detail + 19/19 unit (15 Wave 4 #15b + 4 hotfix) + AST lint + notification coverage CI PASS + soak WAIVED reference.
+
+**Wave 4 progress (post hotfix + PLAN patch)**:
+- ✅ Wave 4 #15b BE `966d5f5f` (PR #224)
+- ✅ Wave 4 #15b hotfix `e5b0a411` (PR #226)
+- 🟡 Wave 4 #15c FE plural migrate (PR #225 OPEN) — ships next with PLAN-compliant state.
+- ⏳ Wave 4 #15d follow-up (drop legacy field) — post-soak (or post-cutover; not blocking #225 merge).
+
+**Tomorrow plan — close Wave 4 sequence**:
+- PR #225 review + machine FE wrapper checks evidence (`fe-check.sh type-check + test`).
+- PR #225 merge (PLAN-compliant post-v2.13.2 patch).
+- Wave 4 closure tracking commit: M-1-15-fe TESTED + Wave 4 COMPLETE banner + memory `184-phase1-schema-wave-plan` Wave 4 section + memory `outstanding-debt` append M-1-15-helper deferred follow-up.
+- Then Wave 6 PR #17 storefront refactor pre-flight grep.
+
+---
+
 ### 🎯 #184 PHASE 1 SCHEMA 100% COMPLETE — Wave 3-E phase1_15a UNIQUE swap SHIPPED ⚠ ONE-WAY (final)
 
 **MILESTONE**: 19/19 active Phase 1 migrations shipped trong 3 calendar days (2026-05-03 / 2026-05-04 / 2026-05-05). Phase 1 Schema CLOSED.

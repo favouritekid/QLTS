@@ -38,6 +38,37 @@
 
 ## Changelog
 
+### v2.13.2 — 2026-05-05 (solo cold cutover SOP — formal soak waiver)
+
+**1 amendment**: Phần 4 Phase 1 cheat sheet line 3473-3478 ~~Soak 1 tuần~~ between sub-PRs `phase1_15a` / `15b` / `15c` is formally **WAIVED** for the solo cold cutover deploy model documented in memory `solo-cutover-simple-data-import` (saved 2026-05-05 pivot).
+
+**Rationale**: the original 1-week soak windows assume a team gradual-rollout deploy pattern with concurrent production traffic to monitor for query-pattern regressions, edge-case telemetry, and alert noise. The QLTS deploy model is a single-maintenance-window cold cutover (frozen prod → drop database → restore from snapshot → run alembic upgrade → resume traffic). During the cutover window:
+
+- 0 concurrent production traffic between sub-PRs.
+- 0 production telemetry to monitor.
+- Soak windows yield empty signal.
+
+→ Honoring soak = ceremonial 14-day delay with 0 functional benefit.
+
+**Substitute evidence required** (replaces soak gate):
+
+| Gate | Evidence |
+|---|---|
+| Multi-year regression coverage | unit test `test_create_profile_allows_same_lead_different_year` (or equivalent year-aware contract) |
+| Same-year duplicate enforcement | unit test `test_create_profile_blocks_same_year_duplicate` |
+| Live alembic + DB INSERT verify | dev DB rehearsal post prod-data import per memory `solo-cutover-simple-data-import` |
+| FE smoke (dual-read pattern) | `LeadDetailPanel` render with multi-year profiles |
+| FE wrapper checks | `scripts/fe-check.sh type-check` + `test` PASS |
+| Tracker / issue / memory sync | M-1-15-model + M-1-15-fe TESTED + Wave 4 closure banner |
+
+**Affected sub-PRs**:
+
+- `phase1_15a` (Wave 3-E PR #223 squash `15f52c8e`): shipped without soak — substitute evidence verified by Wave 3-E live alembic roundtrip.
+- Wave 4 `#15b` (PR #224 squash `966d5f5f`) + hotfix (PR #226 squash `e5b0a411`): shipped without soak — multi-year regression test added in hotfix.
+- Wave 4 `#15c` (PR #225 OPEN): ships without soak — FE dual-read pattern preserves backward compat regardless of deploy ordering.
+
+**Process precedent**: this waiver applies to all solo cold cutover sub-PR sequences in `feat/admission-full-cutover` and any future branches operating under the same deploy model. Future team-mode rollouts MUST re-evaluate the substitute-evidence gate.
+
 ### v2.13 — 2026-05-01 (production-safe lock, 10 product decisions + 20 patches áp risk review round 19)
 
 **Companion:** `Documents/ADMISSION_REFACTOR_RISK_REVIEW.md` (Phần 0 decision log + Phần 8 patches detail).
@@ -3472,9 +3503,9 @@ Thêm field nullable, không phá schema, không breaking change.
   → phase1_12_backfill_selected_subject_group_id         (insert exceptions vào 7b)
   ─── PR Phase 1 #15a (PATCH-15 v2.13): DROP lead_id UNIQUE → ADD composite (lead_id, ─
        academic_year). KHÔNG đổi model relationship (giữ uselist=False, lookup mới nhất).
-       Soak 1 tuần. ───────────────────────────────────────────────────────────────────
+       ~~Soak 1 tuần.~~ **WAIVED v2.13.2 2026-05-05** per §X.Y solo cold cutover SOP. ─
   ─── PR Phase 1 #15b: model uselist=True + repository thêm 2 method (list_profiles_by_lead_id,
-       get_profile_by_lead_year) + schema dual response. Soak 1 tuần. ──────────────────
+       get_profile_by_lead_year) + schema dual response. ~~Soak 1 tuần.~~ **WAIVED v2.13.2** ─
   ─── PR Phase 1 #15c: FE migrate component sang plural list. ────────────────────────
   → phase1_18_extend_confirmation_token_for_multi_action (action_type column + partial unique; gate trước public token routes)
   → phase1_19a_create_outbox_table                       (PATCH-13 v2.13 — tách 4 migration)
