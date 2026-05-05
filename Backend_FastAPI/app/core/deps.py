@@ -2460,8 +2460,19 @@ async def validate_status_transition(
     if not to_status:
         raise ResourceNotFoundError(f"Status {to_status_id} not found")
     
-    # 3. Derive lead phase from admission_profile
-    lead_phase = derive_phase_from_admission(lead.admission_profile).value
+    # 3. Derive lead phase from current-year admission_profile.
+    # Wave 4 #15b: replaces ``lead.admission_profile`` (singular relationship,
+    # removed) with the per-year helper. ``current_intake_year`` from
+    # ``system_config`` defaults to 2026 if the row is missing — matches
+    # the storefront default seeded by phase1_13.
+    from ..services.system_config_service import SystemConfigService
+    current_year = await SystemConfigService(db).get_value(
+        "current_intake_year", 2026
+    )
+    if isinstance(current_year, str):
+        current_year = int(current_year)
+    current_profile = lead.current_admission_profile(current_year)
+    lead_phase = derive_phase_from_admission(current_profile).value
     
     # 4. ✅ RULE #12: Validate transition using FSM engine
     is_allowed = await is_transition_allowed(

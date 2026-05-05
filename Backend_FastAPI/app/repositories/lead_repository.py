@@ -86,7 +86,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
-                selectinload(models.Lead.admission_profile),
+                selectinload(models.Lead.admission_profiles),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),
                 # Collection relationships for timeline/insights
@@ -149,7 +149,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
-                selectinload(models.Lead.admission_profile),
+                selectinload(models.Lead.admission_profiles),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),
             )
@@ -457,7 +457,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.pipeline_stage),
-                selectinload(models.Lead.admission_profile),
+                selectinload(models.Lead.admission_profiles),
                 # Collaborator referrer
                 selectinload(models.Lead.referrer),
             )

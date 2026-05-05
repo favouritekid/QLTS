@@ -240,7 +240,7 @@ async def restore_deleted_lead(
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.admission_profile),
+            selectinload(models.Lead.admission_profiles),
         )
     )
     lead = result.scalar_one()
