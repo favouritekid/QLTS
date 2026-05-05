@@ -2480,10 +2480,35 @@ async def create_profile(
         # IF we trust the session sync. 
         # Better: Re-query specifically for existence check to be safe.
         
-        # Fresh idempotency check inside lock (race-safe — DB query)
-        existing_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+        # Fresh idempotency check inside lock (race-safe — DB query).
+        #
+        # Wave 4 #15b hotfix: Wave 3-E composite UNIQUE
+        # (lead_id, academic_year) is the new uniqueness rule, so this
+        # race-safe check must scope to the target year. Using the
+        # deprecated ``get_profile_by_lead_id`` (which returns the latest
+        # year regardless) would falsely block creating a profile for
+        # year N+1 when the lead has a profile for year N. Scope to the
+        # requested ``academic_year`` (or current_intake_year fallback,
+        # mirroring eligibility check at line 2497) so multi-year
+        # creates work as intended by the composite UNIQUE swap.
+        race_check_year = academic_year
+        if race_check_year is None:
+            from app.services.system_config_service import SystemConfigService
+
+            cfg_year = await SystemConfigService(db).get_value(
+                "current_intake_year", 2026
+            )
+            race_check_year = (
+                int(cfg_year) if isinstance(cfg_year, str) else cfg_year
+            )
+        existing_profile = await admission_repo.get_profile_by_lead_year(
+            lead_id, race_check_year
+        )
         if existing_profile:
-             raise ConflictError(f"Lead {lead_id} already has an admission profile")
+            raise ConflictError(
+                f"Lead {lead_id} already has an admission profile for "
+                f"academic year {race_check_year}"
+            )
 
     # Lead-level eligibility gate (SINGLE SOURCE OF TRUTH shared with GET /leads/{id}).
     # Checks: already_has_profile, invalid_lead_status, missing_offering,
