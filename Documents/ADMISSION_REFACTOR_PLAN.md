@@ -3489,7 +3489,14 @@ Thêm field nullable, không phá schema, không breaking change.
                                                           12 EVENT_CATALOG DB rows cho admin UI
                                                           (notification_rule + notification_template).
                                                           Module-level Python dict đã ship ở B2.
-  → phase1_19d_register_celery_beat_archive_task          (renamed từ spec phase1_19c per Q2 cascade)
+                                                          ✅ SHIPPED PR #213 squash 9af7510b 2026-05-05.
+  ─── ⚠ Wave 5 SHIP-ORDER REORDER (chốt 2026-05-05 Codex round 19): alembic ─────────────
+  ─── chain string-based, KHÔNG numeric monotonic. archive task body cần ──────────────
+  ─── _archived_notification_outbox table (phase1_17) tồn tại trước → ship 16/17 ─────
+  ─── trước phase1_19d. Chain: 19c → 16 → 17 → 19d → 19e (file names giữ ─────────────
+  ─── nguyên Q2 cascade; chỉ down_revision strings + ship sequence thay đổi). ─────────
+  → phase1_19d_register_celery_beat_archive_task          (renamed từ spec phase1_19c per Q2 cascade;
+                                                          ship AFTER phase1_17 per ship-order reorder)
                                                           dispatch_pending_outbox (10s) +
                                                           archive_outbox_dispatched_task (weekly 90d).
   → phase1_19e_seed_notification_rules                    (renamed từ spec phase1_19d per Q2 cascade)
