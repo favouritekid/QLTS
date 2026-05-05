@@ -58,6 +58,27 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Rehearsal — REHEARSAL_LOG D12-D14 runbook extend Wave 5 SHIPPED
+
+**PR**: [#218](https://github.com/favouritekid/QLTS/pull/218) merged squash `962c2e36` (Wave 5 closure follow-up — extend D12-D14 runbook để ops/DBA visibility cho Wave 3 staging gate).
+
+**Parent advance**: `3c2797fb` (Wave 5 closure tracking) → `962c2e36`.
+
+**Patches**:
+- Migration chain table 12 → 17 rows (add Wave 5-A/D/E/B/C entries với PR# + squash + smoke check per row).
+- Estimated duration refined (DDL-only 5→8 + Wave 5-A seed ~2-5s + 2 markers ~0s).
+- Backfill exception bounds: Wave 5 row "0 rows expected".
+- Idempotency contract: target phase1_10 → phase1_19e + 17 migrations chain + new criterion (e) Wave 5 guards.
+- Wave 3 note: runbook now Wave 1+2+5 baseline.
+
+**Memory parallel update**: `project_184_phase1_schema_wave_plan.md` description line 3 sync: "23 active" → "Wave 1+2+5 COMPLETE; 15/19 active shipped; remaining Wave 3 ONE-WAY (4) gated D12-D14".
+
+**SOP**: minimal post-merge — chỉ parent FF + DAILY_LOG entry (no tracker row, no issue body sub-task — REHEARSAL_LOG là ops doc standalone).
+
+**Solo-dev cutover approach pivot** (chốt 2026-05-05): user proposal "import prod data thẳng vào dev DB hiện tại + run migration tại chỗ + cold cutover không care phiên bản cũ" thay vì team-style "staging clone D12-D14 separate environment". Rationale: solo dev = không có concurrent dev users → dev DB đè được; PII manageable controlled env; cold cutover = không có data rollback path anyway. Memory `solo-cutover-simple-data-import` saved. Wave 3 ⚠ gating chuyển từ "ops/DBA timeline TBD" sang "user time + 1 maintenance window".
+
+---
+
 ### #184 WAVE 5 COMPLETE — 5/5 sub-PRs shipped trong cùng ngày
 
 **Milestone**: Phase 1 chain reaches `phase1_19e` (terminal Wave 5 revision). Next advance là **Wave 3 ONE-WAY ⚠** (`phase1_11` status CHECK extend + `phase1_12` selected_subject_group_id backfill + `phase1_15a` lead_id UNIQUE swap + `phase1_18` confirmation_token multi-action) — gated trên staging clone D12-D14 readiness.
