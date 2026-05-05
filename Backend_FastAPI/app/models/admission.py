@@ -76,10 +76,12 @@ class AdmissionProfile(Base):
     # Wave 3-E (M-1-15a) DROPPED the single-profile-per-lead UNIQUE
     # in favor of composite ``uq_admission_profile_lead_year`` declared
     # above. Lead can now hold one profile PER academic_year. Wave 4
-    # PR #15b will flip ``Lead.admission_profile`` from
-    # ``uselist=False`` to plural ``admission_profiles`` paired with
-    # repository/service updates; until then the application contract
-    # remains 1-profile-per-lead via the composite constraint.
+    # Wave 4 PR #15b (M-1-15-model) flipped ``Lead.admission_profile``
+    # (singular ``uselist=False``) to ``Lead.admission_profiles``
+    # (plural list) — leads now hold one profile PER academic_year via
+    # the composite UNIQUE ``uq_admission_profile_lead_year`` declared
+    # in ``__table_args__`` above. The application contract is
+    # multi-year per lead.
     lead_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("lead.id", ondelete="CASCADE"),
@@ -473,7 +475,7 @@ class AdmissionProfile(Base):
     # Relationships (Eager Loading to Prevent N+1 Queries)
     lead: Mapped["Lead"] = relationship(
         "Lead",
-        back_populates="admission_profile",
+        back_populates="admission_profiles",
         lazy="joined",  # Always load lead (for IDOR checks)
         foreign_keys=[lead_id]
     )

@@ -249,11 +249,32 @@ class Lead(Base):
     consultations = relationship(
         "Consultation", back_populates="lead", cascade="all, delete-orphan"
     )
-    admission_profile = relationship(
+    # Wave 4 #15b (M-1-15-model) — Lead one-to-many migration. Phase
+    # 1 #15a (PR #223 squash 15f52c8e) replaced legacy single-profile-
+    # per-lead UNIQUE on ``admission_profile.lead_id`` with composite
+    # ``(lead_id, academic_year)`` UNIQUE so a lead can apply across
+    # academic years. The relationship now flips from singular
+    # (``uselist=False`` + ``cascade="all, delete-orphan"``) to plural
+    # list (``uselist=True`` + ``cascade="save-update, merge"``).
+    #
+    # cascade change rationale (drop ``delete-orphan``):
+    # * delete-orphan triggers profile deletion when a profile is
+    #   detached from the parent's collection (e.g.
+    #   ``lead.admission_profiles.remove(p)``). With multi-year
+    #   profiles, list mutation is a routine operation; auto-delete
+    #   would lose audit-grade application records. Removal is now
+    #   explicit (``db.delete(profile)``) and follows the archive
+    #   lifecycle owned by ``archive_expired_rounds_task`` (PLAN line
+    #   195/562-571 — code-phase post-cutover).
+    # * Hard-delete cascade on Lead deletion still propagates via
+    #   ``ondelete="CASCADE"`` on ``AdmissionProfile.lead_id``
+    #   (admission.py:62-68) — ORM-level ``cascade="save-update,
+    #   merge"`` only governs session ops, not DB-level FK action.
+    admission_profiles = relationship(
         "AdmissionProfile",
         back_populates="lead",
-        uselist=False,
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
+        order_by="AdmissionProfile.academic_year.desc()",
     )
     interactions = relationship(
         "CRMInteraction", back_populates="lead", cascade="all, delete-orphan"
@@ -268,6 +289,37 @@ class Lead(Base):
     # Collaborator system
     referrer = relationship("Collaborator", back_populates="leads_referred")
     claims = relationship("LeadClaim", back_populates="lead", cascade="all, delete-orphan")
+
+    def current_admission_profile(self, year: int) -> "AdmissionProfile | None":
+        """Return the lead's profile for ``year``, or None if none exists.
+
+        Wave 4 #15b helper — replaces the legacy ``lead.admission_profile``
+        singular access with explicit per-year resolution. Required after
+        the Wave 3-E composite UNIQUE swap (PR #223 squash ``15f52c8e``)
+        let leads carry one profile per academic year.
+
+        **Eager-load contract**: the caller MUST have eager-loaded
+        ``Lead.admission_profiles`` (e.g. ``selectinload(Lead.
+        admission_profiles)``) before invoking this helper — the
+        scan walks the in-memory collection without issuing a query.
+
+        **Archive fallback — TODO** (paired with ``ArchivedAdmissionProfile``
+        ORM + ``archive_expired_rounds_task`` cron):
+            PLAN line 124-131 P1 fix #6 v2.12 specs a 2-tier query
+            (active → archive fallback) so officers can resolve
+            historical profiles archived 6 months after round end_date.
+            Currently ``archive_expired_rounds_task`` is NOT shipped
+            (defer code-phase post-cutover per memory
+            ``notification-coverage-roadmap``); ``_archived_admission_
+            profile`` table stays empty during the cutover window, so
+            active-only return is functionally equivalent today. When
+            the cron + ORM ship, extend this helper with the archive
+            UNION query — signature already stable.
+        """
+        return next(
+            (p for p in self.admission_profiles if p.academic_year == year),
+            None,
+        )
 
     def __repr__(self):
         return f"<Lead {self.id}: {self.full_name}>"

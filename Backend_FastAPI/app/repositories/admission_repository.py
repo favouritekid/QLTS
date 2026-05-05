@@ -12,9 +12,12 @@ Benefits:
 - Separates SQL from business logic
 """
 
+import logging
 from datetime import datetime
 from typing import List, Optional, Tuple
 import unicodedata
+
+log = logging.getLogger(__name__)
 
 from sqlalchemy import select, or_, and_, func, desc, asc, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -484,16 +487,77 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         lead_id: int
     ) -> Optional[models.AdmissionProfile]:
         """
-        Get admission profile by lead ID.
-        
+        DEPRECATED (Wave 4 #15b — Lead one-to-many migration).
+
+        Returns the lead's MOST RECENT profile (highest ``academic_year``)
+        for backward compatibility with callers that still expect a
+        single profile per lead. Wave 4 PR #15c FE migrate is on the
+        critical path to remove this method's call sites; new code MUST
+        use ``list_profiles_by_lead_id`` (multi-year) or
+        ``get_profile_by_lead_year`` (composite-UNIQUE-keyed lookup).
+
+        Logs a warning when the lead actually has >1 profile so the
+        ambiguity is visible during the migration window — silent
+        "return latest" would hide cases where the caller's expectation
+        of a single profile breaks.
+
         Args:
             lead_id: Lead ID
-            
+
         Returns:
-            AdmissionProfile or None
+            Latest AdmissionProfile by ``academic_year DESC`` (or None).
         """
-        stmt = select(models.AdmissionProfile).where(
-            models.AdmissionProfile.lead_id == lead_id
+        stmt = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.lead_id == lead_id)
+            .order_by(models.AdmissionProfile.academic_year.desc())
+        )
+        result = await self.db.execute(stmt)
+        rows = list(result.scalars().all())
+        if len(rows) > 1:
+            log.warning(
+                "get_profile_by_lead_id called on a lead with multiple "
+                "profiles; deprecated behavior returns the latest year. "
+                "Caller should migrate to list_profiles_by_lead_id or "
+                "get_profile_by_lead_year (Wave 4 #15b).",
+                extra={"lead_id": lead_id, "profile_count": len(rows)},
+            )
+        return rows[0] if rows else None
+
+    async def list_profiles_by_lead_id(
+        self,
+        lead_id: int,
+    ) -> list[models.AdmissionProfile]:
+        """Wave 4 #15b — multi-year list lookup.
+
+        Returns all profiles for a lead ordered ``academic_year DESC``
+        so the most recent year is first. Documents are eager-loaded
+        for callers that follow this query với fee/document checks.
+        """
+        stmt = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.lead_id == lead_id)
+            .order_by(models.AdmissionProfile.academic_year.desc())
+            .options(selectinload(models.AdmissionProfile.documents))
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_profile_by_lead_year(
+        self,
+        lead_id: int,
+        academic_year: int,
+    ) -> Optional[models.AdmissionProfile]:
+        """Wave 4 #15b — composite-UNIQUE-keyed single-profile lookup.
+
+        Hits the ``uq_admission_profile_lead_year`` UNIQUE shipped by
+        Wave 3-E ``phase1_15a`` (PR #223 squash 15f52c8e), so this
+        query returns at most one row by definition.
+        """
+        stmt = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.lead_id == lead_id)
+            .where(models.AdmissionProfile.academic_year == academic_year)
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
@@ -518,7 +582,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .where(models.Lead.id == lead_id)
             .options(
                 joinedload(models.Lead.offering),
-                selectinload(models.Lead.admission_profile),
+                selectinload(models.Lead.admission_profiles),
             )
         )
         result = await self.db.execute(stmt)

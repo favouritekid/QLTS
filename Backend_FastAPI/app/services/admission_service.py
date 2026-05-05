@@ -1149,6 +1149,7 @@ async def check_lead_level_admission_eligibility(
     current_user: models.User,
     *,
     check_role: bool = True,
+    academic_year: Optional[int] = None,
 ) -> LeadAdmissionEligibility:
     """Check 7 lead-level conditions for creating an admission profile.
 
@@ -1164,8 +1165,8 @@ async def check_lead_level_admission_eligibility(
       forbidden > already_has_profile > invalid_lead_status > missing_offering
       > no_consultation > consultation_missing_status > consultation_universal_status
 
-    Requires lead.admission_profile eager-loaded — uses __dict__.get() to avoid
-    lazy-load crash in async context.
+    Requires lead.admission_profiles eager-loaded (Wave 4 #15b plural) —
+    uses __dict__.get() to avoid lazy-load crash in async context.
     """
     # Role check (optional — skipped when caller already enforced IDOR at deps layer)
     if check_role:
@@ -1189,11 +1190,29 @@ async def check_lead_level_admission_eligibility(
     # matching the historical POST /admissions response.
 
     # 1. Already has profile (structural conflict)
-    if lead.__dict__.get("admission_profile") is not None:
+    #
+    # Wave 4 #15b — composite check: lead can hold one profile per
+    # academic_year (Wave 3-E composite UNIQUE), so blocking is now
+    # year-specific. Caller passes ``academic_year`` to scope the
+    # check; legacy callers (year=None) fall back to "any profile"
+    # semantic so the UX doesn't silently allow conflicting creates
+    # before the rest of the codebase is migrated.
+    profiles = lead.__dict__.get("admission_profiles") or []
+    has_conflict = (
+        any(p.academic_year == academic_year for p in profiles)
+        if academic_year is not None
+        else bool(profiles)
+    )
+    if has_conflict:
+        message = (
+            f"Lead này đã có hồ sơ tuyển sinh năm {academic_year}."
+            if academic_year is not None
+            else "Lead này đã có hồ sơ tuyển sinh."
+        )
         return LeadAdmissionEligibility(
             False,
             "already_has_profile",
-            "Lead này đã có hồ sơ tuyển sinh.",
+            message,
         )
 
     # 2. Missing offering (fixable first — historical precedence)
@@ -2470,8 +2489,13 @@ async def create_profile(
     # Checks: already_has_profile, invalid_lead_status, missing_offering,
     # no_consultation, consultation_missing_status, consultation_universal_status.
     # Role check skipped — IDOR enforced upstream by get_lead_for_user dep.
+    # Wave 4 #15b: pass academic_year so the composite (lead_id, academic_
+    # year) UNIQUE swap (PR #223 squash 15f52c8e) lets a lead create a new
+    # profile for a different year while still blocking duplicates within
+    # the same year. ``academic_year`` parameter on this function is
+    # Optional — None falls back to current_intake_year config below.
     eligibility = await check_lead_level_admission_eligibility(
-        db, lead, current_user, check_role=False
+        db, lead, current_user, check_role=False, academic_year=academic_year
     )
     if not eligibility.eligible:
         code = eligibility.blocker_code

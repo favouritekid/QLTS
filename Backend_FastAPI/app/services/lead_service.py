@@ -4396,9 +4396,20 @@ async def _populate_lead_detail_fields(
 
     # Lazy import to avoid circular dependency (admission_service imports from lead indirectly)
     from app.services import admission_service
+    from app.services.system_config_service import SystemConfigService
+
+    # Wave 4 #15b: scope eligibility check to the current intake year so
+    # the UX hint matches the composite (lead_id, academic_year) UNIQUE
+    # rule. A lead with a profile for last year should still be allowed
+    # to create one for the current year.
+    current_year = await SystemConfigService(db).get_value(
+        "current_intake_year", 2026
+    )
+    if isinstance(current_year, str):
+        current_year = int(current_year)
 
     eligibility = await admission_service.check_lead_level_admission_eligibility(
-        db, lead, current_user, check_role=True
+        db, lead, current_user, check_role=True, academic_year=current_year
     )
 
     permissions = {"create_admission": eligibility.eligible}
