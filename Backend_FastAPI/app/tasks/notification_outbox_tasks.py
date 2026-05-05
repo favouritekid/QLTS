@@ -318,3 +318,94 @@ async def _finalize(session, results) -> None:
                     ),
                     {"id": row_id, "err": error},
                 )
+
+
+# ============================================================================
+# Wave 5-B / M-1-19d — weekly outbox archive sweep (90-day retention)
+# ============================================================================
+#
+# Beat fires ``archive_outbox_dispatched_task`` every Sunday 02:00 VN per the
+# entry in ``app/celery_app.py``. The task moves rows whose ``dispatched_at``
+# is older than 90 days from ``notification_outbox`` into
+# ``_archived_notification_outbox`` (created by ``phase1_17``, PR #215 squash
+# ``0b17f394``).
+#
+# This is a MOVE (DELETE source + INSERT archive in a single CTE) — different
+# from Wave 5-D admission profile archive which COPIES rows (source preserved
+# per PLAN line 558-572). The atomic CTE form follows PLAN line 170-176 P1 fix
+# #8 verbatim — ``DELETE...RETURNING *`` snapshot feeds the INSERT in the same
+# statement, so a crash mid-flight cannot leave a row in both tables nor lose
+# it.
+#
+# Memory ``async-session-gather`` (PR #105 lesson): the task uses ONE
+# ``task_db_session()`` for the whole sweep — no ``asyncio.gather`` over the
+# session.
+
+archive_log = logging.getLogger("archive_outbox_dispatched_task")
+
+# Discriminator in the result dict so ops can grep this task's ticks apart
+# from the worker tick.
+ARCHIVE_TASK_ID = "archive-outbox"
+
+# Retention window — sized to PLAN line 168-178. Surface as a constant so
+# ops can dial it from a single place (and tests can assert the value).
+ARCHIVE_RETENTION_DAYS = 90
+
+
+@celery_app.task(name="archive_outbox_dispatched_task")
+def archive_outbox_dispatched_task() -> dict:
+    """Move dispatched outbox rows older than ``ARCHIVE_RETENTION_DAYS``
+    into ``_archived_notification_outbox``.
+
+    Beat fires this with zero args (Sunday 02:00 VN). Returns a structured
+    result so monitoring can count archived rows per tick.
+    """
+    return run_async_task(
+        async_func=_archive_dispatched,
+        task_name="archive_outbox_dispatched_task",
+        task_log=archive_log,
+        validate_keys=["status", "archived_count", "task_id"],
+    )
+
+
+async def _archive_dispatched() -> dict:
+    """Async body — single-statement atomic move per PLAN line 170-176."""
+    async with task_db_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                text(
+                    """
+                    WITH archived AS (
+                        DELETE FROM notification_outbox
+                        WHERE dispatched_at IS NOT NULL
+                          AND dispatched_at < NOW() - make_interval(days => :retention_days)
+                        RETURNING id, event_code, payload, idempotency_key,
+                                  created_at, dispatched_at, attempts,
+                                  last_error, claimed_at, claimed_until
+                    )
+                    INSERT INTO _archived_notification_outbox (
+                        id, event_code, payload, idempotency_key,
+                        created_at, dispatched_at, attempts, last_error,
+                        claimed_at, claimed_until
+                    )
+                    SELECT * FROM archived
+                    RETURNING id
+                    """
+                ),
+                {"retention_days": ARCHIVE_RETENTION_DAYS},
+            )
+            archived_ids = [row[0] for row in result.fetchall()]
+
+    archive_log.info(
+        "archive_outbox_dispatched_task: tick complete",
+        extra={
+            "task_id": ARCHIVE_TASK_ID,
+            "archived_count": len(archived_ids),
+            "retention_days": ARCHIVE_RETENTION_DAYS,
+        },
+    )
+    return {
+        "status": "ok",
+        "archived_count": len(archived_ids),
+        "task_id": ARCHIVE_TASK_ID,
+    }
