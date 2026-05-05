@@ -493,27 +493,34 @@ export const admissionProfileResponseSchema = z.object({
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
   // Status (extended for async-first workflow).
   //
-  // PERMISSIVE PARSE per PLAN line 3049-3055 — Stage 1 of the
-  // 3-stage deploy choreography for M-1-11 (status CHECK extend
-  // 10 → 14 state). FE Zod must accept any string so the response
-  // doesn't crash when BE deploys the migration + service starts
-  // emitting ``reviewing`` / ``admitted`` / new states BEFORE the
-  // FE container build catches up. Legacy strict enum is the
-  // documentation; the union catchall is what runtime parses.
+  // STRICT PARSE — Stage 3 of the 3-stage deploy choreography for
+  // M-1-11 (status CHECK extend 10 → 14 state) per PLAN line
+  // 188-191 v2.10 fix #7. Flipped from permissive ``z.union(enum,
+  // z.string())`` to strict ``z.enum`` of exactly 14 values after
+  // Wave 3-A ``phase1_11`` shipped (PR #219 squash 55f3eb41).
   //
-  // Status badge fallback (StatusBadge.tsx:166 + status-badge.config.ts:380):
-  // unknown status renders raw string with neutral/outline styling
-  // — generic gray badge per PLAN line 3052.
+  // 10 legacy + 4 new (choice-engine milestones per PLAN §3.3.b):
+  //   reviewing / result_published / admitted / waitlisted.
   //
-  // After Wave 3 ship (M-1-11 + 14 status badge config + i18n):
-  // Stage 3 deploy choreography flips this back to strict enum
-  // with all 14 states.
-  status: z.union([
-    z.enum([
-      "draft", "submitted", "resubmitted", "approved", "rejected",
-      "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn",
-    ]),
-    z.string(),
+  // Strict enum semantics:
+  //   * Backend response with unknown status string → Zod parse
+  //     failure → React Query reports error → user sees error UI,
+  //     not a malformed render. Force the contract end-to-end.
+  //   * Tests must assert this rejection so future drift (BE adds
+  //     a 15th state without coordinating FE) is caught at CI, not
+  //     in prod.
+  //
+  // Surfaces already aligned to 14 states (no follow-up needed):
+  //   * ``status-badge.config.ts`` — 14 entries (PR #212 squash
+  //     2c411306 Wave 3 PR-3A pre-flight).
+  //   * ``AdmissionsClient.tsx`` STATUS_TABS + STATUS_OPTIONS —
+  //     14 entries (PR #212).
+  //   * ``useAdmissionsFilter.ts`` STATUS_TABS — 14 entries (PR
+  //     #212, drift-guarded by ``AdmissionsClient.status-tabs.test``).
+  status: z.enum([
+    "draft", "submitted", "resubmitted", "approved", "rejected",
+    "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn",
+    "reviewing", "result_published", "admitted", "waitlisted",
   ]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year

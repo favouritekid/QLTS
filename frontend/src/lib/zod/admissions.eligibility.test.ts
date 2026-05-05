@@ -87,7 +87,13 @@ function _baselineProfile(): Record<string, unknown> {
 // =============================================================================
 
 
-describe("admissionProfileResponseSchema — permissive status parse", () => {
+describe("admissionProfileResponseSchema — strict 14-state status parse (Stage 3)", () => {
+  // Stage 3 of the M-1-11 deploy choreography (PR #219 Wave 3-A
+  // squash 55f3eb41) flipped the FE Zod from permissive
+  // ``z.union(z.enum(legacy), z.string())`` to strict
+  // ``z.enum(14 states)``. Tests below exercise the strict
+  // contract — all 14 valid states accepted, anything else rejected.
+
   it("parses all 10 legacy status values strict", () => {
     const legacy = [
       "draft",
@@ -110,44 +116,50 @@ describe("admissionProfileResponseSchema — permissive status parse", () => {
     }
   })
 
-  it("parses unknown status 'reviewing' (M-1-11 future state)", () => {
-    // M-1-11 extends the BE CHECK to 14 states. FE permissive
-    // catchall lets `reviewing` through during the deploy window.
-    const result = admissionProfileResponseSchema.safeParse({
-      ..._baselineProfile(),
-      status: "reviewing",
-    })
-    expect(result.success).toBe(true)
-    if (result.success) {
-      expect(result.data.status).toBe("reviewing")
+  it("parses all 4 Wave 3-A new state values strict", () => {
+    // Choice-engine milestone states added by phase1_11
+    // (PR #219 Wave 3-A squash 55f3eb41) per PLAN §3.3.b.
+    const newStates = [
+      "reviewing",
+      "result_published",
+      "admitted",
+      "waitlisted",
+    ]
+    for (const status of newStates) {
+      const result = admissionProfileResponseSchema.safeParse({
+        ..._baselineProfile(),
+        status,
+      })
+      expect(result.success, `new state ${status} should parse`).toBe(true)
+      if (result.success) {
+        expect(result.data.status).toBe(status)
+      }
     }
   })
 
-  it("parses unknown status 'admitted' (M-1-11 future state)", () => {
-    const result = admissionProfileResponseSchema.safeParse({
-      ..._baselineProfile(),
-      status: "admitted",
-    })
-    expect(result.success).toBe(true)
-    if (result.success) {
-      expect(result.data.status).toBe("admitted")
+  it("rejects unknown status string post-Stage-3 strict", () => {
+    // Stage 1 permissive accepted any string (PR #211). Stage 3
+    // strict closes that surface — unknown values fail Zod parse,
+    // surfacing as React Query error instead of malformed render.
+    // Force the BE↔FE 14-state contract end-to-end.
+    for (const bad of [
+      "future_state_x",
+      "approved_legacy",
+      "REVIEWING", // case-sensitive
+      "",
+    ]) {
+      const result = admissionProfileResponseSchema.safeParse({
+        ..._baselineProfile(),
+        status: bad,
+      })
+      expect(
+        result.success,
+        `unknown status ${JSON.stringify(bad)} should fail strict parse`,
+      ).toBe(false)
     }
   })
 
-  it("parses arbitrary unknown status string without crashing", () => {
-    // Defense — even if BE accidentally emits a typo or a state
-    // we haven't planned for, FE must not crash. StatusBadge
-    // fallback renders the raw string with neutral styling.
-    const result = admissionProfileResponseSchema.safeParse({
-      ..._baselineProfile(),
-      status: "future_state_x",
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it("rejects non-string status (number / object / null)", () => {
-    // Permissive only widens to ANY STRING; type itself stays
-    // string. A number or null is still a contract violation.
+  it("rejects non-string status (number / object / null / undefined)", () => {
     for (const bad of [42, { state: "draft" }, null, undefined]) {
       const result = admissionProfileResponseSchema.safeParse({
         ..._baselineProfile(),
@@ -155,6 +167,37 @@ describe("admissionProfileResponseSchema — permissive status parse", () => {
       })
       expect(result.success, `non-string ${typeof bad} should fail`).toBe(false)
     }
+  })
+
+  it("locks the strict enum to exactly 14 entries (drift guard)", () => {
+    // Anchor non-tautological — count any enum drift on this schema.
+    // If a 15th state is added to BE without this test updating, CI
+    // fails here, forcing the coordinated FE bump.
+    const expected14 = [
+      "draft",
+      "submitted",
+      "resubmitted",
+      "approved",
+      "rejected",
+      "revision_requested",
+      "confirmed",
+      "overridden",
+      "enrolled",
+      "withdrawn",
+      "reviewing",
+      "result_published",
+      "admitted",
+      "waitlisted",
+    ]
+
+    for (const status of expected14) {
+      const result = admissionProfileResponseSchema.safeParse({
+        ..._baselineProfile(),
+        status,
+      })
+      expect(result.success, `expected state ${status} not accepted`).toBe(true)
+    }
+    expect(expected14.length).toBe(14)
   })
 })
 
