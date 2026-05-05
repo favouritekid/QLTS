@@ -58,6 +58,60 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 Wave 3-D — phase1_18 confirmation_token multi-action SHIPPED ⚠ ONE-WAY fourth migration
+
+**PR**: [#222](https://github.com/favouritekid/QLTS/pull/222) merged squash `958435cf` (Wave 3-D ⚠ ONE-WAY 2026-05-05).
+
+**Parent advance**: `879a2d96` (Wave 3-B+3-C batched tracking) → `958435cf`.
+
+**Scope shipped (3 file)**:
+- `alembic/versions/phase1_18_extend_confirmation_token_for_multi_action.py` (NEW, 219 lines): 5-step DDL promotes `admission_confirmation_token` từ single-purpose ('confirm' only) → multi-action (submit/resubmit/confirm/withdraw) per PLAN §3.3.g + line 1880-1901.
+  - Step 1: `ADD COLUMN action_type VARCHAR(20) NOT NULL DEFAULT 'confirm'` (PG fast-path backfill legacy rows).
+  - Step 2: `ADD CONSTRAINT ck_token_action_type CHECK action_type IN (4 values)` (DB-layer enum lock).
+  - Step 3: DROP legacy `ix_admission_confirmation_token_profile_id` UNIQUE INDEX (replaced by partial UNIQUE).
+  - Step 4: `CREATE UNIQUE INDEX uq_active_token_per_profile_action` ON `(profile_id, action_type)` `WHERE confirmed_at IS NULL` — audit-trail rows excluded từ uniqueness.
+  - Step 5: `CREATE INDEX ix_token_action_type` ON `(token, action_type)` — covers `get_profile_by_magic_link_token(token, action)`.
+  - Idempotent: `_column_exists` + `_index_exists` inspector helpers.
+  - Defensive ONE-WAY downgrade: COUNT non-confirm rows BEFORE drop → raise `RuntimeError` listing all non-confirm action_type values với clear ONE-WAY snapshot-restore hint.
+- `app/models/admission.py` (50 lines edit): removed `unique=True` từ `profile_id` column (Wave 3-D no longer enforces single-token-per-profile) + added `action_type` Mapped column (String(20), NOT NULL, default 'confirm', server_default text "'confirm'") + added `__table_args__` carrying `CheckConstraint` (4-action enum) + partial UNIQUE Index (`uq_active_token_per_profile_action` WHERE `confirmed_at IS NULL`) + lookup Index (`ix_token_action_type`). Imported `text` from sqlalchemy for `postgresql_where`.
+- `tests/unit/test_phase1_18_token_multi_action.py` (NEW, 243 lines, 18 case): revision chain + constants lock-in (TABLE + 4 ACTION_TYPES + 4 name constants) + 5-step DDL ordering anchor + column NOT NULL DEFAULT 'confirm' + CHECK quoted list + partial UNIQUE predicate + composite columns + inspector idempotency + downgrade COUNT-before-drop + raises RuntimeError ONE-WAY+snapshot + safe-path recreate + module sanity.
+
+**Schema name correction (memory `audit-before-fix` + `verify-schema-before-proposing`)**:
+- PLAN draft mentioned `_profile_id_key` (constraint convention) for the legacy UNIQUE name to drop.
+- Live DB inspection via `\d admission_confirmation_token` revealed actual name: `ix_admission_confirmation_token_profile_id` (SQLAlchemy `unique=True + index=True` produces UNIQUE INDEX with `ix_*` prefix, NOT separate `_key` constraint).
+- Migration uses live name; test 5 anchor non-tautological locks live convention against future PLAN copy-paste drift.
+
+**Live alembic roundtrip verified (Wave 3 strict standard maintained)**:
+- Upgrade `phase1_12 → phase1_18` clean. Schema verified post-upgrade.
+- **Partial UNIQUE behavior verified live**:
+  - INSERT (profile_id=14, action='submit') → SUCCESS (id=3)
+  - INSERT (profile_id=14, action='confirm') → SUCCESS (id=4) — different action allowed concurrently
+  - INSERT (profile_id=14, action='submit') again → REJECTED `duplicate key value violates unique constraint "uq_active_token_per_profile_action"`
+- Downgrade safe path (0 rows) clean — schema fully reverted, legacy UNIQUE re-added.
+- Re-upgrade idempotent (alembic_version stays `phase1_18` head).
+- **Defensive ONE-WAY guard verified live**: INSERT (action='withdraw') id=6 → `alembic downgrade -1` raises `RuntimeError: Cannot downgrade phase1_18: 1 row(s) in admission_confirmation_token hold non-'confirm' action_type values (submit, resubmit, withdraw). This is a ONE-WAY migration — restore from a pre-Wave-3 snapshot instead of running 'alembic downgrade'.`
+
+**Tracker / board / issue**:
+- TRACKER row M-1-18 (line 99): TODO → TESTED + full scope detail + 18/18 unit + live evidence + schema name correction note.
+- Issue #184 body line 30 M-1-18: [ ] → [x] + cite PR #222 squash `958435cf` + 18/18 + live test results + schema name correction note.
+
+**Wave 3 progress (4/5 sub-PR shipped — ALL 4 merged 2026-05-05)**:
+- ✅ Wave 3-A `55f3eb41` phase1_11 status CHECK 10→14 ⚠ (PR #219)
+- ✅ Wave 3-B `efc1b4f7` FE Stage 3 strict 14-state z.enum (PR #220)
+- ✅ Wave 3-C `51b2c1ae` phase1_12 backfill_selected_subject_group_id ⚠ (PR #221)
+- ✅ **Wave 3-D `958435cf` phase1_18 confirmation_token multi-action ⚠** (PR #222) ← this entry
+- ⏳ Wave 3-E phase1_15a DROP UNIQUE → composite ⚠ (final Wave 3 sub-PR)
+
+**Tomorrow plan — Wave 3-E phase1_15a DROP UNIQUE(lead_id) → ADD UNIQUE(lead_id, academic_year)**:
+- Final ⚠ ONE-WAY migration của Wave 3 — completes Phase 1 Schema 100% (post-merge).
+- Pre-flight verified earlier: 0 lead_id duplicates trên prod (9 unique leads = 9 profiles, 1:1 ratio) → ZERO conflict risk for UNIQUE swap.
+- Skip team-style 1-week soak per memory `solo-cutover-simple-data-import` — solo cold cutover semantics.
+- Defensive ONE-WAY downgrade: count rows where multiple profiles share `lead_id` (post-Wave-4 Lead 1-many model) — should be 0 trước Wave 4.
+- Live alembic standard: pre-flight `\d` query để get current UNIQUE constraint name + verify backfill exception bounds.
+- Estimate 0.5d.
+
+---
+
 ### #184 Wave 3-C — phase1_12 backfill_selected_subject_group_id SHIPPED ⚠ ONE-WAY third migration
 
 **PR**: [#221](https://github.com/favouritekid/QLTS/pull/221) merged squash `51b2c1ae` (Wave 3-C ⚠ ONE-WAY backfill 2026-05-05).
