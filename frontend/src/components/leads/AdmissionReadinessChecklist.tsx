@@ -36,7 +36,10 @@ interface ChecklistItem {
 
 // Phase 1: Derive checklist from existing lead data
 function deriveAdmissionChecklist(lead: Lead): ChecklistItem[] {
-  const profile = lead.admission_profile;
+  // Wave 4 #15c — prefer plural list (latest year first) and fall back
+  // to legacy singular while the backend dual response still emits
+  // both. Drop fallback in #15d.
+  const profile = lead.admission_profiles?.[0] ?? lead.admission_profile;
   const profileStatus = profile?.status;
 
   return [
@@ -94,7 +97,7 @@ export function AdmissionReadinessChecklist({
   // Find next incomplete step
   const nextStep = checklist.find((item) => !item.completed);
 
-  const hasProfile = !!lead.admission_profile;
+  const hasProfile = !!(lead.admission_profiles?.[0] ?? lead.admission_profile);
   const hasOffering = !!lead.offering_id;
 
   return (

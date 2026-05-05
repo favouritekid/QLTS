@@ -126,6 +126,15 @@ export interface Lead {
   consultation_status?: ConsultationStatus | null;
   pipeline_stage?: PipelineStage | null;
   consultations?: Consultation[];
+  // Wave 4 #15c — multi-year list (post Wave 3-E composite UNIQUE swap).
+  // ``admission_profiles`` is the canonical plural shape; ordered most-recent
+  // first to match SQLAlchemy ``order_by=academic_year.desc()``. The legacy
+  // ``admission_profile`` singular field below is auto-populated from
+  // ``admission_profiles[0]`` by the backend ``LeadResponse`` validator —
+  // deprecated but kept during the FE migrate window. Wave 4 follow-up
+  // (#15d) removes the legacy field once all consumers read plural.
+  admission_profiles?: AdmissionProfileShallow[];
+  /** @deprecated Wave 4 #15c — read ``admission_profiles[0]`` instead. */
   admission_profile?: AdmissionProfileShallow | null;
 
   // Collaborator (CTV) fields
