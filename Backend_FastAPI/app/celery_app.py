@@ -252,6 +252,18 @@ celery_app.conf.beat_schedule = {
         "schedule": 30.0,  # Every 30 seconds (per RUNBOOK §3.5 T0-4 acceptance)
         "options": {"queue": "default"},
     },
+
+    # --- Wave 5-B / M-1-19d: weekly outbox archive sweep (90-day retention) ---
+    # PLAN line 168-178 P1 fix #8: outbox table grows toward 60-180k rows over
+    # 5 years; worker SELECT FOR UPDATE SKIP LOCKED scan slows + coverage
+    # script DB query slows. Move dispatched rows older than 90d into
+    # `_archived_notification_outbox` (created by `phase1_17`). Sunday 02:00 VN
+    # — low-traffic window, no conflict with daily KPI / cleanup ticks above.
+    "archive-outbox-dispatched": {
+        "task": "archive_outbox_dispatched_task",
+        "schedule": crontab(hour=2, minute=0, day_of_week="sunday"),
+        "options": {"queue": "default"},
+    },
 }
 
 # =============================================================================
