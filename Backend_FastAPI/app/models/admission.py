@@ -16,7 +16,7 @@ Architecture:
 
 from datetime import date, datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -586,17 +586,55 @@ class AdmissionConfirmationToken(Base):
     """
     __tablename__ = "admission_confirmation_token"
 
+    # Wave 3-D (M-1-18) extends single-action token to multi-action.
+    # Migration owner:
+    # ``alembic/versions/phase1_18_extend_confirmation_token_for_multi_action.py``.
+    # CheckConstraint locks the 4-action enum at the test DB layer
+    # (Base.metadata.create_all) so test rows that fail the contract
+    # surface here just like prod. Partial UNIQUE index keeps audit
+    # trail rows (already-confirmed) free from contention with newly-
+    # issued tokens for the same (profile_id, action_type) pair.
+    __table_args__ = (
+        CheckConstraint(
+            "action_type IN ('submit','resubmit','confirm','withdraw')",
+            name="ck_token_action_type",
+        ),
+        Index(
+            "uq_active_token_per_profile_action",
+            "profile_id",
+            "action_type",
+            unique=True,
+            postgresql_where=text("confirmed_at IS NULL"),
+        ),
+        Index("ix_token_action_type", "token", "action_type"),
+    )
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    
-    # Link to AdmissionProfile (one token per profile)
+
+    # Link to AdmissionProfile. Wave 3-D (PR Wave 3-D) DROPPED the
+    # single-token-per-profile UNIQUE in favor of the partial UNIQUE
+    # ``uq_active_token_per_profile_action`` declared above — every
+    # profile may now hold ONE active token PER action_type.
     profile_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("admission_profile.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # One active token per profile
-        index=True
+        index=True,
     )
-    
+
+    # Wave 3-D (M-1-18) — multi-action token. 4 values locked by the
+    # ``ck_token_action_type`` CHECK declared in ``__table_args__``
+    # above. Default ``'confirm'`` preserves legacy single-action
+    # behavior on legacy rows; new code paths set ``submit`` /
+    # ``resubmit`` / ``withdraw`` explicitly.
+    action_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="confirm",
+        server_default=text("'confirm'"),
+        comment="Token action: submit | resubmit | confirm | withdraw",
+    )
+
     # The actual token value (sent in email link)
     token: Mapped[str] = mapped_column(
         String(64),
