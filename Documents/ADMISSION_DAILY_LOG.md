@@ -58,6 +58,70 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-05
 
+### #184 WAVE 5 COMPLETE — 5/5 sub-PRs shipped trong cùng ngày
+
+**Milestone**: Phase 1 chain reaches `phase1_19e` (terminal Wave 5 revision). Next advance là **Wave 3 ONE-WAY ⚠** (`phase1_11` status CHECK extend + `phase1_12` selected_subject_group_id backfill + `phase1_15a` lead_id UNIQUE swap + `phase1_18` confirmation_token multi-action) — gated trên staging clone D12-D14 readiness.
+
+| Wave | Migration | PR | Squash | Scope |
+|---|---|---|---|---|
+| 5-A | `phase1_19c` event_catalog seed | [#213](https://github.com/favouritekid/QLTS/pull/213) | `9af7510b` | 12 NotificationRule + 12 NotificationTemplate + 29 NotificationAction (12 ADMISSION_* milestone events + per-channel routing) |
+| 5-D | `phase1_16` archived_admission_profile | [#214](https://github.com/favouritekid/QLTS/pull/214) | `1989bd03` | 64 admission_profile col mirror + archived_at + ix_archived_profile_lead_year |
+| 5-E | `phase1_17` archived_outbox | [#215](https://github.com/favouritekid/QLTS/pull/215) | `0b17f394` | 10 notification_outbox col mirror + archived_at + ix_archived_outbox_archived_at (Option II) |
+| 5-B | `phase1_19d` beat archive task | [#216](https://github.com/favouritekid/QLTS/pull/216) | `ef6a8b6d` | B-i marker + paired Celery (Sunday 02:00 VN cron + single-CTE atomic MOVE) |
+| 5-C | `phase1_19e` rules marker | [#217](https://github.com/favouritekid/QLTS/pull/217) | `3f902f5b` | Marker — seed scope absorbed by 5-A |
+
+---
+
+### #184 Wave 5-C — phase1_19e marker SHIPPED — Wave 5 closer
+
+**PR**: [#217](https://github.com/favouritekid/QLTS/pull/217) merged squash `3f902f5b` (Wave 5-C marker per Codex round 21 chốt 2026-05-05).
+
+**Parent advance**: `ef6a8b6d` (Wave 5-B merge) → `3f902f5b`.
+
+**Scope absorption rationale**: Spec slot was reserved cho "channel routing rules per audience" per PLAN line 3814-3816, nhưng Wave 5-A `phase1_19c` (PR #213) scope b2 đã ship FULL rule set (12 rule + 12 template + 29 action — per-channel action rows IS channel routing surface). Body=pass marker là cleaner shape than redundant SQL pass that would silently no-op qua WHERE NOT EXISTS guard.
+
+**Test result**: 8/8 unit tests PASS (revision chain + marker no `op.*`/`execute(` + module sanity + docstring cite + 12 events enum + Wave 5 COMPLETE 5 SHAs + no branch_labels).
+
+**Future events out-of-scope**: LEAD_* / PAYMENT_* / CONSULTATION_* etc. remain owned by `app/scripts/seed_notification_rules.py` (catalog-driven post-deploy). Phase 1 #19 chỉ seed 12 admission milestone events vì critical-path during cold cutover (RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false skips script).
+
+**Tomorrow plan**: **WAVE 5 COMPLETE — chờ staging clone D12-D14 ops gating cho Wave 3 ONE-WAY** (`phase1_11` + `phase1_12` + `phase1_15a` + `phase1_18`). User chốt timeline ops/DBA.
+
+---
+
+### #184 Wave 5-B — phase1_19d marker + archive_outbox_dispatched_task SHIPPED — fourth Wave 5 sub-PR
+
+**PR**: [#216](https://github.com/favouritekid/QLTS/pull/216) merged squash `ef6a8b6d` (Wave 5-B B-i marker + paired Celery code 2026-05-05).
+
+**Parent advance**: `132f3679` (Wave 5-E post-merge tracking) → `ef6a8b6d`.
+
+**Scope shipped (4 file)**:
+- `alembic/versions/phase1_19d_register_celery_beat_archive_task.py` (NEW, 83 lines): B-i marker migration. body=pass. Documents Alembic không quản Celery beat (paired code carries change).
+- `app/celery_app.py` (+12 lines): thêm `"archive-outbox-dispatched"` beat entry — `crontab(hour=2, minute=0, day_of_week="sunday")` Sunday 02:00 VN weekly. No slot conflict với existing 19 entries (00:05/01:00/02:00 day-1/02:30/03:00/03:15/04:00/05:00/07:00/09:00 Mon).
+- `app/tasks/notification_outbox_tasks.py` (+91 lines): thêm `archive_outbox_dispatched_task` body. `task_db_session()` single session per memory `async-session-gather` PR #105. `run_async_task()` helper với `validate_keys=["status", "archived_count", "task_id"]`. Single-statement CTE atomic MOVE per PLAN line 170-176: `WITH archived AS (DELETE FROM notification_outbox WHERE dispatched_at IS NOT NULL AND dispatched_at < NOW() - make_interval(days => :retention_days) RETURNING ...) INSERT INTO _archived_notification_outbox (...) SELECT * FROM archived RETURNING id`. `ARCHIVE_RETENTION_DAYS = 90` parameterized constant. `archived_at` relies trên `server_default=now()` từ phase1_17.
+- `tests/unit/test_phase1_19d_archive_beat_task.py` (NEW, 251 lines, 14 case): revision + marker body + module sanity + beat entry registered + task name + Sunday 02:00 crontab introspection + queue + zero-arg + task name in celery_app.tasks + retention constant + single-CTE + parameterized retention không hardcoded + INSERT excludes archived_at + DELETE filter preserves pending + validate_keys.
+
+**Schedule slot decision**: Sunday 02:00 VN weekly (low-traffic, no conflict). day_of_week='sunday' parses to {0}; day_of_month=1 cho KPI plan monthly không trùng day_of_week.
+
+**Memory gates honored**:
+- `audit-before-fix`: pre-flight grep done — beat schedule pattern + task helpers + crontab import all verified.
+- `verify-schema-before-proposing`: re-grep notification_outbox.py 10-col mirror.
+- `migration-predicate-safety`: marker body=pass.
+- `async-session-gather`: single task_db_session() per sweep — KHÔNG asyncio.gather.
+- `notification-event-gate-required-locally`: targeted regression run — 53/53 PASS new + non-DB outbox/notification suite.
+
+**Test result**:
+- Targeted Wave5-B: 14/14 PASS in 1.08s.
+- Notification regression: 53/53 PASS (test_outbox_skeleton + test_notification_outbox_model + test_phase1_17 + test_phase1_19d).
+- 10 errors test_outbox_worker.py = pre-existing test DB drift (subject_kind ENUM type missing per memory `test-db-schema-source`) — KHÔNG caused by PR.
+
+**Live SQL execution — DEFERRED to staging clone D12-D14**: same dev DB drift workaround inherited từ Wave 5-D/5-E.
+
+**Tracker / board / issue**:
+- TRACKER row M-1-19d (line 103): TODO → TESTED + 14/14 unit + 53/53 regression breakdown + 10 pre-existing errors note.
+- Issue #184 body line 36 M-1-19d: [ ] → [x] + cite PR #216 squash ef6a8b6d.
+
+---
+
 ### #184 Wave 5-E — phase1_17 archived_outbox table SHIPPED — third Wave 5 sub-PR
 
 **PR**: [#215](https://github.com/favouritekid/QLTS/pull/215) merged squash `0b17f394` (Wave 5-E D-i scope per Codex round 20 chốt 2026-05-05).
