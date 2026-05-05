@@ -56,6 +56,70 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-05
+
+### #184 Wave 5-A — phase1_19c seed event_catalog DB rows SHIPPED — first Wave 5 sub-PR
+
+**PR**: [#213](https://github.com/favouritekid/QLTS/pull/213) merged squash `9af7510b` (Wave 5-A; first Wave 5 sub-PR per Codex round 18 chốt scope b2).
+
+**Parent advance**: `408e9128` (B-pre drift sweep) → `9af7510b`.
+
+**Scope shipped (2 file)**:
+- `alembic/versions/phase1_19c_seed_event_catalog_db_rows.py` (NEW): MILESTONE_EVENTS tuple 12 entries + idempotent INSERT cho 3 tables (rule + action + template); CAST every param wrapping per memory `notification-payload-design`.
+- `tests/unit/test_phase1_19c_seed_event_catalog.py` (NEW, 16 case): revision + 12-event lock + per-entry shape + Vietnamese title + channel transports + critical zalo coverage + idempotent guards + downgrade order.
+
+**Catch + fix in-flight**:
+- ❌ → ✅ asyncpg `AmbiguousParameterError: text vs character varying` → CAST every `:param` với `CAST(:p AS varchar/text)` (mirror PR #201 B1 casbin pattern).
+- ❌ → ✅ `replace_all` bricked `:events` substring (matched `:event` prefix) → targeted manual fix per memory `verify-schema-before-proposing`.
+- ❌ → ✅ Test guard `WHERE NOT EXISTS` → `NOT EXISTS` for action SELECT-join (different from rule's standalone shape).
+
+**Codex round 18 chốt scope (b2)**:
+- Closes template-gap risk during cold cutover where:
+  - `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` skips startup sync → Action layer absent → dispatcher fail-closed silent zero notifications.
+  - `seed_notification_template_library.py --apply` is forgotten → Template absent → dispatcher render fail.
+- Migration là version-controlled lock-in cho 12 ADMISSION_* events. ON CONFLICT DO NOTHING + WHERE NOT EXISTS guards → re-apply safely no-op.
+
+**Action count math**: 29 = 2×7 + 3×5
+- 7 events × 2 channels (browser + email): SUBMITTED + REVISION_REQUESTED + RESUBMITTED + CONFIRMED + ENROLLED + WITHDRAWN + ROLLED_BACK
+- 5 events × 3 channels (browser + email + zalo): RESULT_PUBLISHED + DECISION_ADMITTED + DECISION_WAITLISTED + DECISION_REJECTED + WAITLIST_PROMOTED (per PLAN §3.3.d Bypass consent column — critical events route to zalo for breaking-news delivery)
+
+**No-checks fallback** (per SOP):
+- Workflow `admission-contract-check.yml` path filter (`app/services/admission*.py` + `notification*.py` + `events*.py` + `event_catalog.py` + `notification_seed_defaults.py`) **không match** PR scope (alembic + test only). 0 check chạy.
+- Manual verification pre-push: 16/16 unit + 90/90 notification regression + live alembic upgrade/downgrade/re-upgrade idempotent on dev DB.
+
+**Test result**:
+- Targeted Wave5-A: 16/16 passed in 1.17s.
+- Notification regression narrow scope: 90/90 passed in 8.29s post-squash on parent.
+- 3 pre-existing failures correctly ignored per memory `test-debt-admission-workflow-e2e` (test_payment_service.py + test_router_fixes_e2e.py — unrelated).
+
+**Live alembic roundtrip on dev DB**:
+- `alembic upgrade phase1_19c` clean → 12 rule + 12 template + 29 action verified.
+- `alembic downgrade phase1_10` clean → 0/0/0.
+- Re-upgrade idempotent.
+
+**Tracker / board / issue**:
+- TRACKER cascade rename per Q2 chốt 2026-05-03:
+  - ~~M-1-19b~~ deprecated slot (chiếm bởi M-1-casbin).
+  - **M-1-19c** = event_catalog seed (Wave 5-A) → TESTED (this PR).
+  - **M-1-19d** = celery beat archive (Wave 5-B) → TODO.
+  - **M-1-19e** = notification rules (Wave 5-C) → TODO.
+- Issue #184 body M-1-19c ticked `[x]` với PR #213 + SHA + scope details.
+- Board card #184 vẫn In Progress.
+
+**Wave 5 progress (1/5 sub-PR shipped)**:
+- ✅ Wave 5-A `9af7510b` — phase1_19c (event_catalog seed)
+- ⏳ Wave 5-B — phase1_19d (celery beat archive — body semantic clarification needed: B-i no-op vs B-ii DB-backed scheduler)
+- ⏳ Wave 5-C — phase1_19e (notification rules seed)
+- ⏳ Wave 5-D — phase1_16 (archived_admission_profile)
+- ⏳ Wave 5-E — phase1_17 (archived_outbox)
+
+**Tomorrow plan — Wave 5-B**:
+- Pre-flight clarification: grep `app/celery_app.py` để xác định `CELERY_BEAT_SCHEDULE` static dict (B-i no-op migration + paired code commit) hay DB-backed scheduler (B-ii migration tạo PeriodicTask rows).
+- Likely (B-i) per QLTS pattern → migration body pass + paired Celery beat config change.
+- Estimate 0.5d.
+
+---
+
 ### #184 FE-wave3-display — A1 14-state display readiness SHIPPED
 
 **PR**: [#212](https://github.com/favouritekid/QLTS/pull/212) merged squash `2c411306` (FE-only — Wave 3 PR-3A bundle preflight A1 per Codex round 16 revised scope).
