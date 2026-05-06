@@ -169,6 +169,60 @@ Before issuing GREEN verdict on rehearsal:
 
 ---
 
+## Rehearsal 2 — 2026-05-06 15:21 (UTC+7) — POST-HOTFIX status_history runtime writer
+
+**Trigger**: Post-Phase-6 GO sign-off independent runtime gate verification surfaced P0 bug — `admission_profile_status_history` runtime writer absent. Hotfix PR [#228](https://github.com/favouritekid/QLTS/pull/228) merged squash `e158f180` adds writer trong `transition()` + `create_profile()` initial state. Rehearsal 2 validates writer integration end-to-end on dev DB before Phase 7 Step B unblock.
+
+**Backend image:** `qlts-backend` (parent commit `e158f180` on `feat/admission-full-cutover` post-hotfix).
+**Migration baseline:** `phase1_15a` (Phase 1 head, post-Rehearsal-1 state).
+
+### Synthetic full legacy 10-state chain transitions
+
+Profile id=14 (lead 23, status=draft, pre history count=1 from phase1_10 backfill) chuyển qua full legacy chain:
+
+| Step | Transition | Actor | Source | Reason |
+|---|---|---|---|---|
+| 0 (pre) | NULL → draft (initial backfill phase1_10) | system | (migration) | NULL |
+| 1 | draft → submitted | admin id=15 | api | Rehearsal#2 step1 |
+| 2 | submitted → approved | admin id=15 | api | Rehearsal#2 step2 |
+| 3 | approved → confirmed | admin id=15 | api | Rehearsal#2 step3 |
+| 4 | confirmed → enrolled | admin id=15 | api | Rehearsal#2 step4 |
+
+**Post history count**: **5 rows** (1 initial + 4 new transitions). 1:1 với 4 service `transition()` calls.
+
+### Row-by-row payload verification
+
+| id | from | to | legacy | actual | effective | user | reason |
+|---|---|---|---|---|---|---|---|
+| 9 (initial backfill) | NULL | draft | system | system | system | NULL | NULL |
+| 11 (NEW) | draft | submitted | admin | admin | admin | 15 | Rehearsal#2 step1 |
+| 12 (NEW) | draft | approved | admin | admin | admin | 15 | Rehearsal#2 step2 |
+| 13 (NEW) | approved | confirmed | admin | admin | admin | 15 | Rehearsal#2 step3 |
+| 14 (NEW) | confirmed | enrolled | admin | admin | admin | 15 | Rehearsal#2 step4 |
+
+### Verification
+
+- [x] Each transition writes 1 row → 4 transitions = 4 new rows ✅
+- [x] from_status captures BEFORE-write value correctly (chain: draft → submitted → approved → confirmed → enrolled) ✅
+- [x] All 3 ENUM role columns populated NOT NULL satisfying `ck_status_history_actor_consistency` ✅
+- [x] `transitioned_by_user_id=15` set, `transitioned_by_lead_id=NULL` per officer/admin combo ✅
+- [x] `transition_reason` propagated correctly per call ✅
+- [x] Legacy `audit_service.log_status_change` still fires (4 "Audit log created" entries observed) → backward compat preserved ✅
+- [x] Final rollback restored dev state (verified via post-rollback query) ✅
+
+### Conclusion
+
+**Verdict: GREEN** — runtime writer functional end-to-end. Phase 1 PLAN line 1067 service contract satisfied at runtime, not just schema. Status_history nghiệp vụ Phase 1 fully operational.
+
+**Action**: Phase 7 Step B trigger UNBLOCKED post Rehearsal #2 sign-off. Outstanding-debt P0 status_history writer item REMOVED (no longer deferred).
+
+**Solo dev sign-off**:
+| Role | Signed by | Date | Decision |
+|---|---|---|---|
+| Backend Lead / DBA / Ops Lead / QA Lead | favouritekid | 2026-05-06 | GO Phase 7 Step B trigger |
+
+---
+
 ## Rehearsal 1 — 2026-05-06 10:15 (UTC+7)
 
 **Staging clone source:** `local_backup/prod_dump_20260505_142727.sql` — `pg_dump` plain SQL from prod 2026-05-05 14:27 (alembic head `admstrict01`).
