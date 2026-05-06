@@ -58,6 +58,83 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-06
 
+### 🎯 #184 WAVE 6 COMPLETE — public_admissions_service Phase 1 portion shipped — FINAL CUTOVER GATE CLEARED
+
+**MILESTONE**: Wave 6 sequence CLOSED. All cutover gates cleared post-merge. Storefront audience filter + 3-tier doc resolution shipped via PR #227 squash `17c619d0`. Cutover dry-run + maintenance window deploy = next milestone.
+
+| Component | PR | Squash | Date |
+|---|---|---|---|
+| Wave 6 #17 Phase 1 portion (storefront audience + 3-tier doc) | [#227](https://github.com/favouritekid/QLTS/pull/227) | `17c619d0` | 2026-05-06 |
+
+**Cutover gates ALL CLEARED**:
+- ✅ Phase 1 Schema 100% (Wave 1 + 2 + 3 + 5 = 19/19 migrations)
+- ✅ Wave 4 Lead 1-many migrate (BE + FE + hotfix end-to-end)
+- ✅ Wave 6 storefront Phase 1 portion (audience filter + 3-tier doc delegation)
+- ⏳ Cutover dry-run + maintenance window deploy (final milestone)
+
+**Deferred (post-cutover)**:
+- Wave 4 #15d follow-up (drop legacy `admission_profile` field từ BE schema dual response + types).
+- Phase 2 storefront PR (admission_round_id filter portion, paired với phase2_01/phase2_02).
+- M-1-15-helper (`Lead.last_terminal_admission_profile()` per PLAN line 892, 903) — outstanding-debt P3 item A.
+
+---
+
+### #184 Wave 6 #17 Phase 1 portion SHIPPED — final cutover gate cleared
+
+**PR**: [#227](https://github.com/favouritekid/QLTS/pull/227) merged squash `17c619d0` (2026-05-06).
+
+**Parent advance**: `36884e46` (Wave 4 closure tracking) → `17c619d0` (Wave 6 #17 Phase 1).
+
+**Pre-flight grep finding repeated** (sequencing decision context):
+- `applicable_to` ARRAY[admission_audience] SHIPPED Wave 1 PR-1B' phase1_03 ✓
+- `AdmissionPathService.resolve_documents_for_path()` 3-tier resolver SHIPPED Wave 1 PR-1C' phase1_06 ✓
+- `admission_round_id` field DOES NOT EXIST — Phase 2 territory (phase2_01/phase2_02 not started). Round filter defers Phase 2 storefront PR.
+
+**Decision (Option A — Limited scope)**: Wave 6 #17 ships Phase 1 portion (2/3 spec) using available primitives. Memory `184-phase1-schema-wave-plan` "1 PR no Alembic" honored. Gate "MERGE BEFORE phase2_02b" trivially satisfied (phase2_02b chưa ship).
+
+**Scope shipped**:
+- `app/schemas/public_admissions.py`: NEW `PublicAdmissionsAudience` enum 5 values mirror admission_audience PG ENUM (drift-anchored by unit test).
+- `app/services/public_admissions_service.py` (404 modifications):
+  - 4 service functions accept `audience: Optional[PublicAdmissionsAudience]` kwarg.
+  - `_load_public_paths` JSONB containment filter `applicable_to.contains([audience.value])` với NULL OR-branch (preserve legacy = applies-to-all-audiences contract per model line 161-167; uses `@>` containment NOT `= ANY()` for GIN index hit).
+  - REMOVED `_load_public_document_groups` + `_serialize_document_requirements` (ad-hoc 2-tier flow that mis-classified path-specific groups as `method_override`).
+  - NEW `_load_path_document_tiers` (3 batched queries per tier: path-specific / method-NULL-path / shared-NULL-method-NULL-path) + `_merge_items_with_mandatory_wins` + `_items_to_public_documents` helpers (3 queries total regardless of path count).
+  - `get_public_documents_catalog` body refactored: per-path 3-tier precedence mirror of `AdmissionPathService.resolve_documents_for_path`, scope source = highest tier observed across paths in `(offering_type, method)` bucket.
+- `app/routers/public_admissions.py`: 4 endpoints accept `audience` query param + propagate to service. Tuition no-op-doc'd (offering-keyed; Phase 2 will narrow via round+audience joins).
+
+**Tests** (12/12 new + 49/49 regression PASS):
+- `tests/unit/test_public_admissions_phase1_wave6.py`:
+  - `TestAudienceFilterPropagation` (4 cases): audience kwarg flow router → service → JSONB filter (programs/methods/documents/tuition all forward).
+  - `TestDocumentsCatalogTierAggregation` (7 cases): Tier 3 shared / Tier 2 method-wins / Tier 1 path-wins / scope source highest-tier across paths / mandatory-wins within tier / inactive offering_type drops / shared docs at offering_type level.
+  - `TestAudienceEnum` (1 case): drift guard (Pydantic enum ↔ PG ENUM mirror).
+- Regression: 49/49 PASS adjacent modules (test_admission_path_resolution_3tier + test_document_group_service_phase1_06_invariant + test_phase1_05_06_revision_chain + Wave 6 new).
+
+**Live verify on dev DB w/ prod data** (per memory `solo-cutover-simple-data-import` substitute evidence gate):
+- 32 public paths, 20 programs, 2 methods, 7 doc types.
+- 4 endpoints non-empty cho audience=None / POST_THPT / LIEN_THONG_CD.
+- All 32 paths NULL `applicable_to` (no backfill yet) → audience filter no-op (NULL preserved as legacy = applies-to-all per contract). Expected behavior.
+- Synthetic JSONB filter test: set path 106 `applicable_to=[POST_THPT]` → audience=POST_THPT 32 paths matched, audience=LIEN_THONG_CD 31 paths matched (path 106 correctly excluded). PROVEN narrowing. Restored NULL.
+
+**Path filter no-checks fallback** (per Wave 4 #15c precedent):
+- `admission-contract-check.yml` path filter `services/admission*.py` doesn't match `public_admissions_service.py` (file starts với `public_`). 0 checks chạy.
+- Substitute evidence gate satisfied via 12/12 unit + 49/49 regression + live verify (PR body + this DAILY_LOG entry).
+
+**Bug fix (incidental)**: 3-tier resolution upgrade fixes pre-existing storefront bug — previous flow loaded path-specific DocumentGroups but lumped them into method bucket via `(offering_type, method)` aggregation, silently misclassifying tier 1 docs as `method_override`. New flow correctly attributes tier 1/2/3 per path.
+
+**Process integrity highlight**: PLAN amendment shipped IN-PR atomic (`Documents/ADMISSION_REFACTOR_PLAN.md` line 3565 +1/-1 patch) — code change + spec patch atomic, no window where code merged but PLAN stale.
+
+**Tracker / board / issue**:
+- TRACKER row #17 line 113: TODO → TESTED + 🎯 CLOSES WAVE 6 banner + Phase 1/Phase 2 split scope + 12/12 + 49/49 + live verify cite.
+- Issue #184: Wave 6 not in checkbox tree (storefront refactor tracked as PLAN code task, not migration sub-task) — TRACKER row + DAILY_LOG cover.
+
+**Tomorrow plan — cutover dry-run + maintenance window deploy**:
+- Cutover dry-run on staging clone DB w/ prod data.
+- Maintenance window deploy (env flags `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` per CLAUDE.md backend Common Commands section).
+- Manual alembic upgrade + backfill + sync_notification_rules in maintenance window with checkpoint logging.
+- Post-cutover: deferred items (Wave 4 #15d + Phase 2 storefront round filter + M-1-15-helper).
+
+---
+
 ### 🎯 #184 WAVE 4 COMPLETE — Lead 1-many migrate done end-to-end (BE + FE + hotfix)
 
 **MILESTONE**: Wave 4 sequence ALL CLOSED. Lead 1-many semantic shipped from DB schema → BE model/repo/service → FE consumers in 4 PRs over 2026-05-05/06.
