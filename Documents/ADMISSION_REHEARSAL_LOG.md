@@ -169,4 +169,105 @@ Before issuing GREEN verdict on rehearsal:
 
 ---
 
-_(no rehearsals yet — placeholder for first entry; runbook above is planning-only, not evidence)_
+## Rehearsal 1 — 2026-05-06 10:15 (UTC+7)
+
+**Staging clone source:** `local_backup/prod_dump_20260505_142727.sql` — `pg_dump` plain SQL from prod 2026-05-05 14:27 (alembic head `admstrict01`).
+**Backend image:** `qlts-backend` (parent commit `b28050af` on `feat/admission-full-cutover` — includes #226 hotfix + #227 Wave 6 #17 Phase 1).
+**Migration baseline:** `admstrict01` (prod base, pre-our-migrations).
+**Solo dev caveat (per memory `solo-cutover-simple-data-import` 2026-05-05 pivot):** dev DB w/ prod data import = rehearsal vehicle (no separate staging clone team-style infra). Per-migration live roundtrip already executed during Wave 3 + 4 + 5 + 6 in earlier sessions; this is the formal end-to-end sequence rehearsal documenting the full chain replay + idempotency + Phase 5 cutover wrap-up.
+
+### Migration chain apply
+
+| ID | Migration | Note |
+|---|---|---|
+| (chain) | admstrict01 → phase0sg01 → phase0br01 → phase1_19a → phase1_19b → phase1_01 → phase1_02 → phase1_03 → phase1_05 → phase1_06 → phase1_07b → phase1_08 → phase1_13 → phase1_09a → phase1_10 → phase1_19c → phase1_16 → phase1_17 → phase1_19d → phase1_19e → phase1_11 → phase1_12 → phase1_18 → phase1_15a | 23 steps applied (2 Phase 0 + 2 prerequisites B2.2/B1 + 19 active Phase 1 = Wave 1: 8 + Wave 2: 2 + Wave 3: 4 + Wave 5: 5) |
+
+**Total chain time:** **5.97 seconds** (dev DB scale: 392 leads / 9 profiles).
+**⚠ Maintenance window estimate caveat:** dev-scale timing NOT extrapolated to prod estimate. Keep original RUNBOOK §7.2 4-6h window — prod has more data + ops complexity (S3 upload integrity verify + Nginx reload + multi-worker Casbin reload + smoke 8 critical journeys + standby coordination) that dev rehearsal does NOT exercise.
+**Alembic head after:** `phase1_15a`.
+**Errors / aborts:** 0.
+
+### Backfill verification (embedded in migration bodies — no separate scripts)
+
+| Backfill | Source migration | Expected | Actual | Verdict |
+|---|---|---|---|---|
+| status_history initial (1 row/profile) | phase1_10 body | 9 (= profile count) | 9 | ✅ |
+| status_history scattered scalar audit migrate | phase1_10 body | bounded | 0 (no audit drift on prod 9-profile sample) | ✅ |
+| selected_subject_group_id decision tree | phase1_12 body ⚠ ONE-WAY | bounded | 8/9 populated, 1 NULL admin pre-existing | ✅ |
+| gpa_overall regex parse từ academic_history JSON | phase1_09a body | partial | 3/9 populated (matches parseable subset) | ✅ |
+| graduation_year từ academic_history JSON | phase1_09a body | 100% target | 9/9 populated | ✅ |
+| **`_admission_backfill_exceptions` total** | phase1_07b table + 4 backfill sinks | 0 | **0 across all 4 backfills** | ✅ |
+| Casbin v3='allow' backfill 210 rows | phase1_19b body | 210 | 210 | ✅ |
+| Casbin v3='deny' seed 6 accountant rules | phase1_19b body | 6 | 6 | ✅ |
+
+### Schema invariants (Wave 3 ⚠ ONE-WAY active)
+
+| Invariant | Active | Evidence |
+|---|---|---|
+| Composite UNIQUE (lead_id, academic_year) | ✅ | `uq_admission_profile_lead_year` (phase1_15a / Wave 3-E) |
+| Status CHECK 14 states | ✅ | 10 OLD + 4 NEW (reviewing/result_published/admitted/waitlisted) (phase1_11 / Wave 3-A) |
+| Confirmation token action_type | ✅ | NOT NULL DEFAULT 'confirm' + 4-action CHECK (phase1_18 / Wave 3-D) |
+| Confirmation token partial UNIQUE | ✅ | `uq_active_token_per_profile_action` ON (profile_id, action_type) WHERE confirmed_at IS NULL |
+| Wave 6 PR #17 primitives | ✅ | applicable_to ARRAY + GIN index + method_quota + document_group.admission_path_id |
+
+### Idempotency 2nd-pass
+
+**Re-run alembic upgrade head:** 4.71 seconds (just connect + check, 0 migrations re-applied).
+**Alembic head:** `phase1_15a` (unchanged).
+**Row count drift across 11 tracked tables:** **0** (no double-INSERT, no double-UPDATE).
+**Idempotency PROVEN.**
+
+### Phase 5 — Cutover sequence wrap-up
+
+| Step | Result | Time |
+|---|---|---|
+| `python -m app.scripts.sync_notification_rules` | created 12 lowercase + skipped 45 + flagged 12 UPPERCASE orphan | 2.5s |
+| Backend restart với `RUN_CASBIN_LOAD_ON_STARTUP=true` | healthy | ~3s |
+| Casbin lifespan `load_policy()` against backfilled v3 (210 allow + 6 deny) | ✅ "AsyncEnforcer initialized and policies loaded" | ~20ms |
+| `/health` endpoint check | `{"status":"ok"}` | ✓ |
+| Storefront API smoke (Wave 6 PR #17 Phase 1 portion — 4 endpoint) | 20 programs / 2 degree levels / 2 methods / 7 doc types | ✓ |
+
+### Smoke (RUNBOOK §7.3 — 8 critical journeys)
+
+**SCOPE DEFERRED post-deploy** per Phase B refined dry-run scope (covered by per-Wave integration tests + adjacent regression 49/49 PASS shipped via PR #227 + 79/79 PASS shipped via PR #224 + 12/12 Wave 6 unit tests). Smoke 8 critical journey will run as **post-deploy verification** in Phase 7 maintenance window (T+4:15-4:45 per RUNBOOK §7.2), not as rehearsal evidence.
+
+### Casbin matrix 4×14 (RUNBOOK §9.2)
+
+**SCOPE DEFERRED post-deploy.** Coverage already shipped via B1 PR #201 (48 B1 focused tests). Will run as post-deploy smoke verification in Phase 7.
+
+### ⚠ Pre-existing issue surfaced (NON-BLOCKING)
+
+**phase1_19c migration body seeded UPPERCASE event names** (`ADMISSION_PROFILE_SUBMITTED`, etc) at line 79, but `SystemEvents.value` (= dispatcher key) is **lowercase** (`admission_profile_submitted`).
+
+| Aspect | Status |
+|---|---|
+| 12 UPPERCASE rules from phase1_19c migration body | ⚠️ Orphan dead weight (never matched by dispatcher) |
+| 12 lowercase rules from sync_notification_rules | ✅ Functional (matched by dispatcher) |
+| Double-dispatch risk | ❌ NONE (dispatcher uses exact match `WHERE event = 'admission_profile_submitted'` per `tasks/admission_tasks.py:348`) |
+| Functional impact on cutover | ⚠️ Harmless — orphan rules sit dormant |
+| Origin | PR #213 phase1_19c migration body (`alembic/versions/phase1_19c_seed_event_catalog_db_rows.py:79`) — pre-existing bug missed in review (sync flagged `orphan_rules: 12` warning-only) |
+
+**Cleanup follow-up (post-cutover, NOT blocking)**: fix migration body to use lowercase + add cleanup migration deleting 12 UPPERCASE orphan rows. Tracked in `outstanding-debt` memory P3 item E.
+
+### Conclusion
+
+- [x] All migrations PASS, no rollback needed (23 steps clean in 5.97s)
+- [x] Backfill exception count = 0 (within expected bounds)
+- [x] ~~8/8 smoke critical PASS~~ DEFERRED post-deploy (covered by integration tests)
+- [x] ~~Casbin 4×14 PASS~~ DEFERRED post-deploy (covered by B1 PR #201 48 tests)
+- [x] Idempotency check: re-run drift = 0 (PROVEN)
+- [x] Phase 5 sync_notification_rules + Casbin lifespan reload PASS
+- [x] Storefront Wave 6 PR #17 Phase 1 portion API healthy
+
+**Verdict:** **GREEN** for migration sequence + backfill + idempotency + cutover wrap-up.
+**Action:** GO Phase 6 documentation/sign-off. Phase 7 maintenance window deploy gated on Phase 6 artifacts + config hygiene closed (per Codex 2026-05-06 audit).
+
+**Total rehearsal duration:** ~23 minutes (Phase 1 reset 15min + Phase 2 migration 5.97s + Phase 3 verify 3min + Phase 4 idempotency 4.71s + Phase 5 sync+reload 5min).
+**Estimated cutover window:** Keep original RUNBOOK §7.2 **4-6h budget**. Do NOT compress based on dev-scale 5.97s timing — prod scale + ops complexity (S3 backup verify + Nginx reload + multi-worker Casbin reload + smoke + standby coordination) NOT exercised in dev rehearsal.
+
+### Solo dev sign-off
+
+| Role | Signed by | Date | Decision |
+|---|---|---|---|
+| Backend Lead / DBA / Ops Lead / QA / Product Owner / Admission Ops | favouritekid (solo dev — single owner per memory `solo-developer`) | 2026-05-06 | GO Phase 6 documentation/sign-off; Phase 7 gate on artifacts + hygiene closed |
+| Legal/Compliance | N/A — solo dev cold cutover, no live admission intake (frozen since 2026-05-01 refactor start) | 2026-05-06 | N/A |

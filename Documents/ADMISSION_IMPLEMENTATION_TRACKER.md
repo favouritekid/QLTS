@@ -209,46 +209,47 @@
 ### 12.1. Backup
 | Check | Status | Owner | Date |
 |---|---|---|---|
-| DB pg_dump verified offsite + restore rehearsal PASS | TODO | DBA | |
-| Uploads tar verified | TODO | DBA | |
-| Env/config bundle uploaded S3 | TODO | Ops | |
-| Image tag pre-cutover pushed registry | TODO | Ops | |
+| DB pg_dump verified + restore rehearsal PASS | PASS (Rehearsal 1 — `prod_dump_20260505_142727.sql` restored clean to dev DB; full chain replay confirmed) | favouritekid (solo dev) | 2026-05-06 |
+| Uploads tar verified | TODO Phase 7 (defer to maintenance window pre-flight) | favouritekid | |
+| Env/config bundle uploaded S3 | N/A solo dev (no S3 infra) | — | — |
+| Image tag pre-cutover pushed registry | TODO Phase 7 (build từ `b28050af` post-Wave-6) | favouritekid | |
 
 ### 12.2. Staging rehearsal
 | Check | Status | Owner | Date |
 |---|---|---|---|
-| Migration chain apply lần 1 PASS staging clone | TODO | DBA + BE | |
-| Migration chain apply lần 2 idempotency PASS | TODO | DBA | |
-| 5 backfill scripts run PASS | TODO | BE | |
-| E2E vận hành 8 critical journey PASS | TODO | QA | |
-| Casbin matrix 4×14 PASS | TODO | QA | |
-| Outbox worker rig (concurrency + crash) PASS | TODO | BE + QA | |
-| Frontend full multi-NV E2E PASS | TODO | FE + QA | |
+| Migration chain apply lần 1 PASS staging clone | PASS (Rehearsal 1 — 23 steps clean in 5.97s; alembic head `phase1_15a`) | favouritekid (solo dev) | 2026-05-06 |
+| Migration chain apply lần 2 idempotency PASS | PASS (Rehearsal 1 — 4.71s no-op, 0 row drift across 11 tracked tables) | favouritekid | 2026-05-06 |
+| ~~5 backfill scripts run PASS~~ | PASS — backfills embedded in migration bodies; 0 exceptions across `_admission_backfill_exceptions` | favouritekid | 2026-05-06 |
+| E2E vận hành 8 critical journey PASS | DEFERRED post-deploy verification (covered by integration tests 49/49 PR #227 + 79/79 PR #224) | favouritekid | Phase 7 T+4:15 |
+| Casbin matrix 4×14 PASS | DEFERRED post-deploy (covered by B1 PR #201 48 focused tests) | favouritekid | Phase 7 T+4:15 |
+| Outbox worker rig (concurrency + crash) PASS | DEFERRED post-deploy (covered by Wave 5-B PR #216 14/14 + B2.2 26/26 unit tests) | favouritekid | Phase 7 |
+| Frontend full multi-NV E2E PASS | DEFERRED post-deploy (covered by 26/26 vitest PR #225 + 12/12 Wave 6 PR #227) | favouritekid | Phase 7 |
 
 ### 12.3. Production readiness (Task 0 prerequisites)
 | Check | Status | Mapped task |
 |---|---|---|
-| T0-1 2 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP) | TESTED | T0-1 |
+| T0-1 3 entrypoint env flag gates shipped (RUN_MIGRATIONS_ON_STARTUP + RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP + RUN_CASBIN_LOAD_ON_STARTUP) | TESTED — verified live in Rehearsal 1 Phase 2-5 | T0-1 |
 | T0-2 ADMISSION_FROZEN middleware shipped (3 prefix verified-from-code, path-segment match) | TESTED | T0-2 |
 | T0-3 Nginx admission block shipped (envsubst-driven, regex match T0-2) | TESTED | T0-3 |
 | T0-4a dispatch_pending_outbox skeleton (no-op safe) | TESTED | T0-4a |
 | T0-4b dispatch_pending_outbox real worker wiring (sau B2 + M-1-19a) | TESTED | T0-4b |
 | T0-5 Casbin reload endpoint shipped (current-process scope; fleet reload = restart backend §7.2 T+3:15) | TESTED | T0-5 |
 | ~~Q11 product decision chốt~~ | **CLOSED** | Resolved PLAN §3.3.g.1 |
-| Maintenance window communicated 7d trước | TODO | D2 |
-| Standby team confirmed availability | TODO | D2 |
-| Rollback compose override file ready | TODO | Ops |
+| Maintenance window communicated 7d trước | N/A solo dev (no live admission intake — frozen since 2026-05-01 refactor start) | — |
+| Standby team confirmed availability | N/A solo dev (single owner per memory `solo-developer`) | — |
+| Rollback compose override file ready | TODO Phase 7 (snapshot `prod_dump_20260505_142727.sql` is rollback baseline; `docker-compose.override.yml` revert to default state shipped 2026-05-06 post-rehearsal) | favouritekid | |
 
-### 12.4. Sign-off (RUNBOOK §10)
+### 12.4. Sign-off (RUNBOOK §10) — solo dev simplified
+
+Per memory `solo-developer`: solo dev = single owner. All roles consolidated. Per memory `solo-cutover-simple-data-import`: cold cutover, no live intake, no team standby required.
+
 | Role | Signed by | Date | Decision |
 |---|---|---|---|
-| Backend Lead | | | |
-| Frontend Lead | | | |
-| DBA / Ops Lead | | | |
-| QA Lead | | | |
-| Product Owner | | | |
-| Admission Ops | | | |
-| Legal/Compliance | | | |
+| Backend Lead / DBA / Ops Lead / QA Lead / Product Owner / Admission Ops | favouritekid (solo dev) | 2026-05-06 | GO Phase 6 documentation/sign-off; Phase 7 maintenance deploy gate on artifacts + hygiene closed |
+| Legal/Compliance | N/A — solo dev cold cutover, no live intake | 2026-05-06 | N/A |
+
+**Rehearsal evidence**: `Documents/ADMISSION_REHEARSAL_LOG.md` Rehearsal 1 entry 2026-05-06 — verdict GREEN.
+**Phase 7 gate**: 1 follow-up cleanup item (UPPERCASE orphan rules from phase1_19c, NON-BLOCKING) tracked in `outstanding-debt` memory P3 item E + cleanup PR post-cutover.
 
 ---
 
