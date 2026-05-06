@@ -58,6 +58,119 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-06
 
+### #184 Phase 7 Step A — pre-flight evidence captured (uploads tar + image tag + rollback recipe)
+
+**Step A scope** (per Codex 2026-05-06 audit verdict): pre-flight items 2-4 (uploads tar, image tag, rollback recipe). Step B maintenance window deploy gate-pending on this Step A artifacts closed.
+
+**Step A.1 — SSH probe prod (read-only audit) — DONE**:
+- SSH access verified via IP `180.93.1.167` (DNS `qlts.tnpc.edu.vn` resolution issue in Git Bash; IP works with `HostKeyAlias=qlts.tnpc.edu.vn` matching `known_hosts`).
+- Prod path: `/opt/qlts`. Branch HEAD: `d8b3191d` (main, PR #180 — pre-cutover state, before our refactor).
+- Env file: `.env.production` (NOT `.env`).
+- Disk free: 34GB / 56GB total (36% used).
+- Backend container: 4 days uptime, healthy.
+
+**Step A.2 — Fresh prod uploads tar — DONE**:
+- Prod uploads volume: `/var/lib/docker/volumes/qlts_backend_uploads/_data` — 24MB / 38 files (REAL DATA — admission documents users uploaded).
+- Static uploads volume: `/var/lib/docker/volumes/qlts_backend_static_uploads/_data` — 744KB / 1 file.
+- Tars created on prod: `local_backup/prod_uploads_pre_cutover_20260506_114244.tar.gz` (24MB, 48 entries) + `local_backup/prod_static_uploads_pre_cutover_20260506_114244.tar.gz` (651KB, 3 entries).
+- Transferred via scp to `D:\QLTS\local_backup\` for redundancy.
+
+**Step A.3 — Image tag pre-cutover for rollback — DONE**:
+- Prod backend image: `qlts-backend:latest` ID `4de1e651e2e9`, 782MB, built 2026-04-30 19:24.
+- Tagged `qlts-backend:pre-cutover-d8b3191d` (rollback target if cutover fails).
+- Prod frontend image: `qlts-frontend:latest` ID `a27e38035e0f`, 359MB. Tagged `qlts-frontend:pre-cutover-d8b3191d`.
+- No registry push — solo dev uses local prod images directly via `docker compose --profile production`.
+
+**Step A.4 — Rollback recipe (for emergency rollback if cutover fails post-T+3:00)**:
+
+```bash
+# === ROLLBACK PLAYBOOK — Production cold cutover failure recovery ===
+# Trigger: cutover failed mid-flow (post-migration apply but pre-smoke PASS) OR
+# post-deploy smoke FAIL on critical journey — restore prod to pre-cutover state.
+
+# === Step 1: Stop new (failed) containers ===
+ssh root@qlts.tnpc.edu.vn 'cd /opt/qlts && docker compose --profile production down'
+
+# === Step 2: Restore database from backup ===
+# IMPORTANT: This restores prod DB to state captured by Step A.2 fresh dump.
+# If cutover took fresh dump at T+0:30, use THAT dump, not the dry-run dump.
+# Dry-run dump is `prod_dump_20260505_142727.sql` (alembic admstrict01) — only suitable
+# if cutover failed before any prod data drift after 2026-05-05 14:27.
+
+ssh root@qlts.tnpc.edu.vn '
+  cd /opt/qlts
+  set -a; source .env.production; set +a
+  # Drop + recreate prod DB (DESTRUCTIVE — only after backup verified)
+  docker compose --profile production exec -T postgres psql -U $POSTGRES_USER -d postgres -c "
+    SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=\"$POSTGRES_DB\" AND pid <> pg_backend_pid();
+    DROP DATABASE \"$POSTGRES_DB\";
+    CREATE DATABASE \"$POSTGRES_DB\" OWNER $POSTGRES_USER;
+  "
+  # Restore from backup (replace <DUMP_FILE> with the actual fresh dump from cutover T+0:30)
+  docker compose --profile production exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB < local_backup/<DUMP_FILE>
+  # Verify alembic version restored
+  docker compose --profile production exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB -c "SELECT version_num FROM alembic_version;"
+  # Expect: d8b3191d-equivalent alembic head (whatever was running pre-cutover)
+'
+
+# === Step 3: Restore uploads ===
+ssh root@qlts.tnpc.edu.vn '
+  cd /opt/qlts
+  # Wipe new uploads volume + extract pre-cutover tar
+  docker volume rm qlts_backend_uploads || true
+  docker volume create qlts_backend_uploads
+  docker run --rm -v qlts_backend_uploads:/restore -v $(pwd)/local_backup:/backup alpine \
+    tar -xzf /backup/prod_uploads_pre_cutover_20260506_114244.tar.gz -C /restore
+  # Same for static uploads if needed
+  docker volume rm qlts_backend_static_uploads || true
+  docker volume create qlts_backend_static_uploads
+  docker run --rm -v qlts_backend_static_uploads:/restore -v $(pwd)/local_backup:/backup alpine \
+    tar -xzf /backup/prod_static_uploads_pre_cutover_20260506_114244.tar.gz -C /restore
+'
+
+# === Step 4: Re-tag pre-cutover image as :latest + restart ===
+ssh root@qlts.tnpc.edu.vn '
+  cd /opt/qlts
+  # Re-tag pre-cutover images back to :latest
+  docker tag qlts-backend:pre-cutover-d8b3191d qlts-backend:latest
+  docker tag qlts-frontend:pre-cutover-d8b3191d qlts-frontend:latest
+  # Switch back to main branch git state (rollback code too if cutover branch was merged)
+  # git checkout main && git reset --hard d8b3191d  # only if main was force-pushed
+  # Restart full stack
+  docker compose --profile production up -d
+'
+
+# === Step 5: Smoke verify rollback ===
+curl -m 10 https://qlts.tnpc.edu.vn/health
+# Expect: {"status":"ok"}
+# + manual verify: 1 lead create + admission profile read + 1 magic link confirm
+```
+
+**Rollback time estimate**: ~10-15 min (DB restore is largest — 4.8MB dump restores in <1 min; uploads tar extract <1 min; image re-tag instant; container restart ~1 min).
+
+**Rollback caveats**:
+- If cutover already merged `feat/admission-full-cutover` to main, `git reset --hard d8b3191d` on prod working tree may be needed (or restore from pre-cutover git tag).
+- DB restore is DESTRUCTIVE — verify backup is the right vintage BEFORE running. Dry-run dump 2026-05-05 14:27 = oldest baseline; cutover T+0:30 fresh dump = ideal target if available.
+- Casbin policy reload happens on backend container restart automatically (lifespan `load_policy()`).
+
+**Step A artifacts inventory**:
+
+| Artifact | Location | Size |
+|---|---|---|
+| `prod_dump_20260505_142727.sql` (dry-run baseline) | `D:\QLTS\local_backup\` + prod `/opt/qlts/local_backup/` | 4.8MB |
+| `prod_uploads_pre_cutover_20260506_114244.tar.gz` | `D:\QLTS\local_backup\` + prod `/opt/qlts/local_backup/` | 24MB |
+| `prod_static_uploads_pre_cutover_20260506_114244.tar.gz` | `D:\QLTS\local_backup\` + prod `/opt/qlts/local_backup/` | 651KB |
+| `qlts-backend:pre-cutover-d8b3191d` image tag | prod docker | 782MB |
+| `qlts-frontend:pre-cutover-d8b3191d` image tag | prod docker | 359MB |
+| Rollback recipe | this DAILY_LOG entry | inline |
+
+**Phase 7 Step B gate** (NOT auto-trigger — user signal required):
+- ✅ Step A artifacts closed
+- ⏳ Fresh DB dump at T+0:30 (in maintenance window — not yet)
+- ⏳ User confirm timing/uninterrupted ~1h block
+
+---
+
 ### 🎯 #184 WAVE 6 COMPLETE — public_admissions_service Phase 1 portion shipped — FINAL CUTOVER GATE CLEARED
 
 **MILESTONE**: Wave 6 sequence CLOSED. All cutover gates cleared post-merge. Storefront audience filter + 3-tier doc resolution shipped via PR #227 squash `17c619d0`. Cutover dry-run + maintenance window deploy = next milestone.
