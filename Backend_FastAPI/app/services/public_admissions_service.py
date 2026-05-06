@@ -6,7 +6,7 @@ published academic information, and public admission paths are exposed.
 """
 from collections import defaultdict
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from app import models
 from app.repositories.organization_repository import OrganizationRepository
 from app.schemas.public_admissions import (
     PublicAdmissionsAcademicInfoSummary,
+    PublicAdmissionsAudience,
     PublicAdmissionsDegreeLevelGroup,
     PublicAdmissionsDocumentRequirement,
     PublicAdmissionsDocumentsMeta,
@@ -37,6 +38,14 @@ from app.schemas.public_admissions import (
     PublicAdmissionsTuitionOffering,
     PublicAdmissionsTuitionResponse,
 )
+
+
+# Tier source precedence for #17 Wave 6 (Phase 1 portion). Higher index =
+# higher tier (path > method > shared). Used to pick the highest-tier
+# attribution when aggregating across paths sharing an
+# (offering_type_id, method_id) bucket — the storefront response shape
+# carries a single source per scope, so the aggregator must collapse.
+_TIER_RANK = {"shared": 0, "method_override": 1, "path_override": 2}
 
 PUBLIC_PATH_STATUS = "active"
 PUBLIC_PATH_VISIBILITY = "public"
@@ -137,17 +146,33 @@ async def _load_public_program_snapshot(
 async def _load_public_paths(
     db: AsyncSession,
     academic_info_ids: Set[int],
+    audience: Optional[PublicAdmissionsAudience] = None,
 ) -> List[models.AdmissionPath]:
     if not academic_info_ids:
         return []
 
+    conditions = [
+        models.AdmissionPath.academic_info_id.in_(sorted(academic_info_ids)),
+        models.AdmissionPath.status == PUBLIC_PATH_STATUS,
+        models.AdmissionPath.visibility == PUBLIC_PATH_VISIBILITY,
+    ]
+    if audience is not None:
+        # phase1_03 audience filter — JSONB ARRAY @> containment.
+        # NULL applicable_to = legacy / applies to every audience
+        # (Phase 1+2 query contract preserves NULL via OR branch
+        # per AdmissionPath model line 161-167). MUST use contains()
+        # not = ANY() so the ix_admission_path_applicable_to GIN
+        # index is hit (model comment line 165-166).
+        conditions.append(
+            or_(
+                models.AdmissionPath.applicable_to.is_(None),
+                models.AdmissionPath.applicable_to.contains([audience.value]),
+            )
+        )
+
     query = (
         select(models.AdmissionPath)
-        .where(
-            models.AdmissionPath.academic_info_id.in_(sorted(academic_info_ids)),
-            models.AdmissionPath.status == PUBLIC_PATH_STATUS,
-            models.AdmissionPath.visibility == PUBLIC_PATH_VISIBILITY,
-        )
+        .where(*conditions)
         .options(
             selectinload(models.AdmissionPath.academic_info)
             .selectinload(models.OfferingAcademicInfo.offering)
@@ -189,93 +214,190 @@ def _build_method_lookup(
     return response
 
 
-async def _load_public_document_groups(
+async def _load_path_document_tiers(
     db: AsyncSession,
-    offering_type_ids: Set[int],
-    method_ids: Set[int],
-) -> List[models.DocumentGroup]:
-    if not offering_type_ids:
-        return []
+    paths: List[models.AdmissionPath],
+) -> Tuple[
+    Dict[int, List[models.DocumentGroup]],
+    Dict[Tuple[int, int], List[models.DocumentGroup]],
+    Dict[int, List[models.DocumentGroup]],
+    Dict[int, "models.ConfigOfferingType"],
+    Dict[int, "models.AdmissionMethod"],
+]:
+    """Batch-load document groups for the 3-tier resolution rule
+    (phase1_06 / #184 Wave 1 PR-1C') across the given paths.
 
-    conditions = [
-        models.DocumentGroup.offering_type_id.in_(sorted(offering_type_ids)),
-        models.DocumentGroup.is_active == True,
-    ]
+    Three queries (one per tier) keyed by:
+    * **Tier 1** ``path_groups_by_path[path_id]`` — admission_path_id
+      matches; per-path-specific override.
+    * **Tier 2** ``method_groups_by_scope[(offering_type_id, method_id)]``
+      — admission_path_id IS NULL AND method matches; legacy
+      method-specific bucket.
+    * **Tier 3** ``shared_groups_by_offering_type[offering_type_id]`` —
+      admission_path_id IS NULL AND admission_method_id IS NULL;
+      offering-type-wide shared bucket.
 
-    if method_ids:
-        conditions.append(
-            or_(
-                models.DocumentGroup.admission_method_id.is_(None),
-                models.DocumentGroup.admission_method_id.in_(sorted(method_ids)),
-            )
+    Also returns offering_type + admission_method model maps populated
+    from eager-loaded relationships, so the caller can build the
+    public response without extra round trips.
+
+    The aggregator (``get_public_documents_catalog``) applies tier
+    precedence per path (highest non-empty tier wins fully, mandatory-
+    wins within the tier) and collapses to the storefront's
+    (offering_type, method) bucketed schema.
+    """
+    if not paths:
+        return {}, {}, {}, {}, {}
+
+    path_ids: Set[int] = {p.id for p in paths}
+    method_ids: Set[int] = {
+        p.admission_method_id for p in paths if p.admission_method_id is not None
+    }
+    offering_type_ids: Set[int] = set()
+    for p in paths:
+        ot_id = (
+            p.academic_info.offering.offering_type_id
+            if p.academic_info and p.academic_info.offering
+            else None
         )
-    else:
-        conditions.append(models.DocumentGroup.admission_method_id.is_(None))
+        if ot_id is not None:
+            offering_type_ids.add(ot_id)
 
-    query = (
-        select(models.DocumentGroup)
-        .where(*conditions)
-        .options(
-            selectinload(models.DocumentGroup.offering_type),
-            selectinload(models.DocumentGroup.admission_method),
-            selectinload(models.DocumentGroup.items)
-            .selectinload(models.DocumentGroupItem.document_type),
-        )
-        .order_by(models.DocumentGroup.code, models.DocumentGroup.id)
+    path_groups_by_path: Dict[int, List[models.DocumentGroup]] = defaultdict(list)
+    method_groups_by_scope: Dict[
+        Tuple[int, int], List[models.DocumentGroup]
+    ] = defaultdict(list)
+    shared_groups_by_offering_type: Dict[int, List[models.DocumentGroup]] = defaultdict(
+        list
     )
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    offering_type_models: Dict[int, "models.ConfigOfferingType"] = {}
+    method_models: Dict[int, "models.AdmissionMethod"] = {}
+
+    common_options = (
+        selectinload(models.DocumentGroup.items).selectinload(
+            models.DocumentGroupItem.document_type
+        ),
+        selectinload(models.DocumentGroup.offering_type),
+        selectinload(models.DocumentGroup.admission_method),
+    )
+
+    if path_ids:
+        path_query = (
+            select(models.DocumentGroup)
+            .where(
+                models.DocumentGroup.admission_path_id.in_(sorted(path_ids)),
+                models.DocumentGroup.is_active == True,  # noqa: E712
+            )
+            .options(*common_options)
+        )
+        result = await db.execute(path_query)
+        for group in result.scalars().all():
+            path_groups_by_path[group.admission_path_id].append(group)
+            if group.offering_type is not None:
+                offering_type_models[group.offering_type_id] = group.offering_type
+            if group.admission_method is not None:
+                method_models[group.admission_method_id] = group.admission_method
+
+    if method_ids and offering_type_ids:
+        method_query = (
+            select(models.DocumentGroup)
+            .where(
+                models.DocumentGroup.offering_type_id.in_(sorted(offering_type_ids)),
+                models.DocumentGroup.admission_method_id.in_(sorted(method_ids)),
+                models.DocumentGroup.admission_path_id.is_(None),
+                models.DocumentGroup.is_active == True,  # noqa: E712
+            )
+            .options(*common_options)
+        )
+        result = await db.execute(method_query)
+        for group in result.scalars().all():
+            method_groups_by_scope[
+                (group.offering_type_id, group.admission_method_id)
+            ].append(group)
+            if group.offering_type is not None:
+                offering_type_models[group.offering_type_id] = group.offering_type
+            if group.admission_method is not None:
+                method_models[group.admission_method_id] = group.admission_method
+
+    if offering_type_ids:
+        shared_query = (
+            select(models.DocumentGroup)
+            .where(
+                models.DocumentGroup.offering_type_id.in_(sorted(offering_type_ids)),
+                models.DocumentGroup.admission_method_id.is_(None),
+                models.DocumentGroup.admission_path_id.is_(None),
+                models.DocumentGroup.is_active == True,  # noqa: E712
+            )
+            .options(*common_options)
+        )
+        result = await db.execute(shared_query)
+        for group in result.scalars().all():
+            shared_groups_by_offering_type[group.offering_type_id].append(group)
+            if group.offering_type is not None:
+                offering_type_models[group.offering_type_id] = group.offering_type
+
+    return (
+        path_groups_by_path,
+        method_groups_by_scope,
+        shared_groups_by_offering_type,
+        offering_type_models,
+        method_models,
+    )
 
 
-def _serialize_document_requirements(
-    groups: List[models.DocumentGroup],
+def _merge_items_with_mandatory_wins(
+    target: Dict[int, "models.DocumentGroupItem"],
+    groups: Iterable[models.DocumentGroup],
+) -> None:
+    """Mandatory-wins merge mirror of
+    AdmissionPathService.resolve_documents_for_path tier-internal
+    aggregation. Mutates ``target`` in place.
+    """
+    for group in groups:
+        for item in group.items:
+            if item.document_type is None or not item.document_type.is_active:
+                continue
+            existing = target.get(item.document_type_id)
+            if existing is None or (item.is_mandatory and not existing.is_mandatory):
+                target[item.document_type_id] = item
+
+
+def _items_to_public_documents(
+    items: Iterable["models.DocumentGroupItem"],
     source: str,
 ) -> List[PublicAdmissionsDocumentRequirement]:
-    items_by_document_type_id: Dict[int, PublicAdmissionsDocumentRequirement] = {}
-
-    ordered_items = sorted(
-        (
-            item
-            for group in groups
-            for item in group.items
-            if item.document_type is not None and item.document_type.is_active
-        ),
-        key=lambda item: (
-            item.display_order,
-            item.document_type.display_order if item.document_type else 0,
-            item.document_type.name.lower() if item.document_type else "",
-            item.id,
-        ),
-    )
-
-    for item in ordered_items:
-        document_type = item.document_type
-        if document_type is None:
-            continue
-
-        items_by_document_type_id[item.document_type_id] = PublicAdmissionsDocumentRequirement(
+    docs = [
+        PublicAdmissionsDocumentRequirement(
             document_type_id=item.document_type_id,
-            document_type_code=document_type.code,
-            document_type_name=document_type.name,
-            document_type_description=document_type.description,
+            document_type_code=item.document_type.code,
+            document_type_name=item.document_type.name,
+            document_type_description=item.document_type.description,
             is_mandatory=item.is_mandatory,
             requires_upload=item.requires_upload,
             submission_format=item.submission_format,
             display_order=item.display_order,
             source=source,
         )
-
+        for item in items
+    ]
     return sorted(
-        items_by_document_type_id.values(),
-        key=lambda item: (item.display_order, item.document_type_name.lower(), item.document_type_id),
+        docs,
+        key=lambda doc: (
+            doc.display_order,
+            doc.document_type_name.lower(),
+            doc.document_type_id,
+        ),
     )
 
 
 async def get_public_programs_catalog(
     db: AsyncSession,
+    audience: Optional[PublicAdmissionsAudience] = None,
 ) -> PublicAdmissionsProgramsResponse:
     programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
-    method_tags_by_info_id = _build_method_lookup(await _load_public_paths(db, academic_info_ids))
+    method_tags_by_info_id = _build_method_lookup(
+        await _load_public_paths(db, academic_info_ids, audience=audience)
+    )
 
     degree_groups: Dict[str, List[PublicAdmissionsProgramSummary]] = defaultdict(list)
     offering_types: Set[str] = set()
@@ -400,9 +522,10 @@ async def get_public_programs_catalog(
 
 async def get_public_methods_catalog(
     db: AsyncSession,
+    audience: Optional[PublicAdmissionsAudience] = None,
 ) -> PublicAdmissionsMethodsResponse:
     _, _, academic_info_ids = await _load_public_program_snapshot(db)
-    paths = await _load_public_paths(db, academic_info_ids)
+    paths = await _load_public_paths(db, academic_info_ids, audience=audience)
 
     method_models: Dict[int, models.AdmissionMethod] = {}
     method_program_ids: Dict[int, Set[int]] = defaultdict(set)
@@ -491,12 +614,12 @@ async def get_public_methods_catalog(
 
 async def get_public_documents_catalog(
     db: AsyncSession,
+    audience: Optional[PublicAdmissionsAudience] = None,
 ) -> PublicAdmissionsDocumentsResponse:
     _, _, academic_info_ids = await _load_public_program_snapshot(db)
-    paths = await _load_public_paths(db, academic_info_ids)
+    paths = await _load_public_paths(db, academic_info_ids, audience=audience)
 
     offering_type_ids: Set[int] = set()
-    method_ids: Set[int] = set()
     offering_type_programs: Dict[int, Set[str]] = defaultdict(set)
     offering_type_program_ids: Dict[int, Set[int]] = defaultdict(set)
     offering_type_offering_ids: Dict[int, Set[int]] = defaultdict(set)
@@ -506,6 +629,9 @@ async def get_public_documents_catalog(
     method_scope_program_ids: Dict[Tuple[int, int], Set[int]] = defaultdict(set)
     method_scope_offering_ids: Dict[Tuple[int, int], Set[int]] = defaultdict(set)
     method_scope_path_ids: Dict[Tuple[int, int], Set[int]] = defaultdict(set)
+    method_scope_paths: Dict[
+        Tuple[int, int], List[models.AdmissionPath]
+    ] = defaultdict(list)
 
     for path in paths:
         academic_info = path.academic_info
@@ -514,11 +640,16 @@ async def get_public_documents_catalog(
         offering_type_id = offering.offering_type_id if offering else None
         method = path.admission_method
 
-        if academic_info is None or offering is None or program is None or offering_type_id is None or method is None:
+        if (
+            academic_info is None
+            or offering is None
+            or program is None
+            or offering_type_id is None
+            or method is None
+        ):
             continue
 
         offering_type_ids.add(offering_type_id)
-        method_ids.add(method.id)
 
         offering_type_programs[offering_type_id].add(program.name)
         offering_type_program_ids[offering_type_id].add(program.id)
@@ -530,23 +661,26 @@ async def get_public_documents_catalog(
         method_scope_program_ids[scope_key].add(program.id)
         method_scope_offering_ids[scope_key].add(offering.id)
         method_scope_path_ids[scope_key].add(path.id)
+        method_scope_paths[scope_key].append(path)
 
-    groups = await _load_public_document_groups(db, offering_type_ids, method_ids)
-    shared_groups_by_offering_type: Dict[int, List[models.DocumentGroup]] = defaultdict(list)
-    method_groups_by_scope: Dict[Tuple[int, int], List[models.DocumentGroup]] = defaultdict(list)
-    offering_type_models: Dict[int, models.ConfigOfferingType] = {}
-    method_models: Dict[int, models.AdmissionMethod] = {}
+    (
+        path_groups_by_path,
+        method_groups_by_scope,
+        shared_groups_by_offering_type,
+        offering_type_models,
+        method_models,
+    ) = await _load_path_document_tiers(db, paths)
 
-    for group in groups:
-        offering_type_models[group.offering_type_id] = group.offering_type
-
-        if group.admission_method_id is None:
-            shared_groups_by_offering_type[group.offering_type_id].append(group)
-            continue
-
-        method_groups_by_scope[(group.offering_type_id, group.admission_method_id)].append(group)
-        if group.admission_method is not None:
-            method_models[group.admission_method_id] = group.admission_method
+    # Bridge: paths' admission_method instances aren't in method_models
+    # if no DocumentGroup exists for that method (eager-load source).
+    # Fill from the path objects so storefront still surfaces methods
+    # whose docs resolve to the offering-type-level shared bucket.
+    for path in paths:
+        if (
+            path.admission_method is not None
+            and path.admission_method.id not in method_models
+        ):
+            method_models[path.admission_method.id] = path.admission_method
 
     offering_type_checklists: List[PublicAdmissionsOfferingTypeDocumentChecklist] = []
     resolved_document_type_ids: Set[int] = set()
@@ -558,41 +692,78 @@ async def get_public_documents_catalog(
         if offering_type_model is None or not offering_type_model.is_active:
             continue
 
-        shared_documents = _serialize_document_requirements(
-            shared_groups_by_offering_type.get(offering_type_id, []),
-            source="shared",
+        # Tier 3 — offering-type-wide shared bucket. Mandatory-wins
+        # merge across DocumentGroup rows so multiple shared groups
+        # for the same offering_type collapse correctly.
+        shared_items: Dict[int, "models.DocumentGroupItem"] = {}
+        _merge_items_with_mandatory_wins(
+            shared_items, shared_groups_by_offering_type.get(offering_type_id, [])
+        )
+        shared_documents = _items_to_public_documents(
+            shared_items.values(), source="shared"
         )
 
         method_documents: List[PublicAdmissionsMethodDocumentChecklist] = []
         for method_id in sorted(offering_type_method_ids.get(offering_type_id, set())):
             scope_key = (offering_type_id, method_id)
-            method_groups = method_groups_by_scope.get(scope_key, [])
             method_model = method_models.get(method_id)
-
-            source = "method_override" if method_groups else "shared"
-            resolved_documents = _serialize_document_requirements(method_groups, source) if method_groups else list(shared_documents)
-
             if method_model is None:
-                for path in paths:
-                    if path.admission_method_id == method_id and path.admission_method is not None:
-                        method_model = path.admission_method
-                        method_models[method_id] = method_model
-                        break
+                continue
 
-            if method_model is None or not resolved_documents:
+            scope_paths = method_scope_paths.get(scope_key, [])
+            if not scope_paths:
+                continue
+
+            # Per-path 3-tier precedence (phase1_06 / Wave 1 PR-1C').
+            # Highest non-empty tier wins fully per path; mandatory-
+            # wins merge across paths sharing this scope. Source per
+            # scope = highest tier observed across paths in scope.
+            scope_items: Dict[int, "models.DocumentGroupItem"] = {}
+            scope_source_rank = -1
+            scope_source = "shared"
+
+            for path in scope_paths:
+                path_groups = path_groups_by_path.get(path.id, [])
+                method_groups = method_groups_by_scope.get(scope_key, [])
+                shared_groups = shared_groups_by_offering_type.get(offering_type_id, [])
+
+                if path_groups:
+                    tier_groups, tier_source = path_groups, "path_override"
+                elif method_groups:
+                    tier_groups, tier_source = method_groups, "method_override"
+                else:
+                    tier_groups, tier_source = shared_groups, "shared"
+
+                _merge_items_with_mandatory_wins(scope_items, tier_groups)
+                tier_rank = _TIER_RANK[tier_source]
+                if tier_rank > scope_source_rank:
+                    scope_source_rank = tier_rank
+                    scope_source = tier_source
+
+            resolved_documents = _items_to_public_documents(
+                scope_items.values(), source=scope_source
+            )
+
+            if not resolved_documents:
                 continue
 
             included_method_ids.add(method_id)
             included_path_ids.update(method_scope_path_ids.get(scope_key, set()))
-            resolved_document_type_ids.update(item.document_type_id for item in resolved_documents)
+            resolved_document_type_ids.update(
+                item.document_type_id for item in resolved_documents
+            )
             method_documents.append(
                 PublicAdmissionsMethodDocumentChecklist(
                     method_id=method_model.id,
                     method_code=method_model.code,
                     method_name=method_model.name,
-                    source=source,
-                    public_program_count=len(method_scope_program_ids.get(scope_key, set())),
-                    public_offering_count=len(method_scope_offering_ids.get(scope_key, set())),
+                    source=scope_source,
+                    public_program_count=len(
+                        method_scope_program_ids.get(scope_key, set())
+                    ),
+                    public_offering_count=len(
+                        method_scope_offering_ids.get(scope_key, set())
+                    ),
                     public_path_count=len(method_scope_path_ids.get(scope_key, set())),
                     documents=resolved_documents,
                 )
@@ -601,15 +772,21 @@ async def get_public_documents_catalog(
         if not shared_documents and not method_documents:
             continue
 
-        resolved_document_type_ids.update(item.document_type_id for item in shared_documents)
+        resolved_document_type_ids.update(
+            item.document_type_id for item in shared_documents
+        )
         sample_programs = sorted(offering_type_programs.get(offering_type_id, set()))[:4]
         offering_type_checklists.append(
             PublicAdmissionsOfferingTypeDocumentChecklist(
                 offering_type_id=offering_type_id,
                 offering_type_code=offering_type_model.code,
                 offering_type_name=offering_type_model.name,
-                public_program_count=len(offering_type_program_ids.get(offering_type_id, set())),
-                public_offering_count=len(offering_type_offering_ids.get(offering_type_id, set())),
+                public_program_count=len(
+                    offering_type_program_ids.get(offering_type_id, set())
+                ),
+                public_offering_count=len(
+                    offering_type_offering_ids.get(offering_type_id, set())
+                ),
                 public_method_count=len({item.method_id for item in method_documents}),
                 sample_programs=sample_programs,
                 shared_documents=shared_documents,
@@ -621,7 +798,10 @@ async def get_public_documents_catalog(
         )
 
     offering_type_checklists.sort(
-        key=lambda item: (_sort_offering_type(item.offering_type_name), item.offering_type_id),
+        key=lambda item: (
+            _sort_offering_type(item.offering_type_name),
+            item.offering_type_id,
+        ),
     )
 
     return PublicAdmissionsDocumentsResponse(
@@ -637,7 +817,13 @@ async def get_public_documents_catalog(
 
 async def get_public_tuition_catalog(
     db: AsyncSession,
+    audience: Optional[PublicAdmissionsAudience] = None,
 ) -> PublicAdmissionsTuitionResponse:
+    # audience param accepted for API uniformity but no-op on tuition:
+    # tuition data is offering-keyed (not path-keyed) so audience filter
+    # has no semantic effect here. Phase 2 storefront PR will narrow
+    # offerings to those with at least one round+audience match.
+    del audience  # unused
     programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(db)
 
     tuition_offerings: List[PublicAdmissionsTuitionOffering] = []

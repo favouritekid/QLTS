@@ -3562,7 +3562,7 @@ Lý do defer: 3 migration trên không block multi-NV core flow. Engine xét tuy
 | Phase 0c hot-fix | `admission_config_repository.py:76,84` field name `admission_criteria_id → criteria_id` | MERGE BEFORE phase1_01 (repository được Phase 1 dependency check rely on) |
 | #16 audit | Workflow contract boundary — grep + refactor mọi `profile.status='...'` direct set sang `state_service.transition()` | MERGE BEFORE phase1_11 (status CHECK extend). Lý do: nếu caller cũ vẫn set direct trong khi CHECK đã extend → DB accept nhưng state machine không update history → audit lệch. |
 | #15 audit | `approved → admitted` workflow remap 23 file caller — `is_admitted_like()` helper + state machine enum extend | MERGE BEFORE phase1_11 (cùng wave với #16). |
-| #17 public storefront | `public_admissions_service.py` migrate sang `admission_round_id` + `applicable_to` filter + 3-tier doc resolution | MERGE BEFORE phase2_02b (NOT NULL + swap unique). Lý do: storefront không thấy round → user không đăng ký được sau swap. |
+| #17 public storefront | `public_admissions_service.py` migrate sang `admission_round_id` + `applicable_to` filter + 3-tier doc resolution | MERGE BEFORE phase2_02b (NOT NULL + swap unique). Lý do: storefront không thấy round → user không đăng ký được sau swap. **PHẦN 1 SHIPPED Wave 6 cutover (`applicable_to` audience filter + 3-tier doc resolution); `admission_round_id` filter defers Phase 2 storefront PR cùng `phase2_01`/`phase2_02` — gate condition unchanged vì phase2_02b vẫn chưa ship.** |
 
 Mỗi file Alembic dùng `down_revision = '<previous>'` chain rõ ràng. Không apply parallel.
 
