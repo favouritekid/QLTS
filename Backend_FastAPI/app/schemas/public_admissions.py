@@ -7,9 +7,23 @@ schemas so the public API can remain stable and fail-closed.
 """
 from datetime import date
 from decimal import Decimal
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+
+class PublicAdmissionsAudience(str, Enum):
+    """Audience filter values mirror AdmissionPath.applicable_to ENUM
+    (phase1_03 / #184 Wave 1 PR-1B'). Storefront accepts as query param;
+    when provided, paths must contain the value in applicable_to OR
+    have applicable_to NULL (= legacy / applies to every audience).
+    """
+    POST_THCS = "POST_THCS"
+    POST_THPT = "POST_THPT"
+    LIEN_THONG_TC = "LIEN_THONG_TC"
+    LIEN_THONG_CD = "LIEN_THONG_CD"
+    VLVH = "VLVH"
 
 
 class PublicAdmissionsMethodTag(BaseModel):

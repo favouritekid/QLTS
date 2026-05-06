@@ -123,6 +123,51 @@ const profile = lead.admission_profiles?.[0] ?? lead.admission_profile;
 
 ---
 
+### #184 Wave 6 #17 Phase 1 portion STARTED — public_admissions_service audience filter + 3-tier doc resolution
+
+**Branch**: `feature/admission-184-wave6-17-public-storefront-phase1` off `feat/admission-full-cutover` post-`36884e46`.
+
+**Pre-flight grep finding (sequencing issue surfaced)**:
+- PLAN line 3565 #17 spec = "migrate sang `admission_round_id` + `applicable_to` filter + 3-tier doc resolution".
+- ✅ `AdmissionPath.applicable_to` ARRAY[admission_audience] SHIPPED (Wave 1 PR-1B' phase1_03; `admission_path.py:169`).
+- ✅ `AdmissionPathService.resolve_documents_for_path()` 3-tier resolver SHIPPED (Wave 1 PR-1C' phase1_06; `admission_path_service.py:676`).
+- ❌ `AdmissionPath.admission_round_id` field DOES NOT EXIST — Phase 2 territory (phase2_01 + phase2_02 not started yet, no migrations + no model).
+
+**Decision (Option A — Limited scope NOW)**: Wave 6 #17 ships Phase 1 portion only (audience filter + 3-tier doc resolution). Round filter portion defers to Phase 2 storefront PR paired với phase2_01/phase2_02. Memory `184-phase1-schema-wave-plan` "1 PR no Alembic" honored. PLAN gate "MERGE BEFORE phase2_02b" trivially satisfied (phase2_02b chưa ship).
+
+**Scope shipped Phase 1 portion**:
+- `app/schemas/public_admissions.py`: NEW `PublicAdmissionsAudience` enum (5 values mirror admission_audience PG ENUM: POST_THCS / POST_THPT / LIEN_THONG_TC / LIEN_THONG_CD / VLVH).
+- `app/services/public_admissions_service.py`:
+  - 4 service functions accept `audience: Optional[PublicAdmissionsAudience]` kwarg (programs/methods/documents/tuition).
+  - `_load_public_paths` applies JSONB containment filter `applicable_to.contains([audience.value])` với NULL OR-branch (preserve legacy = applies-to-all-audiences contract per model line 161-167).
+  - `_load_public_document_groups` + `_serialize_document_requirements` REMOVED (ad-hoc 2-tier classification).
+  - NEW `_load_path_document_tiers` (3 batched queries: tier 1 path-specific / tier 2 method-specific NULL-path / tier 3 shared NULL-method NULL-path) + `_merge_items_with_mandatory_wins` + `_items_to_public_documents` helpers.
+  - `get_public_documents_catalog` body refactored to apply per-path 3-tier resolution mirroring `AdmissionPathService.resolve_documents_for_path` semantics, then aggregate to public response shape (highest tier across paths in scope = scope source).
+- `app/routers/public_admissions.py`: 4 endpoints accept `audience` query param + propagate to service. Tuition no-op-doc'd (offering-keyed; Phase 2 will narrow via round+audience joins).
+
+**Tests (12 case all PASS)**:
+- `tests/unit/test_public_admissions_phase1_wave6.py`:
+  - 4 audience propagation cases (programs/methods/documents/tuition all forward kwarg).
+  - 7 documents catalog tier aggregation cases (Tier 3 shared / Tier 2 method-wins / Tier 1 path-wins / scope source = highest tier across paths / mandatory-wins within tier / inactive offering_type drops / shared docs at offering_type level).
+  - 1 enum surface anchor (mirror admission_audience PG ENUM values).
+- Regression: 49/49 PASS adjacent modules (test_admission_path_resolution_3tier + test_document_group_service_phase1_06_invariant + test_phase1_05_06_revision_chain + Wave 6).
+
+**Live verify on dev DB w/ prod data (32 paths, 20 programs, 2 methods, 7 doc types)**:
+- All 4 endpoints return non-empty data audience=None / POST_THPT / LIEN_THONG_CD.
+- All 32 paths NULL `applicable_to` (no backfill yet) → audience filter no-op (NULL preserved as legacy = matches every audience). Expected.
+- Synthetic test: set path 106 `applicable_to=[POST_THPT]` → audience=POST_THPT 32 paths (matched), audience=LIEN_THONG_CD 31 paths (path 106 excluded). JSONB containment filter PROVEN to narrow correctly. Restored NULL.
+
+**PLAN amendment** (this commit):
+- `Documents/ADMISSION_REFACTOR_PLAN.md` line 3565: appended Phase 1 SHIPPED note + Phase 2 admission_round_id portion deferred note.
+
+**Tracker / board / issue**: pending closure tracking commit post-merge (TRACKER #17 row TESTED + Wave 6 COMPLETE banner). Cutover dry-run is the final remaining gate.
+
+**Notes**:
+- Phase 1 portion preserves storefront response shape backward-compat (no schema breaking change). Phase 2 storefront PR will add `admission_round` filtering field separately.
+- 3-tier resolution upgrade fixes pre-existing bug: previous flow loaded path-specific DocumentGroups but lumped them into method bucket via `(offering_type, method)` aggregation, silently misclassifying tier 1 docs as `method_override`. New flow correctly attributes tier 1 / 2 / 3 per path.
+
+---
+
 ## 2026-05-05
 
 ### #184 Wave 4 #15b SHIPPED + P0 hotfix multi-year regression — PLAN v2.13.2 soak waiver formalized
