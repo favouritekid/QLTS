@@ -2898,6 +2898,37 @@ async def create_profile(
         log.error("IntegrityError during profile creation (race condition)", error=str(e))
         raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
+    # Initial state row — Phase 1 PLAN line 1067 service contract:
+    # every profile creation emits one ``NULL → draft`` row into
+    # ``admission_profile_status_history``. This is the runtime
+    # counterpart to the phase1_10 backfill which seeded one
+    # initial-state row per pre-existing profile at migration time;
+    # without this writer the audit trail would silently flat-line
+    # the moment phase1_10 ships.
+    from ..models.admission_profile_status_history import (
+        AdmissionProfileStatusHistory,
+    )
+    from ..services.admission_state_service import (
+        _resolve_status_history_actor,
+    )
+
+    initial_actor_fields = _resolve_status_history_actor(
+        actor=current_user,
+        source="api",
+        profile_lead_id=new_profile.lead_id,
+    )
+    db.add(
+        AdmissionProfileStatusHistory(
+            profile_id=new_profile.id,
+            from_status=None,  # NULL = initial state per model docstring
+            to_status="draft",
+            transition_reason=None,
+            occurred_at=new_profile.created_at,
+            metadata_={"source": "api", "initial_create": True},
+            **initial_actor_fields,
+        )
+    )
+
     # Audit trail: log profile creation
     from ..services import audit_service
     await audit_service.log_created(

@@ -78,6 +78,83 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
+def _resolve_status_history_actor(
+    actor: Optional["User"],
+    source: str,
+    profile_lead_id: int,
+) -> Dict[str, Any]:
+    """Resolve the 5 actor-related fields on
+    ``AdmissionProfileStatusHistory`` per ``ck_status_history_actor
+    _consistency``.
+
+    Three valid combinations:
+
+    * ``system`` — both FKs NULL (cron, scheduler, automated cleanup).
+    * ``officer`` / ``admin`` — ``transitioned_by_user_id`` set, lead
+      FK NULL (staff actions via API).
+    * ``candidate`` — ``transitioned_by_lead_id`` set, user FK NULL
+      (magic-link confirm / withdraw via public route).
+
+    Per PLAN line 1062 v2.9 contract — the legacy
+    ``transitioned_by_role`` ENUM has only 4 values; ``manager`` and
+    ``accountant`` (which exist on the modern 6-value
+    ``actor_actual_role`` ENUM) fold to the closest legacy bucket
+    (manager → admin, accountant → officer). The 6-value
+    ``actor_actual_role`` retains the original role for audit-of-truth
+    queries; ``effective_transition_role`` (4 values) mirrors RBAC
+    elevation (manager → admin scope, accountant → officer scope).
+    """
+    if actor is None:
+        if source == "magic_link":
+            # Candidate transition (no User row, has Lead row).
+            return {
+                "transitioned_by_role": "candidate",
+                "actor_actual_role": "candidate",
+                "effective_transition_role": "candidate",
+                "transitioned_by_user_id": None,
+                "transitioned_by_lead_id": profile_lead_id,
+            }
+        # System transition (cron / scheduler / boot-time backfill).
+        return {
+            "transitioned_by_role": "system",
+            "actor_actual_role": "system",
+            "effective_transition_role": "system",
+            "transitioned_by_user_id": None,
+            "transitioned_by_lead_id": None,
+        }
+
+    actual_role = (getattr(actor, "role", None) or "officer").lower()
+
+    if actual_role == "admin":
+        legacy_role = "admin"
+        effective_role = "admin"
+    elif actual_role == "manager":
+        # Manager elevated to admin scope for status transitions
+        # (override / approve at scope). Audit-of-truth keeps
+        # actor_actual_role='manager'.
+        legacy_role = "admin"
+        effective_role = "admin"
+    elif actual_role == "accountant":
+        # Accountant rarely transitions a profile (RBAC normally
+        # blocks); defensive fold to officer-equivalent buckets so
+        # the row is still well-formed if a fee-payment hook ever
+        # triggers a transition.
+        legacy_role = "officer"
+        effective_role = "officer"
+    else:
+        # 'officer' (default) and any unknown role string.
+        legacy_role = "officer"
+        effective_role = "officer"
+
+    return {
+        "transitioned_by_role": legacy_role,
+        "actor_actual_role": actual_role,
+        "effective_transition_role": effective_role,
+        "transitioned_by_user_id": actor.id,
+        "transitioned_by_lead_id": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Coverage-script dispatch anchors
 # ---------------------------------------------------------------------------
@@ -246,6 +323,49 @@ async def transition(
     if extra_fields:
         for field_name, value in extra_fields.items():
             setattr(profile, field_name, value)
+
+    # 3.5. Status history audit row — Phase 1 PLAN line 1067 service
+    # contract: every status mutation MUST insert one row into
+    # ``admission_profile_status_history`` in the same transaction
+    # frame. This is independent of the legacy
+    # ``audit_service.log_status_change`` call below — that one
+    # writes generic ``entity_audit_log`` rows; this purpose-built
+    # table carries the 3-column role audit (legacy / actual /
+    # effective) Phase 3 RBAC trace consumes.
+    #
+    # Skipped only when ``skip_audit`` is set, mirroring the legacy
+    # audit's bypass semantics so callers that already record a
+    # richer status-change row (override path via
+    # ``audit_service.log_changes``) don't double-write.
+    if not skip_audit:
+        from ..models.admission_profile_status_history import (
+            AdmissionProfileStatusHistory,
+        )
+
+        actor_fields = _resolve_status_history_actor(
+            actor=actor,
+            source=source,
+            profile_lead_id=profile.lead_id,
+        )
+        history_metadata: Dict[str, Any] = {"source": source}
+        if event_metadata:
+            # Caller-supplied audit context (e.g. ``override=True``,
+            # ``rejection_reason=…``). Stored separately from the
+            # ADMISSION_* dispatch payload so the audit row remains
+            # the single source of truth even if dispatch is skipped.
+            history_metadata.update(event_metadata)
+
+        db.add(
+            AdmissionProfileStatusHistory(
+                profile_id=profile.id,
+                from_status=old_status,
+                to_status=new_status,
+                transition_reason=reason,
+                occurred_at=now,
+                metadata_=history_metadata,
+                **actor_fields,
+            )
+        )
 
     # 4. Audit log — single source of truth for status-change history,
     # except when caller writes a richer log_changes row (override).
