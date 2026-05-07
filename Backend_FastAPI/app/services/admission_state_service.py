@@ -324,51 +324,60 @@ async def transition(
         for field_name, value in extra_fields.items():
             setattr(profile, field_name, value)
 
-    # 3.5. Status history audit row — Phase 1 PLAN line 1067 service
-    # contract: every status mutation MUST insert one row into
-    # ``admission_profile_status_history`` in the same transaction
-    # frame. This is independent of the legacy
-    # ``audit_service.log_status_change`` call below — that one
-    # writes generic ``entity_audit_log`` rows; this purpose-built
-    # table carries the 3-column role audit (legacy / actual /
-    # effective) Phase 3 RBAC trace consumes.
+    # 3.5. Status history audit row — Phase 1 PLAN line 1067 / 1098
+    # service contract: every status mutation MUST insert one row
+    # into ``admission_profile_status_history`` in the same
+    # transaction frame, with NO bypass. The override path's
+    # ``skip_audit=True`` semantics target the legacy
+    # ``entity_audit_log`` writer below (which would double-write
+    # alongside ``audit_service.log_changes``) — they do NOT
+    # extend to this purpose-built audit table.
     #
-    # Skipped only when ``skip_audit`` is set, mirroring the legacy
-    # audit's bypass semantics so callers that already record a
-    # richer status-change row (override path via
-    # ``audit_service.log_changes``) don't double-write.
-    if not skip_audit:
-        from ..models.admission_profile_status_history import (
-            AdmissionProfileStatusHistory,
-        )
+    # Phase1-Hotfix-3 (2026-05-07) — moved this writer outside
+    # ``if not skip_audit`` after ultrareview / Codex audit found
+    # that override transitions were silently skipping the row,
+    # leaving the 3-column role audit (legacy / actual / effective)
+    # incomplete for admin force-approve flows. The matching test
+    # ``test_transition_skip_audit_still_writes_status_history``
+    # locks this contract; ``override`` metadata flows through
+    # ``event_metadata`` so the row carries the override context.
+    from ..models.admission_profile_status_history import (
+        AdmissionProfileStatusHistory,
+    )
 
-        actor_fields = _resolve_status_history_actor(
-            actor=actor,
-            source=source,
-            profile_lead_id=profile.lead_id,
-        )
-        history_metadata: Dict[str, Any] = {"source": source}
-        if event_metadata:
-            # Caller-supplied audit context (e.g. ``override=True``,
-            # ``rejection_reason=…``). Stored separately from the
-            # ADMISSION_* dispatch payload so the audit row remains
-            # the single source of truth even if dispatch is skipped.
-            history_metadata.update(event_metadata)
+    actor_fields = _resolve_status_history_actor(
+        actor=actor,
+        source=source,
+        profile_lead_id=profile.lead_id,
+    )
+    history_metadata: Dict[str, Any] = {"source": source}
+    if event_metadata:
+        # Caller-supplied audit context (e.g. ``override=True``,
+        # ``rejection_reason=…``). Stored separately from the
+        # ADMISSION_* dispatch payload so the audit row remains the
+        # single source of truth even if dispatch is skipped or
+        # legacy entity_audit_log is bypassed via ``skip_audit``.
+        history_metadata.update(event_metadata)
 
-        db.add(
-            AdmissionProfileStatusHistory(
-                profile_id=profile.id,
-                from_status=old_status,
-                to_status=new_status,
-                transition_reason=reason,
-                occurred_at=now,
-                metadata_=history_metadata,
-                **actor_fields,
-            )
+    db.add(
+        AdmissionProfileStatusHistory(
+            profile_id=profile.id,
+            from_status=old_status,
+            to_status=new_status,
+            transition_reason=reason,
+            occurred_at=now,
+            metadata_=history_metadata,
+            **actor_fields,
         )
+    )
 
-    # 4. Audit log — single source of truth for status-change history,
-    # except when caller writes a richer log_changes row (override).
+    # 4. Audit log — legacy ``entity_audit_log`` sink. Override flows
+    # set ``skip_audit=True`` because ``audit_service.log_changes``
+    # already records a richer change-set row (status + version +
+    # override_reason + bypass_rules) and a second
+    # ``log_status_change`` would just be duplicate noise. The
+    # status_history writer above runs unconditionally per PLAN
+    # line 1098.
     if not skip_audit:
         from . import audit_service
         await audit_service.log_status_change(
