@@ -5134,13 +5134,20 @@ async def _perform_enrollment_core(
             # student/student-document writes above. ``transition_callback``
             # is None for outbox events — caller does not need to
             # thread it through.
+            #
+            # Phase 1 hotfix-2: rename ``student_code`` →
+            # ``student_id`` to match the seeded ADMISSION_ENROLLED
+            # template's ``$student_id`` placeholder. The display
+            # value is the human-readable student code (e.g.
+            # ``SV20262469``); naming aligned with the template's
+            # operator-facing variable convention.
             profile, _ = await state_transition(
                 db,
                 profile,
                 "enrolled",
                 actor=current_user,
                 source="api",
-                event_metadata={"student_code": student_code},
+                event_metadata={"student_id": student_code},
             )
 
             # Step 5: ✅ PIPELINE SYNC: Create system consultation for enrollment milestone
@@ -5826,6 +5833,13 @@ async def request_revision(
     # internally for its own audit + ADMISSION_* dispatch payload.
     _old_status_for_audit = profile.status
 
+    # Phase 1 hotfix-2: ``extra_fields`` writes onto AdmissionProfile
+    # columns; it does NOT flow into the dispatch payload. The seeded
+    # ADMISSION_REVISION_REQUESTED template references
+    # ``$revision_reason`` so we mirror the value into
+    # ``event_metadata`` (which IS merged into payload by
+    # transition()) to avoid the literal ``$revision_reason`` leaking
+    # into rendered messages.
     profile, transition_callback = await state_transition(
         db,
         profile,
@@ -5838,6 +5852,7 @@ async def request_revision(
             "revision_requested_by_id": reviewer.id,
             "revision_reason": data["reason"],
         },
+        event_metadata={"revision_reason": data["reason"]},
     )
 
     # PIPELINE SYNC: Create system consultation for revision milestone
@@ -7007,6 +7022,13 @@ async def withdraw_profile(
     # Caller still captures old_status for the legacy bundle below.
     _old_status_for_audit = profile.status
 
+    # Phase 1 hotfix-2: enrich payload với ``from_status`` +
+    # ``withdrawn_by_role`` so the seeded ADMISSION_WITHDRAWN
+    # template's placeholders resolve at render time. ``actor``
+    # always has a User row in Phase 1 (withdraw is staff-only via
+    # /withdraw endpoint per state machine + RBAC); the ``"system"``
+    # fallback is forward-compat with Phase 3 magic-link withdraw
+    # (action_type='withdraw') which would pass ``actor=None``.
     profile, transition_callback = await state_transition(
         db,
         profile,
@@ -7014,6 +7036,11 @@ async def withdraw_profile(
         actor=actor,
         reason=data["reason"],
         source="api",
+        event_metadata={
+            "from_status": _old_status_for_audit,
+            "withdrawn_by_role": (actor.role if actor else "system"),
+            "reason": data["reason"],
+        },
     )
 
     # PIPELINE SYNC: Create system consultation for withdrawal milestone
@@ -7937,6 +7964,11 @@ async def verify_and_confirm(
     # consistently for the audit row + ADMISSION_CONFIRMED dispatch
     # payload's ``old_status`` field.
     try:
+        # Phase 1 hotfix-2: same pattern as revision_requested —
+        # ``extra_fields`` writes the column, ``event_metadata``
+        # mirrors the value into the dispatch payload so the
+        # seeded ADMISSION_CONFIRMED template's ``$confirmed_via``
+        # placeholder resolves at render time.
         profile, transition_callback = await state_transition(
             db,
             profile,
@@ -7948,6 +7980,7 @@ async def verify_and_confirm(
                 "confirmed_at": now,
                 "confirmed_via": "magic_link",
             },
+            event_metadata={"confirmed_via": "magic_link"},
         )
     except BusinessRuleViolation as e:
         raise BadRequest(str(e))

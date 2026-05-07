@@ -108,7 +108,7 @@ MILESTONE_EVENTS: tuple[dict, ...] = (
     {
         "event": "ADMISSION_RESULT_PUBLISHED",
         "title": "Kết quả tuyển sinh đã công bố",
-        "message": "Kết quả tuyển sinh đã được công bố lúc $published_at. $decision_summary",
+        "message": "Kết quả tuyển sinh đã được công bố lúc $published_at_iso. $decision_summary",
         "link": "/admissions/$application_id",
         "channels": ("browser", "email", "zalo"),
         "resolver": "lead_owner",
@@ -148,7 +148,7 @@ MILESTONE_EVENTS: tuple[dict, ...] = (
     {
         "event": "ADMISSION_WAITLIST_PROMOTED",
         "title": "Bạn đã được gọi từ danh sách chờ",
-        "message": "Hồ sơ #$application_id đã được gọi nhập học từ danh sách chờ lúc $promoted_at.",
+        "message": "Hồ sơ #$application_id đã được gọi nhập học từ danh sách chờ lúc $promoted_at_iso.",
         "link": "/admissions/$application_id",
         "channels": ("browser", "email", "zalo"),
         "resolver": "lead_owner",
