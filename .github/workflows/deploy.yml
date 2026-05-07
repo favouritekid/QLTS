@@ -91,7 +91,18 @@ jobs:
       # ---------------------------------------------------------------------
       - name: Backend — Notification event coverage
         working-directory: Backend_FastAPI
-        run: python -m app.scripts.check_notification_event_coverage
+        # Phase1-Hotfix-4 (2026-05-07) — added --allow-deferred to mirror
+        # the policy already shipped in admission-contract-check.yml. The
+        # 4 deferred events have no current legacy writer and are tracked
+        # in ``state_service.DEFERRED_ADMISSION_EVENTS``; without the
+        # flag this gate exits 1 cho mọi cutover-branch deploy attempt
+        # (12 events declared, 4 không reachable). When Phase 3 wires
+        # the writers, drop the corresponding name(s) from this flag —
+        # the lock test ``test_check_notification_event_coverage_deferred
+        # .py`` fails until the Python set is updated to match.
+        run: |
+          python -m app.scripts.check_notification_event_coverage \
+            --allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK
 
       - name: Backend — Notification parity (unit)
         working-directory: Backend_FastAPI
