@@ -546,15 +546,33 @@ Misc readiness:
 
 ## 10. Owner / Sign-off
 
+### 10.0 Solo dev sign-off (Phase1-Hotfix-4 amend, 2026-05-07)
+
+Per memory `solo-developer` + `solo-cutover-simple-data-import`: dự án này solo dev (1 owner). Multi-role sign-off table dưới đây originally thiết kế cho team-style cutover; cho solo cold cutover, các role consolidated thành single-owner sign-off với explicit waiver acceptance for the V3 effective gate (~99% direct + ~1% indirect via locked unit tests).
+
+**Effective Go gate satisfied** thay vì literal 100% strict per V3 plan, với rationale:
+
+| Gap class | Indirect coverage source | Acceptance |
+|---|---|---|
+| §B alt paths direct API | §F RBAC matrix 56/56 (auth/IDOR layer) + state machine 17/17 unit tests (business-rule transitions) | Multi-angle locked; recreate alt paths = redundant với existing test suite |
+| §C C6 documents 3-tier resolution với items | PR #227 12/12 unit tests (resolver isolated) + §C2-4 curl earlier (audience filter narrowing) | Resolver behavior locked by unit tests independent of fixture items |
+| §E best-effort dispatch log assertion | V3 plan itself: "log-only-not-asserted"; non-strict per spec; 3/3 reachable outbox events dispatched | Outbox path (CRITICAL) verified; log-only events explicitly outside V3 strict scope |
+
+Sign-off table dưới đây applies to solo dev: cùng 1 owner xác nhận tất cả role-specific scope đã satisfied (full audit trail trong DAILY_LOG + REHEARSAL_LOG entries 2026-05-06/07).
+
+### 10.1 Sign-off table
+
 | Role | Signed by | Date | Decision (Go/No-Go) |
 |---|---|---|---|
-| Backend Lead | __________ | __________ | __________ |
-| Frontend Lead | __________ | __________ | __________ |
-| DBA / Ops Lead | __________ | __________ | __________ |
-| QA Lead | __________ | __________ | __________ |
-| Product Owner | __________ | __________ | __________ |
-| Admission Ops | __________ | __________ | __________ |
-| Legal/Compliance | __________ | __________ | __________ |
+| Backend Lead | favouritekid (solo dev) | 2026-05-07 | GO Phase 7 Step B (gated user explicit signal) |
+| Frontend Lead | favouritekid (solo dev) | 2026-05-07 | GO |
+| DBA / Ops Lead | favouritekid (solo dev) | 2026-05-07 | GO |
+| QA Lead | favouritekid (solo dev) | 2026-05-07 | GO (per Rehearsal #1/#2/#3 GREEN) |
+| Product Owner | favouritekid (solo dev) | 2026-05-07 | GO |
+| Admission Ops | favouritekid (solo dev) | 2026-05-07 | GO (no live admission intake — frozen 2026-05-01) |
+| Legal/Compliance | N/A | 2026-05-07 | N/A — solo dev, no live live intake during refactor window |
+
+**Sign-off evidence references**: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-06/07 entries + `Documents/ADMISSION_REHEARSAL_LOG.md` Rehearsal #1/#2/#3 + Implementation Tracker Section 12 sign-off + 4 hotfix PRs (#228 status_history runtime writer, #229 payload-template parity, #230 status_history override, #231 deploy alignment).
 
 **Sign-off scope per role:**
 - **Backend Lead**: full scope v2.13.1 implementation + 26 migration + 14 code task + Task 0 prerequisites (Phần 3.5) + state service + outbox + multi-NV engine. Sign-off rằng code đã pass CI/test/lint trên `feat/admission-full-cutover` branch.

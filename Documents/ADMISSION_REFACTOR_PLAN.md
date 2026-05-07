@@ -4305,7 +4305,7 @@ Verify mọi downstream service handle CẢ 3 case profile:
 - AuditReasonDialog: T10/T11/T12 (officer/admin)/T17 require reason ≥10 chars.
 - Magic link flow: candidate confirm fanout `transitioned_by_lead_id` đúng.
 
-**Coverage gate:** 
+**Coverage gate:**
 - Tối thiểu 80% line coverage cho `admission_scoring_service.py`.
 - Tối thiểu 90% coverage cho `admission_state_service.py` + `admission_event_mapping.py` (state transition + projection).
 - 100% pass `check_notification_event_coverage.py` script (12 events).
