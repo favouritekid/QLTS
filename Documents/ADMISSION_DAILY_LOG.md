@@ -56,6 +56,86 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-07 — Hotfix #5 SHIPPED + Rehearsal #6 V3 re-run GREEN 🎯
+
+### #184 Phase1-Hotfix-5 — docker-compose env passthrough for 3 cutover gate flags
+
+**PR**: [#232](https://github.com/favouritekid/QLTS/pull/232) merged squash `68e85c3d` (2026-05-07T13:35Z) base `feat/admission-full-cutover`. Closure tracking commit `637fe850` (Rehearsal #6 entry).
+
+**Bug fixed**: `scripts/deploy.sh:201-203` `export RUN_*=false` had NO PATH into backend/celery containers — `docker-compose.yml` `environment:` blocks did NOT reference 3 cutover keys, AND `.env.production` did NOT define them. Compose silently dropped them → `COLD_CUTOVER=true` mode silently broken (entrypoint auto-ran alembic + sync + Casbin policy load before operator could run RUNBOOK §7.2 manual sequence).
+
+**Fix**: Added `RUN_MIGRATIONS_ON_STARTUP / RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP / RUN_CASBIN_LOAD_ON_STARTUP: ${VAR:-true}` to backend + celery-worker + celery-beat `environment:` blocks. Safe `:-true` default preserves routine deploy; `COLD_CUTOVER=true ./scripts/deploy.sh` exports propagate through compose substitution to entrypoint.
+
+**Celery scope verified**: `Backend_FastAPI/Dockerfile:56` sets `ENTRYPOINT = /app/docker-entrypoint.sh` inherited by all 3 services. Compose `command:` overrides ONLY CMD. Both celery-worker (command=celery worker) + celery-beat (command=celery beat) DO run entrypoint gates before exec.
+
+**Verification**:
+* R5.1 routine substitution: 9/9 instances `"true"` (3 flags × 3 services) — routine deploy unchanged
+* R5.2 cutover substitution: 9/9 instances `"false"` — operator manual sequence enabled
+* R5.3 negative test pre-fix: grep RUN_ on resolved config = empty → confirms bug was real
+
+### #184 V3 runtime test FULL re-run — Rehearsal #6 GREEN
+
+**Trigger**: User explicit "thực hiện lại một lần nữa kịch bản v3 runtime test để đảm bảo không còn lỗi hoặc edge case, drift hoặc lệch contract nữa" post Hotfix #5.
+
+**Coverage**:
+* P1 Unit + parity suite: 59/59 PASS (status_history runtime writer + dispatch payload-template parity + LEGACY_STATUS_TO_EVENT lock + DEFERRED_ADMISSION_EVENTS lock)
+* P2 §A Schema invariants: 23/23 PASS (3 originally-FAIL = V3 plan template column-name drift; schema state correct)
+* P3 §B Runtime workflow live HTTP: 6/7 PASS via cookie auth on profile 22/23/19 dev DB
+  * approved (B1) → overridden (B2) → enrolled (B3) chain via /approve + /override + /enroll (admin)
+  * draft → withdrawn (B7) — PR #229 metadata enrichment visible: `from_status`, `withdrawn_by_role`, `reason`
+  * submitted → rejected (B8) + submitted → revision_requested (B10)
+  * **B9 /resubmit FAILED** with `BUG_RESUBMIT_NOTES_NONE` (P3 pre-existing) — atomicity intact (rollback)
+* P4 §C Storefront filter: structure GREEN (column + GIN + ENUM + 3-tier doc resolution); applicable_to backfill BY DESIGN deferred Phase 3 per PLAN line 355 P2 fix #7
+* P5 §D Multi-year: single-year functional via admission_profile.academic_year; Wave 4 lead 1-many composite UNIQUE deferred per Wave roadmap
+* P6 §E Notification dispatch: 4 outbox events drained 100% by Celery worker + 5 in-memory notifications written
+* P7 §F RBAC matrix: 24/24 role boundaries intact (3 role × 8 endpoint); F4/F5 422 = test data drift (sent reason "F4"/"F5" 2-char vs schema min_length=10), NOT FE drift
+* P8 §G Frontend HTTP smoke: all routes 200 (auth-gated 307→200, /tuyen-sinh public 200); Chrome MCP interactive deferred
+* P9 Hotfix #5 substitution re-validate: 9/9 routine + 9/9 cutover unchanged post-commit
+
+**No regressions from Hotfix #5.** Status_history runtime writer (PR #228 + #230) + PR #229 metadata enrichment + dispatch payload-template parity all re-verified end-to-end via live HTTP.
+
+### NEW finding logged for post-cutover follow-up
+
+**`BUG_RESUBMIT_NOTES_NONE`** (P3 pre-existing, NOT introduced by Hotfix #5):
+* File: `Backend_FastAPI/app/services/admission_service.py:6267`
+* Bug: `data.get('notes', 'No notes')[:50]` returns None when key=None present (Pydantic validates `notes: Optional[str] = None`, so `data['notes']` is None NOT missing). Slicing None → TypeError 500.
+* Atomicity: outer transaction rolled back fully — status_history NOT written, profile status NOT mutated. Clean.
+* Fix candidate: `(data.get('notes') or 'No notes')[:50]`.
+* Memory: `project_resubmit_notes_none_bug.md` saved for post-cutover batch follow-up.
+
+### 4-issue handling matrix synthesis
+
+| Issue | Severity | Action |
+|---|---|---|
+| BUG_RESUBMIT_NOTES_NONE | P3 | Defer post-cutover batch follow-up PR (~1.5h scope: bug fix + UPPERCASE orphan rules cleanup + Wave 4 #15d FE legacy field drop + M-1-15 helper + V3 plan update) |
+| F4/F5 422 admin | Test artifact | Defer V3 plan update post-cutover; FE Zod mirror correct, NO production action |
+| §C applicable_to NULL 0/52 | By design Phase 3 | NO action — NULL OR-branch contract preserves legacy applies-to-all per PLAN line 355 |
+| §D Wave 4 deferred | Per Wave roadmap | NO action — single-year mode functional |
+
+### Pre-cutover gate verifications (post-Rehearsal-6)
+
+* F4/F5 schema drift: ✅ Backend `RejectRequest.reason` + `OverrideRequest.reason` `min_length=10` + FE `rejectRequestSchema z.string().min(10)` mirror correct + override no FE UI exposed yet
+* RUNBOOK §7.2 applicable_to backfill: ✅ By design Phase 3 deferred (NULL OR-branch contract per PLAN line 355) — RUNBOOK §7.2 T+3:00 backfill list does NOT include applicable_to (correct per spec)
+
+### Pattern note — Hotfix-class commit tracking convention
+
+Per `admission-cutover-subpr-sop` SOP, sub-PR 4-step post-merge sequence applies to feature/migration sub-tasks. Hotfix-class commits (#1-5) under cutover umbrella don't have pre-existing thematic checkbox in #184 issue body or TRACKER row — established convention since Hotfix #1. Tracking lives in REHEARSAL_LOG entries (#3-#6) + RUNBOOK references. Step 2 issue tick + Step 3 TRACKER row N/A; Step 4 DAILY_LOG entry (this entry) + parent commit closure (`637fe850`) sufficient.
+
+### Action — Phase 7 Step B trigger gated on user GO signal
+
+| Pre-cutover prep | Status |
+|---|---|
+| 4 P0 hotfix arc closed | ✅ PR #228 + #229 + #230 + #231 |
+| Hotfix #5 env propagation | ✅ PR #232 squash `68e85c3d` |
+| RUNBOOK §10 effective Go gate waiver | ✅ Cleanup commit `0ccdaa5a` |
+| Rehearsal #4 / #5 / #6 GREEN | ✅ Documented |
+| Pre-existing P3 bug logged | ✅ Memory `resubmit-notes-none-bug.md` |
+| Pre-cutover verification matrix | ✅ Both findings classified, NO P1 |
+
+**Phase 7 Step B trigger STILL gated** on user explicit GO signal per memory `push-approval-required` + user explicit gate "không deploy mà không có approval của tôi". When ready: `COLD_CUTOVER=true ./scripts/deploy.sh` per RUNBOOK §7.2 (T+1:30 + T+3:00 + T+3:15 + T+3:30 manual sequence).
+
+---
+
 ## 2026-05-07 — Option C closure: §G2 closed + V3 effective gate satisfied 🎯
 
 ### #184 §G2 /leads list direct smoke + Rehearsal #3 GREEN — Phase 7 Step B unblocked
