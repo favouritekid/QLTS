@@ -56,6 +56,130 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-07 — 🎯🎯🎯 ADMISSION CUTOVER SHIPPED — Phase 7 Step B COMPLETE 🎯🎯🎯
+
+### #184 Production cutover deploy — Phase 1 Schema 100% LIVE on prod
+
+**Window**: 2026-05-07 21:50 → 22:18 UTC+7 (~28 phút thực, dưới 4-6h estimate per RUNBOOK §7.1).
+
+**Phase A — Merge feat → main** (~15 min):
+
+| Step | Result |
+|---|---|
+| A.1 Pre-merge feat history tag | ✅ `v2.13.2-admission-cutover-feat-history` (`ca2fa46a`) — pushed origin |
+| A.2 Open cutover PR #233 | ✅ 37,393 additions / 537 deletions / 171 files |
+| A.3 Squash merge → main | ✅ Squash SHA `fc75517d` |
+| A.4 Tag main squash | ✅ `v2.13.2-admission-cutover` (`fc75517d`) — pushed origin |
+| A.5 Cancel CI auto-deploy | ✅ Run #25503559533 cancelled |
+
+CI dep-audit fail (Mako 1.3.10 CVE-2026-44307 + python-multipart 0.0.26 CVE-2026-42561) confirmed pre-existing on both branches per memory `outstanding-debt` — non-blocking, deferred to post-cutover follow-up batch PR.
+
+**Phase B — Manual SSH cold cutover** (~10 min):
+
+| Time | Action | Result |
+|---|---|---|
+| ~21:55 | B.1 ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true append `.env.production` | ✅ flag written |
+| ~22:00 | B.2 Final pg_dump (just-in-time) `prod_dump_FINAL_20260507_215846.dump` | ✅ md5 `17a5c8f2` dual location |
+| ~22:05 | B.3 `COLD_CUTOVER=true ./scripts/deploy.sh` | ⚠️ Routine flow (script self-update issue — see below) |
+| ~22:10 | Manual envsubst regen + nginx reload | ✅ `set $freeze_check "$request_method:true"` baked |
+| ~22:12 | POST /api/admissions/test → 503 NGINX_ADMISSION_FROZEN | ✅ writes blocked |
+| ~22:13 | `alembic upgrade heads` (manual completion of Wave 5 chain) | ✅ `_archived_notification_outbox` created |
+| ~22:17 | B.4 ADMISSION_FROZEN=false + nginx reload + force-recreate backend | ✅ writes UNFROZEN |
+| ~22:18 | Smoke verify | ✅ ALL containers healthy |
+
+**Script self-update issue surfaced**:
+
+`./scripts/deploy.sh` was OLD (pre-Hotfix-4) on prod when invoked. Step 2 git pull updated the file ON DISK to NEW (post-Hotfix-4 with COLD_CUTOVER detection) but bash had already loaded OLD into memory. Result:
+* COLD_CUTOVER detection (lines 55-71 of NEW) NOT executed
+* Step 6 ran routine alembic upgrade head AUTO (instead of skipping for operator manual sequence)
+* Step 8 ran routine env (RUN_*=true defaults) → entrypoint loaded Casbin auto + sync_notification_rules auto
+
+**Outcome**: cutover state ACHIEVED via routine flow rather than operator-controlled sequence. Migrations applied successfully without errors. Safety net (operator pause checkpoint) was not exercised but also not needed — zero failures during apply.
+
+**Lesson logged**: Hotfix #4 deploy.sh changes only take effect FROM SECOND deploy onwards. Document in `ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` for future cutovers — pre-stage updated deploy.sh BEFORE invoking, OR run via different path (e.g., `./local_backup/deploy.sh.NEW` copy).
+
+### Schema cutover state verified
+
+| Item | Pre-cutover | Post-cutover | Status |
+|---|---|---|---|
+| Alembic head | `admstrict01` | `phase1_15a` (Wave 3-E final) | ✅ |
+| Schema migrations applied | 0 / 19 | 19 / 19 (Wave 1+2+3+5) | ✅ |
+| `admission_audience` ENUM | — | 5 values | ✅ |
+| `admission_path.applicable_to` + GIN | — | Present | ✅ |
+| `admission_profile_status_history` + 9 backfill rows | — | 9 / 9 (1 per profile) | ✅ |
+| `notification_outbox` table | — | Present | ✅ |
+| `_archived_admission_profile` | — | Present | ✅ |
+| `_archived_notification_outbox` | — | Present (post `upgrade heads`) | ✅ |
+| `system_config` table | — | Present | ✅ |
+| Composite UNIQUE `(lead_id, academic_year)` | — | Present | ✅ |
+| `admission_profile.academic_year` NOT NULL | — | Present (all 9 = 2026) | ✅ |
+| `casbin_rule.v3='allow'` | — | 210 rows | ✅ |
+| `casbin_rule.v3='deny'` (accountant) | — | 6 rows | ✅ |
+| GPA + graduation_year backfill (where source) | — | Populated | ✅ |
+| `uses_choice_engine` default false | — | All 9 = false | ✅ |
+| Notification rules (`ADMISSION_*`) | — | 12 UPPERCASE seeded (phase1_19c) | ✅ |
+| Celery beat `dispatch_pending_outbox` 30s | — | Scheduled | ✅ |
+
+### Containers post-cutover
+
+```
+qlts-backend-1         Up 51s (healthy)        qlts-backend
+qlts-celery-beat-1     Up 9 min                qlts-celery-beat
+qlts-celery-worker-1   Up 9 min                qlts-celery-worker
+qlts-frontend-1        Up 9 min (healthy)      qlts-frontend
+qlts-nginx-1           Up 11 days (healthy)    nginx:1.27-alpine
+qlts-postgres-1        Up 4 weeks (healthy)    postgres:16-alpine
+qlts-redis-1           Up 4 weeks (healthy)    redis:7-alpine
+qlts-certbot-1         Up 4 weeks              certbot/certbot
+```
+
+### Smoke verification
+
+```
+GET  /health              → 200 OK
+GET  /tuyen-sinh          → 200 (storefront public)
+GET  /admissions          → 307 (auth redirect)
+POST /api/admissions      → 403 CSRF_TOKEN_MISSING (security middleware OK, NOT 503 freeze)
+```
+
+POST 403 CSRF == ADMISSION WRITES ACCEPTED + security middleware enforcing token = system OPERATIONAL.
+
+### Pending T+24h
+
+Per RUNBOOK §7.2 line 380-385 — flip 3 cutover gates về routine ON STARTUP để future routine deploy auto migrate:
+
+```bash
+# In .env.production:
+RUN_MIGRATIONS_ON_STARTUP=true (or unset)
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=true (or unset)
+RUN_CASBIN_LOAD_ON_STARTUP=true (or unset)
+```
+
+(Currently NOT explicitly set on prod `.env.production` — defaults from docker-compose.yml `${VAR:-true}` Hotfix #5 substitution apply).
+
+### Post-cutover follow-up batch PR (~1.5h scope)
+
+1. `BUG_RESUBMIT_NOTES_NONE` fix — `admission_service.py:6267` `(data.get('notes') or 'No notes')[:50]`
+2. dep-audit upgrade Mako 1.3.10 → 1.3.12 + python-multipart 0.0.26 → 0.0.27 (CVE pre-existing)
+3. UPPERCASE orphan rules cleanup — `DELETE FROM notification_rule WHERE event ~ '^ADMISSION_[A-Z]'` (12 UPPERCASE duplicate of canonical lowercase 12)
+4. Wave 4 #15d — drop legacy `admission_profile` singular field BE schema dual response + FE types
+5. M-1-15-helper — `Lead.last_terminal_admission_profile` per PLAN line 903
+6. `alembic_version` table investigation — verify multi-head merge complete; phase1_19e marker chain
+7. `deploy.sh` self-update fix — pre-stage updated script before invoke
+
+### Solo dev sign-off
+
+| Role | Signed by | Date | Decision |
+|---|---|---|---|
+| Backend Lead / DBA / Ops Lead / QA Lead / Product Owner / Admission Ops | favouritekid (solo dev) | 2026-05-07 22:18 UTC+7 | 🎯 CUTOVER SHIPPED — Phase 7 Step B COMPLETE |
+| Legal/Compliance | N/A — no live admission intake | 2026-05-07 | N/A |
+
+**Cumulative effort**: 5-day solo cold cutover 2026-05-01 → 2026-05-07. 100 commits squashed into PR #233 (`fc75517d`). 19 Phase 1 migrations + Wave 4 + Wave 6 + 5-hotfix arc + 6 rehearsals + restore rehearsal + 4-layer fresh backup + smoke verify.
+
+🎯 **PHASE 1 SCHEMA 100% LIVE ON PROD.**
+
+---
+
 ## 2026-05-07 — Phase 7 Step A re-validate + fresh prod backup arc CLOSED 🎯
 
 ### #184 Phase 7 Step A re-validate — fresh prod backup all 4 layers
