@@ -1,0 +1,50 @@
+# Pre-commit hooks — Admission Contract Enforcement
+# ===================================================
+# Cold Cutover #16 + CI tooling extension. Mirrors the two static
+# analysis gates in ``.github/workflows/admission-contract-check.yml``
+# so dev gets the same feedback locally before pushing.
+#
+# Activation: ``pre-commit install`` once per clone; hooks then run
+# automatically on every ``git commit`` that touches admission /
+# notification / event-related files. Both hooks bypass-able via
+# ``git commit --no-verify`` for emergency hotfixes — CI is the
+# authoritative gatekeeper, the local hook is fast feedback.
+#
+# Spec source: ``Documents/archive/PR_DRAFTS_2026-05-01.md`` line
+# 114; both hooks point at the same Python entry-points used by CI.
+
+repos:
+  - repo: local
+    hooks:
+      - id: admission-status-assignment
+        name: "Admission contract: block direct profile.status writes"
+        entry: python -m app.scripts.check_status_assignment
+        language: system
+        pass_filenames: false
+        files: |
+          (?x)^Backend_FastAPI/(
+            app/services/admission.*\.py
+            | app/services/admission_state_service\.py
+            | app/scripts/check_status_assignment\.py
+            | \.contract-allowlist\.yaml
+          )$
+        # The script walks the whole admission tree — it doesn't take
+        # individual file paths. ``pass_filenames: false`` keeps the
+        # shape clean and matches the CI workflow command exactly.
+
+      - id: admission-notification-coverage
+        name: "Admission contract: notification event coverage"
+        entry: |
+          python -m app.scripts.check_notification_event_coverage
+            --allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK
+        language: system
+        pass_filenames: false
+        files: |
+          (?x)^Backend_FastAPI/(
+            app/services/admission.*\.py
+            | app/services/notification.*\.py
+            | app/core/events.*\.py
+            | app/core/event_catalog\.py
+            | app/core/notification_seed_defaults\.py
+            | app/scripts/check_notification_event_coverage\.py
+          )$

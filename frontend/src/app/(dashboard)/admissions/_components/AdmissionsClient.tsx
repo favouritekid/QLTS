@@ -131,11 +131,22 @@ const STATUS_OPTIONS = [
   { value: "draft", label: "Nháp" },
   { value: "submitted", label: "Chờ duyệt" },
   { value: "resubmitted", label: "Đã nộp lại" },
+  // phase1_11 (#184 Wave 3 PR-3A) — 4 status mới + 3 status
+  // legacy bị thiếu trong filter chooser cũ. Listed in workflow
+  // order (draft → submit → review → approve/admit/waitlist/
+  // publish → reject → revise → confirm → enroll → withdraw +
+  // override side-channel).
+  { value: "reviewing", label: "Đang xét" },
   { value: "approved", label: "Đã duyệt" },
+  { value: "admitted", label: "Đậu" },
+  { value: "waitlisted", label: "Chờ ghế" },
+  { value: "result_published", label: "Đã công bố KQ" },
   { value: "rejected", label: "Từ chối" },
+  { value: "revision_requested", label: "Yêu cầu bổ sung" },
   { value: "confirmed", label: "Đã xác nhận" },
   { value: "overridden", label: "Đã override" },
   { value: "enrolled", label: "Đã nhập học" },
+  { value: "withdrawn", label: "Đã rút" },
 ]
 
 const PAYMENT_STATUS_OPTIONS = [
@@ -152,15 +163,44 @@ const PAYMENT_STATUS_OPTIONS = [
  * profiles that are stuck waiting on the applicant without hunting through
  * a mixed "Đã duyệt" bucket. `overridden` stays with `approved` because it's
  * still an admin-driven state awaiting enroll.
+ *
+ * phase1_11 (#184 Wave 3 PR-3A) — 14-state display readiness:
+ *
+ * * ``reviewing`` joins ``pending`` (officer đang xét, chưa quyết).
+ * * ``revision_requested`` joins ``pending`` (đã nộp + yêu cầu bổ sung,
+ *   chờ ứng viên fix; UI consistent với resubmitted parallel state).
+ * * ``admitted`` joins ``approved`` tab (positive admission outcome,
+ *   choice engine equivalent of legacy ``approved``).
+ * * ``waitlisted`` gets a NEW dedicated tab "Chờ ghế" between
+ *   ``approved`` and ``confirmed`` chronologically (admin needs
+ *   visibility into the wait queue separately from approved batch).
+ * * ``withdrawn`` joins ``rejected`` tab (negative outcome — admin
+ *   already filters these together via ``useAdmissionsFilter``).
+ * * ``result_published`` is NOT in any tab — broadcast marker
+ *   reachable only via "Tất cả" filter or the dedicated drop-down
+ *   ``STATUS_OPTIONS`` (Codex Q1 chốt: not per-profile workflow target).
+ *
+ * MUST sync with ``useAdmissionsFilter.STATUS_TABS`` — drift
+ * causes inconsistent filter behavior between tabs UI and the
+ * versioned-storage hook.
  */
 const STATUS_TABS = [
   { key: "all", label: "Tất cả", statuses: [] as string[] },
   { key: "draft", label: "Nháp", statuses: ["draft"] },
-  { key: "pending", label: "Chờ duyệt", statuses: ["submitted", "resubmitted"] },
-  { key: "approved", label: "Đã duyệt", statuses: ["approved", "overridden"] },
+  {
+    key: "pending",
+    label: "Chờ duyệt",
+    statuses: ["submitted", "resubmitted", "reviewing", "revision_requested"],
+  },
+  {
+    key: "approved",
+    label: "Đã duyệt",
+    statuses: ["approved", "admitted", "overridden"],
+  },
+  { key: "waitlisted", label: "Chờ ghế", statuses: ["waitlisted"] },
   { key: "confirmed", label: "Đã xác nhận", statuses: ["confirmed"] },
   { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
-  { key: "rejected", label: "Từ chối", statuses: ["rejected"] },
+  { key: "rejected", label: "Từ chối", statuses: ["rejected", "withdrawn"] },
 ] as const
 
 // =============================================================================

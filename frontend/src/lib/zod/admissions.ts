@@ -491,8 +491,37 @@ export const admissionProfileResponseSchema = z.object({
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
-  // Status (extended for async-first workflow)
-  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn"]),
+  // Status (extended for async-first workflow).
+  //
+  // STRICT PARSE — Stage 3 of the 3-stage deploy choreography for
+  // M-1-11 (status CHECK extend 10 → 14 state) per PLAN line
+  // 188-191 v2.10 fix #7. Flipped from permissive ``z.union(enum,
+  // z.string())`` to strict ``z.enum`` of exactly 14 values after
+  // Wave 3-A ``phase1_11`` shipped (PR #219 squash 55f3eb41).
+  //
+  // 10 legacy + 4 new (choice-engine milestones per PLAN §3.3.b):
+  //   reviewing / result_published / admitted / waitlisted.
+  //
+  // Strict enum semantics:
+  //   * Backend response with unknown status string → Zod parse
+  //     failure → React Query reports error → user sees error UI,
+  //     not a malformed render. Force the contract end-to-end.
+  //   * Tests must assert this rejection so future drift (BE adds
+  //     a 15th state without coordinating FE) is caught at CI, not
+  //     in prod.
+  //
+  // Surfaces already aligned to 14 states (no follow-up needed):
+  //   * ``status-badge.config.ts`` — 14 entries (PR #212 squash
+  //     2c411306 Wave 3 PR-3A pre-flight).
+  //   * ``AdmissionsClient.tsx`` STATUS_TABS + STATUS_OPTIONS —
+  //     14 entries (PR #212).
+  //   * ``useAdmissionsFilter.ts`` STATUS_TABS — 14 entries (PR
+  //     #212, drift-guarded by ``AdmissionsClient.status-tabs.test``).
+  status: z.enum([
+    "draft", "submitted", "resubmitted", "approved", "rejected",
+    "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn",
+    "reviewing", "result_published", "admitted", "waitlisted",
+  ]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
   applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
@@ -557,6 +586,52 @@ export const admissionProfileResponseSchema = z.object({
   
   // Profile completion percentage (0-100)
   completion_percent: z.number().int().min(0).max(100).default(0),
+
+  // =========================================================================
+  // phase1_09a (#184 Wave 2 PR-2A wired in FE-zod-eligibility) —
+  // 4 eligibility scalar fields. BE migration ships 4 nullable
+  // columns + backfills 2 (gpa_overall + graduation_year via
+  // academic_history JSON). conduct + health_category STAY NULL
+  // post-migration — admin reviews via UI Phase 1+2.
+  // =========================================================================
+  //
+  // FE Zod parse parity per Codex Guard 4 — DB shipped in PR-2A
+  // (squash 2d8b52f1) but FE Zod was deferred to this PR per the
+  // Phase 3 deploy choreography Stage 1 contract (FE permissive
+  // BEFORE BE M-1-11 status CHECK extend). All 4 nullable +
+  // optional so legacy responses without the fields still parse.
+  //
+  // Range guards mirror PLAN + alembic migration:
+  // * gpa_overall: 0..10 (numeric(4,2) on the wire — string-or-
+  //   number depending on BE serializer). Coerce because Pydantic
+  //   `Numeric` typically serializes as string in JSON.
+  // * conduct: enum TB/KHA/TOT (PLAN line 818).
+  // * health_category: smallint 1..4, where 1 = best (PLAN line 819).
+  // * graduation_year: smallint 1900..2100 (PLAN line 2795).
+  gpa_overall: z.coerce
+    .number()
+    .min(0)
+    .max(10)
+    .nullable()
+    .optional(),
+  conduct: z
+    .enum(["TB", "KHA", "TOT"])
+    .nullable()
+    .optional(),
+  health_category: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .nullable()
+    .optional(),
+  graduation_year: z
+    .number()
+    .int()
+    .min(1900)
+    .max(2100)
+    .nullable()
+    .optional(),
   
   // Phase 0.9: Validation Summary (Grouped Errors for UX)
   validation_summary: z.object({

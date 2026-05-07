@@ -85,6 +85,30 @@ class EventDefinition:
     # Default "sensitive" forces explicit opt-in for anything that should broadcast.
     privacy: Literal["public", "sensitive"] = "sensitive"
 
+    # B2.1 (admission cold-cutover refactor) — outbox routing flags.
+    # Both default False so existing 200+ events keep their current behaviour
+    # (additive extension). Set to True only on the 12 ADMISSION_* milestone
+    # events whose contracts demand them (PLAN §3.3.d table line 1644-1657).
+    #
+    # - `requires_outbox=True` → `dispatch_event()` (B2.3) MUST INSERT a
+    #   `notification_outbox` row inside the caller's transaction; the worker
+    #   beat task `dispatch_pending_outbox` (T0-4b) drains the queue with
+    #   delivery guarantee. Caller does NOT receive a post-commit callback.
+    # - `requires_outbox=False` → `dispatch_event()` returns a best-effort
+    #   post-commit callback that the router awaits after `db.commit()`. Same
+    #   semantics as the existing `safe_dispatch` path.
+    # - `bypass_consent_check=True` → wrapper calls into `dispatch()` /
+    #   `safe_dispatch()` with `skip_preference_check=True` for in-app + email
+    #   only (Quy chế Bộ GD&ĐT bắt buộc thông báo). Zalo/SMS bypass is
+    #   FUTURE-GATED — Q7 chốt 2026-05-01 calls for a legal flag (working
+    #   name `zalo_template_approved`) that does NOT exist in the codebase
+    #   yet. B2.3 (`dispatch_event` wrapper) and B2.4 / T0-4b (worker)
+    #   either honor consent for Zalo/SMS until the flag ships, or wire
+    #   the flag at that time. Do NOT skip Zalo/SMS consent based on
+    #   `bypass_consent_check` alone.
+    requires_outbox: bool = False
+    bypass_consent_check: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Helpers — variable / condition shortcuts
@@ -728,6 +752,305 @@ _ADMISSION_EVENTS: tuple = (
         dedup_key_template="confirm_hard_locked:${token_id}:${lock_count}",
         link_strategy="/admissions/${application_id}",
         privacy="sensitive",
+    ),
+
+    # =========================================================================
+    # B2.1 — admission cold-cutover refactor: 12 milestone events.
+    # See `Documents/ADMISSION_REFACTOR_PLAN.md` §3.3.d table line 1644-1657
+    # (audience / outbox / bypass_consent matrix). 7 events carry
+    # `requires_outbox=True`; 5 of those carry `bypass_consent_check=True`.
+    # All keep `category="application"` so admin notification UI groups them
+    # with the existing application/profile lifecycle events.
+    # =========================================================================
+
+    # 1. T1 — candidate submits profile.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_PROFILE_SUBMITTED,
+        category="application",
+        display_name="Hồ sơ tuyển sinh đã nộp",
+        description="Candidate submitted an admission profile (T1). Officer + candidate audience.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("submitted_at_iso", "string", "ISO datetime when submit landed"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=80,
+        dedup_key_template="admission:${application_id}:submitted",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=False,
+        bypass_consent_check=False,
+    ),
+
+    # 2. T3, T4 — officer asks for revision.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_REVISION_REQUESTED,
+        category="application",
+        display_name="Yêu cầu bổ sung hồ sơ",
+        description="Officer requested a revision (T3 from reviewing, T4 from submitted). Candidate audience.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("revision_reason", "string", "Lý do yêu cầu chỉnh sửa"),
+            _var("allowed_fields", "array", "Field paths candidate được sửa", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=70,
+        dedup_key_template="admission:${application_id}:revision_requested",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=False,
+        bypass_consent_check=False,
+    ),
+
+    # 3. T5 — candidate resubmits after revision.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_RESUBMITTED,
+        category="application",
+        display_name="Hồ sơ đã được nộp lại",
+        description="Candidate resubmitted after revision (T5). Officer audience.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("resubmit_notes", "string", "Ghi chú khi nộp lại", False),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=80,
+        dedup_key_template="admission:${application_id}:resubmitted",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=False,
+        bypass_consent_check=False,
+    ),
+
+    # 4. T6 — admin publishes admission result (broadcast batch).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_RESULT_PUBLISHED,
+        category="application",
+        display_name="Công bố kết quả tuyển sinh",
+        description="Admin published the admission result batch (T6). Officer + candidate audience. Critical: outbox + bypass consent.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("published_at_iso", "string", "ISO datetime kết quả công bố"),
+            _var("decision_summary", "string", "Tóm tắt quyết định (admitted/waitlisted/rejected)", False),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:result_published",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=True,
+    ),
+
+    # 5. T7 — system marks profile admitted (per-profile after T6 batch).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_DECISION_ADMITTED,
+        category="application",
+        display_name="Trúng tuyển",
+        description="System marked profile admitted (T7). Candidate audience. Critical: outbox + bypass consent.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("choice_priority", "integer", "NV thứ mấy được trúng (1..5)", False),
+            _var("path_id", "integer", "ID admission_path trúng", False),
+            _var("total_score", "string", "Điểm tổng kết", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=10,
+        dedup_key_template="admission:${application_id}:admitted:${choice_priority}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=True,
+    ),
+
+    # 6. T8 — system marks profile waitlisted.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_DECISION_WAITLISTED,
+        category="application",
+        display_name="Trong danh sách dự bị",
+        description="System marked profile waitlisted (T8). Candidate audience. Critical: outbox + bypass consent.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("waitlist_rank", "integer", "Thứ hạng dự bị", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:waitlisted",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=True,
+    ),
+
+    # 7. T9 — system marks profile rejected.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_DECISION_REJECTED,
+        category="application",
+        display_name="Không trúng tuyển",
+        description="System marked profile rejected (T9). Candidate audience. Critical: outbox + bypass consent.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("reject_reason_codes", "array", "Mã lý do từ chối", False),
+            _var("from_waitlist", "boolean", "True khi từ waitlist → rejected (T11 gộp T9)", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:rejected",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=True,
+    ),
+
+    # 8. T10 — admin promotes waitlist → admitted.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_WAITLIST_PROMOTED,
+        category="application",
+        display_name="Được gọi từ danh sách dự bị",
+        description="Admin promoted waitlisted profile to admitted (T10). Candidate audience. Outbox guaranteed; consent honored.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("promoted_at_iso", "string", "ISO datetime promote"),
+            _var("path_id", "integer", "ID admission_path trúng", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:waitlist_promoted",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
+    ),
+
+    # 9. T12 — candidate / officer / admin confirms admission.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_CONFIRMED,
+        category="application",
+        display_name="Xác nhận nhập học",
+        description=(
+            "Confirm action landed (T12). Officer audience. Distinct from "
+            "ADMISSION_CONFIRMATION_REMINDER_* / _HARD_LOCKED (those are reminder/"
+            "lock awareness signals). `confirmed_via` matches CHECK enum: "
+            "'magic_link' / 'officer' / 'admin_override'."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("confirmed_via", "string", "magic_link / officer / admin_override"),
+            _var("actor_id", "integer", "ID người xác nhận", False),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=60,
+        dedup_key_template="admission:${application_id}:confirmed",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=False,
+        bypass_consent_check=False,
+    ),
+
+    # 10. T13 — system enrolls confirmed profile (Student row created).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_ENROLLED,
+        category="application",
+        display_name="Đã nhập học",
+        description="System enrolled the confirmed profile (T13). Officer + candidate audience. Critical: outbox + bypass consent.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("student_id", "integer", "ID sinh viên mới"),
+            _var("enrolled_at_iso", "string", "ISO datetime enroll"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:enrolled",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=True,
+    ),
+
+    # 11. T14 / T15 / T16 — withdrawal (varies by from_status).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_WITHDRAWN,
+        category="application",
+        display_name="Hồ sơ đã rút",
+        description=(
+            "Profile withdrawn (T14 from admitted / T15 from confirmed / "
+            "T16 from enrolled). Officer audience. `withdrawn_by_role` "
+            "discriminates self-service vs admin override."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("from_status", "string", "Trạng thái trước khi rút"),
+            _var("withdrawn_by_role", "string", "candidate / admin"),
+            _var("reason", "string", "Lý do (bắt buộc khi role != candidate)", False),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=70,
+        dedup_key_template="admission:${application_id}:withdrawn",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=False,
+        bypass_consent_check=False,
+    ),
+
+    # 12. T17 — admin override rollback (wildcard from any state to draft).
+    EventDefinition(
+        event=SystemEvents.ADMISSION_ROLLED_BACK,
+        category="application",
+        display_name="Hồ sơ đã được khôi phục về nháp (admin)",
+        description=(
+            "Admin override rollback to draft (T17 wildcard). Officer + "
+            "candidate audience. Outbox guaranteed; consent honored. "
+            "Per Q1 chốt: T17 from enrolled is rejected at the service "
+            "guard — only states <= confirmed can be rolled back."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("from_status", "string", "Trạng thái trước rollback"),
+            _var("override_reason", "string", "Lý do override (bắt buộc)"),
+            _var("actor_id", "integer", "ID admin thực hiện"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=30,
+        dedup_key_template="admission:${application_id}:rolled_back:${from_status}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
     ),
 )
 

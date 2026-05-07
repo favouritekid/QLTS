@@ -116,6 +116,12 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const { data: insights } = useLeadInsights(leadId, { initialData: initialInsights });
   const { data: workflowContext } = useWorkflowContext(leadId);
 
+  // Wave 4 #15c — read from plural ``admission_profiles[0]`` (latest year
+  // per backend ``order_by=academic_year.desc()``). Falls back to legacy
+  // ``admission_profile`` while the backend still emits the dual response.
+  // Drop fallback in #15d once the legacy field is removed.
+  const currentProfile = lead?.admission_profiles?.[0] ?? lead?.admission_profile;
+
   // Delete mutation
   const deleteMutation = useDeleteLead();
 
@@ -308,11 +314,11 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
           {/* Right: Actions */}
           <div className="flex items-center gap-2">
             {lead.offering_id && (
-              lead.admission_profile ? (
+              currentProfile ? (
                 <Button
                   variant="default"
                   className="bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200"
-                  onClick={() => router.push(`/admissions/${lead.admission_profile!.id}`)}
+                  onClick={() => router.push(`/admissions/${currentProfile.id}`)}
                 >
                   <FileText className="mr-1.5 h-4 w-4" />
                   Xem hồ sơ tuyển sinh
@@ -384,7 +390,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
               onAssign={() => setAssignDialogOpen(true)}
               onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
               onViewProfile={() =>
-                lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)
+                currentProfile && router.push(`/admissions/${currentProfile.id}`)
               }
             />
 
@@ -400,7 +406,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
               lead={lead}
               onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
               onViewProfile={() =>
-                lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)
+                currentProfile && router.push(`/admissions/${currentProfile.id}`)
               }
             />
           </div>

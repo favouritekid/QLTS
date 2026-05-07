@@ -43,6 +43,9 @@ from .admission_tasks import (
     check_admission_surveys_due_task,
     check_admission_confirmation_reminders_task,
 )
+from .notification_outbox_tasks import (
+    dispatch_pending_outbox,  # T0-4a skeleton; T0-4b will replace body
+)
 
 __all__ = [
     # Email tasks
@@ -71,4 +74,6 @@ __all__ = [
     # Admission tasks
     "check_admission_surveys_due_task",
     "check_admission_confirmation_reminders_task",
+    # T0-4a admission outbox skeleton (cold cutover prerequisite)
+    "dispatch_pending_outbox",
 ]

@@ -26,6 +26,48 @@ export const admissionPathStatusEnum = z.enum([
 export type AdmissionPathStatus = z.infer<typeof admissionPathStatusEnum>
 
 // ==============================================================================
+// AUDIENCE ENUM (phase1_03 / #184 Wave 1 PR-1B')
+// ==============================================================================
+
+/**
+ * admission_audience PG ENUM mirror — values pinned to alembic
+ * phase1_03 + PLAN line 605-606. Adding a new audience must touch
+ * the migration, the BE schema (`AdmissionAudience` Literal) and
+ * this enum together; do not extend silently.
+ */
+export const admissionAudienceEnum = z.enum([
+  "POST_THCS",
+  "POST_THPT",
+  "LIEN_THONG_TC",
+  "LIEN_THONG_CD",
+  "VLVH",
+])
+
+export type AdmissionAudience = z.infer<typeof admissionAudienceEnum>
+
+// ==============================================================================
+// BONUS RULE OVERRIDE (phase1_02 wired in PR-1B')
+// ==============================================================================
+
+/**
+ * Path-level / method-default bonus rule shape mirror
+ * (BE: `BonusRuleOverride` in app/schemas/admission_path.py).
+ *
+ * `.strict()` rejects unknown keys to keep parity with Pydantic
+ * `extra="forbid"` — the admin form must not silently round-trip
+ * stray fields that the scoring engine will ignore.
+ */
+export const bonusRuleOverrideSchema = z
+  .object({
+    apply_area_bonus: z.boolean(),
+    apply_subject_bonus: z.boolean(),
+    max_total_bonus: z.number().min(0).max(10).nullable().optional(),
+  })
+  .strict()
+
+export type BonusRuleOverride = z.infer<typeof bonusRuleOverrideSchema>
+
+// ==============================================================================
 // NESTED SCHEMAS
 // ==============================================================================
 
@@ -135,6 +177,14 @@ export const admissionPathCreateSchema = z.object({
       (arr) => arr.every((f) => SAFE_MINOR_CORRECTION_FIELDS.has(f as never)),
       { message: "Field không nằm trong safe catalog" },
     ),
+  // phase1_03 (#184 Wave 1 PR-1B') — audience filter + per-method
+  // quota + typed bonus override. All three optional on create;
+  // admin sets via update once Phase 3 validator gate ("X path null
+  // applicable_to → admin set trước") flips. NULL on the wire =
+  // applicable to every audience (Phase 1+2 contract).
+  applicable_to: z.array(admissionAudienceEnum).optional().nullable(),
+  method_quota: z.number().int().min(0).optional().nullable(),
+  bonus_rule_override: bonusRuleOverrideSchema.optional().nullable(),
 })
 
 export type AdmissionPathCreate = z.infer<typeof admissionPathCreateSchema>
@@ -163,6 +213,14 @@ export const admissionPathUpdateSchema = z.object({
         arr.every((f) => SAFE_MINOR_CORRECTION_FIELDS.has(f as never)),
       { message: "Field không nằm trong safe catalog" },
     ),
+  // phase1_03 — Optional on update so partial PATCH-style updates
+  // don't accidentally clear the audience filter / quota / override.
+  // Pass `null` to clear; omit the key to leave unchanged. Pydantic
+  // distinguishes `None` (clear) from "key missing" via
+  // `model_dump(exclude_unset=True)` on the BE side.
+  applicable_to: z.array(admissionAudienceEnum).optional().nullable(),
+  method_quota: z.number().int().min(0).optional().nullable(),
+  bonus_rule_override: bonusRuleOverrideSchema.optional().nullable(),
 })
 
 export type AdmissionPathUpdate = z.infer<typeof admissionPathUpdateSchema>
@@ -246,6 +304,16 @@ export const admissionPathResponseSchema = z.object({
   // validation, so re-checking here would be redundant work that
   // surfaces no new bugs.
   minor_correction_allowed_fields: z.array(z.string()),
+
+  // phase1_03 (#184 Wave 1 PR-1B') — REQUIRED on the response (no
+  // default) so the parse fails loudly if BE forgets to map the
+  // column. NULL on wire = "applicable to every audience" / "no
+  // quota cap" / "inherit method bonus default". Admin UI must
+  // distinguish NULL vs `[]`/`0` for `applicable_to` / `method_quota`
+  // since they have different semantics.
+  applicable_to: z.array(admissionAudienceEnum).nullable(),
+  method_quota: z.number().int().min(0).nullable(),
+  bonus_rule_override: bonusRuleOverrideSchema.nullable(),
 })
 
 export type AdmissionPathResponse = z.infer<typeof admissionPathResponseSchema>
@@ -282,10 +350,18 @@ export type AcademicYearListResponse = z.infer<typeof academicYearListResponseSc
 /**
  * Resolved Document Response
  * Used for GET /api/admission-config/paths/{id}/documents
- * 
- * The `source` field indicates whether document config comes from:
- * - "shared": Applies to all methods (admission_method_id = NULL)
- * - "method_override": Method-specific config that overrides shared
+ *
+ * The `source` field indicates which tier of the 3-tier resolution
+ * (phase1_06 / #184 Wave 1 PR-1C') provided the document config:
+ * - "path_override": Tier 1 — path-specific group (admission_path_id = X)
+ * - "method_override": Tier 2 — method-specific override
+ *   (admission_path_id NULL, admission_method_id = path.method)
+ * - "shared": Tier 3 — shared offering-type fallback
+ *   (admission_path_id NULL, admission_method_id NULL)
+ *
+ * Precedence: tier 1 fully wins if present; else tier 2 fully
+ * wins; else tier 3. Within a tier, mandatory-wins on duplicate
+ * document_type.
  */
 export const resolvedDocumentResponseSchema = z.object({
   document_type_id: z.number(),
@@ -295,7 +371,7 @@ export const resolvedDocumentResponseSchema = z.object({
   requires_upload: z.boolean(),
   submission_format: z.string().nullable(),
   display_order: z.number(),
-  source: z.enum(["shared", "method_override"]),
+  source: z.enum(["shared", "method_override", "path_override"]),
 })
 
 export type ResolvedDocumentResponse = z.infer<typeof resolvedDocumentResponseSchema>

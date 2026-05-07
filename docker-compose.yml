@@ -76,6 +76,21 @@ services:
       REDIS_URL: redis://redis:6379/1
       CELERY_BROKER_URL: redis://redis:6379/2
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
+      # Cold cutover gates per RUNBOOK §7.2 (Phase1-Hotfix-5 / 2026-05-07).
+      # Default ``true`` keeps routine deploy unchanged — entrypoint runs
+      # alembic + sync_notification_rules + Casbin lifespan auto. When
+      # ``COLD_CUTOVER=true ./scripts/deploy.sh`` is invoked, the deploy
+      # script ``export``s these = ``false`` and the substitution below
+      # propagates them into the container env so docker-entrypoint.sh
+      # skips the gates and operator runs the steps manually per
+      # RUNBOOK §7.2 T+1:30 / T+3:00 / T+3:15 / T+3:30 sequence.
+      # Without these substitution lines, deploy.sh ``export`` had no
+      # path into the container (compose only forwards keys explicitly
+      # listed here OR present in env_file). Found via Hotfix #4
+      # post-merge code review 2026-05-07.
+      RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
+      RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
     volumes:
       - backend_uploads:/app/uploads
       - backend_static_uploads:/app/app/static/uploads
@@ -112,6 +127,16 @@ services:
       REDIS_URL: redis://redis:6379/1
       CELERY_BROKER_URL: redis://redis:6379/2
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
+      # Cold cutover gates per RUNBOOK §7.2 (Phase1-Hotfix-5).
+      # Celery worker shares Backend_FastAPI/Dockerfile so the same
+      # docker-entrypoint.sh runs (compose ``command:`` only overrides
+      # CMD, NOT ENTRYPOINT). Without these, celery container would
+      # auto-run alembic + sync at startup even when backend's gates
+      # are set to false → race condition với operator's manual
+      # cutover sequence.
+      RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
+      RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
     volumes:
       - backend_static_uploads:/app/app/static/uploads
       - backend_uploads:/app/uploads
@@ -141,6 +166,16 @@ services:
       REDIS_URL: redis://redis:6379/1
       CELERY_BROKER_URL: redis://redis:6379/2
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
+      # Cold cutover gates per RUNBOOK §7.2 (Phase1-Hotfix-5).
+      # Celery beat shares Backend_FastAPI/Dockerfile so the same
+      # docker-entrypoint.sh runs (compose ``command:`` only overrides
+      # CMD, NOT ENTRYPOINT). Beat container also evaluates the 3 gates
+      # before exec — without these flags it auto-runs alembic + sync
+      # at startup independently of backend, breaking RUNBOOK §7.2
+      # operator-controlled sequence.
+      RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
+      RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
     volumes:
       - backend_static_uploads:/app/app/static/uploads
       - backend_uploads:/app/uploads

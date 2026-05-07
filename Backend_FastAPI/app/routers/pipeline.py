@@ -124,14 +124,25 @@ async def get_allowed_next_statuses(
     lead_phase = "consultation"  # Default phase for new/consultation leads
 
     if lead_id:
-        # Get lead to derive phase
+        # Get lead to derive phase. Wave 4 #15b: relationship is plural
+        # (``admission_profiles``); resolve the current-intake-year profile
+        # via the helper before deriving phase.
+        from ..services.system_config_service import SystemConfigService
+
         lead = await db.get(
             models.Lead,
             lead_id,
-            options=[selectinload(models.Lead.admission_profile)]
+            options=[selectinload(models.Lead.admission_profiles)]
         )
-        if lead and lead.admission_profile:
-            lead_phase = derive_phase_from_admission(lead.admission_profile).value
+        if lead:
+            current_year = await SystemConfigService(db).get_value(
+                "current_intake_year", 2026
+            )
+            if isinstance(current_year, str):
+                current_year = int(current_year)
+            current_profile = lead.current_admission_profile(current_year)
+            if current_profile:
+                lead_phase = derive_phase_from_admission(current_profile).value
 
     # ✅ USE NEW FSM ENGINE (Spec v3.0 compliant)
     return await get_next_statuses_for_lead(

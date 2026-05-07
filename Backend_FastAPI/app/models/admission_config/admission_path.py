@@ -13,7 +13,7 @@ This is the CENTRAL ENTITY for:
 
 import sqlalchemy as sa
 from sqlalchemy import CheckConstraint, Column, Integer, String, Boolean, ForeignKey, DateTime, UniqueConstraint, Numeric
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, ENUM, JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -156,6 +156,56 @@ class AdmissionPath(Base):
             "Effective = SAFE_MINOR_CORRECTION_FIELDS ∩ this list. "
             "Live config (not snapshotted to applied_rules)."
         ),
+    )
+
+    # phase1_03 (#184 Wave 1 PR-1B') — audience filter ARRAY of
+    # admission_audience enum. NULL = legacy / applicable to every
+    # audience (Phase 1+2 query contract preserves NULL via OR
+    # branch). Query MUST use @> containment / && overlap; NEVER
+    # = ANY(arr) (would not hit the ix_admission_path_applicable_to
+    # GIN index — see PLAN line 2646-2657).
+    # ENUM type is created in alembic phase1_03 with create_type=False
+    # mirrored here so model autogenerate doesn't try to redeclare it.
+    applicable_to = Column(
+        ARRAY(
+            ENUM(
+                "POST_THCS",
+                "POST_THPT",
+                "LIEN_THONG_TC",
+                "LIEN_THONG_CD",
+                "VLVH",
+                name="admission_audience",
+                create_type=False,
+            )
+        ),
+        nullable=True,
+        comment="Audience filter ARRAY of admission_audience enum. "
+                "NULL = applicable to every audience.",
+    )
+
+    # phase1_03 (#184 Wave 1 PR-1B') — per-method quota tier. NULL =
+    # no method-level cap; effective quota falls back to round
+    # (Phase 2) / group_quota. Service-layer guard tier-3 (PLAN
+    # line 3973) sum(method_quota) <= round.admit_quota.
+    method_quota = Column(
+        Integer,
+        nullable=True,
+        comment="Per-method admission quota. NULL = inherit from "
+                "round.admit_quota fallback.",
+    )
+
+    # phase1_02 (#184 Wave 1) — path-level bonus rule override above
+    # the method default. Same JSONB shape as
+    # AdmissionMethod.default_bonus_rule. NULL = inherit from method.
+    # Resolution precedence (PLAN line 787-789):
+    #   effective = path.bonus_rule_override
+    #               ?? method.default_bonus_rule
+    #               ?? {"apply_area_bonus": false, "apply_subject_bonus": false}
+    bonus_rule_override = Column(
+        JSONB,
+        nullable=True,
+        comment="Path-level bonus rule override above method default. "
+                "NULL = inherit from admission_method.default_bonus_rule."
     )
 
     @property

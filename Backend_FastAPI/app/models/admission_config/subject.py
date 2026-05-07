@@ -10,10 +10,23 @@ Tables:
 
 from decimal import Decimal
 
-from sqlalchemy import Column, Integer, Numeric, String, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, Numeric, String, Boolean, ForeignKey, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import ENUM
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
+
+
+# phase1_05 (#184 Wave 1 PR-1C') — subject_kind ENUM mirror.
+# ``create_type=False`` because the migration owns the DDL.
+# Adding a new value requires migration ALTER TYPE + this tuple
+# in lockstep — no silent extension via direct DB access.
+SUBJECT_KIND_VALUES: tuple[str, ...] = (
+    "ACADEMIC_SUBJECT",
+    "TERM_AVERAGE",
+    "ABILITY_TEST",
+    "CERTIFICATE",
+)
 
 
 class Subject(Base):
@@ -51,6 +64,46 @@ class Subject(Base):
         nullable=False,
         default=True,
         index=True
+    )
+
+    # phase1_05 (#184 Wave 1 PR-1C') — subject category. Backfilled
+    # to ``ACADEMIC_SUBJECT`` for all legacy rows via server default
+    # at ALTER TIME; seeded virtual subjects (TB_HK1_L12 / DGNL /
+    # IELTS / V_ACT / ...) carry the proper non-academic kind. Service
+    # uses this to gate routing: ``ACADEMIC_SUBJECT`` flows through
+    # legacy single-NV ProfileSubjectScore (CHECK 0..10), non-academic
+    # MUST go through Phase 3 multi-NV choice engine (no CHECK).
+    subject_kind = Column(
+        ENUM(
+            *SUBJECT_KIND_VALUES,
+            name="subject_kind",
+            create_type=False,
+        ),
+        nullable=False,
+        server_default=text("'ACADEMIC_SUBJECT'::subject_kind"),
+        comment=(
+            "Subject category. ACADEMIC_SUBJECT for legacy / Toán / "
+            "Lý / Hóa; TERM_AVERAGE / ABILITY_TEST / CERTIFICATE for "
+            "virtual subjects."
+        ),
+    )
+
+    # phase1_05 — score ceiling. NULL = service falls back to 10
+    # for ACADEMIC_SUBJECT. Seeded values: 10 (academic), 150
+    # (DGNL_DHQGHN), 1200 (V_ACT), 9 (IELTS).
+    max_score = Column(
+        Numeric(precision=6, scale=2),
+        nullable=True,
+        comment=(
+            "Score ceiling. NULL = service default 10 for ACADEMIC_SUBJECT."
+        ),
+    )
+
+    # phase1_05 — score floor. NULL = service treats as 0.
+    min_possible_score = Column(
+        Numeric(precision=6, scale=2),
+        nullable=True,
+        comment="Score floor. NULL = 0.",
     )
 
     # Relationships

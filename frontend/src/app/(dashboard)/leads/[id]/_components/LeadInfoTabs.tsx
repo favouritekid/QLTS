@@ -476,30 +476,37 @@ export function LeadInfoTabs({
         {/* Profile Tab */}
         {activeTab === "profile" && (
           <div>
-            {lead.admission_profile ? (
+            {(() => {
+              // Wave 4 #15c — read from plural ``admission_profiles[0]``
+              // (latest year per backend ``order_by=academic_year.desc()``).
+              // Falls back to legacy ``admission_profile`` while the backend
+              // still emits the dual response. Drop fallback in #15d.
+              const profile =
+                lead.admission_profiles?.[0] ?? lead.admission_profile;
+              return profile ? (
               <div className="space-y-4">
                 {(() => {
-                  const profileStyle = getProfileStatusStyle(lead.admission_profile.status);
+                  const profileStyle = getProfileStatusStyle(profile.status);
                   return (
                     <div className={cn("p-4 border rounded-xl", profileStyle.bg, profileStyle.border)}>
                       <div className="flex items-center gap-2 mb-2">
                         <FileText className={cn("w-4 h-4", profileStyle.icon)} />
                         <span className={cn("text-sm font-semibold", profileStyle.value)}>
-                          Hồ sơ tuyển sinh #{lead.admission_profile.id}
+                          Hồ sơ tuyển sinh #{profile.id}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-sm">
                         <div>
                           <span className={profileStyle.label}>Trạng thái:</span>{" "}
                           <span className={cn("font-medium", profileStyle.value)}>
-                            {PROFILE_STATUS_LABELS[lead.admission_profile.status] ?? lead.admission_profile.status}
+                            {PROFILE_STATUS_LABELS[profile.status] ?? profile.status}
                           </span>
                         </div>
-                        {lead.admission_profile.student_code && (
+                        {profile.student_code && (
                           <div>
                             <span className={profileStyle.label}>Mã SV:</span>{" "}
                             <span className={cn("font-medium", profileStyle.value)}>
-                              {lead.admission_profile.student_code}
+                              {profile.student_code}
                             </span>
                           </div>
                         )}
@@ -528,7 +535,8 @@ export function LeadInfoTabs({
                   </Button>
                 )}
               </div>
-            )}
+            );
+            })()}
           </div>
         )}
 

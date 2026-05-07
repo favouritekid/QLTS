@@ -16,8 +16,8 @@ Architecture:
 
 from datetime import date, datetime, timezone
 from typing import List, Optional
-from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, String, Text, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
 from .base import Base
@@ -44,8 +44,23 @@ class AdmissionProfile(Base):
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
         Index('ix_admission_profile_citizen_year', 'citizen_id', 'academic_year'),
+        # Wave 3-E (M-1-15a) replaces the legacy single-profile-per-lead
+        # UNIQUE on ``lead_id`` with a composite ``(lead_id, academic_year)``
+        # UNIQUE so a lead can apply for multiple academic years (one
+        # profile per year per lead). Migration owner:
+        # ``alembic/versions/phase1_15a_drop_lead_id_unique_to_composite.py``.
+        # Test DB (``Base.metadata.create_all``) reads this declaration —
+        # keeping it in sync với migration prevents drift symptom per
+        # memory ``test-db-schema-source``.
+        UniqueConstraint('lead_id', 'academic_year', name='uq_admission_profile_lead_year'),
+        # Wave 3-A (M-1-11) extends 10-state CHECK to 14-state, adding the
+        # 4 choice-engine milestone states (reviewing / result_published /
+        # admitted / waitlisted). Migration owner:
+        # ``alembic/versions/phase1_11_extend_profile_status_check_constraint.py``.
+        # Test DB (``Base.metadata.create_all()``) reads this declaration —
+        # keeping it in sync with the migration prevents test-vs-prod drift.
         CheckConstraint(
-            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn')",
+            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn','reviewing','result_published','admitted','waitlisted')",
             name="ck_admission_profile_status"
         ),
         CheckConstraint(
@@ -58,11 +73,19 @@ class AdmissionProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 
     # Foreign Key to Lead (One-to-One relationship)
+    # Wave 3-E (M-1-15a) DROPPED the single-profile-per-lead UNIQUE
+    # in favor of composite ``uq_admission_profile_lead_year`` declared
+    # above. Lead can now hold one profile PER academic_year. Wave 4
+    # Wave 4 PR #15b (M-1-15-model) flipped ``Lead.admission_profile``
+    # (singular ``uselist=False``) to ``Lead.admission_profiles``
+    # (plural list) — leads now hold one profile PER academic_year via
+    # the composite UNIQUE ``uq_admission_profile_lead_year`` declared
+    # in ``__table_args__`` above. The application contract is
+    # multi-year per lead.
     lead_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("lead.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # One lead can only have one admission profile
         index=True,
         comment="Link to Lead (IDOR check point: lead.unit_id)"
     )
@@ -75,6 +98,27 @@ class AdmissionProfile(Base):
         nullable=True,  # Nullable for backward compatibility with existing profiles
         index=True,
         comment="Source config (audit/debug/report)"
+    )
+
+    # Phase 0 (M-P0a) — single owner of the DDL for this column.
+    # Persisted forward-only at submit time so Phase 3 backfill of
+    # `AdmissionProfileChoice` does not have to re-derive the chosen group.
+    # Phase 1 #13 (`phase1_12_backfill_selected_subject_group_id`) fills
+    # historical rows via the 3-rule decision tree and writes ambiguous
+    # cases into `_admission_backfill_exceptions`. ``ondelete="SET NULL"``
+    # mirrors `offering_admission_config_id` (FK-traceability convention)
+    # — `subject_group` is catalog data with `is_active`; soft-retire is
+    # the expected lifecycle, and hard delete should not erase submitted
+    # profiles.
+    selected_subject_group_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("subject_group.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment=(
+            "Subject group chosen by candidate at submit time. "
+            "Phase 0 owner; Phase 1 #13 backfills historical rows."
+        ),
     )
 
     # ✅ Academic Year (for multi-year admission support)
@@ -375,10 +419,63 @@ class AdmissionProfile(Base):
         comment="Reason for dropping out"
     )
 
+    # phase1_09a (#184 Wave 2 PR-2A) — eligibility scalars. 4
+    # nullable columns. gpa_overall + graduation_year backfilled
+    # from academic_history JSON via LATERAL + range guard;
+    # conduct + health_category STAY NULL (no JSON source — admin
+    # reviews qua UI Phase 1+2 per PLAN line 2813-2814).
+    # Lock-after-draft trigger (phase1_09b) is DEFERRED Q1/2027
+    # per Q9 chốt 2026-05-01; service guard provides basic
+    # protection in 2026 cutover.
+    gpa_overall: Mapped[Optional[float]] = mapped_column(
+        Numeric(precision=4, scale=2),
+        nullable=True,
+        comment="Overall GPA (0.00..10.00). Backfilled from academic_history.",
+    )
+    conduct: Mapped[Optional[str]] = mapped_column(
+        ENUM(
+            "TB", "KHA", "TOT",
+            name="conduct_grade",
+            create_type=False,
+        ),
+        nullable=True,
+        comment="Đạo đức (TB/KHA/TOT). NULL post-migration; admin UI Phase 1+2.",
+    )
+    health_category: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="Phân loại sức khỏe (1..4 — 1 tốt nhất). NULL post-migration.",
+    )
+    graduation_year: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="Năm tốt nghiệp (1900..2100). Backfilled from MAX(year_to).",
+    )
+
+    # phase1_08 (#184 Wave 1 PR-1D) — multi-NV gate. Determines
+    # whether this profile flows through the legacy single-NV
+    # ProfileSubjectScore engine (false) or the Phase 3 multi-NV
+    # AdmissionProfileChoice + ProfileChoiceScore engine (true).
+    # PLAN line 821-826: must be an explicit flag (not inferred
+    # from count(choices)) because Phase 3 backfill creates one
+    # choice per existing profile, after which count >= 1 for
+    # every row and can no longer distinguish legacy from new.
+    uses_choice_engine: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment=(
+            "Phase 3 multi-NV gate. false = legacy single-NV "
+            "ProfileSubjectScore flow; true = AdmissionProfileChoice "
+            "+ ProfileChoiceScore flow."
+        ),
+    )
+
     # Relationships (Eager Loading to Prevent N+1 Queries)
     lead: Mapped["Lead"] = relationship(
         "Lead",
-        back_populates="admission_profile",
+        back_populates="admission_profiles",
         lazy="joined",  # Always load lead (for IDOR checks)
         foreign_keys=[lead_id]
     )
@@ -506,17 +603,55 @@ class AdmissionConfirmationToken(Base):
     """
     __tablename__ = "admission_confirmation_token"
 
+    # Wave 3-D (M-1-18) extends single-action token to multi-action.
+    # Migration owner:
+    # ``alembic/versions/phase1_18_extend_confirmation_token_for_multi_action.py``.
+    # CheckConstraint locks the 4-action enum at the test DB layer
+    # (Base.metadata.create_all) so test rows that fail the contract
+    # surface here just like prod. Partial UNIQUE index keeps audit
+    # trail rows (already-confirmed) free from contention with newly-
+    # issued tokens for the same (profile_id, action_type) pair.
+    __table_args__ = (
+        CheckConstraint(
+            "action_type IN ('submit','resubmit','confirm','withdraw')",
+            name="ck_token_action_type",
+        ),
+        Index(
+            "uq_active_token_per_profile_action",
+            "profile_id",
+            "action_type",
+            unique=True,
+            postgresql_where=text("confirmed_at IS NULL"),
+        ),
+        Index("ix_token_action_type", "token", "action_type"),
+    )
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    
-    # Link to AdmissionProfile (one token per profile)
+
+    # Link to AdmissionProfile. Wave 3-D (PR Wave 3-D) DROPPED the
+    # single-token-per-profile UNIQUE in favor of the partial UNIQUE
+    # ``uq_active_token_per_profile_action`` declared above — every
+    # profile may now hold ONE active token PER action_type.
     profile_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("admission_profile.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,  # One active token per profile
-        index=True
+        index=True,
     )
-    
+
+    # Wave 3-D (M-1-18) — multi-action token. 4 values locked by the
+    # ``ck_token_action_type`` CHECK declared in ``__table_args__``
+    # above. Default ``'confirm'`` preserves legacy single-action
+    # behavior on legacy rows; new code paths set ``submit`` /
+    # ``resubmit`` / ``withdraw`` explicitly.
+    action_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="confirm",
+        server_default=text("'confirm'"),
+        comment="Token action: submit | resubmit | confirm | withdraw",
+    )
+
     # The actual token value (sent in email link)
     token: Mapped[str] = mapped_column(
         String(64),

@@ -45,7 +45,70 @@ def _validate_minor_correction_allowlist(
 
 AdmissionPathStatus = Literal["draft", "active", "inactive", "archived"]
 VisibilityStatus = Literal["internal", "public"]
-DocumentSource = Literal["shared", "method_override"]
+DocumentSource = Literal["shared", "method_override", "path_override"]
+
+
+# =============================================================================
+# AUDIENCE ENUM (phase1_03 / #184 Wave 1 PR-1B')
+# =============================================================================
+
+# admission_audience PG ENUM. Values mirror alembic phase1_03 +
+# PLAN line 605-606. Frozen here as a Literal so Pydantic rejects
+# unknown values at the API boundary, and so the FE Zod can pin the
+# same union shape via a generated type. Adding a new audience =
+# update both this Literal AND the alembic migration AND the FE
+# Zod schema in lockstep (no silent extension via direct DB ALTER).
+AdmissionAudience = Literal[
+    "POST_THCS",
+    "POST_THPT",
+    "LIEN_THONG_TC",
+    "LIEN_THONG_CD",
+    "VLVH",
+]
+
+
+# =============================================================================
+# BONUS RULE OVERRIDE SHAPE (phase1_02 wired in PR-1B' per Codex P2)
+# =============================================================================
+
+
+class BonusRuleOverride(BaseModel):
+    """Path-level / method-default bonus rule shape.
+
+    PLAN line 768-789. Shape is shared by
+    ``AdmissionMethod.default_bonus_rule`` and
+    ``AdmissionPath.bonus_rule_override`` (path takes precedence).
+
+    Per Codex P2 review on PR-1B': we ship a structured Pydantic
+    shape rather than a raw JSONB blob so the admin UI can render
+    a typed form (3 fields) and the API rejects malformed payload
+    at the boundary instead of letting bad shapes reach the
+    scoring engine.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    apply_area_bonus: bool = Field(
+        description=(
+            "Apply the area bonus (KV1 / KV2_NT / KV2 / KV3) when "
+            "computing the effective score for this path."
+        ),
+    )
+    apply_subject_bonus: bool = Field(
+        description=(
+            "Apply per-subject bonus (priority objects 01..07) when "
+            "computing the effective score."
+        ),
+    )
+    max_total_bonus: Optional[float] = Field(
+        default=None,
+        ge=0,
+        le=10,
+        description=(
+            "Cap on the combined bonus (area + subject) in points. "
+            "NULL = no cap. Range 0..10 matches the GPA scale."
+        ),
+    )
 
 
 # =============================================================================
@@ -166,6 +229,35 @@ class AdmissionPathCreate(BaseModel):
         ),
     )
 
+    # phase1_03 (#184 Wave 1 PR-1B') — audience filter. Optional on
+    # create; admin sets later via update once the storefront Phase
+    # 3 validator gate is enabled. NULL = legacy / applicable to
+    # every audience (Phase 1+2 query contract preserves NULL).
+    applicable_to: Optional[List[AdmissionAudience]] = Field(
+        default=None,
+        description=(
+            "Audience filter list. NULL = applicable to every audience. "
+            "Phase 3 enables strict filter only after admin sets this."
+        ),
+    )
+    method_quota: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Per-method admission quota. NULL = no method-level cap; "
+            "round.admit_quota / group_quota provide fallback."
+        ),
+    )
+    # phase1_02 wired in PR-1B' — typed shape (NOT raw JSONB) per
+    # Codex P2. NULL = inherit from admission_method.default_bonus_rule.
+    bonus_rule_override: Optional[BonusRuleOverride] = Field(
+        default=None,
+        description=(
+            "Path-level override above admission_method.default_bonus_rule. "
+            "NULL = inherit from method default."
+        ),
+    )
+
     _v_minor_correction_allowlist = field_validator(
         "minor_correction_allowed_fields"
     )(_validate_minor_correction_allowlist)
@@ -200,6 +292,35 @@ class AdmissionPathUpdate(BaseModel):
             "Replace the per-path correction allowlist. Admin-only — "
             "service raises BusinessRuleViolation for non-admin callers. "
             "Pass `[]` to clear; omit to leave unchanged."
+        ),
+    )
+
+    # phase1_03 — Optional on update so partial PATCH-style updates
+    # don't accidentally clear the audience filter / quota. Pass an
+    # explicit empty list to ``applicable_to`` to clear, or pass
+    # ``None`` to leave unchanged. Same pattern for ``method_quota``
+    # and ``bonus_rule_override`` — None means "do not touch", which
+    # the service distinguishes via ``model_dump(exclude_unset=True)``.
+    applicable_to: Optional[List[AdmissionAudience]] = Field(
+        default=None,
+        description=(
+            "Replace the audience filter. Pass `[]` to clear (NULL "
+            "= every audience), or omit to leave unchanged."
+        ),
+    )
+    method_quota: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Replace per-method quota. Pass 0 to mark exhausted, "
+            "or omit to leave unchanged."
+        ),
+    )
+    bonus_rule_override: Optional[BonusRuleOverride] = Field(
+        default=None,
+        description=(
+            "Replace path-level bonus override. Pass `null` to fall "
+            "back to method default, or omit to leave unchanged."
         ),
     )
 
@@ -289,6 +410,29 @@ class AdmissionPathResponse(BaseModel):
         description=(
             "Per-path allowlist for post-approval minor corrections. "
             "Subset of SAFE_MINOR_CORRECTION_FIELDS."
+        ),
+    )
+
+    # phase1_03 — REQUIRED in the response (non-default) so Zod parse
+    # on FE side fails loudly when the BE forgets to emit the field
+    # rather than silently rendering an empty audience filter / NULL
+    # quota. Following the same pattern as
+    # ``allow_unverified_submission`` / ``minor_correction_allowed_fields``.
+    applicable_to: Optional[List[AdmissionAudience]] = Field(
+        description=(
+            "Audience filter list, or NULL = applicable to every "
+            "audience (Phase 1+2 legacy)."
+        ),
+    )
+    method_quota: Optional[int] = Field(
+        description=(
+            "Per-method admission quota, or NULL if no cap configured."
+        ),
+    )
+    bonus_rule_override: Optional[BonusRuleOverride] = Field(
+        description=(
+            "Path-level bonus override, or NULL if inherited from "
+            "admission_method.default_bonus_rule."
         ),
     )
 

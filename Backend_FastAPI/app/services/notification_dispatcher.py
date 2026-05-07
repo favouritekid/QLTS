@@ -40,7 +40,7 @@ Usage:
 import asyncio
 import structlog
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 # from sqlalchemy import and_, cast, insert, select, String (removed - using repository)
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1918,3 +1918,157 @@ async def safe_dispatch(
         except Exception:
             pass
         return []
+
+
+# ============================================================================
+# DISPATCH EVENT — B2.3 wrapper around outbox + safe_dispatch
+# ============================================================================
+
+
+async def dispatch_event(
+    db: AsyncSession,
+    *,
+    event: SystemEvents,
+    payload: dict,
+    dedupe_key: Optional[str] = None,
+) -> Optional[Callable[[], Awaitable[None]]]:
+    """B2.3 — single API for the admission notification surface.
+
+    Routes between two paths based on ``EVENT_CATALOG[event]``:
+
+    1. ``requires_outbox=True`` (the 7 critical milestone events from
+       B2.1 § PLAN 3.3.d): INSERTs a ``NotificationOutbox`` row in the
+       **caller's transaction** and returns ``None``. The Celery beat
+       task ``dispatch_pending_outbox`` (T0-4a skeleton today; B2.4 /
+       T0-4b ships the real worker body) drains the table out-of-band
+       post-commit.
+
+    2. ``requires_outbox=False`` (the 5 best-effort events): returns a
+       post-commit callback that the router awaits **after** ``await
+       db.commit()``. The callback delegates to ``safe_dispatch()`` —
+       that's the right primitive for "router after-commit, fire-and-
+       forget" per the doc on lines 1864-1866.
+
+    Why ``safe_dispatch()`` and not ``dispatch(strict=True)`` in the
+    best-effort callback (resolves the doc drift caught during B2.3
+    contract verification — see DAILY_LOG entry 2026-05-03):
+
+    - The callback runs **outside** the caller's transaction (post-
+      commit). There is no outer business transaction left to protect
+      with ``begin_nested()``, so the ``strict=True`` requirement from
+      memory ``dispatch-bundle-strict-required`` does not apply.
+    - ``safe_dispatch()`` already owns its own commit + swallows errors,
+      which is exactly what a post-commit fire-and-forget caller wants.
+    - ``ADMISSION_REFACTOR_RISK_REVIEW.md`` PATCH-11 mentions
+      ``safe_dispatch(strict=True)`` — that wording is itself drift:
+      ``safe_dispatch()`` does not accept a ``strict`` parameter
+      (ground-truth signature on lines 1853-1859 above; verified during
+      B2.3 implementation). The ground-truth signatures of the two
+      primitives govern; aspirational doc notes do not.
+
+    Outbox path uses ``dedupe_key`` as the ``idempotency_key`` column
+    on the ``notification_outbox`` table (the DB column keeps the
+    canonical end-to-end dedupe-contract noun; the API arg name keeps
+    the dispatcher convention). Best-effort path forwards
+    ``dedupe_key`` to ``safe_dispatch()`` as-is.
+
+    Args:
+        db: Caller's async DB session. Outbox INSERT lands in this
+            session's transaction (caller commits). The best-effort
+            callback captures this same session and uses it post-commit.
+        event: The system event — ``SystemEvents`` enum member, NOT a
+            raw string. The catalog is keyed by enum identity.
+        payload: Event-specific data — forwarded to the dispatcher /
+            stored on the outbox row.
+        dedupe_key: End-to-end dedupe key. **Required** for outbox
+            events (becomes the row's ``idempotency_key``); forwarded
+            as-is for best-effort events.
+
+    Returns:
+        ``None`` for outbox events (caller commits, worker dispatches
+        later).
+
+        ``Callable[[], Awaitable[None]]`` for best-effort events. The
+        router MUST ``await callback()`` after ``await db.commit()``
+        (per service / router pattern V3, ``CLAUDE.md`` Rule 5).
+
+    Raises:
+        ValueError: If ``event`` is not a key in ``EVENT_CATALOG``
+                    (covers unknown events and non-enum inputs — the
+                    catalog dict only matches ``SystemEvents`` enum
+                    identities), or if ``requires_outbox=True`` but
+                    ``dedupe_key`` is missing.
+
+    Service caller pattern (B2.3 wrapper; #16 will wire
+    ``state_service.transition()`` through this).
+
+    The example below uses ``<OUTBOX_EVENT>`` and ``<DECISION_KEY>``
+    as placeholders so the coverage grep
+    (``check_notification_event_coverage.py``) does not pick this
+    docstring up as a fake dispatch site. A real call passes a
+    concrete ``SystemEvents`` enum member (e.g. one of the seven
+    ``requires_outbox=True`` admission events in the B2.1 catalog)::
+
+        notif_callback = await dispatch_event(
+            db,
+            event=SystemEvents.<OUTBOX_EVENT>,
+            payload={"profile_id": profile.id, "choice_priority": 1},
+            dedupe_key=f"<DECISION_KEY>:{profile.id}:1",
+        )
+        # Service body returns (result, post_commit_callback) where
+        # post_commit_callback awaits notif_callback if non-None.
+    """
+    # SystemEvents is ``(str, Enum)`` so a raw string with a matching value
+    # would dict-lookup successfully via __hash__/__eq__. That hides bugs
+    # downstream (``event.value`` / ``event.name`` access on a string blows
+    # up with AttributeError far from the call site). Reject non-enum input
+    # at the front door so the contract is enforced positively.
+    if not isinstance(event, SystemEvents):
+        raise ValueError(
+            f"dispatch_event: event must be a SystemEvents enum member; "
+            f"got {type(event).__name__} {event!r}. The catalog is keyed "
+            "by enum identity even though SystemEvents derives from str."
+        )
+
+    event_def = get_event(event)
+    if event_def is None:
+        raise ValueError(
+            f"dispatch_event: event {event.name} is not in EVENT_CATALOG. "
+            "Add a catalog entry before calling dispatch_event for this "
+            "SystemEvents member."
+        )
+
+    if event_def.requires_outbox:
+        if dedupe_key is None:
+            raise ValueError(
+                f"dispatch_event: event {event.name} has requires_outbox=True; "
+                "dedupe_key is required (becomes the outbox `idempotency_key`)."
+            )
+        db.add(
+            models.NotificationOutbox(
+                event_code=event.value,
+                payload=payload,
+                idempotency_key=dedupe_key,
+            )
+        )
+        return None
+
+    # Best-effort path — return a post-commit callback that delegates
+    # to safe_dispatch. Capture context via closure so the router can
+    # invoke the callback without re-passing args.
+    captured_db = db
+    captured_event = event
+    captured_payload = payload
+    captured_dedupe = dedupe_key
+    captured_skip = event_def.bypass_consent_check
+
+    async def post_commit_callback() -> None:
+        await safe_dispatch(
+            db=captured_db,
+            event=captured_event,
+            payload=captured_payload,
+            dedupe_key=captured_dedupe,
+            skip_preference_check=captured_skip,
+        )
+
+    return post_commit_callback
