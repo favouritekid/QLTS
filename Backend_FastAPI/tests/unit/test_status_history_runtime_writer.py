@@ -240,26 +240,77 @@ class TestTransitionWriterContract:
         assert history_row.effective_transition_role == "admin"
 
     @pytest.mark.asyncio
-    async def test_transition_skip_audit_skips_history_row(self):
-        """``skip_audit`` callers (e.g. override path that writes its
-        own ``audit_service.log_changes`` row) must NOT double-write
-        the status_history row either; otherwise the audit trail
-        contains both an ``override`` log_changes row and a generic
-        history row pointing at the same transition."""
+    async def test_transition_skip_audit_still_writes_status_history(self):
+        """Phase1-Hotfix-3 contract — ``skip_audit=True`` callers
+        (override path that already writes a richer
+        ``audit_service.log_changes`` row) MUST STILL stage the
+        purpose-built ``AdmissionProfileStatusHistory`` row per PLAN
+        line 1098 mandate ``"mọi endpoint đổi status MUST insert 1 row
+        vào status_history cùng transaction frame"``.
+
+        The override path's bypass intent targets ``entity_audit_log``
+        (legacy generic table) where a second log_status_change row
+        would duplicate the ``log_changes`` row. It does NOT extend
+        to the new 3-column role audit table — that table is the
+        single canonical source for transition-trail queries
+        regardless of which legacy sink the caller used.
+
+        Locks the corrected behavior; the previous test
+        ``test_transition_skip_audit_skips_history_row`` (deleted
+        2026-05-07) inverted this contract and would have allowed
+        admin override transitions to vanish from the new audit
+        table indefinitely."""
         db = _make_db()
-        profile = _profile()
+        profile = _profile(status="approved")
         await transition(
             db,
             profile,
-            "submitted",
+            "overridden",
             actor=_user(15, "admin"),
-            source="api",
+            reason="Admin force-approve",
+            source="override",
+            event_metadata={"override": True, "bypass_rules": True},
             skip_audit=True,
             skip_dispatch=True,
         )
-        # Zero ``db.add`` calls — neither history row nor anything
-        # else this code path stages.
-        assert db.add.call_count == 0
+        # Status_history row staged exactly once per transition,
+        # carrying the override context so admin audit queries can
+        # branch on it without joining the legacy log_changes row.
+        assert db.add.call_count == 1
+        history_row = db.add.call_args[0][0]
+        assert history_row.from_status == "approved"
+        assert history_row.to_status == "overridden"
+        assert history_row.transition_reason == "Admin force-approve"
+        assert history_row.metadata_["override"] is True
+        assert history_row.metadata_["bypass_rules"] is True
+        assert history_row.metadata_["source"] == "override"
+
+    @pytest.mark.asyncio
+    async def test_transition_skip_audit_skips_legacy_entity_audit(self):
+        """Companion to the above — ``skip_audit=True`` MUST still
+        bypass the legacy ``audit_service.log_status_change`` call
+        (which is the original bypass target). Status_history runs
+        regardless; entity_audit_log skips per the override path's
+        coordination with ``log_changes``."""
+        db = _make_db()
+        profile = _profile(status="approved")
+        with patch(
+            "app.services.audit_service.log_status_change",
+            new_callable=AsyncMock,
+        ) as mock_legacy:
+            await transition(
+                db,
+                profile,
+                "overridden",
+                actor=_user(15, "admin"),
+                source="override",
+                skip_audit=True,
+                skip_dispatch=True,
+            )
+        # Legacy entity_audit_log writer NOT called when skip_audit=True.
+        mock_legacy.assert_not_called()
+        # But status_history still staged (locked above).
+        assert db.add.call_count == 1
 
     @pytest.mark.asyncio
     async def test_transition_metadata_includes_source(self):
