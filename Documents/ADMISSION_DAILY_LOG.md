@@ -56,6 +56,81 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-07 — Phase 7 Step A re-validate + fresh prod backup arc CLOSED 🎯
+
+### #184 Phase 7 Step A re-validate — fresh prod backup all 4 layers
+
+**Trigger**: User explicit ask — verify backup gap audit (post-Rehearsal-6) yêu cầu fresh prod artifacts trước Phase 7 Step B GO. Step A.2 backup từ 2026-05-06 11:42 đã 1.5 ngày cũ; restore rehearsal chưa PASS evidence.
+
+**Prod state captured** (2026-05-07 21:01 UTC+7):
+* Branch HEAD: `d8b3191d` (main, PR #180 — pre-cutover state)
+* Alembic head: `admstrict01` (pre-Phase-1 baseline)
+* All 8 services up + healthy: backend (6d) + celery × 2 (6d) + frontend (6d) + nginx (11d) + postgres (4w) + redis (4w) + certbot (4w)
+* DB row counts: 9 admission_profile + 425 lead + 17 user + 0 student + 232 casbin_rule + 3 admission_method + 52 admission_path + 54 profile_document
+* Disk free: 34GB / 56GB
+* Pre-cutover image tags both present: `qlts-backend:pre-cutover-d8b3191d` (782MB) + `qlts-frontend:pre-cutover-d8b3191d` (359MB)
+
+**4 backup layers captured (timestamp `20260507_210307`)**:
+
+| Layer | File | Size | md5 |
+|---|---|---|---|
+| 1. DB custom format | `prod_dump_20260507_210307.dump` | 1.2M | `792c07403a8f68737cdce204c1578634` |
+| 1'. DB plain SQL (insurance) | `prod_dump_20260507_210307.sql` | 12M | `4d788e6de05b474acb7e407321a86034` |
+| 2. Uploads volume | `prod_uploads_20260507_210307.tar.gz` | 24M (48 entries) | `68df8ee074a4fe31c53c7ba948e94d33` |
+| 2'. Static uploads | `prod_static_uploads_20260507_210307.tar.gz` | 651K (3 entries) | `e5466e1e6c02c38419d34224c61cb81a` |
+| 3. Config bundle | `prod_config_20260507_210307.tar.gz` | 8K | `666e584a4c9c5288f5eac4a941cd81a6` |
+| 4. Backend image | `qlts-backend-pre-cutover-d8b3191d.tar.gz` | 165M | `3fc4daf1a4082498015e0327818cb68f` |
+| 4'. Frontend image | `qlts-frontend-pre-cutover-d8b3191d.tar.gz` | 80M | `d1cf26fc104a0578525de22541e2e163` |
+
+Config bundle entries: `.env.production` + `docker-compose.yml` + `nginx/conf.d/{default.conf,default.conf.template}` + `nginx/nginx.conf` + `scripts/deploy.sh`.
+
+**Dual location redundancy**:
+* Prod VPS: `/opt/qlts/local_backup/` — md5 verified
+* Dev workstation: `D:\QLTS\local_backup\` — md5 verified parity (7/7 hashes match)
+* Total local backup directory: 315MB (includes 2026-05-06 dual artifacts retained as redundancy)
+
+**Restore rehearsal PASS** (NEW — addresses RUNBOOK §9.1 Backup checklist gap):
+1. Created throwaway DB `qlts_restore_test` on dev postgres
+2. `pg_restore` from `prod_dump_20260507_210307.dump` (custom format)
+3. Verified row count parity vs prod source:
+   ```
+   alembic           | admstrict01  ✓
+   admission_profile | 9            ✓
+   lead              | 425          ✓
+   user              | 17           ✓
+   casbin_rule       | 232          ✓
+   admission_method  | 3            ✓
+   admission_path    | 52           ✓
+   profile_document  | 54           ✓
+   ```
+4. Cleanup: `DROP DATABASE qlts_restore_test;` (throwaway, not retained)
+
+→ Backup mechanism verified end-to-end. Recipe works.
+
+**SCP transfer notes**:
+* Files <50MB transferred OK first attempt
+* Backend image (165MB) connection-reset attempt #1; succeeded with `-l 8000` bandwidth throttle + `ServerAliveInterval=30` keepalive on attempt #2
+* Frontend image (80MB) succeeded first attempt with throttle
+
+### Backup gap closure status
+
+| Gap from prior audit | Status |
+|---|---|
+| Restore rehearsal PASS evidence | ✅ B6 verified |
+| Pre-cutover image tag offsite | ✅ Backend + frontend tar saved local + verified md5 |
+| `.env.production` + nginx conf bundle | ✅ B3 prod_config bundle includes all |
+| Step A.2 uploads tar 1.5 ngày cũ | ✅ Refreshed 20260507_210307 |
+| Step A re-validate (task #99) | ✅ DONE |
+| S3 offsite | ⊘ Solo dev simplification per memory `solo-cutover-simple-data-import` — local + prod VPS dual location accepted |
+
+**ALL 6 backup gaps closed.** Fresh prod artifacts captured + integrity-verified + restore-tested. Phase 7 Step B trigger pre-flight backup checklist 100% satisfied.
+
+### Pending — Phase 7 Step B trigger gated user GO signal
+
+`COLD_CUTOVER=true ./scripts/deploy.sh` per RUNBOOK §7.2 (T+0:00 → T+5:15 maintenance window).
+
+---
+
 ## 2026-05-07 — Hotfix #5 SHIPPED + Rehearsal #6 V3 re-run GREEN 🎯
 
 ### #184 Phase1-Hotfix-5 — docker-compose env passthrough for 3 cutover gate flags
