@@ -169,6 +169,109 @@ Before issuing GREEN verdict on rehearsal:
 
 ---
 
+## Rehearsal 5 — 2026-05-07 16:35 (UTC+7) — POST Hotfix #5 deploy env propagation fix
+
+**Trigger**: Post-Hotfix-4 code review (memory `audit-before-fix` + `pattern-change-impact-audit`) surfaced a 5th P0 bug — `deploy.sh` Step 8 `export RUN_*=false` does NOT propagate into backend / celery-worker / celery-beat containers because `docker-compose.yml` `environment:` blocks did NOT reference these 3 keys, and `.env.production` did NOT define them. Compose only forwards env keys that are explicitly listed in `environment:` block OR present in `env_file`. Result: `COLD_CUTOVER=true ./scripts/deploy.sh` would silently launch containers with default `:-true` semantics → entrypoint auto-runs `alembic upgrade head` + `sync_notification_rules` + Casbin lifespan policy load before operator can run RUNBOOK §7.2 manual sequence. Hotfix #5 adds 3 env passthrough keys with safe `:-true` defaults to all 3 services.
+
+**Branch / commit**: `feature/admission-184-deploy-env-propagation-fix` off `feat/admission-full-cutover @ 04a1f292`. PR pending push approval per memory `push-approval-required`.
+
+### R5.0 — Celery scope verify
+
+`Backend_FastAPI/Dockerfile`:
+```
+56  ENTRYPOINT ["/app/docker-entrypoint.sh"]
+63  CMD ["gunicorn", "app.main:app", "-c", "gunicorn.conf.py"]
+```
+
+Compose `command:` overrides ONLY CMD, NOT ENTRYPOINT. Therefore:
+* `backend` (CMD = gunicorn) → entrypoint runs 3 gates → exec gunicorn ✓
+* `celery-worker` (command override = celery worker) → entrypoint runs 3 gates → exec celery worker ✓
+* `celery-beat` (command override = celery beat) → entrypoint runs 3 gates → exec celery beat ✓
+
+→ All 3 services need the 3 cutover flags. Scope confirmed.
+
+`docker-entrypoint.sh` 3 gate lines verified:
+* `13  if [ "${RUN_MIGRATIONS_ON_STARTUP:-true}" != "false" ]; then ...`
+* `25  if [ "${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}" != "false" ]; then ...`
+* `42  if [ "${RUN_CASBIN_LOAD_ON_STARTUP:-true}" != "false" ]; then ...`
+
+### R5.1 — Routine flow substitution (env unset → defaults to "true")
+
+```
+$ docker compose -f docker-compose.yml --profile production --env-file .env.production config | grep -E "RUN_(MIGRATIONS|SYNC_NOTIFICATION|CASBIN)" | sort
+
+RUN_CASBIN_LOAD_ON_STARTUP: "true"
+RUN_CASBIN_LOAD_ON_STARTUP: "true"
+RUN_CASBIN_LOAD_ON_STARTUP: "true"
+RUN_MIGRATIONS_ON_STARTUP: "true"
+RUN_MIGRATIONS_ON_STARTUP: "true"
+RUN_MIGRATIONS_ON_STARTUP: "true"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "true"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "true"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "true"
+```
+
+→ 9 lines = 3 flags × 3 services. ALL `"true"` ⇒ routine deploy unchanged. Existing pre-Hotfix-4 flow preserved.
+
+### R5.2 — Cutover flow substitution (deploy.sh exports `false`)
+
+```
+$ RUN_MIGRATIONS_ON_STARTUP=false RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false RUN_CASBIN_LOAD_ON_STARTUP=false \
+    docker compose -f docker-compose.yml --profile production --env-file .env.production config \
+    | grep -E "RUN_(MIGRATIONS|SYNC_NOTIFICATION|CASBIN)" | sort
+
+RUN_CASBIN_LOAD_ON_STARTUP: "false"
+RUN_CASBIN_LOAD_ON_STARTUP: "false"
+RUN_CASBIN_LOAD_ON_STARTUP: "false"
+RUN_MIGRATIONS_ON_STARTUP: "false"
+RUN_MIGRATIONS_ON_STARTUP: "false"
+RUN_MIGRATIONS_ON_STARTUP: "false"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+```
+
+→ 9 lines = 3 flags × 3 services. ALL `"false"` ⇒ entrypoint skips alembic + sync + Casbin. Operator runs RUNBOOK §7.2 manual sequence (T+1:30 / T+3:00 / T+3:15 / T+3:30) without race condition with auto-startup.
+
+### R5.3 — Pre-fix bug reproduction (negative test)
+
+Pre-Hotfix-5 state (no `RUN_*` keys in `environment:` blocks):
+```
+$ RUN_MIGRATIONS_ON_STARTUP=false ... docker compose ... config | grep RUN_
+(empty)
+```
+→ Confirmed: deploy.sh `export` had NO PATH into the container. Compose silently dropped them.
+
+Post-Hotfix-5 fix verified above (R5.2). Bug closed.
+
+### R5.4 — YAML syntax + diff scope
+
+* `docker-compose.yml` parses cleanly via `docker compose config` (no validation errors).
+* Diff scope: 3 services × `environment:` block += 3 keys + comment block. Total +33 lines added. No keys removed, no key types changed. `volumes`, `depends_on`, `command`, `restart`, `deploy.resources`, `healthcheck`, `logging` all untouched.
+
+### Verdict: GREEN — env propagation now works end-to-end
+
+| Gate | Result |
+|---|---|
+| Celery scope verify (entrypoint inheritance) | ✅ All 3 services share entrypoint |
+| Routine flow preserved (defaults to "true") | ✅ R5.1 — 9/9 instances `"true"` |
+| Cutover flow propagation (exports → containers) | ✅ R5.2 — 9/9 instances `"false"` |
+| Pre-fix negative test (bug reproducible) | ✅ R5.3 — pre-fix grep empty |
+| YAML parse + diff scope review | ✅ R5.4 — 33 lines additive only |
+
+### Action
+
+**Phase 7 Step B trigger** STILL gated on user explicit signal per memory `push-approval-required` + user explicit gate "không deploy mà không có approval của tôi". Hotfix #5 ships the missing piece for COLD_CUTOVER mode to actually function as RUNBOOK §7.2 designs — but the deploy itself is operator-triggered.
+
+Pending sign-off:
+* Hotfix #5 PR push approval (per `push-approval-required` memory)
+* Hotfix #5 PR CI green
+* Hotfix #5 PR merge approval
+
+Then Phase 7 Step A re-validate (re-read backup tags + image tags) → user GO signal → Phase 7 Step B (cutover execution per RUNBOOK §7.2).
+
+---
+
 ## Rehearsal 4 — 2026-05-07 15:25 (UTC+7) — POST 4-HOTFIX ARC integration verify + cutover closure
 
 **Trigger**: NO-GO verdict 2026-05-07 surfaced 4 P0 blockers (status_history skip_audit override gap, deploy.sh routine vs RUNBOOK §7.2, deploy.yml --allow-deferred missing, RUNBOOK §10 Go gate waiver drift). 4 hotfix arc shipped via PR #229/#230/#231 + cleanup commit `0ccdaa5a`. Rehearsal #4 verifies all 4 fixes integrated end-to-end before Phase 7 Step B trigger.
