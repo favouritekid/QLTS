@@ -169,6 +169,104 @@ Before issuing GREEN verdict on rehearsal:
 
 ---
 
+## Rehearsal 4 — 2026-05-07 15:25 (UTC+7) — POST 4-HOTFIX ARC integration verify + cutover closure
+
+**Trigger**: NO-GO verdict 2026-05-07 surfaced 4 P0 blockers (status_history skip_audit override gap, deploy.sh routine vs RUNBOOK §7.2, deploy.yml --allow-deferred missing, RUNBOOK §10 Go gate waiver drift). 4 hotfix arc shipped via PR #229/#230/#231 + cleanup commit `0ccdaa5a`. Rehearsal #4 verifies all 4 fixes integrated end-to-end before Phase 7 Step B trigger.
+
+**Backend image**: parent commit `0ccdaa5a` on `feat/admission-full-cutover` post-cleanup.
+
+### R4.1 — Unit + parity + regression suite (59 tests)
+
+| Suite | Cases | Result |
+|---|---|---|
+| `test_status_history_runtime_writer.py` | 19 (post-Hotfix-3 refactor: -1 wrong-behavior lock + +2 corrected contract locks = net +2 vs Hotfix-1) | ✅ PASS |
+| `test_admission_dispatch_payload_template_parity.py` | 24 (8 events × 3 test classes: parity + coverage + render roundtrip) | ✅ PASS |
+| `test_admission_state_service_event_mapping.py` | 10 (LEGACY_STATUS_TO_EVENT lock + DEFERRED set lock + dispatch anchor parity) | ✅ PASS |
+| `test_check_notification_event_coverage_deferred.py` | 7 (DEFERRED_ADMISSION_EVENTS Python set lock) | ✅ PASS |
+
+**Total: 59/59 PASS in 2.85s.**
+
+### R4.2 — deploy.yml --allow-deferred runtime verify
+
+```
+With --allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK:
+  exit=0
+  message: "OK — every notification event is wired or explicitly deferred (4 allow-listed)."
+
+Without --allow-deferred (negative test, proves P0-3 was real blocker):
+  exit=1
+```
+
+→ Hotfix #4 fix #2 (`deploy.yml:92` --allow-deferred) prevents cutover branch CI exit 1 post-merge.
+
+### R4.3 — deploy.sh COLD_CUTOVER env flag detection
+
+```
+COLD_CUTOVER=true   → IS_CUTOVER=1 (cutover mode triggered) ✓
+COLD_CUTOVER=TRUE   → IS_CUTOVER=0 (defensive — case-sensitive match) ✓
+COLD_CUTOVER=1      → IS_CUTOVER=0 (defensive — only "true" lowercase) ✓
+COLD_CUTOVER unset  → IS_CUTOVER=0 (routine deploy path) ✓
+```
+
+Defensive parse mirrors `docker-entrypoint.sh` 3 gate flags contract.
+
+### R4.4 — Syntax checks
+
+* `bash -n scripts/deploy.sh`: ✅ syntax OK
+* `deploy.yml` YAML parse via PyYAML: ✅ OK
+
+### R4.5 — Prior live integration evidence (carried from Hotfix #3 pre-merge verify)
+
+Hotfix #3 commit `00e264f0` live verified on dev DB profile id=14:
+* Pre history count: 1 (initial backfill)
+* 3 transitions chain: draft → submitted (skip_dispatch) → approved (skip_dispatch) → overridden (**skip_audit=True**)
+* Post history count: 4 (delta +3 — every transition wrote a row)
+* Override row id=27: from='approved' → to='overridden', role='admin', actor_actual_role='admin', metadata=`{source: override, override: true, bypass_rules: true}`
+* Legacy entity_audit_log: only 2 entries (override correctly skipped via skip_audit=True)
+* Rolled back; dev state restored
+
+→ PLAN line 1098 contract satisfied even cho override path.
+
+### R4.6 — Prior live integration evidence (Hotfix #2 PM session)
+
+3 outbox events dispatched end-to-end on dev DB:
+* `admission_decision_admitted` (id=1): claimed → dispatched ~2s, 1 attempt
+* `admission_decision_rejected` (id=2): ~1s, 1 attempt
+* `admission_enrolled` (id=3): ~22ms, 2 attempts (1 retry succeeded)
+
+→ Notification outbox dispatcher functional + Celery worker drains correctly.
+
+### Verdict: GREEN — all 4 P0 blockers closed + integrated
+
+Phase 7 Step B trigger UNBLOCKED. All cutover gates cleared:
+
+* Phase 1 Schema 19/19 + 23/23 invariants
+* Phase 1 nghiệp vụ runtime end-to-end (HTTP + service + Student row + outbox + Casbin)
+* Wave 4 multi-year + Wave 6 storefront BE
+* PR #228 + #229 + #230 + #231 hotfix arc closed (4 P0)
+* Cleanup commit `0ccdaa5a` (P0-4 RUNBOOK §10 + whitespace)
+* §A 23/23 + §B 80% + §C 95% + §D 100% + §E 3/3 outbox + §F 56/56 RBAC + §G 8/8
+* V3 effective gate satisfied with explicit waiver doc
+* Rehearsal #1 + #2 + #3 + #4 GREEN
+
+### Solo dev sign-off
+
+| Role | Signed by | Date | Decision |
+|---|---|---|---|
+| Backend Lead / DBA / Ops Lead / QA Lead / Product Owner / Admission Ops | favouritekid (solo dev) | 2026-05-07 | GO Phase 7 Step B (gated user explicit signal) |
+| Legal/Compliance | N/A — no live admission intake during refactor window | 2026-05-07 | N/A |
+
+### Action
+
+**Phase 7 Step A re-validate** next:
+* Backup artifacts still fresh?
+* Pre-cutover image tags still on prod?
+* Rollback recipe inline trong DAILY_LOG still accurate?
+
+Then **Phase 7 Step B trigger** — gated on user explicit signal per memory `push-approval-required` + user explicit gate "không deploy mà không có approval của tôi".
+
+---
+
 ## Rehearsal 2 — 2026-05-06 15:21 (UTC+7) — POST-HOTFIX status_history runtime writer
 
 **Trigger**: Post-Phase-6 GO sign-off independent runtime gate verification surfaced P0 bug — `admission_profile_status_history` runtime writer absent. Hotfix PR [#228](https://github.com/favouritekid/QLTS/pull/228) merged squash `e158f180` adds writer trong `transition()` + `create_profile()` initial state. Rehearsal 2 validates writer integration end-to-end on dev DB before Phase 7 Step B unblock.
