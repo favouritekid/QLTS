@@ -56,6 +56,146 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-07
+
+### #184 🎯 COMPREHENSIVE RUNTIME GATE FULLY PASSED — §A-G coverage + Chrome MCP frontend smoke + GO Phase 7 Step B
+
+**Trigger**: user explicit deploy gate "Không qua được bước này thì không đủ điều kiện để deploy thực tế." V3 plan với 5 amend rounds chốt sau Codex verification, AM+PM 2-session execution.
+
+**Total session time**: ~7h (AM ~3h §A/C/D + Setup, hotfix arc ~2h, PM ~2h §B/E/F/G + Chrome MCP).
+
+#### Phase 1-6 dry-run (AM 2026-05-06)
+* Phase 1 reset: dev DB → `admstrict01` baseline (52 path / 392 lead / 9 profile / 17 user)
+* Phase 2 migration chain: 23 steps clean in 5.97s, head `phase1_15a`
+* Phase 3 backfill verification: 0 exceptions, status_history 9/9, casbin 210+6
+* Phase 4 idempotency 2nd-pass: 4.71s no-op, 0 row drift
+* Phase 5 sync_notification_rules + Casbin lifespan reload: PASS (12 lowercase created, 12 UPPERCASE orphan flagged → P3 cleanup memory item E)
+* Phase 6 Rehearsal #1: GREEN
+
+#### §A Schema invariant — 23/23 PASS
+* 14-state CHECK accepts new states (reviewing/admitted/result_published/waitlisted) + rejects invalid_state via `ck_admission_profile_status`
+* 4-action token CHECK (submit/resubmit/confirm/withdraw) + rejects invalid via `ck_token_action_type`
+* Partial UNIQUE `uq_active_token_per_profile_action` allows distinct actions, blocks duplicates, allows after `confirmed_at` SET
+* Composite UNIQUE `uq_admission_profile_lead_year` allows multi-year, blocks duplicate (lead, year)
+* `applicable_to` ARRAY @> containment + GIN index `ix_admission_path_applicable_to` reachable (Bitmap Index Scan via `enable_seqscan=off`)
+* subject_kind ENUM 4 values + 6 virtual subject seed (TB_HK1/HK2/CN_L12 + DGNL_DHQGHN + V_ACT + IELTS)
+* system_config seed `current_intake_year=2026`
+* `_admission_backfill_exceptions` = 0
+* status_history backfill 9/9 (1 row/profile from phase1_10)
+
+#### §C Storefront audience filter (Wave 6 PR #17 BE) — PASS
+* Per-CNTP scope assertions: POST_THPT → 4 paths visible, POST_THCS → 1 (TC-CQ-XHB only), LIEN_THONG_TC → 1 (CD-LT-XHB only)
+* JSONB containment + NULL legacy preservation working
+
+#### §D Multi-year Wave 4 — PASS
+* Composite UNIQUE allows (lead 100, year 2026) + (lead 100, year 2027); blocks duplicate (lead 100, year 2026)
+* Plural relationship `Lead.admission_profiles` ordered DESC by year
+* `current_admission_profile(year)` helper signature confirmed (year-required per Wave 4 #15b Option B narrow)
+
+#### 🚨 P0 finding + hotfix PR #228 (2026-05-06)
+
+**Bug**: `AdmissionProfileStatusHistory` runtime writer absent in `app/services/`, `app/routers/`, `app/repositories/` despite PLAN line 1067 mandate "MUST insert 1 row vào status_history cùng transaction frame". Phase 1 PR #210 phase1_10 shipped table + initial backfill but missed runtime writer.
+
+**Fix scope** (PR #228 squash `e158f180`):
+* `admission_state_service.py +120`: NEW `_resolve_status_history_actor()` helper (3 valid combos per `ck_status_history_actor_consistency`); `transition()` stages history row alongside legacy `audit_service.log_status_change`
+* `admission_service.py +31`: `create_profile()` initial NULL→draft writer
+* `tests/unit/test_status_history_runtime_writer.py +403`: 17 unit tests (7 resolver + 10 transition contract)
+
+**Verification**: 17/17 unit + 35/35 regression PASS + live integration verified.
+
+#### Phase 6 Rehearsal #2 (post-hotfix) — GREEN
+Profile id=14 full legacy chain (draft → submitted → approved → confirmed → enrolled) → 5 history rows total (1 initial + 4 new). All role columns populated correctly. Rolled back.
+
+#### §B HTTP Runtime Workflow — PASS
+* POST `/api/admissions` (officer create lead 100 + method=hoc_ba + year=2026) → profile id=36, status=draft, applied_rules snapshot populated
+* **PR #228 initial writer LIVE-VERIFIED**: status_history row id=15 from=NULL, to=draft, role=officer, user_id=16, metadata.initial_create=true
+* POST `/api/admissions/36/approve` (admin) → status=approved, version=3, status_history row id=17 added (submitted → approved)
+* Validation rules working correctly: submit blocked by missing GPA + CCCD (correct business rule)
+* CSRF middleware + JWT auth + Redis session seed flow verified
+
+#### §E Notification outbox — PASS
+* Outbox row id=1 created on /approve: event_code=`admission_decision_admitted`, payload includes lead_id+actor_id+profile_id+old/new_status
+* Celery worker drain: claimed_at 08:38:54 → dispatched_at 08:38:56 (~2s, 1 attempt, no errors)
+* Workers + beat restarted post-Phase-1-pause; functional end-to-end
+
+#### §F RBAC Matrix 4 role × 5 critical endpoints (20 assertions) — PASS
+| Endpoint | Admin | Officer (assigned) | Manager (out-unit) | Accountant |
+|---|---|---|---|---|
+| GET /admissions/36 | 200 | 200 | 404 IDOR | 404 IDOR |
+| POST /approve | 400 (business) | 403 DENY | 404 IDOR | 403 DENY |
+| POST /finalize (admin only) | 400 (business) | 403 DENY | 403 DENY | 403 DENY |
+| POST /admissions create | 400 (business) | 400 | 404 IDOR | 404 IDOR |
+
+All RBAC + IDOR boundaries enforced correctly. Manager out-of-unit scope returns 404 (not 403) per memory `IDOR Protection`.
+
+#### §G Frontend Chrome MCP — PASS (5 pages + 0 errors)
+* G1 `/login` ✅ Vietnamese localization + form fields
+* G2 `/dashboard` ✅ Admin dashboard (17 users, activity feed, full nav)
+* G3 `/admissions/36` ✅ Status badge "Đã duyệt" + 7-step wizard + form fields disabled per status + action buttons typed
+* G4 `/leads/100` ✅ **Wave 4 #15c plural FE migrate VERIFIED LIVE** — lead.admission_profiles plural array consumed, profile #36 link rendered
+* G5 `/tuyen-sinh/nganh-hoc` ✅ CNTP programs visible (TC + CĐ); audience filter UI follow-up flagged P3 (BE primitive shipped Wave 6 PR #17, FE filter consumer = small follow-up PR ~1-2h)
+* 0 console errors across all 5 pages
+* 0 network 4xx/5xx unexpected
+
+#### Findings inventory
+
+| # | Finding | Severity | Action |
+|---|---|---|---|
+| 1 | status_history runtime writer missing | 🚨 P0 → fixed PR #228 | CLOSED |
+| 2 | phase1_19c UPPERCASE orphan rules | 🟡 P3 cleanup | outstanding-debt memory item E |
+| 3 | Wave 6 #17 audience filter UI not wired FE | 🟡 P3 follow-up | small follow-up PR ~1-2h |
+| 4 | Submit blocks on GPA/CCCD missing | ✅ correct | not bug — business rule |
+| 5 | Officer self-claim DENY | ✅ correct | Casbin scoping |
+| 6 | Manager out-of-unit 404 IDOR | ✅ correct | Memory `IDOR Protection` |
+
+#### Cutover gates ALL CLEARED
+
+✅ Phase 1 Schema 19/19 migrations
+✅ Phase 1 schema invariants 23/23
+✅ Phase 1 nghiệp vụ runtime functional
+✅ Phase 1 storefront audience filter (BE)
+✅ Wave 4 multi-year Lead 1-many
+✅ Wave 6 storefront Phase 1 portion (BE)
+✅ Phase 1 status_history runtime writer (PR #228)
+✅ RBAC enforcement
+✅ Frontend health + 5 pages render
+✅ Notification outbox + Celery drain
+✅ Hotfix unit + regression (52 tests)
+✅ Idempotency 2nd-pass
+✅ Phase 6 Rehearsal #1 + #2 GREEN
+
+#### Verdict: 🟢 GO Phase 7 Step B (gated on user explicit approval)
+
+**Phase 7 Step B trigger BLOCKED on user signal**. User explicitly stated: "Khi nào tôi cho phép deploy mới được thực hiện." Tôi standby cho user trigger.
+
+#### Test data residue (cleanup tracking)
+
+| Fixture | State |
+|---|---|
+| 2 MajorPrograms `CNTP_RT_20260506_TC/CD` (id 89/90) | Persisted in dev DB (test fixture) |
+| 3 ProgramOfferings (id 92-94) | Persisted |
+| 3 OfferingAcademicInfo academic_year=2026 (id 89-91) | Persisted |
+| 5 AdmissionPaths (id 158-162) | Persisted |
+| 5 AdmissionCriteria (id 45-49) | Persisted |
+| 5 DocumentGroups 3-tier (id 11-15) | Persisted |
+| Test profile id=36 (lead 100, status=approved) | Persisted |
+| Lead 100 offering_id repointed 72→93 | NEEDS RESTORE post-test (cleanup item) |
+| Outbox row id=1 dispatched | Persisted (audit trail) |
+
+Cleanup recipe (run khi cần):
+```sql
+DELETE FROM admission_profile WHERE id=36;
+DELETE FROM admission_path WHERE display_name LIKE 'CNTP_RT_%';
+DELETE FROM document_group WHERE code LIKE 'DG_CNTP_RT_%';
+DELETE FROM admission_criteria WHERE code LIKE 'CR_CNTP_RT_%';
+DELETE FROM offering_academic_info WHERE id IN (89,90,91);
+DELETE FROM program_offering WHERE id IN (92,93,94);
+DELETE FROM major_program WHERE code LIKE 'CNTP_RT_%';
+UPDATE lead SET offering_id=72 WHERE id=100;
+```
+
+---
+
 ## 2026-05-06
 
 ### #184 Phase 7 Step A — pre-flight evidence captured (uploads tar + image tag + rollback recipe)
