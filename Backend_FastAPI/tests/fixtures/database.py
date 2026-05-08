@@ -110,14 +110,96 @@ async def init_schema_once(settings, AppBase, CasbinBase=None):
             connect_args={"command_timeout": 60},
         )
         async with setup_engine.begin() as conn:
-            # Drop stale enum types
-            for enum_type in ("discount_type_enum", "outcometype", "statustype",
-                              "selectablemode", "triggertype", "administrativenodelevel"):
+            # Drop stale enum types (legacy + current names)
+            for enum_type in (
+                "discount_type_enum",
+                "outcometype", "statustype", "selectablemode", "triggertype",
+                "administrativenodelevel",
+                # cutover-introduced ENUMs (cleanup defensive)
+                "subject_kind",
+                "admission_audience",
+                "conduct_grade",
+                "transition_role_legacy",
+                "actor_actual_role",
+                "effective_transition_role",
+                "outcome_type_enum",
+                "status_type_enum",
+                "selectable_mode_enum",
+                "trigger_type_enum",
+            ):
                 await conn.execute(text(f"DROP TYPE IF EXISTS {enum_type} CASCADE"))
 
-            # Re-create migration-managed enums
+            # Re-create migration-managed enums BEFORE Base.metadata.create_all().
+            #
+            # All ENUMs here use ``create_type=False`` in the model column
+            # definition because their DDL is owned by Alembic migrations.
+            # Test DB uses ``Base.metadata.create_all()`` (NOT alembic) per
+            # ``tests/fixtures/database.py:123`` + memory
+            # ``test-db-schema-source`` — so SQLAlchemy SKIPs ENUM creation
+            # for ``create_type=False`` columns and the table CREATE fails
+            # with ``UndefinedObjectError: type "foo" does not exist``.
+            #
+            # Every ``create_type=False`` ENUM in app/models MUST be listed
+            # below. The lock test ``tests/unit/test_fixture_enum_coverage.
+            # py`` greps the codebase + asserts each name appears here —
+            # adding a new ``create_type=False`` ENUM without updating
+            # this fixture fails the lock test loudly.
+
+            # tuition_discount_policy.py — pre-cutover existing
             await conn.execute(text(
                 "CREATE TYPE discount_type_enum AS ENUM ('amount', 'percentage')"
+            ))
+
+            # phase1_03 (#184 Wave 1 PR-1B') — admission_path.applicable_to
+            await conn.execute(text(
+                "CREATE TYPE admission_audience AS ENUM "
+                "('POST_THCS', 'POST_THPT', 'LIEN_THONG_TC', "
+                "'LIEN_THONG_CD', 'VLVH')"
+            ))
+
+            # phase1_05 (#184 Wave 1 PR-1C') — subject.subject_kind
+            await conn.execute(text(
+                "CREATE TYPE subject_kind AS ENUM "
+                "('ACADEMIC_SUBJECT', 'TERM_AVERAGE', 'ABILITY_TEST', "
+                "'CERTIFICATE')"
+            ))
+
+            # phase1_09a (#184 Wave 2) — admission_profile.conduct_grade
+            await conn.execute(text(
+                "CREATE TYPE conduct_grade AS ENUM ('TB', 'KHA', 'TOT')"
+            ))
+
+            # phase1_10 (#184 Wave 2) — status_history 3-role triplet
+            await conn.execute(text(
+                "CREATE TYPE transition_role_legacy AS ENUM "
+                "('system', 'officer', 'admin', 'candidate')"
+            ))
+            await conn.execute(text(
+                "CREATE TYPE actor_actual_role AS ENUM "
+                "('candidate', 'officer', 'manager', 'accountant', "
+                "'admin', 'system')"
+            ))
+            await conn.execute(text(
+                "CREATE TYPE effective_transition_role AS ENUM "
+                "('candidate', 'officer', 'admin', 'system')"
+            ))
+
+            # pipeline.py — pre-cutover existing FSM enums
+            await conn.execute(text(
+                "CREATE TYPE outcome_type_enum AS ENUM "
+                "('positive', 'neutral', 'negative')"
+            ))
+            await conn.execute(text(
+                "CREATE TYPE status_type_enum AS ENUM "
+                "('transition', 'activity', 'system')"
+            ))
+            await conn.execute(text(
+                "CREATE TYPE selectable_mode_enum AS ENUM "
+                "('user', 'role', 'system')"
+            ))
+            await conn.execute(text(
+                "CREATE TYPE trigger_type_enum AS ENUM "
+                "('user', 'role', 'system', 'event')"
             ))
 
             await conn.run_sync(AppBase.metadata.create_all)
