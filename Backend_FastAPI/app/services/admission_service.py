@@ -6264,7 +6264,7 @@ async def resubmit_profile(
         db=db,
         profile=profile,
         changed_by_user_id=officer.id,
-        reason=f"Profile resubmitted: {data.get('notes', 'No notes')[:50]}",
+        reason=f"Profile resubmitted: {(data.get('notes') or 'No notes')[:50]}",
     )
 
     await db.flush()
