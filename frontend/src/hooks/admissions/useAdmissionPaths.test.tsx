@@ -28,14 +28,21 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 const MOCK_PATH_ID = 42;
 
 /** A minimal AdmissionPathResponse to pre-seed the detail cache. */
-const mockAdmissionPathResponse: AdmissionPathResponse = {
+// Use ``satisfies`` instead of ``: AdmissionPathResponse`` annotation —
+// the explicit-annotation form triggered TS2739 "missing properties"
+// for the 3 phase1_03 fields (``applicable_to`` / ``method_quota`` /
+// ``bonus_rule_override``) even though they are present in the literal.
+// Symptom only manifests on CI runner; test-debt fix 2026-05-08 swap
+// to ``satisfies`` to widen literal-narrowing while still type-checking
+// the shape against ``AdmissionPathResponse``.
+const mockAdmissionPathResponse = {
   id: MOCK_PATH_ID,
   academic_info_id: 1,
   admission_method_id: 1,
-  status: "draft",
+  status: "draft" as const,
   display_name: "Test Path",
   display_order: 1,
-  visibility: "public",
+  visibility: "public" as const,
   activated_at: null,
   activated_by: null,
   created_at: "2025-06-01T00:00:00+00:00",
@@ -43,16 +50,16 @@ const mockAdmissionPathResponse: AdmissionPathResponse = {
   academic_info: null,
   admission_method: null,
   criteria: null,
-  available_actions: [],
+  available_actions: [] as string[],
   can_edit: true,
   can_activate: false,
-  validation_errors: [],
+  validation_errors: [] as string[],
   // PR #6: strict submit gate per path; default False in the fixture
   // mirrors the backend default for newly-created paths.
   allow_unverified_submission: false,
   // Minor-correction allowlist — empty by default for fresh paths
   // (admin opts in field-by-field after path creation).
-  minor_correction_allowed_fields: [],
+  minor_correction_allowed_fields: [] as string[],
   // phase1_03 (#184 Wave 1 PR-1B') — 3 new fields shipped in BE
   // PR #206 + Zod parse parity. Defaults mirror BE Create behavior:
   // null for all three (= legacy / no audience filter / no method
@@ -62,7 +69,7 @@ const mockAdmissionPathResponse: AdmissionPathResponse = {
   applicable_to: null,
   method_quota: null,
   bonus_rule_override: null,
-};
+} satisfies AdmissionPathResponse;
 
 /** The shape that PUT /paths/:id/documents returns. */
 const mockDocumentsResponse: ResolvedDocumentListResponse = {
