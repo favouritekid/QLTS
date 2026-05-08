@@ -56,6 +56,70 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-08 — Post-cutover follow-up batch SHIPPED prod (combined deploy)
+
+### #184 Routine deploy — FU batch + BE test-debt + FE test-debt atomic ship
+
+**CI run**: #25534494957 trigger by main push `54e0bd7b` (FE test-debt squash). PR Gate Contract Tests SUCCESS + Deploy to VPS SUCCESS post production env approval.
+
+**Combined deploy bundle** (3 PRs, 1 atomic deploy):
+
+| PR | Squash SHA | Scope |
+|---|---|---|
+| #234 FU-batch | `d8554bca` | BUG_RESUBMIT_NOTES_NONE fix + Mako 1.3.10→1.3.12 + python-multipart 0.0.26→0.0.27 + Lead.last_terminal_admission_profile helper + alembic doc + deploy.sh self-update prevention pattern |
+| #235 BE test-debt fixture | `09b1538b` | Add explicit CREATE TYPE for 10 `create_type=False` ENUMs in `init_schema_once` + drift lock test `test_fixture_enum_coverage.py` |
+| #236 FE test-debt | `54e0bd7b` | Fix 2 pre-existing FE test type-check errors (AdmissionProfileShallow shape align + satisfies operator pattern on AdmissionPathResponse fixture) |
+
+**Deploy timeline**:
+* 08:06 UTC+7 — FU.3 prod SQL DELETE 12 UPPERCASE orphan `notification_rule` rows + 29 FK cascade `notification_action` (defensive backup tables `_archived_notification_rule_uppercase_20260508` + `_archived_notification_action_uppercase_20260508` retained for trace)
+* 08:54 UTC+7 — PR #234 FU-batch merge `d8554bca` → CI run #25530761329 fail at "Backend — Lead assignment contract" (`subject_kind` ENUM init order — pre-existing test debt)
+* 08:34 UTC+7 — PR #235 BE test-debt branch + commit `13c1bee4` local verify 91/91 PASS
+* 08:39 UTC+7 — PR #235 squash merge `09b1538b` → CI run #25531774137 fail at "Frontend — Type check" (next pre-existing test debt exposed)
+* 09:18 UTC+7 — PR #236 FE test-debt branch + commit `6cf3ff07`
+* 10:11 UTC+7 — PR #236 squash merge `54e0bd7b` → CI run #25534494957
+* 10:37 UTC+7 — PR Gate Contract Tests SUCCESS (all 3 fixes verified)
+* 10:39 UTC+7 — Deploy to VPS waiting production env approval
+* 10:50 UTC+7 — User consent "đồng ý" → API approval submitted (deployment ID 4617072693)
+* 10:59 UTC+7 — Backend container restart (`docker inspect StartedAt: 2026-05-08T03:59:18Z`)
+* 11:00 UTC+7 — Smoke verify: `/health` 200, Mako 1.3.12, python-multipart 0.0.27, all 8 containers healthy
+
+**T+24h env flag explicit set** (RUNBOOK §7.2 line 380-385):
+* Backup `.env.production.bak.t24h-flags-20260508_110533`
+* Append 3 explicit `RUN_*=true` to `.env.production` for documentation/clarity (zero functional difference — `${VAR:-true}` substitution Hotfix #5 same outcome). Container restart NOT needed.
+* Verified `docker compose config` substitution + backend container env both show "true" for all 3 flags.
+
+### Verification
+
+* All 3 deploy items live on prod (Mako 1.3.12 + python-multipart 0.0.27 verified via `pip show`)
+* Container start timestamps confirm fresh image (Up About a minute → 1 minute uptime post-restart)
+* DB row counts unchanged from cutover-shipped state (no migrations to apply, alembic head still `phase1_15a`)
+* FU.3 prod cleanup confirmed: 0 UPPERCASE rules + 15 lowercase canonical + 12 archived backup rows
+
+### Outstanding follow-ups
+
+* **FU.4 Wave 4 #15d** — drop legacy `admission_profile` singular field BE schema + FE types + 5 fallback sites — defer to next session (BE+FE coordinated deploy + external consumer audit needed)
+* **Dev frontend image staleness** (mtime 2026-04-26) — `docker compose run --rm` doesn't see disk edits; rebuild dev image cho fresh source baseline (housekeeping, low priority)
+* **Future cutovers**: pre-stage `deploy.sh` per `cp scripts/deploy.sh /tmp/deploy_NEW.sh` recipe (FU.7 doc) to avoid script self-update issue
+
+### Cumulative post-cutover follow-up arc CLOSED
+
+7 follow-up items shipped this session:
+1. FU.1 BUG_RESUBMIT_NOTES_NONE fix ✅ live
+2. FU.2 dep-audit upgrade Mako + python-multipart ✅ live
+3. FU.3 prod UPPERCASE orphan cleanup ✅ done direct prod SQL
+4. FU.5 Lead.last_terminal_admission_profile helper ✅ live
+5. FU.6 alembic_version multi-head investigation ✅ FALSE ALARM (linear chain confirmed)
+6. FU.7 deploy.sh self-update prevention pattern ✅ doc shipped
+7. T+24h env flag explicit set ✅ done
+
+Plus 2 test-debt items shipped along the way:
+* BE test fixture ENUM init order (10 ENUMs CREATE explicit + drift lock)
+* FE test type-check (AdmissionProfileShallow + satisfies pattern)
+
+**Phase 1 cutover arc 100% closed.** Phase 2 (round + multi-NV) + Phase 3 (choice engine) future scope per PLAN roadmap.
+
+---
+
 ## 2026-05-07 — 🎯🎯🎯 ADMISSION CUTOVER SHIPPED — Phase 7 Step B COMPLETE 🎯🎯🎯
 
 ### #184 Production cutover deploy — Phase 1 Schema 100% LIVE on prod
