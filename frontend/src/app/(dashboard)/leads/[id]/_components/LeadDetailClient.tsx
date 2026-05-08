@@ -116,11 +116,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const { data: insights } = useLeadInsights(leadId, { initialData: initialInsights });
   const { data: workflowContext } = useWorkflowContext(leadId);
 
-  // Wave 4 #15c — read from plural ``admission_profiles[0]`` (latest year
-  // per backend ``order_by=academic_year.desc()``). Falls back to legacy
-  // ``admission_profile`` while the backend still emits the dual response.
-  // Drop fallback in #15d once the legacy field is removed.
-  const currentProfile = lead?.admission_profiles?.[0] ?? lead?.admission_profile;
+  const currentProfile = lead?.admission_profiles?.[0];
 
   // Delete mutation
   const deleteMutation = useDeleteLead();

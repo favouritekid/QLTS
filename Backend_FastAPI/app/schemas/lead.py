@@ -407,44 +407,17 @@ class Lead(LeadBase):
     assigned_officer: Optional[User] = None
     pipeline_stage: Optional[PipelineStage] = None
     consultation_status: Optional[ConsultationStatus] = None
-    # Wave 4 #15b — multi-year list (post Wave 3-E composite UNIQUE swap).
-    # ``admission_profiles`` is the canonical plural shape; FE migrate
-    # consumes this in Wave 4 PR #15c. The legacy ``admission_profile``
-    # singular field below is auto-populated from the latest item for
-    # backward compatibility — deprecated, removed once FE migrate ships.
     admission_profiles: List[AdmissionProfileShallow] = Field(
         default_factory=list,
         description=(
             "Per-academic-year admission profiles, ordered most-recent "
-            "first. Wave 4 #15b plural shape."
-        ),
-    )
-    admission_profile: Optional[AdmissionProfileShallow] = Field(
-        default=None,
-        description=(
-            "DEPRECATED (Wave 4 #15b) — most-recent profile only. Kept "
-            "during the FE migrate window (Wave 4 PR #15c)."
+            "first."
         ),
     )
     # Collaborator referrer (nested)
     referrer: Optional[CollaboratorShallow] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-    @model_validator(mode="after")
-    def _populate_legacy_admission_profile(self):
-        """Backward-compat: keep ``admission_profile`` (singular)
-        populated from the first item of ``admission_profiles`` so FE
-        clients that have not migrated to plural still see a profile.
-
-        Order is established by the SQLAlchemy relationship
-        ``order_by=academic_year.desc()`` so item 0 is the latest year.
-        FE migrate (Wave 4 PR #15c) will switch to consuming the plural
-        list directly; the legacy field is then removed.
-        """
-        if self.admission_profile is None and self.admission_profiles:
-            self.admission_profile = self.admission_profiles[0]
-        return self
 
 
 class LeadDetail(Lead):
