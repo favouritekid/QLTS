@@ -137,6 +137,14 @@ class OfferingAcademicInfo(Base):
         cascade="all, delete-orphan"
     )
 
+    # ✅ Phase 2 PR-2A: Admission Rounds (multi-round per academic_info)
+    admission_rounds = relationship(
+        "OfferingAdmissionRound",
+        back_populates="academic_info",
+        cascade="all, delete-orphan",
+        order_by="OfferingAdmissionRound.round_code",
+    )
+
     # PR 1 (ADR-002): canonical per-semester tuition catalog.
     # Replaces tuition_fee_per_year as source of truth during the epic.
     # The legacy scalar is retained as a deprecated compatibility field.

@@ -56,6 +56,87 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-08 (phần 2) — Wave 4 #15d shipped + 8 test-debt fixes + Phase 2 plan locked v6
+
+### PR #237 SHIPPED — Wave 4 #15d FU.4 + test-debt sweep (atomic deploy)
+
+**Squash merge `7116794a` on main 2026-05-08 06:11 UTC+7. Deploy `4618206194` approved 2026-05-08 06:53 UTC+7 (em delegated approve via gh API per user instruction). Smoke `/health` 200. Containers all healthy ~1 hour post-deploy.**
+
+Bundle 2 commits:
+- `1d120270` — Wave 4 #15d drop legacy `admission_profile` singular field (BE schema dual response + 4 FE fallback sites + obsolete dual-read test deleted)
+- `3b33bb11` — 8 pre-existing test failures fixed (2 case-mismatch STATUS_A1 + 6 lead_import URL drift + fixture marker + phone format + status code/key drift)
+
+Verification: BE 47/47 PASS local + CI Contract Tests 9m21s ✅ + FE type-check + lint + Vitest + build all green.
+
+**Cumulative post-cutover follow-up arc CLOSED 2026-05-08**: Wave 4 #15d = LAST cutover-related debt. All 8 FU items (BUG_RESUBMIT + dep-audit + UPPERCASE cleanup + Lead helper + multi-head false-alarm + deploy.sh doc + T+24h flag + #15d) shipped + 2 test-debt items shipped along the way.
+
+### Phase 2 plan LOCKED v6 — multi-round + path subject group + score precision V-ACT/DGNL
+
+**Plan file**: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` (full v6 text).
+**Memory**: `phase2-plan-locked` updated v6.
+
+**5 Q chốt qua tuần tự**:
+
+| # | Q | Choice |
+|---|---|---|
+| Q1 | Soak window post-cutover | **A** — 0 day, start ngay 2026-05-09 |
+| Q2 | PR-2B → PR-2C ⚠ ONE-WAY soak | **A** — 1 day (deviation từ SPEC 1 week, documented PLAN Phần 9) |
+| Q3 | Round naming + dates | `round_code` (DOT_1) + `round_name` ("Đợt 1 - {year}") + dates NULL (admin edit), 2-col split |
+| Q4 | Test suite strategy | **B** — khung infra early extend `tests/fixtures/builders.py` + nightly regression bundle fix |
+| Q5 | Wave 6 #17 P2 + Admin Round UI | **B** — Wave 6 #17 P2 storefront filter bundle PR-2B; Admin Round UI bundle PR-2A |
+
+**5-round audit history** (em + user back-and-forth):
+- v2 (5 P0/P1): user audit Plan v1 → round_code/name align SPEC; backfill dates NULL; thêm round_quota field; PR-2B applied_rules backfill; PR-2E ship trước PR-2D
+- v3 (10 drifts): + repo line ref `:138`; model file top-level; test infra extend builders.py; quota 4 levels 3 pairwise
+- v4 (7 concerns): + 3 extension audit fields; EXISTS guard chống NULL bypass; high-watermark semantic; soft-archive; sequencing rebase
+- v5 (6 micro-patches): archive cron DEFER Phase 3; cite phase1_16 archive table; A.4b orphan paths query; test count sync
+- v6 (5 nano-patches): label updates; **γ DELETE UX P1 fix** (allow soft-archive admin discretion vì deferred cron tạo dead-end nếu block-with-hint)
+
+**10 drifts trong v3** (high-level): start_date/end_date không tồn tại; code/display_name lệch SPEC; thiếu round_quota; applied_rules backfill missing; 1-day soak deviation; PR-2D/2E coupling; repo line ref; model file location; test namespace; quota tier naming.
+
+### Phase A pre-flight audit (verified 2026-05-08, dev + prod 1:1 match)
+
+```
+Dev qlts_dev (docker compose exec postgres):
+  alembic_version = phase1_15a ✅
+  offering_academic_info active = 20
+  admission_profile total = 9, has_path_id = 9, has_round_id = 0 (greenfield)
+  admission_path = 52, distinct academic_info_id = 20
+  criteria_subject_group = 194
+  subject_group_subject = 843
+
+Prod qlts_production (SSH qlts.tnpc.edu.vn):
+  alembic_version = phase1_15a ✅ (1:1 dev)
+  offering_academic_info active = 20 ✅
+  admission_profile total = 9, has_path_id = 9, has_round_id = 0 ✅ greenfield
+  admission_path = 52, distinct academic_info_id = 20 ✅
+  criteria_subject_group = 194 ✅
+  subject_group_subject = 843 ✅
+```
+
+**Backfill expectations**:
+- PR-2A: insert 20 DOT_1 rounds (1 per academic_info active)
+- PR-2B Task 1: backfill 52 admission_path.admission_round_id
+- PR-2B Task 2: backfill 9 admission_profile.applied_rules.admission_round_id
+- PR-2B Task 3: reconcile submission_count cho 20 rounds (high-watermark count from 9 profiles)
+- PR-2D: backfill 194 path_subject_group_config + 843 path_subject_group_item
+
+### Phase 2 sequencing (locked)
+
+```
+2026-05-09 Day 1: PR-2A merges first (head=phase2_01)
+                  → PR-2E rebase down_revision=phase2_01 (head=phase2_04)
+                  → PR-2D rebase down_revision=phase2_04 (head=phase2_03)
+2026-05-10/11 Day 2-3: PR-2B (head=phase2_02)
+2026-05-12 Day 5: 1-day soak (Q2 deviation — 3 audit gates Phase C)
+2026-05-13 Day 6: PR-2C ⚠ ONE-WAY (head=phase2_02b)
+2026-05-14..16 Day 7-9: PR-2F engine sweep
+```
+
+**Tomorrow plan**: backup prod database (mandatory pre-PR-2A), tạo Phase 2 GitHub thematic issue + Project board card (Chrome MCP per user reminder), start PR-2A code (migration + model + Admin UI + test infra extend builders + nightly fix).
+
+---
+
 ## 2026-05-08 — Post-cutover follow-up batch SHIPPED prod (combined deploy)
 
 ### #184 Routine deploy — FU batch + BE test-debt + FE test-debt atomic ship

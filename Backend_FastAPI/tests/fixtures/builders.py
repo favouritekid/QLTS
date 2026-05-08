@@ -136,3 +136,104 @@ class SeedDependenciesBuilder:
             "status_a1_id": status_a1_id,
             "stage_id": stage_a_id,
         }
+
+
+# =============================================================================
+# Phase 2 PR-2A — Admission Round / Path / Profile / SubjectGroup builders
+# =============================================================================
+
+
+class AdmissionRoundBuilder:
+    """Builder for OfferingAdmissionRound test fixtures.
+
+    Defaults follow Phase 2 PR-2A backfill semantics: round_code='DOT_1',
+    round_quota=None (no cap), admit_quota=None (NULL = inherit),
+    submission_count=0, is_active=True, dates NULL.
+
+    Usage::
+
+        round_payload = AdmissionRoundBuilder.make(academic_info_id=42)
+        round_obj = models.OfferingAdmissionRound(**round_payload)
+        session.add(round_obj)
+    """
+
+    @staticmethod
+    def make(academic_info_id: int, round_code: str = "DOT_1", **overrides) -> dict:
+        # Extract round number from code for display name (DOT_1 → "Đợt 1")
+        suffix = round_code.replace("DOT_", "") if round_code.startswith("DOT_") else round_code
+        defaults = {
+            "academic_info_id": academic_info_id,
+            "round_code": round_code,
+            "round_name": f"Đợt {suffix} - 2026",
+            "start_date": None,
+            "end_date": None,
+            "round_quota": None,
+            "admit_quota": None,
+            "submission_count": 0,
+            "is_active": True,
+            "archived_at": None,
+            "extended_at": None,
+            "extended_by_user_id": None,
+            "extension_reason": None,
+        }
+        defaults.update(overrides)
+        return defaults
+
+
+class AdmissionPathBuilder:
+    """Builder for AdmissionPath test fixtures (placeholder for PR-2B/PR-2D).
+
+    Phase 2 PR-2B will extend với ``admission_round_id`` field.
+    """
+
+    @staticmethod
+    def make(
+        academic_info_id: int, admission_method_id: int, **overrides
+    ) -> dict:
+        defaults = {
+            "academic_info_id": academic_info_id,
+            "admission_method_id": admission_method_id,
+            "status": "draft",
+            "display_order": 0,
+            "visibility": "internal",
+        }
+        defaults.update(overrides)
+        return defaults
+
+
+class AdmissionProfileBuilder:
+    """Builder for AdmissionProfile test fixtures (placeholder for PR-2B+/PR-2F).
+
+    Phase 2 PR-2F engine test sweep will extend với scoring fixtures.
+    """
+
+    @staticmethod
+    def make(lead_id: int, academic_year: int = 2026, **overrides) -> dict:
+        defaults = {
+            "lead_id": lead_id,
+            "academic_year": academic_year,
+            "status": "draft",
+            "applied_rules": {},
+            "documents_checklist": [],
+        }
+        defaults.update(overrides)
+        return defaults
+
+
+class SubjectGroupConfigBuilder:
+    """Builder for PathSubjectGroupConfig test fixtures (placeholder for PR-2D).
+
+    Phase 2 PR-2D will create the ``path_subject_group_config`` table.
+    """
+
+    @staticmethod
+    def make(admission_path_id: int, subject_group_id: int, **overrides) -> dict:
+        defaults = {
+            "admission_path_id": admission_path_id,
+            "subject_group_id": subject_group_id,
+            "min_score": None,
+            "min_subject_score": None,
+            "group_quota": None,
+        }
+        defaults.update(overrides)
+        return defaults

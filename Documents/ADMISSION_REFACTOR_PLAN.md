@@ -4546,3 +4546,17 @@ PLAN section §4 Phase 1 chain ordering uses placeholder revision IDs (`phase1_X
 Slot `phase1_14` left free as a future-reserve gap; `phase1_15a/15b/15c` reserved for Wave 4 lead-1-many sub-PR split (DDL drop + soak 1w + model+repo + soak 1w + FE migrate per PLAN line 3468-3473).
 
 Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-03 #184 preflight entry — 6-question matrix + Q1=C / Q2=A / Q3=phase1_13/16/17 / Q4=accept 3w / Q5=verify D12-D14 / Q6=start Wave 1 now.
+
+### Phase 2 — Soak window + backfill + scope deviations (2026-05-08)
+
+Plan v6 chốt 2026-05-08 sau Phase 1 cutover ship (T+1). 5 audit rounds (v2: 5 P0/P1 + v3: 10 drifts + v4: 7 concerns + v5: 6 micro-patches + v6: 5 nano-patches). Plan file: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md`.
+
+| # | PLAN spec | Final v6 implementation | Lý do deviation |
+|---|---|---|---|
+| Q1 | Implicit team-style soak post-cutover | **0-day soak — start ngay 2026-05-09** | Solo dev, momentum quan trọng; Phase 1 cutover đã verify rehearsals 6 lần GREEN; ZNS first send 2026-05-20 độc lập với admission schema; weekend traffic 10-11/05 đủ catch race condition |
+| Q2 | PLAN line 3607-3608 "Step 4: Monitor 1 tuần" giữa PR-2B (nullable) và PR-2C (NOT NULL ⚠ ONE-WAY) | **1-day soak** | Solo dev control 100% caller (FE+BE cùng repo, không external); service shim auto-resolve guard mọi NULL round_id; audit caller dễ qua grep callsites; chấp nhận manual rollback nếu fail (archive table + playbook đã prep) |
+| Q3 dates | PLAN line 3579 "start_date/end_date từ academic_info nếu có" | **Backfill DOT_1 dates = NULL, admin edit qua UI** | `OfferingAcademicInfo` model verified (offering_academic_info.py:35-148) KHÔNG có cột `start_date`/`end_date` → SPEC author hedged "nếu có"; cột không tồn tại → set NULL, Admin Round UI cung cấp date input để admin fill manual sau |
+| β | PLAN line 553-554 cron `archive_expired_rounds_task` move profile sang `_archived_admission_profile` table at end_date+6mo | **DEFER Phase 3** | Solo dev focus on schema foundation; first DOT_1 backfilled doesn't expire until ~Q4 2026 (round end_date+6mo từ DOT_1 created 2026-05-09); cron fits Phase 3 backend wave naturally; aligns memory `outstanding-debt` P3-C archive task dormant pattern |
+| γ DELETE UX | PLAN line 562-606 SPEC 2.1.a Rule 3 implies DELETE blocks if submissions exist với hint "use archive cron" | **Phase 2: DELETE soft-archive allowed regardless of submission_count** | Concern β v5 deferred cron means "use archive cron" hint references nonexistent feature → admin stuck UX dead-end. Phase 2 allow soft-archive admin discretion (`is_active=false` hides round, reversible). Phase 3 post cron ship: tighten back to block-with-hint |
+
+Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-08 phần 2 — 5 Q matrix + 10 drifts + v6 patch summary + Phase A pre-flight audit results (dev/prod 1:1 match: 20 academic_info + 9 profile + 52 path + 194/843 subject group).
