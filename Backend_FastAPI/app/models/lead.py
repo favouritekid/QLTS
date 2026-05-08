@@ -321,6 +321,52 @@ class Lead(Base):
             None,
         )
 
+    @property
+    def last_terminal_admission_profile(self) -> "AdmissionProfile | None":
+        """Return the lead's most recent profile in a terminal state, or None.
+
+        Wave 4 #15b helper — companion to ``current_admission_profile(year)``.
+        Walks the in-memory ``admission_profiles`` collection and returns the
+        profile with the highest ``academic_year`` whose ``status`` is one of
+        the three truly terminal states from the candidate's perspective:
+
+        * ``enrolled`` — student row created, lifecycle complete
+        * ``rejected`` — final reject (NOTE: can transition to ``resubmitted``
+          but treated as terminal for "completed admissions" lookup until a
+          new submission cycle starts)
+        * ``withdrawn`` — candidate explicit cancellation
+
+        States like ``overridden`` and ``revision_requested`` are NOT
+        considered terminal because they imply an in-flight admin override
+        path or staff queue handoff that may transition further.
+
+        **Use cases**:
+        * Lead detail view — show "last admission outcome" badge
+        * Re-engagement / dedupe heuristic — if the lead has a terminal
+          ``enrolled`` profile, suppress new outreach
+        * KPI funnel — terminal counts for officer attribution
+
+        **Eager-load contract**: the caller MUST have eager-loaded
+        ``Lead.admission_profiles`` before invoking this helper — the scan
+        walks the in-memory collection without issuing a query. Mirror
+        ``current_admission_profile(year)`` contract.
+
+        **Archive fallback — TODO**: same caveat as
+        ``current_admission_profile`` — when ``archive_expired_rounds_task``
+        ships, extend this helper to UNION across active +
+        ``_archived_admission_profile`` so historical terminals stay
+        resolvable post-archive (PLAN line 124-131 P1 fix #6 v2.12).
+        Until then, archive table stays empty during the cutover window so
+        active-only is functionally equivalent.
+        """
+        terminal_states = {"enrolled", "rejected", "withdrawn"}
+        terminal_profiles = [
+            p for p in self.admission_profiles if p.status in terminal_states
+        ]
+        if not terminal_profiles:
+            return None
+        return max(terminal_profiles, key=lambda p: p.academic_year)
+
     def __repr__(self):
         return f"<Lead {self.id}: {self.full_name}>"
 

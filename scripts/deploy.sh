@@ -26,6 +26,52 @@
 #
 # Routine deploy (COLD_CUTOVER unset or != "true"):
 #   Flow unchanged from pre-Hotfix-4 — auto migration + sync + restart.
+#
+# =============================================================================
+# 🚨 SELF-UPDATE CAVEAT (Phase1-Hotfix-7 / 2026-05-08, lesson from cutover
+# ship 2026-05-07 22:18 UTC+7):
+# =============================================================================
+# When this script changes (e.g. new flag, new step, new env var) and the
+# changes ship via main, invoking ``./scripts/deploy.sh`` directly on prod
+# will run the OLD logic — bash loads the script into memory at invocation,
+# then Step 2 ``git pull origin main`` updates the file ON DISK but the
+# in-memory copy stays the OLD version. Result: any new flag/branch logic
+# added in the latest commit will NOT execute on the FIRST deploy after
+# merge. It only takes effect from the SECOND invocation onwards.
+#
+# This bit us during the admission cutover ship: ``COLD_CUTOVER=true ./
+# scripts/deploy.sh`` ran the OLD pre-Hotfix-4 deploy.sh in memory which
+# had no COLD_CUTOVER detection, so the routine flow auto-ran alembic +
+# sync + Casbin instead of the operator-controlled sequence per RUNBOOK
+# §7.2. End state was correct because all migrations + backfills are
+# idempotent + apply cleanly, but the safety net (operator pause) was
+# never engaged.
+#
+# **Mitigation for next cutover** — pre-stage the updated script BEFORE
+# invoking, so bash loads the NEW version directly:
+#
+#   ssh prod
+#   cd /opt/qlts
+#   git fetch origin && git checkout main && git pull --ff-only origin main
+#   # Copy NEW deploy.sh out of repo so future ``git pull`` (Step 2) cannot
+#   # mutate the in-memory script:
+#   cp scripts/deploy.sh /tmp/deploy_NEW.sh
+#   chmod +x /tmp/deploy_NEW.sh
+#   COLD_CUTOVER=true /tmp/deploy_NEW.sh
+#
+# The ``/tmp`` copy is loaded into bash memory; Step 2's git pull updates
+# ``/opt/qlts/scripts/deploy.sh`` but our running invocation reads from
+# ``/tmp/deploy_NEW.sh`` which we already loaded. Subsequent routine
+# deploys (post-cutover) call ``./scripts/deploy.sh`` directly as usual
+# because the on-disk and in-memory copies converge after the cutover
+# merge propagates.
+#
+# Alternative: invoke via stdin to bypass the file-on-disk → memory race:
+#   COLD_CUTOVER=true bash < scripts/deploy.sh
+# (Less robust because positional args/relative paths break. Prefer cp.)
+#
+# Reference: ``Documents/ADMISSION_DAILY_LOG.md`` 2026-05-07 cutover entry +
+# memory ``admission-cutover-shipped-2026-05-07``.
 # =============================================================================
 set -euo pipefail
 

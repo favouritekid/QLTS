@@ -310,6 +310,30 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 
 ### 7.2. Cutover steps (target window 4-6h)
 
+> **🚨 Self-update caveat — pre-stage `deploy.sh` before invoking** (lesson
+> from 2026-05-07 cutover ship):
+>
+> When `scripts/deploy.sh` changes ship via main, invoking
+> `./scripts/deploy.sh` directly on prod runs the **OLD** logic — bash
+> loads the script into memory at invocation, then Step 2 `git pull
+> origin main` updates the file on disk but the in-memory copy stays
+> OLD. Any new flag (e.g. `COLD_CUTOVER` detection added in Hotfix #4)
+> only takes effect from the **SECOND** invocation onwards.
+>
+> **Mitigation**: pre-stage updated script before invoking:
+>
+> ```bash
+> ssh prod && cd /opt/qlts
+> git fetch origin && git checkout main && git pull --ff-only origin main
+> cp scripts/deploy.sh /tmp/deploy_NEW.sh && chmod +x /tmp/deploy_NEW.sh
+> COLD_CUTOVER=true /tmp/deploy_NEW.sh
+> ```
+>
+> The `/tmp` copy is loaded into bash memory; Step 2's git pull updates
+> the on-disk script but our running invocation already loaded the NEW
+> logic. See `scripts/deploy.sh` Self-update caveat header for full
+> rationale.
+
 ```
 T+0:00   Communicate freeze (email + Slack + in-app banner)
 T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
