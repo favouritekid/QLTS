@@ -52,12 +52,18 @@ describe("AdmissionReadinessChecklist — Wave 4 #15c plural migrate", () => {
 
 describe("Lead type — admission_profiles plural shape", () => {
   it("type allows plural list with legacy singular fallback", () => {
+    // Profile shape mirrors `AdmissionProfileShallow` interface
+    // (`types/lead.types.ts:340-345` + BE `app/schemas/lead.py:133-144`):
+    // {id, status, student_code?, created_at}. `lead_id` and
+    // `academic_year` are NOT in the shallow nested response — they
+    // live on the full `AdmissionProfileResponse`. Wave 4 #15c plural
+    // shape exposes the per-year list via `Lead.admission_profiles[]`
+    // but each item still uses the shallow projection.
     const profile_2026: AdmissionProfileShallow = {
       id: 100,
-      lead_id: 1,
       status: "draft",
-      academic_year: 2026,
-    } as AdmissionProfileShallow
+      created_at: "2026-01-01T00:00:00Z",
+    }
 
     const lead_with_plural: Pick<Lead, "id" | "admission_profiles" | "admission_profile"> = {
       id: 1,
