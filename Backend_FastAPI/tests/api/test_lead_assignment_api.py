@@ -34,6 +34,7 @@ try:
     from tests.fixtures.constants import (
         TestUsers,
         TestOrgData,
+        TestPipelineData,
         LeadsURLs,
         AuthURLs,
     )
@@ -475,7 +476,7 @@ async def test_scenario_14_officer_consultation_unassigned_lead(
     lead_id = unassigned_lead["id"]
 
     consultation_data = {
-        "status_id": "STATUS_A1",
+        "status_id": TestPipelineData.STATUS_A1["id"],
         "notes": "Attempting consultation on unassigned lead",
     }
 
@@ -512,7 +513,7 @@ async def test_scenario_15_officer_consultation_others_lead(
     lead_id = lead_assigned_to_officer["id"]
 
     consultation_data = {
-        "status_id": "STATUS_A1",
+        "status_id": TestPipelineData.STATUS_A1["id"],
         "notes": "Attempting consultation on someone else's lead",
     }
 
@@ -784,7 +785,7 @@ async def test_admin_can_create_consultation_any_lead(
     lead_id = unassigned_lead["id"]
 
     consultation_data = {
-        "status_id": "STATUS_A1",  # Required field per ConsultationCreate schema
+        "status_id": TestPipelineData.STATUS_A1["id"],  # Required field per ConsultationCreate schema
         "notes": "Admin creating consultation",
     }
 
@@ -971,7 +972,7 @@ async def test_scenario_16_manager_consultation_team_lead(
     lead_id = lead_assigned_to_officer["id"]
 
     consultation_data = {
-        "status_id": "STATUS_A1",
+        "status_id": TestPipelineData.STATUS_A1["id"],
         "notes": "Manager creating consultation for team lead",
     }
 

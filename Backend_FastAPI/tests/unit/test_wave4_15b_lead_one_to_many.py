@@ -157,18 +157,16 @@ def test_get_profile_by_lead_year_uses_composite_unique_columns() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Schema dual-response
+# 4. Schema plural shape (post-#15d, legacy singular field removed)
 # ---------------------------------------------------------------------------
 
 
-def test_lead_schema_carries_both_singular_and_plural_fields() -> None:
-    """Backward compat: the FE may still consume ``admission_profile``
-    while migrating; both fields must serialize."""
+def test_lead_schema_exposes_plural_only() -> None:
     from app.schemas.lead import Lead as LeadSchema
 
     fields = LeadSchema.model_fields
     assert "admission_profiles" in fields
-    assert "admission_profile" in fields
+    assert "admission_profile" not in fields
 
 
 def _minimal_lead_payload(**overrides) -> dict:
@@ -205,9 +203,8 @@ def _minimal_profile_payload(**overrides) -> dict:
     return payload
 
 
-def test_lead_schema_validator_populates_legacy_singular_from_latest() -> None:
-    """The ``model_validator`` after-mode hook copies plural[0] into
-    the legacy singular field. Order matches SQLAlchemy
+def test_lead_schema_plural_orders_latest_year_first() -> None:
+    """Plural list preserves SQLAlchemy
     ``order_by=academic_year.desc()`` so plural[0] = most-recent year."""
     from app.schemas.lead import Lead as LeadSchema
 
@@ -219,17 +216,16 @@ def test_lead_schema_validator_populates_legacy_singular_from_latest() -> None:
     lead = LeadSchema.model_validate(
         _minimal_lead_payload(admission_profiles=[profile_2026, profile_2025])
     )
-    assert lead.admission_profile is not None
-    assert lead.admission_profile.id == 100
+    assert len(lead.admission_profiles) == 2
+    assert lead.admission_profiles[0].id == 100
 
 
-def test_lead_schema_singular_stays_none_when_plural_empty() -> None:
+def test_lead_schema_plural_empty_when_no_profiles() -> None:
     from app.schemas.lead import Lead as LeadSchema
 
     lead = LeadSchema.model_validate(
         _minimal_lead_payload(admission_profiles=[])
     )
-    assert lead.admission_profile is None
     assert lead.admission_profiles == []
 
 

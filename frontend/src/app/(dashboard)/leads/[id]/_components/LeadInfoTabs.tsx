@@ -477,12 +477,7 @@ export function LeadInfoTabs({
         {activeTab === "profile" && (
           <div>
             {(() => {
-              // Wave 4 #15c — read from plural ``admission_profiles[0]``
-              // (latest year per backend ``order_by=academic_year.desc()``).
-              // Falls back to legacy ``admission_profile`` while the backend
-              // still emits the dual response. Drop fallback in #15d.
-              const profile =
-                lead.admission_profiles?.[0] ?? lead.admission_profile;
+              const profile = lead.admission_profiles?.[0];
               return profile ? (
               <div className="space-y-4">
                 {(() => {
