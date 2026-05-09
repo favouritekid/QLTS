@@ -189,3 +189,13 @@ def test_factory_admission_round_builder_dot2_overrides() -> None:
     assert payload["round_name"] == "Đợt 2 - 2026"
     assert payload["round_quota"] == 50
     assert payload["admit_quota"] == 30
+
+
+def test_factory_admission_round_builder_accepts_year_override() -> None:
+    """Builder năm sau không cần update fixture code."""
+    from tests.fixtures.builders import AdmissionRoundBuilder
+
+    payload = AdmissionRoundBuilder.make(
+        academic_info_id=99, round_code="DOT_1", academic_year=2027
+    )
+    assert payload["round_name"] == "Đợt 1 - 2027"

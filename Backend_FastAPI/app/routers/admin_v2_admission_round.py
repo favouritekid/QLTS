@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
-from app.core.deps import get_current_active_user, require_admin
+from app.core.deps import require_admin
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas.admission_round import (
     AdmissionRoundCreate,
@@ -100,7 +100,7 @@ async def create_round(
 async def list_rounds_by_academic_info(
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
-    _user: models.User = Depends(get_current_active_user),
+    _admin: models.User = Depends(require_admin),
 ):
     """List rounds under academic_info, ordered by round_code."""
     service = AdmissionRoundService(db)
@@ -120,7 +120,7 @@ async def list_rounds_by_academic_info(
 async def get_round(
     round_id: int,
     db: AsyncSession = Depends(database.get_db),
-    _user: models.User = Depends(get_current_active_user),
+    _admin: models.User = Depends(require_admin),
 ):
     """Fetch single round detail."""
     service = AdmissionRoundService(db)

@@ -11,11 +11,9 @@ Covers:
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Tuple
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -85,10 +83,7 @@ async def round_test_seed(seed_lead_dependencies: dict) -> dict:
             s.add(admin)
             await s.flush()
 
-    async with AsyncSessionLocal() as s:
-        ai_id = ai.id
-        admin_id = admin.id
-    return {"academic_info_id": ai_id, "admin_user_id": admin_id}
+    return {"academic_info_id": ai.id, "admin_user_id": admin.id}
 
 
 async def _get_admin(db: AsyncSession, admin_id: int) -> models.User:
@@ -358,7 +353,10 @@ async def test_round_extend_writes_extended_at_user_id_reason(
 async def test_round_extend_rejects_earlier_or_same_date(
     round_test_seed: dict,
 ) -> None:
-    """SPEC §2.1.a Rule 2 — new end_date phải sau current."""
+    """SPEC §2.1.a Rule 2 — new end_date phải sau current.
+
+    Test cả 2 boundary: earlier date AND same date (== guard).
+    """
     async with AsyncSessionLocal() as db:
         admin = await _get_admin(db, round_test_seed["admin_user_id"])
         service = AdmissionRoundService(db)
@@ -374,6 +372,7 @@ async def test_round_extend_rejects_earlier_or_same_date(
         await db.commit()
         round_id = round_obj.id
 
+    # Earlier date case
     async with AsyncSessionLocal() as db:
         admin = await _get_admin(db, round_test_seed["admin_user_id"])
         service = AdmissionRoundService(db)
@@ -383,6 +382,20 @@ async def test_round_extend_rejects_earlier_or_same_date(
                 AdmissionRoundExtend(
                     end_date=date(2026, 5, 1),  # earlier than current 6/30
                     extension_reason="Test invalid earlier date",
+                ),
+                admin,
+            )
+
+    # Same date case — boundary `<=` operator must reject equality
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        with pytest.raises(BusinessRuleViolation, match="phải sau current"):
+            await service.extend(
+                round_id,
+                AdmissionRoundExtend(
+                    end_date=date(2026, 6, 30),  # same as current
+                    extension_reason="Test invalid same date",
                 ),
                 admin,
             )

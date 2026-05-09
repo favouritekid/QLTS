@@ -158,13 +158,18 @@ class AdmissionRoundBuilder:
     """
 
     @staticmethod
-    def make(academic_info_id: int, round_code: str = "DOT_1", **overrides) -> dict:
+    def make(
+        academic_info_id: int,
+        round_code: str = "DOT_1",
+        academic_year: int = 2026,
+        **overrides,
+    ) -> dict:
         # Extract round number from code for display name (DOT_1 → "Đợt 1")
         suffix = round_code.replace("DOT_", "") if round_code.startswith("DOT_") else round_code
         defaults = {
             "academic_info_id": academic_info_id,
             "round_code": round_code,
-            "round_name": f"Đợt {suffix} - 2026",
+            "round_name": f"Đợt {suffix} - {academic_year}",
             "start_date": None,
             "end_date": None,
             "round_quota": None,
