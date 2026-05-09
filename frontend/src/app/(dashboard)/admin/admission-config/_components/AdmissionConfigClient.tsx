@@ -25,6 +25,7 @@ import { OfferingTypePanel } from "./Phase1Master/OfferingTypePanel";
 import { AdmissionMethodPanel } from "./Phase1Master/AdmissionMethodPanel";
 import { DocumentTypePanel } from "./Phase1Master/DocumentTypePanel";
 import { SubjectGroupPanel } from "./Phase1Master/SubjectGroupPanel";
+import { RoundsManagementTab } from "./Phase1Master/RoundsManagementTab";  // Phase 2 v8.2 PR-2A v2
 import { MajorProgramPanel } from "./Phase2Program/MajorProgramPanel";
 import { ProgramOfferingPanel } from "./Phase2Program/ProgramOfferingPanel";
 import { AcademicInfoPanel } from "./Phase2Program/AcademicInfoPanel";
@@ -174,6 +175,8 @@ function Phase1Content({ step }: { step: string }) {
       return <DocumentTypePanel />;
     case "subject-groups":
       return <SubjectGroupPanel />;
+    case "rounds":
+      return <RoundsManagementTab />;
     default:
       return (
         <div className="space-y-6">
