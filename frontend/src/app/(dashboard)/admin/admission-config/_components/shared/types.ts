@@ -125,7 +125,8 @@ export type Phase1Step =
   | 'offering-types'
   | 'methods'
   | 'document-types'
-  | 'subject-groups';
+  | 'subject-groups'
+  | 'rounds';  // Phase 2 v8.2 PR-2A v2 — đợt tuyển sinh year-level
 
 export type Phase2Step =
   | 'majors'

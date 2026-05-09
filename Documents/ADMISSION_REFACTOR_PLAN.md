@@ -4546,3 +4546,78 @@ PLAN section §4 Phase 1 chain ordering uses placeholder revision IDs (`phase1_X
 Slot `phase1_14` left free as a future-reserve gap; `phase1_15a/15b/15c` reserved for Wave 4 lead-1-many sub-PR split (DDL drop + soak 1w + model+repo + soak 1w + FE migrate per PLAN line 3468-3473).
 
 Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-03 #184 preflight entry — 6-question matrix + Q1=C / Q2=A / Q3=phase1_13/16/17 / Q4=accept 3w / Q5=verify D12-D14 / Q6=start Wave 1 now.
+
+### Phase 2 — Schema design pivot Option A (2026-05-09, v8.2 plan locked)
+
+**MAJOR deviation from §2.1 line 532-535 + §4 Phase 2 line 3577-3608**.
+
+Plan v8.2 chốt 2026-05-09 sau 8 audit rounds. Plan file: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md`. v6 PR-2A archived qua tag `phase2-pr-2a-v6-archived` (push origin) — 6 commits + 22 files + 2961 lines + 8/8 browser smoke PASS retained for git history reference.
+
+#### Schema deviation — round entity location
+
+| Aspect | PLAN §2.1 spec (v6 plan) | v8.2 Option A final |
+|---|---|---|
+| Round entity | `OfferingAdmissionRound.academic_info_id` FK (per academic_info) | `OfferingAdmissionRound.academic_year` int + UNIQUE(academic_year, round_code) — year-level globally |
+| Storage | N rows per đợt (3 majors × 4 đợt = 12 rows replicate) | 1 row per đợt globally |
+| Quota fields | `round_quota`, `admit_quota`, `submission_count` on round table | MOVED to `admission_path` (per-path counter + caps) |
+| Round metadata sharing | Per academic_info (extend = N atomic UPDATEs) | Globally (extend = 1 UPDATE, paths inherit qua JOIN) |
+| Tier 1 chain root | `sum(round.round_quota in academic_info) ≤ annual_admission_quota` | `∑(path.admit_quota WHERE academic_info_id=X) ≤ academic_info[X].annual_admission_quota` |
+| AdmissionPath UNIQUE | swap to `(round_id, method_id)` [PR-2C v6] | swap to **3-col** `(round_id, academic_info_id, method_id)` [PR-2C v8.2 Q5] |
+| Atomic submit increment | `offering_admission_round.submission_count` per round | `admission_path.submission_count` per path (P3-3) |
+| Path FK | unspecified | `admission_path.admission_round_id` ON DELETE RESTRICT [Q7] |
+| Path clone | implicit | Mandatory deep-copy `AdmissionCriteria` + `CriteriaSubjectGroup` + `PathSubjectGroupConfig` + `PathSubjectGroupItem` per ADM-003 1:1 invariant [Q6] |
+| round_code namespace | implicit DOT_1/DOT_2 | Pure string + UI convention; program_type enum defer Phase 3 [Q8] |
+| Round metadata Phase 2 | time-window + notification template | Time-window only (extension audit + lifecycle); notification template defer Phase 3 [Q3] |
+
+#### Lý do deviation
+
+User Pass 4 review (2026-05-09) flag UX issue PR-2A v6: bottom-up workflow buộc admin vào từng ngành tạo đợt. Walk-through 8 stories + 4 edge cases reveal v6 schema sinh problem replication:
+
+1. Round metadata edit (extend/archive/notification template) → bulk update N rows atomic per academic_info
+2. Phase 3+ notification template per round = N rows duplicate
+3. Cross-major reporting "Đợt 1 status" = scan N rows GROUP BY
+4. Bulk-create solves CREATE only — EXTEND/ARCHIVE/EDIT vẫn pay N-row coordination cost
+
+Schema correctness Phase 2 trumps fast ship vì Phase 3+ cycle benefits multiply (multi-NV, choice engine, magic link multi-action depend on round metadata sharing).
+
+#### 8 decisions LOCKED Q1-Q8
+
+| # | Decision | Choice |
+|---|---|---|
+| Q1 | Schema | Option A (year-level round) |
+| Q2 | Tier 1 chain root | `admit_quota` per academic_info |
+| Q3 | Round metadata Phase 2 | time-window only |
+| Q4 | Branch strategy | tag preserve v6 + new `feat/admission-phase2-01-rounds-v2` |
+| Q5 | UNIQUE columns | 3-col `(round_id, academic_info_id, method_id)` |
+| Q6 | Clone strategy | hybrid modal + deep-copy criteria chain |
+| Q7 | FK ON DELETE | RESTRICT |
+| Q8 | round_code namespace | pure string + UI convention |
+
+#### Quota chain refactor v8.2 (Phần 5 update)
+
+- **Tier 1**: `∑(path.admit_quota WHERE academic_info_id=X AND path.status != 'archived' AND path.admit_quota IS NOT NULL) ≤ academic_info[X].annual_admission_quota`. Scope PER academic_info.
+- **Tier 2** (path-level invariant): `path.admit_quota ≤ path.round_quota` nếu cả 2 set.
+- **Tier 3** (PR-2D): `∑(group_quota in path) ≤ path.admit_quota`. KHÔNG fallback "round.admit_quota".
+
+#### Atomic increment SQL pattern shift
+
+PLAN §4.1 line 4100-4107 atomic increment original target: `offering_admission_round.submission_count`. v8.2 moves counter to `admission_path.submission_count` per-path semantic. Per-path semantic correct vì candidate submit destination = (path × round × major), KHÔNG global round.
+
+#### v8.1 P0 patches (3 blockers from Pass 5 review)
+
+1. **P0-1**: `admission_path.archived_at` column **không tồn tại** — `AdmissionPath.status` enum value `'archived'` (`app/models/admission_config/admission_path.py:91-98`). Tier 1 filter: `path.status != 'archived'`.
+2. **P0-2**: DB trigger `enforce_applied_rules_immutability` (`b5c6d7e8f9a0_add_applied_rules_immutability_trigger.py:42-47`) chặn UPDATE `applied_rules`. PR-2B Task 3 wrap `ALTER TABLE ... DISABLE/ENABLE TRIGGER` try/finally per precedent `aa1i2j3k4l5m_pr6_allow_unverified_submission.py:65-92`.
+3. **P0-3**: PR-2B Task 4 cast unsafe — CTE `safe_profiles` wrapper với regex `~ '^[0-9]+$'` + EXISTS guard parity Task 3.
+
+#### PR breakdown v8.2 (6 PRs ~10d)
+
+| PR | Scope |
+|---|---|
+| PR-2A v2 | phase2_01_v2 year-level OfferingAdmissionRound + RoundsManagementTab top-level + bulk-create endpoint |
+| PR-2B v2 | phase2_02_v2 admission_path 4 cols + 4-task backfill (DISABLE/ENABLE trigger + CTE safe_profiles) + service shim + Wave 6 #17 P2 storefront |
+| PR-2C v2 ⚠ | phase2_02b_v2 NOT NULL + 3-col UNIQUE swap + archive table + manual rollback playbook v8 |
+| PR-2D | phase2_03 PathSubjectGroupConfig + Item + QuotaMatrix UI + clone endpoint deep-copy |
+| PR-2E | phase2_04 Numeric(8,2) score precision |
+| PR-2F | engine sweep ≥22 cases + mandatory `test_tier1_chain_per_academic_info_scope` |
+
+Audit reference: `Documents/ADMISSION_DAILY_LOG.md` 2026-05-09 design pivot entry + memory `phase2-plan-locked` v8.2 + plan file `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md`.

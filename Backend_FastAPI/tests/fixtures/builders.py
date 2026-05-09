@@ -136,3 +136,52 @@ class SeedDependenciesBuilder:
             "status_a1_id": status_a1_id,
             "stage_id": stage_a_id,
         }
+
+
+# =============================================================================
+# Phase 2 v8.2 PR-2A v2 — AdmissionRoundBuilder year-level (Q1 Option A)
+# =============================================================================
+
+
+class AdmissionRoundBuilder:
+    """Builder for OfferingAdmissionRound test fixtures (year-level).
+
+    Q1 v8.2: round = 1 row globally per (academic_year, round_code), NOT
+    per academic_info (v6 archived).
+
+    Defaults: round_code='DOT_1', academic_year=2026, dates NULL,
+    is_active=True. No quota fields (moved to admission_path PR-2B v2).
+
+    Usage::
+
+        round_payload = AdmissionRoundBuilder.make(academic_year=2026)
+        round_obj = models.OfferingAdmissionRound(**round_payload)
+        session.add(round_obj)
+    """
+
+    @staticmethod
+    def make(
+        academic_year: int = 2026,
+        round_code: str = "DOT_1",
+        **overrides,
+    ) -> dict:
+        # Extract round number from code for display name (DOT_1 → "Đợt 1")
+        suffix = (
+            round_code.replace("DOT_", "")
+            if round_code.startswith("DOT_")
+            else round_code
+        )
+        defaults = {
+            "academic_year": academic_year,
+            "round_code": round_code,
+            "round_name": f"Đợt {suffix} - {academic_year}",
+            "start_date": None,
+            "end_date": None,
+            "is_active": True,
+            "archived_at": None,
+            "extended_at": None,
+            "extended_by_user_id": None,
+            "extension_reason": None,
+        }
+        defaults.update(overrides)
+        return defaults

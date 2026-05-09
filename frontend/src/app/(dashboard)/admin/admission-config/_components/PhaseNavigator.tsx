@@ -49,6 +49,7 @@ const PHASE1_STEPS: StepConfig[] = [
   { id: "methods", label: "Phương thức Tuyển sinh" },
   { id: "document-types", label: "Loại Giấy tờ" },
   { id: "subject-groups", label: "Tổ hợp môn" },
+  { id: "rounds", label: "Đợt Tuyển sinh" },  // Phase 2 v8.2 PR-2A v2 — year-level
 ];
 
 const PHASE2_STEPS: StepConfig[] = [
@@ -185,13 +186,13 @@ export function PhaseNavigator({
           onClick={handlePhase3Click}
         >
           <BarChart3 className="h-4 w-4 mr-2" />
-          Đợt Tuyển sinh
+          Cấu hình Đường tuyển sinh
         </Button>
       </Card>
 
       {/* Help Text */}
       <div className="text-xs text-muted-foreground px-2">
-        <p>Hoàn thành Giai đoạn 1 và 2 trước khi cấu hình đợt tuyển sinh.</p>
+        <p>Hoàn thành Giai đoạn 1 và 2 trước khi cấu hình đường tuyển sinh.</p>
       </div>
     </div>
   );
