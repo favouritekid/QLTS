@@ -135,6 +135,47 @@ Prod qlts_production (SSH qlts.tnpc.edu.vn):
 
 **Tomorrow plan**: backup prod database (mandatory pre-PR-2A), tạo Phase 2 GitHub thematic issue + Project board card (Chrome MCP per user reminder), start PR-2A code (migration + model + Admin UI + test infra extend builders + nightly fix).
 
+### Phase 2 PR-2A — BE foundation + FE Admin UI shipped local 2026-05-09 (5 commits, 21 files, +2920 lines)
+
+Branch `feat/admission-phase2-01-rounds`:
+
+| Commit | Scope |
+|---|---|
+| `e33a144d` | BE foundation (migration + model + schema + repo + service + router + 25 BE tests) |
+| `579b6886` | FE Admin UI v1 (panel + 4 dialogs + hooks + API + Zod + Vitest) |
+| `15c1c35e` | Pass 1 P2+P3 fixup (year override + same-date case + read auth tighten) |
+| `c4b76f0c` | **Pass 2 P0 fix**: drawer integration via Sheet trong AcademicInfoPanel + file relocation Phase1Master → Phase2Program |
+| `2a08e58e` | Pass 2 P2 docs + P3 cleanup (tier 1 math comments + drop unused imports) |
+
+**Browser smoke (Chrome MCP) — Scenario A 2026-05-09**:
+
+Test admin: `smoke_admin` / academic_info_id=70 (Chăn nuôi thú y CĐ 2026, annual_quota=35).
+
+| Step | Result | Evidence |
+|---|---|---|
+| Login → /admin/admission-config → Phase 2 → Thông tin chi tiết | ✅ Table loads 20 rows | URL `/admin/admission-config?phase=2&step=academic-info` |
+| Click "Quản lý đợt tuyển sinh" CalendarRange button | ✅ Sheet drawer opens right-side | Title "Đợt tuyển sinh — Năm 2026" |
+| DOT_1 backfilled visible | ✅ quota=35, Active badge, dates "—" | round_code DOT_1, submission_count=0 |
+| Create DOT_2_SMOKE (quota NULL) | ✅ POST `/api/v2/admin/academic-info/70/rounds` 201 | Toast "Đợt tuyển sinh đã được tạo", row appears |
+| Edit DOT_2_SMOKE → set quota=5 | ✅ tier 1 chain rejection | PATCH `/rounds/22` 400 (sum 40 > annual 35) |
+| Extend dialog: reason="short" (5 chars) | ✅ "Kéo dài" button **DISABLED** | Client-side ≥10 chars validator |
+| Extend với reason 41 chars + date 2026-12-31 | ✅ POST `/rounds/22/extend` success | Toast + "Extended" badge appears |
+| Soft-archive DOT_2_SMOKE | ✅ DELETE `/rounds/22` success | Toast + "Archived" badge + 3 actions disabled |
+
+`.smoke_phase2_archived.png` evidence captured. Cleanup: DELETE DOT_2_SMOKE, smoke_admin status=inactive.
+
+**Service smoke (Scenario B 7/7 PASS earlier 2026-05-08 evening)**: covered all override flow paths (3a no-override reject, 3b với override accept) + same-date boundary (`<=` operator) + tier 1 chain `current_sum + delta` math.
+
+**Verification gates 100% GREEN**:
+- BE pytest 26/26 Phase 2 + 38/38 regression
+- FE type-check 0 errors / Vitest 25/25 / lint 0 new warnings / build OK
+- Migration phase2_01 roundtrip dev DB ✅
+- Browser UI smoke Chrome MCP 8/8 steps PASS
+
+Pre-Phase-2 prod backup `prod_dump_pre_phase2_20260508_153443.dump` (md5 1a9eb966...) ready cho cutover.
+
+**Push approval pending** — branch ready, evidence trail complete. Awaiting bác chốt.
+
 ---
 
 ## 2026-05-08 — Post-cutover follow-up batch SHIPPED prod (combined deploy)
