@@ -161,6 +161,30 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_path_by_round_and_method(
+        self,
+        admission_round_id: int,
+        academic_info_id: int,
+        admission_method_id: int,
+    ) -> Optional[AdmissionPath]:
+        """Phase 2 v8.2 PR-2B v2 — 3-col lookup helper.
+
+        Returns matching path under (round, academic_info, method) tuple
+        per Q5 v8.2 UNIQUE constraint (PR-2C v2 swap). Eager loads
+        admission_method để tránh MissingGreenlet downstream.
+        """
+        query = (
+            select(AdmissionPath)
+            .where(
+                AdmissionPath.admission_round_id == admission_round_id,
+                AdmissionPath.academic_info_id == academic_info_id,
+                AdmissionPath.admission_method_id == admission_method_id,
+            )
+            .options(selectinload(AdmissionPath.admission_method))
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def list_paths_by_audience(
         self,
         audience: str,
