@@ -6,7 +6,7 @@ factory defaults. Service + API tests live separately.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 
 import pytest
 

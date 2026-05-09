@@ -118,10 +118,21 @@ class AdmissionRoundService:
                     },
                 )
 
-            # Tier 1 chain re-validation when quota changes
+            # Tier 1 chain re-validation when quota changes.
+            # Override flag bypasses ONLY the submission_count check above.
+            # Tier 1 annual cap re-validation runs UNCONDITIONALLY — annual
+            # quota constraint applies even when admin overrides per-round
+            # oversubscribed scenario.
             academic_info = await self.db.get(
                 OfferingAcademicInfo, round_obj.academic_info_id
             )
+            # Tier 1 chain math: current_sum already includes this round's
+            # OLD round_quota (in `_validate_tier1_quota_chain` SUM query),
+            # delta = new - old. Therefore current_sum + delta = new sum
+            # after change. Verified for 3 cases:
+            #   * create (delta = new): current_sum excludes this round → +new
+            #   * increase (delta > 0): current_sum has old → old + (new-old) = new
+            #   * decrease (delta < 0): same math, delta negative
             delta = new_quota - (round_obj.round_quota or 0)
             await self._validate_tier1_quota_chain(academic_info, delta=delta)
 
@@ -245,6 +256,11 @@ class AdmissionRoundService:
         )
         result.scalar_one()
 
+        # Archived rounds NOT counted in tier 1 sum: when admin soft-archives
+        # a round, its quota is "freed" — admin can re-allocate to new active
+        # rounds. Trade-off: archive→un-archive flow could violate tier 1
+        # (no re-check implemented Phase 2; defense-in-depth gap acknowledged
+        # per memory phase2-plan-locked critical risks).
         sum_result = await self.db.execute(
             select(OfferingAdmissionRound.round_quota).where(
                 OfferingAdmissionRound.academic_info_id == academic_info.id,
