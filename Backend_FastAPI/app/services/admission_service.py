@@ -4018,6 +4018,45 @@ async def submit_and_evaluate(
             "validation_errors": errors,  # ✅ FIX: Match schema field name
         }
     else:
+        # Phase 2 v8.2 PR-2B v2 — Atomic submit per-path counter (SPEC
+        # §4.1 line 4100-4107 pattern). Tier 2 quota guard: increment
+        # admission_path.submission_count atomically, block if
+        # round_quota exhausted. NULL round_quota = unbounded.
+        # Backward-compat: legacy profiles (applied_rules KHÔNG có
+        # admission_path_id) skip atomic increment.
+        applied_rules_pre = profile.applied_rules or {}
+        path_id_raw = applied_rules_pre.get("admission_path_id")
+        if path_id_raw is not None:
+            try:
+                path_id_int = int(path_id_raw)
+            except (TypeError, ValueError):
+                path_id_int = None
+            if path_id_int is not None:
+                from sqlalchemy import text
+                atomic_stmt = text(
+                    "UPDATE admission_path "
+                    "SET submission_count = submission_count + 1 "
+                    "WHERE id = :path_id "
+                    "  AND (round_quota IS NULL "
+                    "       OR submission_count < round_quota) "
+                    "RETURNING submission_count, round_quota"
+                )
+                inc_result = await db.execute(
+                    atomic_stmt, {"path_id": path_id_int}
+                )
+                inc_row = inc_result.first()
+                if inc_row is None:
+                    log.warning(
+                        "atomic_submit_blocked_quota_exhausted",
+                        profile_id=profile.id,
+                        admission_path_id=path_id_int,
+                    )
+                    raise BadRequest(
+                        f"Đã đủ chỉ tiêu nộp hồ sơ cho đường tuyển sinh "
+                        f"{path_id_int}. Vui lòng chọn đợt tuyển sinh khác "
+                        f"hoặc liên hệ admin."
+                    )
+
         # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED).
         # transition() validates DRAFT → SUBMITTED via the state machine
         # and raises BusinessRuleViolation if illegal — caller maps to

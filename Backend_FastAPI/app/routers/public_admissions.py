@@ -33,6 +33,15 @@ def _set_public_cache_headers(response: Response) -> None:
 # phase2_01/phase2_02). Until then, audience is the only public
 # narrowing knob beyond the always-on status=active+visibility=public
 # pair.
+_ADMISSION_ROUND_QUERY = Query(
+    None,
+    ge=1,
+    description=(
+        "Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — optional admission_round_id "
+        "filter. Khi set, chỉ trả về paths thuộc round đó (storefront switch "
+        "by đợt). NULL = backward-compat: return all paths across all rounds."
+    ),
+)
 _AUDIENCE_QUERY = Query(
     None,
     description=(
@@ -49,6 +58,7 @@ async def get_public_programs_catalog(
     request: Request,
     response: Response,
     audience: Optional[PublicAdmissionsAudience] = _AUDIENCE_QUERY,
+    admission_round_id: Optional[int] = _ADMISSION_ROUND_QUERY,
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -60,10 +70,11 @@ async def get_public_programs_catalog(
     - latest published academic info per offering
     - public admission methods per offering (narrowed by ``audience``
       when provided)
+    - Phase 2 v8.2 PR-2B v2: ``admission_round_id`` storefront filter
     """
     _set_public_cache_headers(response)
     return await public_admissions_service.get_public_programs_catalog(
-        db, audience=audience
+        db, audience=audience, admission_round_id=admission_round_id,
     )
 
 
@@ -73,6 +84,7 @@ async def get_public_methods_catalog(
     request: Request,
     response: Response,
     audience: Optional[PublicAdmissionsAudience] = _AUDIENCE_QUERY,
+    admission_round_id: Optional[int] = _ADMISSION_ROUND_QUERY,
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -83,10 +95,11 @@ async def get_public_methods_catalog(
     - subject groups referenced by those paths
 
     The ``audience`` query narrows paths via applicable_to containment.
+    Phase 2 v8.2 PR-2B v2: ``admission_round_id`` storefront filter.
     """
     _set_public_cache_headers(response)
     return await public_admissions_service.get_public_methods_catalog(
-        db, audience=audience
+        db, audience=audience, admission_round_id=admission_round_id,
     )
 
 
@@ -96,6 +109,7 @@ async def get_public_documents_catalog(
     request: Request,
     response: Response,
     audience: Optional[PublicAdmissionsAudience] = _AUDIENCE_QUERY,
+    admission_round_id: Optional[int] = _ADMISSION_ROUND_QUERY,
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -108,11 +122,12 @@ async def get_public_documents_catalog(
     Document resolution follows the 3-tier rule (path → method →
     shared) per phase1_06 / Wave 1 PR-1C'; the response source field
     surfaces which tier each document set comes from. ``audience``
-    narrows paths before resolution.
+    narrows paths before resolution. Phase 2 v8.2 PR-2B v2:
+    ``admission_round_id`` storefront filter.
     """
     _set_public_cache_headers(response)
     return await public_admissions_service.get_public_documents_catalog(
-        db, audience=audience
+        db, audience=audience, admission_round_id=admission_round_id,
     )
 
 
