@@ -56,6 +56,88 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-09 — Phase 2 PR-2A v6 ARCHIVED + design pivot Option A v8.2
+
+### Context — Pass 4 user review surfaces UX issue
+
+PR-2A v6 đã ship local (6 commits, 22 files, +2961 lines, browser smoke 8/8 PASS, BE pytest 26/26 + FE Vitest 25/25). Branch `feat/admission-phase2-01-rounds` chưa push. Trước khi push, user Pass 4 review (2026-05-09) flag:
+
+1. **UX issue tiếng Anh/Việt mix** trong RoundManagementPanel (Active/Inactive/Archived/Extended badges, "Override" label, "DOT_1" code leak)
+2. **Workflow inversion**: v6 schema `OfferingAdmissionRound.academic_info_id` FK forces admin vào từng ngành tạo đợt riêng (bottom-up). Nghiệp vụ thực = top-down (1 đợt cho cả trường, allocate quota per major)
+
+User confirm: "Như vậy nghiệp vụ vẫn là vào ngành thêm đợt tuyển sinh thì mới có đợt tuyển sinh đúng không?" → triggered design re-think.
+
+### Design pivot Option A (8-round audit thread)
+
+Em initial recommend Option B (giữ schema v6 + matrix UI top-level). User Pass 5 surface counter-argument: round metadata replication problem (extend/archive/notification template paid N-row coordination cost). Em flipped recommend Option A.
+
+**Walk-through 8 user stories + 4 edge cases** confirmed schema fit Option A. 4 NEW sub-decisions discovered (Q5-Q8): UNIQUE 3-col, clone deep-copy mandate (ADM-003 1:1 invariant), FK ON DELETE RESTRICT, round_code namespace.
+
+### 8 decisions chốt (Q1-Q8 LOCKED)
+
+| # | Decision | Choice |
+|---|---|---|
+| Q1 | Schema | Option A — round at academic_year level |
+| Q2 | Tier 1 chain root | admit_quota per academic_info |
+| Q3 | Round metadata Phase 2 | time-window only (defer notification template Phase 3) |
+| Q4 | Branch strategy | tag preserve v6 + new feat/admission-phase2-01-rounds-v2 |
+| Q5 | UNIQUE columns | 3-col (round_id, academic_info_id, method_id) |
+| Q6 | Clone strategy | hybrid modal + deep-copy criteria + criteria_subject_group + PSG config + items |
+| Q7 | FK ON DELETE | RESTRICT |
+| Q8 | round_code namespace | pure string + UI convention |
+
+### Plan v8 → v8.1 → v8.2 (3 P0 + 7 P2 + 5 P3 patches)
+
+**v8.1 P0 patches** (3 blockers Pass 5 review):
+- P0-1: `path.archived_at` không tồn tại — code dùng `status` enum (verified `admission_path.py:91-98`). Tier 1 filter chuyển `path.status != 'archived'`.
+- P0-2: DB trigger `enforce_applied_rules_immutability` (`b5c6d7e8f9a0_add_applied_rules_immutability_trigger.py:42-47`) chặn UPDATE applied_rules. PR-2B Task 3 wrap `DISABLE/ENABLE TRIGGER` try/finally per precedent `aa1i2j3k4l5m_pr6_allow_unverified_submission.py:65-92`.
+- P0-3: PR-2B Task 4 submission_count cast unsafe — CTE `safe_profiles` wrapper với regex + EXISTS guard parity Task 3.
+
+**v8.2 polish** (Pass 6 fresh-mindset audit, 7 P2 + 5 P3):
+- P2-1 helper naming consistent / P2-2 PR-2B v2 browser smoke / P2-3 rollback playbook scope / P2-4 multi-window 48h-24h / P2-5 A.0 approval note / P2-6 atomic submit tests / P2-7 deploy.sh pre-stage template
+- P3-1 URL `{academic_year}` consistent / P3-2 anchor test mandate matrix / P3-3 atomic increment shift mention / P3-4 admission_quota_service interface / P3-5 "120+ rows" wording
+
+### Task 10 execution 2026-05-09
+
+| Step | Action | Result |
+|---|---|---|
+| 1 | `git tag -a phase2-pr-2a-v6-archived feat/admission-phase2-01-rounds` | annotated tag `e95fa50b` → commit `59ba355a` |
+| 2 | `git push origin phase2-pr-2a-v6-archived` (em delegated approve) | tag pushed origin ✅ |
+| 3 | `docker compose exec backend alembic downgrade phase1_15a` (user approve test-run-approval-required) | head: phase2_01 → phase1_15a, table `offering_admission_round` dropped ✅ |
+| 4 | `\d offering_admission_round` verify | "table does not exist" ✅ |
+| 5-7 | git checkout main + pull + create v2 branch + delete v6 local | `feat/admission-phase2-01-rounds-v2` from main `7116794a` ✅ |
+
+### v6 → v8 PR breakdown delta
+
+| PR | v6 scope | v8.2 scope |
+|---|---|---|
+| PR-2A | round per-academic_info + drawer in AcademicInfoPanel | round at academic_year level + RoundsManagementTab top-level + bulk-create |
+| PR-2B | path.admission_round_id nullable + applied_rules backfill | + 3 quota fields (round_quota, admit_quota, submission_count) + 4-task backfill (DISABLE/ENABLE trigger + CTE safe_profiles) + admission_quota_service |
+| PR-2C | NOT NULL + 2-col UNIQUE swap | NOT NULL + 3-col UNIQUE swap (round_id, academic_info_id, method_id) |
+| PR-2D | PathSubjectGroupConfig + Item | + QuotaMatrix UI (2 tabs round/admit) + clone endpoint deep-copy |
+| PR-2E | Numeric(8,2) score precision | unchanged |
+| PR-2F | engine sweep ≥22 cases | refactored Tier 1/2/3 chain v8 + mandatory test_tier1_chain_per_academic_info_scope |
+
+### Tomorrow plan (Task 12)
+
+Implement PR-2A v2 trên branch `feat/admission-phase2-01-rounds-v2`:
+- Migration `phase2_01_v2_create_offering_admission_round_year_level.py` (down_revision phase1_15a)
+- Model `OfferingAdmissionRound` year-level (academic_year INT, round_code, UNIQUE(year, code))
+- Schema/Repo/Service/Router (`/api/v2/admin/years/{academic_year}/rounds`)
+- FE RoundsManagementTab top-level (Phase1Step `'rounds'` extension)
+- Bulk-create endpoint atomic (4 đợt)
+- Test infra extend builders.py với year-level AdmissionRoundBuilder
+- Anchor test mandate (P3-2 v8.2)
+- Browser smoke per `noble-launching-cocoa.md` plan
+
+### Notes / surprises
+
+- v6 PR-2A passed full verification gates (BE 26/26 + FE 25/25 + browser smoke 8/8 + service smoke 7/7) but failed user UX review → reminder em rằng technical correctness ≠ product fit
+- Pass 5 P0-2 (immutability trigger) là discovery em missed Pass 1-4 — memory `verify-schema-before-proposing` mandate violated. Future reviews phải grep DB trigger inventory trước khi propose UPDATE on applied_rules
+- 8-round audit history dài bất thường nhưng schema correctness Phase 2 sẽ pay dividend Phase 3+ cycle (multi-NV, choice engine, magic link multi-action)
+
+---
+
 ## 2026-05-08 — Post-cutover follow-up batch SHIPPED prod (combined deploy)
 
 ### #184 Routine deploy — FU batch + BE test-debt + FE test-debt atomic ship

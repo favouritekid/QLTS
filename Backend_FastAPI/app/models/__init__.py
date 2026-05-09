@@ -80,6 +80,7 @@ from .organization import OfferingDistributionConfig, OrganizationUnit
 from .major_program import MajorProgram  # Level 1
 from .program_offering import ProgramOffering  # Level 2
 from .offering_academic_info import OfferingAcademicInfo  # Level 3
+from .offering_admission_round import OfferingAdmissionRound  # Phase 2 v8.2 PR-2A v2 — year-level
 from .offering_semester_tuition import OfferingSemesterTuition  # PR 1 (ADR-002)
 
 # Tuition Discount Policy
@@ -196,6 +197,7 @@ __all__ = [
     "MajorProgram",
     "ProgramOffering",
     "OfferingAcademicInfo",
+    "OfferingAdmissionRound",
     "OfferingSemesterTuition",
     # Tuition Discount Policy
     "TuitionDiscountPolicy",
