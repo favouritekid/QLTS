@@ -80,10 +80,17 @@ class AdmissionRoundService:
     async def bulk_create(
         self, academic_year: int, payload: AdmissionRoundBulkCreate, current_admin: User
     ) -> tuple[List[OfferingAdmissionRound], int]:
-        """Bulk-create rounds atomic per academic_year.
+        """Bulk-create rounds idempotent per academic_year.
 
-        ON CONFLICT skip duplicates. Returns (created_rounds, skipped_count).
+        Per-item duplicate check + skip; non-duplicate DB errors abort
+        entire txn (router db.commit() không chạy → rollback). Returns
+        (created_rounds, skipped_count). P2-3 v8.2 semantic clarification.
+
+        Race-window mitigation (P2-4 v8.2): wrap IntegrityError trên flush
+        thành DuplicateResourceError friendly cho concurrent admin scenario.
         """
+        from sqlalchemy.exc import IntegrityError
+
         created: List[OfferingAdmissionRound] = []
         skipped = 0
 
@@ -102,7 +109,17 @@ class AdmissionRoundService:
                 is_active=item.is_active,
             )
             self.db.add(round_obj)
-            await self.db.flush()
+            try:
+                await self.db.flush()
+            except IntegrityError as exc:
+                # Race: 2 admins bulk-create same round_code concurrently.
+                # First commit, second hits UNIQUE → friendly 409 instead
+                # of raw 500.
+                await self.db.rollback()
+                raise DuplicateResourceError(
+                    f"Round {item.round_code!r} đã tồn tại cho năm {academic_year} "
+                    f"(race condition — admin khác vừa tạo cùng lúc)"
+                ) from exc
             created.append(round_obj)
 
         log.info(

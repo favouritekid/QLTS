@@ -79,8 +79,11 @@ class AdmissionRoundBulkCreateItem(BaseModel):
 class AdmissionRoundBulkCreate(BaseModel):
     """Payload for POST /api/v2/admin/years/{academic_year}/rounds/bulk-create.
 
-    Atomic transaction: tạo nhiều rounds cho cùng 1 academic_year.
-    ON CONFLICT(academic_year, round_code) DO NOTHING — re-runnable safe.
+    Idempotent transaction: skip duplicates by (academic_year, round_code),
+    create new rounds atomically. Re-runnable safely. Per-item duplicate
+    check + skip + continue; non-duplicate errors abort entire txn (router
+    db.commit() không chạy → rollback) — atomic-on-error, partial-success-
+    on-duplicate semantic (P2-3 v8.2 wording fix).
     """
 
     rounds: List[AdmissionRoundBulkCreateItem] = Field(

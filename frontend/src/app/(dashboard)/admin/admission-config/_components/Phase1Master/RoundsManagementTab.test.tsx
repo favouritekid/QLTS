@@ -85,12 +85,10 @@ describe("RoundsManagementTab year-level", () => {
     expect(screen.getByRole("button", { name: /Thêm đợt/i })).toBeTruthy()
   })
 
-  it("renders empty-state hint when no rounds for selected year", () => {
-    // Default current year ≠ 2026 (mock returns undefined for non-2026)
-    // Wait — current year is 2026 trong test environment
-    // mock returns 2 rounds when year === 2026
-    // To test empty-state, would need to override year via interaction
-    // Just verify mock baseline: 2 rounds visible (not empty-state path)
+  it("renders rounds list when data loaded", () => {
+    // Mock returns 2 rounds when year === 2026 (default current year).
+    // Empty-state path requires year selector interaction (Vitest JSDOM
+    // limitation với Radix Select portal — defer to Playwright e2e).
     render(wrap(<RoundsManagementTab />))
     // Both round codes visible
     expect(screen.getByText("DOT_1")).toBeTruthy()
@@ -118,9 +116,10 @@ describe("RoundsManagementTab year-level", () => {
     expect(extendButtons.length).toBe(2)
     expect(archiveButtons.length).toBe(2)
 
-    // Last row (DOT_2 archived) buttons should be disabled
-    expect(editButtons[1]).toHaveProperty("disabled", true)
-    expect(extendButtons[1]).toHaveProperty("disabled", true)
-    expect(archiveButtons[1]).toHaveProperty("disabled", true)
+    // Last row (DOT_2 archived) buttons should be disabled (P2-2 v8.2 —
+    // idiomatic jest-dom matcher).
+    expect(editButtons[1]).toBeDisabled()
+    expect(extendButtons[1]).toBeDisabled()
+    expect(archiveButtons[1]).toBeDisabled()
   })
 })
