@@ -147,6 +147,7 @@ async def _load_public_paths(
     db: AsyncSession,
     academic_info_ids: Set[int],
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> List[models.AdmissionPath]:
     if not academic_info_ids:
         return []
@@ -156,6 +157,13 @@ async def _load_public_paths(
         models.AdmissionPath.status == PUBLIC_PATH_STATUS,
         models.AdmissionPath.visibility == PUBLIC_PATH_VISIBILITY,
     ]
+    # Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — storefront round filter.
+    # Khi caller specify admission_round_id, only paths thuộc round đó
+    # được serve. NULL filter = backward-compat (return all paths).
+    if admission_round_id is not None:
+        conditions.append(
+            models.AdmissionPath.admission_round_id == admission_round_id
+        )
     if audience is not None:
         # phase1_03 audience filter — JSONB ARRAY @> containment.
         # NULL applicable_to = legacy / applies to every audience

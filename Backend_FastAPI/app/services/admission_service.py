@@ -2808,6 +2808,10 @@ async def create_profile(
         # =========================================================================
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
+        # Phase 2 v8.2 PR-2B v2 — snapshot admission_round_id từ path
+        # để engine + cross-round queries không phải JOIN lại. Backfill
+        # migration phase2_02_v2 đã populate cho legacy profiles.
+        "admission_round_id": admission_path.admission_round_id,
         "academic_info_id": academic_info.id,
         # PR #6 — snapshot the path-level flag so later admin changes to
         # the path don't retroactively block (or unblock) submissions
