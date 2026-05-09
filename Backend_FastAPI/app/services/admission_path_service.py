@@ -138,9 +138,68 @@ class AdmissionPathService:
         """
         Create a new AdmissionPath.
 
+        Phase 2 v8.2 PR-2B v2: auto-resolve DOT_1 shim. If
+        ``data.admission_round_id`` is None, lookup DOT_1 của
+        academic_info's academic_year (year-level Option A). Validate
+        Tier 1 chain trên admit_quota change.
+
         Raises:
             DuplicateResourceError: If path already exists for offering + method
+            BusinessRuleViolation: Tier 1 chain violated, Tier 2 invariant violated, or DOT_1 not found
         """
+        # Phase 2 v8.2 PR-2B v2 — auto-resolve admission_round_id.
+        # Note: PR-2C v2 sẽ swap UNIQUE thành 3-col (round, acad, method).
+        # Phase 2 transition: vẫn dùng 2-col duplicate check tại đây
+        # (PR-2C v2 sẽ relax sang 3-col).
+        admission_round_id = data.admission_round_id
+        if admission_round_id is None:
+            from app.models.offering_academic_info import OfferingAcademicInfo
+            from app.repositories.admission_round_repository import (
+                AdmissionRoundRepository,
+            )
+            academic_info = await self.db.get(
+                OfferingAcademicInfo, data.academic_info_id
+            )
+            if academic_info is None:
+                raise ResourceNotFoundError(
+                    f"OfferingAcademicInfo {data.academic_info_id} not found"
+                )
+            round_repo = AdmissionRoundRepository(self.db)
+            default_round = await round_repo.get_default_dot1(
+                academic_info.academic_year
+            )
+            if default_round is None:
+                raise BusinessRuleViolation(
+                    f"DOT_1 round không tồn tại cho năm "
+                    f"{academic_info.academic_year}; admin tạo round trước "
+                    f"hoặc truyền explicit admission_round_id."
+                )
+            admission_round_id = default_round.id
+            log.info(
+                "admission_path_create_auto_resolved_round",
+                academic_info_id=data.academic_info_id,
+                academic_year=academic_info.academic_year,
+                resolved_round_id=admission_round_id,
+                auto_resolved=True,
+            )
+
+        # Tier 1+2 chain validation — admit_quota Tier 1 chain check
+        # if admit_quota provided; Tier 2 invariant check both fields.
+        if data.admit_quota is not None or data.round_quota is not None:
+            from app.services.admission_quota_service import (
+                AdmissionQuotaService,
+            )
+            quota_service = AdmissionQuotaService(self.db)
+            await quota_service.validate_tier2_path_invariant(
+                admit_quota=data.admit_quota,
+                round_quota=data.round_quota,
+            )
+            if data.admit_quota is not None:
+                await quota_service.validate_tier1_chain_on_path_quota_change(
+                    academic_info_id=data.academic_info_id,
+                    delta_admit_quota=data.admit_quota,
+                )
+
         # Check for duplicate
         existing = await self.repo.get_path_by_offering_and_method(
             data.academic_info_id, data.admission_method_id
@@ -185,6 +244,9 @@ class AdmissionPathService:
             {
                 "academic_info_id": data.academic_info_id,
                 "admission_method_id": data.admission_method_id,
+                "admission_round_id": admission_round_id,
+                "round_quota": data.round_quota,
+                "admit_quota": data.admit_quota,
                 "display_name": data.display_name,
                 "display_order": data.display_order,
                 "visibility": data.visibility,

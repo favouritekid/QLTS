@@ -197,6 +197,24 @@ class AdmissionPathCreate(BaseModel):
     """Request schema for creating a new AdmissionPath."""
     academic_info_id: int
     admission_method_id: int
+    # Phase 2 v8.2 PR-2B v2 — optional admission_round_id; nếu None,
+    # service layer auto-resolve DOT_1 của academic_info's year (year-
+    # level lookup, Option A). NOT NULL post PR-2C v2 swap.
+    admission_round_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Round FK. NULL = auto-resolve DOT_1 của academic_info's "
+            "academic_year tại service layer."
+        ),
+    )
+    round_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path submission cap. NULL = unbounded.",
+    )
+    admit_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path admit cap (Tier 1 chain root per academic_info).",
+    )
     display_name: Optional[str] = None
     display_order: int = 0
     visibility: VisibilityStatus = "internal"

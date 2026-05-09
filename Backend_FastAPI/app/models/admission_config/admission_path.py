@@ -213,6 +213,46 @@ class AdmissionPath(Base):
         """Check if this admission path requires application fee payment."""
         return self.application_fee is not None and float(self.application_fee) > 0
 
+    # Phase 2 v8.2 PR-2B v2 — admission_round_id FK + path-level quota
+    # fields. Round entity year-level (Q1 Option A). RESTRICT per Q7
+    # v8.2 — soft-archive lifecycle preserved. NOT NULL post PR-2C v2
+    # swap (⚠ ONE-WAY).
+    admission_round_id = Column(
+        Integer,
+        ForeignKey("offering_admission_round.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="FK to offering_admission_round (year-level). NOT NULL post PR-2C v2."
+    )
+
+    # Per-path submission cap. NULL = unbounded. Path-level invariant:
+    # admit_quota ≤ round_quota nếu cả 2 set (Tier 2 service guard).
+    round_quota = Column(
+        Integer,
+        nullable=True,
+        comment="Per-path submission cap. NULL = unbounded."
+    )
+
+    # Tier 1 chain root per Q2 v8.2:
+    # ∑(path.admit_quota WHERE academic_info_id=X) ≤
+    # academic_info[X].annual_admission_quota
+    admit_quota = Column(
+        Integer,
+        nullable=True,
+        comment="Per-path admit cap. Tier 1 chain root per academic_info."
+    )
+
+    # Atomic per-path counter (incremented qua candidate submit
+    # SPEC §4.1 SQL pattern). Moved từ round.submission_count v6
+    # → path.submission_count v8.2 Option A.
+    submission_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=sa.text("0"),
+        comment="Atomic per-path submission counter."
+    )
+
     # Activation Audit
     activated_at = Column(
         DateTime(timezone=True),
@@ -255,6 +295,10 @@ class AdmissionPath(Base):
     activator = relationship(
         "User",
         foreign_keys=[activated_by]
+    )
+    admission_round = relationship(
+        "OfferingAdmissionRound",
+        foreign_keys=[admission_round_id],
     )
 
     # UNIQUE constraint: Only 1 path per (offering + method)

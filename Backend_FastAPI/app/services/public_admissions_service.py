@@ -147,6 +147,7 @@ async def _load_public_paths(
     db: AsyncSession,
     academic_info_ids: Set[int],
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> List[models.AdmissionPath]:
     if not academic_info_ids:
         return []
@@ -156,6 +157,13 @@ async def _load_public_paths(
         models.AdmissionPath.status == PUBLIC_PATH_STATUS,
         models.AdmissionPath.visibility == PUBLIC_PATH_VISIBILITY,
     ]
+    # Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — storefront round filter.
+    # Khi caller specify admission_round_id, only paths thuộc round đó
+    # được serve. NULL filter = backward-compat (return all paths).
+    if admission_round_id is not None:
+        conditions.append(
+            models.AdmissionPath.admission_round_id == admission_round_id
+        )
     if audience is not None:
         # phase1_03 audience filter — JSONB ARRAY @> containment.
         # NULL applicable_to = legacy / applies to every audience
@@ -393,10 +401,18 @@ def _items_to_public_documents(
 async def get_public_programs_catalog(
     db: AsyncSession,
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsProgramsResponse:
+    """Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — `admission_round_id`
+    optional filter. NULL = backward-compat (return all paths, all
+    rounds). Set = scope to specific round (storefront switch by đợt)."""
     programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
     method_tags_by_info_id = _build_method_lookup(
-        await _load_public_paths(db, academic_info_ids, audience=audience)
+        await _load_public_paths(
+            db, academic_info_ids,
+            audience=audience,
+            admission_round_id=admission_round_id,
+        )
     )
 
     degree_groups: Dict[str, List[PublicAdmissionsProgramSummary]] = defaultdict(list)
@@ -523,9 +539,16 @@ async def get_public_programs_catalog(
 async def get_public_methods_catalog(
     db: AsyncSession,
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsMethodsResponse:
+    """Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — admission_round_id
+    optional filter wired through _load_public_paths."""
     _, _, academic_info_ids = await _load_public_program_snapshot(db)
-    paths = await _load_public_paths(db, academic_info_ids, audience=audience)
+    paths = await _load_public_paths(
+        db, academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
 
     method_models: Dict[int, models.AdmissionMethod] = {}
     method_program_ids: Dict[int, Set[int]] = defaultdict(set)
@@ -615,9 +638,16 @@ async def get_public_methods_catalog(
 async def get_public_documents_catalog(
     db: AsyncSession,
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsDocumentsResponse:
+    """Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — admission_round_id
+    optional filter wired through _load_public_paths."""
     _, _, academic_info_ids = await _load_public_program_snapshot(db)
-    paths = await _load_public_paths(db, academic_info_ids, audience=audience)
+    paths = await _load_public_paths(
+        db, academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
 
     offering_type_ids: Set[int] = set()
     offering_type_programs: Dict[int, Set[str]] = defaultdict(set)

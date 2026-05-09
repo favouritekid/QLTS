@@ -56,6 +56,40 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-09 — 🎯 Phase 2 PR-2A v2 SHIPPED prod (Option A foundation live)
+
+**Squash SHA**: `0b3ba418d0890d9555dd428b2c2306b05c7367cd` (PR #239)
+**Merged**: 2026-05-09 04:45:40 UTC
+**Deployed**: 2026-05-09 05:29:17 UTC (deploy duration 10m 9s)
+**Migration prod**: `phase1_15a → phase2_01_v2` apply 05:28:11 UTC clean
+
+### Verification
+
+- BE pytest 26/26 PASS (14 unit + 12 service)
+- FE Vitest 4/4 PASS RoundsManagementTab
+- PR Gate Contract Tests 9m7s green (16 jobs)
+- prod /health 200 post-deploy
+- Migration roundtrip dev clean trước merge
+- Browser smoke (Chrome MCP) — bulk-create 4 đợt OK
+
+### What's live on prod
+
+- Table `offering_admission_round` (year-level, 12 cols, UNIQUE(academic_year, round_code))
+- 1 row backfill: (academic_year=2026, round_code='DOT_1', round_name='Đợt 1 - 2026')
+- 7 admin endpoints `/api/v2/admin/years/{academic_year}/rounds*` + `/rounds/{id}/*` (require_admin)
+- FE Phase 1 sidebar "Đợt Tuyển sinh" tab top-level + Vietnamese badges + "Tạo nhanh 4 đợt" bulk-create
+
+### Side effects
+
+- Pre-existing Node.js Dependencies CI fail (fast-uri high + postcss moderate via next 16.3.0) — pattern khớp PRs #233-#237; cần upgrade PR riêng (KHÔNG do PR-2A v2 introduce)
+- Deploy SSH duration 10m 9s — within normal range so với PR #237 9m20s
+
+### Plan v8.2 progress: 1/6 PRs SHIPPED
+
+PR-2B v2 next sequential — branch `feat/admission-phase2-02-path-quota` đã setup, ~40% scaffolded (migration + model + admission_quota_service Tier 1+2 + repo helper). Cần rebase onto new main (squash SHA `0b3ba418`) trước khi push PR.
+
+---
+
 ## 2026-05-09 — Phase 2 PR-2A v6 ARCHIVED + design pivot Option A v8.2
 
 ### Context — Pass 4 user review surfaces UX issue
