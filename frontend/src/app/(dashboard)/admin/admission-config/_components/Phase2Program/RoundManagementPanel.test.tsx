@@ -1,11 +1,11 @@
 /**
  * Vitest tests for RoundManagementPanel (Phase 2 PR-2A).
  *
- * Lightweight smoke tests focused on contract:
- * - Renders empty-state when academic_info_id null
+ * Mounted by AcademicInfoPanel via Sheet drawer (parent guarantees
+ * non-null academicInfoId). Smoke tests focused on contract:
  * - Renders rounds list when data loaded
- * - Disables Edit/Extend/Archive buttons when round.archived_at set
- * - Disables "Kéo dài" submit button when reason < 10 chars
+ * - Shows Archived badge for soft-archived rounds
+ * - Renders empty-state hint when no rounds yet
  *
  * Full mount + interactive flow deferred to Playwright e2e PR-2F suite.
  */
@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from "vitest"
 import { RoundManagementPanel } from "./RoundManagementPanel"
 
 vi.mock("@/hooks/admissions/useAdmissionRounds", () => ({
-  useAdmissionRounds: (id: number | null) => ({
+  useAdmissionRounds: (id: number) => ({
     data: id === 42
       ? {
           total: 2,
@@ -84,10 +84,11 @@ function wrap(ui: ReactNode) {
 }
 
 describe("RoundManagementPanel", () => {
-  it("renders empty-state hint when academicInfoId is null", () => {
-    render(wrap(<RoundManagementPanel academicInfoId={null} />))
+  it("renders empty-state hint when no rounds exist for academic_info", () => {
+    // id=99 doesn't match the mock's id===42 branch → undefined data → empty
+    render(wrap(<RoundManagementPanel academicInfoId={99} />))
     expect(
-      screen.getByText(/Chọn một năm học để quản lý các đợt tuyển sinh/i)
+      screen.getByText(/Chưa có đợt nào\. Tạo DOT_1 để bắt đầu/i)
     ).toBeTruthy()
   })
 

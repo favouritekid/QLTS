@@ -2,10 +2,12 @@
  * RoundManagementPanel — admin CRUD UI cho OfferingAdmissionRound
  * (Phase 2 PR-2A, Q5 v6 bundled với PR-2A).
  *
- * Sibling pattern follow `AdmissionMethodPanel.tsx` cùng dir.
+ * Mounted dưới Phase2Program (round là sub-resource của academic_info).
+ * Parent component `AcademicInfoPanel` opens drawer với academicInfoId
+ * prop khi admin click "Đợt" button per row.
  *
  * Capabilities:
- * - List rounds dưới academic_info (selected ngoài qua prop)
+ * - List rounds dưới academic_info
  * - Add round (POST /api/v2/admin/academic-info/{id}/rounds)
  * - Edit round (PATCH /api/v2/admin/rounds/{id})
  * - Soft-archive (DELETE /api/v2/admin/rounds/{id}) — Concern γ v6: Phase 2
@@ -52,7 +54,8 @@ import {
 import type { AdmissionRoundResponse } from "@/lib/zod/admission-rounds"
 
 interface Props {
-  academicInfoId: number | null
+  /** Parent (AcademicInfoPanel) guarantees non-null ID before mount. */
+  academicInfoId: number
 }
 
 interface FormState {
@@ -113,10 +116,10 @@ function roundToFormState(r: AdmissionRoundResponse): FormState {
 
 export function RoundManagementPanel({ academicInfoId }: Props) {
   const { data, isLoading } = useAdmissionRounds(academicInfoId)
-  const createMutation = useCreateRound(academicInfoId ?? 0)
-  const updateMutation = useUpdateRound(academicInfoId ?? 0)
-  const archiveMutation = useSoftArchiveRound(academicInfoId ?? 0)
-  const extendMutation = useExtendRound(academicInfoId ?? 0)
+  const createMutation = useCreateRound(academicInfoId)
+  const updateMutation = useUpdateRound(academicInfoId)
+  const archiveMutation = useSoftArchiveRound(academicInfoId)
+  const extendMutation = useExtendRound(academicInfoId)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AdmissionRoundResponse | null>(
@@ -134,14 +137,6 @@ export function RoundManagementPanel({ academicInfoId }: Props) {
     extension_reason: "",
   })
   const [overrideQuota, setOverrideQuota] = useState(false)
-
-  if (academicInfoId === null) {
-    return (
-      <div className="text-sm text-muted-foreground p-4">
-        Chọn một năm học để quản lý các đợt tuyển sinh.
-      </div>
-    )
-  }
 
   const rounds = data?.items ?? []
 

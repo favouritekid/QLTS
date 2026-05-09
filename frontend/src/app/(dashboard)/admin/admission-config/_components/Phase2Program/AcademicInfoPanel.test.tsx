@@ -35,6 +35,16 @@ vi.mock("@/hooks/admissions/useAdmissionConfigState", () => ({
   useAdmissionConfigState: () => ({ navigate: vi.fn() }),
 }));
 
+// Phase 2 PR-2A — drawer mounts RoundManagementPanel which uses these hooks.
+// Mock to avoid network calls trong AcademicInfoPanel test scope.
+vi.mock("@/hooks/admissions/useAdmissionRounds", () => ({
+  useAdmissionRounds: () => ({ data: undefined, isLoading: false }),
+  useCreateRound: () => ({ mutateAsync: vi.fn() }),
+  useUpdateRound: () => ({ mutateAsync: vi.fn() }),
+  useSoftArchiveRound: () => ({ mutateAsync: vi.fn() }),
+  useExtendRound: () => ({ mutateAsync: vi.fn() }),
+}));
+
 describe("AcademicInfoPanel", () => {
   const mockAcademicInfos = [
     {
@@ -399,6 +409,30 @@ describe("AcademicInfoPanel", () => {
     // The dialog should close (finally block runs) even though mutation failed
     await waitFor(() => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
+  // ===========================================================================
+  // Phase 2 PR-2A — Round Management drawer integration smoke
+  // ===========================================================================
+
+  it("opens Round Management drawer when 'Đợt' button clicked per row", async () => {
+    render(<AcademicInfoPanel />);
+
+    // Each row has aria-label="Quản lý đợt tuyển sinh" button
+    const roundButtons = screen.getAllByRole("button", {
+      name: /Quản lý đợt tuyển sinh/i,
+    });
+    expect(roundButtons.length).toBe(mockAcademicInfos.length);
+
+    // Click first row → drawer opens với academic_year title
+    fireEvent.click(roundButtons[0]);
+
+    await waitFor(() => {
+      // Sheet renders title "Đợt tuyển sinh — Năm {year}"
+      expect(
+        screen.getByText(/Đợt tuyển sinh — Năm 2024/i),
+      ).toBeInTheDocument();
     });
   });
 });

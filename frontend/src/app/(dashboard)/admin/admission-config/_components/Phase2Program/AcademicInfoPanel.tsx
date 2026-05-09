@@ -12,7 +12,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { Calendar, Pencil, Trash2, Plus, Loader2, Eye } from "lucide-react";
+import { Calendar, CalendarRange, Pencil, Trash2, Plus, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +32,14 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { RoundManagementPanel } from "./RoundManagementPanel";
 import { toast } from "sonner";
 import {
   useOfferingAcademicInfos,
@@ -79,6 +87,12 @@ export function AcademicInfoPanel() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [editingItem, setEditingItem] = useState<OfferingAcademicInfo | null>(null);
+  // Phase 2 PR-2A — Round management drawer state. C-1 inline pattern:
+  // open from per-row "Đợt" button; admin sees rounds CRUD in side drawer
+  // anchored to the selected academic_info context.
+  const [roundsTarget, setRoundsTarget] = useState<OfferingAcademicInfo | null>(
+    null,
+  );
   const [semesterTuitions, setSemesterTuitions] = useState<
     SemesterTuitionBulkUpsertItem[]
   >([]);
@@ -475,6 +489,18 @@ export function AcademicInfoPanel() {
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
+                          {/* Phase 2 PR-2A — manage rounds dưới academic_info.
+                              Placed last so existing tests selecting first
+                              button per row (Pencil) keep working. */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setRoundsTarget(item)}
+                            title="Quản lý đợt tuyển sinh"
+                            aria-label="Quản lý đợt tuyển sinh"
+                          >
+                            <CalendarRange className="h-4 w-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -485,6 +511,32 @@ export function AcademicInfoPanel() {
           )}
         </CardContent>
       </Card>
+
+      {/* Phase 2 PR-2A — Round Management drawer (C-1 inline pattern) */}
+      <Sheet
+        open={roundsTarget !== null}
+        onOpenChange={(open) => !open && setRoundsTarget(null)}
+      >
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-2xl lg:max-w-3xl overflow-y-auto"
+        >
+          <SheetHeader>
+            <SheetTitle>
+              Đợt tuyển sinh — Năm {roundsTarget?.academic_year}
+            </SheetTitle>
+            <SheetDescription>
+              Quản lý các đợt tuyển sinh dưới năm học đã chọn (DOT_1 / DOT_2 /
+              BO_SUNG). Mỗi đợt có quota / dates / extension audit riêng.
+            </SheetDescription>
+          </SheetHeader>
+          {roundsTarget !== null && (
+            <div className="mt-4">
+              <RoundManagementPanel academicInfoId={roundsTarget.id} />
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Create/Edit Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
