@@ -109,6 +109,22 @@ export function useSoftArchiveRound(academicYear: number) {
   })
 }
 
+export function useRestoreRound(academicYear: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: roundsApi.restoreRound,
+    onSuccess: () => {
+      toast.success("Đã khôi phục đợt tuyển sinh")
+      queryClient.invalidateQueries({
+        queryKey: [ROUNDS_KEY, "by-year", academicYear],
+      })
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.response?.data?.detail || "Không thể khôi phục")
+    },
+  })
+}
+
 export function useExtendRound(academicYear: number) {
   const queryClient = useQueryClient()
   return useMutation({

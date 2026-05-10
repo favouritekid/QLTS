@@ -197,7 +197,9 @@ async def update_round(
         resource_id=round_id,
         actor_id=current_admin.id,
         description=f"Round {round_id} updated",
-        changes=payload.model_dump(exclude_unset=True),
+        # mode="json" để serialize date → ISO string (JSON column không nhận
+        # datetime.date object → SQLAlchemy raise TypeError lúc INSERT).
+        changes=payload.model_dump(exclude_unset=True, mode="json"),
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
@@ -229,6 +231,34 @@ async def soft_archive_round(
         resource_id=round_id,
         actor_id=current_admin.id,
         description=f"Round {round_id} soft-archived",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    await db.commit()
+    await db.refresh(round_obj)
+    return AdmissionRoundResponse.model_validate(round_obj)
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.post("/rounds/{round_id}/restore", response_model=AdmissionRoundResponse)
+async def restore_round(
+    request: Request,
+    round_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """Khôi phục đợt đã lưu trữ — inverse của soft_archive."""
+    service = AdmissionRoundService(db)
+    round_obj = await service.restore(round_id, current_admin)
+
+    await activity_service.log_activity(
+        db=db,
+        action="admission_round_restore",
+        resource_type="offering_admission_round",
+        resource_id=round_id,
+        actor_id=current_admin.id,
+        description=f"Round {round_id} restored từ archive",
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )

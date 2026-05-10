@@ -145,6 +145,17 @@ class AdmissionRoundService:
         for field, value in update_data.items():
             setattr(round_obj, field, value)
 
+        # Validate time-window invariant: start_date ≤ end_date.
+        if (
+            round_obj.start_date is not None
+            and round_obj.end_date is not None
+            and round_obj.start_date > round_obj.end_date
+        ):
+            raise BusinessRuleViolation(
+                f"start_date ({round_obj.start_date}) phải ≤ end_date "
+                f"({round_obj.end_date})"
+            )
+
         await self.db.flush()
         log.info(
             "admission_round_updated",
@@ -178,6 +189,34 @@ class AdmissionRoundService:
         await self.db.flush()
         log.info(
             "admission_round_soft_archived",
+            round_id=round_id,
+            admin_id=current_admin.id,
+        )
+        return round_obj
+
+    async def restore(
+        self, round_id: int, current_admin: User
+    ) -> OfferingAdmissionRound:
+        """Khôi phục đợt đã lưu trữ — clear archived_at, set is_active=true.
+
+        Inverse của soft_archive. Chỉ admin discretion; đợt đã archive vẫn
+        giữ nguyên end_date / extended_at để preserve audit trail.
+        """
+        round_obj = await self.repo.get_by_id(round_id)
+        if round_obj is None:
+            raise ResourceNotFoundError(f"Round {round_id} not found")
+
+        if round_obj.archived_at is None:
+            raise BusinessRuleViolation(
+                f"Round {round_id} chưa lưu trữ — không cần khôi phục"
+            )
+
+        round_obj.archived_at = None
+        round_obj.is_active = True
+
+        await self.db.flush()
+        log.info(
+            "admission_round_restored",
             round_id=round_id,
             admin_id=current_admin.id,
         )

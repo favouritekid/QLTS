@@ -22,6 +22,7 @@
 
 import {
   Archive,
+  ArchiveRestore,
   CalendarPlus,
   Edit,
   Layers,
@@ -64,6 +65,7 @@ import {
   useBulkCreateRounds,
   useCreateRound,
   useExtendRound,
+  useRestoreRound,
   useSoftArchiveRound,
   useUpdateRound,
 } from "@/hooks/admissions/useAdmissionRounds"
@@ -139,6 +141,7 @@ export function RoundsManagementTab() {
   const bulkCreateMutation = useBulkCreateRounds(academicYear)
   const updateMutation = useUpdateRound(academicYear)
   const archiveMutation = useSoftArchiveRound(academicYear)
+  const restoreMutation = useRestoreRound(academicYear)
   const extendMutation = useExtendRound(academicYear)
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -318,15 +321,27 @@ export function RoundsManagementTab() {
                     >
                       <CalendarPlus className="h-3 w-3" />
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setArchiveTarget(r)}
-                      disabled={r.archived_at !== null}
-                      aria-label="Lưu trữ đợt"
-                    >
-                      <Archive className="h-3 w-3" />
-                    </Button>
+                    {r.archived_at === null ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setArchiveTarget(r)}
+                        aria-label="Lưu trữ đợt"
+                      >
+                        <Archive className="h-3 w-3" aria-hidden="true" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => restoreMutation.mutate(r.id)}
+                        disabled={restoreMutation.isPending}
+                        aria-label="Khôi phục đợt"
+                        aria-busy={restoreMutation.isPending}
+                      >
+                        <ArchiveRestore className="h-3 w-3" aria-hidden="true" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               )

@@ -181,6 +181,25 @@ class AdmissionPathService:
                 resolved_round_id=admission_round_id,
                 auto_resolved=True,
             )
+        else:
+            # Pre-validate explicit round_id exists để tránh IntegrityError
+            # bùng FK constraint mid-INSERT (no response → CORS error ở FE).
+            from app.models.offering_admission_round import (
+                OfferingAdmissionRound,
+            )
+            round_obj = await self.db.get(
+                OfferingAdmissionRound, admission_round_id
+            )
+            if round_obj is None:
+                raise ResourceNotFoundError(
+                    f"OfferingAdmissionRound {admission_round_id} not found"
+                )
+            log.debug(
+                "admission_path_create_explicit_round",
+                academic_info_id=data.academic_info_id,
+                round_id=admission_round_id,
+                auto_resolved=False,
+            )
 
         # Tier 1+2 chain validation — admit_quota Tier 1 chain check
         # if admit_quota provided; Tier 2 invariant check both fields.
