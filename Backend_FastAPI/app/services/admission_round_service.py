@@ -43,6 +43,17 @@ class AdmissionRoundService:
         self.db = db
         self.repo = AdmissionRoundRepository(db)
 
+    @staticmethod
+    def _validate_date_window(start, end) -> None:
+        """Cross-field invariant: start_date ≤ end_date nếu cả 2 set.
+
+        Apply chung create/update/extend để tránh drift logic giữa các path.
+        """
+        if start is not None and end is not None and start > end:
+            raise BusinessRuleViolation(
+                f"start_date ({start}) phải ≤ end_date ({end})"
+            )
+
     async def create(
         self, academic_year: int, payload: AdmissionRoundCreate, current_admin: User
     ) -> OfferingAdmissionRound:
@@ -50,7 +61,10 @@ class AdmissionRoundService:
 
         Guards:
         * round_code UNIQUE per academic_year
+        * start_date ≤ end_date nếu cả 2 set (BUG #C2 fix)
         """
+        self._validate_date_window(payload.start_date, payload.end_date)
+
         existing = await self.repo.get_by_year_and_code(academic_year, payload.round_code)
         if existing is not None:
             raise DuplicateResourceError(
@@ -145,16 +159,8 @@ class AdmissionRoundService:
         for field, value in update_data.items():
             setattr(round_obj, field, value)
 
-        # Validate time-window invariant: start_date ≤ end_date.
-        if (
-            round_obj.start_date is not None
-            and round_obj.end_date is not None
-            and round_obj.start_date > round_obj.end_date
-        ):
-            raise BusinessRuleViolation(
-                f"start_date ({round_obj.start_date}) phải ≤ end_date "
-                f"({round_obj.end_date})"
-            )
+        # Validate time-window invariant: start_date ≤ end_date (shared helper).
+        self._validate_date_window(round_obj.start_date, round_obj.end_date)
 
         await self.db.flush()
         log.info(
@@ -235,11 +241,23 @@ class AdmissionRoundService:
         if round_obj is None:
             raise ResourceNotFoundError(f"Round {round_id} not found")
 
+        # BUG #C1 fix: chặn extend khi đã archive — tránh corrupt audit trail
+        # (extended_at + archived_at cùng tồn tại). Admin phải restore trước
+        # nếu thật sự muốn extend.
+        if round_obj.archived_at is not None:
+            raise BusinessRuleViolation(
+                f"Round {round_id} đã lưu trữ ({round_obj.archived_at}); "
+                f"khôi phục trước khi gia hạn"
+            )
+
         if round_obj.end_date is not None and payload.end_date <= round_obj.end_date:
             raise BusinessRuleViolation(
                 f"New end_date ({payload.end_date}) phải sau current end_date "
                 f"({round_obj.end_date})"
             )
+
+        # Validate window after extend nếu start_date đã set.
+        self._validate_date_window(round_obj.start_date, payload.end_date)
 
         round_obj.end_date = payload.end_date
         round_obj.extended_at = datetime.now(timezone.utc)

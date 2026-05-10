@@ -556,6 +556,67 @@ async def test_round_update_rejects_end_before_start(round_test_seed: dict) -> N
 
 
 @pytest.mark.asyncio
+async def test_round_create_rejects_end_before_start(round_test_seed: dict) -> None:
+    """ANCHOR (BUG #C2): create round với end_date < start_date raise 400.
+
+    Trước fix: chỉ update() validate, create() bỏ qua → admin tạo round
+    với window invalid.
+    """
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        with pytest.raises(BusinessRuleViolation, match="phải ≤ end_date"):
+            await service.create(
+                2026,
+                AdmissionRoundCreate(
+                    round_code="DOT_X",
+                    round_name="Đợt invalid",
+                    start_date=date(2026, 6, 1),
+                    end_date=date(2026, 1, 1),
+                ),
+                admin,
+            )
+
+
+@pytest.mark.asyncio
+async def test_round_extend_blocks_archived(round_test_seed: dict) -> None:
+    """ANCHOR (BUG #C1): extend round đã archive raise 400.
+
+    Trước fix: extended_at + archived_at cùng tồn tại → audit trail ambiguous.
+    Sau fix: phải restore trước khi extend.
+    """
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        round_obj = await service.create(
+            2026,
+            AdmissionRoundCreate(
+                round_code="DOT_1",
+                round_name="Đợt 1",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 3, 31),
+            ),
+            admin,
+        )
+        await service.soft_archive(round_obj.id, admin)
+        await db.commit()
+        round_id = round_obj.id
+
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        with pytest.raises(BusinessRuleViolation, match="đã lưu trữ"):
+            await service.extend(
+                round_id,
+                AdmissionRoundExtend(
+                    end_date=date(2026, 6, 30),
+                    extension_reason="Cố gắng gia hạn round archived",
+                ),
+                admin,
+            )
+
+
+@pytest.mark.asyncio
 async def test_round_update_partial_start_against_existing_end(
     round_test_seed: dict,
 ) -> None:

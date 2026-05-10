@@ -666,6 +666,25 @@ class AdmissionPathService:
         if path.status not in ["draft", "inactive"]:
             errors.append(f"Cannot activate path with status '{path.status}'")
 
+        # Check 1b (BUG #C4 fix): admission_round phải đang hoạt động + chưa
+        # archive. Path active trên round archived = "active path on offline
+        # round" → confuse storefront. Cross-entity guard tại activation gate.
+        # Fetch via session.get để tránh MissingGreenlet (relationship không
+        # eager-loaded trong AdmissionPathRepository default queries).
+        from app.models.offering_admission_round import OfferingAdmissionRound
+        admission_round = await self.db.get(
+            OfferingAdmissionRound, path.admission_round_id
+        )
+        if admission_round is not None:
+            if admission_round.archived_at is not None:
+                errors.append(
+                    f"Đợt tuyển sinh '{admission_round.round_code}' đã lưu trữ"
+                )
+            elif not admission_round.is_active:
+                errors.append(
+                    f"Đợt tuyển sinh '{admission_round.round_code}' đang tắt (is_active=false)"
+                )
+
         # Check 2: academic_info + quota
         academic_info = path.academic_info
         if not academic_info:

@@ -44,7 +44,11 @@ const mockAdmissionPathResponse = {
   display_order: 1,
   visibility: "public" as const,
   activated_at: null,
-  activated_by: null,
+  // Mirror BE Pydantic UserNested shape (admission_path.py:499). FE Zod
+  // schema yêu cầu nested object, không phải scalar id.
+  activator: null,
+  // Phase 2 v8.2 — derived flag từ application_fee > 0.
+  requires_application_fee: false,
   created_at: "2025-06-01T00:00:00+00:00",
   updated_at: "2025-06-01T00:00:00+00:00",
   academic_info: null,

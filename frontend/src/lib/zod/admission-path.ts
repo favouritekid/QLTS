@@ -105,6 +105,18 @@ export const admissionMethodNestedSchema = z.object({
 export type AdmissionMethodNested = z.infer<typeof admissionMethodNestedSchema>
 
 /**
+ * User (nested - used for activator field).
+ * Mirror BE UserNested mini-schema.
+ */
+export const userNestedSchema = z.object({
+  id: z.number(),
+  username: z.string(),
+  full_name: z.string().nullable(),
+})
+
+export type UserNested = z.infer<typeof userNestedSchema>
+
+/**
  * Subject Group (nested in criteria)
  * Used for LeadApplicationForm score initialization
  */
@@ -135,7 +147,10 @@ export const admissionCriteriaNestedSchema = z.object({
   // Rule Engine config
   required_subject_count: z.number().nullable(),
   subject_selection_mode: z.string().default("fixed"),
-  scoring_method: z.string().default("sum"),
+  // BE Pydantic Literal["sum", "average", "weighted"] (admission_path.py:373).
+  // FE phải mirror đúng — trước đây dùng "avg" sai chính tả + thiếu "weighted"
+  // → criteria có scoring_method="average"/"weighted" parse fail.
+  scoring_method: z.enum(["sum", "average", "weighted"]).default("sum"),
   
   // Validity
   policy_version: z.string().nullable().optional(),
@@ -291,12 +306,17 @@ export const admissionPathResponseSchema = z.object({
   submission_count: z.number().default(0),
   // Phase 2 v8.2 — application fee (VND).
   application_fee: z.number().nullable(),
+  // BE Pydantic field default=False (admission_path.py:440), FE phải mirror.
+  // FE dùng để hiển thị flow thanh toán — không suy luận từ application_fee > 0.
+  requires_application_fee: z.boolean().default(false),
   status: admissionPathStatusEnum,
   display_name: z.string().nullable(),
   display_order: z.number(),
   visibility: z.enum(["public", "internal"]),
   activated_at: z.string().datetime({ offset: true }).nullable(),
-  activated_by: z.number().nullable(),
+  // BE Pydantic trả nested ``activator: Optional[UserNested]`` (admission_path.py:499).
+  // Trước đây FE viết ``activated_by: number`` → Zod parse fail khi BE trả object.
+  activator: userNestedSchema.nullable().optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   

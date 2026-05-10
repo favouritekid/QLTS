@@ -124,7 +124,6 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
 
     try {
       const payload = Object.values(selections);
-      console.log("ConfigDocuments: Saving payload:", payload);
 
       await updateMutation.mutateAsync({
         pathId: path.id,
@@ -135,9 +134,11 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
       // Move to review step after successful save
       onFinish();
     } catch (error: unknown) {
-      console.error("ConfigDocuments: Save error:", error);
       const apiError = error as { response?: { data?: { detail?: unknown } } };
-      console.error("ConfigDocuments: Error response:", apiError?.response?.data);
+      if (process.env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.error("ConfigDocuments save error:", error, apiError?.response?.data);
+      }
 
       // Extract validation error details
       const errorDetail = apiError?.response?.data?.detail;

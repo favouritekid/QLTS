@@ -493,8 +493,8 @@ function LifecycleTab({
               <div>
                 <div className="font-medium">Lỗi xác thực từ máy chủ</div>
                 <ul className="text-xs mt-0.5 space-y-0.5 ml-1">
-                  {errors.map((err, i) => (
-                    <li key={i}>• {err}</li>
+                  {errors.map((err) => (
+                    <li key={err}>• {err}</li>
                   ))}
                 </ul>
               </div>

@@ -97,9 +97,15 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
       return;
     }
 
-    if (effectiveFrom && effectiveTo && effectiveFrom > effectiveTo) {
-      toast.warning("Ngày bắt đầu hiệu lực không được lớn hơn ngày kết thúc");
-      return;
+    if (effectiveFrom && effectiveTo) {
+      // Parse ISO date string ('YYYY-MM-DD') to Date trước khi compare —
+      // string compare lexical sai cho format không zero-pad consistent.
+      const fromTs = Date.parse(effectiveFrom);
+      const toTs = Date.parse(effectiveTo);
+      if (!isNaN(fromTs) && !isNaN(toTs) && fromTs > toTs) {
+        toast.warning("Ngày bắt đầu hiệu lực không được lớn hơn ngày kết thúc");
+        return;
+      }
     }
 
     try {
@@ -171,8 +177,6 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
         effective_to: effectiveTo || null,
       };
 
-      console.log("Sending criteria payload:", payload);
-
       await updateMutation.mutateAsync({
         pathId: path.id,
         data: payload
@@ -181,9 +185,11 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
       // Move to next step after successful save
       onNext();
     } catch (error: unknown) {
-      console.error("Failed to save criteria:", error);
       const apiError = error as { response?: { data?: { detail?: unknown } } };
-      console.error("Error response:", apiError?.response?.data);
+      if (process.env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.error("ConfigCriteria save error:", error, apiError?.response?.data);
+      }
 
       // Extract validation error details
       const errorDetail = apiError?.response?.data?.detail;
