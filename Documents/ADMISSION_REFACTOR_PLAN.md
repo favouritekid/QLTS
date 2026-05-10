@@ -4494,6 +4494,87 @@ User approve mở PR Phase 0 → start.
 
 ---
 
+## Phần 9.B — Phase 2 PR-2D BE/FE split + revision number drift (2026-05-10)
+
+### Original plan (v8.2 PR-2D scope)
+- Migration `phase2_03_create_path_subject_group_config_and_item.py`
+- Service + repo + clone endpoint + Router CRUD
+- FE QuotaMatrix component (Phase1Master/QuotaMatrix.tsx) — 2-tab matrix với inline edit + clone modal UX
+- ~15 tests
+
+### Reality shipped (PR #246 squash `2858966a` deployed 2026-05-10 07:27 UTC)
+- Migration `phase2_05_create_path_subject_group_config_and_item.py` (revision number drift — `phase2_03` slot unused per actual rollout sequence)
+- Service + repo + clone endpoint + Router CRUD (BE complete)
+- 13 tests (5 unit + 4 service Tier 3 + 4 clone Q6)
+- ❌ FE QuotaMatrix UI — DEFERRED to PR-2D.1 follow-up
+
+### Rationale for split
+
+Pass 11 hard re-audit (post Wave 3 commit) flagged:
+- BE 1900 lines + projected FE 1500-2000 lines = ~3500-3900 line PR review fatigue risk
+- Memory `audit-before-fix`: schema-level pattern changes (2 new tables + Tier 3 chain) need isolated CI cycle before FE introduces new dimensions
+- PR-2F engine test sweep depends on PR-2D BE schema; earlier BE ship unblocks PR-2F dev
+- Memory `pattern-change-impact-audit` lessons reapplied (PR-2C v2 test debt incident proximity earlier same day)
+
+### PR-2D.1 FE follow-up scope
+
+- `frontend/src/app/(dashboard)/admin/admission-config/_components/Phase1Master/QuotaMatrix.tsx`:
+  - 2 tabs: "Chỉ tiêu nộp hồ sơ" (round_quota) / "Chỉ tiêu trúng tuyển" (admit_quota)
+  - Rows: paths grouped by major; Cols: rounds (DOT_1/DOT_2/DOT_3/BO_SUNG)
+  - Cells: inline edit input → PATCH `/api/v2/admin/admission-paths/{id}/quota`
+  - Tier 1 validation real-time per cell change (admit_quota tab)
+  - Bulk-clone "Clone DOT_1 paths → DOT_2" button → opens clone modal
+- Clone modal UX:
+  - Source round dropdown (DOT_1 default)
+  - Target round (current selected)
+  - Filter ngành: ☑ all / ☐ subset checkboxes
+  - Criteria code template preview
+  - Preview cloned paths count
+  - Submit → atomic clone + toast
+- BE follow-up: per-path quota PATCH endpoint (currently UPDATE goes through service, may need dedicated endpoint cho UI inline edit)
+- Vitest tests cho QuotaMatrix interaction patterns
+
+### Migration revision number drift
+
+Plan v8.2 reference `phase2_03_*`. Actual revision `phase2_05` because revision chain shipped:
+
+```
+phase1_15a → phase2_01_v2 → phase2_02_v2 → phase2_02b_v2 → phase2_04 → phase2_05
+                            (PR-2A v2)    (PR-2B v2)   (PR-2C v2)   (PR-2E)   (PR-2D)
+```
+
+`phase2_03` slot skipped due to natural sequencing. Migration internally consistent (down_revision chain valid). No action required — alembic versions immutable post-application. Plan v8.2 doc reference outdated cosmetically.
+
+### Test count delta
+
+Plan target: ~15 tests cho PR-2D
+Actual: 13 tests (-2)
+
+**Coverage explicit (13 PASS)**:
+- ✅ UNIQUE constraint per (path, group)
+- ✅ Item links + composite invariant (cross-group blocked)
+- ✅ Score precision Numeric(8,2) — PR-2E parity
+- ✅ CASCADE delete (path → config → item)
+- ✅ Item UNIQUE per (config, sgs)
+- ✅ Tier 3 chain (block, unbounded NULL, duplicate config)
+- ✅ Q6 clone derived code template
+- ✅ Clone resets quota fields target
+- ✅ Clone same round_id rejected
+- ✅ Clone academic_info filter
+
+**Coverage gaps explicit (defer)**:
+- 1200-point V-ACT explicit boundary on PathSubjectGroupConfig.min_score (covered indirectly via Numeric(8,2) anchor — PR-2E shipped same column type)
+- Clone với deep ON CONFLICT skip integration test (current test only verifies non-skip path + filter)
+- PR-2F engine test sweep will exercise PathSubjectGroupConfig 3-tier resolution end-to-end
+
+### Plan v8.2 progression maintained
+
+5/6 PRs SHIPPED (4 direct + PR-2D BE) + 1 follow-up (PR-2D.1 FE) + 1 pending (PR-2F).
+
+Total Phase 2 BE feature scope: ~95% complete. FE matrix UX = remaining feature delivery.
+
+---
+
 ## Phần 9 — Phụ lục: Field name verification log
 
 Document v1.0 đã align với schema thực tế (verified 2026-04-30):
