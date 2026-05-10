@@ -287,7 +287,8 @@ async def test_round_extend_writes_extended_at_user_id_reason(
     async with AsyncSessionLocal() as db:
         admin = await _get_admin(db, round_test_seed["admin_user_id"])
         service = AdmissionRoundService(db)
-        extended = await service.extend(
+        # Pass 2 hard-review B-2-2: service.extend trả tuple cho audit log delta.
+        extended, prior_state = await service.extend(
             round_id,
             AdmissionRoundExtend(
                 end_date=date(2026, 9, 30),
@@ -301,6 +302,10 @@ async def test_round_extend_writes_extended_at_user_id_reason(
         assert extended.extended_at is not None
         assert extended.extended_by_user_id == round_test_seed["admin_user_id"]
         assert "COVID" in extended.extension_reason
+        # Prior state captured cho audit reconstruction.
+        assert prior_state["old_end_date"] == "2026-06-30"
+        assert prior_state["old_extended_at"] is None  # first extend
+        assert prior_state["old_extension_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -484,11 +489,15 @@ async def test_round_restore_clears_archived_at_and_sets_active(
     async with AsyncSessionLocal() as db:
         admin = await _get_admin(db, round_test_seed["admin_user_id"])
         service = AdmissionRoundService(db)
-        restored = await service.restore(round_id, admin)
+        # Pass 2 hard-review B-2-2: service.restore trả tuple cho audit log delta.
+        restored, prior_state = await service.restore(round_id, admin)
         await db.commit()
 
         assert restored.archived_at is None
         assert restored.is_active is True
+        # Prior state captured: archived_at non-null pre-restore.
+        assert prior_state["old_archived_at"] is not None
+        assert prior_state["old_is_active"] is False
 
 
 @pytest.mark.asyncio

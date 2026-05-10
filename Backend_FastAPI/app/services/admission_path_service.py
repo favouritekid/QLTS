@@ -194,6 +194,16 @@ class AdmissionPathService:
                 raise ResourceNotFoundError(
                     f"OfferingAdmissionRound {admission_round_id} not found"
                 )
+            # Pass 2 hard-review B-2-1: chặn tạo path trên round đã archive.
+            # Path tạo trên archived round = inert path (không activate được vì
+            # validate_activation cũng chặn) → wasted DB row + admin confusion.
+            # Catch sớm tại create để FE hiển thị error message thân thiện.
+            if round_obj.archived_at is not None:
+                raise BusinessRuleViolation(
+                    f"Đợt tuyển sinh '{round_obj.round_code}' đã lưu trữ "
+                    f"({round_obj.archived_at.date().isoformat()}); "
+                    f"khôi phục đợt trước khi tạo đường tuyển sinh."
+                )
             log.debug(
                 "admission_path_create_explicit_round",
                 academic_info_id=data.academic_info_id,
@@ -746,6 +756,38 @@ class AdmissionPathService:
 
         if not can_activate:
             raise BusinessRuleViolation(f"Cannot activate path: {'; '.join(errors)}")
+
+        # Pass 2 hard-review B-2-3: race window guard. validate_activation
+        # đọc round qua session.get (no lock); concurrent admin có thể
+        # soft_archive round giữa lúc validate xong và lúc UPDATE path
+        # ở dưới. Acquire SELECT FOR UPDATE trên round row để hold lock
+        # đến commit boundary — concurrent soft_archive UPDATE bị block,
+        # serialize 2 thao tác. Nếu lock release thấy round đã archive
+        # → fail-fast ngay đây.
+        from app.models.offering_admission_round import OfferingAdmissionRound
+
+        round_lock_stmt = (
+            select(OfferingAdmissionRound)
+            .where(OfferingAdmissionRound.id == path.admission_round_id)
+            .with_for_update()
+        )
+        round_locked = (
+            await self.db.execute(round_lock_stmt)
+        ).scalar_one_or_none()
+        if round_locked is None:
+            raise BusinessRuleViolation(
+                "Đợt tuyển sinh đã bị xoá; không thể kích hoạt"
+            )
+        if round_locked.archived_at is not None:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_locked.round_code}' đã lưu trữ "
+                f"trong khi xác thực; khôi phục đợt và thử lại."
+            )
+        if not round_locked.is_active:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_locked.round_code}' đã tắt "
+                f"trong khi xác thực; bật lại đợt và thử lại."
+            )
 
         # Activate
         path = await self.repo.update(

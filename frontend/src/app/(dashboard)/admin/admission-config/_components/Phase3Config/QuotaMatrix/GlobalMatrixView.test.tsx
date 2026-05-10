@@ -4,11 +4,13 @@
  * Anchor tests per memory pattern-change-impact-audit.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 
 import { GlobalMatrixView } from "./GlobalMatrixView"
+
 
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   useQuotaMatrix: () => ({
@@ -43,6 +45,12 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
     },
     isLoading: false,
     isError: false,
+  }),
+  // Pass 2 hard-review F-2-2: AggregateDrawer (nested) dùng cùng module —
+  // mock minimal shape để drawer render khi user click cell mở tổng hợp.
+  usePathMatrixByMajor: () => ({
+    data: undefined,
+    isLoading: true,
   }),
 }))
 
@@ -91,5 +99,23 @@ describe("GlobalMatrixView", () => {
     )
     expect(hasCellButton).toBe(true)
     expect(container.querySelectorAll("input[type='number']").length).toBe(0)
+  })
+
+  // Pass 2 hard-review F-2-2: cell click → AggregateDrawer mở với context
+  // đúng (academicInfoId + roundId + programName + roundCode). Tránh
+  // regression khi refactor cell-to-drawer dispatch.
+  it("ANCHOR (cell click → AggregateDrawer): mở drawer với context ngành+đợt", async () => {
+    const user = userEvent.setup()
+    render(
+      wrap(<GlobalMatrixView academicYear={2026} onYearChange={() => {}} />),
+    )
+    // Click aggregate cell — aria-label chứa "Mở tổng hợp" + program_name + đợt.
+    const cellButton = screen.getByLabelText(/Mở tổng hợp Công nghệ thông tin đợt DOT_1/)
+    await user.click(cellButton)
+    // AggregateDrawer hiển thị header với program_name + roundCode.
+    await waitFor(() => {
+      // Drawer header chứa "Đợt" + program_name + DOT_1.
+      expect(screen.getAllByText(/DOT_1/).length).toBeGreaterThan(0)
+    })
   })
 })

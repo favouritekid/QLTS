@@ -8,7 +8,8 @@
 "use client"
 
 import { AlertTriangle } from "lucide-react"
-import { useEffect, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useCallback, useEffect, useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -46,7 +47,31 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
   const { data: globalData } = useQuotaMatrix(academicYear)
   const [selectedAcademicInfoId, setSelectedAcademicInfoId] = useState<number | undefined>(undefined)
   const { data: matrix, isLoading } = usePathMatrixByMajor(selectedAcademicInfoId)
-  const [openPathId, setOpenPathId] = useState<number | null>(null)
+
+  // Pass 2 hard-review F-2-1: URL state sync cho openPathId.
+  // Drawer state là URL state theo Frontend CLAUDE.md ("URL State: Filters,
+  // pagination") — admin share link mở thẳng path detail, browser
+  // back/forward navigate giữa các drawer mở/đóng.
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const openPathId = useMemo(() => {
+    const raw = searchParams.get("pathId")
+    if (!raw) return null
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }, [searchParams])
+  const setOpenPathId = useCallback(
+    (id: number | null) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (id === null) params.delete("pathId")
+      else params.set("pathId", id.toString())
+      const qs = params.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
+
   const [createCell, setCreateCell] = useState<{
     methodId: number
     methodName: string

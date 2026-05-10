@@ -103,7 +103,17 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
         )}
 
         {path && (
-          <Tabs value={tab} onValueChange={setTab} className="flex-1 flex flex-col min-h-0">
+          // Pass 2 hard-review F-2-3: ``key={pathId}`` ép Tabs subtree remount
+          // khi parent giữ drawer mở rồi swap path khác (vd drill-down từ
+          // AggregateDrawer sang path khác). Nếu không có key, QuotaTab /
+          // IdentityTab / LifecycleTab giữ ``useState`` initial value của
+          // path cũ → user save = ghi đè path mới với data path cũ.
+          <Tabs
+            key={pathId}
+            value={tab}
+            onValueChange={setTab}
+            className="flex-1 flex flex-col min-h-0"
+          >
             <TabsList className="grid grid-cols-5 shrink-0">
               <TabsTrigger value="quota">Chỉ tiêu</TabsTrigger>
               <TabsTrigger value="identity">Định danh</TabsTrigger>

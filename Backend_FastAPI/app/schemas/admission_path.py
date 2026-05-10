@@ -12,7 +12,7 @@ FRONTEND_ARCHITECTURE_V3.md Compliance:
 from datetime import datetime, date
 from decimal import Decimal
 from typing import List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.core.admission_correction_constants import SAFE_MINOR_CORRECTION_FIELDS
 
@@ -441,6 +441,15 @@ class AdmissionPathResponse(BaseModel):
         default=False,
         description="True nếu lệ phí > 0, FE dùng để hiển thị flow thanh toán"
     )
+
+    # Pass 2 hard-review B-2-7: Pydantic v2 serializes ``Decimal`` thành str
+    # mặc định trong JSON output (preserve precision). FE Zod schema expect
+    # ``z.number().nullable()`` cho ``application_fee`` → parse fail trên path
+    # có lệ phí > 0. Force float emit cho on-the-wire JSON; DB column vẫn
+    # Numeric không mất precision (chỉ JSON layer convert).
+    @field_serializer("application_fee", when_used="json")
+    def _serialize_application_fee(self, v: Optional[Decimal]) -> Optional[float]:
+        return float(v) if v is not None else None
 
     # PR #6 — required in the response so FE Zod parse fails loudly
     # if backend forgot to emit the field, rather than silently

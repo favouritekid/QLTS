@@ -202,11 +202,16 @@ class AdmissionRoundService:
 
     async def restore(
         self, round_id: int, current_admin: User
-    ) -> OfferingAdmissionRound:
+    ) -> tuple[OfferingAdmissionRound, dict]:
         """Khôi phục đợt đã lưu trữ — clear archived_at, set is_active=true.
 
         Inverse của soft_archive. Chỉ admin discretion; đợt đã archive vẫn
         giữ nguyên end_date / extended_at để preserve audit trail.
+
+        Pass 2 hard-review B-2-2: trả tuple ``(round_obj, prior_state)`` để
+        router log_activity ghi delta old → new. Restore-archive-restore loop
+        không mất extension history vì ``extended_at`` / ``extension_reason``
+        được giữ nguyên + capture vào prior_state cho audit reconstruction.
         """
         round_obj = await self.repo.get_by_id(round_id)
         if round_obj is None:
@@ -217,6 +222,17 @@ class AdmissionRoundService:
                 f"Round {round_id} chưa lưu trữ — không cần khôi phục"
             )
 
+        prior_state = {
+            "old_archived_at": round_obj.archived_at.isoformat(),
+            "old_is_active": round_obj.is_active,
+            "old_extended_at": (
+                round_obj.extended_at.isoformat()
+                if round_obj.extended_at is not None
+                else None
+            ),
+            "old_extension_reason": round_obj.extension_reason,
+        }
+
         round_obj.archived_at = None
         round_obj.is_active = True
 
@@ -225,17 +241,23 @@ class AdmissionRoundService:
             "admission_round_restored",
             round_id=round_id,
             admin_id=current_admin.id,
+            **prior_state,
         )
-        return round_obj
+        return round_obj, prior_state
 
     async def extend(
         self, round_id: int, payload: AdmissionRoundExtend, current_admin: User
-    ) -> OfferingAdmissionRound:
+    ) -> tuple[OfferingAdmissionRound, dict]:
         """Admin extend end_date per SPEC §2.1.a Rule 2.
 
         Audit fields ``extended_at``, ``extended_by_user_id``,
         ``extension_reason`` written atomically. Reason ≥10 chars enforced
         at schema layer.
+
+        Pass 2 hard-review B-2-2: trả tuple ``(round_obj, prior_state)`` —
+        capture ``old_end_date`` + ``old_extended_at`` để router log delta.
+        Pre-extend value cần thiết cho audit reconstruction nếu admin
+        extend nhiều lần liên tiếp.
         """
         round_obj = await self.repo.get_by_id(round_id)
         if round_obj is None:
@@ -259,6 +281,20 @@ class AdmissionRoundService:
         # Validate window after extend nếu start_date đã set.
         self._validate_date_window(round_obj.start_date, payload.end_date)
 
+        prior_state = {
+            "old_end_date": (
+                round_obj.end_date.isoformat()
+                if round_obj.end_date is not None
+                else None
+            ),
+            "old_extended_at": (
+                round_obj.extended_at.isoformat()
+                if round_obj.extended_at is not None
+                else None
+            ),
+            "old_extension_reason": round_obj.extension_reason,
+        }
+
         round_obj.end_date = payload.end_date
         round_obj.extended_at = datetime.now(timezone.utc)
         round_obj.extended_by_user_id = current_admin.id
@@ -271,8 +307,9 @@ class AdmissionRoundService:
             new_end_date=payload.end_date.isoformat(),
             admin_id=current_admin.id,
             reason_len=len(payload.extension_reason),
+            **prior_state,
         )
-        return round_obj
+        return round_obj, prior_state
 
     async def list_by_year(
         self, academic_year: int

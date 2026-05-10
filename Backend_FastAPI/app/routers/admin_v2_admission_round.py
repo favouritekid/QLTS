@@ -250,7 +250,10 @@ async def restore_round(
 ):
     """Khôi phục đợt đã lưu trữ — inverse của soft_archive."""
     service = AdmissionRoundService(db)
-    round_obj = await service.restore(round_id, current_admin)
+    # Pass 2 hard-review B-2-2: service trả ``(round_obj, prior_state)`` —
+    # log delta old → new để audit reconstruction (restore-archive-restore
+    # loop preserve extension history).
+    round_obj, prior_state = await service.restore(round_id, current_admin)
 
     await activity_service.log_activity(
         db=db,
@@ -259,6 +262,11 @@ async def restore_round(
         resource_id=round_id,
         actor_id=current_admin.id,
         description=f"Round {round_id} restored từ archive",
+        changes={
+            **prior_state,
+            "new_archived_at": None,
+            "new_is_active": True,
+        },
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
@@ -279,7 +287,10 @@ async def extend_round(
 ):
     """Admin extend ``end_date`` per SPEC §2.1.a Rule 2."""
     service = AdmissionRoundService(db)
-    round_obj = await service.extend(round_id, payload, current_admin)
+    # Pass 2 hard-review B-2-2: service trả ``(round_obj, prior_state)`` —
+    # log delta old_end_date → new_end_date để audit reconstruction nếu
+    # admin extend nhiều lần liên tiếp.
+    round_obj, prior_state = await service.extend(round_id, payload, current_admin)
 
     await activity_service.log_activity(
         db=db,
@@ -291,6 +302,7 @@ async def extend_round(
             f"Round {round_id} end_date extended to {payload.end_date.isoformat()}"
         ),
         changes={
+            **prior_state,
             "new_end_date": payload.end_date.isoformat(),
             "extension_reason": payload.extension_reason,
         },

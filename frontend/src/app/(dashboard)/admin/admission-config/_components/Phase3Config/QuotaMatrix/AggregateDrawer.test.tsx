@@ -4,11 +4,21 @@
  * Anchor: drawer chỉ filter cells thuộc round được click (NOT all rounds).
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 
 import { AggregateDrawer } from "./AggregateDrawer"
+
+// Pass 2 hard-review F-2-2: PathDetailDrawer (nested) dùng useAdmissionPath
+// + useUpdatePathQuota; mock cả 2 module để drill-down render an toàn.
+vi.mock("@/hooks/admissions/useAdmissionPaths", () => ({
+  useAdmissionPath: () => ({ data: undefined, isLoading: true }),
+  useUpdateAdmissionPath: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useActivateAdmissionPath: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useDeactivateAdmissionPath: () => ({ mutateAsync: vi.fn(), isPending: false }),
+}))
 
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   usePathMatrixByMajor: () => ({
@@ -155,5 +165,31 @@ describe("AggregateDrawer", () => {
     expect(screen.getByText(/Đã rải toàn ngành:/)).toBeTruthy()
     expect(screen.getByText("100")).toBeTruthy()
     expect(screen.getByText("80")).toBeTruthy()
+  })
+
+  // Pass 2 hard-review F-2-2: ChevronRight click → PathDetailDrawer nested
+  // mở với pathId đúng. Verify drill-down flow + tránh regression khi
+  // refactor button-to-drawer dispatch trong AggregateDrawer.
+  it("ANCHOR (drill-down): ChevronRight click → PathDetailDrawer nested", async () => {
+    const user = userEvent.setup()
+    render(
+      wrap(
+        <AggregateDrawer
+          academicInfoId={70}
+          roundId={1}
+          programName="CNTT"
+          roundCode="DOT_1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    // ChevronRight button có aria-label "Mở chi tiết đường <method_name>".
+    const drillBtn = screen.getByLabelText(/Mở chi tiết đường Học bạ/)
+    await user.click(drillBtn)
+    // PathDetailDrawer hiển thị fallback title "Đường tuyển sinh #<pathId>"
+    // khi data chưa load (mocked isLoading=true) — pathId=106 cho HB DOT_1.
+    await waitFor(() => {
+      expect(screen.getByText(/Đường tuyển sinh #106/)).toBeTruthy()
+    })
   })
 })

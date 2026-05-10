@@ -5,10 +5,21 @@
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ByMajorView } from "./ByMajorView"
+
+// Pass 2 hard-review F-2-1 prerequisite: ByMajorView dùng Next.js navigation
+// hooks để sync ``?pathId`` URL param. Test mock cùng pattern với
+// ``useAdmissionsFilter.test.ts``.
+const replaceMock = vi.fn()
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: replaceMock, push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/admin/admission-config",
+}))
 
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   useQuotaMatrix: () => ({
@@ -77,6 +88,10 @@ function wrap(ui: ReactNode) {
 }
 
 describe("ByMajorView", () => {
+  beforeEach(() => {
+    replaceMock.mockClear()
+  })
+
   it("renders title + auto-select first ngành + load matrix", () => {
     render(wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />))
     expect(screen.getByText(/Cấu hình theo ngành/)).toBeTruthy()
@@ -102,5 +117,29 @@ describe("ByMajorView", () => {
       wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />),
     )
     expect(container.querySelectorAll("input[type='number']").length).toBe(0)
+  })
+
+  // Pass 2 hard-review F-2-2: regression cho ngành dropdown — đảm bảo
+  // dropdown trigger render với ngành option khả dụng. Test ngành change
+  // → matrix re-fetch không thực hiện được vì hook mock tĩnh, nhưng test
+  // dropdown options có ngành đúng tránh regression khi refactor data flow.
+  it("ANCHOR (ngành dropdown): trigger render + ngành option có sẵn", () => {
+    render(wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />))
+    expect(screen.getByText(/Ngành:/)).toBeTruthy()
+    // SelectTrigger hiển thị ngành đã auto-select.
+    expect(screen.getAllByText("Công nghệ thông tin").length).toBeGreaterThan(0)
+  })
+
+  // Pass 2 hard-review F-2-2: cell click → setOpenPathId qua URL replace.
+  // Verify router.replace gọi với ?pathId=N khi user click cell active.
+  it("ANCHOR (cell click → URL sync): click cell active emit replace với ?pathId", async () => {
+    const user = userEvent.setup()
+    render(wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />))
+    // Cell button có aria-label chứa method_name + đợt — pick by partial match.
+    const cellButton = screen.getByLabelText(/Mở chi tiết Học bạ/)
+    await user.click(cellButton)
+    expect(replaceMock).toHaveBeenCalled()
+    const callArg = replaceMock.mock.calls[0][0] as string
+    expect(callArg).toContain("pathId=106")
   })
 })
