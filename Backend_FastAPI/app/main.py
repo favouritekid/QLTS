@@ -42,6 +42,7 @@ from .routers import (
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
+    admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
     admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admissions,  # ✅ NEW: Admission Profile workflow
     auth,
@@ -785,6 +786,7 @@ fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
+fastapi_app.include_router(admin_v2_path_subject_group.router)  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes
