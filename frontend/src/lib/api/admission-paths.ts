@@ -198,6 +198,33 @@ export async function getCoverageMatrix(
 }
 
 // ============================================
+// PHASE 2 v8.2 PR-2D.1 — QuotaMatrix per-path quota PATCH
+// ============================================
+
+export interface AdmissionPathQuotaUpdate {
+  round_quota: number | null
+  admit_quota: number | null
+}
+
+/**
+ * Update path quota fields (round_quota + admit_quota) cho QuotaMatrix
+ * inline edit. Tier 1+2 chain re-validated server-side.
+ *
+ * BusinessRuleViolation raised từ backend nếu chain violated.
+ */
+export async function updatePathQuota(
+  pathId: number,
+  data: AdmissionPathQuotaUpdate
+): Promise<AdmissionPathResponse> {
+  const response = await api.patch<AdmissionPathResponse>(
+    `/api/v2/admin/admission-paths/${pathId}/quota`,
+    data
+  )
+  return response.data
+}
+
+
+// ============================================
 // EXPORT DEFAULT OBJECT
 // ============================================
 
@@ -220,6 +247,8 @@ export const admissionPathsApi = {
   getPathDocuments,
   // Matrix
   getCoverageMatrix,
+  // Phase 2 v8.2 PR-2D.1
+  updatePathQuota,
 }
 
 export default admissionPathsApi

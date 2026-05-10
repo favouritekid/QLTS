@@ -50,6 +50,7 @@ const PHASE1_STEPS: StepConfig[] = [
   { id: "document-types", label: "Loại Giấy tờ" },
   { id: "subject-groups", label: "Tổ hợp môn" },
   { id: "rounds", label: "Đợt Tuyển sinh" },  // Phase 2 v8.2 PR-2A v2 — year-level
+  { id: "quota-matrix", label: "Ma trận Chỉ tiêu" },  // Phase 2 v8.2 PR-2D.1
 ];
 
 const PHASE2_STEPS: StepConfig[] = [

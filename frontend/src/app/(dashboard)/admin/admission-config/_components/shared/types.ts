@@ -126,7 +126,8 @@ export type Phase1Step =
   | 'methods'
   | 'document-types'
   | 'subject-groups'
-  | 'rounds';  // Phase 2 v8.2 PR-2A v2 — đợt tuyển sinh year-level
+  | 'rounds'  // Phase 2 v8.2 PR-2A v2 — đợt tuyển sinh year-level
+  | 'quota-matrix';  // Phase 2 v8.2 PR-2D.1 — ma trận chỉ tiêu (round_quota + admit_quota)
 
 export type Phase2Step =
   | 'majors'

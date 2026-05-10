@@ -21,6 +21,8 @@ import {
   getAcademicYears,
   getCoverageMatrix,
   getPathDocuments,
+  updatePathQuota,
+  type AdmissionPathQuotaUpdate,
 } from "@/lib/api/admission-paths"
 import type { 
   AdmissionPathCreate, 
@@ -160,6 +162,25 @@ export function useUpdateAdmissionPath() {
       queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
       // Invalidate list queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+    },
+  })
+}
+
+/**
+ * Phase 2 v8.2 PR-2D.1 — Hook to update path quota fields.
+ * Tier 1+2 chain validated server-side; BusinessRuleViolation surfaces
+ * as 400 với Vietnamese message.
+ */
+export function useUpdatePathQuota() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathQuotaUpdate }) =>
+      updatePathQuota(pathId, data),
+    onSuccess: (updatedPath) => {
+      queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
     },
   })
 }

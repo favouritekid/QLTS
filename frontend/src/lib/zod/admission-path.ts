@@ -314,6 +314,12 @@ export const admissionPathResponseSchema = z.object({
   applicable_to: z.array(admissionAudienceEnum).nullable(),
   method_quota: z.number().int().min(0).nullable(),
   bonus_rule_override: bonusRuleOverrideSchema.nullable(),
+
+  // Phase 2 v8.2 PR-2B v2 + PR-2D.1 — admission_round_id + path-level quota
+  admission_round_id: z.number().int().min(1).nullable().optional(),
+  round_quota: z.number().int().min(0).nullable().optional(),
+  admit_quota: z.number().int().min(0).nullable().optional(),
+  submission_count: z.number().int().min(0).optional(),
 })
 
 export type AdmissionPathResponse = z.infer<typeof admissionPathResponseSchema>

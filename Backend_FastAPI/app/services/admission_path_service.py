@@ -281,6 +281,55 @@ class AdmissionPathService:
 
         return path, _noop_callback
 
+    async def update_quota(
+        self,
+        path: AdmissionPath,
+        round_quota: int | None,
+        admit_quota: int | None,
+        user: User,
+    ) -> AdmissionPath:
+        """Phase 2 v8.2 PR-2D.1 — dedicated quota update với Tier 1+2 chain
+        validation per cell change cho QuotaMatrix UI inline edit.
+
+        Tier 1: ∑(path.admit_quota WHERE academic_info_id=X) ≤
+        academic_info[X].annual_admission_quota.
+        Tier 2: path.admit_quota ≤ path.round_quota nếu cả 2 set.
+
+        Raises BusinessRuleViolation nếu Tier 1/2 violated.
+        """
+        from app.services.admission_quota_service import AdmissionQuotaService
+
+        _check_lifecycle_guard(path, user)
+
+        quota_service = AdmissionQuotaService(self.db)
+
+        # Tier 2 path invariant
+        await quota_service.validate_tier2_path_invariant(
+            admit_quota=admit_quota, round_quota=round_quota,
+        )
+
+        # Tier 1 chain re-validate when admit_quota changes
+        if admit_quota != path.admit_quota:
+            delta = (admit_quota or 0)
+            await quota_service.validate_tier1_chain_on_path_quota_change(
+                academic_info_id=path.academic_info_id,
+                delta_admit_quota=delta,
+                excluded_path_id=path.id,
+            )
+
+        path.round_quota = round_quota
+        path.admit_quota = admit_quota
+        await self.db.flush()
+
+        log.info(
+            "admission_path_quota_updated",
+            path_id=path.id,
+            round_quota=round_quota,
+            admit_quota=admit_quota,
+            actor_id=user.id,
+        )
+        return path
+
     async def update_path(
         self, path: AdmissionPath, data: AdmissionPathUpdate, user: User
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
