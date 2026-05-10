@@ -4,6 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
+  getPathMatrixByMajor,
   getQuotaMatrix,
   updatePathQuota,
   type AdmissionPathQuotaUpdate,
@@ -12,6 +13,17 @@ import {
 export const quotaMatrixKeys = {
   all: ["quota-matrix"] as const,
   byYear: (year: number) => [...quotaMatrixKeys.all, "year", year] as const,
+  byMajor: (academicInfoId: number) =>
+    [...quotaMatrixKeys.all, "major", academicInfoId] as const,
+}
+
+export function usePathMatrixByMajor(academicInfoId: number | undefined) {
+  return useQuery({
+    queryKey: quotaMatrixKeys.byMajor(academicInfoId ?? 0),
+    queryFn: () => getPathMatrixByMajor(academicInfoId!),
+    enabled: !!academicInfoId,
+    staleTime: 30 * 1000,
+  })
 }
 
 export function useQuotaMatrix(academicYear: number | undefined) {

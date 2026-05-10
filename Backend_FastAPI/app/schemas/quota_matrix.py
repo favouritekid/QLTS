@@ -78,3 +78,58 @@ class QuotaMatrixResponse(BaseModel):
     rounds: List[QuotaMatrixRound]
     rows: List[QuotaMatrixRow]
     total_rows: int
+
+
+# ============================================================
+# Per-major view: paths × rounds (cells = exact path, NOT aggregate)
+# ============================================================
+
+
+class PathMatrixCell(BaseModel):
+    """1 cell trong per-major matrix = 1 exact AdmissionPath identity.
+
+    Vì filter theo (academic_info_id × method_id × round_id) = UNIQUE 3-col,
+    cell exact 1 path (or empty nếu chưa có).
+    """
+    path_id: int
+    admission_round_id: int
+    admission_method_id: int
+    round_quota: Optional[int]  # submit cap
+    admit_quota: Optional[int]
+    submission_count: int
+    status: str  # active|draft|inactive|archived
+    criteria_code: Optional[str] = None
+
+
+class PathMatrixMethodRow(BaseModel):
+    """1 row trong per-major matrix = 1 admission_method.
+
+    Cells map: round_id → cell (None nếu chưa có path cho cell này).
+    """
+    admission_method_id: int
+    method_code: str
+    method_name: str
+    cells_by_round_id: dict[int, Optional[PathMatrixCell]] = Field(
+        default_factory=dict,
+        description="Map round_id → cell (None = chưa tạo path cho cell này)",
+    )
+    sum_admit_quota: int = 0  # sum across rounds for this method
+
+
+class PathMatrixResponse(BaseModel):
+    """GET /api/v2/admin/academic-infos/{id}/path-matrix response.
+
+    Per-major view: rows = methods, cols = rounds, cells = exact path.
+    Admin chọn 1 ngành → render matrix method × đợt cho ngành đó.
+    """
+    model_config = ConfigDict(from_attributes=True)
+    academic_info_id: int
+    academic_year: int
+    program_name: str
+    program_code: Optional[str] = None
+    degree_level: Optional[str] = None
+    annual_admission_quota: Optional[int] = None
+    sum_admit_allocated: int = 0
+    sum_remaining: Optional[int] = None
+    rounds: List[QuotaMatrixRound]
+    methods: List[PathMatrixMethodRow]

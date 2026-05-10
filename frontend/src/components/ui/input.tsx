@@ -3,10 +3,24 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
-  ({ className, type, ...props }, ref) => {
+  ({ className, type, onWheel, ...props }, ref) => {
+    // type="number" mặc định ăn wheel event để tăng/giảm giá trị khi đang focus
+    // → page không cuộn được khi cursor hover input số. Blur input để wheel bubble
+    // lên page scroll; user refocus bằng click nếu cần chỉnh tiếp.
+    const handleWheel = React.useCallback(
+      (e: React.WheelEvent<HTMLInputElement>) => {
+        onWheel?.(e)
+        if (type === "number" && e.currentTarget === document.activeElement) {
+          e.currentTarget.blur()
+        }
+      },
+      [type, onWheel],
+    )
+
     return (
       <input
         type={type}
+        onWheel={handleWheel}
         className={cn(
           "flex w-full rounded-md border border-input bg-transparent px-3 shadow-sm transition-colors",
           // Mobile: taller input (44px touch target), 16px font to prevent iOS zoom

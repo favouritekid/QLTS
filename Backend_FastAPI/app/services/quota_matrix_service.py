@@ -19,7 +19,11 @@ from app.models import (
 )
 from app.models.admission_config import AdmissionPath
 from app.models.major_program import MajorProgram
+from app.models.admission_config.method import AdmissionMethod
 from app.schemas.quota_matrix import (
+    PathMatrixCell,
+    PathMatrixMethodRow,
+    PathMatrixResponse,
     QuotaMatrixCell,
     QuotaMatrixResponse,
     QuotaMatrixRound,
@@ -141,4 +145,122 @@ class QuotaMatrixService:
             ],
             rows=rows,
             total_rows=len(rows),
+        )
+
+    async def get_path_matrix_by_major(
+        self, academic_info_id: int
+    ) -> PathMatrixResponse:
+        """Per-major view: rows = methods, cols = rounds, cells = exact path.
+
+        Filter:
+        - academic_info.id = id (single ngành × năm × hệ ĐT)
+        - rounds.academic_year = academic_info.academic_year
+        - paths.academic_info_id = id, status != 'archived'
+        - methods: ALL active methods (so admin có cells trống render '+ Tạo path')
+        """
+        ai_stmt = (
+            select(OfferingAcademicInfo)
+            .where(OfferingAcademicInfo.id == academic_info_id)
+            .options(
+                selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program)
+            )
+        )
+        ai = (await self.db.execute(ai_stmt)).scalar_one_or_none()
+        if ai is None:
+            from app.utils.exceptions import ResourceNotFoundError
+            raise ResourceNotFoundError(
+                f"OfferingAcademicInfo {academic_info_id} not found"
+            )
+
+        # Rounds for the year
+        rounds_stmt = (
+            select(OfferingAdmissionRound)
+            .where(OfferingAdmissionRound.academic_year == ai.academic_year)
+            .order_by(OfferingAdmissionRound.round_code)
+        )
+        rounds = list((await self.db.execute(rounds_stmt)).scalars().all())
+
+        # All active methods
+        methods_stmt = (
+            select(AdmissionMethod)
+            .where(AdmissionMethod.is_active.is_(True))
+            .order_by(AdmissionMethod.display_order, AdmissionMethod.id)
+        )
+        methods = list((await self.db.execute(methods_stmt)).scalars().all())
+
+        # Paths for this academic_info (excluding archived)
+        paths_stmt = (
+            select(AdmissionPath)
+            .where(
+                AdmissionPath.academic_info_id == academic_info_id,
+                AdmissionPath.status != "archived",
+            )
+            .options(selectinload(AdmissionPath.criteria))
+        )
+        paths = list((await self.db.execute(paths_stmt)).scalars().all())
+
+        # Build cells map: (method_id, round_id) → path
+        path_map: dict[tuple[int, int], AdmissionPath] = {}
+        for p in paths:
+            if p.admission_round_id is None:
+                continue
+            path_map[(p.admission_method_id, p.admission_round_id)] = p
+
+        # Build method rows
+        method_rows: List[PathMatrixMethodRow] = []
+        for m in methods:
+            cells: dict[int, PathMatrixCell | None] = {}
+            sum_admit = 0
+            for r in rounds:
+                p = path_map.get((m.id, r.id))
+                if p is None:
+                    cells[r.id] = None
+                else:
+                    cells[r.id] = PathMatrixCell(
+                        path_id=p.id,
+                        admission_round_id=p.admission_round_id,
+                        admission_method_id=p.admission_method_id,
+                        round_quota=p.round_quota,
+                        admit_quota=p.admit_quota,
+                        submission_count=int(p.submission_count or 0),
+                        status=p.status,
+                        criteria_code=p.criteria.code if p.criteria else None,
+                    )
+                    sum_admit += int(p.admit_quota or 0)
+            method_rows.append(
+                PathMatrixMethodRow(
+                    admission_method_id=m.id,
+                    method_code=m.code,
+                    method_name=m.name,
+                    cells_by_round_id=cells,
+                    sum_admit_quota=sum_admit,
+                )
+            )
+
+        # Aggregate header
+        offering = ai.offering
+        program = offering.program if offering else None
+        sum_allocated = sum(mr.sum_admit_quota for mr in method_rows)
+        remaining: int | None = None
+        if ai.annual_admission_quota is not None:
+            remaining = ai.annual_admission_quota - sum_allocated
+
+        return PathMatrixResponse(
+            academic_info_id=ai.id,
+            academic_year=ai.academic_year,
+            program_name=program.name if program else "(không tên)",
+            program_code=program.code if program else None,
+            degree_level=program.degree_level if program else None,
+            annual_admission_quota=ai.annual_admission_quota,
+            sum_admit_allocated=sum_allocated,
+            sum_remaining=remaining,
+            rounds=[
+                QuotaMatrixRound(
+                    id=r.id, round_code=r.round_code,
+                    round_name=r.round_name, is_active=r.is_active,
+                )
+                for r in rounds
+            ],
+            methods=method_rows,
         )

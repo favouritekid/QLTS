@@ -19,7 +19,7 @@ from app.schemas.path_subject_group import (
     PathSubjectGroupItemResponse,
 )
 from app.schemas.admission_path import AdmissionPathQuotaUpdate, AdmissionPathResponse
-from app.schemas.quota_matrix import QuotaMatrixResponse
+from app.schemas.quota_matrix import PathMatrixResponse, QuotaMatrixResponse
 from app.services import activity_service
 from app.services.admission_path_service import AdmissionPathService
 from app.services.path_clone_service import PathCloneService
@@ -194,6 +194,26 @@ async def get_quota_matrix(
     """
     service = QuotaMatrixService(db)
     return await service.get_matrix(academic_year)
+
+
+@router.get(
+    "/academic-infos/{academic_info_id}/path-matrix",
+    response_model=PathMatrixResponse,
+)
+async def get_path_matrix_by_major(
+    request: Request,
+    academic_info_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    _admin: models.User = Depends(require_admin),
+):
+    """Phase 2 v8.2 PR-2D.1 v3 — per-major view (Theo ngành) — daily ops mode.
+
+    Filter 1 ngành (academic_info) → matrix rows = methods, cols = rounds.
+    Cells = exact path identity (NOT aggregate). Empty cells = chưa tạo path.
+    Header context: cap năm, đã rải, còn lại.
+    """
+    service = QuotaMatrixService(db)
+    return await service.get_path_matrix_by_major(academic_info_id)
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)

@@ -408,10 +408,29 @@ class AdmissionPathResponse(BaseModel):
     
     # Core fields
     id: int
+    academic_info_id: int
+    admission_method_id: int
     status: AdmissionPathStatus
     display_name: Optional[str] = None
     display_order: int
     visibility: VisibilityStatus
+
+    # Phase 2 v8.2 PR-2B v2 / PR-2C v2 — round + per-path quota fields.
+    admission_round_id: int = Field(
+        description="Round FK (NOT NULL post PR-2C v2 3-col UNIQUE swap)."
+    )
+    round_quota: Optional[int] = Field(
+        default=None,
+        description="Per-path submission cap. NULL = unbounded.",
+    )
+    admit_quota: Optional[int] = Field(
+        default=None,
+        description="Per-path admit cap. Tier 1 chain root (per academic_info).",
+    )
+    submission_count: int = Field(
+        default=0,
+        description="Atomic submission counter; incremented on profile create.",
+    )
 
     # Application Fee
     application_fee: Optional[Decimal] = Field(

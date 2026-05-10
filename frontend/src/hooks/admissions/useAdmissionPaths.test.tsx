@@ -69,6 +69,12 @@ const mockAdmissionPathResponse = {
   applicable_to: null,
   method_quota: null,
   bonus_rule_override: null,
+  // Phase 2 v8.2 PR-2B/2C — quota fields + admission_round_id (NOT NULL).
+  admission_round_id: 1,
+  round_quota: null,
+  admit_quota: null,
+  submission_count: 0,
+  application_fee: null,
 } satisfies AdmissionPathResponse;
 
 /** The shape that PUT /paths/:id/documents returns. */

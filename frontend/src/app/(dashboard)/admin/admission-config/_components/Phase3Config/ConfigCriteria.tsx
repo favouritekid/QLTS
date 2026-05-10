@@ -22,9 +22,12 @@ interface ConfigCriteriaProps {
   path: AdmissionPathResponse;
   onNext: () => void;
   onBack: () => void;
+  /** Khi true: render footer "Đóng" + "Lưu tiêu chí" (drawer mode) thay vì
+   * "Quay lại" + "Lưu & Tiếp tục" (wizard mode). */
+  embedded?: boolean;
 }
 
-export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
+export function ConfigCriteria({ path, onNext, onBack, embedded = false }: ConfigCriteriaProps) {
   const { data: subjectGroups = [], isLoading: loadingGroups } = useSubjectGroups();
   const updateMutation = useUpdateCriteria();
 
@@ -397,20 +400,27 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
           {/* Search Input */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search
+              className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"
+              aria-hidden="true"
+            />
             <Input
-              placeholder="Tìm kiếm tổ hợp môn (mã hoặc tên môn)..."
+              placeholder="Tìm kiếm tổ hợp môn (mã hoặc tên môn)…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
+              autoComplete="off"
+              spellCheck={false}
+              className={searchQuery ? "pl-9 pr-9" : "pl-9"}
+              aria-label="Tìm kiếm tổ hợp môn"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 hover:bg-muted rounded-full p-1"
+                aria-label="Xoá từ khoá tìm kiếm"
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 hover:bg-muted rounded-full p-1"
               >
-                <X className="h-4 w-4 text-muted-foreground" />
+                <X className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -452,19 +462,19 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex justify-between pt-4">
+        <div className="flex justify-end gap-2 pt-4 border-t">
           <Button variant="outline" onClick={onBack} disabled={isSaving}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Quay lại
+            {!embedded && <ArrowLeft className="h-4 w-4 mr-2" aria-hidden="true" />}
+            {embedded ? "Đóng" : "Quay lại"}
           </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button onClick={handleSave} disabled={isSaving} aria-busy={isSaving}>
             {isSaving ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
             ) : (
-              <Save className="h-4 w-4 mr-2" />
+              <Save className="h-4 w-4 mr-2" aria-hidden="true" />
             )}
-            Lưu & Tiếp tục
-            <ArrowRight className="h-4 w-4 ml-2" />
+            {embedded ? "Lưu tiêu chí" : "Lưu & Tiếp tục"}
+            {!embedded && <ArrowRight className="h-4 w-4 ml-2" aria-hidden="true" />}
           </Button>
         </div>
 

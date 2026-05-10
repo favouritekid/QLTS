@@ -148,9 +148,8 @@ class AdmissionPathService:
             BusinessRuleViolation: Tier 1 chain violated, Tier 2 invariant violated, or DOT_1 not found
         """
         # Phase 2 v8.2 PR-2B v2 — auto-resolve admission_round_id.
-        # Note: PR-2C v2 sẽ swap UNIQUE thành 3-col (round, acad, method).
-        # Phase 2 transition: vẫn dùng 2-col duplicate check tại đây
-        # (PR-2C v2 sẽ relax sang 3-col).
+        # PR-2C v2 đã ship 3-col UNIQUE (round, acad, method); duplicate check
+        # bên dưới dùng 3-col helper tương ứng.
         admission_round_id = data.admission_round_id
         if admission_round_id is None:
             from app.models.offering_academic_info import OfferingAcademicInfo
@@ -200,14 +199,18 @@ class AdmissionPathService:
                     delta_admit_quota=data.admit_quota,
                 )
 
-        # Check for duplicate
-        existing = await self.repo.get_path_by_offering_and_method(
-            data.academic_info_id, data.admission_method_id
+        # Phase 2 v8.2 PR-2C v2 — duplicate check theo 3-col UNIQUE
+        # (round, academic_info, method). 1 ngành có thể có nhiều path
+        # cùng method ở các đợt khác nhau (DOT_1 vs DOT_2).
+        existing = await self.repo.get_path_by_round_and_method(
+            admission_round_id=admission_round_id,
+            academic_info_id=data.academic_info_id,
+            admission_method_id=data.admission_method_id,
         )
         if existing:
             raise DuplicateResourceError(
-                f"AdmissionPath already exists for academic_info={data.academic_info_id}, "
-                f"method={data.admission_method_id}"
+                f"AdmissionPath already exists for round={admission_round_id}, "
+                f"academic_info={data.academic_info_id}, method={data.admission_method_id}"
             )
 
         # Governance guard: 4 fields are admin-only on create — the

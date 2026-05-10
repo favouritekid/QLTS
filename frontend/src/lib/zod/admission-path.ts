@@ -159,6 +159,13 @@ export type AdmissionCriteriaNested = z.infer<typeof admissionCriteriaNestedSche
 export const admissionPathCreateSchema = z.object({
   academic_info_id: z.number().int().positive("Academic Info ID phải là số dương"),
   admission_method_id: z.number().int().positive("Admission Method ID phải là số dương"),
+  // Phase 2 v8.2 PR-2B v2 — optional; BE auto-resolves DOT_1 nếu null.
+  admission_round_id: z.number().int().positive().optional().nullable(),
+  // Phase 2 v8.2 PR-2B v2 — per-path quota fields (admit chain Tier 1, submit chain Tier 2).
+  round_quota: z.number().int().min(0).optional().nullable(),
+  admit_quota: z.number().int().min(0).optional().nullable(),
+  // Phase 2 v8.2 — application fee (VND). 0/null = miễn phí.
+  application_fee: z.number().min(0).optional().nullable(),
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
@@ -197,6 +204,8 @@ export const admissionPathUpdateSchema = z.object({
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
+  // Phase 2 v8.2 — application fee (VND). 0/null = miễn phí.
+  application_fee: z.number().min(0).optional().nullable(),
   // Optional on update — callers that don't want to flip the flag omit
   // it entirely and the backend leaves the current value untouched.
   allow_unverified_submission: z.boolean().optional(),
@@ -274,6 +283,14 @@ export const admissionPathResponseSchema = z.object({
   id: z.number(),
   academic_info_id: z.number(),
   admission_method_id: z.number(),
+  // Phase 2 v8.2 PR-2C v2 — NOT NULL post 3-col UNIQUE swap.
+  admission_round_id: z.number(),
+  // Phase 2 v8.2 PR-2B v2 — per-path quota fields.
+  round_quota: z.number().nullable(),
+  admit_quota: z.number().nullable(),
+  submission_count: z.number().default(0),
+  // Phase 2 v8.2 — application fee (VND).
+  application_fee: z.number().nullable(),
   status: admissionPathStatusEnum,
   display_name: z.string().nullable(),
   display_order: z.number(),

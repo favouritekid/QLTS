@@ -43,6 +43,48 @@ export interface AdmissionPathQuotaUpdate {
   admit_quota: number | null
 }
 
+// Phase 2 v8.2 PR-2D.1 v3 — per-major view types
+export interface PathMatrixCell {
+  path_id: number
+  admission_round_id: number
+  admission_method_id: number
+  round_quota: number | null
+  admit_quota: number | null
+  submission_count: number
+  status: string
+  criteria_code: string | null
+}
+
+export interface PathMatrixMethodRow {
+  admission_method_id: number
+  method_code: string
+  method_name: string
+  cells_by_round_id: Record<number, PathMatrixCell | null>
+  sum_admit_quota: number
+}
+
+export interface PathMatrixResponse {
+  academic_info_id: number
+  academic_year: number
+  program_name: string
+  program_code: string | null
+  degree_level: string | null
+  annual_admission_quota: number | null
+  sum_admit_allocated: number
+  sum_remaining: number | null
+  rounds: QuotaMatrixRound[]
+  methods: PathMatrixMethodRow[]
+}
+
+export async function getPathMatrixByMajor(
+  academicInfoId: number,
+): Promise<PathMatrixResponse> {
+  const response = await api.get<PathMatrixResponse>(
+    `/api/v2/admin/academic-infos/${academicInfoId}/path-matrix`,
+  )
+  return response.data
+}
+
 /**
  * Get quota matrix overview cho năm tuyển sinh.
  * Aggregation: rows = academic_info × academic_year, cols = rounds,
