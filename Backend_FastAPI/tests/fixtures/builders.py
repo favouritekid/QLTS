@@ -160,6 +160,50 @@ class AdmissionRoundBuilder:
     """
 
     @staticmethod
+    async def get_or_create_default_round(
+        session,
+        academic_year: int = 2026,
+        round_code: str = "DOT_1",
+    ) -> int:
+        """Idempotent helper for test fixtures (Phase 2 v8.2 PR-2C v2 prep).
+
+        Returns OfferingAdmissionRound.id for given (academic_year,
+        round_code). Creates row if not exists. Centralizes round seeding
+        so test fixtures don't duplicate boilerplate per file.
+
+        Usage::
+
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                session, academic_year=ai.academic_year
+            )
+            ap = models.AdmissionPath(
+                academic_info_id=ai.id,
+                admission_method_id=method.id,
+                admission_round_id=round_id,  # required post PR-2C v2
+                ...
+            )
+        """
+        from app import models  # noqa: F401 — avoid circular at module import
+        from sqlalchemy import select
+
+        result = await session.execute(
+            select(models.OfferingAdmissionRound).where(
+                models.OfferingAdmissionRound.academic_year == academic_year,
+                models.OfferingAdmissionRound.round_code == round_code,
+            )
+        )
+        obj = result.scalar_one_or_none()
+        if obj is None:
+            payload = AdmissionRoundBuilder.make(
+                academic_year=academic_year, round_code=round_code
+            )
+            obj = models.OfferingAdmissionRound(**payload)
+            session.add(obj)
+            await session.flush()
+        return obj.id
+
+    @staticmethod
     def make(
         academic_year: int = 2026,
         round_code: str = "DOT_1",

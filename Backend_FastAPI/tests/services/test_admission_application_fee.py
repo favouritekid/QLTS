@@ -102,9 +102,12 @@ async def create_admission_path_with_fee(
     """Create an admission path with application fee configured."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(session, academic_year=2026)
             path = models.AdmissionPath(
                 academic_info_id=academic_info_id,
                 admission_method_id=admission_method_id,
+                admission_round_id=round_id,
                 status="active",
                 display_name="Test Path with Fee",
                 application_fee=application_fee,
@@ -121,9 +124,12 @@ async def create_admission_path_no_fee(
     """Create an admission path without application fee (exempt)."""
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(session, academic_year=2026)
             path = models.AdmissionPath(
                 academic_info_id=academic_info_id,
                 admission_method_id=admission_method_id,
+                admission_round_id=round_id,
                 status="active",
                 display_name="Test Path No Fee",
                 application_fee=Decimal("0"),

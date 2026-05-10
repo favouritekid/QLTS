@@ -66,9 +66,14 @@ async def setup_admission_api_data(major_id, unit_id, officer_id, academic_year=
             session.add(criteria)
             await session.flush()
 
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                session, academic_year=academic_info.academic_year,
+            )
             path = models.AdmissionPath(
                 academic_info_id=academic_info.id,
                 admission_method_id=method.id,
+                admission_round_id=round_id,
                 criteria_id=criteria.id,
                 status="active",
             )

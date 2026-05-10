@@ -113,9 +113,12 @@ async def realtime_config(seed_lead_dependencies: dict):
             )
             s.add(ac)
             await s.flush()
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
             ap = models.AdmissionPath(
                 academic_info_id=ai.id,
                 admission_method_id=am.id,
+                admission_round_id=round_id,
                 criteria_id=ac.id,
                 status="active",
                 display_name=f"RT {ts}",
