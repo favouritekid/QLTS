@@ -52,8 +52,8 @@ def upgrade() -> None:
             "SELECT COUNT(*) FROM admission_path "
             "WHERE admission_round_id IS NULL"
         )
-    ).scalar()
-    if null_count and null_count > 0:
+    ).scalar() or 0
+    if null_count > 0:
         raise RuntimeError(
             f"PR-2C v2 abort: {null_count} admission_path rows have NULL "
             f"admission_round_id. PR-2B v2 backfill should have populated "
@@ -66,6 +66,12 @@ def upgrade() -> None:
     # If admin needs to downgrade to 2-col UNIQUE, duplicates by
     # (academic_info_id, admission_method_id) phải được move sang
     # archive trước. CREATE IF NOT EXISTS — idempotent.
+    #
+    # INCLUDING DEFAULTS only (intentional): archive purpose là store
+    # rows REJECTED bởi source table's UNIQUE constraints. Copy
+    # constraints (qua INCLUDING ALL) sẽ self-block insert. Defaults
+    # đủ cho re-insert path data nguyên trạng. Indexes KHÔNG cần vì
+    # archive không query frequently — chỉ admin manual rollback path.
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS _archive_admission_path_dup (
