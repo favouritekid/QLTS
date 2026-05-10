@@ -101,9 +101,12 @@ async def adm_seed(seed_lead_dependencies: dict):
                 )
             )
             await s.flush()
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
             path_a = models.AdmissionPath(
                 academic_info_id=ai.id,
                 admission_method_id=method.id,
+                admission_round_id=round_id,
                 criteria_id=criteria.id,
                 status="draft",
                 display_name="Path A",
@@ -178,12 +181,16 @@ class TestUniqueConstraintRejectsDuplicateCriteriaId:
                 })).scalar()
 
         async with AsyncSessionLocal() as s:
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
+            await s.commit()  # Persist round before next async transaction
             with pytest.raises(IntegrityError) as exc_info:
                 async with s.begin():
                     s.add(
                         models.AdmissionPath(
                             academic_info_id=adm_seed["academic_info_id"],
                             admission_method_id=method_b_id,
+                            admission_round_id=round_id,
                             criteria_id=adm_seed["criteria_id"],
                             status="draft",
                             display_name="Path B (illegal criteria share)",

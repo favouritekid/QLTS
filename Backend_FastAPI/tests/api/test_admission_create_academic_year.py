@@ -114,9 +114,12 @@ async def multi_year_offering(seed_lead_dependencies: dict):
             # Two paths — one per published year — so each path resolves
             # for its own academic_info. (Without this, only the year
             # whose path exists is creatable.)
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_2025_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2025)
             ap_2025 = models.AdmissionPath(
                 academic_info_id=ai_2025.id,
                 admission_method_id=am.id,
+                admission_round_id=round_2025_id,
                 criteria_id=ac.id,
                 status="active",
                 display_name=f"Path 2025 {ts}",
@@ -138,9 +141,11 @@ async def multi_year_offering(seed_lead_dependencies: dict):
             )
             s.add(ac_2026)
             await s.flush()
+            round_2026_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
             ap_2026 = models.AdmissionPath(
                 academic_info_id=ai_2026.id,
                 admission_method_id=am.id,
+                admission_round_id=round_2026_id,
                 criteria_id=ac_2026.id,
                 status="active",
                 display_name=f"Path 2026 {ts}",

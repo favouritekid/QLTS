@@ -65,8 +65,11 @@ async def doc_perm_config(seed_lead_dependencies: dict):
                 policy_version="2026.1", is_active=True,
             )
             s.add(ac); await s.flush()
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
             ap = models.AdmissionPath(
-                academic_info_id=ai.id, admission_method_id=am.id, criteria_id=ac.id,
+                academic_info_id=ai.id, admission_method_id=am.id,
+                admission_round_id=round_id, criteria_id=ac.id,
                 status="active", display_name="Test", display_order=0, visibility="public",
             )
             s.add(ap); await s.flush()
