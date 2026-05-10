@@ -281,6 +281,20 @@ class AdmissionPathCreate(BaseModel):
     )(_validate_minor_correction_allowlist)
 
 
+class AdmissionPathQuotaUpdate(BaseModel):
+    """Phase 2 v8.2 PR-2D.1 — dedicated quota PATCH payload cho QuotaMatrix
+    inline edit. Allows admin update round_quota/admit_quota independently
+    với Tier 1+2 chain validation real-time per cell change."""
+    round_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path submission cap. NULL = unbounded; explicit None to clear.",
+    )
+    admit_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path admit cap. Triggers Tier 1 chain re-validation on change.",
+    )
+
+
 class AdmissionPathUpdate(BaseModel):
     """Request schema for updating an AdmissionPath."""
     display_name: Optional[str] = None

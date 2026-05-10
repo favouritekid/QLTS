@@ -18,9 +18,15 @@ from app.schemas.path_subject_group import (
     PathSubjectGroupItemCreate,
     PathSubjectGroupItemResponse,
 )
+from app.schemas.admission_path import AdmissionPathQuotaUpdate, AdmissionPathResponse
+from app.schemas.quota_matrix import QuotaMatrixResponse
 from app.services import activity_service
+from app.services.admission_path_service import AdmissionPathService
 from app.services.path_clone_service import PathCloneService
 from app.services.path_subject_group_service import PathSubjectGroupService
+from app.services.quota_matrix_service import QuotaMatrixService
+from app.utils.exceptions import ResourceNotFoundError
+from sqlalchemy import select
 
 
 log = structlog.get_logger(__name__)
@@ -163,6 +169,76 @@ async def add_item(
     item = await service.add_item(config_id, payload)
     await db.commit()
     return item
+
+
+# =============================================================================
+# PR-2D.1 v2 — Quota Matrix overview + per-path quota PATCH
+# =============================================================================
+
+
+@router.get(
+    "/years/{academic_year}/quota-matrix",
+    response_model=QuotaMatrixResponse,
+)
+async def get_quota_matrix(
+    request: Request,
+    academic_year: int,
+    db: AsyncSession = Depends(database.get_db),
+    _admin: models.User = Depends(require_admin),
+):
+    """Phase 2 v8.2 PR-2D.1 v2 — admin tổng quan ALL ngành × ALL đợt năm filter.
+
+    Aggregation: rows = academic_info, cols = rounds, cells = ∑ admit_quota
+    across paths trong cùng (academic_info × round). Constraint visible:
+    ∑ row cells ≤ academic_info.annual_admission_quota.
+    """
+    service = QuotaMatrixService(db)
+    return await service.get_matrix(academic_year)
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.patch(
+    "/admission-paths/{admission_path_id}/quota",
+    response_model=AdmissionPathResponse,
+)
+async def update_path_quota(
+    request: Request,
+    admission_path_id: int,
+    payload: AdmissionPathQuotaUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """Phase 2 v8.2 PR-2D.1 — dedicated quota PATCH cho QuotaMatrix inline edit."""
+    stmt = select(models.AdmissionPath).where(
+        models.AdmissionPath.id == admission_path_id
+    )
+    path = (await db.execute(stmt)).scalar_one_or_none()
+    if path is None:
+        raise ResourceNotFoundError(f"AdmissionPath {admission_path_id} not found")
+
+    service = AdmissionPathService(db)
+    path = await service.update_quota(
+        path=path,
+        round_quota=payload.round_quota,
+        admit_quota=payload.admit_quota,
+        user=current_admin,
+    )
+    await db.commit()
+
+    await activity_service.log_activity(
+        db=db,
+        action="admission_path_quota_update",
+        resource_type="admission_path",
+        resource_id=path.id,
+        actor_id=current_admin.id,
+        description=(
+            f"Updated quota path={path.id} "
+            f"round_quota={payload.round_quota} admit_quota={payload.admit_quota}"
+        ),
+    )
+    from app.repositories.admission_path_repository import AdmissionPathRepository
+    path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
+    return path
 
 
 # =============================================================================

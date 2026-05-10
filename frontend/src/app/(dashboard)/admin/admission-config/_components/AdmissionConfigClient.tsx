@@ -32,6 +32,7 @@ import { AcademicInfoPanel } from "./Phase2Program/AcademicInfoPanel";
 import { ContextSelector } from "./Phase3Config/ContextSelector";
 import { PathsList } from "./Phase3Config/PathsList";
 import { CoverageMatrix } from "./Phase3Config/CoverageMatrix";
+import { QuotaMatrixOverview } from "./Phase3Config/QuotaMatrixOverview";  // Phase 2 v8.2 PR-2D.1 v2
 import { PathWizard } from "./Phase3Config/PathWizard";
 import { Button } from "@/components/ui/button";
 import {
@@ -151,6 +152,17 @@ export function AdmissionConfigClient() {
               context={currentState.context}
               view={currentState.view}
               navigate={navigate}
+            />
+          )}
+
+          {/* Phase 2 v8.2 PR-2D.1 v2 — Quota Matrix overview (no context) */}
+          {currentState.type === "quota-matrix-overview" && (
+            <QuotaMatrixOverview
+              academicYear={currentState.academicYear}
+              onYearChange={(year) =>
+                navigate({ type: "quota-matrix-overview", academicYear: year })
+              }
+              onBack={() => navigate({ type: "welcome" })}
             />
           )}
         </div>

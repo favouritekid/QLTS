@@ -71,6 +71,7 @@ export function PhaseNavigator({
   const isPhase1Active = currentState.type === "phase1";
   const isPhase2Active = currentState.type === "phase2";
   const isPhase3Active = currentState.type === "phase3" || currentState.type === "select-context";
+  const isQuotaMatrixActive = currentState.type === "quota-matrix-overview";
 
   const currentPhase1Step = isPhase1Active ? currentState.step : null;
   const currentPhase2Step = isPhase2Active ? currentState.step : null;
@@ -98,6 +99,13 @@ export function PhaseNavigator({
   const handlePhase3Click = () => {
     onNavigate({ type: "select-context" });
     // Close mobile sheet after navigation
+    onClose?.();
+  };
+
+  // Navigate to Quota Matrix overview (Phase 2 v8.2 PR-2D.1 v2)
+  const handleQuotaMatrixClick = () => {
+    const currentYear = new Date().getFullYear();
+    onNavigate({ type: "quota-matrix-overview", academicYear: currentYear });
     onClose?.();
   };
 
@@ -187,6 +195,15 @@ export function PhaseNavigator({
         >
           <BarChart3 className="h-4 w-4 mr-2" />
           Cấu hình Đường tuyển sinh
+        </Button>
+        <Button
+          variant={isQuotaMatrixActive ? "default" : "outline"}
+          size="sm"
+          className="w-full justify-start mt-2"
+          onClick={handleQuotaMatrixClick}
+        >
+          <BarChart3 className="h-4 w-4 mr-2" />
+          Ma trận Chỉ tiêu Theo Đợt
         </Button>
       </Card>
 
