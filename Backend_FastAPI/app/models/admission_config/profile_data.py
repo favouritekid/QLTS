@@ -41,9 +41,10 @@ class ProfileSubjectScore(Base):
         index=True
     )
     score = Column(
-        Numeric(precision=3, scale=1),
+        # Phase 2 v8.2 PR-2E — widened cho V-ACT/DGNL methods (max 1200).
+        Numeric(precision=8, scale=2),
         nullable=False,
-        comment="Score 0.0 - 10.0"
+        comment="Score 0.0 - 1200.0 (V-ACT/DGNL); trad THPT 0-10"
     )
     created_at = Column(
         DateTime(timezone=True),
@@ -66,9 +67,10 @@ class ProfileSubjectScore(Base):
             "profile_id", "subject_id",
             name="uq_profile_subject_score"
         ),
+        # Phase 2 v8.2 PR-2E — relaxed cho V-ACT/DGNL.
         CheckConstraint(
-            "score >= 0 AND score <= 10",
-            name="ck_profile_subject_score_range"
+            "score >= 0",
+            name="ck_profile_subject_score_non_negative"
         ),
     )
 

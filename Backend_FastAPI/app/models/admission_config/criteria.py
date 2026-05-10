@@ -50,9 +50,12 @@ class AdmissionCriteria(Base):
         comment="Minimum GPA (0.0 - 10.0)"
     )
     min_score = Column(
-        Numeric(precision=4, scale=1),
+        # Phase 2 v8.2 PR-2E — widened cho V-ACT/DGNL methods (max 1200).
+        # Comment range "0.0 - 30.0" still describes traditional THPT QG;
+        # V-ACT/DGNL paths set 0-1200.
+        Numeric(precision=8, scale=2),
         nullable=True,
-        comment="Minimum total score (0.0 - 30.0)"
+        comment="Minimum total score (0.0 - 1200.0; trad THPT QG 0-30)"
     )
     conditions = Column(
         Text,
@@ -97,17 +100,19 @@ class AdmissionCriteria(Base):
     )
     
     # Maximum possible score (for normalization/display)
+    # Phase 2 v8.2 PR-2E — widened cho V-ACT/DGNL (max 1200)
     max_possible_score = Column(
-        Numeric(precision=5, scale=2),
+        Numeric(precision=8, scale=2),
         nullable=True,
-        comment="Điểm tối đa: 30.0 (3 môn), 20.0 (2 môn), 10.0 (1 môn)"
+        comment="Điểm tối đa: 30.0 (3 môn), 20.0 (2 môn), 10.0 (1 môn), 1200 (V-ACT/DGNL)"
     )
-    
+
     # Optional: minimum score per subject (quy chế đặc thù)
+    # Phase 2 v8.2 PR-2E — widened (e.g., V-ACT subject min 100/300)
     min_subject_score = Column(
-        Numeric(precision=3, scale=1),
+        Numeric(precision=8, scale=2),
         nullable=True,
-        comment="Điểm tối thiểu mỗi môn (vd: không môn nào dưới 1.0)"
+        comment="Điểm tối thiểu mỗi môn (vd: 1.0 cho THPT, 100 cho V-ACT)"
     )
 
     # =========================================================================
