@@ -220,7 +220,7 @@ class AdmissionPath(Base):
     admission_round_id = Column(
         Integer,
         ForeignKey("offering_admission_round.id", ondelete="RESTRICT"),
-        nullable=False,  # Phase 2 v8.2 PR-2C v2 ⚠ ONE-WAY swap
+        nullable=True,
         index=True,
         comment="FK to offering_admission_round (year-level). NOT NULL post PR-2C v2."
     )
@@ -301,15 +301,14 @@ class AdmissionPath(Base):
         foreign_keys=[admission_round_id],
     )
 
-    # UNIQUE constraints (Phase 2 v8.2 PR-2C v2 — 3-col swap per Q5):
-    # - 3-col (admission_round_id, academic_info_id, admission_method_id)
-    #   tách path identity per round (4 đợt × major × method = 4× capacity).
-    # ADM-003 UNIQUE: criteria_id path-owned. Named to match alembic
-    # adm003path001 cho autogenerate diff quiet.
+    # UNIQUE constraint: Only 1 path per (offering + method)
+    # ADM-003 UNIQUE constraint: criteria_id is path-owned. Named to
+    # match alembic adm003path001 so future autogenerate diffs stay
+    # quiet (the migration creates this exact constraint name).
     __table_args__ = (
         UniqueConstraint(
-            "admission_round_id", "academic_info_id", "admission_method_id",
-            name="uq_admission_path_round_acad_method"
+            "academic_info_id", "admission_method_id",
+            name="uq_admission_path_offering_method"
         ),
         UniqueConstraint(
             "criteria_id",
