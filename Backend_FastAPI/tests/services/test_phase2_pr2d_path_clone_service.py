@@ -222,3 +222,88 @@ async def test_clone_filtered_by_academic_info_ids(clone_seed: dict, seed_lead_d
 
     assert response.cloned_count == 1  # Chỉ matching academic_info_id #1
     assert response.items[0].source_path_id == clone_seed["source_path_id"]
+
+
+# ---------------------------------------------------------------------------
+# BUG #3 fix — pre-check skip pattern (savepoint không phá session state)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clone_skip_existing_does_not_corrupt_session(
+    clone_seed: dict, seed_lead_dependencies: dict
+):
+    """ANCHOR (BUG #3): clone với 1 source path đã tồn tại trong target +
+    1 source path mới → 1 skipped + 1 cloned, KHÔNG MissingGreenlet.
+
+    Trước fix: rollback() trong loop expire instances của remaining src_paths
+    → access criteria_id ở iter sau crash MissingGreenlet.
+    Sau fix: pre-fetch existing keys (acad, method) làm lookup table, skip
+    in-memory mà KHÔNG cần catch IntegrityError → session intact.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            # Pre-create path trong target_round với cùng (acad, method) như source
+            # để force ON CONFLICT skip iter đầu.
+            existing_criteria = models.AdmissionCriteria(
+                method_id=clone_seed["method_id"],
+                code=f"E{ts}"[:20], name=f"Existing {ts}",
+                min_score=Decimal("16.00"),
+                policy_version="2026.1", is_active=True,
+            )
+            s.add(existing_criteria); await s.flush()
+            existing_path = models.AdmissionPath(
+                academic_info_id=clone_seed["academic_info_id"],
+                admission_method_id=clone_seed["method_id"],
+                admission_round_id=clone_seed["target_round_id"],
+                criteria_id=existing_criteria.id,
+                status="draft",
+            )
+            s.add(existing_path); await s.flush()
+
+            # Add source path #2 cho academic_info khác (sẽ clone OK)
+            offering2 = models.ProgramOffering(
+                program_id=seed_lead_dependencies["major_program_id"],
+                offering_type="part_time",
+                duration_semesters=8,
+            )
+            s.add(offering2); await s.flush()
+            ai2 = models.OfferingAcademicInfo(
+                offering_id=offering2.id,
+                academic_year=2026,
+                annual_admission_quota=10,
+                tuition_fee_per_year=1_000_000,
+            )
+            s.add(ai2); await s.flush()
+            criteria2 = models.AdmissionCriteria(
+                method_id=clone_seed["method_id"],
+                code=f"S2_{ts}"[:20], name=f"Source2 {ts}",
+                min_score=Decimal("15.00"),
+                policy_version="2026.1", is_active=True,
+            )
+            s.add(criteria2); await s.flush()
+            path2 = models.AdmissionPath(
+                academic_info_id=ai2.id,
+                admission_method_id=clone_seed["method_id"],
+                admission_round_id=clone_seed["source_round_id"],
+                criteria_id=criteria2.id,
+                status="active",
+            )
+            s.add(path2); await s.flush()
+
+    # Clone — expect skip 1 (acad #1 đã có), cloned 1 (acad #2 mới)
+    async with AsyncSessionLocal() as s:
+        svc = PathCloneService(s)
+        response = await svc.clone_paths_from_round(
+            target_round_id=clone_seed["target_round_id"],
+            source_round_id=clone_seed["source_round_id"],
+            payload=ClonePathsRequest(),
+        )
+        await s.commit()
+
+    assert response.skipped_count == 1
+    assert response.cloned_count == 1, (
+        "Iter sau khi skip phải clone OK — nếu MissingGreenlet thì test fail "
+        "với exception khác. Pre-check pattern không phá session state."
+    )

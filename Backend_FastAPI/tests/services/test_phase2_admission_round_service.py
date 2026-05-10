@@ -457,3 +457,133 @@ async def test_round_update_time_window_only(round_test_seed: dict) -> None:
         assert updated.round_name == "Đợt 1 (đã sửa)"
         assert updated.start_date == date(2026, 3, 1)
         assert updated.end_date == date(2026, 6, 30)
+
+
+# ---------------------------------------------------------------------------
+# Restore (un-archive) — PR-2D.1 v4a+ NEW
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_round_restore_clears_archived_at_and_sets_active(
+    round_test_seed: dict,
+) -> None:
+    """ANCHOR: restore inverse của soft_archive — archived_at=None, is_active=True."""
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        round_obj = await service.create(
+            2026,
+            AdmissionRoundCreate(round_code="DOT_1", round_name="Đợt 1"),
+            admin,
+        )
+        await service.soft_archive(round_obj.id, admin)
+        await db.commit()
+        round_id = round_obj.id
+
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        restored = await service.restore(round_id, admin)
+        await db.commit()
+
+        assert restored.archived_at is None
+        assert restored.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_round_restore_idempotent_guard_when_not_archived(
+    round_test_seed: dict,
+) -> None:
+    """ANCHOR: restore raise BusinessRuleViolation khi round chưa archive."""
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        round_obj = await service.create(
+            2026,
+            AdmissionRoundCreate(round_code="DOT_1", round_name="Đợt 1"),
+            admin,
+        )
+        await db.commit()
+        round_id = round_obj.id
+
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        with pytest.raises(BusinessRuleViolation, match="chưa lưu trữ"):
+            await service.restore(round_id, admin)
+
+
+# ---------------------------------------------------------------------------
+# Update invariant: start_date ≤ end_date — PR-2D.1 v4a+ BUG #5 fix
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_round_update_rejects_end_before_start(round_test_seed: dict) -> None:
+    """ANCHOR (BUG #5): PATCH với end_date < start_date raise 400.
+
+    Trước fix: server lưu invalid time-window. Sau fix: validate post-merge.
+    """
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        round_obj = await service.create(
+            2026,
+            AdmissionRoundCreate(
+                round_code="DOT_1",
+                round_name="Đợt 1",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 3, 31),
+            ),
+            admin,
+        )
+        await db.commit()
+        round_id = round_obj.id
+
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        with pytest.raises(BusinessRuleViolation, match="phải ≤ end_date"):
+            await service.update(
+                round_id,
+                AdmissionRoundUpdate(
+                    start_date=date(2026, 6, 1),
+                    end_date=date(2026, 1, 1),
+                ),
+                admin,
+            )
+
+
+@pytest.mark.asyncio
+async def test_round_update_partial_start_against_existing_end(
+    round_test_seed: dict,
+) -> None:
+    """ANCHOR (BUG #5 partial): PATCH chỉ start_date phải validate against
+    end_date đang có trong DB (cross-field invariant)."""
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        round_obj = await service.create(
+            2026,
+            AdmissionRoundCreate(
+                round_code="DOT_1",
+                round_name="Đợt 1",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 3, 31),
+            ),
+            admin,
+        )
+        await db.commit()
+        round_id = round_obj.id
+
+    async with AsyncSessionLocal() as db:
+        admin = await _get_admin(db, round_test_seed["admin_user_id"])
+        service = AdmissionRoundService(db)
+        # PATCH chỉ start_date sang sau end_date hiện tại → violation
+        with pytest.raises(BusinessRuleViolation, match="phải ≤ end_date"):
+            await service.update(
+                round_id,
+                AdmissionRoundUpdate(start_date=date(2026, 12, 31)),
+                admin,
+            )

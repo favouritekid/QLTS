@@ -42,7 +42,9 @@ Usage Examples:
         await audit_service.log_changes(db, "AdmissionProfile", profile.id, "updated", changes=changes, ...)
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from uuid import UUID
 from typing import Any, Dict, List, Optional, Union
 
 import structlog
@@ -105,7 +107,8 @@ async def log_audit(
         field_name=field_name,
         old_value=_serialize_value(old_value),
         new_value=_serialize_value(new_value),
-        changes=changes,
+        # Recursive serialize để JSON column nhận date/Decimal/UUID inside dict.
+        changes=_serialize_value(changes) if changes is not None else None,
         reason=reason,
         source=source,
         ip_address=ip_address,
@@ -441,13 +444,24 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
 
 
 def _serialize_value(value: Any) -> Any:
-    """Serialize a value for JSON storage."""
+    """Serialize a value for JSON storage.
+
+    Handles datetime, date, Decimal, UUID, enum, list/dict recursively.
+    JSON column raw INSERT raise TypeError với date/Decimal nếu skip.
+    """
     if value is None:
         return None
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, datetime):
         return value.isoformat()
+    # `date` MUST come AFTER `datetime` vì datetime là subclass của date.
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
     if isinstance(value, (list, tuple)):
         return [_serialize_value(v) for v in value]
     if isinstance(value, dict):

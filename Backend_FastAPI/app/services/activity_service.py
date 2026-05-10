@@ -1,6 +1,8 @@
 # app/services/activity_service.py
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from uuid import UUID
 
 # ✅ PHASE 1: Removed FastAPI Request import (protocol-independent)
 from sqlalchemy import and_, desc, func, select
@@ -8,6 +10,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models, schemas
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursive serialize cho JSON column (changes field).
+
+    JSON column raw INSERT raise TypeError với date/Decimal/UUID. Đây là
+    last-mile shim — caller có thể quên set ``mode="json"`` trên Pydantic
+    dump hoặc trộn raw model values vào dict.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):  # AFTER datetime (datetime kế thừa date)
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if hasattr(value, "value"):  # enum
+        return value.value
+    return str(value)
 
 
 async def log_activity(
@@ -50,7 +78,8 @@ async def log_activity(
         resource_type=resource_type,
         resource_id=resource_id,
         description=description,
-        changes=changes,
+        # JSON column safety: serialize date/Decimal/UUID inside dict.
+        changes=_json_safe(changes) if changes is not None else None,
         ip_address=ip_address,
         user_agent=user_agent,
     )

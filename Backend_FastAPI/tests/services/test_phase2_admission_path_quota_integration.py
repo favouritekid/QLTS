@@ -19,6 +19,10 @@ from app import models
 from app.database import AsyncSessionLocal
 from app.schemas.admission_path import AdmissionPathCreate
 from app.services.admission_path_service import AdmissionPathService
+from app.utils.exceptions import (
+    DuplicateResourceError,
+    ResourceNotFoundError,
+)
 from app.services.public_admissions_service import _load_public_paths
 from app.utils.exceptions import BusinessRuleViolation
 
@@ -535,3 +539,119 @@ async def test_atomic_submit_blocks_when_round_quota_exhausted(
     # before quota). For ANCHOR atomic semantics, SQL test above sufficient.
     _ = profile_id  # used by full integration if validation seed expanded
     _ = path_seed
+
+
+# ---------------------------------------------------------------------------
+# BUG #1 fix — 3-col duplicate check (PR-2D.1 v4a+)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_path_allows_same_method_in_different_round(path_seed: dict):
+    """ANCHOR (BUG #1): same (acad, method) cho phép tạo path ở round khác.
+
+    Phase 2 v8.2 PR-2C v2 schema dùng 3-col UNIQUE (round, acad, method).
+    Trước fix: service vẫn check 2-col → block tạo path đợt thứ 2 → vô hiệu hoá
+    multi-round capability. Sau fix: 3-col check, allow duplicate (acad, method)
+    nếu round khác.
+    """
+    # Tạo round thứ 2 (DOT_2) cùng năm
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            r2 = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code="DOT_2",
+                round_name="Đợt 2 - 2026",
+                is_active=True,
+            )
+            s.add(r2)
+            await s.flush()
+            r2_id = r2.id
+
+    # Tạo path 1 ở DOT_1
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, path_seed["admin_id"])
+        svc = AdmissionPathService(s)
+        path1, _ = await svc.create_path(
+            AdmissionPathCreate(
+                academic_info_id=path_seed["academic_info_id"],
+                admission_method_id=path_seed["method_id"],
+                admission_round_id=path_seed["round_id"],
+            ),
+            admin,
+        )
+        await s.commit()
+
+    # Tạo path 2 cùng (acad, method) nhưng ở DOT_2 — phải pass
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, path_seed["admin_id"])
+        svc = AdmissionPathService(s)
+        path2, _ = await svc.create_path(
+            AdmissionPathCreate(
+                academic_info_id=path_seed["academic_info_id"],
+                admission_method_id=path_seed["method_id"],
+                admission_round_id=r2_id,
+            ),
+            admin,
+        )
+        await s.commit()
+
+        assert path2.id != path1.id
+        assert path2.admission_round_id == r2_id
+
+
+@pytest.mark.asyncio
+async def test_create_path_rejects_duplicate_3col(path_seed: dict):
+    """ANCHOR (BUG #1): same (round, acad, method) → 409 DuplicateResourceError."""
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, path_seed["admin_id"])
+        svc = AdmissionPathService(s)
+        await svc.create_path(
+            AdmissionPathCreate(
+                academic_info_id=path_seed["academic_info_id"],
+                admission_method_id=path_seed["method_id"],
+                admission_round_id=path_seed["round_id"],
+            ),
+            admin,
+        )
+        await s.commit()
+
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, path_seed["admin_id"])
+        svc = AdmissionPathService(s)
+        with pytest.raises(DuplicateResourceError, match="already exists"):
+            await svc.create_path(
+                AdmissionPathCreate(
+                    academic_info_id=path_seed["academic_info_id"],
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                ),
+                admin,
+            )
+
+
+# ---------------------------------------------------------------------------
+# BUG #6 fix — pre-validate explicit admission_round_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_path_rejects_invalid_round_id(path_seed: dict):
+    """ANCHOR (BUG #6): invalid admission_round_id raise ResourceNotFoundError
+    sớm thay vì SQLAlchemy IntegrityError mid-INSERT.
+
+    Trước fix: FK violation mid-INSERT → response 500 không có CORS header
+    → FE thấy 'Network Error'. Sau fix: pre-validate exists → 404.
+    """
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, path_seed["admin_id"])
+        svc = AdmissionPathService(s)
+        with pytest.raises(ResourceNotFoundError, match="OfferingAdmissionRound"):
+            await svc.create_path(
+                AdmissionPathCreate(
+                    academic_info_id=path_seed["academic_info_id"],
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=999_999,  # not exists
+                ),
+                admin,
+            )
