@@ -56,6 +56,85 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-10 — 🚀 Phase 2 sprint Day 2: 5/6 PRs SHIPPED (revert + re-attempt arc)
+
+### Morning recovery arc — PR-2C v2 ⚠ ONE-WAY revert + test debt fix + re-attempt
+
+**Timeline UTC**:
+- 02:24 PR #241 (PR-2C v2 attempt 1) merged → CI Contract Tests FAILED
+  - Root cause: 17 pre-existing test files KHÔNG seed admission_round_id → 13 fail + 99 errors khi NOT NULL constraint active (76% test broken in suite run)
+  - prod NOT affected (deploy gate blocked by failed PR Gate)
+- 04:20 PR #242 revert PR #241 squashed `621628aa` → main back to phase2_02_v2
+- 04:53 PR #243 test-debt fix merged `52d26190`:
+  - `AdmissionRoundBuilder.get_or_create_default_round()` helper centralized
+  - 17 test files updated với 24 AdmissionPath() instantiation sites
+  - Forward-compatible (works on nullable AND NOT NULL)
+- 05:20 PR #244 PR-2C v2 re-attempt merged `f184c12c` (cherry-picked từ archived branch)
+- 05:32 prod deployed `phase2_02b_v2` — admission_path NOT NULL admission_round_id + 3-col UNIQUE swap LIVE
+
+**Lesson learned**:
+- Pre-merge audit MUST include full BE pytest suite trên dev với target migration applied
+- Memory `pattern-change-impact-audit` reinforced: NOT NULL swap on long-existing column = pattern change requiring impact audit
+- Phase 1 cutover lesson reapplied: small reversible steps > big bang
+
+### Mid-morning — PR-2E score precision
+
+**Timeline**:
+- 05:41 PR #245 merged `49f1d461`
+- 05:55 prod deployed `phase2_04`
+- admission_criteria score columns + profile_subject_score widened to Numeric(8,2)
+- CHECK ck_profile_subject_score_non_negative replaced range CHECK
+- min_gpa Numeric(3,1) UNCHANGED (Phase 2 contract)
+- 5 anchor tests PASS
+
+### Afternoon — PR-2D BE-only PathSubjectGroupConfig + Q6 deep-copy clone
+
+**Timeline**:
+- 07:12 PR #246 BE-only merged `2858966a`
+- 07:27 prod deployed `phase2_05` (~15 phút end-to-end)
+
+**Components shipped**:
+- 2 new tables: `path_subject_group_config` + `path_subject_group_item`
+- Tier 3 chain validation (∑ group_quota in path ≤ admit_quota)
+- Composite invariant guard (subject_group_subject ↔ config subject_group)
+- Q6 deep-copy clone endpoint POST `/api/v2/admin/rounds/{target}/clone-paths-from/{source}`
+- Backfill từ CriteriaSubjectGroup (192 prod rows verified)
+- 13 anchor tests PASS
+
+**Plan deviation**:
+- Plan v8.2 bundled BE + FE QuotaMatrix UI; em split per Pass 11 audit
+- BE-only ship now → PR-2D.1 FE QuotaMatrix as follow-up
+- Migration revision `phase2_05` (vs plan reference `phase2_03`) — actual chain `phase1_15a → phase2_01_v2 → phase2_02_v2 → phase2_02b_v2 → phase2_04 → phase2_05`
+
+### Phase 2 plan v8.2 progress: 5/6 PRs SHIPPED
+
+| PR | Status | Deployed |
+|---|---|---|
+| PR-2A v2 (Round year-level) | ✅ | 2026-05-09 05:29 UTC |
+| PR-2B v2 (admission_path quota + atomic submit + Wave 6) | ✅ | 2026-05-09 08:47 UTC |
+| PR-2C v2 (NOT NULL + 3-col UNIQUE) | ✅ | 2026-05-10 05:32 UTC (re-attempt) |
+| PR-2E (score precision Numeric(8,2)) | ✅ | 2026-05-10 05:55 UTC |
+| **PR-2D BE** (PathSubjectGroupConfig + clone) | ✅ | **2026-05-10 07:27 UTC** |
+| PR-2D.1 FE QuotaMatrix UI | ⏳ follow-up | — |
+| PR-2F engine sweep ≥22 cases | ⏳ pending | — |
+
+### Sprint metrics (Phase 2 sprint 2-day)
+
+- 7 PRs shipped + 1 reverted: #239 #240 #241↩#242 #243 #244 #245 #246
+- ~5800+ BE lines, ~1000+ FE lines
+- 50+ anchor tests added
+- 5 prod deploys (4 direct successful + 1 re-attempt post test debt fix)
+- Deploy duration avg ~10-15 min end-to-end
+- Cumulative downtime ~80-100s spread across 5 deploys
+
+### Outstanding follow-up
+
+1. PR-2D.1 FE QuotaMatrix UI scaffold
+2. PR-2F engine test sweep
+3. Memory `phase2-pr-2d-be-shipped` ✅ FINAL (this commit)
+
+---
+
 ## 2026-05-09 — 🎯 Phase 2 PR-2A v2 SHIPPED prod (Option A foundation live)
 
 **Squash SHA**: `0b3ba418d0890d9555dd428b2c2306b05c7367cd` (PR #239)
