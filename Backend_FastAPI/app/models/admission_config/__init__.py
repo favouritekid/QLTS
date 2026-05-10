@@ -23,6 +23,7 @@ from .offering_config import OfferingAdmissionConfig
 from .document_group import DocumentGroup, DocumentGroupItem
 from .profile_data import ProfileSubjectScore, ProfileDocument, DocumentAuditLog
 from .admission_path import AdmissionPath
+from .path_subject_group import PathSubjectGroupConfig, PathSubjectGroupItem
 
 __all__ = [
     "Subject",
@@ -38,4 +39,6 @@ __all__ = [
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
     "AdmissionPath",
+    "PathSubjectGroupConfig",  # Phase 2 v8.2 PR-2D
+    "PathSubjectGroupItem",  # Phase 2 v8.2 PR-2D
 ]
