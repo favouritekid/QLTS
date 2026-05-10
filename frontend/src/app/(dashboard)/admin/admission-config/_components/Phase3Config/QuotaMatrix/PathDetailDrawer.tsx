@@ -19,12 +19,21 @@ import {
   Save,
   XCircle,
 } from "lucide-react"
-import { useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useCallback, useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -65,9 +74,34 @@ interface Props {
   onClose: () => void
 }
 
+const VALID_TABS = ["quota", "identity", "criteria", "documents", "lifecycle"] as const
+type TabId = (typeof VALID_TABS)[number]
+
 export function PathDetailDrawer({ pathId, onClose }: Props) {
   const { data: path, isLoading } = useAdmissionPath(pathId)
-  const [tab, setTab] = useState<string>("quota")
+
+  // Pass 2 hard-review FM-2: tab active sync với ?tab= URL param.
+  // Reload page giữ tab user đang xem; share link mở thẳng tab cụ thể.
+  // Default = "quota" nếu URL không có hoặc invalid value.
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const tab: TabId = useMemo(() => {
+    const raw = searchParams.get("tab")
+    return (VALID_TABS as readonly string[]).includes(raw ?? "")
+      ? (raw as TabId)
+      : "quota"
+  }, [searchParams])
+  const setTab = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (next === "quota") params.delete("tab")
+      else params.set("tab", next)
+      const qs = params.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
 
   return (
     <Sheet open onOpenChange={(o) => { if (!o) onClose() }}>
@@ -438,6 +472,9 @@ function LifecycleTab({
   const queryClient = useQueryClient()
   const activateMutation = useActivateAdmissionPath()
   const deactivateMutation = useDeactivateAdmissionPath()
+  // Pass 2 hard-review FM-1: custom Dialog confirm thay JS confirm()
+  // (mobile UX kém + a11y kém — không có focus trap, không styled).
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false)
 
   const hasCriteria = path.criteria !== null
   const hasQuota = path.admit_quota !== null && path.admit_quota > 0
@@ -455,8 +492,8 @@ function LifecycleTab({
     }
   }
 
-  const handleDeactivate = async () => {
-    if (!confirm("Vô hiệu hoá đường tuyển sinh này? Storefront sẽ ẩn ngay.")) return
+  const performDeactivate = async () => {
+    setConfirmDeactivate(false)
     try {
       await deactivateMutation.mutateAsync(pathId)
       queryClient.invalidateQueries({ queryKey: quotaMatrixKeys.all })
@@ -532,7 +569,7 @@ function LifecycleTab({
         {isActive ? (
           <Button
             variant="destructive"
-            onClick={handleDeactivate}
+            onClick={() => setConfirmDeactivate(true)}
             disabled={isPending}
             aria-busy={isPending}
           >
@@ -558,6 +595,38 @@ function LifecycleTab({
           </Button>
         )}
       </div>
+
+      {/* Pass 2 hard-review FM-1: custom Dialog confirm thay JS confirm() —
+          focus trap + styled + a11y-friendly trên mobile. */}
+      <Dialog open={confirmDeactivate} onOpenChange={setConfirmDeactivate}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Vô hiệu hoá đường tuyển sinh?</DialogTitle>
+            <DialogDescription>
+              Storefront sẽ ẩn ngay đường tuyển sinh này. Người dùng đã
+              nộp hồ sơ vẫn giữ snapshot path; chỉ submission mới bị chặn.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDeactivate(false)}>
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={performDeactivate}
+              disabled={isPending}
+              aria-busy={isPending}
+            >
+              {isPending ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
+              ) : (
+                <PowerOff className="h-4 w-4 mr-1" aria-hidden="true" />
+              )}
+              Vô hiệu hoá
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

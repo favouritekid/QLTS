@@ -80,13 +80,23 @@ class AdmissionQuotaService:
         new_sum = current_sum + delta_admit_quota
 
         if new_sum > annual_cap:
+            # Pass 2 hard-review BM-5: structured metric_event + overflow
+            # gauge cho observability. Operator có thể grep
+            # ``metric_event=tier1_violation`` để build Prometheus counter
+            # qua promtail/loki, hoặc query Grafana log panel cho rate
+            # chain violations theo academic_info. Excluded_path_id giúp
+            # phân biệt CREATE vs UPDATE flow.
             log.warning(
                 "tier1_chain_violation",
+                metric_event="tier1_violation",
                 academic_info_id=academic_info_id,
                 annual_cap=annual_cap,
                 current_sum=current_sum,
                 delta=delta_admit_quota,
                 new_sum=new_sum,
+                overflow=new_sum - annual_cap,
+                excluded_path_id=excluded_path_id,
+                flow="update" if excluded_path_id is not None else "create",
             )
             raise BusinessRuleViolation(
                 f"Tier 1 chain violated: tổng admit_quota của ngành "
@@ -108,6 +118,15 @@ class AdmissionQuotaService:
         if admit_quota is None or round_quota is None:
             return
         if admit_quota > round_quota:
+            # Pass 2 hard-review BM-5: Tier 2 violation cũng có metric_event
+            # parity với Tier 1 cho dashboard panel chung.
+            log.warning(
+                "tier2_invariant_violation",
+                metric_event="tier2_violation",
+                admit_quota=admit_quota,
+                round_quota=round_quota,
+                overflow=admit_quota - round_quota,
+            )
             raise BusinessRuleViolation(
                 f"Tier 2 invariant violated: admit_quota={admit_quota} > "
                 f"round_quota={round_quota} trên cùng path"

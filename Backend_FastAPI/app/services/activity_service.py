@@ -12,12 +12,20 @@ from sqlalchemy.orm import selectinload
 from app import models, schemas
 
 
-def _json_safe(value: Any) -> Any:
+# Pass 2 hard-review BM-3: depth cap parity với audit_service._serialize_value.
+_MAX_JSON_SAFE_DEPTH = 10
+_DEPTH_SENTINEL = "[truncated: depth_exceeded]"
+
+
+def _json_safe(value: Any, _depth: int = 0) -> Any:
     """Recursive serialize cho JSON column (changes field).
 
     JSON column raw INSERT raise TypeError với date/Decimal/UUID. Đây là
     last-mile shim — caller có thể quên set ``mode="json"`` trên Pydantic
     dump hoặc trộn raw model values vào dict.
+
+    Pass 2 hard-review BM-3: depth cap _MAX_JSON_SAFE_DEPTH chống stack
+    overflow trên adversarial nested JSONB. Trả sentinel marker nếu vượt.
     """
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -29,10 +37,12 @@ def _json_safe(value: Any) -> Any:
         return float(value)
     if isinstance(value, UUID):
         return str(value)
+    if _depth >= _MAX_JSON_SAFE_DEPTH:
+        return _DEPTH_SENTINEL
     if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
+        return [_json_safe(v, _depth + 1) for v in value]
     if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
+        return {k: _json_safe(v, _depth + 1) for k, v in value.items()}
     if hasattr(value, "value"):  # enum
         return value.value
     return str(value)

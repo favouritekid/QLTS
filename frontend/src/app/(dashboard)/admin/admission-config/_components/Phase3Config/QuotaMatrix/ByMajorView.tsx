@@ -9,7 +9,7 @@
 
 import { AlertTriangle } from "lucide-react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -45,13 +45,10 @@ interface Props {
 export function ByMajorView({ academicYear, onYearChange }: Props) {
   // Reuse global quota-matrix endpoint to populate ngành dropdown options
   const { data: globalData } = useQuotaMatrix(academicYear)
-  const [selectedAcademicInfoId, setSelectedAcademicInfoId] = useState<number | undefined>(undefined)
-  const { data: matrix, isLoading } = usePathMatrixByMajor(selectedAcademicInfoId)
 
-  // Pass 2 hard-review F-2-1: URL state sync cho openPathId.
-  // Drawer state là URL state theo Frontend CLAUDE.md ("URL State: Filters,
-  // pagination") — admin share link mở thẳng path detail, browser
-  // back/forward navigate giữa các drawer mở/đóng.
+  // Pass 2 hard-review F-2-1 + FM-3: URL state sync cho openPathId +
+  // selectedAcademicInfoId. Share link reproduce đúng ngành + drawer
+  // path detail; browser back/forward navigate giữa các view.
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -61,16 +58,32 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     const n = Number(raw)
     return Number.isFinite(n) && n > 0 ? n : null
   }, [searchParams])
-  const setOpenPathId = useCallback(
-    (id: number | null) => {
+  const selectedAcademicInfoId = useMemo<number | undefined>(() => {
+    const raw = searchParams.get("academicInfo")
+    if (!raw) return undefined
+    const n = Number(raw)
+    return Number.isFinite(n) && n > 0 ? n : undefined
+  }, [searchParams])
+  const updateSearchParam = useCallback(
+    (key: string, value: string | null) => {
       const params = new URLSearchParams(searchParams.toString())
-      if (id === null) params.delete("pathId")
-      else params.set("pathId", id.toString())
+      if (value === null) params.delete(key)
+      else params.set(key, value)
       const qs = params.toString()
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
     },
     [pathname, router, searchParams],
   )
+  const setOpenPathId = useCallback(
+    (id: number | null) => updateSearchParam("pathId", id === null ? null : id.toString()),
+    [updateSearchParam],
+  )
+  const setSelectedAcademicInfoId = useCallback(
+    (id: number) => updateSearchParam("academicInfo", id.toString()),
+    [updateSearchParam],
+  )
+
+  const { data: matrix, isLoading } = usePathMatrixByMajor(selectedAcademicInfoId)
 
   const [createCell, setCreateCell] = useState<{
     methodId: number
@@ -79,12 +92,12 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     roundCode: string
   } | null>(null)
 
-  // Auto-select first ngành on year change
+  // Auto-select first ngành on year change — only if URL has no academicInfo.
   useEffect(() => {
     if (globalData && globalData.rows.length > 0 && selectedAcademicInfoId === undefined) {
       setSelectedAcademicInfoId(globalData.rows[0].academic_info_id)
     }
-  }, [globalData, selectedAcademicInfoId])
+  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId])
 
   const isOver = matrix?.sum_remaining !== null && matrix !== undefined && matrix.sum_remaining! < 0
 
@@ -183,47 +196,28 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
                     const cell = m.cells_by_round_id[r.id]
                     if (!cell) {
                       return (
-                        <TableCell key={r.id} className="p-1 text-center">
-                          <button
-                            onClick={() =>
-                              setCreateCell({
-                                methodId: m.admission_method_id,
-                                methodName: m.method_name,
-                                roundId: r.id,
-                                roundCode: r.round_code,
-                              })
-                            }
-                            className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded px-2 py-1.5 w-full transition-colors"
-                            aria-label={`Tạo đường tuyển sinh ${m.method_name} đợt ${r.round_code}`}
-                          >
-                            + Tạo
-                          </button>
-                        </TableCell>
+                        <EmptyCellButton
+                          key={r.id}
+                          methodId={m.admission_method_id}
+                          methodName={m.method_name}
+                          roundId={r.id}
+                          roundCode={r.round_code}
+                          onCreate={setCreateCell}
+                        />
                       )
                     }
                     return (
-                      <TableCell key={r.id} className="p-1">
-                        <button
-                          onClick={() => setOpenPathId(cell.path_id)}
-                          className="w-full text-left bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-2 py-1.5 transition-colors"
-                          aria-label={`Mở chi tiết ${m.method_name} đợt ${r.round_code}: trần admit ${cell.admit_quota ?? "chưa đặt"} trên cap năm ${matrix.annual_admission_quota ?? "không giới hạn"}, trạng thái ${pathStatusLabel(cell.status)}`}
-                        >
-                          <div className="text-xs font-semibold tabular-nums">
-                            {cell.admit_quota ?? "—"} / {matrix.annual_admission_quota ?? "∞"}
-                          </div>
-                          <div className="text-[11px] text-muted-foreground tabular-nums">
-                            Submit {cell.round_quota ?? "—"}
-                          </div>
-                          <div className="text-[11px]">
-                            <Badge
-                              variant={cell.status === "active" ? "default" : "outline"}
-                              className="text-[10px] h-4 px-1"
-                            >
-                              {pathStatusLabel(cell.status)}
-                            </Badge>
-                          </div>
-                        </button>
-                      </TableCell>
+                      <PathCellButton
+                        key={r.id}
+                        pathId={cell.path_id}
+                        admitQuota={cell.admit_quota}
+                        roundQuota={cell.round_quota}
+                        status={cell.status}
+                        methodName={m.method_name}
+                        roundCode={r.round_code}
+                        annualCap={matrix.annual_admission_quota}
+                        onOpen={setOpenPathId}
+                      />
                     )
                   })}
                   <TableCell className="text-right font-medium tabular-nums">
@@ -266,3 +260,91 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     </Card>
   )
 }
+
+// ============================================================================
+// Pass 2 hard-review FM-5: memoize cell buttons để tránh re-create closures +
+// re-render toàn matrix khi 1 cell update (vd user edit cell A, all other
+// cells re-render mặc dù props không đổi). React.memo + stable callback từ
+// parent (setOpenPathId / setCreateCell stable qua useCallback) skip re-render.
+// ============================================================================
+
+interface PathCellProps {
+  pathId: number
+  admitQuota: number | null | undefined
+  roundQuota: number | null | undefined
+  status: "draft" | "active" | "inactive" | "archived"
+  methodName: string
+  roundCode: string
+  annualCap: number | null | undefined
+  onOpen: (id: number) => void
+}
+
+const PathCellButton = memo(function PathCellButton({
+  pathId,
+  admitQuota,
+  roundQuota,
+  status,
+  methodName,
+  roundCode,
+  annualCap,
+  onOpen,
+}: PathCellProps) {
+  const handleClick = useCallback(() => onOpen(pathId), [onOpen, pathId])
+  return (
+    <TableCell className="p-1">
+      <button
+        onClick={handleClick}
+        className="w-full text-left bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-2 py-1.5 transition-colors"
+        aria-label={`Mở chi tiết ${methodName} đợt ${roundCode}: trần admit ${admitQuota ?? "chưa đặt"} trên cap năm ${annualCap ?? "không giới hạn"}, trạng thái ${pathStatusLabel(status)}`}
+      >
+        <div className="text-xs font-semibold tabular-nums">
+          {admitQuota ?? "—"} / {annualCap ?? "∞"}
+        </div>
+        <div className="text-[11px] text-muted-foreground tabular-nums">
+          Submit {roundQuota ?? "—"}
+        </div>
+        <div className="text-[11px]">
+          <Badge
+            variant={status === "active" ? "default" : "outline"}
+            className="text-[10px] h-4 px-1"
+          >
+            {pathStatusLabel(status)}
+          </Badge>
+        </div>
+      </button>
+    </TableCell>
+  )
+})
+
+interface EmptyCellProps {
+  methodId: number
+  methodName: string
+  roundId: number
+  roundCode: string
+  onCreate: (cell: { methodId: number; methodName: string; roundId: number; roundCode: string }) => void
+}
+
+const EmptyCellButton = memo(function EmptyCellButton({
+  methodId,
+  methodName,
+  roundId,
+  roundCode,
+  onCreate,
+}: EmptyCellProps) {
+  const handleClick = useCallback(
+    () => onCreate({ methodId, methodName, roundId, roundCode }),
+    [onCreate, methodId, methodName, roundId, roundCode],
+  )
+  return (
+    <TableCell className="p-1 text-center">
+      <button
+        onClick={handleClick}
+        className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded px-2 py-1.5 w-full transition-colors"
+        aria-label={`Tạo đường tuyển sinh ${methodName} đợt ${roundCode}`}
+      >
+        + Tạo
+      </button>
+    </TableCell>
+  )
+})
+

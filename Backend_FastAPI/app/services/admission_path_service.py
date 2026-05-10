@@ -150,19 +150,23 @@ class AdmissionPathService:
         # Phase 2 v8.2 PR-2B v2 — auto-resolve admission_round_id.
         # PR-2C v2 đã ship 3-col UNIQUE (round, acad, method); duplicate check
         # bên dưới dùng 3-col helper tương ứng.
+        # Pass 2 hard-review BM-4: lookup academic_info upfront (cả 2 nhánh
+        # auto-resolve + explicit cần academic_year cho cross-check).
+        from app.models.offering_academic_info import OfferingAcademicInfo
+
+        academic_info = await self.db.get(
+            OfferingAcademicInfo, data.academic_info_id
+        )
+        if academic_info is None:
+            raise ResourceNotFoundError(
+                f"OfferingAcademicInfo {data.academic_info_id} not found"
+            )
+
         admission_round_id = data.admission_round_id
         if admission_round_id is None:
-            from app.models.offering_academic_info import OfferingAcademicInfo
             from app.repositories.admission_round_repository import (
                 AdmissionRoundRepository,
             )
-            academic_info = await self.db.get(
-                OfferingAcademicInfo, data.academic_info_id
-            )
-            if academic_info is None:
-                raise ResourceNotFoundError(
-                    f"OfferingAcademicInfo {data.academic_info_id} not found"
-                )
             round_repo = AdmissionRoundRepository(self.db)
             default_round = await round_repo.get_default_dot1(
                 academic_info.academic_year
@@ -203,6 +207,17 @@ class AdmissionPathService:
                     f"Đợt tuyển sinh '{round_obj.round_code}' đã lưu trữ "
                     f"({round_obj.archived_at.date().isoformat()}); "
                     f"khôi phục đợt trước khi tạo đường tuyển sinh."
+                )
+            # Pass 2 hard-review BM-4: cross-check academic_year giữa round
+            # và academic_info. Round là year-level (Q1 Option A); tạo path
+            # với round năm 2025 trên academic_info năm 2026 = cross-year
+            # configuration sai semantic, reporting "Đợt 1 năm X" sẽ confuse.
+            if round_obj.academic_year != academic_info.academic_year:
+                raise BusinessRuleViolation(
+                    f"Đợt tuyển sinh '{round_obj.round_code}' thuộc năm "
+                    f"{round_obj.academic_year}, không khớp năm "
+                    f"{academic_info.academic_year} của ngành. Chọn đợt "
+                    f"cùng năm với ngành."
                 )
             log.debug(
                 "admission_path_create_explicit_round",

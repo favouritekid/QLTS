@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,26 +51,35 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
   // Search state for filtering subject groups
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Pass 2 hard-review FM-4: debounce search input để tránh filter 281
+  // subject groups + re-render checkbox grid mỗi keystroke. 200ms = ngắn
+  // đủ feel responsive, đủ skip rapid typing.
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
+
   // Sync form state when path data loads
   const currentPathId = path.id;
-   
+
   // REMOVED useEffect sync - relying on key-based remount from parent (PathWizard)
   // to re-initialize these states when path/criteria changes.
-  
+
   // Handlers
 
-  // Filter subject groups based on search query
-  // Filter subject groups based on search query
-  const filteredGroups = Array.isArray(subjectGroups) 
-    ? subjectGroups.filter((group: SubjectGroup) => {
-        if (!searchQuery) return true;
-        const query = searchQuery.toLowerCase();
-        return (
-          (group.code?.toLowerCase() || "").includes(query) ||
-          (group.name?.toLowerCase() || "").includes(query)
-        );
-      })
-    : [];
+  // Filter subject groups based on debounced search query.
+  // Wrap trong useMemo để re-compute chỉ khi groups hoặc query thay đổi
+  // (không re-compute trên mỗi state change khác trong component).
+  const filteredGroups = useMemo(() => {
+    if (!Array.isArray(subjectGroups)) return [] as SubjectGroup[];
+    if (!debouncedSearch) return subjectGroups;
+    const query = debouncedSearch.toLowerCase();
+    return subjectGroups.filter((group: SubjectGroup) =>
+      (group.code?.toLowerCase() || "").includes(query) ||
+      (group.name?.toLowerCase() || "").includes(query)
+    );
+  }, [subjectGroups, debouncedSearch]);
 
   // Get selected group details for chip display
   const selectedGroupsDetails = subjectGroups.filter((group: SubjectGroup) =>

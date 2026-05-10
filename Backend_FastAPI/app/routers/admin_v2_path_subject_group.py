@@ -237,14 +237,21 @@ async def update_path_quota(
         raise ResourceNotFoundError(f"AdmissionPath {admission_path_id} not found")
 
     service = AdmissionPathService(db)
+    # Pass 2 hard-review BM-1: capture old quota TRƯỚC khi service mutate
+    # (cho activity log delta), sau đó update + log + commit cùng 1 txn frame.
+    old_round_quota = path.round_quota
+    old_admit_quota = path.admit_quota
     path = await service.update_quota(
         path=path,
         round_quota=payload.round_quota,
         admit_quota=payload.admit_quota,
         user=current_admin,
     )
-    await db.commit()
 
+    # Pass 2 hard-review BM-1: log_activity TRƯỚC db.commit() để cả 2 atomic.
+    # Trước fix: commit → log_activity → activity log fail = quota persists
+    # mà audit trail mất (silent drift). log_activity gọi db.add() = tham gia
+    # cùng transaction frame; nếu fail trước commit, full rollback.
     await activity_service.log_activity(
         db=db,
         action="admission_path_quota_update",
@@ -255,7 +262,17 @@ async def update_path_quota(
             f"Updated quota path={path.id} "
             f"round_quota={payload.round_quota} admit_quota={payload.admit_quota}"
         ),
+        changes={
+            "old_round_quota": old_round_quota,
+            "new_round_quota": payload.round_quota,
+            "old_admit_quota": old_admit_quota,
+            "new_admit_quota": payload.admit_quota,
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
     )
+    await db.commit()
+
     from app.repositories.admission_path_repository import AdmissionPathRepository
     path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
     return path
