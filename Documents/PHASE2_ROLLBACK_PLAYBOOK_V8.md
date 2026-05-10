@@ -253,13 +253,31 @@ Same as ARCHIVE strategy Step 3.
 
 Trước khi merge PR-2C v2 trên prod:
 
-- [ ] Backup prod DB ngay trước cutover (separate từ pre-Phase-2 backup)
-- [ ] Verify 0 NULL admission_round_id trên prod (`SELECT COUNT(*) FROM admission_path WHERE admission_round_id IS NULL` = 0)
-- [ ] Verify 0 missing applied_rules.admission_round_id (parity check)
-- [ ] Verify trigger `enforce_applied_rules_immutability` enabled (`tgenabled='O'`)
-- [ ] Soak ≥24h post PR-2B v2 ship
-- [ ] Rollback playbook (this doc) reviewed by solo dev
-- [ ] Have 30-min window scheduled cho potential rollback execution
+### Mandatory gates (block merge nếu chưa pass)
+
+- [ ] **G1 — Backup**: Dump prod DB ngay trước cutover (separate từ pre-Phase-2 backup)
+  ```bash
+  ssh prod 'cd /app/qlts && docker compose exec -T postgres pg_dump -U qlts -Fc qlts_production > /backup/prod_dump_pre_phase2c_$(date +%Y%m%d_%H%M%S).dump'
+  ```
+- [ ] **G2 — Backup integrity**: pg_restore --list verify (Phase 1 cutover lesson per memory `admission-cutover-shipped-2026-05-07` §9.1)
+  ```bash
+  ssh prod 'pg_restore --list /backup/prod_dump_pre_phase2c_*.dump | wc -l'  # expect 100+ entries
+  ssh prod 'pg_restore --list /backup/prod_dump_pre_phase2c_*.dump | head -20'  # spot check schema entries
+  ```
+  Optional stronger gate: restore rehearsal dump vào dev DB qlts_preflight + verify replay; acceptable to skip nếu dev đã roll forward.
+- [ ] **G3 — 0 NULL admission_round_id**: `SELECT COUNT(*) FROM admission_path WHERE admission_round_id IS NULL` = 0
+- [ ] **G4 — 0 missing applied_rules.admission_round_id**: parity check (PR-2B v2 audit guard already enforces, double-verify post 24h soak)
+- [ ] **G5 — Trigger enabled**: `SELECT tgenabled FROM pg_trigger WHERE tgname='enforce_applied_rules_immutability'` returns `'O'`
+- [ ] **G6 — Soak ≥24h** post PR-2B v2 ship (PR #240 merged 2026-05-09 07:47 UTC → soak ends 2026-05-10 07:47 UTC)
+- [ ] **G7 — Playbook reviewed** by solo dev (this doc full read-through)
+- [ ] **G8 — 30-min rollback window scheduled** (phòng case must execute ARCHIVE/MERGE strategy)
+
+### Notes
+
+- G1-G2 separate từ pre-Phase-2 backup vì PR-2B v2 đã modify prod state (admission_path 4 cols + applied_rules 9 profile JSONB updates) — pre-Phase-2 backup không restore được rollback target
+- G6 soak window đếm từ PR-2B v2 PROD DEPLOY time (08:47 UTC), không phải merge time
+- G7 highlight key sections: ARCHIVE strategy step 1 (idempotent SQL), MERGE strategy DISABLE/ENABLE trigger pattern
+- Post-recovery Step 5 col list (line 149-157) cần update khi model add cols Phase 3+; maintenance debt acceptable for current Phase 2 scope
 
 ---
 
