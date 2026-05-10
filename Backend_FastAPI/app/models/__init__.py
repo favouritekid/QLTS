@@ -55,6 +55,8 @@ from .admission_config import (
     ProfileDocument,
     DocumentAuditLog,  # Audit trail for document operations
     AdmissionPath,  # Phase 1: Admission Configuration Console
+    PathSubjectGroupConfig,  # Phase 2 v8.2 PR-2D
+    PathSubjectGroupItem,  # Phase 2 v8.2 PR-2D
 )
 
 # Notification models
