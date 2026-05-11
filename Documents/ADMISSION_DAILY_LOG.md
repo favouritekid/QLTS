@@ -94,9 +94,23 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 - Reviewer flag tautological asserts + test count drift → test-debt follow-up, không block feature PR.
 
 **Tomorrow plan**:
-- Prod deploy PR #251 (chờ user approval) — pre-stage `scripts/deploy.sh` + smoke test Tier 2 CHECK + restore round flow
-- Tracker resync (8 ngày stale) bundle vào Phase 2 sprint closure docs PR
-- Phase 2 sprint Day 3 closure entry sau prod ship
+- ~~Prod deploy PR #251~~ — DEPLOYED prod 2026-05-11 05:47 UTC qua deploy.yml run 25650761933 (sau 2 CI hotfix iterations + env approve via gh api)
+- ~~Tracker resync~~ — DONE TRACKER Section 5 + PLAN Phần 9.C
+- ~~Phase 2 sprint closure~~ — DONE memory phase2-pr-2d1-shipped + MEMORY.md index
+
+**Phase 2 sprint FINAL closure (2026-05-11)**:
+- 6/6 PRs prod-deployed: PR-2A v2 → PR-2D.1 v4a (3 ngày total 2026-05-09 → 2026-05-11)
+- 2 CI hotfix iterations (PR #252 type-check `5086af1d`, PR #253 lint `e43ec8a0`)
+- PR-2F Wave 2 (PR #254 squash `3aa7abba`) merged 2026-05-11 — 25/22 engine test cases (plan target ≥22 met)
+- Alembic head prod = `phase2_06` (Tier 2 CHECK constraint live)
+- Plan v8.2 (`noble-launching-cocoa.md`) ARCHIVED — supersede pointer to PLAN.md Phần 9.C
+- Issue #238 thematic checklist 6/6 ticked (PR-2A/B/C/D/E/F)
+- env approval streamlined: `gh api POST .../pending_deployments` thay vì manual UI click
+
+**Process lessons learned**:
+- Docker dev `docker compose run --rm` test stale IMAGE-baked src/, không phải host = false PASS
+- CI ground truth duy nhất; KHÔNG SSH thủ công bypass test gate (memory `feedback_deploy_guidance` + `feedback_type_check_container_isolation` updated)
+- 2 hotfix iterations cho cùng PR là signal pre-push validation insufficient
 
 ---
 
