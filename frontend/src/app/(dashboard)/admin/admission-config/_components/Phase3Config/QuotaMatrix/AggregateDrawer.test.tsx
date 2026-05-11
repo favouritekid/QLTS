@@ -11,12 +11,17 @@ import { describe, expect, it, vi } from "vitest"
 
 import { AggregateDrawer } from "./AggregateDrawer"
 
-// Test-debt fix 2026-05-11: drill-down test render nested PathDetailDrawer
-// dùng useRouter (FM-2 tab URL state). Mock next/navigation parity với
-// PathDetailDrawer.test.tsx tránh "invariant expected app router to be mounted".
+// Test-debt fix 2026-05-11 + follow-up parity 2026-05-11:
+// drill-down test render nested PathDetailDrawer dùng useRouter
+// (FM-2 tab URL state). Mock factory pattern parity với
+// PathDetailDrawer.test.tsx + ByMajorView.test.tsx — `searchParamsMock`
+// vi.fn cho phép future per-test override qua mockReturnValue nếu cần
+// initial tab/pathId state khác default.
+const aggregateReplaceMock = vi.fn()
+const searchParamsMock = vi.fn(() => new URLSearchParams())
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ replace: aggregateReplaceMock, push: vi.fn() }),
+  useSearchParams: () => searchParamsMock(),
   usePathname: () => "/admin/admission-config",
 }))
 
