@@ -39,7 +39,11 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
   const [conditions, setConditions] = useState<string>(path.criteria?.conditions || "");
   const [requiredSubjectCount, setRequiredSubjectCount] = useState<string>(path.criteria?.required_subject_count?.toString() || "");
   
-  const [scoringMethod, setScoringMethod] = useState<"sum" | "avg">((path.criteria?.scoring_method as "sum" | "avg") || "sum");
+  // Hotfix: parity với Zod admissionCriteriaCreateSchema sau CHECKPOINT 7
+  // (enum đã đổi "avg" → ["sum", "average", "weighted"] match BE).
+  const [scoringMethod, setScoringMethod] = useState<"sum" | "average" | "weighted">(
+    (path.criteria?.scoring_method as "sum" | "average" | "weighted") || "sum",
+  );
   const [selectionMode, setSelectionMode] = useState<"fixed" | "best_n" | "any_n">((path.criteria?.subject_selection_mode as "fixed" | "best_n" | "any_n") || "fixed");
   const [selectedGroups, setSelectedGroups] = useState<number[]>(path.criteria?.subject_groups?.map(g => g.id) || []);
   
@@ -271,16 +275,19 @@ export function ConfigCriteria({ path, onNext, onBack, embedded = false }: Confi
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-2">
             <Label>Cách tính điểm</Label>
-            <Select 
-              value={scoringMethod} 
-              onValueChange={(val: "sum" | "avg") => setScoringMethod(val)}
+            <Select
+              value={scoringMethod}
+              onValueChange={(val: "sum" | "average" | "weighted") =>
+                setScoringMethod(val)
+              }
             >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="sum">Tổng điểm</SelectItem>
-                <SelectItem value="avg">Điểm trung bình</SelectItem>
+                <SelectItem value="average">Điểm trung bình</SelectItem>
+                <SelectItem value="weighted">Có hệ số (weighted)</SelectItem>
               </SelectContent>
             </Select>
           </div>

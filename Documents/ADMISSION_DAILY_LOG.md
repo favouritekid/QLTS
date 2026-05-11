@@ -56,6 +56,50 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ## 2026-05-04
 
+## 2026-05-11 — Phase 2 PR-2D.1 v4a MERGED main (Quota Matrix UI + 31 hard-review fixes)
+
+**Merged tới main**:
+- PR #251 — `feat(admission): #184 Phase 2 PR-2D.1 v4a — Quota Matrix UI + 31 hard-review fixes` — squash SHA `d869c78c`
+  - 02:08:38 UTC merge; 7 commits CHECKPOINT 1-7 squashed
+  - Migration delta: `phase2_05 → phase2_06` (Tier 2 invariant CHECK constraint)
+  - Branch `feat/admission-phase2-2d1-quota-matrix-v2` retained on origin
+
+**Scope shipped**:
+- 5-tab unified PathDetailDrawer (Chỉ tiêu / Định danh / Tiêu chí / Giấy tờ / Vòng đời)
+- ByMajorView (daily ops mode) + GlobalMatrixView (overview drill-down qua AggregateDrawer)
+- QuickCreatePathModal (cell trống "+ Tạo")
+- ClonePathsDialog deep-copy (Q6 v8.2 frontend integration)
+- Restore round (un-archive) endpoint + UI confirm dialog
+- 31 hard-review fixes across 2 audit passes + 1 review pass
+
+**Hard-review breakdown**:
+- Pass 1 CHECKPOINT 4: 14 fixes (BE + FE critical/high/medium)
+- Pass 2 CHECKPOINT 5: 7 critical/high (B-2-1..7 + F-2-1..3) — 4 false positives verified
+- Pass 2 CHECKPOINT 6: 10 medium (BM-1..5 + FM-1..5)
+- Review CHECKPOINT 7: 3 issues from /review pass (Zod typo + log_activity contract + GlobalMatrixView comment)
+
+**Verification gates final**:
+- BE pytest 41/41 Phase 2 PASS (1 pre-existing skip)
+- BE pytest 7/7 activity_service PASS sau signature refactor
+- FE type-check 0 errors
+- FE vitest 26/26 PASS
+- 3/4 CI checks SUCCESS; 1 FAIL Node.js Dependencies pre-existing on main
+
+**Blocked / decisions cần**:
+- Prod deploy explicit approval — `phase2_06` migration + FE bundle waiting
+
+**Notes / surprises**:
+- Docker image staleness trap: `docker compose run --rm` dùng IMAGE baked src, KHÔNG sync host. 12 "type errors" trong CHECKPOINT 5 thực ra do stale image → resolve qua `docker compose build frontend` rebuild. Memorialized for future debugging.
+- Audit false-positive pattern 4 items (B-2-4/5/6 + F-2-4): Explore agents flag race conditions / atomicity issues do hiểu sai transaction frame semantics (flush ≠ commit; FOR UPDATE lock duration; cache invalidate IS correct behavior). Verify trước fix tránh scope creep.
+- Reviewer flag tautological asserts + test count drift → test-debt follow-up, không block feature PR.
+
+**Tomorrow plan**:
+- Prod deploy PR #251 (chờ user approval) — pre-stage `scripts/deploy.sh` + smoke test Tier 2 CHECK + restore round flow
+- Tracker resync (8 ngày stale) bundle vào Phase 2 sprint closure docs PR
+- Phase 2 sprint Day 3 closure entry sau prod ship
+
+---
+
 ## 2026-05-10 — 🚀 Phase 2 sprint Day 2: 5/6 PRs SHIPPED (revert + re-attempt arc)
 
 ### Morning recovery arc — PR-2C v2 ⚠ ONE-WAY revert + test debt fix + re-attempt

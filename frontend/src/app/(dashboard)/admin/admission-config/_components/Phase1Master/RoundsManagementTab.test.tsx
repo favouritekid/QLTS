@@ -56,6 +56,9 @@ vi.mock("@/hooks/admissions/useAdmissionRounds", () => ({
   useBulkCreateRounds: () => ({ mutateAsync: vi.fn() }),
   useUpdateRound: () => ({ mutateAsync: vi.fn() }),
   useSoftArchiveRound: () => ({ mutateAsync: vi.fn() }),
+  // Hotfix: restore round hook đã thêm trong CHECKPOINT 2 nhưng test mock
+  // chưa cover → component crash khi import useRestoreRound.
+  useRestoreRound: () => ({ mutateAsync: vi.fn() }),
   useExtendRound: () => ({ mutateAsync: vi.fn() }),
 }))
 
