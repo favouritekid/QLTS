@@ -51,7 +51,10 @@ export interface PathMatrixCell {
   round_quota: number | null
   admit_quota: number | null
   submission_count: number
-  status: string
+  // Hotfix: literal union match AdmissionPathStatus contract. BE chỉ trả 1
+  // trong 4 value (DB CHECK ck_admission_path_status). Trước đây `string`
+  // → ByMajorView pass cell.status xuống PathCellButton expected union → CI tsc fail.
+  status: "draft" | "active" | "inactive" | "archived"
   criteria_code: string | null
 }
 
