@@ -13,6 +13,18 @@ import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+// Test-debt fix 2026-05-11: FM-2 added useRouter cho tab URL state sync.
+// Mock per-test override `useSearchParams` để test active tab Vòng đời
+// (Lifecycle) cần pre-set `?tab=lifecycle` initial state — Tabs component
+// dùng `value={tab}` controlled (URL-derived), không phải `defaultValue`.
+const tabReplaceMock = vi.fn()
+const searchParamsMock = vi.fn(() => new URLSearchParams())
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: tabReplaceMock, push: vi.fn() }),
+  useSearchParams: () => searchParamsMock(),
+  usePathname: () => "/admin/admission-config",
+}))
+
 const hoisted = vi.hoisted(() => {
   const defaultPath = {
     id: 109,
@@ -85,6 +97,10 @@ beforeEach(() => {
   hoisted.mockDeactivate.mockReset()
   toastError.mockReset()
   toastSuccess.mockReset()
+  tabReplaceMock.mockReset()
+  // Reset URL search params về default empty cho mỗi test; test có thể
+  // override qua searchParamsMock.mockReturnValue(...) inside test body.
+  searchParamsMock.mockImplementation(() => new URLSearchParams())
   // Reset path mock to default; per-test override với mockReturnValue if needed
   hoisted.mockUseAdmissionPath.mockReturnValue({
     data: hoisted.defaultPath,
@@ -145,10 +161,10 @@ describe("PathDetailDrawer 5-tab", () => {
       },
       isLoading: false,
     })
-    const user = userEvent.setup()
+    // Pre-set ?tab=lifecycle vì Tabs component controlled bởi URL (FM-2).
+    // Click tab Vòng đời trong test không persist vì mock router stateless.
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=lifecycle"))
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
-
-    await user.click(screen.getByRole("tab", { name: /Vòng đời/ }))
 
     await waitFor(() => {
       const activateBtn = screen.getByRole("button", {
@@ -168,10 +184,8 @@ describe("PathDetailDrawer 5-tab", () => {
       },
       isLoading: false,
     })
-    const user = userEvent.setup()
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=lifecycle"))
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
-
-    await user.click(screen.getByRole("tab", { name: /Vòng đời/ }))
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Vô hiệu hoá/ })).toBeTruthy()

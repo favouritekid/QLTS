@@ -108,21 +108,27 @@ describe("RoundsManagementTab year-level", () => {
 
   it("disables action buttons on archived rounds", () => {
     render(wrap(<RoundsManagementTab />))
-    // 3 action button types: Sửa đợt, Gia hạn đợt, Lưu trữ đợt per row
-    // DOT_2 archived → buttons disabled
+    // CHECKPOINT 2 (2026-05-10): restore round feature thay Lưu trữ button
+    // bằng Khôi phục cho rows đã archive. Test-debt fix 2026-05-11:
+    // archive button count đổi 2 → 1 (chỉ row active còn Lưu trữ); thêm
+    // restoreButtons assertion cho row archived.
     const editButtons = screen.getAllByRole("button", { name: /Sửa đợt/i })
     const extendButtons = screen.getAllByRole("button", { name: /Gia hạn đợt/i })
     const archiveButtons = screen.getAllByRole("button", { name: /Lưu trữ đợt/i })
+    const restoreButtons = screen.getAllByRole("button", { name: /Khôi phục đợt/i })
 
-    // 2 rows × 3 button types = 6 buttons, 3 disabled (archived row)
+    // 2 rows total. Active row (DOT_1): Sửa + Gia hạn + Lưu trữ.
+    // Archived row (DOT_2): Sửa (disabled) + Gia hạn (disabled) + Khôi phục.
     expect(editButtons.length).toBe(2)
     expect(extendButtons.length).toBe(2)
-    expect(archiveButtons.length).toBe(2)
+    expect(archiveButtons.length).toBe(1)  // chỉ trên DOT_1 active
+    expect(restoreButtons.length).toBe(1)  // chỉ trên DOT_2 archived
 
-    // Last row (DOT_2 archived) buttons should be disabled (P2-2 v8.2 —
-    // idiomatic jest-dom matcher).
+    // Last row (DOT_2 archived) Sửa + Gia hạn buttons disabled
     expect(editButtons[1]).toBeDisabled()
     expect(extendButtons[1]).toBeDisabled()
-    expect(archiveButtons[1]).toBeDisabled()
+    // Restore button trên archived row KHÔNG bị disabled (admin có thể
+    // restore đợt đã archive bất kỳ lúc nào).
+    expect(restoreButtons[0]).not.toBeDisabled()
   })
 })
