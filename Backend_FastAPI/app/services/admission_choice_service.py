@@ -14,6 +14,18 @@ Per plan v0.6 LOCKED:
   == admission_path_id` (service-layer enforce — DB không có FK composite)
 
 Engine xét tuyển + waitlist promote endpoint defer PR-3C.
+
+**BONUS-35 v0.6 route convention** (apply when defining routers PR-3D-B/3E):
+Per memory `lead-keymatch4-collision-followup` lesson, Phase 3 multi-segment
+routes phải dùng regex constraint trong FastAPI path:
+- `/api/v2/admissions/{id:[0-9]+}/choices` (NOT `{id}` alone)
+- `/api/v2/admissions/{id:[0-9]+}/choices/{choice_id:[0-9]+}/scores`
+- `/api/v2/admissions/{id:[0-9]+}/choices/{choice_id:[0-9]+}/promote`
+- `/api/v2/admin/admission-backfill-exceptions/{id:[0-9]+}/resolve`
+- `/api/v2/admissions/magic-link/{action}/{token}` (action constrained enum
+  qua Pydantic, NOT path regex)
+
+Tighten ngăn typosquat `/api/v2/admissions/abc/choices` đụng route khác.
 """
 from typing import Any, Callable, Optional, Tuple
 
