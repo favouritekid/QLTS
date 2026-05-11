@@ -17,6 +17,8 @@ vi.mock("@/lib/api/quota-matrix", () => ({
   getQuotaMatrix: vi.fn(),
 }))
 
+import * as quotaMatrixApi from "@/lib/api/quota-matrix"
+
 import { useUpdatePathQuota, quotaMatrixKeys } from "./useQuotaMatrix"
 import { admissionPathKeys } from "./useAdmissionPaths"
 
@@ -85,5 +87,43 @@ describe("useUpdatePathQuota cache invalidation (stateful)", () => {
     // quotaMatrixKeys.all invalidate → byYear(2026) thuộc all → marked invalid
     const stateAfter = qc.getQueryState(quotaMatrixKeys.byYear(2026))
     expect(stateAfter?.isInvalidated).toBe(true)
+  })
+
+  it("ANCHOR (error path): cache KHÔNG invalidated khi mutation reject", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    // Pre-seed cache
+    qc.setQueryData(admissionPathKeys.detail(106), {
+      id: 106,
+      round_quota: 50,
+      admit_quota: 30,
+    })
+
+    // Override mock để reject (BE Tier 1 violation simulate)
+    vi.mocked(quotaMatrixApi.updatePathQuota).mockRejectedValueOnce(
+      new Error("Tier 1 chain violated"),
+    )
+
+    const { result } = renderHook(() => useUpdatePathQuota(), {
+      wrapper: makeWrapper(qc),
+    })
+
+    // mutateAsync reject — swallow để test continue
+    await result.current
+      .mutateAsync({
+        pathId: 106,
+        data: { round_quota: 50, admit_quota: 80 },
+      })
+      .catch(() => {
+        /* expected reject */
+      })
+
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true)
+    })
+
+    // Mutation failed → onSuccess KHÔNG fire → cache KHÔNG invalidated
+    const stateAfter = qc.getQueryState(admissionPathKeys.detail(106))
+    expect(stateAfter?.isInvalidated).toBe(false)
   })
 })
