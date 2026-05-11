@@ -42,7 +42,9 @@ Usage Examples:
         await audit_service.log_changes(db, "AdmissionProfile", profile.id, "updated", changes=changes, ...)
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from uuid import UUID
 from typing import Any, Dict, List, Optional, Union
 
 import structlog
@@ -105,7 +107,8 @@ async def log_audit(
         field_name=field_name,
         old_value=_serialize_value(old_value),
         new_value=_serialize_value(new_value),
-        changes=changes,
+        # Recursive serialize để JSON column nhận date/Decimal/UUID inside dict.
+        changes=_serialize_value(changes) if changes is not None else None,
         reason=reason,
         source=source,
         ip_address=ip_address,
@@ -440,18 +443,43 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     return {}
 
 
-def _serialize_value(value: Any) -> Any:
-    """Serialize a value for JSON storage."""
+# Pass 2 hard-review BM-3: max recursion depth cho _serialize_value để
+# tránh stack overflow trên malformed JSONB payload (circular ref hoặc
+# deeply nested adversarial input). 10 levels đủ cho audit changes thực
+# tế (typical: 2-3 levels: changes → field → list); sentinel "[truncated:
+# depth_exceeded]" giúp admin debug nếu hit limit.
+_MAX_SERIALIZE_DEPTH = 10
+_DEPTH_SENTINEL = "[truncated: depth_exceeded]"
+
+
+def _serialize_value(value: Any, _depth: int = 0) -> Any:
+    """Serialize a value for JSON storage.
+
+    Handles datetime, date, Decimal, UUID, enum, list/dict recursively
+    (with depth cap _MAX_SERIALIZE_DEPTH cho BM-3 stack safety).
+    JSON column raw INSERT raise TypeError với date/Decimal nếu skip.
+    """
     if value is None:
         return None
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, datetime):
         return value.isoformat()
+    # `date` MUST come AFTER `datetime` vì datetime là subclass của date.
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if _depth >= _MAX_SERIALIZE_DEPTH:
+        # Truncate sentinel instead of recursing further. Audit log
+        # vẫn ghi được, admin debug bằng sentinel marker.
+        return _DEPTH_SENTINEL
     if isinstance(value, (list, tuple)):
-        return [_serialize_value(v) for v in value]
+        return [_serialize_value(v, _depth + 1) for v in value]
     if isinstance(value, dict):
-        return {k: _serialize_value(v) for k, v in value.items()}
+        return {k: _serialize_value(v, _depth + 1) for k, v in value.items()}
     # For enums and other types
     if hasattr(value, "value"):
         return value.value

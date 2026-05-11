@@ -77,6 +77,15 @@ export async function softArchiveRound(
   return res.data
 }
 
+export async function restoreRound(
+  roundId: number
+): Promise<AdmissionRoundResponse> {
+  const res = await api.post<AdmissionRoundResponse>(
+    `${BASE}/rounds/${roundId}/restore`,
+  )
+  return res.data
+}
+
 export async function extendRound(
   roundId: number,
   payload: AdmissionRoundExtend

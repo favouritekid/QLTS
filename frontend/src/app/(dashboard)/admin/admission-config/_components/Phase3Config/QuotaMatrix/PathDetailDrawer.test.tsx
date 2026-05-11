@@ -1,0 +1,181 @@
+/**
+ * Vitest tests cho PathDetailDrawer 5-tab (Phase 2 v8.2 PR-2D.1 v4a).
+ *
+ * Anchor:
+ * - 5 tabs render
+ * - Quota tab client guard (admit ≤ round)
+ * - Identity tab can_edit gate
+ * - Lifecycle tab can_activate gate (thin-client)
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import type { ReactNode } from "react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const hoisted = vi.hoisted(() => {
+  const defaultPath = {
+    id: 109,
+    display_name: "CNTT - Học bạ",
+    status: "draft",
+    can_edit: true,
+    can_activate: false,
+    validation_errors: [] as string[],
+    round_quota: 50,
+    admit_quota: 30,
+    submission_count: 5,
+    display_order: 1,
+    visibility: "public",
+    application_fee: null,
+    allow_unverified_submission: false,
+    criteria: { id: 200, code: "HB2026_CNTT" },
+    admission_method: { id: 1, code: "hoc_ba" },
+    admission_method_id: 1,
+  }
+  return {
+    defaultPath,
+    mockUseAdmissionPath: vi.fn(() => ({ data: defaultPath, isLoading: false })),
+    mockUpdateQuota: vi.fn(),
+    mockUpdatePath: vi.fn(),
+    mockActivate: vi.fn(),
+    mockDeactivate: vi.fn(),
+  }
+})
+
+vi.mock("@/hooks/admissions/useAdmissionPaths", () => ({
+  admissionPathKeys: { all: ["admission-paths"] },
+  useAdmissionPath: hoisted.mockUseAdmissionPath,
+  useUpdateAdmissionPath: () => ({ mutateAsync: hoisted.mockUpdatePath, isPending: false }),
+  useActivateAdmissionPath: () => ({ mutateAsync: hoisted.mockActivate, isPending: false }),
+  useDeactivateAdmissionPath: () => ({ mutateAsync: hoisted.mockDeactivate, isPending: false }),
+}))
+
+vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
+  quotaMatrixKeys: { all: ["quota-matrix"] },
+  useUpdatePathQuota: () => ({ mutateAsync: hoisted.mockUpdateQuota, isPending: false }),
+}))
+
+vi.mock("../ConfigCriteria", () => ({
+  ConfigCriteria: () => <div data-testid="config-criteria-stub">criteria form</div>,
+}))
+vi.mock("../ConfigDocuments", () => ({
+  ConfigDocuments: () => <div data-testid="config-documents-stub">documents form</div>,
+}))
+
+const toastError = vi.fn()
+const toastSuccess = vi.fn()
+vi.mock("sonner", () => ({
+  toast: {
+    error: (...args: unknown[]) => toastError(...args),
+    success: (...args: unknown[]) => toastSuccess(...args),
+  },
+}))
+
+import { PathDetailDrawer } from "./PathDetailDrawer"
+
+function wrap(ui: ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
+}
+
+beforeEach(() => {
+  hoisted.mockUpdateQuota.mockReset()
+  hoisted.mockUpdatePath.mockReset()
+  hoisted.mockActivate.mockReset()
+  hoisted.mockDeactivate.mockReset()
+  toastError.mockReset()
+  toastSuccess.mockReset()
+  // Reset path mock to default; per-test override với mockReturnValue if needed
+  hoisted.mockUseAdmissionPath.mockReturnValue({
+    data: hoisted.defaultPath,
+    isLoading: false,
+  })
+})
+
+describe("PathDetailDrawer 5-tab", () => {
+  it("renders 5 tabs + path display_name in header", () => {
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    expect(screen.getByText("CNTT - Học bạ")).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Chỉ tiêu/ })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Định danh/ })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Tiêu chí/ })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Giấy tờ/ })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: /Vòng đời/ })).toBeTruthy()
+  })
+
+  it("ANCHOR (Quota tab client guard): blocks save khi admit > round", async () => {
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    const submitInput = screen.getByLabelText(/Trần submit/) as HTMLInputElement
+    const admitInput = screen.getByLabelText(/Trần admit/) as HTMLInputElement
+
+    await user.clear(submitInput)
+    await user.type(submitInput, "10")
+    await user.clear(admitInput)
+    await user.type(admitInput, "50")
+
+    await user.click(screen.getByRole("button", { name: /Lưu chỉ tiêu/ }))
+    expect(toastError).toHaveBeenCalledWith(
+      "Trần admit phải ≤ trần submit. Giảm trần admit hoặc tăng trần submit.",
+    )
+    expect(hoisted.mockUpdateQuota).not.toHaveBeenCalled()
+  })
+
+  it("ANCHOR (thin-client can_edit=false): Quota inputs disabled, save button disabled", () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: { ...hoisted.defaultPath, can_edit: false },
+      isLoading: false,
+    })
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    const submitInput = screen.getByLabelText(/Trần submit/) as HTMLInputElement
+    expect(submitInput.disabled).toBe(true)
+    const saveBtn = screen.getByRole("button", { name: /Lưu chỉ tiêu/ }) as HTMLButtonElement
+    expect(saveBtn.disabled).toBe(true)
+  })
+
+  it("ANCHOR (thin-client can_activate=false): Activate button disabled, validation_errors render từ API", async () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: {
+        ...hoisted.defaultPath,
+        status: "draft",
+        can_activate: false,
+        validation_errors: ["Missing criteria"],
+      },
+      isLoading: false,
+    })
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await user.click(screen.getByRole("tab", { name: /Vòng đời/ }))
+
+    await waitFor(() => {
+      const activateBtn = screen.getByRole("button", {
+        name: /Kích hoạt/,
+      }) as HTMLButtonElement
+      expect(activateBtn.disabled).toBe(true)
+    })
+    expect(screen.getByText(/Missing criteria/)).toBeTruthy()
+  })
+
+  it("ANCHOR (status=active): shows Deactivate button, NOT Activate", async () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: {
+        ...hoisted.defaultPath,
+        status: "active",
+        can_activate: true,
+      },
+      isLoading: false,
+    })
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await user.click(screen.getByRole("tab", { name: /Vòng đời/ }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Vô hiệu hoá/ })).toBeTruthy()
+    })
+    expect(screen.queryByRole("button", { name: /Kích hoạt/ })).toBeNull()
+  })
+})

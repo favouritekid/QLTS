@@ -1,6 +1,8 @@
 # app/services/activity_service.py
-from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 
 # ✅ PHASE 1: Removed FastAPI Request import (protocol-independent)
 from sqlalchemy import and_, desc, func, select
@@ -8,6 +10,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models, schemas
+
+
+# Pass 2 hard-review BM-3: depth cap parity với audit_service._serialize_value.
+_MAX_JSON_SAFE_DEPTH = 10
+_DEPTH_SENTINEL = "[truncated: depth_exceeded]"
+
+
+def _json_safe(value: Any, _depth: int = 0) -> Any:
+    """Recursive serialize cho JSON column (changes field).
+
+    JSON column raw INSERT raise TypeError với date/Decimal/UUID. Đây là
+    last-mile shim — caller có thể quên set ``mode="json"`` trên Pydantic
+    dump hoặc trộn raw model values vào dict.
+
+    Pass 2 hard-review BM-3: depth cap _MAX_JSON_SAFE_DEPTH chống stack
+    overflow trên adversarial nested JSONB. Trả sentinel marker nếu vượt.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):  # AFTER datetime (datetime kế thừa date)
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if _depth >= _MAX_JSON_SAFE_DEPTH:
+        return _DEPTH_SENTINEL
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v, _depth + 1) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v, _depth + 1) for k, v in value.items()}
+    if hasattr(value, "value"):  # enum
+        return value.value
+    return str(value)
 
 
 async def log_activity(
@@ -21,12 +59,19 @@ async def log_activity(
     changes: Optional[Dict[str, Any]] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
-) -> Tuple[models.UserActivityLog, Callable]:
+) -> models.UserActivityLog:
     """
     Create a new activity log entry.
 
     IMPORTANT: This function does NOT commit the transaction.
-    Router must call db.commit() and then execute the returned callback.
+    Router must call db.commit() — activity_log INSERT is part of the same
+    transaction frame, atomic với business mutation.
+
+    PR #251 review fix #2: signature trước đây trả ``Tuple[UserActivityLog,
+    Callable]`` nhưng all 17 callers discard tuple (verified). Post-commit
+    callback là no-op từ đầu. Simplify thành plain ``UserActivityLog`` để
+    contract khớp usage; nếu sau này cần post-commit logic, design riêng
+    qua dispatch pattern (memory ADR-001-remove-finance-events).
 
     Args:
         db: Database session
@@ -41,7 +86,7 @@ async def log_activity(
         user_agent: User agent string
 
     Returns:
-        Tuple of (activity_log, post_commit_callback)
+        The created UserActivityLog (flushed, refreshed; not yet committed).
     """
     activity_log = models.UserActivityLog(
         actor_id=actor_id,
@@ -50,23 +95,19 @@ async def log_activity(
         resource_type=resource_type,
         resource_id=resource_id,
         description=description,
-        changes=changes,
+        # JSON column safety: serialize date/Decimal/UUID inside dict.
+        changes=_json_safe(changes) if changes is not None else None,
         ip_address=ip_address,
         user_agent=user_agent,
     )
 
     db.add(activity_log)
 
-    # ✅ TRANSACTION FIX: Flush instead of commit
+    # ✅ TRANSACTION FIX: Flush instead of commit — router commits.
     await db.flush()
     await db.refresh(activity_log)
 
-    # ✅ Create post-commit callback
-    async def _post_commit():
-        """Execute after router commits the transaction."""
-        pass  # No post-commit actions needed for activity logs
-
-    return activity_log, _post_commit
+    return activity_log
 
 
 # ✅ PHASE 1: Removed log_activity_from_request() - routers should extract IP/UA

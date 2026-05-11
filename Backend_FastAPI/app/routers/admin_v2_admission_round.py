@@ -197,7 +197,9 @@ async def update_round(
         resource_id=round_id,
         actor_id=current_admin.id,
         description=f"Round {round_id} updated",
-        changes=payload.model_dump(exclude_unset=True),
+        # mode="json" để serialize date → ISO string (JSON column không nhận
+        # datetime.date object → SQLAlchemy raise TypeError lúc INSERT).
+        changes=payload.model_dump(exclude_unset=True, mode="json"),
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
@@ -239,6 +241,42 @@ async def soft_archive_round(
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)
+@router.post("/rounds/{round_id}/restore", response_model=AdmissionRoundResponse)
+async def restore_round(
+    request: Request,
+    round_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """Khôi phục đợt đã lưu trữ — inverse của soft_archive."""
+    service = AdmissionRoundService(db)
+    # Pass 2 hard-review B-2-2: service trả ``(round_obj, prior_state)`` —
+    # log delta old → new để audit reconstruction (restore-archive-restore
+    # loop preserve extension history).
+    round_obj, prior_state = await service.restore(round_id, current_admin)
+
+    await activity_service.log_activity(
+        db=db,
+        action="admission_round_restore",
+        resource_type="offering_admission_round",
+        resource_id=round_id,
+        actor_id=current_admin.id,
+        description=f"Round {round_id} restored từ archive",
+        changes={
+            **prior_state,
+            "new_archived_at": None,
+            "new_is_active": True,
+        },
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    await db.commit()
+    await db.refresh(round_obj)
+    return AdmissionRoundResponse.model_validate(round_obj)
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
 @router.post("/rounds/{round_id}/extend", response_model=AdmissionRoundResponse)
 async def extend_round(
     request: Request,
@@ -249,7 +287,10 @@ async def extend_round(
 ):
     """Admin extend ``end_date`` per SPEC §2.1.a Rule 2."""
     service = AdmissionRoundService(db)
-    round_obj = await service.extend(round_id, payload, current_admin)
+    # Pass 2 hard-review B-2-2: service trả ``(round_obj, prior_state)`` —
+    # log delta old_end_date → new_end_date để audit reconstruction nếu
+    # admin extend nhiều lần liên tiếp.
+    round_obj, prior_state = await service.extend(round_id, payload, current_admin)
 
     await activity_service.log_activity(
         db=db,
@@ -261,6 +302,7 @@ async def extend_round(
             f"Round {round_id} end_date extended to {payload.end_date.isoformat()}"
         ),
         changes={
+            **prior_state,
             "new_end_date": payload.end_date.isoformat(),
             "extension_reason": payload.extension_reason,
         },

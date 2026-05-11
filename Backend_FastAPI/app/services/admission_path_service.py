@@ -148,22 +148,25 @@ class AdmissionPathService:
             BusinessRuleViolation: Tier 1 chain violated, Tier 2 invariant violated, or DOT_1 not found
         """
         # Phase 2 v8.2 PR-2B v2 — auto-resolve admission_round_id.
-        # Note: PR-2C v2 sẽ swap UNIQUE thành 3-col (round, acad, method).
-        # Phase 2 transition: vẫn dùng 2-col duplicate check tại đây
-        # (PR-2C v2 sẽ relax sang 3-col).
+        # PR-2C v2 đã ship 3-col UNIQUE (round, acad, method); duplicate check
+        # bên dưới dùng 3-col helper tương ứng.
+        # Pass 2 hard-review BM-4: lookup academic_info upfront (cả 2 nhánh
+        # auto-resolve + explicit cần academic_year cho cross-check).
+        from app.models.offering_academic_info import OfferingAcademicInfo
+
+        academic_info = await self.db.get(
+            OfferingAcademicInfo, data.academic_info_id
+        )
+        if academic_info is None:
+            raise ResourceNotFoundError(
+                f"OfferingAcademicInfo {data.academic_info_id} not found"
+            )
+
         admission_round_id = data.admission_round_id
         if admission_round_id is None:
-            from app.models.offering_academic_info import OfferingAcademicInfo
             from app.repositories.admission_round_repository import (
                 AdmissionRoundRepository,
             )
-            academic_info = await self.db.get(
-                OfferingAcademicInfo, data.academic_info_id
-            )
-            if academic_info is None:
-                raise ResourceNotFoundError(
-                    f"OfferingAcademicInfo {data.academic_info_id} not found"
-                )
             round_repo = AdmissionRoundRepository(self.db)
             default_round = await round_repo.get_default_dot1(
                 academic_info.academic_year
@@ -181,6 +184,46 @@ class AdmissionPathService:
                 academic_year=academic_info.academic_year,
                 resolved_round_id=admission_round_id,
                 auto_resolved=True,
+            )
+        else:
+            # Pre-validate explicit round_id exists để tránh IntegrityError
+            # bùng FK constraint mid-INSERT (no response → CORS error ở FE).
+            from app.models.offering_admission_round import (
+                OfferingAdmissionRound,
+            )
+            round_obj = await self.db.get(
+                OfferingAdmissionRound, admission_round_id
+            )
+            if round_obj is None:
+                raise ResourceNotFoundError(
+                    f"OfferingAdmissionRound {admission_round_id} not found"
+                )
+            # Pass 2 hard-review B-2-1: chặn tạo path trên round đã archive.
+            # Path tạo trên archived round = inert path (không activate được vì
+            # validate_activation cũng chặn) → wasted DB row + admin confusion.
+            # Catch sớm tại create để FE hiển thị error message thân thiện.
+            if round_obj.archived_at is not None:
+                raise BusinessRuleViolation(
+                    f"Đợt tuyển sinh '{round_obj.round_code}' đã lưu trữ "
+                    f"({round_obj.archived_at.date().isoformat()}); "
+                    f"khôi phục đợt trước khi tạo đường tuyển sinh."
+                )
+            # Pass 2 hard-review BM-4: cross-check academic_year giữa round
+            # và academic_info. Round là year-level (Q1 Option A); tạo path
+            # với round năm 2025 trên academic_info năm 2026 = cross-year
+            # configuration sai semantic, reporting "Đợt 1 năm X" sẽ confuse.
+            if round_obj.academic_year != academic_info.academic_year:
+                raise BusinessRuleViolation(
+                    f"Đợt tuyển sinh '{round_obj.round_code}' thuộc năm "
+                    f"{round_obj.academic_year}, không khớp năm "
+                    f"{academic_info.academic_year} của ngành. Chọn đợt "
+                    f"cùng năm với ngành."
+                )
+            log.debug(
+                "admission_path_create_explicit_round",
+                academic_info_id=data.academic_info_id,
+                round_id=admission_round_id,
+                auto_resolved=False,
             )
 
         # Tier 1+2 chain validation — admit_quota Tier 1 chain check
@@ -200,14 +243,18 @@ class AdmissionPathService:
                     delta_admit_quota=data.admit_quota,
                 )
 
-        # Check for duplicate
-        existing = await self.repo.get_path_by_offering_and_method(
-            data.academic_info_id, data.admission_method_id
+        # Phase 2 v8.2 PR-2C v2 — duplicate check theo 3-col UNIQUE
+        # (round, academic_info, method). 1 ngành có thể có nhiều path
+        # cùng method ở các đợt khác nhau (DOT_1 vs DOT_2).
+        existing = await self.repo.get_path_by_round_and_method(
+            admission_round_id=admission_round_id,
+            academic_info_id=data.academic_info_id,
+            admission_method_id=data.admission_method_id,
         )
         if existing:
             raise DuplicateResourceError(
-                f"AdmissionPath already exists for academic_info={data.academic_info_id}, "
-                f"method={data.admission_method_id}"
+                f"AdmissionPath already exists for round={admission_round_id}, "
+                f"academic_info={data.academic_info_id}, method={data.admission_method_id}"
             )
 
         # Governance guard: 4 fields are admin-only on create — the
@@ -280,6 +327,43 @@ class AdmissionPathService:
         )
 
         return path, _noop_callback
+
+    async def update_quota(
+        self,
+        path: AdmissionPath,
+        round_quota: int | None,
+        admit_quota: int | None,
+        user: User,
+    ) -> AdmissionPath:
+        """Phase 2 v8.2 PR-2D.1 — dedicated quota update với Tier 1+2 chain
+        validation per cell change cho QuotaMatrix UI inline edit."""
+        from app.services.admission_quota_service import AdmissionQuotaService
+
+        _check_lifecycle_guard(path, user)
+        quota_service = AdmissionQuotaService(self.db)
+
+        await quota_service.validate_tier2_path_invariant(
+            admit_quota=admit_quota, round_quota=round_quota,
+        )
+        if admit_quota != path.admit_quota:
+            await quota_service.validate_tier1_chain_on_path_quota_change(
+                academic_info_id=path.academic_info_id,
+                delta_admit_quota=(admit_quota or 0),
+                excluded_path_id=path.id,
+            )
+
+        path.round_quota = round_quota
+        path.admit_quota = admit_quota
+        await self.db.flush()
+
+        log.info(
+            "admission_path_quota_updated",
+            path_id=path.id,
+            round_quota=round_quota,
+            admit_quota=admit_quota,
+            actor_id=user.id,
+        )
+        return path
 
     async def update_path(
         self, path: AdmissionPath, data: AdmissionPathUpdate, user: User
@@ -607,6 +691,25 @@ class AdmissionPathService:
         if path.status not in ["draft", "inactive"]:
             errors.append(f"Cannot activate path with status '{path.status}'")
 
+        # Check 1b (BUG #C4 fix): admission_round phải đang hoạt động + chưa
+        # archive. Path active trên round archived = "active path on offline
+        # round" → confuse storefront. Cross-entity guard tại activation gate.
+        # Fetch via session.get để tránh MissingGreenlet (relationship không
+        # eager-loaded trong AdmissionPathRepository default queries).
+        from app.models.offering_admission_round import OfferingAdmissionRound
+        admission_round = await self.db.get(
+            OfferingAdmissionRound, path.admission_round_id
+        )
+        if admission_round is not None:
+            if admission_round.archived_at is not None:
+                errors.append(
+                    f"Đợt tuyển sinh '{admission_round.round_code}' đã lưu trữ"
+                )
+            elif not admission_round.is_active:
+                errors.append(
+                    f"Đợt tuyển sinh '{admission_round.round_code}' đang tắt (is_active=false)"
+                )
+
         # Check 2: academic_info + quota
         academic_info = path.academic_info
         if not academic_info:
@@ -668,6 +771,38 @@ class AdmissionPathService:
 
         if not can_activate:
             raise BusinessRuleViolation(f"Cannot activate path: {'; '.join(errors)}")
+
+        # Pass 2 hard-review B-2-3: race window guard. validate_activation
+        # đọc round qua session.get (no lock); concurrent admin có thể
+        # soft_archive round giữa lúc validate xong và lúc UPDATE path
+        # ở dưới. Acquire SELECT FOR UPDATE trên round row để hold lock
+        # đến commit boundary — concurrent soft_archive UPDATE bị block,
+        # serialize 2 thao tác. Nếu lock release thấy round đã archive
+        # → fail-fast ngay đây.
+        from app.models.offering_admission_round import OfferingAdmissionRound
+
+        round_lock_stmt = (
+            select(OfferingAdmissionRound)
+            .where(OfferingAdmissionRound.id == path.admission_round_id)
+            .with_for_update()
+        )
+        round_locked = (
+            await self.db.execute(round_lock_stmt)
+        ).scalar_one_or_none()
+        if round_locked is None:
+            raise BusinessRuleViolation(
+                "Đợt tuyển sinh đã bị xoá; không thể kích hoạt"
+            )
+        if round_locked.archived_at is not None:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_locked.round_code}' đã lưu trữ "
+                f"trong khi xác thực; khôi phục đợt và thử lại."
+            )
+        if not round_locked.is_active:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_locked.round_code}' đã tắt "
+                f"trong khi xác thực; bật lại đợt và thử lại."
+            )
 
         # Activate
         path = await self.repo.update(

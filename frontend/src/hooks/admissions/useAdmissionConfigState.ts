@@ -116,6 +116,10 @@ function stateToUrl(state: AdmissionConfigState): string {
     return `${base}?phase=3`;
   }
 
+  if (state.type === "quota-matrix-overview") {
+    return `${base}?view=quota-matrix&year=${state.academicYear}`;
+  }
+
   if (state.type === "phase3") {
     const ctx = state.context;
     const params = new URLSearchParams({
@@ -184,6 +188,14 @@ export function useAdmissionConfigState() {
     // If Phase 2 URL param, show Phase 2
     if (phase === "2" && step) {
       return { type: "phase2", step: step as Phase2Step };
+    }
+
+    // Quota Matrix overview (Phase 2 v8.2 PR-2D.1 v2 — global view, no context)
+    const viewParam = searchParams.get("view");
+    if (viewParam === "quota-matrix") {
+      const yearStr = searchParams.get("year");
+      const year = yearStr ? parseInt(yearStr, 10) : new Date().getFullYear();
+      return { type: "quota-matrix-overview", academicYear: year };
     }
 
     // If Phase 3 URL param

@@ -105,6 +105,18 @@ export const admissionMethodNestedSchema = z.object({
 export type AdmissionMethodNested = z.infer<typeof admissionMethodNestedSchema>
 
 /**
+ * User (nested - used for activator field).
+ * Mirror BE UserNested mini-schema.
+ */
+export const userNestedSchema = z.object({
+  id: z.number(),
+  username: z.string(),
+  full_name: z.string().nullable(),
+})
+
+export type UserNested = z.infer<typeof userNestedSchema>
+
+/**
  * Subject Group (nested in criteria)
  * Used for LeadApplicationForm score initialization
  */
@@ -135,7 +147,10 @@ export const admissionCriteriaNestedSchema = z.object({
   // Rule Engine config
   required_subject_count: z.number().nullable(),
   subject_selection_mode: z.string().default("fixed"),
-  scoring_method: z.string().default("sum"),
+  // BE Pydantic Literal["sum", "average", "weighted"] (admission_path.py:373).
+  // FE phải mirror đúng — trước đây dùng "avg" sai chính tả + thiếu "weighted"
+  // → criteria có scoring_method="average"/"weighted" parse fail.
+  scoring_method: z.enum(["sum", "average", "weighted"]).default("sum"),
   
   // Validity
   policy_version: z.string().nullable().optional(),
@@ -159,6 +174,13 @@ export type AdmissionCriteriaNested = z.infer<typeof admissionCriteriaNestedSche
 export const admissionPathCreateSchema = z.object({
   academic_info_id: z.number().int().positive("Academic Info ID phải là số dương"),
   admission_method_id: z.number().int().positive("Admission Method ID phải là số dương"),
+  // Phase 2 v8.2 PR-2B v2 — optional; BE auto-resolves DOT_1 nếu null.
+  admission_round_id: z.number().int().positive().optional().nullable(),
+  // Phase 2 v8.2 PR-2B v2 — per-path quota fields (admit chain Tier 1, submit chain Tier 2).
+  round_quota: z.number().int().min(0).optional().nullable(),
+  admit_quota: z.number().int().min(0).optional().nullable(),
+  // Phase 2 v8.2 — application fee (VND). 0/null = miễn phí.
+  application_fee: z.number().min(0).optional().nullable(),
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
@@ -197,6 +219,8 @@ export const admissionPathUpdateSchema = z.object({
   display_name: z.string().max(255).optional().nullable(),
   display_order: z.number().int().min(0).optional().nullable(),
   visibility: z.enum(["public", "internal"]).optional(),
+  // Phase 2 v8.2 — application fee (VND). 0/null = miễn phí.
+  application_fee: z.number().min(0).optional().nullable(),
   // Optional on update — callers that don't want to flip the flag omit
   // it entirely and the backend leaves the current value untouched.
   allow_unverified_submission: z.boolean().optional(),
@@ -236,7 +260,11 @@ export const admissionCriteriaCreateSchema = z.object({
   conditions: z.string().nullable().optional(),
   required_subject_count: z.number().int().min(1).nullable().optional(),
   subject_selection_mode: z.enum(["fixed", "best_n", "any_n"]).default("fixed"),
-  scoring_method: z.enum(["sum", "avg"]).default("sum"),
+  // PR #251 review fix #1: parity với BE Pydantic Literal["sum", "average",
+  // "weighted"] (admission_path.py:373). Trước đây Create schema còn "avg"
+  // typo (Response schema đã fix CHECKPOINT 4); payload Create với
+  // scoring_method="average" parse fail.
+  scoring_method: z.enum(["sum", "average", "weighted"]).default("sum"),
   subject_groups: z.array(z.number().int()).default([]), // List of IDs
   
   // Validity
@@ -274,12 +302,25 @@ export const admissionPathResponseSchema = z.object({
   id: z.number(),
   academic_info_id: z.number(),
   admission_method_id: z.number(),
+  // Phase 2 v8.2 PR-2C v2 — NOT NULL post 3-col UNIQUE swap.
+  admission_round_id: z.number(),
+  // Phase 2 v8.2 PR-2B v2 — per-path quota fields.
+  round_quota: z.number().nullable(),
+  admit_quota: z.number().nullable(),
+  submission_count: z.number().default(0),
+  // Phase 2 v8.2 — application fee (VND).
+  application_fee: z.number().nullable(),
+  // BE Pydantic field default=False (admission_path.py:440), FE phải mirror.
+  // FE dùng để hiển thị flow thanh toán — không suy luận từ application_fee > 0.
+  requires_application_fee: z.boolean().default(false),
   status: admissionPathStatusEnum,
   display_name: z.string().nullable(),
   display_order: z.number(),
   visibility: z.enum(["public", "internal"]),
   activated_at: z.string().datetime({ offset: true }).nullable(),
-  activated_by: z.number().nullable(),
+  // BE Pydantic trả nested ``activator: Optional[UserNested]`` (admission_path.py:499).
+  // Trước đây FE viết ``activated_by: number`` → Zod parse fail khi BE trả object.
+  activator: userNestedSchema.nullable().optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   

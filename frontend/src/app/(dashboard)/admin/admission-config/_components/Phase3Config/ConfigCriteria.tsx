@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,9 +22,12 @@ interface ConfigCriteriaProps {
   path: AdmissionPathResponse;
   onNext: () => void;
   onBack: () => void;
+  /** Khi true: render footer "Đóng" + "Lưu tiêu chí" (drawer mode) thay vì
+   * "Quay lại" + "Lưu & Tiếp tục" (wizard mode). */
+  embedded?: boolean;
 }
 
-export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
+export function ConfigCriteria({ path, onNext, onBack, embedded = false }: ConfigCriteriaProps) {
   const { data: subjectGroups = [], isLoading: loadingGroups } = useSubjectGroups();
   const updateMutation = useUpdateCriteria();
 
@@ -48,26 +51,35 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   // Search state for filtering subject groups
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Pass 2 hard-review FM-4: debounce search input để tránh filter 281
+  // subject groups + re-render checkbox grid mỗi keystroke. 200ms = ngắn
+  // đủ feel responsive, đủ skip rapid typing.
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
+
   // Sync form state when path data loads
   const currentPathId = path.id;
-   
+
   // REMOVED useEffect sync - relying on key-based remount from parent (PathWizard)
   // to re-initialize these states when path/criteria changes.
-  
+
   // Handlers
 
-  // Filter subject groups based on search query
-  // Filter subject groups based on search query
-  const filteredGroups = Array.isArray(subjectGroups) 
-    ? subjectGroups.filter((group: SubjectGroup) => {
-        if (!searchQuery) return true;
-        const query = searchQuery.toLowerCase();
-        return (
-          (group.code?.toLowerCase() || "").includes(query) ||
-          (group.name?.toLowerCase() || "").includes(query)
-        );
-      })
-    : [];
+  // Filter subject groups based on debounced search query.
+  // Wrap trong useMemo để re-compute chỉ khi groups hoặc query thay đổi
+  // (không re-compute trên mỗi state change khác trong component).
+  const filteredGroups = useMemo(() => {
+    if (!Array.isArray(subjectGroups)) return [] as SubjectGroup[];
+    if (!debouncedSearch) return subjectGroups;
+    const query = debouncedSearch.toLowerCase();
+    return subjectGroups.filter((group: SubjectGroup) =>
+      (group.code?.toLowerCase() || "").includes(query) ||
+      (group.name?.toLowerCase() || "").includes(query)
+    );
+  }, [subjectGroups, debouncedSearch]);
 
   // Get selected group details for chip display
   const selectedGroupsDetails = subjectGroups.filter((group: SubjectGroup) =>
@@ -94,9 +106,15 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       return;
     }
 
-    if (effectiveFrom && effectiveTo && effectiveFrom > effectiveTo) {
-      toast.warning("Ngày bắt đầu hiệu lực không được lớn hơn ngày kết thúc");
-      return;
+    if (effectiveFrom && effectiveTo) {
+      // Parse ISO date string ('YYYY-MM-DD') to Date trước khi compare —
+      // string compare lexical sai cho format không zero-pad consistent.
+      const fromTs = Date.parse(effectiveFrom);
+      const toTs = Date.parse(effectiveTo);
+      if (!isNaN(fromTs) && !isNaN(toTs) && fromTs > toTs) {
+        toast.warning("Ngày bắt đầu hiệu lực không được lớn hơn ngày kết thúc");
+        return;
+      }
     }
 
     try {
@@ -168,8 +186,6 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
         effective_to: effectiveTo || null,
       };
 
-      console.log("Sending criteria payload:", payload);
-
       await updateMutation.mutateAsync({
         pathId: path.id,
         data: payload
@@ -178,9 +194,11 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       // Move to next step after successful save
       onNext();
     } catch (error: unknown) {
-      console.error("Failed to save criteria:", error);
       const apiError = error as { response?: { data?: { detail?: unknown } } };
-      console.error("Error response:", apiError?.response?.data);
+      if (process.env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.error("ConfigCriteria save error:", error, apiError?.response?.data);
+      }
 
       // Extract validation error details
       const errorDetail = apiError?.response?.data?.detail;
@@ -397,20 +415,27 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
           {/* Search Input */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Search
+              className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none"
+              aria-hidden="true"
+            />
             <Input
-              placeholder="Tìm kiếm tổ hợp môn (mã hoặc tên môn)..."
+              placeholder="Tìm kiếm tổ hợp môn (mã hoặc tên môn)…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
+              autoComplete="off"
+              spellCheck={false}
+              className={searchQuery ? "pl-9 pr-9" : "pl-9"}
+              aria-label="Tìm kiếm tổ hợp môn"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 hover:bg-muted rounded-full p-1"
+                aria-label="Xoá từ khoá tìm kiếm"
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 hover:bg-muted rounded-full p-1"
               >
-                <X className="h-4 w-4 text-muted-foreground" />
+                <X className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -452,19 +477,19 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
         </div>
 
         {/* Actions */}
-        <div className="flex justify-between pt-4">
+        <div className="flex justify-end gap-2 pt-4 border-t">
           <Button variant="outline" onClick={onBack} disabled={isSaving}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Quay lại
+            {!embedded && <ArrowLeft className="h-4 w-4 mr-2" aria-hidden="true" />}
+            {embedded ? "Đóng" : "Quay lại"}
           </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button onClick={handleSave} disabled={isSaving} aria-busy={isSaving}>
             {isSaving ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
             ) : (
-              <Save className="h-4 w-4 mr-2" />
+              <Save className="h-4 w-4 mr-2" aria-hidden="true" />
             )}
-            Lưu & Tiếp tục
-            <ArrowRight className="h-4 w-4 ml-2" />
+            {embedded ? "Lưu tiêu chí" : "Lưu & Tiếp tục"}
+            {!embedded && <ArrowRight className="h-4 w-4 ml-2" aria-hidden="true" />}
           </Button>
         </div>
 

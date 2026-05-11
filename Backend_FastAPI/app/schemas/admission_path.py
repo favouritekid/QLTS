@@ -12,7 +12,7 @@ FRONTEND_ARCHITECTURE_V3.md Compliance:
 from datetime import datetime, date
 from decimal import Decimal
 from typing import List, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.core.admission_correction_constants import SAFE_MINOR_CORRECTION_FIELDS
 
@@ -281,6 +281,20 @@ class AdmissionPathCreate(BaseModel):
     )(_validate_minor_correction_allowlist)
 
 
+class AdmissionPathQuotaUpdate(BaseModel):
+    """Phase 2 v8.2 PR-2D.1 — dedicated quota PATCH payload cho QuotaMatrix
+    inline edit. Allows admin update round_quota/admit_quota independently
+    với Tier 1+2 chain validation real-time per cell change."""
+    round_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path submission cap. NULL = unbounded; explicit None to clear.",
+    )
+    admit_quota: Optional[int] = Field(
+        default=None, ge=0,
+        description="Per-path admit cap. Triggers Tier 1 chain re-validation on change.",
+    )
+
+
 class AdmissionPathUpdate(BaseModel):
     """Request schema for updating an AdmissionPath."""
     display_name: Optional[str] = None
@@ -394,10 +408,29 @@ class AdmissionPathResponse(BaseModel):
     
     # Core fields
     id: int
+    academic_info_id: int
+    admission_method_id: int
     status: AdmissionPathStatus
     display_name: Optional[str] = None
     display_order: int
     visibility: VisibilityStatus
+
+    # Phase 2 v8.2 PR-2B v2 / PR-2C v2 — round + per-path quota fields.
+    admission_round_id: int = Field(
+        description="Round FK (NOT NULL post PR-2C v2 3-col UNIQUE swap)."
+    )
+    round_quota: Optional[int] = Field(
+        default=None,
+        description="Per-path submission cap. NULL = unbounded.",
+    )
+    admit_quota: Optional[int] = Field(
+        default=None,
+        description="Per-path admit cap. Tier 1 chain root (per academic_info).",
+    )
+    submission_count: int = Field(
+        default=0,
+        description="Atomic submission counter; incremented on profile create.",
+    )
 
     # Application Fee
     application_fee: Optional[Decimal] = Field(
@@ -408,6 +441,15 @@ class AdmissionPathResponse(BaseModel):
         default=False,
         description="True nếu lệ phí > 0, FE dùng để hiển thị flow thanh toán"
     )
+
+    # Pass 2 hard-review B-2-7: Pydantic v2 serializes ``Decimal`` thành str
+    # mặc định trong JSON output (preserve precision). FE Zod schema expect
+    # ``z.number().nullable()`` cho ``application_fee`` → parse fail trên path
+    # có lệ phí > 0. Force float emit cho on-the-wire JSON; DB column vẫn
+    # Numeric không mất precision (chỉ JSON layer convert).
+    @field_serializer("application_fee", when_used="json")
+    def _serialize_application_fee(self, v: Optional[Decimal]) -> Optional[float]:
+        return float(v) if v is not None else None
 
     # PR #6 — required in the response so FE Zod parse fails loudly
     # if backend forgot to emit the field, rather than silently

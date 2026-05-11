@@ -25,25 +25,23 @@ class TestLogActivity:
         return db
 
     @pytest.mark.asyncio
-    async def test_log_activity_returns_tuple(self, mock_db):
-        """Test that log_activity returns (log, callback) tuple."""
+    async def test_log_activity_returns_user_activity_log(self, mock_db):
+        """PR #251 review fix #2: log_activity trả plain UserActivityLog
+        (trước đây tuple với no-op callback; tất cả callers đều discard
+        tuple → simplify contract).
+        """
         result = await activity_service.log_activity(
             db=mock_db,
             action="test_action",
             resource_type="test",
         )
-        
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        # First element should be UserActivityLog
-        assert isinstance(result[0], models.UserActivityLog)
-        # Second element should be callable
-        assert callable(result[1])
+
+        assert isinstance(result, models.UserActivityLog)
 
     @pytest.mark.asyncio
     async def test_log_activity_creates_log_with_correct_data(self, mock_db):
         """Test that log_activity creates log with all provided data."""
-        log, callback = await activity_service.log_activity(
+        log = await activity_service.log_activity(
             db=mock_db,
             action="login",
             resource_type="user",
@@ -54,7 +52,7 @@ class TestLogActivity:
             ip_address="192.168.1.1",
             user_agent="Mozilla/5.0",
         )
-        
+
         assert log.action == "login"
         assert log.resource_type == "user"
         assert log.actor_id == 123
@@ -72,22 +70,10 @@ class TestLogActivity:
             action="test",
             resource_type="test",
         )
-        
+
         mock_db.add.assert_called_once()
         mock_db.flush.assert_awaited_once()
         mock_db.refresh.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_log_activity_callback_is_async(self, mock_db):
-        """Test that the callback is awaitable."""
-        log, callback = await activity_service.log_activity(
-            db=mock_db,
-            action="test",
-            resource_type="test",
-        )
-        
-        # Should not raise
-        await callback()
 
 
 class TestGetActivityLogs:

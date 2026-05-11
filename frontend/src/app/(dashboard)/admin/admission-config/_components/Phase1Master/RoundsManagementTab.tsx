@@ -22,6 +22,7 @@
 
 import {
   Archive,
+  ArchiveRestore,
   CalendarPlus,
   Edit,
   Layers,
@@ -64,6 +65,7 @@ import {
   useBulkCreateRounds,
   useCreateRound,
   useExtendRound,
+  useRestoreRound,
   useSoftArchiveRound,
   useUpdateRound,
 } from "@/hooks/admissions/useAdmissionRounds"
@@ -139,6 +141,7 @@ export function RoundsManagementTab() {
   const bulkCreateMutation = useBulkCreateRounds(academicYear)
   const updateMutation = useUpdateRound(academicYear)
   const archiveMutation = useSoftArchiveRound(academicYear)
+  const restoreMutation = useRestoreRound(academicYear)
   const extendMutation = useExtendRound(academicYear)
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -146,6 +149,7 @@ export function RoundsManagementTab() {
   const [editTarget, setEditTarget] = useState<AdmissionRoundResponse | null>(null)
   const [extendTarget, setExtendTarget] = useState<AdmissionRoundResponse | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<AdmissionRoundResponse | null>(null)
+  const [restoreTarget, setRestoreTarget] = useState<AdmissionRoundResponse | null>(null)
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [extendForm, setExtendForm] = useState({ end_date: "", extension_reason: "" })
@@ -185,6 +189,12 @@ export function RoundsManagementTab() {
     if (!archiveTarget) return
     await archiveMutation.mutateAsync(archiveTarget.id)
     setArchiveTarget(null)
+  }
+
+  const handleRestore = async () => {
+    if (!restoreTarget) return
+    await restoreMutation.mutateAsync(restoreTarget.id)
+    setRestoreTarget(null)
   }
 
   const handleExtend = async () => {
@@ -318,15 +328,25 @@ export function RoundsManagementTab() {
                     >
                       <CalendarPlus className="h-3 w-3" />
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setArchiveTarget(r)}
-                      disabled={r.archived_at !== null}
-                      aria-label="Lưu trữ đợt"
-                    >
-                      <Archive className="h-3 w-3" />
-                    </Button>
+                    {r.archived_at === null ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setArchiveTarget(r)}
+                        aria-label="Lưu trữ đợt"
+                      >
+                        <Archive className="h-3 w-3" aria-hidden="true" />
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRestoreTarget(r)}
+                        aria-label="Khôi phục đợt"
+                      >
+                        <ArchiveRestore className="h-3 w-3" aria-hidden="true" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               )
@@ -484,9 +504,43 @@ export function RoundsManagementTab() {
             <Button variant="outline" onClick={() => setArchiveTarget(null)}>
               Huỷ
             </Button>
-            <Button variant="destructive" onClick={handleArchive}>
-              <Trash2 className="h-4 w-4 mr-2" />
+            <Button
+              variant="destructive"
+              onClick={handleArchive}
+              disabled={archiveMutation.isPending}
+              aria-busy={archiveMutation.isPending}
+            >
+              <Trash2 className="h-4 w-4 mr-2" aria-hidden="true" />
               Lưu trữ
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Confirm Dialog */}
+      <Dialog
+        open={restoreTarget !== null}
+        onOpenChange={(o) => !o && setRestoreTarget(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Khôi phục đợt {restoreTarget?.round_code}?</DialogTitle>
+            <DialogDescription>
+              Đợt sẽ hiện lại trên storefront và xuất hiện trong danh sách cấu
+              hình đường tuyển sinh. Trạng thái Đang hoạt động sẽ được bật lại.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestoreTarget(null)}>
+              Huỷ
+            </Button>
+            <Button
+              onClick={handleRestore}
+              disabled={restoreMutation.isPending}
+              aria-busy={restoreMutation.isPending}
+            >
+              <ArchiveRestore className="h-4 w-4 mr-2" aria-hidden="true" />
+              Khôi phục
             </Button>
           </DialogFooter>
         </DialogContent>

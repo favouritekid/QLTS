@@ -20,6 +20,8 @@ interface ConfigDocumentsProps {
   path: AdmissionPathResponse;
   onFinish: () => void;
   onBack: () => void;
+  /** Khi true: render footer "Đóng" + "Lưu giấy tờ" (drawer mode). */
+  embedded?: boolean;
 }
 
 interface DocSelection {
@@ -30,7 +32,7 @@ interface DocSelection {
   display_order: number;
 }
 
-export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps) {
+export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: ConfigDocumentsProps) {
   // Queries
   const { data: allDocTypes = [], isLoading: loadingTypes } = useDocumentTypes();
   const { data: resolvedDocs, isLoading: loadingResolved } = usePathDocuments(path.id);
@@ -122,7 +124,6 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
 
     try {
       const payload = Object.values(selections);
-      console.log("ConfigDocuments: Saving payload:", payload);
 
       await updateMutation.mutateAsync({
         pathId: path.id,
@@ -133,9 +134,11 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
       // Move to review step after successful save
       onFinish();
     } catch (error: unknown) {
-      console.error("ConfigDocuments: Save error:", error);
       const apiError = error as { response?: { data?: { detail?: unknown } } };
-      console.error("ConfigDocuments: Error response:", apiError?.response?.data);
+      if (process.env.NODE_ENV === "development") {
+        // eslint-disable-next-line no-console
+        console.error("ConfigDocuments save error:", error, apiError?.response?.data);
+      }
 
       // Extract validation error details
       const errorDetail = apiError?.response?.data?.detail;
@@ -263,18 +266,18 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
             </div>
 
             {/* Actions */}
-            <div className="flex justify-between pt-4">
+            <div className="flex justify-end gap-2 pt-4 border-t">
               <Button variant="outline" onClick={onBack} disabled={isSaving}>
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Quay lại
+                {!embedded && <ArrowLeft className="h-4 w-4 mr-2" aria-hidden="true" />}
+                {embedded ? "Đóng" : "Quay lại"}
               </Button>
-              <Button onClick={handleSave} disabled={isSaving}>
+              <Button onClick={handleSave} disabled={isSaving} aria-busy={isSaving}>
                 {isSaving ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
                 ) : (
-                  <Archive className="h-4 w-4 mr-2" />
+                  <Archive className="h-4 w-4 mr-2" aria-hidden="true" />
                 )}
-                Lưu & Tiếp tục
+                {embedded ? "Lưu giấy tờ" : "Lưu & Tiếp tục"}
               </Button>
             </div>
           </div>

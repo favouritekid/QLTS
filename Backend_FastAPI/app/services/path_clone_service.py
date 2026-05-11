@@ -109,7 +109,25 @@ class PathCloneService:
         cloned_items: List[ClonePathsResponseItem] = []
         skipped = 0
 
+        # Pre-fetch tất cả existing (acad_info, method) trong target round —
+        # dùng làm lookup table cho ON CONFLICT skip mà KHÔNG cần catch
+        # IntegrityError (catch sẽ phá session state khi nested savepoint
+        # tương tác với expired attributes của remaining src_path instances).
+        existing_stmt = select(
+            AdmissionPath.academic_info_id,
+            AdmissionPath.admission_method_id,
+        ).where(AdmissionPath.admission_round_id == target_round_id)
+        existing_keys = {
+            (row.academic_info_id, row.admission_method_id)
+            for row in (await self.db.execute(existing_stmt)).all()
+        }
+
         for src_path in source_paths:
+            # Pre-check: skip nếu (acad, method) đã tồn tại trong target round
+            # — match logic ON CONFLICT 3-col UNIQUE.
+            if (src_path.academic_info_id, src_path.admission_method_id) in existing_keys:
+                skipped += 1
+                continue
             # Step 1: clone criteria nếu source có (ADM-003: 1:1 path-criteria)
             new_criteria_id: Optional[int] = None
             new_criteria_code: str = ""
@@ -190,16 +208,12 @@ class PathCloneService:
                 submission_count=0,
             )
             self.db.add(cloned_path)
-            try:
-                await self.db.flush()
-            except IntegrityError:
-                # ON CONFLICT 3-col UNIQUE skip — path already exists trong target round
-                await self.db.rollback()
-                skipped += 1
-                # Note: rollback nukes prior INSERTs trong this iteration too.
-                # Re-attach session for next iteration via fresh transaction.
-                # NOTE: caller wraps trong begin() — partial commit semantic.
-                continue
+            await self.db.flush()
+            # Track key as inserted để pre-check defend chống multiple
+            # source paths cùng (acad, method) trong source_round (edge case).
+            existing_keys.add(
+                (cloned_path.academic_info_id, cloned_path.admission_method_id)
+            )
 
             # Step 4: clone PathSubjectGroupConfig + items
             psgc_stmt = (
