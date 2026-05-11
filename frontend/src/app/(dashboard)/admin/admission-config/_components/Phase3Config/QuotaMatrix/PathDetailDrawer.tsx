@@ -95,13 +95,17 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
   }, [searchParams])
   const setTab = useCallback(
     (next: string) => {
+      // Idempotent guard: Radix Tabs + React 19 effects có thể fire
+      // onValueChange 2x per click với same value (no-op double dispatch).
+      // Verified via Phase B.1 runtime debug 2026-05-11.
+      if (next === tab) return
       const params = new URLSearchParams(searchParams.toString())
       if (next === "quota") params.delete("tab")
       else params.set("tab", next)
       const qs = params.toString()
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
     },
-    [pathname, router, searchParams],
+    [pathname, router, searchParams, tab],
   )
 
   return (
