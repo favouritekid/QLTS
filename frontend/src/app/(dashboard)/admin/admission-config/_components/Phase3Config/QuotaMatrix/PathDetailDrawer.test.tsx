@@ -192,4 +192,53 @@ describe("PathDetailDrawer 5-tab", () => {
     })
     expect(screen.queryByRole("button", { name: /Kích hoạt/ })).toBeNull()
   })
+
+  // FM-2 contract anchor: click tab updates ?tab= URL searchParam via
+  // router.replace. Trade-off cho 2 Lifecycle tests trên dùng pre-set
+  // ?tab=lifecycle (avoid mock router stateless click→URL gap) —
+  // anchor test này verify click→URL contract observable từ outside.
+  // 5-tab `it.each` cover toàn bộ FM-2 contract thay vì 1 tab anchor.
+  //
+  // Edge: tab "quota" là default → click "quota" KHÔNG add ?tab=quota
+  // (component xóa param khi value === default per FM-2 impl line 99).
+  // Test "quota" verify replaceMock called với URL KHÔNG chứa "tab=".
+  it.each([
+    ["identity", "Định danh"],
+    ["criteria", "Tiêu chí"],
+    ["documents", "Giấy tờ"],
+    ["lifecycle", "Vòng đời"],
+  ])(
+    "ANCHOR (FM-2): click tab %s updates ?tab=%s URL",
+    async (param, label) => {
+      const user = userEvent.setup()
+      render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+      // Click tab — Radix Tabs trigger button accessible qua role=tab.
+      // Tên trigger là Vietnamese label.
+      const tabTrigger = screen.getByRole("tab", {
+        name: new RegExp(label, "i"),
+      })
+      await user.click(tabTrigger)
+      // replaceMock được gọi với URL chứa `tab=<param>`. Format:
+      // `${pathname}?tab=<param>` hoặc query string variant.
+      expect(tabReplaceMock).toHaveBeenCalled()
+      const lastCall = tabReplaceMock.mock.calls.at(-1)
+      const url = lastCall?.[0] as string
+      expect(url).toContain(`tab=${param}`)
+    },
+  )
+
+  it("ANCHOR (FM-2): click tab Quota (default) clears ?tab= URL param", async () => {
+    const user = userEvent.setup()
+    // Start from non-default tab để có tab=criteria trong URL trước click
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=criteria"))
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    const quotaTab = screen.getByRole("tab", { name: /Chỉ tiêu/i })
+    await user.click(quotaTab)
+    expect(tabReplaceMock).toHaveBeenCalled()
+    const lastCall = tabReplaceMock.mock.calls.at(-1)
+    const url = lastCall?.[0] as string
+    // Default tab "quota" xóa ?tab= param khỏi URL — FM-2 contract line 99
+    // `if (next === "quota") params.delete("tab")`.
+    expect(url).not.toContain("tab=")
+  })
 })
