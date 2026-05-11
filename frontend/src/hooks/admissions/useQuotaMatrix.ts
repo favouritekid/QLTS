@@ -10,6 +10,8 @@ import {
   type AdmissionPathQuotaUpdate,
 } from "@/lib/api/quota-matrix"
 
+import { admissionPathKeys } from "./useAdmissionPaths"
+
 export const quotaMatrixKeys = {
   all: ["quota-matrix"] as const,
   byYear: (year: number) => [...quotaMatrixKeys.all, "year", year] as const,
@@ -45,7 +47,15 @@ export function useUpdatePathQuota() {
       pathId: number
       data: AdmissionPathQuotaUpdate
     }) => updatePathQuota(pathId, data),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
+      // Invalidate path detail to refetch fresh quota — fixes drawer reopen
+      // showing stale empty inputs after save (parity với
+      // useUpdatePathDocuments:199-200 pattern; useUpdateAdmissionPath
+      // dùng setQueryData được vì BE return full path, ở đây response
+      // shape untyped nên invalidate an toàn hơn).
+      queryClient.invalidateQueries({
+        queryKey: admissionPathKeys.detail(variables.pathId),
+      })
       queryClient.invalidateQueries({ queryKey: quotaMatrixKeys.all })
     },
   })

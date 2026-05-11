@@ -227,6 +227,32 @@ describe("PathDetailDrawer 5-tab", () => {
     },
   )
 
+  // Bug #1 anchor test (2026-05-11): khi BE return 400 với response.data.detail,
+  // toast phải hiển thị BE detail KHÔNG phải axios generic "Request failed
+  // with status code 400". parseApiError helper xử lý parse + fallback.
+  it("ANCHOR (Bug #1): toast hiển thị BE detail thay vì axios generic khi save quota fail", async () => {
+    const user = userEvent.setup()
+    hoisted.mockUpdateQuota.mockRejectedValueOnce({
+      response: { data: { detail: "Tier 1 chain violated: tổng admit_quota=80 vượt cap năm=70" } },
+    })
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    const submitInput = screen.getByLabelText(/Trần submit/) as HTMLInputElement
+    const admitInput = screen.getByLabelText(/Trần admit/) as HTMLInputElement
+    await user.clear(submitInput)
+    await user.type(submitInput, "100")
+    await user.clear(admitInput)
+    await user.type(admitInput, "80")
+
+    await user.click(screen.getByRole("button", { name: /Lưu chỉ tiêu/ }))
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith(
+        "Tier 1 chain violated: tổng admit_quota=80 vượt cap năm=70",
+      )
+    })
+  })
+
   it("ANCHOR (FM-2): click tab Quota (default) clears ?tab= URL param", async () => {
     const user = userEvent.setup()
     // Start from non-default tab để có tab=criteria trong URL trước click
