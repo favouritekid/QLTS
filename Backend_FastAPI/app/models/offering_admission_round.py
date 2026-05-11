@@ -102,6 +102,26 @@ class OfferingAdmissionRound(Base):
     )
     extension_reason = Column(Text, nullable=True)
 
+    # phase3_01 (#184 Wave 3 PR-3A) — Q-P3-02 + Q-P3-06.
+    # Per-round flag enable Phase 3 multi-NV. Default false (2026
+    # stay legacy single-NV; admin enable cho future 2027 round).
+    allow_multi_nv = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="Q-P3-02 per-round flag — Phase 3 multi-NV gate",
+    )
+    # Magic-link confirm expiry per-round (Q-P3-06 default 168h = 7d).
+    # Admin set per round (vd: DOT_1 = 7d, BO_SUNG = 3d).
+    confirm_expiry_hours = Column(
+        Integer,
+        nullable=False,
+        default=168,
+        server_default="168",
+        comment="Q-P3-06 magic-link confirm expiry per-round (hours)",
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
