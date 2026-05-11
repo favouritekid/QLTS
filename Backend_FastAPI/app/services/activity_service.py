@@ -1,7 +1,7 @@
 # app/services/activity_service.py
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 # ✅ PHASE 1: Removed FastAPI Request import (protocol-independent)
@@ -59,12 +59,19 @@ async def log_activity(
     changes: Optional[Dict[str, Any]] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
-) -> Tuple[models.UserActivityLog, Callable]:
+) -> models.UserActivityLog:
     """
     Create a new activity log entry.
 
     IMPORTANT: This function does NOT commit the transaction.
-    Router must call db.commit() and then execute the returned callback.
+    Router must call db.commit() — activity_log INSERT is part of the same
+    transaction frame, atomic với business mutation.
+
+    PR #251 review fix #2: signature trước đây trả ``Tuple[UserActivityLog,
+    Callable]`` nhưng all 17 callers discard tuple (verified). Post-commit
+    callback là no-op từ đầu. Simplify thành plain ``UserActivityLog`` để
+    contract khớp usage; nếu sau này cần post-commit logic, design riêng
+    qua dispatch pattern (memory ADR-001-remove-finance-events).
 
     Args:
         db: Database session
@@ -79,7 +86,7 @@ async def log_activity(
         user_agent: User agent string
 
     Returns:
-        Tuple of (activity_log, post_commit_callback)
+        The created UserActivityLog (flushed, refreshed; not yet committed).
     """
     activity_log = models.UserActivityLog(
         actor_id=actor_id,
@@ -96,16 +103,11 @@ async def log_activity(
 
     db.add(activity_log)
 
-    # ✅ TRANSACTION FIX: Flush instead of commit
+    # ✅ TRANSACTION FIX: Flush instead of commit — router commits.
     await db.flush()
     await db.refresh(activity_log)
 
-    # ✅ Create post-commit callback
-    async def _post_commit():
-        """Execute after router commits the transaction."""
-        pass  # No post-commit actions needed for activity logs
-
-    return activity_log, _post_commit
+    return activity_log
 
 
 # ✅ PHASE 1: Removed log_activity_from_request() - routers should extract IP/UA

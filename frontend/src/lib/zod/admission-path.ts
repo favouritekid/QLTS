@@ -260,7 +260,11 @@ export const admissionCriteriaCreateSchema = z.object({
   conditions: z.string().nullable().optional(),
   required_subject_count: z.number().int().min(1).nullable().optional(),
   subject_selection_mode: z.enum(["fixed", "best_n", "any_n"]).default("fixed"),
-  scoring_method: z.enum(["sum", "avg"]).default("sum"),
+  // PR #251 review fix #1: parity với BE Pydantic Literal["sum", "average",
+  // "weighted"] (admission_path.py:373). Trước đây Create schema còn "avg"
+  // typo (Response schema đã fix CHECKPOINT 4); payload Create với
+  // scoring_method="average" parse fail.
+  scoring_method: z.enum(["sum", "average", "weighted"]).default("sum"),
   subject_groups: z.array(z.number().int()).default([]), // List of IDs
   
   // Validity

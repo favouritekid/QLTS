@@ -3,6 +3,12 @@
  *
  * Rows = academic_info × academic_year, cols = rounds, cells = aggregate.
  * Cell read-only, click → AggregateDrawer.
+ *
+ * FM-5 follow-up: memoize cell button pending. Tooltip wrapper (Radix)
+ * trigger asChild render-prop khiến memoization phức tạp hơn ByMajorView;
+ * cần đo perf trên schema thực (20 ngành × 4 đợt = 80 cells) trước khi
+ * extract component. ByMajorView (240 cells / 1 method × round) đã memoize
+ * trong CHECKPOINT 6.
  */
 "use client"
 
