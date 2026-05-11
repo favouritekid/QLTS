@@ -263,3 +263,23 @@ qa_org_selector_verified.png
 2026-*-sn-sng.txt
 test-results/
 playwright-report/
+
+# Working tree pollution from Claude Code sessions (PR drafts, smoke
+# screenshots, debug logs, plan drafts). Saved per-session for context but
+# không phải canonical artifacts — canonical = memory + Documents/ + DAILY_LOG.
+.tmp_*
+.pr_body_*
+.backup_*
+.e2e_*
+.smoke_*
+.workflow_*.png
+.daily_log_*_draft.md
+.phase2_issue_body.md
+.plan_v82_*.md
+.pr_1b_*.png
+.pr_3d_b_*.png
+.claude_test_output/
+local_backup/
+# 2026-05-14 S2 hardening session additions
+.branch_protection_*.png
+.decision_badge_*.png
