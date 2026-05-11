@@ -11,13 +11,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ByMajorView } from "./ByMajorView"
 
-// Pass 2 hard-review F-2-1 prerequisite: ByMajorView dùng Next.js navigation
-// hooks để sync ``?pathId`` URL param. Test mock cùng pattern với
-// ``useAdmissionsFilter.test.ts``.
+// Pass 2 hard-review F-2-1 + FM-3: ByMajorView dùng Next.js navigation
+// hooks để sync ``?pathId`` + ``?academicInfo`` URL params. Test mock
+// stateful qua searchParamsMock per-test override — auto-select ngành
+// effect (line 84-87 of component) gọi replace với academicInfo=N nhưng
+// mock router stateless không persist; mỗi test phải pre-set initial
+// searchParams nếu cần matrix loaded (test-debt fix 2026-05-11).
 const replaceMock = vi.fn()
+const searchParamsMock = vi.fn(() => new URLSearchParams("academicInfo=70"))
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock, push: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParamsMock(),
   usePathname: () => "/admin/admission-config",
 }))
 
@@ -90,6 +94,11 @@ function wrap(ui: ReactNode) {
 describe("ByMajorView", () => {
   beforeEach(() => {
     replaceMock.mockClear()
+    // Reset to default initial: pre-selected academicInfo=70 để matrix
+    // load (auto-select effect không trigger trong mock router stateless).
+    searchParamsMock.mockImplementation(
+      () => new URLSearchParams("academicInfo=70"),
+    )
   })
 
   it("renders title + auto-select first ngành + load matrix", () => {
