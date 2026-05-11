@@ -69,7 +69,11 @@ class PathSubjectGroupConfig(Base):
 
     # Relationships
     admission_path = relationship("AdmissionPath", foreign_keys=[admission_path_id])
-    subject_group = relationship("SubjectGroup", foreign_keys=[subject_group_id])
+    subject_group = relationship(
+        "SubjectGroup",
+        foreign_keys=[subject_group_id],
+        lazy="selectin",  # phase3_01 Contract-06: eager-load for display_subject_group_name
+    )
     items = relationship(
         "PathSubjectGroupItem",
         back_populates="config",

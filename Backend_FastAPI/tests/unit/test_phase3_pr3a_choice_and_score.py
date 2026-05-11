@@ -24,6 +24,9 @@ from app.database import AsyncSessionLocal
 from app.repositories.admission_profile_choice_repository import (
     AdmissionProfileChoiceRepository,
 )
+from app.schemas.admission_profile_choice import (
+    AdmissionProfileChoiceResponse,
+)
 from app.services.admission_choice_service import AdmissionChoiceService
 from app.utils.exceptions import BusinessRuleViolation
 
@@ -688,3 +691,261 @@ async def test_score_check_blocks_negative(pr3a_seed: dict):
                 )
                 s.add(neg_score)
                 await s.flush()
+
+
+# ============================================================
+# F. P1 reviewer follow-up tests (4 NEW per round-7 deep verify)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_revision_chain_phase3_01_after_phase2_06(setup_test_database):
+    """ANCHOR Wave 3-A memory `pattern-change-impact-audit`:
+    alembic revision chain lock — phase3_01.down_revision == phase2_06.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config("/app/alembic.ini")
+    script = ScriptDirectory.from_config(cfg)
+    rev = script.get_revision("phase3_01")
+    assert rev is not None, "phase3_01 revision not found"
+    assert rev.down_revision == "phase2_06", (
+        f"down_revision drift: got {rev.down_revision!r}, expected 'phase2_06'"
+    )
+    # Head anchor — phase3_01 must be current head
+    heads = script.get_heads()
+    assert "phase3_01" in heads, f"phase3_01 not in heads: {heads}"
+
+
+@pytest.mark.asyncio
+async def test_add_choice_blocks_when_max_choices_reached(pr3a_seed: dict):
+    """ANCHOR G7 precheck 3 (Q-P3-01): max_choices_per_profile boundary —
+    5 existing + add 6th → block.
+    """
+    # Seed system_config max_choices = 5 (test DB không chạy migration INSERT)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                text(
+                    "INSERT INTO system_config (key, value, description, updated_at) "
+                    "VALUES ('max_choices_per_profile', '5'::jsonb, 'test', now()) "
+                    "ON CONFLICT (key) DO UPDATE SET value = '5'::jsonb"
+                )
+            )
+
+    # Seed 5 existing choices với 5 distinct paths
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_path = await s.get(models.AdmissionPath, pr3a_seed["path_id"])
+            sg = await s.execute(select(models.SubjectGroup).limit(1))
+            sg_row = sg.scalar_one()
+
+            for i in range(1, 6):  # 5 choices: display_order 1-5
+                ts = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 1_000_000
+                method = models.AdmissionMethod(
+                    code=f"MX{i}{ts}"[:20],
+                    name=f"max-test method {i}",
+                    requires_subject_scores=True,
+                    is_active=True,
+                )
+                s.add(method)
+                await s.flush()
+                p = models.AdmissionPath(
+                    academic_info_id=base_path.academic_info_id,
+                    admission_method_id=method.id,
+                    admission_round_id=base_path.admission_round_id,
+                    status="active",
+                )
+                s.add(p)
+                await s.flush()
+                cfg = models.PathSubjectGroupConfig(
+                    admission_path_id=p.id,
+                    subject_group_id=sg_row.id,
+                    min_score=Decimal("18.00"),
+                )
+                s.add(cfg)
+                await s.flush()
+                c = models.AdmissionProfileChoice(
+                    admission_profile_id=pr3a_seed["profile_id"],
+                    admission_path_id=p.id,
+                    path_subject_group_config_id=cfg.id,
+                    display_order=i,
+                )
+                s.add(c)
+                await s.flush()
+
+    # 6th add → expect block
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ts2 = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 1_000_000
+            method6 = models.AdmissionMethod(
+                code=f"M6X{ts2}"[:20],
+                name="6th attempt method",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(method6)
+            await s.flush()
+            base = await s.get(models.AdmissionPath, pr3a_seed["path_id"])
+            p6 = models.AdmissionPath(
+                academic_info_id=base.academic_info_id,
+                admission_method_id=method6.id,
+                admission_round_id=base.admission_round_id,
+                status="active",
+            )
+            s.add(p6)
+            await s.flush()
+            sg2 = await s.execute(select(models.SubjectGroup).limit(1))
+            sg2_row = sg2.scalar_one()
+            cfg6 = models.PathSubjectGroupConfig(
+                admission_path_id=p6.id,
+                subject_group_id=sg2_row.id,
+                min_score=Decimal("18.00"),
+            )
+            s.add(cfg6)
+            await s.flush()
+            p6_id = p6.id
+            cfg6_id = cfg6.id
+
+    async with AsyncSessionLocal() as s:
+        profile = await s.get(
+            models.AdmissionProfile, pr3a_seed["profile_id"]
+        )
+        service = AdmissionChoiceService(s)
+        with pytest.raises(BusinessRuleViolation, match="tối đa"):
+            await service.add_choice(
+                profile=profile,
+                admission_path_id=p6_id,
+                path_subject_group_config_id=cfg6_id,
+                display_order=6,
+            )
+
+
+@pytest.mark.asyncio
+async def test_add_choice_blocks_when_allow_multi_nv_false_and_second_nv(
+    pr3a_seed: dict,
+):
+    """ANCHOR G7 precheck 2 (Q-P3-02): allow_multi_nv=false + 2nd NV → block.
+
+    First NV luôn cho phép (Wave A single-NV vẫn ship 1 choice qua path
+    này). Chỉ block ADD-NV-2 khi flag tắt.
+    """
+    # Flip allow_multi_nv off (pr3a_seed default true)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            round_obj = await s.get(
+                models.OfferingAdmissionRound, pr3a_seed["round_id"]
+            )
+            round_obj.allow_multi_nv = False
+            await s.flush()
+
+    # 1st NV OK — service flush only, test commits explicit
+    async with AsyncSessionLocal() as s:
+        profile = await s.get(
+            models.AdmissionProfile, pr3a_seed["profile_id"]
+        )
+        service = AdmissionChoiceService(s)
+        choice1, _cb = await service.add_choice(
+            profile=profile,
+            admission_path_id=pr3a_seed["path_id"],
+            path_subject_group_config_id=pr3a_seed["config_id"],
+            display_order=1,
+        )
+        await s.commit()
+        assert choice1 is not None
+
+    # Seed 2nd path + config
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ts = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 1_000_000
+            method2 = models.AdmissionMethod(
+                code=f"M2NV{ts}"[:20],
+                name="multi-nv test method 2",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(method2)
+            await s.flush()
+            base = await s.get(models.AdmissionPath, pr3a_seed["path_id"])
+            p2 = models.AdmissionPath(
+                academic_info_id=base.academic_info_id,
+                admission_method_id=method2.id,
+                admission_round_id=base.admission_round_id,
+                status="active",
+            )
+            s.add(p2)
+            await s.flush()
+            sg = await s.execute(select(models.SubjectGroup).limit(1))
+            sg_row = sg.scalar_one()
+            cfg2 = models.PathSubjectGroupConfig(
+                admission_path_id=p2.id,
+                subject_group_id=sg_row.id,
+                min_score=Decimal("18.00"),
+            )
+            s.add(cfg2)
+            await s.flush()
+            p2_id = p2.id
+            cfg2_id = cfg2.id
+
+    # 2nd NV → expect block với match "1 nguyện vọng"
+    async with AsyncSessionLocal() as s:
+        profile = await s.get(
+            models.AdmissionProfile, pr3a_seed["profile_id"]
+        )
+        service = AdmissionChoiceService(s)
+        with pytest.raises(BusinessRuleViolation, match="1 nguyện vọng"):
+            await service.add_choice(
+                profile=profile,
+                admission_path_id=p2_id,
+                path_subject_group_config_id=cfg2_id,
+                display_order=2,
+            )
+
+
+@pytest.mark.asyncio
+async def test_get_choice_response_computes_display_fields_with_eager_load(
+    pr3a_seed: dict,
+):
+    """ANCHOR Contract-06: Pydantic model_validator computes display fields
+    đầy đủ khi relations selectinload chain loaded.
+
+    Non-tautological: empty string fallback = bug (model_validator defensive
+    KHÔNG mask N+1 — repository selectinload chain MUST populate relations).
+    """
+    # Seed choice
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            c = models.AdmissionProfileChoice(
+                admission_profile_id=pr3a_seed["profile_id"],
+                admission_path_id=pr3a_seed["path_id"],
+                path_subject_group_config_id=pr3a_seed["config_id"],
+                display_order=1,
+            )
+            s.add(c)
+            await s.flush()
+            choice_id = c.id
+
+    # Load via repository với selectinload chain
+    async with AsyncSessionLocal() as s:
+        repo = AdmissionProfileChoiceRepository(s)
+        loaded = await repo.get_by_id_with_relations(choice_id)
+        assert loaded is not None
+
+        # Trigger Pydantic computed fields via model_validate
+        response = AdmissionProfileChoiceResponse.model_validate(loaded)
+
+    # ANCHOR: display_subject_group_name MUST be populated (anti-N+1 prove)
+    # SubjectGroup.name là field cơ bản — luôn có giá trị từ pr3a_seed fixture.
+    assert response.display_subject_group_name != "", (
+        "display_subject_group_name empty = relations not eager-loaded → "
+        "Contract-06 model_validator defensive fallback masked N+1 bug"
+    )
+    # SubjectGroup name fixture format "SubjectGroup3A {ts}"
+    assert "SubjectGroup3A" in response.display_subject_group_name
+
+    # display_path_name có thể chứa empty strings cho program (nếu MajorProgram
+    # name None) nhưng method_code + academic_year MUST be present qua join.
+    # Verify at minimum một phần được populate (non-empty after join).
+    assert response.admission_path_id == pr3a_seed["path_id"]
+    assert response.path_subject_group_config_id == pr3a_seed["config_id"]

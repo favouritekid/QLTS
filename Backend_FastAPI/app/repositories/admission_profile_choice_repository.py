@@ -45,7 +45,18 @@ class AdmissionProfileChoiceRepository:
     async def get_by_id_with_relations(
         self, choice_id: int
     ) -> Optional[AdmissionProfileChoice]:
-        """GAP-22: selectinload chain — Contract-06 computed display fields."""
+        """GAP-22: selectinload chain — Contract-06 computed display fields.
+
+        Chain pre-loads:
+        - admission_path → academic_info + admission_method + admission_round
+        - path_subject_group_config → subject_group (Contract-06 fix v0.6)
+        - scores → subject
+        """
+        # Imports local để tránh circular
+        from app.models.admission_config.path_subject_group import (
+            PathSubjectGroupConfig,
+        )
+
         result = await self.db.execute(
             select(AdmissionProfileChoice)
             .where(AdmissionProfileChoice.id == choice_id)
@@ -57,10 +68,14 @@ class AdmissionProfileChoiceRepository:
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_method
                 ),
-                # path_subject_group_config → subject_group
+                # admission_round qua AdmissionPath FK chain (Contract-06)
+                selectinload(AdmissionProfileChoice.admission_path).selectinload(
+                    AdmissionPath.admission_round
+                ),
+                # path_subject_group_config → subject_group (Contract-06)
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
-                ),
+                ).selectinload(PathSubjectGroupConfig.subject_group),
                 # scores → subject (via choice.scores.selectinload trong model)
                 selectinload(AdmissionProfileChoice.scores).selectinload(
                     ProfileChoiceScore.subject
@@ -86,6 +101,9 @@ class AdmissionProfileChoiceRepository:
             .order_by(AdmissionProfileChoice.display_order)
         )
         if eager:
+            from app.models.admission_config.path_subject_group import (
+                PathSubjectGroupConfig,
+            )
             stmt = stmt.options(
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.academic_info
@@ -95,7 +113,7 @@ class AdmissionProfileChoiceRepository:
                 ),
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
-                ),
+                ).selectinload(PathSubjectGroupConfig.subject_group),
                 selectinload(AdmissionProfileChoice.scores).selectinload(
                     ProfileChoiceScore.subject
                 ),

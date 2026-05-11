@@ -97,73 +97,86 @@ class AdmissionProfileChoiceResponse(BaseModel):
         - admission_path.admission_round (OfferingAdmissionRound)
         - path_subject_group_config.subject_group
 
-        Falls back gracefully nếu relations chưa loaded (return empty).
+        Strategy v0.6: convert ORM instance → dict explicit + inject
+        computed fields. Pydantic field-binds from dict reliably (avoids
+        from_attributes ambiguity với ORM monkey-patch).
         """
-        # Skip nếu input là dict (test fixture, not ORM)
+        # Skip nếu input đã là dict
         if isinstance(data, dict):
             return data
 
-        # ORM instance — compute computed fields
-        try:
-            path = getattr(data, "admission_path", None)
-            config = getattr(data, "path_subject_group_config", None)
+        # ORM instance — build dict from attributes
+        out: dict[str, Any] = {}
+        for field_name in (
+            "id", "admission_profile_id", "admission_path_id",
+            "path_subject_group_config_id", "display_order", "decision",
+            "waitlist_rank", "eligibility_check_result",
+            "bonus_rule_snapshot", "created_at", "updated_at",
+        ):
+            out[field_name] = getattr(data, field_name, None)
 
-            if path is not None:
-                academic_info = getattr(path, "academic_info", None)
-                program = (
-                    getattr(academic_info, "program", None)
-                    if academic_info
-                    else None
-                )
-                method = getattr(path, "admission_method", None)
-                round_obj = getattr(path, "admission_round", None)
+        # Compute display fields từ eager-loaded relations
+        path = getattr(data, "admission_path", None)
+        config = getattr(data, "path_subject_group_config", None)
 
-                parts = []
-                if program is not None:
-                    program_name = getattr(program, "name", "") or ""
-                    parts.append(program_name)
-                if academic_info is not None:
-                    parts.append(str(getattr(academic_info, "academic_year", "")))
-                if method is not None:
-                    method_code = getattr(method, "code", "") or ""
-                    if method_code:
-                        parts.append(method_code)
-                if round_obj is not None:
-                    round_code = getattr(round_obj, "round_code", "") or ""
-                    if round_code:
-                        parts.append(round_code)
+        display_path_parts: list[str] = []
+        if path is not None:
+            academic_info = getattr(path, "academic_info", None)
+            program = (
+                getattr(academic_info, "program", None)
+                if academic_info is not None
+                else None
+            )
+            method = getattr(path, "admission_method", None)
+            round_obj = getattr(path, "admission_round", None)
 
-                display_path_name = " - ".join(p for p in parts if p)
-            else:
-                display_path_name = ""
+            if program is not None:
+                program_name = getattr(program, "name", None) or ""
+                if program_name:
+                    display_path_parts.append(program_name)
+            if academic_info is not None:
+                year = getattr(academic_info, "academic_year", None)
+                if year:
+                    display_path_parts.append(str(year))
+            if method is not None:
+                method_code = getattr(method, "code", None) or ""
+                if method_code:
+                    display_path_parts.append(method_code)
+            if round_obj is not None:
+                round_code = getattr(round_obj, "round_code", None) or ""
+                if round_code:
+                    display_path_parts.append(round_code)
 
-            if config is not None:
-                subject_group = getattr(config, "subject_group", None)
-                display_subject_group_name = (
-                    getattr(subject_group, "name", "") or ""
-                    if subject_group
-                    else ""
-                )
-            else:
-                display_subject_group_name = ""
+        out["display_path_name"] = " - ".join(display_path_parts)
 
-            # Attach computed values to ORM-derived dict
-            # Pydantic from_attributes mode: convert ORM → dict-like via
-            # __dict__; we monkey-patch attributes so subsequent field
-            # binding picks them up.
-            try:
-                data.display_path_name = display_path_name
-                data.display_subject_group_name = display_subject_group_name
-            except (AttributeError, TypeError):
-                # Read-only ORM (rare) — fall back to dict construction
-                # below; this path is defensive only.
-                pass
-        except Exception:
-            # Defensive: KHÔNG raise vì computed fields là display-only;
-            # FE fallback render rỗng nếu compute fail.
-            pass
+        subject_group_name = ""
+        if config is not None:
+            subject_group = getattr(config, "subject_group", None)
+            if subject_group is not None:
+                subject_group_name = getattr(subject_group, "name", None) or ""
+        out["display_subject_group_name"] = subject_group_name
 
-        return data
+        # Nested scores — list[ChoiceScoreSummary] built from ProfileChoiceScore
+        scores_list: list[dict[str, Any]] = []
+        scores = getattr(data, "scores", None) or []
+        for score_row in scores:
+            subject = getattr(score_row, "subject", None)
+            scores_list.append({
+                "subject_id": getattr(score_row, "subject_id", None),
+                "subject_code": getattr(subject, "code", "") if subject else "",
+                "subject_name": getattr(subject, "name_vi", "") if subject else "",
+                "score": getattr(score_row, "score", None),
+                "max_score_snapshot": getattr(
+                    score_row, "max_score_snapshot", None
+                ),
+                "min_possible_score_snapshot": getattr(
+                    score_row, "min_possible_score_snapshot", None
+                ),
+                "weight_snapshot": getattr(score_row, "weight_snapshot", None),
+            })
+        out["scores"] = scores_list
+
+        return out
 
 
 class AdmissionProfileChoiceCreate(BaseModel):
