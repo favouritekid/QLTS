@@ -37,6 +37,12 @@ from .lead_phone import LeadPhoneIdentity
 from .admission import AdmissionProfile, AdmissionConfirmationToken
 # phase1_10 (#184 Wave 2 PR-2A) — status transition audit trail.
 from .admission_profile_status_history import AdmissionProfileStatusHistory
+# phase3_01 (#184 Wave 3 PR-3A) — multi-NV choice + per-choice score.
+from .admission_profile_choice import (
+    AdmissionProfileChoice,
+    ProfileChoiceScore,
+    CHOICE_DECISIONS,
+)
 from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 
