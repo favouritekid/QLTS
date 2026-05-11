@@ -61,6 +61,7 @@ import {
   quotaMatrixKeys,
   useUpdatePathQuota,
 } from "@/hooks/admissions/useQuotaMatrix"
+import { parseApiError } from "@/lib/utils/api-errors"
 import type { AdmissionPathResponse } from "@/lib/zod/admission-path"
 
 import { ConfigCriteria } from "../ConfigCriteria"
@@ -222,8 +223,7 @@ function QuotaTab({
       toast.success("Đã lưu chỉ tiêu")
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Lỗi lưu — kiểm tra mạng và thử lại."
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi lưu — kiểm tra mạng và thử lại."))
     }
   }
 
@@ -333,8 +333,7 @@ function IdentityTab({
       toast.success("Đã lưu định danh")
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Lỗi lưu — kiểm tra mạng và thử lại."
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi lưu — kiểm tra mạng và thử lại."))
     }
   }
 
@@ -487,8 +486,7 @@ function LifecycleTab({
       toast.success("Đã kích hoạt đường tuyển sinh")
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Lỗi kích hoạt — kiểm tra checklist và thử lại."
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi kích hoạt — kiểm tra checklist và thử lại."))
     }
   }
 
@@ -500,8 +498,7 @@ function LifecycleTab({
       toast.success("Đã vô hiệu hoá đường tuyển sinh")
       onClose()
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Lỗi vô hiệu hoá — thử lại sau."
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi vô hiệu hoá — thử lại sau."))
     }
   }
 

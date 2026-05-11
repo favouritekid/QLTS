@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select"
 import { useAdmissionRounds } from "@/hooks/admissions/useAdmissionRounds"
 import { useClonePathsFromRound } from "@/hooks/admissions/useClonePathsFromRound"
+import { parseApiError } from "@/lib/utils/api-errors"
 
 interface AdmissionRound {
   id: number
@@ -77,10 +78,7 @@ export function ClonePathsDialog({ academicYear, onClose }: Props) {
       )
       onClose()
     } catch (e: unknown) {
-      const msg =
-        (e as { response?: { data?: { detail?: string } } }).response?.data?.detail ??
-        (e instanceof Error ? e.message : "Lỗi sao chép — kiểm tra dữ liệu và thử lại.")
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi sao chép — kiểm tra dữ liệu và thử lại."))
     }
   }
 

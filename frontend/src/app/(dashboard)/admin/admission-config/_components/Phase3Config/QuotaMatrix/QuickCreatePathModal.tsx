@@ -32,6 +32,8 @@ import {
 } from "@/components/ui/select"
 import { useCreateAdmissionPath } from "@/hooks/admissions/useAdmissionPaths"
 import { useAdmissionMethods } from "@/hooks/admissions/useMasterData"
+import { parseApiError } from "@/lib/utils/api-errors"
+
 import type { AdmissionMethod } from "../../shared/types"
 
 interface Props {
@@ -79,10 +81,7 @@ export function QuickCreatePathModal({
       toast.success("Đã tạo đường tuyển sinh. Mở chi tiết để cấu hình tiêu chí &amp; giấy tờ.")
       onCreated(created.id)
     } catch (e: unknown) {
-      const msg =
-        (e as { response?: { data?: { detail?: string } } }).response?.data?.detail ??
-        (e instanceof Error ? e.message : "Lỗi tạo — kiểm tra dữ liệu và thử lại.")
-      toast.error(msg)
+      toast.error(parseApiError(e, "Lỗi tạo — kiểm tra dữ liệu và thử lại."))
     }
   }
 
