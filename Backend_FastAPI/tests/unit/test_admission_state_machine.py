@@ -25,8 +25,11 @@ class TestAdmissionStatusEnum:
     """Test AdmissionStatus enum values."""
 
     def test_all_statuses_defined(self):
-        """Verify all 10 statuses are defined."""
+        """Verify all 14 statuses defined — 10 legacy + 4 Phase 3 multi-NV
+        (phase1_11 DB CHECK extend, plan v0.7 PR-3B).
+        """
         expected_statuses = {
+            # Legacy 10-state
             "draft",
             "submitted",
             "approved",
@@ -37,6 +40,11 @@ class TestAdmissionStatusEnum:
             "overridden",
             "enrolled",
             "withdrawn",
+            # Phase 3 multi-NV
+            "reviewing",
+            "result_published",
+            "admitted",
+            "waitlisted",
         }
         actual_statuses = {status.value for status in AdmissionStatus}
         assert actual_statuses == expected_statuses
@@ -59,12 +67,14 @@ class TestAllowedTransitions:
         }
 
     def test_submitted_transitions(self):
-        """SUBMITTED can transition to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
+        """SUBMITTED can transition to APPROVED/REJECTED/REVISION_REQUESTED/
+        WITHDRAWN (legacy) or REVIEWING (Phase 3 T2)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.SUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.REVIEWING,  # Phase 3 T2
         }
 
     def test_rejected_transitions(self):
@@ -75,20 +85,24 @@ class TestAllowedTransitions:
         }
 
     def test_resubmitted_transitions(self):
-        """RESUBMITTED can transition to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
+        """RESUBMITTED can transition to APPROVED/REJECTED/REVISION_REQUESTED/
+        WITHDRAWN (legacy) or REVIEWING (Phase 3)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.RESUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.REVIEWING,  # Phase 3
         }
 
     def test_revision_requested_transitions(self):
-        """REVISION_REQUESTED can transition to RESUBMITTED, REJECTED, or WITHDRAWN."""
+        """REVISION_REQUESTED can transition to RESUBMITTED/REJECTED/
+        WITHDRAWN (legacy) or REVIEWING (Phase 3 T4)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REVISION_REQUESTED] == {
             AdmissionStatus.RESUBMITTED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.REVIEWING,  # Phase 3 T4
         }
 
     def test_approved_transitions(self):
@@ -205,20 +219,29 @@ class TestGetAllowedTransitions:
         assert get_allowed_transitions("draft") == {"submitted", "withdrawn"}
 
     def test_submitted_allowed_transitions(self):
-        """SUBMITTED can go to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
-        assert get_allowed_transitions("submitted") == {"approved", "rejected", "revision_requested", "withdrawn"}
+        """SUBMITTED: legacy 4 + Phase 3 reviewing (T2)."""
+        assert get_allowed_transitions("submitted") == {
+            "approved", "rejected", "revision_requested", "withdrawn",
+            "reviewing",
+        }
 
     def test_rejected_allowed_transitions(self):
         """REJECTED can go to RESUBMITTED or WITHDRAWN."""
         assert get_allowed_transitions("rejected") == {"resubmitted", "withdrawn"}
 
     def test_revision_requested_allowed_transitions(self):
-        """REVISION_REQUESTED can go to RESUBMITTED, REJECTED, or WITHDRAWN."""
-        assert get_allowed_transitions("revision_requested") == {"resubmitted", "rejected", "withdrawn"}
+        """REVISION_REQUESTED: legacy 3 + Phase 3 reviewing (T4)."""
+        assert get_allowed_transitions("revision_requested") == {
+            "resubmitted", "rejected", "withdrawn",
+            "reviewing",
+        }
 
     def test_resubmitted_allowed_transitions(self):
-        """RESUBMITTED can go to APPROVED, REJECTED, REVISION_REQUESTED, or WITHDRAWN."""
-        assert get_allowed_transitions("resubmitted") == {"approved", "rejected", "revision_requested", "withdrawn"}
+        """RESUBMITTED: legacy 4 + Phase 3 reviewing."""
+        assert get_allowed_transitions("resubmitted") == {
+            "approved", "rejected", "revision_requested", "withdrawn",
+            "reviewing",
+        }
 
     def test_approved_allowed_transitions(self):
         """APPROVED can go to CONFIRMED or OVERRIDDEN."""
