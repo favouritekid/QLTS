@@ -55,11 +55,11 @@ def upgrade() -> None:
             """
             SELECT COUNT(*) FROM notification_rule
             WHERE event IN (
-                'ADMISSION_RESULT_PUBLISHED',
-                'ADMISSION_DECISION_ADMITTED',
-                'ADMISSION_DECISION_WAITLISTED',
-                'ADMISSION_DECISION_REJECTED',
-                'ADMISSION_ENROLLED'
+                'admission_result_published',
+                'admission_decision_admitted',
+                'admission_decision_waitlisted',
+                'admission_decision_rejected',
+                'admission_enrolled'
             )
             """
         )
@@ -305,11 +305,11 @@ def upgrade() -> None:
             UPDATE notification_rule
             SET bypass_consent = true
             WHERE event IN (
-                'ADMISSION_RESULT_PUBLISHED',
-                'ADMISSION_DECISION_ADMITTED',
-                'ADMISSION_DECISION_WAITLISTED',
-                'ADMISSION_DECISION_REJECTED',
-                'ADMISSION_ENROLLED'
+                'admission_result_published',
+                'admission_decision_admitted',
+                'admission_decision_waitlisted',
+                'admission_decision_rejected',
+                'admission_enrolled'
             )
             """
         )
@@ -326,11 +326,11 @@ def downgrade() -> None:
             UPDATE notification_rule
             SET bypass_consent = false
             WHERE event IN (
-                'ADMISSION_RESULT_PUBLISHED',
-                'ADMISSION_DECISION_ADMITTED',
-                'ADMISSION_DECISION_WAITLISTED',
-                'ADMISSION_DECISION_REJECTED',
-                'ADMISSION_ENROLLED'
+                'admission_result_published',
+                'admission_decision_admitted',
+                'admission_decision_waitlisted',
+                'admission_decision_rejected',
+                'admission_enrolled'
             )
             """
         )
