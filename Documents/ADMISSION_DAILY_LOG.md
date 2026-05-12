@@ -54,6 +54,212 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+## 2026-05-12 — 🚀 Phase 3 Multi-NV KICKOFF — Day 1 prep + plan v0.6 LOCKED
+
+**Plan locked**: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` v0.6 + supplement `Documents/PHASE3_UI_DESIGN_V0.1.md` v0.5 (2-file canonical structure).
+
+**v0.6 final state** (6 review rounds 2026-05-11):
+- 12 decisions Q-P3-01..12 chốt
+- 9 UI patches P-UI-01..09 applied
+- **34 hard-gap-hunt fixes GAP-01..34**:
+  - **5 P0 BLOCKERS applied**: GAP-11 RBAC matrix + GAP-13 IDOR gates + GAP-16 engine FOR UPDATE+Redis + GAP-18 FK ON DELETE CASCADE + GAP-29 notification_rule.event column name fix
+  - 12 P1 (apply in-flight PR body)
+  - 17 P2/P3 (defer Phase 4 / DAILY_LOG track)
+- 14 risks R1-R14 tracked (R14 tight buffer fallback shift Wave B+0 2026-09-13)
+- **Total ~23.6d active dev + ~16.4d buffer (tight)**
+
+**Effort table final v0.6 (round-7 deep verify revised)**:
+- PR-3A: **2.1d** (schema + 3 IDOR gates reusable Phase 1 + RBAC matrix doc + keyMatch4 tighten)
+- PR-3B: **2.2d** (state machine + Casbin officer/manager allow + flip endpoint; accountant deny ĐÃ ship Phase 1 B1)
+- PR-3C: **2.1d** (engine FOR UPDATE+Redis reusable Phase 2 B-2-3 + chunked commit + path archive + bonus lock inline polish)
+- PR-3D-A: **2.35d** (Wave A FE + socket selective inline)
+- PR-3D-B: **10.4d** (Wave B FE + 6 fixtures + memo/namespace/i18n inline)
+- PR-3E: **1.8d** (magic-link 6 items + CSRF exempt + token action-aware + audit log + enum validate)
+- Day 1 prep + UI design v0.5: 1d ✓ DONE 2026-05-11
+- **Total: ~22.45d active + ~17.55d buffer** (R14 tight margin, fallback Wave B+0 shift 2026-09-13)
+
+**Round-7 deep verify summary**:
+- GAP-31 ✅ NO drift — SystemEvents 12 events match catalog + wired/deferred sets
+- GAP-11 PARTIAL — accountant 6 deny ĐÃ ship Phase 1 B1; chỉ cần officer/manager allow (+0.1d)
+- GAP-13/16 pattern reusable → effort downward correct (+0.2d, +0.1d)
+- BONUS-35/36/37 NEW Casbin concerns logged
+
+---
+
+### PR-3A SHIPPED merge — multi-NV schema foundation (2026-05-12)
+
+**Pre-merge sequence** (CI dep audit cascade unblock):
+1. CI Python Deps + Node Deps audit FAIL on PR #261 do CVE mới disclosed post main@2026-05-11 11:30 scheduled audit (urllib3 2.6.3 vulns CVE-2026-44431/44432 + 13 Next.js 16.0-16.2.5 GHSA advisories)
+2. Tách `chore(deps): bump urllib3 2.7.0 + next 16.2.6` → **PR #262** (squash `d2a17340`) ship first để clear gate
+3. Rebase PR #261 lên main mới + force-push (`abec9fdd → 805834e9`)
+4. CI re-run PR #261 → 4 checks ALL PASS (AST lint 8s, notification coverage 51s, Node deps 31s, Python deps 44s)
+
+**Merge** PR #261 — squash `1cd2f184` main, branch `feat/admission-phase3-01-choice-schema` deleted.
+
+**Migration footprint `phase3_01`** (G1 bundle plan v0.6 LOCKED):
+- 2 NEW tables: `admission_profile_choice` (10 cols + 2 UNIQUE + 2 CHECK + 2 indexes), `profile_choice_score` (6 cols + 1 UNIQUE + 1 CHECK + 1 index)
+- 3 ALTER cols:
+  - `offering_admission_round.allow_multi_nv BOOLEAN DEFAULT false` (Q-P3-02 per-round)
+  - `offering_admission_round.confirm_expiry_hours INTEGER DEFAULT 168` (Q-P3-06 per-round, 7d)
+  - `notification_rule.bypass_consent BOOLEAN DEFAULT false` (Q-P3-07 per-rule)
+- 1 INSERT `system_config.max_choices_per_profile=5` (Q-P3-01 soft cap)
+- 1 UPDATE 5 system-critical events `bypass_consent=true` (RESULT_PUBLISHED, DECISION_ADMITTED/WAITLISTED/REJECTED, ENROLLED) — GAP-29 fix column name `event` (NOT `event_code`)
+- **C1 pre-flight check** memory `migration-predicate-safety`: abort migration nếu Phase 1 #19c-d seed < 5 events
+
+**Code artifacts shipped (6 sub-commits)**:
+- `6ba6f674` Migration `phase3_01` + models + relationship
+- `800eff99` Pydantic schemas (P-UI-02 `uses_choice_engine` + Contract-06 computed display fields)
+- `a74c114f` Repository + service guard G7 4-precheck (`uses_choice_engine`, status, allow_multi_nv, max_choices) + 3 IDOR gates `deps.py` (GAP-13: get_choice_for_user/manager + get_backfill_exception_for_admin)
+- `f4b032dc` BONUS-35 keyMatch4 route convention docs (apply PR-3D-B/3E)
+- `a499f251` 17 anchor tests + model parity (OfferingAdmissionRound +2 + NotificationRule +1 cols) per Wave 3-A `pattern-change-impact-audit` lesson
+- `abec9fdd` 4 P1 reviewer tests + Contract-06 N+1 fix (selectinload chain + `PathSubjectGroupConfig.subject_group lazy="selectin"` + `model_validator(mode="before")` return dict explicit)
+
+**Tests**: 21/21 PR-3A anchor PASS (41.71s) + 25 Phase 2 regression PASS / 1 skip (63s).
+
+**Real bugs surfaced + fixed during P1 review cycle**:
+1. Repository selectinload chain missed `AdmissionPath.admission_round` → MissingGreenlet — fixed via explicit chain
+2. `PathSubjectGroupConfig.subject_group` default `lazy="select"` triggered lazy-load fail trong async → `lazy="selectin"`
+3. Pydantic `model_validator(mode="after")` mutate ORM attrs unreliable → refactor `mode="before"` return dict explicit
+
+**Deploy run** `25708398296` triggered 2026-05-12 01:51 UTC; concurrency group `deploy-production` auto-cancels older `25707593569` (deps-only) when entering deploy job. GH Env "production" approval needed.
+
+**Deviation từ plan v0.6**:
+- Backfill SQL **DEFERRED** → separate `phase3_01b_backfill_choices_from_legacy.py` Day 28 sau replica dry-run rehearsal (memory `migration-predicate-safety` — data migration separate from DDL safer)
+- 3 IDOR gates **orphan** until router ships (PR-3B waitlist promote, PR-3C engine, PR-3D-B admin backfill queue) — NOT dead code
+
+**Tomorrow plan**:
+- Verify deploy `25708398296` success → smoke checklist 5 SQL queries
+- Save memory `project_phase3_pr_3a_shipped` với squash SHA + deploy timestamp
+- Day 4-5 (May 13-14): start PR-3B state machine 17 transitions + 22 tests (Q-P3-08) — branch `feat/admission-phase3-02-state-machine`
+
+---
+
+### Deploy fail → hotfix → re-deploy → SHIPPED prod 2026-05-12 02:57 UTC
+
+**Deploy run `25708398296` (02:26 UTC) FAILED**: phase3_01.py:68 C1 pre-flight check `WHERE event IN ('UPPER',...)` matched 0/5 rows on prod. Root cause: migration SQL viết uppercase enum NAME, prod data lowercase `SystemEvents.X.value` canonical từ `sync_notification_rules.py`.
+
+**Auto-rollback WORKED**: Step 6 alembic fail → Step 5 backup `pre_deploy_<TIMESTAMP>.sql` restored via psql → prod alembic stay `phase2_06`, schema unchanged, prod traffic UNAFFECTED. Defense-in-depth pattern `migration-predicate-safety` C1 pre-flight + backup + auto-rollback works as designed.
+
+**Hotfix arc** (`hotfix/phase3-01-event-case`):
+1. SSH audit prod: `SELECT DISTINCT event FROM notification_rule` → confirmed lowercase canonical
+2. Edit phase3_01.py 15 strings (3 SQL blocks × 5 events) → lowercase
+3. Add anchor test `test_phase3_01_c1_preflight_event_strings_match_canonical_lowercase` (non-tautological — reads source file, regex guard uppercase NAME re-introduction)
+4. Local downgrade + re-upgrade verify: bypass_consent=true on 5 lowercase events ✅
+5. PR #263 (`4290177b`) squash-merge 02:48 UTC, deploy run `25710249592` SUCCESS 02:57 UTC
+
+**Prod smoke 5/5 PASS**:
+- alembic head = `phase3_01` ✅
+- bypass_consent=true on 5 lowercase events: admitted/rejected/waitlisted/enrolled/result_published ✅
+- system_config.max_choices_per_profile = 5 ✅
+- admission_profile_choice count = 0 (backfill deferred Day 28) ✅
+- profile_choice_score count = 0 ✅
+- Schema verify: admission_profile_choice 10 cols + 2 UNIQUE + 2 CHECK + 3 FK; profile_choice_score 7 cols + 1 UNIQUE + 1 CHECK + 2 FK ✅
+
+**Lesson saved** memory `migration-systemevents-value-case`: migrations touching `notification_rule.event` MUST use `SystemEvents.X.value` lowercase NOT enum NAME uppercase. Cross-reference `audit-report-accuracy` precedent — previously caught column NAME drift (GAP-29) but missed VALUE case form.
+
+**Memory updates**:
+- ✅ NEW `project_phase3_pr_3a_shipped.md` saved với hotfix final SHA `4290177b` + deploy timestamps
+- ✅ NEW `feedback_migration_systemevents_value_case.md` saved với template anchor test
+- ✅ Updated `phase3-plan-locked` description: PR-3A SHIPPED 9.4% complete, next PR-3B
+- ✅ MEMORY.md index 2 entries added
+
+**Real progress**: 2.1d budget PR-3A spent (1d prep Day 1 + 1d schema Day 2-3). Phase 3 cumulative ~9.4% / ~22.45d total v0.6.
+
+**Tomorrow plan (revised)**:
+- Day 4-5 (May 13-14): PR-3B state machine 17 transitions + 22 tests — branch `feat/admission-phase3-02-state-machine` off main `4290177b`
+- Apply Casbin officer/manager allow Phase 3 routes (GAP-11 partial complete, FU-6 from PR-3A follow-up tracking)
+
+---
+
+(legacy entry below)
+
+## 2026-05-12 — 🚀 Phase 3 Multi-NV KICKOFF — Day 1 prep + plan v0.3 LOCKED
+
+**Plan locked**: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` v0.3 (12 decisions Q-P3-01..12 + 7 gap fixes G1-G7).
+
+**Why Phase 3 NOW**: Phase 2 SHIPPED prod 2026-05-11 22:18 UTC+7 (Phần 9.C). Mùa tuyển sinh 2026-08-01 — 12 tuần runway. User chốt Full polish + immediate start (NO W10 buffer wait) — buffer 4w dùng cho hard-review pass 1+2 + bug-fix iter thay vì cushion start.
+
+**Day 1 prep batch DONE** (2026-05-11 evening + 2026-05-12 morning):
+- [x] Memory `project_phase3_plan_locked` saved + MEMORY.md index updated
+- [x] PLAN.md Phần 9.D Phase 3 deviation log added
+- [x] `Documents/PHASE3_ROLLBACK_RUNBOOK.md` draft Strategy A/B/C
+- [ ] `scripts/phase3-pre-deploy-snapshot.sh` snapshot script (skeleton ready, finalize Day 28)
+- [ ] `scripts/phase3-backfill-dryrun.py` dry-run scaffolding (skeleton ready, finalize Day 28)
+- [ ] Branch `feat/admission-phase3-01-choice-schema` created (Day 2 morning)
+
+**Pre-conditions DONE** (Phase 1+2 prod LIVE):
+- Alembic head `phase2_06`
+- 19 Phase 1 migrations + 7 Phase 2 migrations LIVE
+- `notification_outbox` + beat + 12 events catalog seeded
+- `AdmissionConfirmationToken.action_type` ENUM ready
+- 12 decisions Q-P3-01..12 locked
+
+**Tomorrow (Day 2-3, 2026-05-13/14) plan**:
+- PR-3A `phase3_01` migration bundle (G1: 2 tables + 4 ALTER + 1 INSERT + 1 UPDATE)
+- AdmissionProfileChoice + ProfileChoiceScore models + repository
+- Backfill SQL 3-step (exception flagging → choice → score)
+- 17 anchor unit tests (schema + UNIQUE + invariant + G7 add_choice guard)
+
+**Risk callouts** (R11/R12/R13 NEW v0.3):
+- R11 solo burn-out 4-6w straight → mandatory 1 buffer day/week + weekend reset (memory `solo-developer`)
+- R12 hard-review iter lặp Phase 2 PR-2D.1 4 follow-up → self-review checklist BEFORE PR open
+- R13 dnd library — `dnd-kit` chosen (Next.js 16 + React 19 compat), decide Day 15
+
+**Timeline target**:
+- W1-W5 (May 12 - Jun 15): active dev 20.5d → Wave B+0 ship 2026-06-15 EARLY
+- W6-W9 (Jun 16 - Jul 13): 4w hardening buffer (hard-review pass 1+2 + bug-fix iter + soak)
+- W10 (Jul 14-23): final hardening Wave A boundary
+- 2026-07-23: Wave A HARD COMMIT (block mùa nếu slip)
+- 2026-08-01: Mùa tuyển sinh open với FULL polish UI
+- 2026-09-13: Wave B+30 deprecation header live
+- 2026-12-15: Wave B+90 SHIFTED (G6) drop `available_actions_legacy` post-mùa
+
+**Notes**:
+- FE Full polish chosen (Q-P3-12) — risk +8d trên PR-3D-B nhưng 4w buffer W6-W9 đủ absorb
+- Memory `solo-developer` honor: weekend reset, work session ≤8h/day, KHÔNG có team escalation path
+- Skip W10 prep buffer (2026-06-23) per user direction "đẩy ship nhanh"
+- Phase 2 PR-2D.1 lesson absorbed: anchor test non-tautological + hard-review pass 1+2 trước merge
+
+---
+
+## 2026-05-11 — 🎯 Phase 2 sprint CLOSED + Bug fixes prod LIVE + Phase 3 plan v0.3 locked
+
+**Phase 2 sprint CLOSURE** (cumulative ngày này):
+
+**Merged tới main hôm nay**:
+- PR #257 — `chore(deps): override fast-uri + postcss to clear 4 npm audit vulns` — squash `1e9d5316`
+- PR #258 — `fix(admission): parseApiError helper + useUpdatePathQuota cache parity (Bug #1 + #2)` — squash `3406861a`
+- PR #259 — `test-debt(admission): upgrade useQuotaMatrix.test.tsx tautological → stateful assertion + setTab idempotent guard` — squash (post 0b564717)
+
+**Phase 2 v8.2 sprint cumulative shipped**:
+- 6/6 sub-PRs prod-deployed (PR-2A v2, PR-2B v2, PR-2C v2 ONE-WAY, PR-2D BE, PR-2E, PR-2D.1 v4a)
+- 7 active migrations Phase 2 LIVE (alembic head `phase2_06`)
+- 31 hard-review fixes across 2 audit passes
+- Multi-round + path-level quota + Tier 1+2+3 chain + score precision Numeric(8,2)
+
+**E2E browser round 2 — 3 bugs found + fixed**:
+- Bug #1 (HIGH): `parseApiError` helper extract + 6 callsites refactor → toast hiển thị BE detail Pydantic
+- Bug #2 (HIGH): `useUpdatePathQuota.onSuccess` invalidate `admissionPathKeys.detail(pathId)` parity → drawer reopen state fresh
+- Bug #3 (MEDIUM): Phase B.1 runtime debug REJECTED 3 hypothesis H1/H2/H3 — Next.js 16 `router.replace` eventual consistency ~500ms (NOT logic bug); idempotent guard `if (next === tab) return` added; claim 4 + 5 verified PASS
+
+**Memory entries saved**:
+- `feedback_react_query_mutation_cache_parity` — mutation hooks MUST invalidate/setQueryData detail
+- `feedback_vitest_url_mock_tautological` — `vi.fn() router.replace` mock-call verify ≠ verify URL state
+- `feedback_nextjs16_router_replace_eventual_consistency` — Next.js 16 async URL update ~100-500ms
+- `project_phase3_plan_locked` v0.3 — 12 decisions + Full polish + immediate start
+
+**Project board sync** (Task #9):
+- Closed 4 issues: #184 Phase 1 Schema, #185 Phase 2 v6, #188 Cutover Readiness, #238 Phase 2 thematic
+- Project "Admission Full Cutover": Todo 2 (#186 + #187), In Progress 0, Done 6 (auto-archive workflow)
+
+**Phase 3 plan v0.3 LOCKED**:
+- Plan file `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` (overwrote archived Phase 2 v8.2)
+- 12 decisions Q-P3-01..12 + 7 gap fixes G1-G7 + 13 risks R1-R13
+- 6 sub-PRs 20.5d active + 4w hardening buffer
+- Kickoff 2026-05-12, ship 2026-06-15 EARLY, mùa 2026-08-01
+
+---
+
 ## 2026-05-04
 
 ## 2026-05-11 — Phase 2 PR-2D.1 v4a MERGED main (Quota Matrix UI + 31 hard-review fixes)

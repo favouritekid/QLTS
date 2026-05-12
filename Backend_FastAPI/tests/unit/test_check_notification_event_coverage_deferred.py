@@ -67,10 +67,10 @@ def test_deferred_set_canonical_source_is_state_service() -> None:
     same set of names enumerated in
     ``state_service.DEFERRED_ADMISSION_EVENTS``. Without this, the
     coverage flag and the runtime mapping could drift silently."""
+    # Phase 3 PR-3B Sub-2 shrunk 4 → 1: T6/T8/T10 wired via
+    # LEGACY_STATUS_TO_EVENT + TRANSITION_PAIR_TO_EVENT extension; only
+    # T17 stays deferred until PR-3C ships admin-rollback router.
     assert DEFERRED_ADMISSION_EVENTS == frozenset({
-        "ADMISSION_RESULT_PUBLISHED",
-        "ADMISSION_DECISION_WAITLISTED",
-        "ADMISSION_WAITLIST_PROMOTED",
         "ADMISSION_ROLLED_BACK",
     })
 

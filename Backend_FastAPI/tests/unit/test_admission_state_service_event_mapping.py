@@ -37,9 +37,12 @@ def test_legacy_status_to_event_locked_set() -> None:
     addition must come with the matching legacy write site refactor
     + caller refactor + dispatch-anchor docstring update.
 
-    9 rows total: 8 distinct events; ``approved`` and ``overridden``
-    both fire T7 (the override site adds ``override=True`` payload
-    metadata so consumers can distinguish).
+    Phase 3 PR-3B Sub-2 extension: 12 rows total, 10 distinct events.
+    - ``approved`` and ``overridden`` both fire T7 (override site adds
+      ``override=True`` payload metadata)
+    - ``approved`` and ``admitted`` both fire T7 (multi-NV alias)
+    - T6/T8 wired (RESULT_PUBLISHED, DECISION_WAITLISTED)
+    - T10 NOT here (source-aware via TRANSITION_PAIR_TO_EVENT)
     """
     assert state_service.LEGACY_STATUS_TO_EVENT == {
         "submitted":          SystemEvents.ADMISSION_PROFILE_SUBMITTED,        # T1
@@ -51,14 +54,34 @@ def test_legacy_status_to_event_locked_set() -> None:
         "confirmed":          SystemEvents.ADMISSION_CONFIRMED,                # T12
         "enrolled":           SystemEvents.ADMISSION_ENROLLED,                 # T13
         "withdrawn":          SystemEvents.ADMISSION_WITHDRAWN,                # T14/T15/T16
+        # Phase 3 PR-3B Sub-2 — multi-NV path
+        "result_published":   SystemEvents.ADMISSION_RESULT_PUBLISHED,         # T6
+        "admitted":           SystemEvents.ADMISSION_DECISION_ADMITTED,        # T7 (multi-NV alias)
+        "waitlisted":         SystemEvents.ADMISSION_DECISION_WAITLISTED,      # T8
     }
 
 
-def test_legacy_status_to_event_has_8_distinct_events() -> None:
-    """Catches the case where someone breaks the approved↔overridden
-    aliasing by re-pointing one of them at a different event."""
+def test_legacy_status_to_event_has_10_distinct_events() -> None:
+    """Catches the case where someone breaks the approved↔overridden↔admitted
+    aliasing by re-pointing one of them at a different event.
+
+    Phase 3 PR-3B Sub-2: 12 rows / 10 distinct events.
+    3 rows alias to ADMISSION_DECISION_ADMITTED: approved/overridden/admitted.
+    """
     distinct = set(state_service.LEGACY_STATUS_TO_EVENT.values())
-    assert len(distinct) == 8
+    assert len(distinct) == 10
+
+
+def test_transition_pair_to_event_locked_set() -> None:
+    """Phase 3 PR-3B Sub-2 source-aware mapping locked.
+
+    Single entry T10 — waitlisted→admitted fires WAITLIST_PROMOTED
+    (NOT generic DECISION_ADMITTED). Adding new pair entries requires
+    same audit discipline as LEGACY_STATUS_TO_EVENT changes.
+    """
+    assert state_service.TRANSITION_PAIR_TO_EVENT == {
+        ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,  # T10
+    }
 
 
 def test_approved_and_overridden_share_admitted_event() -> None:
@@ -79,17 +102,13 @@ def test_approved_and_overridden_share_admitted_event() -> None:
 
 
 def test_deferred_admission_events_locked_set() -> None:
-    """4 events with no current legacy writer — Phase 3 choice-engine
-    routes will wire them when those flows ship.
-
-    Set this assertion is what the coverage script's ``--allow-deferred``
-    flag is calibrated against: callers pass exactly these four names.
+    """Phase 3 PR-3B Sub-2 shrunk 4 → 1: T6/T8 wired via
+    LEGACY_STATUS_TO_EVENT, T10 wired via TRANSITION_PAIR_TO_EVENT.
+    Only T17 ROLLED_BACK stays deferred until PR-3C ships the
+    admin-rollback router endpoint.
     """
     assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
-        "ADMISSION_RESULT_PUBLISHED",     # T6 — admin batch broadcast
-        "ADMISSION_DECISION_WAITLISTED",  # T8 — choice-engine waitlist
-        "ADMISSION_WAITLIST_PROMOTED",    # T10 — promote-from-waitlist
-        "ADMISSION_ROLLED_BACK",          # T17 — admin rollback
+        "ADMISSION_ROLLED_BACK",          # T17 — admin rollback (PR-3C)
     })
 
 
@@ -122,11 +141,16 @@ def test_mapping_and_deferred_are_disjoint() -> None:
 
 
 def test_total_admission_events_is_12() -> None:
-    """B2.1 catalog ships 12 ADMISSION_* milestone events; #16
-    accounts for all of them — 8 mapped + 4 deferred."""
+    """B2.1 catalog ships 12 ADMISSION_* milestone events; Phase 3
+    PR-3B Sub-2 accounts for all 12:
+    - 10 distinct events via LEGACY_STATUS_TO_EVENT (target-keyed)
+    - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED)
+    - 1 deferred (T17 ROLLED_BACK, awaits PR-3C router)
+    """
     mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
+    pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
     deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
-    total = len(mapped | deferred)
+    total = len(mapped | pair | deferred)
     assert total == 12
 
 
@@ -140,21 +164,25 @@ _ANCHOR_PATTERN = re.compile(r"event\s*=\s*SystemEvents\.([A-Z_][A-Z0-9_]*)")
 
 def test_dispatch_anchors_match_mapping() -> None:
     """The anchor docstring is what makes the coverage script's grep
-    detect dispatch sites — every mapped event MUST appear, and every
-    deferred event MUST NOT (deferred events stay at no-dispatch-site
-    until Phase 3 wires the writers).
+    detect dispatch sites — every event with a writer (LEGACY map OR
+    PAIR map) MUST appear; deferred events MUST NOT.
+
+    Phase 3 PR-3B Sub-2: anchor block now includes TRANSITION_PAIR
+    events (T10 WAITLIST_PROMOTED) alongside LEGACY events.
     """
     anchor_text = state_service._DISPATCH_ANCHORS
     found = set(_ANCHOR_PATTERN.findall(anchor_text))
 
-    expected_mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
-    assert found == expected_mapped, (
-        f"Dispatch anchor docstring out of sync with LEGACY_STATUS_TO_EVENT.\n"
-        f"  Expected (mapped): {sorted(expected_mapped)}\n"
-        f"  Found in anchors:  {sorted(found)}\n"
+    expected_legacy = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
+    expected_pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
+    expected_all = expected_legacy | expected_pair
+    assert found == expected_all, (
+        f"Dispatch anchor docstring out of sync with mapping union.\n"
+        f"  Expected (legacy ∪ pair): {sorted(expected_all)}\n"
+        f"  Found in anchors:        {sorted(found)}\n"
         "Fix: edit _DISPATCH_ANCHORS in admission_state_service.py to add "
         "or remove ``event=SystemEvents.<NAME>`` lines so they match the "
-        "mapping. Without parity the coverage script will misreport "
+        "mapping union. Without parity the coverage script will misreport "
         "no-dispatch-site for events the runtime actually dispatches."
     )
 
