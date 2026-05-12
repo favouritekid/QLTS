@@ -86,14 +86,23 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.WITHDRAWN,
         # Phase 3 T2: submitted → reviewing (manager review window)
         AdmissionStatus.REVIEWING,
+        # Phase 3 PR-3C Sub-3.5 T17: admin rollback → draft
+        AdmissionStatus.DRAFT,
     },
-    AdmissionStatus.REJECTED: {AdmissionStatus.RESUBMITTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.REJECTED: {
+        AdmissionStatus.RESUBMITTED,
+        AdmissionStatus.WITHDRAWN,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
+    },
     AdmissionStatus.REVISION_REQUESTED: {
         AdmissionStatus.RESUBMITTED,
         AdmissionStatus.REJECTED,
         AdmissionStatus.WITHDRAWN,
         # Phase 3 T4: revision_requested → reviewing (after candidate fix)
         AdmissionStatus.REVIEWING,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
     AdmissionStatus.RESUBMITTED: {
         AdmissionStatus.APPROVED,
@@ -102,14 +111,29 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.WITHDRAWN,
         # Phase 3: resubmitted → reviewing (uses_choice_engine path)
         AdmissionStatus.REVIEWING,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
-    AdmissionStatus.APPROVED: {AdmissionStatus.CONFIRMED, AdmissionStatus.OVERRIDDEN},
-    AdmissionStatus.OVERRIDDEN: {AdmissionStatus.ENROLLED},
-    AdmissionStatus.CONFIRMED: {AdmissionStatus.ENROLLED},
+    AdmissionStatus.APPROVED: {
+        AdmissionStatus.CONFIRMED,
+        AdmissionStatus.OVERRIDDEN,
+        # Phase 3 PR-3C Sub-3.5 T17 — admin rollback approved profile
+        AdmissionStatus.DRAFT,
+    },
+    AdmissionStatus.OVERRIDDEN: {
+        AdmissionStatus.ENROLLED,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
+    },
+    AdmissionStatus.CONFIRMED: {
+        AdmissionStatus.ENROLLED,
+        # Phase 3 PR-3C Sub-3.5 T17 — admin rollback confirmed (rare)
+        AdmissionStatus.DRAFT,
+    },
     AdmissionStatus.ENROLLED: set(),  # Final state - no transitions
     AdmissionStatus.WITHDRAWN: set(),  # Final state - no transitions
 
-    # Phase 3 multi-NV edges (PR-3B)
+    # Phase 3 multi-NV edges (PR-3B + PR-3C Sub-3.5 T17 extension)
     AdmissionStatus.REVIEWING: {
         # T3: reviewing → revision_requested (manager requests fix)
         AdmissionStatus.REVISION_REQUESTED,
@@ -117,6 +141,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.RESULT_PUBLISHED,
         # Candidate withdraws during review window
         AdmissionStatus.WITHDRAWN,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
     AdmissionStatus.RESULT_PUBLISHED: {
         # T7: result_published → admitted (choice-engine cascade)
@@ -125,12 +151,16 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.WAITLISTED,
         # T9 (multi-NV variant): result_published → rejected
         AdmissionStatus.REJECTED,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
     AdmissionStatus.ADMITTED: {
         # T12 (multi-NV): admitted → confirmed (candidate accepts)
         AdmissionStatus.CONFIRMED,
         # Candidate withdraws after admit
         AdmissionStatus.WITHDRAWN,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
     AdmissionStatus.WAITLISTED: {
         # T10: waitlisted → admitted (manual admin promote)
@@ -139,6 +169,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.REJECTED,
         # Candidate withdraws while waitlisted
         AdmissionStatus.WITHDRAWN,
+        # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
     },
 }
 

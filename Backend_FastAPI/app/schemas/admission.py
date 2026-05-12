@@ -1566,6 +1566,100 @@ class AdmissionStats(BaseModel):
     avg_completion: float = 0.0
 
 
+# =============================================================================
+# Phase 3 PR-3C Sub-3 — Choice-engine endpoint schemas
+# =============================================================================
+
+
+class _PerChoiceDecision(BaseModel):
+    """Per-choice decision row inside `AdmissionPublishResultResponse`."""
+
+    choice_id: int
+    display_order: int
+    decision: Literal["pending", "admitted", "waitlisted", "rejected", "skip"]
+    reasons: List[str] = Field(default_factory=list)
+    score: Optional[float] = None
+
+
+class AdmissionPublishResultResponse(BaseModel):
+    """T6 publish-result endpoint response — wraps `CascadeResult`.
+
+    Returned by `POST /api/v2/admissions/{id}/publish-result` after the
+    choice-engine cascade evaluates all profile.choices in display_order
+    and transitions profile.status to admitted/rejected.
+    """
+
+    profile_id: int
+    final_status: Literal["admitted", "rejected", "waitlisted"]
+    admitted_choice_id: Optional[int] = None
+    admitted_display_order: Optional[int] = None
+    per_choice_decisions: List[_PerChoiceDecision] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdmissionWaitlistPromoteRequest(BaseModel):
+    """T10 waitlist-promote endpoint request body.
+
+    DRIFT-01: Sub-3.4 route shipped là profile-scoped (Casbin canonical
+    `/api/v2/admissions/{profile_id}/waitlist-promote`), NOT choice-scoped
+    admin namespace per stale Plan v0.7 line 437. `choice_id` moves from
+    URL param vào request body — service verifies ownership.
+
+    `reason` optional cho audit context (transition() reason kwarg passes
+    into status_history.transition_reason).
+    """
+
+    choice_id: int = Field(..., gt=0, description="ID nguyện vọng promote từ waitlist")
+    reason: Optional[str] = Field(
+        None,
+        min_length=10,
+        max_length=500,
+        description="Optional audit reason (status_history.transition_reason)",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class AdmissionWaitlistPromoteResponse(BaseModel):
+    """T10 waitlist-promote endpoint response.
+
+    Returned by `POST /api/v2/admissions/{profile_id}/waitlist-promote`
+    after admin promotes a waitlisted choice → admitted.
+    """
+
+    choice_id: int
+    decision: Literal["admitted"] = "admitted"
+    profile_id: int
+    profile_status: Literal["admitted"] = "admitted"
+
+
+class AdmissionAdminRollbackRequest(BaseModel):
+    """T17 admin-rollback endpoint request body.
+
+    Reason is mandatory + min 10 chars for audit trail. The reason flows
+    into `AdmissionProfileStatusHistory.transition_reason` + dispatch
+    payload of `ADMISSION_ROLLED_BACK`.
+    """
+
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Mandatory rollback reason (audit log + dispatch payload)",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class AdmissionAdminRollbackResponse(BaseModel):
+    """T17 admin-rollback endpoint response."""
+
+    profile_id: int
+    status: Literal["draft"] = "draft"
+    rolled_back_from: str  # The status the profile was in BEFORE rollback
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -1602,4 +1696,10 @@ __all__ = [
     # Aggregate schemas
     "AdmissionStatusCounts",
     "AdmissionStats",
+    # Phase 3 PR-3C Sub-3 — choice-engine endpoints
+    "AdmissionPublishResultResponse",
+    "AdmissionWaitlistPromoteRequest",
+    "AdmissionWaitlistPromoteResponse",
+    "AdmissionAdminRollbackRequest",
+    "AdmissionAdminRollbackResponse",
 ]

@@ -100,9 +100,12 @@ jobs:
         # the writers, drop the corresponding name(s) from this flag —
         # the lock test ``test_check_notification_event_coverage_deferred
         # .py`` fails until the Python set is updated to match.
+        # PR-3C Sub-3.5: T17 ADMISSION_ROLLED_BACK wired via
+        # TRANSITION_PAIR_TO_EVENT (11 pair entries). DEFERRED set
+        # now empty — coverage script runs WITHOUT --allow-deferred
+        # flag. ALL 12 ADMISSION_* events have a writer.
         run: |
-          python -m app.scripts.check_notification_event_coverage \
-            --allow-deferred=ADMISSION_ROLLED_BACK
+          python -m app.scripts.check_notification_event_coverage
 
       - name: Backend — Notification parity (unit)
         working-directory: Backend_FastAPI

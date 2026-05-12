@@ -46,6 +46,8 @@ ROUTE_PROMOTE_POST = ("/api/v2/admissions/123/waitlist-promote", "POST")
 ROUTE_REJECT_POST = ("/api/v2/admissions/123/waitlist-reject", "POST")
 ROUTE_CHOICES_GET = ("/api/v2/admissions/123/choices", "GET")
 ROUTE_PUBLISH_GET = ("/api/v2/admissions/123/publish-result", "GET")
+# Phase 3 PR-3C Sub-3.5b — T17 admin-rollback route
+ROUTE_ADMIN_ROLLBACK_POST = ("/api/v2/admissions/123/admin-rollback", "POST")
 
 
 # ----------------------------------------------------------------------
@@ -171,6 +173,8 @@ def enforcer():
         # Manager inherits officer GET reads
         ("role:manager", ROUTE_CHOICES_GET, True),
         ("role:manager", ROUTE_PUBLISH_GET, True),
+        # ⭐ Manager DENY admin-rollback (T17 admin-only, no manager allow + no inheritance reach)
+        ("role:manager", ROUTE_ADMIN_ROLLBACK_POST, False),
         # Officer denied on POST (no allow rule, no inheritance reach)
         ("role:officer", ROUTE_PUBLISH_POST, False),
         ("role:officer", ROUTE_PROMOTE_POST, False),
@@ -178,6 +182,8 @@ def enforcer():
         # Officer allow on GET reads (NEW)
         ("role:officer", ROUTE_CHOICES_GET, True),
         ("role:officer", ROUTE_PUBLISH_GET, True),
+        # ⭐ Officer DENY admin-rollback (no allow)
+        ("role:officer", ROUTE_ADMIN_ROLLBACK_POST, False),
         # Accountant explicit DENY on 3 POST routes (Phase 1 B1)
         ("role:accountant", ROUTE_PUBLISH_POST, False),
         ("role:accountant", ROUTE_PROMOTE_POST, False),
@@ -185,19 +191,98 @@ def enforcer():
         # Accountant inherits officer GET reads (per diamond)
         ("role:accountant", ROUTE_CHOICES_GET, True),
         ("role:accountant", ROUTE_PUBLISH_GET, True),
+        # ⭐ Accountant explicit DENY admin-rollback (Phase 1 B1 line 324)
+        ("role:accountant", ROUTE_ADMIN_ROLLBACK_POST, False),
     ],
 )
 def test_phase3_route_enforce_matrix(enforcer, role, route, expected):
-    """Anchor matrix: 3 roles × 5 routes = 15 cells covering
-    Phase 3 multi-NV transitions + reads.
+    """Anchor matrix: 3 roles × 6 routes = 18 cells covering
+    Phase 3 multi-NV transitions + reads + T17 admin-rollback.
 
-    Manager: 3 POST allow + 2 GET inherit allow = 5 True
-    Officer: 3 POST deny (no allow) + 2 GET allow = 3 True / 2 False inverted → 2 True / 3 False
-    Accountant: 3 POST explicit deny + 2 GET inherit allow = 2 True / 3 False
+    Manager: 3 POST allow + 2 GET inherit allow + admin-rollback DENY = 5 True / 1 False
+    Officer: 3 POST deny (no allow) + 2 GET allow + admin-rollback DENY = 2 True / 4 False
+    Accountant: 3 POST explicit deny + 2 GET inherit allow + admin-rollback explicit DENY = 2 True / 4 False
+
+    Why admin-rollback DENIED for ALL non-admin roles: T17 admin-only via
+    `require_admin` FastAPI dependency (NOT CasbinAuth). Casbin policy has
+    accountant explicit DENY (Phase 1 B1) + zero allow rules for any role
+    → all Casbin enforce checks return False. Admin uses `require_admin`
+    BYPASSING Casbin entirely per memory `lead-active-user-casbin-pr4`.
     """
     obj, action = route
     result = enforcer.enforce(role, obj, action)
     assert result is expected, (
         f"Casbin enforce drift: ({role}, {obj}, {action}) expected "
         f"{expected}, got {result}"
+    )
+
+
+# ----------------------------------------------------------------------
+# T17 admin-rollback — Casbin DENY for ALL roles via diamond inheritance
+# ----------------------------------------------------------------------
+
+
+def test_admin_rollback_casbin_denies_admin_via_diamond_inheritance():
+    """⭐ Critical anchor: admin would ALSO be DENIED Casbin enforce on
+    admin-rollback (via `g, role:admin, role:accountant` diamond → admin
+    inherits accountant explicit deny). This PROVES T17 admin-rollback
+    MUST use `require_admin` FastAPI dep, NOT CasbinAuth.
+
+    Per memory `lead-active-user-casbin-pr4`: admin role uses require_admin
+    direct gate which bypasses Casbin. If em ever swap admin-rollback gate
+    from `require_admin` → `CasbinAuth`, admin would get 403 — this test
+    would still pass (proving Casbin behavior) but the route would break
+    for actual admins. Cross-ref `test_admin_rollback_uses_require_admin`
+    trong test_phase3_pr3c_sub3_router_registration.py — that test locks
+    the FastAPI dep wiring, this test locks Casbin enforce contract.
+
+    Build enforcer với admin template + diamond edge (admin → accountant).
+    """
+    # Include admin template + accountant diamond inheritance
+    from app.casbin_config.policy_templates import ADMIN_TEMPLATE
+    roles = {
+        "admin": ADMIN_TEMPLATE,
+        "manager": MANAGER_TEMPLATE,
+        "officer": OFFICER_TEMPLATE,
+        "accountant": ACCOUNTANT_TEMPLATE,
+    }
+    # _build_enforcer_from_templates only adds manager→officer and
+    # accountant→officer edges. For admin diamond, build manually.
+    from tempfile import NamedTemporaryFile
+    import casbin
+
+    lines = []
+    for template_name in roles:
+        role_subject = f"role:{template_name}"
+        rules = apply_template(template_name, role_subject)
+        for r in rules:
+            eft = r.get("eft", "allow")
+            lines.append(f"p, {r['subject']}, {r['object']}, {r['action']}, {eft}")
+
+    # Diamond inheritance (per Phase 1 B1 docstring lines 42-47)
+    lines.append("g, role:manager, role:officer")
+    lines.append("g, role:accountant, role:officer")
+    lines.append("g, role:admin, role:manager")
+    lines.append("g, role:admin, role:accountant")  # ← admin inherits accountant deny
+
+    policy_text = "\n".join(lines) + "\n"
+    tmp = NamedTemporaryFile(
+        mode="w", suffix=".csv", delete=False, encoding="utf-8"
+    )
+    tmp.write(policy_text)
+    tmp.close()
+
+    enforcer = casbin.Enforcer(str(AUTH_MODEL_PATH), tmp.name)
+
+    # Admin Casbin enforce → DENIED via diamond inheritance
+    result = enforcer.enforce(
+        "role:admin",
+        "/api/v2/admissions/123/admin-rollback",
+        "POST",
+    )
+    assert result is False, (
+        "Admin Casbin enforce on admin-rollback should be DENIED (diamond "
+        "inherits accountant explicit deny). If True, em conflated layers — "
+        "admin allow rule may have been accidentally added. T17 admin-rollback "
+        "MUST use require_admin FastAPI dep, NOT CasbinAuth."
     )

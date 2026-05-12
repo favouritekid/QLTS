@@ -67,61 +67,65 @@ class TestAllowedTransitions:
         }
 
     def test_submitted_transitions(self):
-        """SUBMITTED can transition to APPROVED/REJECTED/REVISION_REQUESTED/
-        WITHDRAWN (legacy) or REVIEWING (Phase 3 T2)."""
+        """SUBMITTED: legacy 4 + REVIEWING (Phase 3 T2) + DRAFT (T17 PR-3C)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.SUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
-            AdmissionStatus.REVIEWING,  # Phase 3 T2
+            AdmissionStatus.REVIEWING,
+            AdmissionStatus.DRAFT,  # T17 PR-3C Sub-3.5
         }
 
     def test_rejected_transitions(self):
-        """REJECTED can transition to RESUBMITTED or WITHDRAWN."""
+        """REJECTED: legacy 2 + DRAFT (T17 PR-3C Sub-3.5)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REJECTED] == {
             AdmissionStatus.RESUBMITTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.DRAFT,
         }
 
     def test_resubmitted_transitions(self):
-        """RESUBMITTED can transition to APPROVED/REJECTED/REVISION_REQUESTED/
-        WITHDRAWN (legacy) or REVIEWING (Phase 3)."""
+        """RESUBMITTED: legacy 4 + REVIEWING + DRAFT (T17)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.RESUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
-            AdmissionStatus.REVIEWING,  # Phase 3
+            AdmissionStatus.REVIEWING,
+            AdmissionStatus.DRAFT,
         }
 
     def test_revision_requested_transitions(self):
-        """REVISION_REQUESTED can transition to RESUBMITTED/REJECTED/
-        WITHDRAWN (legacy) or REVIEWING (Phase 3 T4)."""
+        """REVISION_REQUESTED: legacy 3 + REVIEWING (T4) + DRAFT (T17)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REVISION_REQUESTED] == {
             AdmissionStatus.RESUBMITTED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.WITHDRAWN,
-            AdmissionStatus.REVIEWING,  # Phase 3 T4
+            AdmissionStatus.REVIEWING,
+            AdmissionStatus.DRAFT,
         }
 
     def test_approved_transitions(self):
-        """APPROVED can transition to CONFIRMED or OVERRIDDEN."""
+        """APPROVED: legacy 2 + DRAFT (T17)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.APPROVED] == {
             AdmissionStatus.CONFIRMED,
             AdmissionStatus.OVERRIDDEN,
+            AdmissionStatus.DRAFT,
         }
 
     def test_confirmed_transitions(self):
-        """CONFIRMED can only transition to ENROLLED."""
+        """CONFIRMED: ENROLLED + DRAFT (T17, rare)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.CONFIRMED] == {
-            AdmissionStatus.ENROLLED
+            AdmissionStatus.ENROLLED,
+            AdmissionStatus.DRAFT,
         }
 
     def test_overridden_transitions(self):
-        """OVERRIDDEN can only transition to ENROLLED."""
+        """OVERRIDDEN: ENROLLED + DRAFT (T17)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.OVERRIDDEN] == {
-            AdmissionStatus.ENROLLED
+            AdmissionStatus.ENROLLED,
+            AdmissionStatus.DRAFT,
         }
 
     def test_enrolled_transitions(self):
@@ -219,41 +223,45 @@ class TestGetAllowedTransitions:
         assert get_allowed_transitions("draft") == {"submitted", "withdrawn"}
 
     def test_submitted_allowed_transitions(self):
-        """SUBMITTED: legacy 4 + Phase 3 reviewing (T2)."""
+        """SUBMITTED: legacy 4 + Phase 3 reviewing (T2) + draft (T17)."""
         assert get_allowed_transitions("submitted") == {
             "approved", "rejected", "revision_requested", "withdrawn",
-            "reviewing",
+            "reviewing", "draft",
         }
 
     def test_rejected_allowed_transitions(self):
-        """REJECTED can go to RESUBMITTED or WITHDRAWN."""
-        assert get_allowed_transitions("rejected") == {"resubmitted", "withdrawn"}
+        """REJECTED: legacy 2 + draft (T17 PR-3C Sub-3.5)."""
+        assert get_allowed_transitions("rejected") == {
+            "resubmitted", "withdrawn", "draft",
+        }
 
     def test_revision_requested_allowed_transitions(self):
-        """REVISION_REQUESTED: legacy 3 + Phase 3 reviewing (T4)."""
+        """REVISION_REQUESTED: legacy 3 + Phase 3 reviewing (T4) + draft (T17)."""
         assert get_allowed_transitions("revision_requested") == {
             "resubmitted", "rejected", "withdrawn",
-            "reviewing",
+            "reviewing", "draft",
         }
 
     def test_resubmitted_allowed_transitions(self):
-        """RESUBMITTED: legacy 4 + Phase 3 reviewing."""
+        """RESUBMITTED: legacy 4 + Phase 3 reviewing + draft (T17)."""
         assert get_allowed_transitions("resubmitted") == {
             "approved", "rejected", "revision_requested", "withdrawn",
-            "reviewing",
+            "reviewing", "draft",
         }
 
     def test_approved_allowed_transitions(self):
-        """APPROVED can go to CONFIRMED or OVERRIDDEN."""
-        assert get_allowed_transitions("approved") == {"confirmed", "overridden"}
+        """APPROVED: legacy 2 + draft (T17 PR-3C Sub-3.5)."""
+        assert get_allowed_transitions("approved") == {
+            "confirmed", "overridden", "draft",
+        }
 
     def test_confirmed_allowed_transitions(self):
-        """CONFIRMED can only go to ENROLLED."""
-        assert get_allowed_transitions("confirmed") == {"enrolled"}
+        """CONFIRMED: legacy 1 + draft (T17 PR-3C Sub-3.5, rare)."""
+        assert get_allowed_transitions("confirmed") == {"enrolled", "draft"}
 
     def test_overridden_allowed_transitions(self):
-        """OVERRIDDEN can only go to ENROLLED."""
-        assert get_allowed_transitions("overridden") == {"enrolled"}
+        """OVERRIDDEN: legacy 1 + draft (T17 PR-3C Sub-3.5)."""
+        assert get_allowed_transitions("overridden") == {"enrolled", "draft"}
 
     def test_enrolled_allowed_transitions(self):
         """ENROLLED is final - no transitions."""
@@ -353,12 +361,18 @@ class TestStateMachineInvariants:
     """Test state machine invariants (business rules)."""
 
     def test_no_backwards_transitions(self):
-        """Cannot transition backwards in the workflow."""
+        """Cannot transition backwards in the workflow.
+
+        Note: T17 admin-rollback (PR-3C Sub-3.5) allows `→ draft` from
+        11 non-final states — exception to backwards-rule, audit-gated
+        via require_admin + reason mandatory. These pairs intentionally
+        OMITTED from the invalid_backwards list.
+        """
         invalid_backwards = [
-            ("approved", "submitted"),
+            ("approved", "submitted"),  # No "down" except T17 (admitted→draft tested elsewhere)
             ("confirmed", "approved"),
             ("enrolled", "confirmed"),
-            ("resubmitted", "draft"),
+            # ("resubmitted", "draft") REMOVED — T17 now valid (PR-3C Sub-3.5)
         ]
         for current, target in invalid_backwards:
             assert can_transition(current, target) is False
