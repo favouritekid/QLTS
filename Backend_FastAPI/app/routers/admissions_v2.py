@@ -26,6 +26,7 @@ from app import database, models, schemas
 from app.core.deps import (
     CasbinAuth,
     get_admission_for_manager,
+    require_admin,
 )
 from app.services import admission_choice_engine_service as choice_engine
 from app.utils.exceptions import ResourceNotFoundError
@@ -201,4 +202,78 @@ async def waitlist_promote_choice(
     return schemas.AdmissionWaitlistPromoteResponse(
         choice_id=result["choice_id"],
         profile_id=result["profile_id"],
+    )
+
+
+# =============================================================================
+# T17 — Admin rollback (admin force profile back to draft, audit-logged)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id:[0-9]+}/admin-rollback",
+    response_model=schemas.AdmissionAdminRollbackResponse,
+    summary="T17 — Admin rollback profile to draft (audit-logged)",
+)
+async def admin_rollback_admission(
+    profile_id: int,
+    payload: schemas.AdmissionAdminRollbackRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """T17 admin rollback — force any non-final profile state → draft.
+
+    Audit-gated với:
+    - **Admin-only**: `require_admin` dependency (NOT CasbinAuth). Manager
+      và officer denied via Casbin DENY trên `/api/v2/admissions/*/admin-rollback`
+      (Phase 1 B1 accountant deny line 324 + diamond inheritance reach).
+    - **Reason mandatory**: payload.reason min 10 chars, max 500 chars
+      (`AdmissionAdminRollbackRequest` schema enforces; service defensive
+      double-check).
+
+    **Pre-checks** (raises 400 BusinessRuleViolation in service helper):
+    - profile.status NOT IN ("enrolled", "withdrawn") — terminal states
+      cannot rollback per state machine ALLOWED_TRANSITIONS (Sub-3.5 extension)
+
+    **Security**:
+    - No IDOR gate — admin has global scope (require_admin dep enforces)
+    - `db.get(profile_id)` direct → 404 if not found (anti-enumeration)
+
+    **Dispatches** (via state_service.transition() + PAIR map):
+    - ADMISSION_ROLLED_BACK (T17 source-aware via TRANSITION_PAIR_TO_EVENT
+      11 pair entries shipped trong Sub-3.5 atomic). PAIR map fires
+      ROLLED_BACK regardless of source state.
+
+    Returns AdmissionAdminRollbackResponse với `rolled_back_from` capture
+    cho audit response.
+    """
+    # Admin global scope — direct db.get (no IDOR gate needed)
+    profile = await db.get(models.AdmissionProfile, profile_id)
+    if profile is None:
+        raise ResourceNotFoundError(f"Hồ sơ {profile_id} không tồn tại")
+
+    # Service helper (Sub-3.2) — pre-checks (terminal state, reason min 10)
+    # + state machine transition (source-aware PAIR → ROLLED_BACK)
+    result, post_commit_cb = await choice_engine.admin_rollback_profile(
+        db,
+        profile=profile,
+        reason=payload.reason,
+        actor=current_admin,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    log.info(
+        "admissions_v2.admin_rollback",
+        profile_id=profile_id,
+        rolled_back_from=result["rolled_back_from"],
+        actor_id=current_admin.id,
+        reason_length=len(payload.reason),
+    )
+
+    return schemas.AdmissionAdminRollbackResponse(
+        profile_id=result["profile_id"],
+        rolled_back_from=result["rolled_back_from"],
     )
