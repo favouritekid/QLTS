@@ -4671,6 +4671,83 @@ phase1_15a → phase2_01_v2 → phase2_02_v2 → phase2_02b_v2 → phase2_04 →
 
 ---
 
+## Phần 9.D — Phase 3 Multi-NV plan v0.3 kickoff (2026-05-11)
+
+**Plan source**: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` v0.3 (Claude Code plans dir, NOT git-tracked)
+**Memory**: `phase3-plan-locked`
+**Scope**: 6 sub-PRs (PR-3A schema + PR-3B state + PR-3C engine+events + PR-3D-A FE Wave A + PR-3D-B FE Wave B FULL + PR-3E magic-link)
+**Total**: 20.5d active dev + 4w hardening buffer = 10w total
+**Timeline**: Kickoff 2026-05-12, Wave B+0 ship target 2026-06-15 (early), Wave A hard 2026-07-23, mùa 2026-08-01 open
+
+### 12 decisions LOCKED 2026-05-11
+
+| Q | Decision |
+|---|---|
+| Q-P3-01 | MAX_CHOICES_PER_PROFILE = `system_config` global default 5 + DB CHECK `display_order BETWEEN 1 AND 10` |
+| Q-P3-02 | `offering_admission_round.allow_multi_nv` BOOLEAN per-round (2026 false, 2027 admin enable) |
+| Q-P3-03 | Storefront round picker DEFER Phase 4 |
+| Q-P3-04 | Scoring formula = allowlist `sum`/`weighted_sum` JSONB |
+| Q-P3-05 | Waitlist promote = MANUAL only mùa đầu |
+| Q-P3-06 | `offering_admission_round.confirm_expiry_hours INT DEFAULT 168` per-round |
+| Q-P3-07 | `notification_rule.bypass_consent` per-rule + seed 5 events true |
+| Q-P3-08 | Wave A test scope = 22 anchor cases (17 transitions + 5 negative) |
+| Q-P3-09 | Backfill admin UI = NEW `/admin/admission-backfill-queue` |
+| Q-P3-10 | 6 sub-PRs (tách PR-3D Wave A/B) |
+| Q-P3-11 | `bonus_rule_snapshot` tại T6 publish (NOT T1 submit) |
+| Q-P3-12 | FE polish = FULL (no Lite) + immediate start (no W10 buffer wait) |
+
+### Schema migrations Phase 3
+
+**1 migration `phase3_01_create_admission_profile_choice_and_score`** bundle 4 ALTER + 1 INSERT + 1 UPDATE (G1):
+- `admission_profile_choice` + `profile_choice_score` tables
+- ALTER `offering_admission_round` add `allow_multi_nv`, `confirm_expiry_hours`
+- ALTER `notification_rule` add `bypass_consent`
+- INSERT `system_config` `max_choices_per_profile=5`
+- UPDATE `notification_rule` set `bypass_consent=true` cho 5 events (4/5/6/7/10)
+
+### Migration revision chain projected
+
+```
+phase2_06 → phase3_01
+            PR-3A
+```
+
+### 13 critical risks (R1-R13)
+
+R1-R10 from v0.2 base + 3 NEW v0.3:
+- R11 solo dev burn-out 4-6w → weekend reset mandatory
+- R12 hard-review iter lặp Phase 2 PR-2D.1 (4 follow-up PRs) → self-review checklist + 4w buffer W6-W9
+- R13 drag-drop library choice → **dnd-kit** chosen (Next.js 16 + React 19 compat)
+
+### Pre-conditions DONE (Phase 1+2 prod LIVE)
+
+- ✅ Alembic head `phase2_06` (Phase 2 PR-2D.1 v4a)
+- ✅ 19 Phase 1 migrations LIVE
+- ✅ `notification_outbox` + Celery beat + 12 events catalog seeded
+- ✅ `AdmissionConfirmationToken.action_type` ENUM ready
+- ✅ `uses_choice_engine` flag column
+- ✅ `_admission_backfill_exceptions` table
+
+### Pre-conditions PENDING Day 1 prep (2026-05-12)
+
+- ⏳ `Documents/PHASE3_ROLLBACK_RUNBOOK.md` (Strategy A/B/C)
+- ⏳ `scripts/phase3-pre-deploy-snapshot.sh` DB snapshot
+- ⏳ `scripts/phase3-backfill-dryrun.py` replica scaffolding
+- ⏳ DAILY_LOG entry 2026-05-12 kickoff
+
+### Anchor test mandate (memory `pattern-change-impact-audit`)
+
+7 non-tautological anchor tests:
+- `test_choice_config_path_id_invariant_raises_on_drift`
+- `test_engine_admits_nv1_marks_remaining_skip`
+- `test_transition_T{n}_from_{src}_to_{dst}_by_{role}` × 17
+- `test_event_{n}_routes_to_correct_dispatch_path` × 12
+- `test_token_consume_atomic_under_concurrent_requests` × 4
+- `test_backfill_flags_AMBIGUOUS_when_multi_match`
+- `test_flag_off_blocks_choice_create_action`
+
+---
+
 ## Phần 9 — Phụ lục: Field name verification log
 
 Document v1.0 đã align với schema thực tế (verified 2026-04-30):
