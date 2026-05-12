@@ -221,6 +221,9 @@ def _resolve_allowed_subjects(choice: "AdmissionProfileChoice") -> List[str]:
     """Extract allowed subjects from choice.path_subject_group_config.
 
     Returns list of subject codes in deterministic order.
+
+    Schema: SubjectGroup has `subject_mappings` (M2M to SubjectGroupSubject)
+    NOT direct `subjects` relation. Navigate via mapping → subject chain.
     """
     config = getattr(choice, "path_subject_group_config", None)
     if config is None:
@@ -228,10 +231,12 @@ def _resolve_allowed_subjects(choice: "AdmissionProfileChoice") -> List[str]:
     group = getattr(config, "subject_group", None)
     if group is None:
         return []
-    subjects = getattr(group, "subjects", None) or []
+    # SubjectGroup.subject_mappings → SubjectGroupSubject.subject → Subject
+    mappings = getattr(group, "subject_mappings", None) or []
     codes: List[str] = []
-    for s in subjects:
-        code = getattr(s, "code", None)
+    for sgs in mappings:
+        subj = getattr(sgs, "subject", None)
+        code = getattr(subj, "code", None) if subj else None
         if code:
             codes.append(code)
     return codes

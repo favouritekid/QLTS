@@ -93,10 +93,13 @@ async def publish_admission_result(
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.criteria),
+            # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
+            # NOT direct `subjects` relation (em earlier drift, fixed).
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.path_subject_group_config)
             .selectinload(models.PathSubjectGroupConfig.subject_group)
-            .selectinload(models.SubjectGroup.subjects),
+            .selectinload(models.SubjectGroup.subject_mappings)
+            .selectinload(models.SubjectGroupSubject.subject),
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.scores)
             .selectinload(models.ProfileChoiceScore.subject),
