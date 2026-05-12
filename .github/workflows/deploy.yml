@@ -102,7 +102,7 @@ jobs:
         # .py`` fails until the Python set is updated to match.
         run: |
           python -m app.scripts.check_notification_event_coverage \
-            --allow-deferred=ADMISSION_RESULT_PUBLISHED,ADMISSION_DECISION_WAITLISTED,ADMISSION_WAITLIST_PROMOTED,ADMISSION_ROLLED_BACK
+            --allow-deferred=ADMISSION_ROLLED_BACK
 
       - name: Backend — Notification parity (unit)
         working-directory: Backend_FastAPI

@@ -64,6 +64,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
+# Phase 3 PR-3B Sub-2: pair lookup `Tuple[str, str]` cho source-aware events
+# (vd T10 waitlisted→admitted fires WAITLIST_PROMOTED, NOT generic ADMITTED).
+
 import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -177,8 +180,11 @@ _DISPATCH_ANCHORS = """
 event=SystemEvents.ADMISSION_PROFILE_SUBMITTED            T1
 event=SystemEvents.ADMISSION_REVISION_REQUESTED           T3/T4
 event=SystemEvents.ADMISSION_RESUBMITTED                  T5
-event=SystemEvents.ADMISSION_DECISION_ADMITTED            T7 (approved + overridden)
+event=SystemEvents.ADMISSION_RESULT_PUBLISHED             T6 (admin batch publish, Phase 3 PR-3B)
+event=SystemEvents.ADMISSION_DECISION_ADMITTED            T7 (approved + overridden + admitted multi-NV)
+event=SystemEvents.ADMISSION_DECISION_WAITLISTED          T8 (choice-engine, Phase 3 PR-3B)
 event=SystemEvents.ADMISSION_DECISION_REJECTED            T9
+event=SystemEvents.ADMISSION_WAITLIST_PROMOTED            T10 (source-aware: waitlisted→admitted, Phase 3 PR-3B)
 event=SystemEvents.ADMISSION_CONFIRMED                    T12
 event=SystemEvents.ADMISSION_ENROLLED                     T13
 event=SystemEvents.ADMISSION_WITHDRAWN                    T14/T15/T16
@@ -206,18 +212,45 @@ LEGACY_STATUS_TO_EVENT: Dict[str, SystemEvents] = {
     "confirmed":          SystemEvents.ADMISSION_CONFIRMED,                # T12
     "enrolled":           SystemEvents.ADMISSION_ENROLLED,                 # T13
     "withdrawn":          SystemEvents.ADMISSION_WITHDRAWN,                # T14/T15/T16
+    # Phase 3 PR-3B Sub-2 — wire 3 new events (multi-NV path)
+    "result_published":   SystemEvents.ADMISSION_RESULT_PUBLISHED,         # T6
+    "admitted":           SystemEvents.ADMISSION_DECISION_ADMITTED,        # T7 (multi-NV alias for "approved")
+    "waitlisted":         SystemEvents.ADMISSION_DECISION_WAITLISTED,      # T8
 }
 
 
-# Events tracked by the B2.1 catalog but with no current legacy
-# writer. The coverage script's ``--allow-deferred`` flag accepts
-# this exact set and prints them in the summary so operators know
-# the gap is intentional, not a missed wire.
+# Source-aware overrides — target alone insufficient because multiple
+# transitions can converge to the same target with semantically distinct
+# events. Pair lookup runs BEFORE ``LEGACY_STATUS_TO_EVENT`` in
+# ``transition()`` event resolution (so the pair value wins on overlap).
+#
+# Currently 1 entry — T10 manual promote from waitlist:
+#   * (waitlisted, admitted) → ADMISSION_WAITLIST_PROMOTED, NOT
+#     ADMISSION_DECISION_ADMITTED. Consumers need to distinguish first-pass
+#     admit (T7 choice-engine cascade) vs second-pass promote (T10 admin
+#     manual via waitlist queue UI).
+#
+# Future entries follow same Tuple[old, new] → event shape. Parity locked
+# by ``tests/unit/test_admission_state_service_event_mapping.py``.
+TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
+    ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,  # T10
+}
+
+
+# Events tracked by the B2.1 catalog but with no current legacy writer.
+# The coverage script's ``--allow-deferred`` flag accepts this exact set
+# and prints them in the summary so operators know the gap is intentional.
+#
+# Phase 3 PR-3B Sub-2 shrunk this from 4 → 1: T6/T8/T10 wired via
+# ``LEGACY_STATUS_TO_EVENT`` + ``TRANSITION_PAIR_TO_EVENT`` extension.
+# T17 ``ADMISSION_ROLLED_BACK`` stays deferred until PR-3C ships the
+# ``/api/v2/admissions/{id}/admin-rollback`` router endpoint (the rollback
+# transition itself goes back to ``draft`` and reuses
+# ``LEGACY_STATUS_TO_EVENT`` indirection via ``draft`` not having a row —
+# the dedicated ROLLED_BACK event is dispatched by the router post-commit
+# instead of via this map).
 DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset({
-    "ADMISSION_RESULT_PUBLISHED",     # T6 — admin batch broadcast
-    "ADMISSION_DECISION_WAITLISTED",  # T8 — choice-engine waitlist
-    "ADMISSION_WAITLIST_PROMOTED",    # T10 — promote-from-waitlist
-    "ADMISSION_ROLLED_BACK",          # T17 — admin rollback (≠ overridden)
+    "ADMISSION_ROLLED_BACK",          # T17 — admin rollback router PR-3C
 })
 
 
@@ -394,7 +427,12 @@ async def transition(
     # 5. ADMISSION_* event dispatch via B2.3 wrapper.
     callback: Optional[Callable[[], Awaitable[None]]] = None
     if not skip_dispatch:
-        event = LEGACY_STATUS_TO_EVENT.get(new_status)
+        # Pair lookup runs first — source-aware events (T10) override the
+        # generic target mapping (which would fire ADMISSION_DECISION_ADMITTED
+        # for any → admitted).
+        event = TRANSITION_PAIR_TO_EVENT.get((old_status, new_status))
+        if event is None:
+            event = LEGACY_STATUS_TO_EVENT.get(new_status)
         if event is not None:
             payload: Dict[str, Any] = {
                 "application_id": profile.id,
@@ -432,7 +470,11 @@ async def transition(
     # ``event`` is structlog's internal positional kwarg name (it
     # holds the log message), so the dispatched-event identifier is
     # logged under ``dispatched_event`` to avoid the name clash.
-    _logged_event = LEGACY_STATUS_TO_EVENT.get(new_status)
+    # Mirror pair-first resolution for log accuracy (T10 logs WAITLIST_PROMOTED
+    # not DECISION_ADMITTED).
+    _logged_event = TRANSITION_PAIR_TO_EVENT.get((old_status, new_status))
+    if _logged_event is None:
+        _logged_event = LEGACY_STATUS_TO_EVENT.get(new_status)
     log.info(
         "admission_state_service.transition",
         profile_id=profile.id,
