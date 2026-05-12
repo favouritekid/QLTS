@@ -157,6 +157,11 @@ from .admission import (
     AdmissionProfileResponse,
     AdmissionsPage,
     AdmissionSubmitResponse,
+    # Phase 3 PR-3C Sub-3 — choice-engine endpoint schemas
+    AdmissionPublishResultResponse,
+    AdmissionWaitlistPromoteResponse,
+    AdmissionAdminRollbackRequest,
+    AdmissionAdminRollbackResponse,
     EnrollStudentResponse,
     # Bulk action schemas
     BulkApproveRequest,
