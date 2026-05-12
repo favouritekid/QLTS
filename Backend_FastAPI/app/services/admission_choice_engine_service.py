@@ -65,6 +65,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.events import SystemEvents
+from ..utils.exceptions import BusinessRuleViolation
 from .admission_scoring_service import (
     AdmissionScoringService,
     AdmissionScoreResult,
@@ -385,3 +386,179 @@ async def evaluate_cascade(
             await cb2()
 
     return result, chained_callback
+
+
+# ============================================================================
+# Sub-3.2 — Router-facing service helper
+# ============================================================================
+
+
+async def publish_result(
+    db: AsyncSession,
+    profile: "AdmissionProfile",
+) -> Tuple[CascadeResult, Optional[Callable[[], Awaitable[None]]]]:
+    """T6 publish-result service entry point (router-facing).
+
+    Thin wrapper trên `evaluate_cascade()` adding pre-condition guards.
+    Used by `POST /api/v2/admissions/{id}/publish-result` router (Sub-3.3).
+
+    PRE-CHECKS (raises BusinessRuleViolation):
+        1. `profile.uses_choice_engine == True` — only multi-NV profiles
+           publish via choice engine; legacy single-NV profiles flow qua
+           existing `admission_service.review_*` paths.
+        2. `profile.status == "reviewing"` — engine evaluates from
+           reviewing state ONLY. Other states blocked by state machine
+           (T6 edge: reviewing → result_published only).
+
+    NO `begin_nested()` wrap here — single-profile publish ships within
+    the router's outer transaction. Batch-publish (future Phase 4 ship)
+    would wrap per-profile in begin_nested with `dispatch_event(strict=True)`
+    propagation per memory `dispatch-bundle-strict-required`. For single-
+    profile case, FastAPI dependency rollback on exception suffices.
+
+    Returns:
+        `(CascadeResult, post_commit_callback)` per V3.0 contract.
+        Caller (router) commits db then awaits callback for
+        notification outbox flush.
+
+    Raises:
+        BusinessRuleViolation: pre-check failure (engine flag / wrong state)
+                                or downstream state machine edge rejection.
+    """
+    if not getattr(profile, "uses_choice_engine", False):
+        raise BusinessRuleViolation(
+            "Hồ sơ không bật multi-NV choice engine — không thể publish qua engine"
+        )
+    if profile.status != "reviewing":
+        raise BusinessRuleViolation(
+            f"Hồ sơ phải ở trạng thái 'reviewing' để publish; trạng thái hiện tại: '{profile.status}'"
+        )
+
+    return await evaluate_cascade(db, profile)
+
+
+# ============================================================================
+# Sub-3.2 — Waitlist promote helper (T10)
+# ============================================================================
+
+
+async def promote_waitlisted_choice(
+    db: AsyncSession,
+    choice: "AdmissionProfileChoice",
+    profile: "AdmissionProfile",
+    actor: Any,
+) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
+    """T10 manual promote: waitlisted → admitted (admin action).
+
+    Used by `POST /api/v2/admin/admission-profile-choice/{id}/promote`.
+    Uses PR-3B Sub-2 `TRANSITION_PAIR_TO_EVENT` source-aware mapping:
+    `(waitlisted, admitted)` fires `ADMISSION_WAITLIST_PROMOTED` (NOT
+    generic `ADMISSION_DECISION_ADMITTED` from target alone).
+
+    PRE-CHECKS:
+        1. `choice.decision == "waitlisted"` — only waitlisted choices
+           can be promoted
+        2. `profile.status == "waitlisted"` — must match (engine sets
+           both together per cascade)
+
+    Returns:
+        `(result_dict, post_commit_callback)` per V3.0 contract.
+    """
+    from . import admission_state_service as state_service
+
+    if choice.decision != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Nguyện vọng phải ở quyết định 'waitlisted'; current: '{choice.decision}'"
+        )
+    if profile.status != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
+        )
+
+    # Update choice decision FIRST so audit trail captures the source
+    choice.decision = "admitted"
+    await db.flush()
+
+    # State transition fires ADMISSION_WAITLIST_PROMOTED via PAIR map
+    _, callback = await state_service.transition(
+        db, profile, "admitted",
+        actor=actor,
+        source="waitlist_promote",
+        event_metadata={
+            "promoted_from_waitlist": True,
+            "choice_id": choice.id,
+            "display_order": choice.display_order,
+        },
+    )
+
+    return (
+        {
+            "choice_id": choice.id,
+            "decision": "admitted",
+            "profile_id": profile.id,
+            "profile_status": "admitted",
+        },
+        callback,
+    )
+
+
+# ============================================================================
+# Sub-3.2 — Admin rollback helper (T17)
+# ============================================================================
+
+
+async def admin_rollback_profile(
+    db: AsyncSession,
+    profile: "AdmissionProfile",
+    reason: str,
+    actor: Any,
+) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
+    """T17 admin-rollback: any non-final state → draft (admin-only).
+
+    Used by `POST /api/v2/admissions/{id}/admin-rollback`. Uses PR-3C
+    Sub-3.5 `TRANSITION_PAIR_TO_EVENT` extension (11 pair entries) —
+    `(<any_source>, "draft")` fires `ADMISSION_ROLLED_BACK` source-aware.
+
+    PRE-CHECKS:
+        1. `profile.status NOT IN ("enrolled", "withdrawn")` — terminal
+           states cannot be rolled back per state machine (no `→ DRAFT`
+           edges from those sources).
+        2. `reason` mandatory, min 10 chars (caller already validated via
+           schema; defensive re-check here).
+
+    Returns:
+        `(result_dict, post_commit_callback)` with `rolled_back_from`
+        capture for audit response.
+    """
+    from . import admission_state_service as state_service
+
+    rolled_back_from = profile.status
+
+    if rolled_back_from in ("enrolled", "withdrawn"):
+        raise BusinessRuleViolation(
+            f"Hồ sơ ở trạng thái cuối ('{rolled_back_from}') không thể rollback"
+        )
+    if not reason or len(reason.strip()) < 10:
+        raise BusinessRuleViolation(
+            "Lý do rollback bắt buộc, tối thiểu 10 ký tự"
+        )
+
+    _, callback = await state_service.transition(
+        db, profile, "draft",
+        actor=actor,
+        reason=reason,
+        source="admin_rollback",
+        event_metadata={
+            "rolled_back_from": rolled_back_from,
+            "actor_id": getattr(actor, "id", None),
+        },
+    )
+
+    return (
+        {
+            "profile_id": profile.id,
+            "status": "draft",
+            "rolled_back_from": rolled_back_from,
+        },
+        callback,
+    )
