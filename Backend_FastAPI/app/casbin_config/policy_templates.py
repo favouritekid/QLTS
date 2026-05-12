@@ -169,6 +169,12 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # (requires_upload=false); service-layer guard enforces the
         # owning-officer + profile-editable + missing-status contract.
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/paper-submitted", "action": "POST"},
+        # Phase 3 multi-NV read-only (PR-3B). Officer can VIEW result-published
+        # profiles + choice list for their assigned unit; mutations stay
+        # manager-only per RBAC matrix plan v0.7. Service-layer IDOR
+        # (get_choice_for_user) narrows to assigned officer scope.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "GET"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "GET"},
         # PR #7 — officer can create the official fee record for their own
         # assigned profile. Casbin admits the route; _fee_calc_authorized +
         # _compute_permissions narrow the scope to the owning officer on a
@@ -369,6 +375,18 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/verify-format", "action": "PATCH"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reject", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reset", "action": "POST"},
+        # Phase 3 multi-NV transitions (PR-3B). Routes shipped under /api/v2/
+        # namespace; counterpart accountant DENY rules already in
+        # ACCOUNTANT_TEMPLATE Phase 1 B1 (lines 319-324 above), so manager
+        # gets the ALLOW side here. T17 admin-rollback NOT in manager
+        # template — admin-only via inherited wildcard `/*`.
+        # BONUS-35 keyMatch4 route convention `{id:[0-9]+}` applied by
+        # downstream router PRs (PR-3C engine + PR-3D-B admin queue + PR-3E
+        # magic-link) — Casbin matcher uses `/api/v2/admissions/*/<verb>`
+        # wildcard so policy stays stable across router regex tightening.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST"},  # T6
+        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST"},  # T10
+        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST"},  # T11
         # Admission Configuration Console (Phase 1: Admission Path Management)
         # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate
         {"subject": "{role}", "object": "/api/admission-config/years", "action": "GET"},  # Academic years
