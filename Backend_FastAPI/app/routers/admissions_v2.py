@@ -46,7 +46,7 @@ router = APIRouter(
 
 
 @router.post(
-    "/{profile_id:[0-9]+}/publish-result",
+    "/{profile_id}/publish-result",
     response_model=schemas.AdmissionPublishResultResponse,
     summary="T6 — Publish admission result (trigger multi-NV choice engine)",
 )
@@ -138,7 +138,7 @@ async def publish_admission_result(
 
 
 @router.post(
-    "/{profile_id:[0-9]+}/waitlist-promote",
+    "/{profile_id}/waitlist-promote",
     response_model=schemas.AdmissionWaitlistPromoteResponse,
     summary="T10 — Promote waitlisted choice to admitted (admin manual)",
 )
@@ -211,7 +211,7 @@ async def waitlist_promote_choice(
 
 
 @router.post(
-    "/{profile_id:[0-9]+}/admin-rollback",
+    "/{profile_id}/admin-rollback",
     response_model=schemas.AdmissionAdminRollbackResponse,
     summary="T17 — Admin rollback profile to draft (audit-logged)",
 )
