@@ -68,6 +68,10 @@ class DisqualificationReason(str, Enum):
     SUBJECT_BELOW_THRESHOLD = "SUBJECT_BELOW_THRESHOLD"
     NO_VALID_SCORES = "NO_VALID_SCORES"
     INVALID_SUBJECT_GROUP = "INVALID_SUBJECT_GROUP"
+    # Phase 3 PR-3C — choice-engine cascade gates (called BEFORE
+    # calculate_score per evaluate_cascade orchestration)
+    MISSING_GPA_OVERALL = "MISSING_GPA_OVERALL"
+    GRADUATION_YEAR_OUT_OF_RANGE = "GRADUATION_YEAR_OUT_OF_RANGE"
 
 
 # =============================================================================
@@ -565,3 +569,93 @@ class AdmissionScoringService:
         payload = json.dumps(data, sort_keys=True, default=str)
         calculated = hashlib.sha256(payload.encode()).hexdigest()
         return stored_checksum == calculated
+
+    # =========================================================================
+    # PHASE 3 PR-3C — CHOICE-ENGINE PROFILE-LEVEL GATES
+    # =========================================================================
+    # Standalone rule helpers called BEFORE `calculate_score()` trong
+    # PR-3C Sub-2's `evaluate_cascade()` orchestration. Kept separate
+    # from `calculate_score()` để KHÔNG touch its existing signature
+    # (3 callers: admission_config.py:749 + admission_service.py:3708 +
+    # admission_service.py:3903). The cascade orchestrator (PR-3C Sub-2)
+    # chains: gate1 (min_gpa) → gate2 (grad_year) → calculate_score().
+    #
+    # Why static + pure: same design constraint as `calculate_score()`
+    # (deterministic + reproducible for audit). Helpers take profile +
+    # criteria args explicitly; no DB calls, no side effects.
+
+    @staticmethod
+    def _check_min_gpa(
+        profile_gpa_overall: Optional[Decimal],
+        criteria_min_gpa: Optional[Decimal],
+    ) -> tuple[bool, Optional[str]]:
+        """Phase 3 PR-3C rule 2: minimum overall GPA threshold.
+
+        Plan v0.7 PR-3C "6-rule sequential" spec. Returns (passed, reason_code).
+
+        Args:
+            profile_gpa_overall: `AdmissionProfile.gpa_overall` (Numeric(4,2)
+                nullable per phase1_09a). Pass-through to comparison.
+            criteria_min_gpa: `AdmissionCriteria.min_gpa` (Numeric, nullable).
+                None = no threshold configured → rule SKIPS (returns pass).
+
+        Returns:
+            (True, None) if rule passes (no threshold OR GPA ≥ threshold)
+            (False, "MISSING_GPA_OVERALL") if threshold set but profile.gpa
+                null — candidate must provide GPA
+            (False, "BELOW_MIN_GPA") if GPA < threshold
+
+        Determinism: pure comparison, no I/O. Match `calculate_score()`
+        contract — caller (Sub-2 cascade) decides how to react to fail.
+        """
+        if criteria_min_gpa is None:
+            return True, None  # No threshold configured → skip rule
+        if profile_gpa_overall is None:
+            return False, DisqualificationReason.MISSING_GPA_OVERALL.value
+        if Decimal(str(profile_gpa_overall)) < Decimal(str(criteria_min_gpa)):
+            return False, DisqualificationReason.BELOW_MIN_GPA.value
+        return True, None
+
+    @staticmethod
+    def _check_graduation_year_range(
+        profile_graduation_year: Optional[int],
+        criteria_min_graduation_year: Optional[int] = None,
+        criteria_max_graduation_year: Optional[int] = None,
+    ) -> tuple[bool, Optional[str]]:
+        """Phase 3 PR-3C rule 3: graduation year range gate.
+
+        ⚠️ NO-OP placeholder cho mùa 2026 — Phase 1 #04 columns
+        ``min_graduation_year`` + ``max_graduation_year`` trên
+        ``AdmissionCriteria`` đã DEFERRED Q1/2027 per Q9 chốt
+        2026-05-01 (memory `184-phase1-schema-wave-plan` line 88).
+
+        Current behavior: returns ``(True, None)`` if criteria_*_year
+        args are None (default — Phase 4 not yet wired). Helper signature
+        already accepts the range params so Phase 4 swap = caller passes
+        the criteria fields, NO body change needed.
+
+        Phase 4 activation: ship migration adding columns +
+        backfill defaults + caller (Sub-2 cascade orchestrator) reads
+        `criteria.min_graduation_year` / `max_graduation_year` + passes
+        them here. Logic body below already handles the range check —
+        just gated behind None checks.
+
+        Determinism: pure comparison, no I/O.
+        """
+        # Phase 4 activation gate: skip nếu range không configured
+        if criteria_min_graduation_year is None and criteria_max_graduation_year is None:
+            return True, None
+        # Profile must have grad_year set if any range configured
+        if profile_graduation_year is None:
+            return False, DisqualificationReason.GRADUATION_YEAR_OUT_OF_RANGE.value
+        if (
+            criteria_min_graduation_year is not None
+            and profile_graduation_year < criteria_min_graduation_year
+        ):
+            return False, DisqualificationReason.GRADUATION_YEAR_OUT_OF_RANGE.value
+        if (
+            criteria_max_graduation_year is not None
+            and profile_graduation_year > criteria_max_graduation_year
+        ):
+            return False, DisqualificationReason.GRADUATION_YEAR_OUT_OF_RANGE.value
+        return True, None
