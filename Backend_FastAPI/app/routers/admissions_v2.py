@@ -28,6 +28,7 @@ from app.core.deps import (
     get_admission_for_manager,
 )
 from app.services import admission_choice_engine_service as choice_engine
+from app.utils.exceptions import ResourceNotFoundError
 
 
 log = structlog.get_logger(__name__)
@@ -127,4 +128,77 @@ async def publish_admission_result(
         admitted_choice_id=cascade_result.admitted_choice_id,
         admitted_display_order=cascade_result.admitted_display_order,
         per_choice_decisions=cascade_result.per_choice_decisions,
+    )
+
+
+# =============================================================================
+# T10 — Waitlist promote (admin manual promote choice waitlisted → admitted)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id:[0-9]+}/waitlist-promote",
+    response_model=schemas.AdmissionWaitlistPromoteResponse,
+    summary="T10 — Promote waitlisted choice to admitted (admin manual)",
+)
+async def waitlist_promote_choice(
+    profile_id: int,
+    payload: schemas.AdmissionWaitlistPromoteRequest,
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    current_user: models.User = CasbinAuth,
+):
+    """T10 manual waitlist promote — admin chọn 1 NV trên waitlist
+    chuyển sang admitted.
+
+    DRIFT-01 sync: route profile-scoped per Casbin policy LIVE prod
+    (`/api/v2/admissions/*/waitlist-promote`), NOT choice-scoped admin
+    namespace per stale Plan v0.7 line 437. `choice_id` moves từ URL
+    param vào request body — router verifies ownership.
+
+    **Pre-checks** (raises 400 BusinessRuleViolation):
+    - choice.decision must be "waitlisted"
+    - profile.status must be "waitlisted"
+
+    **Security**:
+    - IDOR: `get_admission_for_manager` (profile-scoped 3-tier)
+    - Casbin: manager/admin allow per PR-3B Sub-3 policy
+    - Ownership: router verifies choice.admission_profile_id == profile.id
+      (defense-in-depth — service helper also checks)
+
+    **Dispatches** (via state_service.transition() + PAIR map):
+    - ADMISSION_WAITLIST_PROMOTED (T10 source-aware, NOT generic ADMITTED)
+    """
+    # Fetch choice + verify ownership (router thin lookup)
+    choice = await db.get(models.AdmissionProfileChoice, payload.choice_id)
+    if choice is None or choice.admission_profile_id != profile.id:
+        # 404 anti-enumeration per IDOR pattern (memory deps.py precedent)
+        raise ResourceNotFoundError(
+            f"Choice {payload.choice_id} không thuộc hồ sơ {profile_id}"
+        )
+
+    # Service helper (Sub-3.2)
+    result, post_commit_cb = await choice_engine.promote_waitlisted_choice(
+        db,
+        choice=choice,
+        profile=profile,
+        actor=current_user,
+        reason=payload.reason,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    log.info(
+        "admissions_v2.waitlist_promote",
+        profile_id=profile_id,
+        choice_id=payload.choice_id,
+        actor_id=current_user.id,
+        has_reason=bool(payload.reason),
+    )
+
+    return schemas.AdmissionWaitlistPromoteResponse(
+        choice_id=result["choice_id"],
+        profile_id=result["profile_id"],
     )

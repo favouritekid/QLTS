@@ -447,10 +447,13 @@ async def promote_waitlisted_choice(
     choice: "AdmissionProfileChoice",
     profile: "AdmissionProfile",
     actor: Any,
+    reason: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """T10 manual promote: waitlisted → admitted (admin action).
 
-    Used by `POST /api/v2/admin/admission-profile-choice/{id}/promote`.
+    Used by `POST /api/v2/admissions/{profile_id}/waitlist-promote`
+    (Sub-3.4 router, profile-scoped per Casbin policy LIVE prod — see
+    DRIFT-01 sync from Plan v0.7 line 437 stale choice-scoped path).
     Uses PR-3B Sub-2 `TRANSITION_PAIR_TO_EVENT` source-aware mapping:
     `(waitlisted, admitted)` fires `ADMISSION_WAITLIST_PROMOTED` (NOT
     generic `ADMISSION_DECISION_ADMITTED` from target alone).
@@ -483,6 +486,7 @@ async def promote_waitlisted_choice(
     _, callback = await state_service.transition(
         db, profile, "admitted",
         actor=actor,
+        reason=reason,  # Optional audit context (Sub-3.4 router passes payload.reason)
         source="waitlist_promote",
         event_metadata={
             "promoted_from_waitlist": True,

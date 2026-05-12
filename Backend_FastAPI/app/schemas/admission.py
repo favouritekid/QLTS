@@ -1598,10 +1598,33 @@ class AdmissionPublishResultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AdmissionWaitlistPromoteRequest(BaseModel):
+    """T10 waitlist-promote endpoint request body.
+
+    DRIFT-01: Sub-3.4 route shipped là profile-scoped (Casbin canonical
+    `/api/v2/admissions/{profile_id}/waitlist-promote`), NOT choice-scoped
+    admin namespace per stale Plan v0.7 line 437. `choice_id` moves from
+    URL param vào request body — service verifies ownership.
+
+    `reason` optional cho audit context (transition() reason kwarg passes
+    into status_history.transition_reason).
+    """
+
+    choice_id: int = Field(..., gt=0, description="ID nguyện vọng promote từ waitlist")
+    reason: Optional[str] = Field(
+        None,
+        min_length=10,
+        max_length=500,
+        description="Optional audit reason (status_history.transition_reason)",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
 class AdmissionWaitlistPromoteResponse(BaseModel):
     """T10 waitlist-promote endpoint response.
 
-    Returned by `POST /api/v2/admin/admission-profile-choice/{id}/promote`
+    Returned by `POST /api/v2/admissions/{profile_id}/waitlist-promote`
     after admin promotes a waitlisted choice → admitted.
     """
 
@@ -1675,6 +1698,7 @@ __all__ = [
     "AdmissionStats",
     # Phase 3 PR-3C Sub-3 — choice-engine endpoints
     "AdmissionPublishResultResponse",
+    "AdmissionWaitlistPromoteRequest",
     "AdmissionWaitlistPromoteResponse",
     "AdmissionAdminRollbackRequest",
     "AdmissionAdminRollbackResponse",
