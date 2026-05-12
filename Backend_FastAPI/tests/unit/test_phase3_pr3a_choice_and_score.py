@@ -270,6 +270,74 @@ async def test_system_config_max_choices_per_profile_can_be_seeded(
 
 
 # ============================================================
+# A2. C1 pre-flight event-name canonical (hotfix 2026-05-12)
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_phase3_01_c1_preflight_event_strings_match_canonical_lowercase(
+    setup_test_database,
+):
+    """ANCHOR hotfix `hotfix/phase3-01-event-case`: phase3_01.py C1
+    pre-flight + UPDATE + verify SQL string literals MUST match
+    `SystemEvents.X.value` lowercase form (NOT enum NAME uppercase).
+
+    Why non-tautological: original bug shipped uppercase
+    'ADMISSION_DECISION_ADMITTED' (enum NAME) but prod data uses
+    lowercase 'admission_decision_admitted' (`SystemEvents.X.value`
+    canonical via `sync_notification_rules.py`). C1 pre-flight matched
+    0 rows on prod, blocking deploy 2026-05-12 02:26 UTC.
+
+    This test reads phase3_01.py file content + grep cho uppercase
+    pattern `ADMISSION_(RESULT|DECISION|ENROLLED)` strings — fail nếu
+    re-introduced. Cross-references `SystemEvents.X.value` runtime.
+    """
+    import re
+    from pathlib import Path
+
+    from app.core.events import SystemEvents
+
+    migration_path = (
+        Path(__file__).resolve().parents[2]
+        / "alembic"
+        / "versions"
+        / "phase3_01_create_admission_profile_choice_and_score.py"
+    )
+    content = migration_path.read_text(encoding="utf-8")
+
+    expected_events = {
+        SystemEvents.ADMISSION_RESULT_PUBLISHED.value,
+        SystemEvents.ADMISSION_DECISION_ADMITTED.value,
+        SystemEvents.ADMISSION_DECISION_WAITLISTED.value,
+        SystemEvents.ADMISSION_DECISION_REJECTED.value,
+        SystemEvents.ADMISSION_ENROLLED.value,
+    }
+    # All canonical values MUST be lowercase
+    for ev in expected_events:
+        assert ev == ev.lower(), (
+            f"SystemEvents value drifted from lowercase canonical: {ev!r}"
+        )
+
+    # All 5 lowercase strings MUST appear trong file (3 SQL blocks x 5)
+    for ev in expected_events:
+        count = content.count(f"'{ev}'")
+        assert count >= 3, (
+            f"phase3_01.py expected ≥3 occurrences of {ev!r} (C1 + UPDATE "
+            f"+ verify), found {count} — drift từ canonical lowercase form"
+        )
+
+    # NO uppercase enum NAME literals trong SQL (case sensitivity bug guard)
+    upper_pattern = re.compile(
+        r"'ADMISSION_(RESULT_PUBLISHED|DECISION_(ADMITTED|WAITLISTED|REJECTED)|ENROLLED)'"
+    )
+    upper_matches = upper_pattern.findall(content)
+    assert not upper_matches, (
+        f"phase3_01.py re-introduced uppercase enum NAME literals "
+        f"(should be `SystemEvents.X.value` lowercase): {upper_matches}"
+    )
+
+
+# ============================================================
 # B. UNIQUE / CHECK constraints (4 tests)
 # ============================================================
 
