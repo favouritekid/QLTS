@@ -1566,6 +1566,77 @@ class AdmissionStats(BaseModel):
     avg_completion: float = 0.0
 
 
+# =============================================================================
+# Phase 3 PR-3C Sub-3 — Choice-engine endpoint schemas
+# =============================================================================
+
+
+class _PerChoiceDecision(BaseModel):
+    """Per-choice decision row inside `AdmissionPublishResultResponse`."""
+
+    choice_id: int
+    display_order: int
+    decision: Literal["pending", "admitted", "waitlisted", "rejected", "skip"]
+    reasons: List[str] = Field(default_factory=list)
+    score: Optional[float] = None
+
+
+class AdmissionPublishResultResponse(BaseModel):
+    """T6 publish-result endpoint response — wraps `CascadeResult`.
+
+    Returned by `POST /api/v2/admissions/{id}/publish-result` after the
+    choice-engine cascade evaluates all profile.choices in display_order
+    and transitions profile.status to admitted/rejected.
+    """
+
+    profile_id: int
+    final_status: Literal["admitted", "rejected", "waitlisted"]
+    admitted_choice_id: Optional[int] = None
+    admitted_display_order: Optional[int] = None
+    per_choice_decisions: List[_PerChoiceDecision] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdmissionWaitlistPromoteResponse(BaseModel):
+    """T10 waitlist-promote endpoint response.
+
+    Returned by `POST /api/v2/admin/admission-profile-choice/{id}/promote`
+    after admin promotes a waitlisted choice → admitted.
+    """
+
+    choice_id: int
+    decision: Literal["admitted"] = "admitted"
+    profile_id: int
+    profile_status: Literal["admitted"] = "admitted"
+
+
+class AdmissionAdminRollbackRequest(BaseModel):
+    """T17 admin-rollback endpoint request body.
+
+    Reason is mandatory + min 10 chars for audit trail. The reason flows
+    into `AdmissionProfileStatusHistory.transition_reason` + dispatch
+    payload of `ADMISSION_ROLLED_BACK`.
+    """
+
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Mandatory rollback reason (audit log + dispatch payload)",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class AdmissionAdminRollbackResponse(BaseModel):
+    """T17 admin-rollback endpoint response."""
+
+    profile_id: int
+    status: Literal["draft"] = "draft"
+    rolled_back_from: str  # The status the profile was in BEFORE rollback
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -1602,4 +1673,9 @@ __all__ = [
     # Aggregate schemas
     "AdmissionStatusCounts",
     "AdmissionStats",
+    # Phase 3 PR-3C Sub-3 — choice-engine endpoints
+    "AdmissionPublishResultResponse",
+    "AdmissionWaitlistPromoteResponse",
+    "AdmissionAdminRollbackRequest",
+    "AdmissionAdminRollbackResponse",
 ]

@@ -73,14 +73,29 @@ def test_legacy_status_to_event_has_10_distinct_events() -> None:
 
 
 def test_transition_pair_to_event_locked_set() -> None:
-    """Phase 3 PR-3B Sub-2 source-aware mapping locked.
+    """Phase 3 source-aware mapping locked. 12 pair entries total:
 
-    Single entry T10 — waitlisted→admitted fires WAITLIST_PROMOTED
-    (NOT generic DECISION_ADMITTED). Adding new pair entries requires
-    same audit discipline as LEGACY_STATUS_TO_EVENT changes.
+    - T10 (waitlisted → admitted) → ADMISSION_WAITLIST_PROMOTED (PR-3B Sub-2)
+    - T17 (11 source states → draft) → ADMISSION_ROLLED_BACK (PR-3C Sub-3.5)
+
+    Adding new pair entries requires same audit discipline as
+    LEGACY_STATUS_TO_EVENT changes.
     """
     assert state_service.TRANSITION_PAIR_TO_EVENT == {
-        ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,  # T10
+        # T10
+        ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,
+        # T17 — 11 pair entries (one per non-final non-WITHDRAWN/ENROLLED source)
+        ("submitted",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("reviewing",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("revision_requested", "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("resubmitted",        "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("result_published",   "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("admitted",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("waitlisted",         "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("rejected",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("approved",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("overridden",         "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+        ("confirmed",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
     }
 
 
@@ -102,14 +117,11 @@ def test_approved_and_overridden_share_admitted_event() -> None:
 
 
 def test_deferred_admission_events_locked_set() -> None:
-    """Phase 3 PR-3B Sub-2 shrunk 4 → 1: T6/T8 wired via
-    LEGACY_STATUS_TO_EVENT, T10 wired via TRANSITION_PAIR_TO_EVENT.
-    Only T17 ROLLED_BACK stays deferred until PR-3C ships the
-    admin-rollback router endpoint.
+    """Phase 3 PR-3C Sub-3.5 shrunk 1 → 0: T17 ADMISSION_ROLLED_BACK wired
+    via TRANSITION_PAIR_TO_EVENT (11 pair entries — one per non-final
+    source state). ALL 12 catalog events now have a writer.
     """
-    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
-        "ADMISSION_ROLLED_BACK",          # T17 — admin rollback (PR-3C)
-    })
+    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset()
 
 
 def test_deferred_set_is_frozenset() -> None:

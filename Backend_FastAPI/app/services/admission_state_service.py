@@ -188,6 +188,7 @@ event=SystemEvents.ADMISSION_WAITLIST_PROMOTED            T10 (source-aware: wai
 event=SystemEvents.ADMISSION_CONFIRMED                    T12
 event=SystemEvents.ADMISSION_ENROLLED                     T13
 event=SystemEvents.ADMISSION_WITHDRAWN                    T14/T15/T16
+event=SystemEvents.ADMISSION_ROLLED_BACK                  T17 (source-aware: any non-final state → draft, Phase 3 PR-3C Sub-3.5)
 """
 
 
@@ -234,6 +235,22 @@ LEGACY_STATUS_TO_EVENT: Dict[str, SystemEvents] = {
 # by ``tests/unit/test_admission_state_service_event_mapping.py``.
 TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
     ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,  # T10
+    # Phase 3 PR-3C Sub-3.5 T17 — admin rollback to draft fires
+    # ADMISSION_ROLLED_BACK regardless of source state. Pair entries
+    # for ALL 11 non-draft non-final-WITHDRAWN/ENROLLED states which
+    # now have `→ DRAFT` edge in `admission_state_machine.ALLOWED_TRANSITIONS`.
+    # ENROLLED + WITHDRAWN stay final per state machine — no rollback edge.
+    ("submitted",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("reviewing",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("revision_requested", "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("resubmitted",        "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("result_published",   "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("admitted",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("waitlisted",         "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("rejected",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("approved",           "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("overridden",         "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
+    ("confirmed",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
 }
 
 
@@ -241,17 +258,14 @@ TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
 # The coverage script's ``--allow-deferred`` flag accepts this exact set
 # and prints them in the summary so operators know the gap is intentional.
 #
-# Phase 3 PR-3B Sub-2 shrunk this from 4 → 1: T6/T8/T10 wired via
-# ``LEGACY_STATUS_TO_EVENT`` + ``TRANSITION_PAIR_TO_EVENT`` extension.
-# T17 ``ADMISSION_ROLLED_BACK`` stays deferred until PR-3C ships the
-# ``/api/v2/admissions/{id}/admin-rollback`` router endpoint (the rollback
-# transition itself goes back to ``draft`` and reuses
-# ``LEGACY_STATUS_TO_EVENT`` indirection via ``draft`` not having a row —
-# the dedicated ROLLED_BACK event is dispatched by the router post-commit
-# instead of via this map).
-DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset({
-    "ADMISSION_ROLLED_BACK",          # T17 — admin rollback router PR-3C
-})
+# Phase 3 PR-3B Sub-2 shrunk 4 → 1 (wired T6/T8/T10).
+# Phase 3 PR-3C Sub-3.5 shrunk 1 → 0 — T17 ADMISSION_ROLLED_BACK now wired
+# via TRANSITION_PAIR_TO_EVENT 11 pair entries (one per non-final source
+# state). All 12 catalog events have a writer reachable from `transition()`.
+#
+# Empty frozenset = no deferred events. CI gate `--allow-deferred` flag
+# in both deploy.yml + admission-contract-check.yml synced empty.
+DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------

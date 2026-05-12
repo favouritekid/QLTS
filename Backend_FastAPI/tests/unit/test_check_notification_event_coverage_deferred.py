@@ -67,12 +67,10 @@ def test_deferred_set_canonical_source_is_state_service() -> None:
     same set of names enumerated in
     ``state_service.DEFERRED_ADMISSION_EVENTS``. Without this, the
     coverage flag and the runtime mapping could drift silently."""
-    # Phase 3 PR-3B Sub-2 shrunk 4 → 1: T6/T8/T10 wired via
-    # LEGACY_STATUS_TO_EVENT + TRANSITION_PAIR_TO_EVENT extension; only
-    # T17 stays deferred until PR-3C ships admin-rollback router.
-    assert DEFERRED_ADMISSION_EVENTS == frozenset({
-        "ADMISSION_ROLLED_BACK",
-    })
+    # Phase 3 PR-3C Sub-3.5 shrunk 1 → 0: T17 ADMISSION_ROLLED_BACK
+    # wired via TRANSITION_PAIR_TO_EVENT (11 pair entries — one per
+    # non-final source state). ALL 12 catalog events now have a writer.
+    assert DEFERRED_ADMISSION_EVENTS == frozenset()
 
 
 def test_deferred_events_disjoint_from_mapped_events() -> None:
@@ -99,28 +97,20 @@ def _capture_stderr(callable_):
 
 
 def test_summarize_passes_when_deferred_events_match(capsys) -> None:
-    """Four allow-listed events with EXACTLY the
-    ``no-dispatch-site`` gap → verdict 0 + summary lists each
-    deferred event."""
-    statuses = [
-        _status(name) for name in DEFERRED_ADMISSION_EVENTS
-    ]
-    # Coverage script calls ``.gaps`` (a property). Each stand-in has
-    # ``in_catalog=True``, ``notification_class="user"``, ``in_seed
-    # _defaults=True``, but no dispatch sites → exactly the
-    # ``no-dispatch-site`` gap.
-    for st in statuses:
-        assert st.gaps == ["no-dispatch-site"]
+    """Phase 3 PR-3C Sub-3.5: DEFERRED_ADMISSION_EVENTS is now empty
+    (all 12 events wired). Test pivots to verify empty allow-list +
+    no statuses passes cleanly (rc=0, no "with gaps" block).
+    """
+    # PR-3C Sub-3.5: DEFERRED set is empty → no statuses to iterate.
+    # Empty `statuses` + empty `allow_deferred` → rc=0, clean output.
+    assert DEFERRED_ADMISSION_EVENTS == frozenset()
 
     rc, output = _capture_stderr(
-        lambda: coverage._summarize(statuses, allow_deferred=set(DEFERRED_ADMISSION_EVENTS))
+        lambda: coverage._summarize([], allow_deferred=set(DEFERRED_ADMISSION_EVENTS))
     )
 
     assert rc == 0
-    assert "Deferred (allow-listed)" in output
-    for name in DEFERRED_ADMISSION_EVENTS:
-        assert name in output
-    # No "with gaps:" failure block when everything is allow-listed.
+    # No "with gaps:" failure block.
     assert "event(s) with gaps:" not in output
 
 

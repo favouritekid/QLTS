@@ -115,6 +115,7 @@ jobs:
         # set. PR-3B Sub-2 missed this workflow file initially — this
         # hotfix closes the gap (cross-file CI flag sync per memory
         # `ci-workflow-flag-cross-file-sync`).
+        # PR-3C Sub-3.5: T17 ADMISSION_ROLLED_BACK wired via
+        # TRANSITION_PAIR_TO_EVENT — DEFERRED set now empty.
         run: |
-          python -m app.scripts.check_notification_event_coverage \
-            --allow-deferred=ADMISSION_ROLLED_BACK
+          python -m app.scripts.check_notification_event_coverage
