@@ -488,6 +488,19 @@ class AdmissionProfile(Base):
         lazy="selectin",  # ✅ FIX: Eager load to prevent MissingGreenlet in async
     )
 
+    # phase3_01 (#184 Wave 3 PR-3A) — multi-NV Phase 3.
+    # Active khi uses_choice_engine=true (legacy profiles có 0 choices,
+    # KHÔNG flow qua engine xét tuyển này). Cascade delete-orphan đảm bảo
+    # cleanup choices + scores khi profile xoá (matches FK ON DELETE
+    # CASCADE migration).
+    choices: Mapped[list["AdmissionProfileChoice"]] = relationship(
+        "AdmissionProfileChoice",
+        back_populates="profile",
+        cascade="all, delete-orphan",
+        order_by="AdmissionProfileChoice.display_order",
+        lazy="select",  # Engine query via selectinload explicit (GAP-22)
+    )
+
     # ✅ FIX #6: Audit trail relationships
     approved_by: Mapped["User"] = relationship(
         "User",

@@ -123,6 +123,15 @@ class NotificationRule(Base):
     enabled = Column(Boolean, nullable=False, default=True, index=True,
                     comment="Enable/disable this rule")
 
+    # phase3_01 (#184 Wave 3 PR-3A) — Q-P3-07 per-rule bypass consent flag.
+    # System-critical events (decision/published/enrolled) bypass consent
+    # check khi flag=true. Seeded true cho 5 events (ADMISSION_RESULT_PUBLISHED,
+    # DECISION_ADMITTED/WAITLISTED/REJECTED, ENROLLED) trong phase3_01
+    # migration UPDATE statement.
+    bypass_consent = Column(Boolean, nullable=False, default=False,
+                            server_default="false",
+                            comment="Q-P3-07 per-rule bypass consent flag")
+
     # ✅ PHASE 3.1: Optional reference to reusable template
     template_id = Column(Integer, ForeignKey("notification_template.id", ondelete="SET NULL"),
                         nullable=True, index=True,

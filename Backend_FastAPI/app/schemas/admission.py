@@ -635,10 +635,17 @@ class AdmissionProfileResponse(BaseModel):
     status: str
     version: int
     academic_year: int  # ✅ NEW: Academic year (e.g., 2025, 2026)
-    
+
+    # phase3_01 (#184 Wave 3 PR-3A) P-UI-02 v0.6 — multi-NV gate.
+    # false = legacy single-NV ProfileSubjectScore flow; true = Phase 3
+    # AdmissionProfileChoice + ProfileChoiceScore engine flow. FE Step 5
+    # "Nguyện vọng" hiển thị có điều kiện theo flag này (dynamic
+    # visibleSteps array per P-UI-01).
+    uses_choice_engine: bool = False
+
     # ✅ Ticket #1: Use strict schema
     applied_rules: AppliedRulesSchema
-    
+
     created_at: datetime
     updated_at: datetime
     

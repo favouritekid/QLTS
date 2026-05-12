@@ -63,6 +63,11 @@ __all__ = [
     # Admission Configuration Console IDOR
     "get_admission_path_for_user",  # Phase 1: Config Console
 
+    # Phase 3 Multi-NV IDOR (GAP-13 v0.6)
+    "get_choice_for_user",  # Officer scope: assigned profile choices
+    "get_choice_for_manager",  # Manager scope: unit-level choices
+    "get_backfill_exception_for_admin",  # Admin only — Q-P3-09
+
     # Collaborator System (Phase 1)
     "require_collaborator_role",
     "get_own_collaborator",
@@ -2688,3 +2693,183 @@ async def get_commission_record_for_user(
         if record.collaborator and record.collaborator.unit_id == current_user.unit_id:
             return record
     raise ResourceNotFoundError("Commission record not found")
+
+
+# ============================================================
+# Phase 3 Multi-NV IDOR gates (GAP-13 v0.6)
+# Memory: lead-active-user-casbin-pr4 precedent — raise 404 (not 403)
+# ============================================================
+
+
+async def get_choice_for_user(
+    choice_id: int = Path(..., description="Admission Profile Choice ID"),
+    current_user: "models.User" = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.AdmissionProfileChoice":
+    """IDOR gate for Officer/Manager mutations on a choice.
+
+    3-tier scope (Phase 3 parity với get_admission_for_user):
+    - Admin: all choices
+    - Manager: choices whose profile.lead.unit_id == user.unit_id
+    - Officer: choices whose profile.lead.assigned_officer_id == user.id
+
+    Returns 404 (not 403) for unauthorized — anti-enumeration.
+
+    Used by:
+    - PATCH /api/v2/admissions/{profile_id}/choices/{choice_id}/scores
+    - PATCH /api/v2/admissions/{profile_id}/choices/{choice_id}
+    - DELETE /api/v2/admissions/{profile_id}/choices/{choice_id}
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from ..repositories.admission_profile_choice_repository import (
+        AdmissionProfileChoiceRepository,
+    )
+
+    stmt = (
+        select(models.AdmissionProfileChoice)
+        .where(models.AdmissionProfileChoice.id == choice_id)
+        .options(
+            selectinload(models.AdmissionProfileChoice.profile)
+            .selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+        )
+    )
+    result = await db.execute(stmt)
+    choice = result.scalar_one_or_none()
+
+    if choice is None:
+        raise ResourceNotFoundError(
+            detail=f"Choice {choice_id} not found"
+        )
+
+    if current_user.role != UserRole.ADMIN:
+        profile = choice.profile
+        if not profile or not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            log.warning(
+                "IDOR attempt: User tried to access choice from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                choice_id=choice_id,
+            )
+            raise ResourceNotFoundError(
+                detail=f"Choice {choice_id} not found"
+            )
+        if current_user.role == UserRole.OFFICER:
+            if profile.lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: Officer tried to access choice not assigned",
+                    user_id=current_user.id,
+                    choice_id=choice_id,
+                    assigned_officer_id=profile.lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(
+                    detail=f"Choice {choice_id} not found"
+                )
+
+    return choice
+
+
+async def get_choice_for_manager(
+    choice_id: int = Path(..., description="Admission Profile Choice ID"),
+    current_user: "models.User" = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.AdmissionProfileChoice":
+    """IDOR gate for Manager-only operations (waitlist promote/reject).
+
+    2-tier scope:
+    - Admin: all choices
+    - Manager: choices whose profile.lead.unit_id == user.unit_id
+    - Officer + others: 404 (deny)
+
+    Used by:
+    - POST /api/v2/admissions/{profile_id}/choices/{choice_id}/promote (T10)
+    - POST /api/v2/admissions/{profile_id}/choices/{choice_id}/reject (T11)
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfileChoice)
+        .where(models.AdmissionProfileChoice.id == choice_id)
+        .options(
+            selectinload(models.AdmissionProfileChoice.profile)
+            .selectinload(models.AdmissionProfile.lead),
+        )
+    )
+    result = await db.execute(stmt)
+    choice = result.scalar_one_or_none()
+
+    if choice is None:
+        raise ResourceNotFoundError(
+            detail=f"Choice {choice_id} not found"
+        )
+
+    if current_user.role == UserRole.ADMIN:
+        return choice
+
+    if current_user.role != UserRole.MANAGER:
+        log.warning(
+            "IDOR attempt: Non-manager tried to access manager-only choice op",
+            user_id=current_user.id,
+            user_role=current_user.role,
+            choice_id=choice_id,
+        )
+        raise ResourceNotFoundError(
+            detail=f"Choice {choice_id} not found"
+        )
+
+    profile = choice.profile
+    if not profile or not profile.lead or profile.lead.unit_id != current_user.unit_id:
+        log.warning(
+            "IDOR attempt: Manager cross-unit choice access",
+            user_id=current_user.id,
+            user_unit_id=current_user.unit_id,
+            choice_id=choice_id,
+        )
+        raise ResourceNotFoundError(
+            detail=f"Choice {choice_id} not found"
+        )
+
+    return choice
+
+
+async def get_backfill_exception_for_admin(
+    exception_id: int = Path(..., description="Backfill exception row ID"),
+    current_user: "models.User" = Depends(require_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Admin-only gate for Q-P3-09 admin backfill queue UI.
+
+    Note: ``require_admin`` dependency handles 403/permission denial cho
+    non-admin BEFORE reaching this gate body. Gate body chỉ resolve
+    exception row + raise 404 if missing — pattern parity với other
+    admin-only IDOR gates.
+
+    Used by:
+    - PATCH /api/v2/admin/admission-backfill-exceptions/{id}/resolve
+    """
+    from sqlalchemy import text
+
+    # _admission_backfill_exceptions table (Phase 1 #07b). Model class
+    # name TBD trong Phase 3 backfill PR — placeholder query via raw
+    # SQL until model registered. Em ship gate signature, body returns
+    # row dict (router consumes).
+    result = await db.execute(
+        text(
+            "SELECT id, profile_id, exception_type, details, "
+            "resolved_at, resolved_by_user_id, resolution_notes, "
+            "created_at "
+            "FROM _admission_backfill_exceptions WHERE id = :id"
+        ),
+        {"id": exception_id},
+    )
+    row = result.mappings().first()
+
+    if row is None:
+        raise ResourceNotFoundError(
+            detail=f"Backfill exception {exception_id} not found"
+        )
+
+    return dict(row)
