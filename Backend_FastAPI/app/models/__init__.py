@@ -43,6 +43,8 @@ from .admission_profile_choice import (
     ProfileChoiceScore,
     CHOICE_DECISIONS,
 )
+# phase1_07b table promoted to ORM model in Phase 3 PR-3D-B BE-2 for admin queue.
+from .admission_backfill_exception import AdmissionBackfillException
 from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 

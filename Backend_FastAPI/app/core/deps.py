@@ -2839,7 +2839,7 @@ async def get_backfill_exception_for_admin(
     exception_id: int = Path(..., description="Backfill exception row ID"),
     current_user: "models.User" = Depends(require_admin),
     db: AsyncSession = Depends(database.get_db),
-):
+) -> "models.AdmissionBackfillException":
     """Admin-only gate for Q-P3-09 admin backfill queue UI.
 
     Note: ``require_admin`` dependency handles 403/permission denial cho
@@ -2847,29 +2847,15 @@ async def get_backfill_exception_for_admin(
     exception row + raise 404 if missing — pattern parity với other
     admin-only IDOR gates.
 
+    Returns the ORM ``AdmissionBackfillException`` instance (Phase 3 PR-3D-B
+    BE-2 promoted the raw-SQL placeholder to model-backed lookup).
+
     Used by:
     - PATCH /api/v2/admin/admission-backfill-exceptions/{id}/resolve
     """
-    from sqlalchemy import text
-
-    # _admission_backfill_exceptions table (Phase 1 #07b). Model class
-    # name TBD trong Phase 3 backfill PR — placeholder query via raw
-    # SQL until model registered. Em ship gate signature, body returns
-    # row dict (router consumes).
-    result = await db.execute(
-        text(
-            "SELECT id, profile_id, exception_type, details, "
-            "resolved_at, resolved_by_user_id, resolution_notes, "
-            "created_at "
-            "FROM _admission_backfill_exceptions WHERE id = :id"
-        ),
-        {"id": exception_id},
-    )
-    row = result.mappings().first()
-
+    row = await db.get(models.AdmissionBackfillException, exception_id)
     if row is None:
         raise ResourceNotFoundError(
             detail=f"Backfill exception {exception_id} not found"
         )
-
-    return dict(row)
+    return row
