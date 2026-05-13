@@ -558,3 +558,865 @@ async def test_admin_rollback_reason_too_long_422(
     assert response.status_code == 422, (
         f"reason > 500 chars must trigger Pydantic 422; got {response.status_code}"
     )
+
+
+# ============================================================================
+# F. Bug-hunt tests — gap analysis post-hotfix #267 (4 tests)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_writes_status_history_audit_row(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Bug-hunt: T17 transition() MUST write status_history audit row
+    với from_status='submitted' + to_status='draft' + transition_reason.
+
+    Memory `audit-before-fix` precedent — em never verified actual DB
+    row written after T17. Service `state_service.transition()` claims
+    writes status_history but unit tests mocked it.
+    """
+    from sqlalchemy import select
+    profile_id = pr3c_seed_choices["profile_id"]
+    reason = "Test rollback audit row verification 10+ chars"
+
+    # Transition to 'submitted' first so rollback has source state
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": reason},
+    )
+    assert response.status_code == 200
+
+    # Verify status_history row written
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileStatusHistory)
+            .where(models.AdmissionProfileStatusHistory.profile_id == profile_id)
+            .order_by(models.AdmissionProfileStatusHistory.occurred_at.desc())
+        )
+        history = list(rows.scalars().all())
+
+    # Last row should be rollback transition
+    assert len(history) >= 1, "T17 admin-rollback MUST write status_history row"
+    last = history[0]
+    assert last.from_status == "submitted", (
+        f"from_status must capture pre-rollback state; got {last.from_status}"
+    )
+    assert last.to_status == "draft", (
+        f"to_status must be 'draft'; got {last.to_status}"
+    )
+    assert last.transition_reason == reason, (
+        f"transition_reason must match payload.reason; got {last.transition_reason!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_waitlist_promote_bumps_profile_version(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_waitlisted: dict,
+):
+    """⭐ Bug-hunt: T10 transition MUST bump profile.version (optimistic lock).
+
+    Catches regression nếu transition() forgets `profile.version += 1`
+    canonical write triple. Service layer contract: status + version + updated_at
+    all written atomically.
+    """
+    profile_id = pr3c_seed_waitlisted["profile_id"]
+    choice_id = pr3c_seed_waitlisted["choice_id_1"]
+
+    # Capture version BEFORE promote
+    async with AsyncSessionLocal() as s:
+        profile = await s.get(models.AdmissionProfile, profile_id)
+        version_before = profile.version
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": choice_id},
+    )
+    assert response.status_code == 200
+
+    # Verify version bumped
+    async with AsyncSessionLocal() as s:
+        profile = await s.get(models.AdmissionProfile, profile_id)
+        version_after = profile.version
+
+    assert version_after > version_before, (
+        f"profile.version MUST bump after transition (optimistic lock contract); "
+        f"before={version_before}, after={version_after}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_result_eligibility_check_result_jsonb_schema(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Bug-hunt: cascade MUST write `eligibility_check_result` JSONB
+    với canonical keys: decision, reason_codes (list), score (dict | None).
+
+    Catches regression nếu cascade orchestration drops one of the 3 keys.
+    Audit trail consumers (Phase 4 FE) depend on stable shape.
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 200
+
+    # Verify eligibility_check_result JSONB shape on each choice
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select
+        rows = await s.execute(
+            select(models.AdmissionProfileChoice)
+            .where(models.AdmissionProfileChoice.admission_profile_id == profile_id)
+        )
+        choices = list(rows.scalars().all())
+
+    assert len(choices) >= 1
+    for choice in choices:
+        # Skipped choices may have empty result; admitted/rejected MUST have populated
+        if choice.decision in ("admitted", "rejected"):
+            assert choice.eligibility_check_result is not None, (
+                f"choice {choice.id} decision={choice.decision} MUST have "
+                f"eligibility_check_result JSONB populated"
+            )
+            ecr = choice.eligibility_check_result
+            assert "decision" in ecr
+            assert "reason_codes" in ecr
+            assert "score" in ecr
+            assert isinstance(ecr["reason_codes"], list)
+            assert ecr["score"] is None or isinstance(ecr["score"], dict)
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_event_metadata_captures_rolled_back_from(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Bug-hunt: T17 dispatch event_metadata MUST capture rolled_back_from
+    (source state) via status_history.metadata_ JSONB. Audit trail consumer
+    needs to reconstruct original state.
+
+    Memory `audit-report-accuracy` precedent — em ack 4 misses arc. Verify
+    metadata flow router → service → status_history actually preserves
+    rolled_back_from key.
+    """
+    from sqlalchemy import select
+    profile_id = pr3c_seed_choices["profile_id"]
+
+    # Transition profile to specific non-trivial source state
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "admitted"  # T17 from admitted is unusual but valid
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Audit metadata flow test 10+ chars"},
+    )
+    assert response.status_code == 200
+
+    # Verify response captures rolled_back_from
+    body = response.json()
+    assert body["rolled_back_from"] == "admitted"
+
+    # Verify status_history.metadata_ JSONB has rolled_back_from key
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileStatusHistory)
+            .where(models.AdmissionProfileStatusHistory.profile_id == profile_id)
+            .order_by(models.AdmissionProfileStatusHistory.occurred_at.desc())
+        )
+        history = list(rows.scalars().all())
+
+    last = history[0]
+    metadata = last.metadata_ or {}
+    assert "rolled_back_from" in metadata, (
+        f"status_history.metadata_ JSONB MUST contain rolled_back_from key; "
+        f"got keys: {list(metadata.keys())}"
+    )
+    assert metadata["rolled_back_from"] == "admitted"
+
+
+# ============================================================================
+# G. Audit-driven bug-hunt — contract/edge case/security (6 tests)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_publish_result_zero_choices_profile_edge_case(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3a_seed: dict,
+):
+    """⭐ Edge case: profile in reviewing state với 0 choices configured.
+    Cascade loop runs empty → CascadeResult.final_status='rejected'?
+    OR service should refuse với 400 pre-check?
+
+    Bug-hunt: cascade might crash on empty list OR silently mark profile
+    rejected without rationale. Either way needs explicit handling.
+    """
+    profile_id = pr3a_seed["profile_id"]
+    # Transition profile to reviewing WITHOUT adding any choices
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "reviewing"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    # Either 200 with empty per_choice_decisions OR 400 with explicit message
+    # NOT 500 (crash) NOT silently weird state
+    assert response.status_code in (200, 400), (
+        f"0-choices profile must return 200 (empty cascade) or 400 (refuse); "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    if response.status_code == 200:
+        body = response.json()
+        # final_status should be 'rejected' if no admit found (semantic: no winning NV)
+        assert body["final_status"] in ("rejected", "admitted", "waitlisted")
+        assert len(body["per_choice_decisions"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_publish_result_idempotency_re_run_blocked(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Edge case: publish-result called 2x on same profile.
+
+    First call transitions reviewing → result_published → admitted/rejected.
+    Second call should 400 because profile.status != 'reviewing' anymore
+    (publish_result pre-check rejects).
+
+    Catches replay/retry bug — engine should NOT re-process profile.
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+
+    # First publish — succeeds
+    response1 = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response1.status_code == 200
+
+    # Second publish — should be blocked (status now != reviewing)
+    response2 = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response2.status_code == 400, (
+        f"Re-publish on non-reviewing profile must 400; got {response2.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_from_confirmed_state(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ State edge: T17 rollback từ `confirmed` (rare scenario but valid
+    per ALLOWED_TRANSITIONS Sub-3.5 extension).
+
+    Bug-hunt: state machine extension may have missed `confirmed → draft`
+    edge OR PAIR map may not fire ROLLED_BACK for this source.
+    """
+    profile_id = pr3c_seed_choices["profile_id"]
+
+    # Move to confirmed (requires intermediate transitions)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "confirmed"
+            profile.version += 2  # intermediate steps
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Rollback từ confirmed test 10+ chars edge case"},
+    )
+    assert response.status_code == 200, (
+        f"T17 from confirmed must succeed (state machine allows); "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    body = response.json()
+    assert body["rolled_back_from"] == "confirmed"
+    assert body["status"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_publish_result_archived_path_handling(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Security/Business rule: AdmissionPath archived after choice created.
+
+    Bug-hunt: cascade may still process archived path → admit candidates to
+    archived program. Service SHOULD refuse OR fail gracefully.
+
+    Current behavior unknown — em never verified path.status check trong
+    evaluate_cascade. This test surfaces actual behavior.
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+    path_id = pr3c_seed_reviewing["path_id"]
+
+    # Archive the path AFTER choice already created
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(models.AdmissionPath, path_id)
+            path.status = "archived"
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    # Either 200 (cascade ignores path.status — current behavior, possible BUG)
+    # OR 400 (cascade refuses archived path — correct behavior)
+    # NOT 500 (crash on missing relation OR null check)
+    assert response.status_code in (200, 400), (
+        f"Archived path must return 200 (ignored) or 400 (refused); "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    # If 200, document the gap as FU tracking
+    if response.status_code == 200:
+        body = response.json()
+        # Log decision — em flags as potential gap for plan v0.8 if cascade
+        # silently processed archived path
+        assert "final_status" in body
+
+
+@pytest.mark.asyncio
+async def test_publish_result_manager_cross_unit_idor_denied(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    admin_token_headers: dict,
+    seed_lead_dependencies: dict,
+):
+    """⭐ Security: manager unit A trying to publish profile of unit B.
+
+    Manager IDOR `get_admission_for_manager` MUST enforce unit scope.
+    Profile created với different unit_id → manager from default unit
+    should get 404 anti-enumeration.
+
+    Memory `lead-active-user-casbin-pr4` precedent — 3-tier IDOR scope.
+    """
+    # Create profile in DIFFERENT unit than manager fixture (UNIT_1).
+    # Use UNIT_2 (id=9001) from TestOrgData — manager_token_headers grants
+    # access to UNIT_1 only, so UNIT_2 profile should 404 anti-enumerate.
+    from tests.fixtures.constants import TestOrgData
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            # Ensure UNIT_2 exists (idempotent)
+            unit_2 = await s.get(models.OrganizationUnit, TestOrgData.UNIT_2["id"])
+            if unit_2 is None:
+                unit_2 = models.OrganizationUnit(
+                    id=TestOrgData.UNIT_2["id"],
+                    name=TestOrgData.UNIT_2["name"],
+                    type=TestOrgData.UNIT_2["type"],
+                )
+                s.add(unit_2)
+                await s.flush()
+
+            ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+            lead_alt = models.Lead(
+                full_name=f"Alt Lead {ts}",
+                phone=f"096{ts:07d}"[:10],
+                unit_id=TestOrgData.UNIT_2["id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead_alt)
+            await s.flush()
+
+            profile_alt = models.AdmissionProfile(
+                lead_id=lead_alt.id,
+                citizen_id=f"8{ts:08d}9"[:12],
+                status="reviewing",
+                applied_rules={},
+                academic_year=2026,
+                uses_choice_engine=True,
+            )
+            s.add(profile_alt)
+            await s.flush()
+            profile_id_alt = profile_alt.id
+
+    # Manager from default unit tries to publish profile in other unit
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id_alt}/publish-result",
+        headers=manager_token_headers,
+    )
+    # IDOR anti-enumeration — 404 (don't leak resource existence)
+    # OR 403 acceptable if Casbin/IDOR returns differently
+    assert response.status_code in (403, 404), (
+        f"Cross-unit IDOR must deny (403/404); got {response.status_code}. "
+        f"SECURITY RISK if 200 — manager bypassed unit scope!"
+    )
+
+
+@pytest.mark.asyncio
+async def test_waitlist_promote_concurrent_attempt_optimistic_lock(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_waitlisted: dict,
+):
+    """⭐ Race condition: 2 sequential promote attempts on same choice.
+
+    First promote: 200 → choice.decision='admitted', profile.status='admitted'
+    Second promote (same payload): should 400 (choice.decision already 'admitted',
+    NOT 'waitlisted' anymore — pre-check fails).
+
+    Bug-hunt: if service doesn't re-fetch choice from DB OR if pre-check
+    misses, second call could silently succeed → double dispatch
+    ADMISSION_WAITLIST_PROMOTED.
+
+    NOTE: True concurrent race (memory `async-session-gather`) deferred — needs
+    asyncio.gather + 2 separate sessions. This sequential test catches the
+    common case: admin clicks promote 2x quickly.
+    """
+    profile_id = pr3c_seed_waitlisted["profile_id"]
+    choice_id = pr3c_seed_waitlisted["choice_id_1"]
+    payload = {"choice_id": choice_id, "reason": "First promote attempt"}
+
+    # First attempt — succeeds
+    r1 = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json=payload,
+    )
+    assert r1.status_code == 200
+
+    # Second attempt với same payload — choice no longer waitlisted
+    r2 = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json=payload,
+    )
+    # Either 400 (choice.decision='admitted', pre-check fails)
+    # OR 404 (IDOR may re-evaluate profile.status mismatch)
+    # NOT 200 (would mean double-promote silent success)
+    assert r2.status_code != 200, (
+        f"Second promote on already-admitted choice must NOT 200; "
+        f"got {r2.status_code}. BUG: idempotency check missing — "
+        f"would fire ADMISSION_WAITLIST_PROMOTED twice."
+    )
+    assert r2.status_code in (400, 404), (
+        f"Expected 400/404; got {r2.status_code}: {r2.text[:200]}"
+    )
+
+
+# ============================================================================
+# H. Extended audit — semantic + security boundary (5 tests)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_admin_bypasses_casbin_diamond_deny(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Security/Architecture: admin DOES receive 200 on admin-rollback
+    despite Casbin matrix anchor proving admin DENIED via diamond inheritance.
+
+    Memory `lead-active-user-casbin-pr4` precedent — admin uses `require_admin`
+    direct gate BYPASSING Casbin. Casbin matrix test
+    (`test_admin_rollback_casbin_denies_admin_via_diamond_inheritance`) proves
+    Casbin layer denies; THIS test proves FastAPI layer actually grants.
+
+    If admin gets 403, dev swapped require_admin → CasbinAuth (regression).
+    """
+    profile_id = pr3c_seed_choices["profile_id"]
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Admin bypass Casbin diamond test 10+ chars"},
+    )
+    assert response.status_code == 200, (
+        f"Admin MUST receive 200 (require_admin gate, NOT Casbin); got {response.status_code}. "
+        f"If 403, T17 endpoint may have been mistakenly swapped to CasbinAuth — "
+        f"admin would be denied via diamond inheritance of accountant deny rule."
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_result_non_numeric_profile_id_returns_422(
+    client: AsyncClient,
+    manager_token_headers: dict,
+):
+    """⭐ FastAPI type validation: `/api/v2/admissions/abc/publish-result`
+    với non-numeric profile_id → 422 Unprocessable Entity (Pydantic int coercion).
+
+    Memory `fastapi-route-regex-vs-casbin-keymatch-distinction` (em saved
+    post Sub-3.6 broken-routes fix). Path uses `{profile_id}` plain +
+    `profile_id: int` annotation; FastAPI auto-validates via Pydantic.
+
+    Catches regression nếu endpoint signature drops type annotation.
+    """
+    response = await client.post(
+        "/api/v2/admissions/abc-non-numeric/publish-result",
+        headers=manager_token_headers,
+    )
+    # 422 Unprocessable (Pydantic int parse fail) OR 404 (route doesn't match)
+    # NOT 500 (crash) NOT 200 (would mean profile_id='abc' processed)
+    assert response.status_code in (422, 404), (
+        f"Non-numeric profile_id must return 422 or 404; got {response.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_reason_json_object_instead_of_string_422(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Input validation: reason field MUST be string. Pydantic should
+    reject `{reason: {"nested": "object"}}` → 422.
+
+    Defensive: catches type confusion / JSON injection attempts.
+    """
+    profile_id = pr3c_seed_choices["profile_id"]
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": {"nested": "object", "trying": "to bypass"}},
+    )
+    assert response.status_code == 422, (
+        f"JSON object as reason must trigger 422 Pydantic type error; "
+        f"got {response.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_metadata_jsonb_isolation_from_later_changes(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Audit immutability: status_history.metadata_ JSONB is a SNAPSHOT
+    at transition time. Changes to the source profile state AFTER rollback
+    MUST NOT mutate the historical metadata row.
+
+    Critical for audit integrity — auditor reads history rows expecting
+    point-in-time state, NOT live data.
+    """
+    from sqlalchemy import select
+    profile_id = pr3c_seed_choices["profile_id"]
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Snapshot immutability test 10+ chars"},
+    )
+    assert response.status_code == 200
+
+    # Capture metadata RIGHT AFTER rollback
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileStatusHistory)
+            .where(models.AdmissionProfileStatusHistory.profile_id == profile_id)
+            .order_by(models.AdmissionProfileStatusHistory.occurred_at.desc())
+        )
+        history = list(rows.scalars().all())
+    snapshot_metadata = dict(history[0].metadata_ or {})
+    snapshot_rolled_from = snapshot_metadata.get("rolled_back_from")
+
+    # NOW mutate profile state AFTER rollback (simulating admin retry)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"  # bring back
+            profile.version += 1
+
+    # Re-read history — metadata MUST stay frozen
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileStatusHistory)
+            .where(models.AdmissionProfileStatusHistory.profile_id == profile_id)
+            .order_by(models.AdmissionProfileStatusHistory.occurred_at.desc())
+        )
+        history_after = list(rows.scalars().all())
+    refetched_metadata = dict(history_after[0].metadata_ or {})
+
+    assert refetched_metadata == snapshot_metadata, (
+        f"status_history.metadata_ MUST be immutable post-write; "
+        f"snapshot={snapshot_metadata}, refetched={refetched_metadata}"
+    )
+    assert refetched_metadata.get("rolled_back_from") == snapshot_rolled_from
+
+
+@pytest.mark.asyncio
+async def test_publish_result_returns_405_on_get_method(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ HTTP method enforcement: GET on POST-only route → 405 Method Not Allowed.
+
+    Catches regression nếu endpoint signature changes to allow GET (unintended).
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+    response = await client.get(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 405, (
+        f"GET on POST-only route must return 405; got {response.status_code}"
+    )
+
+
+# ============================================================================
+# I. Extended audit round 3 — business rules + audit integrity (5 tests)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_bonus_rule_snapshot_immutable_after_source_mutation(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Q-P3-11 critical: choice.bonus_rule_snapshot MUST be immutable
+    after cascade writes it — subsequent mutations to source
+    `path.bonus_rule_override` or `method.default_bonus_rule` must NOT
+    propagate to the historical snapshot.
+
+    Bug-hunt: if cascade stores ref instead of deep copy, snapshot would
+    mutate when source changes — breaks audit point-in-time integrity.
+    """
+    from sqlalchemy import select
+    profile_id = pr3c_seed_reviewing["profile_id"]
+    path_id = pr3c_seed_reviewing["path_id"]
+
+    # Pre-set initial bonus_rule_override on path
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(models.AdmissionPath, path_id)
+            path.bonus_rule_override = {"version": 1, "rule": "initial"}
+
+    # Run cascade — snapshot captured
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 200
+
+    # Capture snapshot value
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileChoice)
+            .where(models.AdmissionProfileChoice.admission_profile_id == profile_id)
+        )
+        choices = list(rows.scalars().all())
+    pre_mutation_snapshot = (
+        dict(choices[0].bonus_rule_snapshot)
+        if choices[0].bonus_rule_snapshot
+        else None
+    )
+
+    # NOW mutate source path.bonus_rule_override
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(models.AdmissionPath, path_id)
+            path.bonus_rule_override = {"version": 99, "rule": "MUTATED"}
+
+    # Re-fetch choice — snapshot MUST stay frozen
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileChoice)
+            .where(models.AdmissionProfileChoice.admission_profile_id == profile_id)
+        )
+        choices_after = list(rows.scalars().all())
+    post_mutation_snapshot = (
+        dict(choices_after[0].bonus_rule_snapshot)
+        if choices_after[0].bonus_rule_snapshot
+        else None
+    )
+
+    assert post_mutation_snapshot == pre_mutation_snapshot, (
+        f"bonus_rule_snapshot MUST be immutable post-cascade. "
+        f"Pre-mutation: {pre_mutation_snapshot}, post-mutation: {post_mutation_snapshot}. "
+        f"BUG: cascade stored ref instead of deep copy — audit point-in-time broken."
+    )
+
+
+@pytest.mark.asyncio
+async def test_cascade_does_not_auto_set_waitlist_rank(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Q-P3-05 contract: cascade is admit/reject ONLY. Waitlist outcome
+    là MANUAL admin-only via T10 endpoint (mùa đầu, NOT auto-waitlist).
+
+    Bug-hunt: cascade currently sets decision in {'admitted', 'rejected'};
+    must NEVER auto-set 'waitlisted' nor populate `waitlist_rank` column.
+
+    Verifies Q-P3-05 design: no auto-waitlist trong mùa 2026.
+    """
+    from sqlalchemy import select
+    profile_id = pr3c_seed_reviewing["profile_id"]
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.AdmissionProfileChoice)
+            .where(models.AdmissionProfileChoice.admission_profile_id == profile_id)
+        )
+        choices = list(rows.scalars().all())
+
+    for choice in choices:
+        # Decision must be in admit/reject/skip — NOT waitlisted (cascade scope)
+        assert choice.decision in ("admitted", "rejected", "skip"), (
+            f"Cascade decision must be admit/reject/skip ONLY (Q-P3-05 manual "
+            f"waitlist); got '{choice.decision}'. BUG: auto-waitlist regression."
+        )
+        # waitlist_rank must stay null (only set manually via T10 future flow)
+        assert choice.waitlist_rank is None, (
+            f"waitlist_rank MUST stay null after cascade (Q-P3-05); "
+            f"got {choice.waitlist_rank}. BUG: auto-set waitlist_rank regression."
+        )
+
+
+@pytest.mark.asyncio
+async def test_waitlist_promote_accepts_null_optional_reason(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_waitlisted: dict,
+):
+    """⭐ Schema contract: AdmissionWaitlistPromoteRequest.reason is
+    Optional (NOT required). Promote without reason MUST succeed 200.
+
+    Bug-hunt: if schema accidentally marked reason as required, manager
+    forced to provide audit text for every promote — breaks UX flow.
+    """
+    profile_id = pr3c_seed_waitlisted["profile_id"]
+    choice_id = pr3c_seed_waitlisted["choice_id_1"]
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": choice_id},  # NO reason field
+    )
+    assert response.status_code == 200, (
+        f"Promote without optional reason must succeed 200; got {response.status_code}: {response.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_publish_result_closed_round_behavior(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """⭐ Business rule: OfferingAdmissionRound.status='closed' — should
+    publish-result refuse OR proceed?
+
+    Bug-hunt: cascade may silently process choices linked to a closed round.
+    Current behavior unknown — verify + document.
+
+    Note: round.status enum has 'draft|open|closed|archived' per Phase 1
+    schema. 'closed' = end of submission window, 'archived' = post-publish
+    finalization.
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+    round_id = pr3c_seed_reviewing["round_id"]
+
+    # Close the round AFTER profile already in reviewing
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            round_obj = await s.get(models.OfferingAdmissionRound, round_id)
+            round_obj.status = "closed"
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+    # Either 200 (cascade proceeds — actually CORRECT semantic since
+    # publish happens AFTER round closes; round 'closed' = submission ended
+    # but publishing decisions is the NEXT step)
+    # OR 400 (cascade refuses — stricter business rule)
+    # NOT 500 (crash)
+    assert response.status_code in (200, 400), (
+        f"Closed-round publish must return 200 (proceed) or 400 (refuse); "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    # 200 is expected behavior per semantic — round closes BEFORE publish phase
+    # Em note: nếu return 400, đó là drift từ business spec
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_response_schema_locked(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """⭐ Response schema contract lock: T17 endpoint response MUST contain
+    exactly profile_id + status + rolled_back_from keys.
+
+    Bug-hunt: catches future regression nếu response shape adds/removes
+    keys without bumping API version. FE consumer depends on stable shape.
+    """
+    profile_id = pr3c_seed_choices["profile_id"]
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Response schema lock test 10+ chars"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    expected_keys = {"profile_id", "status", "rolled_back_from"}
+    actual_keys = set(body.keys())
+    assert actual_keys == expected_keys, (
+        f"T17 response keys drift. Expected: {expected_keys}, got: {actual_keys}. "
+        f"BUG: shape change without API version bump breaks FE consumer."
+    )
+    # Specific value verify
+    assert body["status"] == "draft"
+    assert body["rolled_back_from"] == "submitted"
+    assert body["profile_id"] == profile_id
