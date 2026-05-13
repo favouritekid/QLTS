@@ -26,8 +26,11 @@ export type ChoiceDecision = z.infer<typeof choiceDecisionEnum>
 
 export const choiceScoreInputSchema = z.object({
   subject_id: z.number().int().positive(),
-  // Decimal arrives as string from BE; FE input is number → coerce when sending
-  score: z.union([z.string(), z.number()]).pipe(z.coerce.number().nonnegative()),
+  // Decimal arrives as string from BE; FE input is number → coerce via transform
+  score: z
+    .union([z.string(), z.number()])
+    .transform((v) => Number(v))
+    .pipe(z.number().nonnegative()),
 })
 export type ChoiceScoreInput = z.infer<typeof choiceScoreInputSchema>
 
