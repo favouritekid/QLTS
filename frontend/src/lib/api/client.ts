@@ -26,6 +26,7 @@ import {
   CSRF_HEADER_NAME,
 } from "./csrf";
 import { env } from "@/lib/config/env";
+import { inspectVersionHeaders } from "@/lib/api/api-versioning";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
 // ============================================
@@ -126,8 +127,17 @@ api.interceptors.request.use(
 // ============================================
 
 api.interceptors.response.use(
-  // Success responses - pass through
-  (response) => response,
+  // Success responses — inspect soft-cutoff headers (Wave B+30 deprecation,
+  // Wave B+90 schema-version mismatch) before passing through.
+  (response) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      inspectVersionHeaders(response.headers as any)
+    } catch {
+      // Defensive — versioning is observability, never block the response
+    }
+    return response
+  },
 
   // Error responses - handle 401 with auto-refresh
   async (error: AxiosError) => {
