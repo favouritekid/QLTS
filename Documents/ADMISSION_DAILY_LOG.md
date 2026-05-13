@@ -171,6 +171,133 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+### PR-3B + Hotfix #265 SHIPPED prod 2026-05-12 11:56 UTC — Phase 3 multi-NV state machine LIVE
+
+**Day 4 single-session 4-PR arc** (~5 phút compressed real time but ~6h dev work):
+
+| T | Event | SHA |
+|---|---|---|
+| 03:10 | Mini-audit Path A1 post PR-3A merge — detect AdmissionStatus Python enum 10/14 drift vs DB CHECK | — |
+| 04-06 | PR-3B 4 sub-commits: enum extend + LEGACY/PAIR maps + Casbin + 22 tests | `33398e34` → `e2fa371f` → `de685c2f` → `a825df18` |
+| ~06:00 | PR #264 mở, CI runs | — |
+| 10:33 | PR-3B merge main (despite Coverage check fail — branch protection non-blocking) | `f3c6f1c7` |
+| 10:35 | Caught: Coverage check fail = drift trong admission-contract-check.yml --allow-deferred 4 names (Sub-2 missed cross-workflow sync) | — |
+| 11:31 | Hotfix #265 merge main: admission-contract-check.yml --allow-deferred 4 → 1 names sync | `461078cd` |
+| 11:48 | Deploy run #1 FAIL at Step 4 docker compose build — Docker Hub TLS handshake timeout pulling node:20-alpine | Transient infra |
+| ~11:54 | `gh run rerun --failed` + env approve via API | — |
+| 11:56 | Deploy run #2 SUCCESS (~1m36s, vs ~10m fail) — PR-3B + hotfix LIVE prod | — |
+
+**Mini-audit findings (Path A1)**:
+1. **Critical D**: `AdmissionStatus` Python enum 10/14 statuses stale vs DB CHECK đã 14 từ Phase 1 #11. PR-3C engine `validate_transition(_, "admitted")` would crash với ValueError nếu PR-3B không fix.
+2. **PR-3D-A scope shrink**: Zod 14-state + status-badge.config 14 entries ĐÃ ship Phase 1 #11 → real PR-3D-A work còn 0.8d (vs plan 1.5d).
+3. Plan v0.6 → v0.7 cập nhật: AUDIT-01 +0.3d, AUDIT-02 -0.7d, AUDIT-03 +0.5d backfill router bundle — net +0.1d cumulative.
+
+**PR-3B Sub-commit breakdown** (4 sub-commits):
+- Sub-1 `33398e34`: AdmissionStatus enum 10→14 + ALLOWED_TRANSITIONS +9 edges (T2/T3/T4/T6/T7/T8/T9/T10/T11/T12)
+- Sub-2 `e2fa371f`: LEGACY_STATUS_TO_EVENT +3 events + NEW TRANSITION_PAIR_TO_EVENT (T10 source-aware waitlisted→admitted = WAITLIST_PROMOTED, không generic ADMITTED) + DEFERRED 4→1 (T17 only) + CI gate deploy.yml sync (MISSED admission-contract-check.yml → Hotfix #265)
+- Sub-3 `de685c2f`: Casbin MANAGER +3 POST + OFFICER +2 GET + 19 anchor tests (4 lock + 15 matrix)
+- Sub-4 `a825df18`: 22 state machine anchor tests (17 happy + 5 negative, T10 pair-lookup non-tautological)
+
+**Cross-module audit (post-deploy parallel)**: 0 critical drift. Phase 1 #15 `is_admitted_like()` helper + `lead_admission_sync.py` 4-state explicit map + `phase_manager.py` đã thoughtfully anticipate Phase 3. Em earlier "5 modules likely drift" estimate too pessimistic — should grep helper coverage BEFORE flagging risk.
+
+**Prod smoke 2/2 PASS**:
+- Backend `/health` HTTP 200 (0.18s)
+- alembic head = `phase3_01` (Phase 3 schema từ PR-3A vẫn LIVE)
+- Profile distribution unchanged: 9 draft + 1 submitted
+- PR-3B Python state machine extension + Casbin policy LIVE prod runtime
+
+**3 lessons captured into memory**:
+1. `migration-systemevents-value-case` (PR-3A hotfix #263 lesson — case canonical)
+2. `ci-workflow-flag-cross-file-sync` (PR-3B Sub-2 → hotfix #265 lesson — cross-workflow flag sync)
+3. `docker-hub-tls-transient` (deploy run #1 fail — transient infra, retry strategy)
+
+**Cumulative Phase 3 progress v0.7**:
+- PR-3A: 1.85d budget → ~0.6d actual = 1.25d saved
+- PR-3B: 2.5d budget → ~0.7d actual = 1.8d saved
+- **Total: 3.05d under budget** sau 2/6 PRs
+- Remaining 4 PRs: ~14.9d (PR-3C 2.1d + PR-3D-A 0.8d + PR-3D-B 10.5d + PR-3E 1.5d)
+- Buffer healthier than plan estimate
+
+**Next session plan**:
+- Day 5-7 (May 13-15): PR-3C engine + events fanout — wire choice-engine evaluate_cascade + publish_result endpoint + waitlist promote endpoint + T17 admin-rollback router
+- Apply BONUS-35 `{id:[0-9]+}` regex trên NEW routes
+- Memory `dispatch-bundle-strict-required`: T6/T10 dispatch trong begin_nested PHẢI strict=True
+- Memory `async-session-gather`: concurrent transition race test với 2 separate AsyncSession
+
+---
+
+## 2026-05-13 — 🎯 Phase 3 Day 6: PR-3D-A SHIPPED prod + PR-3D-B BE merged
+
+**Two-PR day** (ahead of Plan v0.7 schedule):
+
+### PR-3D-A FE Wave A SHIPPED + DEPLOYED prod 2026-05-13 04:39 UTC (PR #270 `509b3354`)
+
+| T | Event |
+|---|---|
+| ~04:00 | PR-3D-A scope shrink per AUDIT-02 (Zod 14-state + status-badge ĐÃ ship Phase 1 #11 → real work = i18n 25 keys + 4 DecisionBadge SVG + hasAction helper + Vitest, ~0.8d) |
+| 04:16 | Deploy workflow `25777921749` fired post merge |
+| 04:16-04:26 | PR Gate — Contract Tests PASS 09:34s |
+| 04:26-04:39 | Deploy to VPS PASS 12:39s |
+| 04:39 | LIVE prod. 0 hotfix needed. Commit-to-live 22:54 min total |
+
+**Files (10 FE, 0 BE/migration/Casbin)**:
+- `DecisionBadge` 5 variants × 3 sizes + `ResultPublishedBadge` profile-level
+- `hasAction()` + `getActionItem()` helpers in `frontend/src/lib/admission/permissions.ts`
+- `available_actions_v2` Zod typed shape (additive, keep legacy per P-UI-08)
+- 25 keys i18n inline (12 events + 6 reasons + 3 confirmed_via + 4 decision badges)
+- 25/25 tests PASS
+
+### PR-3D-B BE merge — Choice CRUD + Backfill admin (PR #271 `27a7a38e`)
+
+**Two-commit bundle** (consolidate review + deploy cycle per memory `gom lại rồi push một lần`):
+
+**BE-1 Choice CRUD (`0e900113`)** — 4 endpoints (officer/manager scope via CasbinAuth + IDOR):
+- `POST   /api/v2/admissions/{pid}/choices`              — create + N scores snapshot
+- `DELETE /api/v2/admissions/{pid}/choices/{cid}`        — FK cascade scores
+- `PATCH  /api/v2/admissions/{pid}/choices/{cid}`        — reorder display_order
+- `PATCH  /api/v2/admissions/{pid}/choices/{cid}/scores` — replace all (idempotent set)
+
+G7 prechecks: uses_choice_engine + status whitelist + allow_multi_nv + max_choices cap + subject∈group anti-tampering. Snapshot pattern freezes `Subject.max_score` + `SubjectGroupSubject.weight` at write time.
+
+Casbin: officer ALLOW + accountant DENY. Admin denied via diamond inheritance (P0 follow-up `phase3-pr-3d-b-backlog` FU-1 tracks Phase 4 fix).
+
+**BE-2 Backfill admin (`89f3a96d`)** — 4 endpoints (all `require_admin`, sidestep diamond gotcha):
+- `GET    /api/v2/admin/admission-backfill-exceptions`             — paginated list
+- `PATCH  /api/v2/admin/admission-backfill-exceptions/{id}/resolve` — single resolve + audit
+- `POST   /api/v2/admin/admission-backfill-exceptions/bulk-resolve` — atomic ≤500/batch
+- `GET    /api/v2/admin/admission-backfill-exceptions/export.csv`   — streaming CSV
+
+Promotes Phase 1 #07b `_admission_backfill_exceptions` table to ORM model + updates dormant PR-3A IDOR gate.
+
+**Test totals**: 14 (BE-1) + 12 (BE-2) = 26/26 PASS. Regression smoke 58/58 (PR-3B Casbin matrix + PR-3C integration) = 0 regression.
+
+**Reviewer hard-review**: APPROVE both commits, 0 critical findings, 5 deferred follow-ups tracked in memory `phase3-pr-3d-b-backlog`.
+
+**Mini-review process discipline (em positive flag)**:
+- BE-1 audit caught admin diamond DENY → BE-2 architecture deliberately uses `require_admin` direct (sidestep)
+- Idempotency feedback explicit (already-resolved 400 vs silent re-touch)
+- Bulk counters granular (requested/resolved/skipped_already_resolved/missing/missing_ids)
+- structlog actor_id + operation counters per mutation
+
+### Plan v0.7 vs reality
+
+| Milestone | Plan | Reality |
+|---|---|---|
+| Day 1-5 PR-3A→3B→3C | May 12-16 | ✅ done May 12 |
+| Day 6 PR-3D-A FE Wave A | May 17 | ✅ done May 13 (4 days ahead) |
+| Day 7-9 PR-3D-B BE | May 18-20 | ✅ BE done May 13 (5 days ahead) |
+| Day 10-15 PR-3D-B FE Wave B | May 21-26 | 📋 next, start Day 7 today |
+| Day 16 PR-3E magic-link | May 27 | 📋 |
+| Wave A ship target | May 21 | tracking ahead |
+
+**Next session plan**:
+- Start FE Wave B Day 7: `ChoiceListEditor` drag-drop dnd-kit (2.5d budget, highest priority component)
+- Consume freshly-deployed BE endpoints E2E
+- Per Plan v0.7 R13 recommendation: dnd-kit (active maintenance + Next.js 16 + React 19 compat)
+- Memory `react-query-mutation-cache-parity`: onSuccess MUST invalidate/setQueryData detail key when create/delete/reorder mutation fires
+
+---
+
 (legacy entry below)
 
 ## 2026-05-12 — 🚀 Phase 3 Multi-NV KICKOFF — Day 1 prep + plan v0.3 LOCKED
