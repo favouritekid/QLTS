@@ -199,6 +199,30 @@ from .admission import (
     AdmissionStats,
 )
 
+# --- Từ admission_backfill_exception.py (Phase 3 PR-3D-B BE-2 admin queue) ---
+from .admission_backfill_exception import (
+    AdmissionBackfillExceptionResponse,
+    BackfillExceptionListResponse,
+    BackfillExceptionResolveRequest,
+    BackfillExceptionBulkResolveRequest,
+    BackfillBulkResolveResponse,
+)
+
+
+# --- Từ admission_profile_choice.py (Phase 3 PR-3A/3D-B Choice CRUD) ---
+from .admission_profile_choice import (
+    ChoiceScoreSummary,
+    AdmissionProfileChoiceResponse,
+    AdmissionProfileChoiceCreate,
+    AdmissionProfileChoiceUpdate,
+    ChoiceScoreInput,
+    # PR-3D-B BE-1 — Choice CRUD endpoint schemas
+    ChoiceUpdateDisplayOrderRequest,
+    ChoiceScoresReplaceRequest,
+    ChoiceDeleteResponse,
+)
+
+
 # --- Từ permissions.py ---
 from .permissions import (
     Policy,

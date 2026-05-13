@@ -27,7 +27,7 @@ routes phải dùng regex constraint trong FastAPI path:
 
 Tighten ngăn typosquat `/api/v2/admissions/abc/choices` đụng route khác.
 """
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple  # noqa: F401
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -208,3 +208,293 @@ class AdmissionChoiceService:
         if eager:
             return await self.choice_repo.get_by_id_with_relations(choice_id)
         return await self.choice_repo.get_by_id(choice_id)
+
+    # ============================================================
+    # PR-3D-B BE-1 — Choice mutation helpers (CRUD endpoints)
+    # ============================================================
+
+    async def create_choice_with_scores(
+        self,
+        *,
+        profile: AdmissionProfile,
+        admission_path_id: int,
+        path_subject_group_config_id: int,
+        display_order: int,
+        scores: list,
+    ) -> Tuple[AdmissionProfileChoice, Callable]:
+        """Atomic create choice + N score rows with snapshot resolution.
+
+        Wraps ``add_choice`` (4 prechecks per G7 v0.6) then snapshots
+        ``Subject.max_score`` / ``Subject.min_possible_score`` + per-mapping
+        ``SubjectGroupSubject.weight`` into ``ProfileChoiceScore.*_snapshot``
+        columns. Snapshot pattern freezes the values at write time so a later
+        admin edit on Subject/Mapping does NOT retroactively change candidate
+        results.
+
+        Args:
+            profile: pre-loaded profile (caller IDOR-gated).
+            admission_path_id: FK to AdmissionPath.
+            path_subject_group_config_id: FK to PathSubjectGroupConfig.
+            display_order: priority 1-10.
+            scores: list of ``ChoiceScoreInput`` (subject_id + score). Each
+                subject_id MUST belong to the chosen subject_group via
+                ``SubjectGroupSubject`` mapping — else BusinessRuleViolation.
+
+        Returns:
+            (created_choice, post_commit_callback)
+
+        Raises:
+            BusinessRuleViolation: precheck or subject-not-in-group violation
+            ResourceNotFoundError: path / config / subject missing
+        """
+        # Step 1: create the choice (4 G7 prechecks inside)
+        choice, _cb = await self.add_choice(
+            profile=profile,
+            admission_path_id=admission_path_id,
+            path_subject_group_config_id=path_subject_group_config_id,
+            display_order=display_order,
+        )
+
+        # Step 2: snapshot scores (only if any provided)
+        if scores:
+            await self._snapshot_and_store_scores(
+                choice=choice,
+                path_subject_group_config_id=path_subject_group_config_id,
+                scores=scores,
+            )
+
+        return choice, _noop_callback
+
+    async def delete_choice(
+        self,
+        *,
+        profile: AdmissionProfile,
+        choice: AdmissionProfileChoice,
+    ) -> Tuple[dict, Callable]:
+        """Delete a choice + cascade scores via FK ON DELETE CASCADE.
+
+        **Prechecks**:
+        - profile.uses_choice_engine == True
+        - profile.status IN (draft, revision_requested) — retroactive scope
+
+        Note: scope is INTENTIONALLY tight. Once a profile transitions to
+        ``submitted`` or beyond, choices are immutable per state machine —
+        admin uses T17 rollback to allow editing again.
+        """
+        self._assert_choice_editable(profile, action="xoá nguyện vọng")
+
+        deleted = await self.choice_repo.delete(choice.id)
+        if not deleted:
+            raise ResourceNotFoundError(
+                f"Nguyện vọng {choice.id} không tồn tại hoặc đã xoá."
+            )
+
+        return ({"choice_id": choice.id, "profile_id": profile.id},
+                _noop_callback)
+
+    async def update_choice_display_order(
+        self,
+        *,
+        profile: AdmissionProfile,
+        choice: AdmissionProfileChoice,
+        new_display_order: int,
+    ) -> Tuple[AdmissionProfileChoice, Callable]:
+        """Update display_order on a single choice.
+
+        Caller responsible for resolving cycle conflicts when reordering >1
+        rows (FE typically sends one PATCH per row in deferred batch — DB
+        UNIQUE(profile_id, display_order) is the safety net).
+
+        **Prechecks**:
+        - profile.uses_choice_engine == True
+        - profile.status IN (draft, revision_requested)
+        - new_display_order != current (no-op short-circuit)
+        - new_display_order ≤ system_config.max_choices_per_profile (Q-P3-01
+          allows ≤10 by DB CHECK, but service narrows per system_config)
+        """
+        self._assert_choice_editable(profile, action="đổi thứ tự nguyện vọng")
+
+        if new_display_order == choice.display_order:
+            return choice, _noop_callback
+
+        max_choices_raw = await self.sysconfig.get_value(
+            "max_choices_per_profile", default=5
+        )
+        try:
+            max_choices = int(max_choices_raw) if max_choices_raw else 5
+        except (TypeError, ValueError):
+            max_choices = 5
+
+        if new_display_order > max_choices:
+            raise BusinessRuleViolation(
+                f"Thứ tự {new_display_order} vượt giới hạn "
+                f"({max_choices} nguyện vọng/hồ sơ)."
+            )
+
+        updated = await self.choice_repo.update_display_order(
+            choice.id, new_display_order=new_display_order
+        )
+        if updated is None:
+            raise ResourceNotFoundError(
+                f"Nguyện vọng {choice.id} không tồn tại."
+            )
+
+        return updated, _noop_callback
+
+    async def replace_choice_scores(
+        self,
+        *,
+        profile: AdmissionProfile,
+        choice: AdmissionProfileChoice,
+        scores: list,
+    ) -> Tuple[AdmissionProfileChoice, Callable]:
+        """Replace all scores on a choice (idempotent set semantics).
+
+        Clears existing ``ProfileChoiceScore`` rows for the choice then
+        re-creates them with fresh snapshots — same as create_choice_with_scores
+        but on existing choice. Each input subject_id MUST belong to the
+        choice's subject_group via SubjectGroupSubject mapping.
+
+        **Prechecks**:
+        - profile.uses_choice_engine == True
+        - profile.status IN (draft, revision_requested)
+
+        Note: empty scores list is a valid "clear all" intent — DB UNIQUE
+        constraint allows zero rows per choice.
+        """
+        self._assert_choice_editable(profile, action="cập nhật điểm nguyện vọng")
+
+        # Clear existing scores via direct delete (FK CASCADE would only fire
+        # on choice delete, not score replace — use bulk delete here).
+        # synchronize_session='fetch' so the session-level identity map drops
+        # stale ProfileChoiceScore rows; otherwise the eager-load on the
+        # subsequent get_choice() can return cached empty scores.
+        from sqlalchemy import delete as sa_delete
+        from app.models import ProfileChoiceScore
+
+        await self.db.execute(
+            sa_delete(ProfileChoiceScore).where(
+                ProfileChoiceScore.admission_profile_choice_id == choice.id
+            ).execution_options(synchronize_session="fetch")
+        )
+        await self.db.flush()
+
+        if scores:
+            await self._snapshot_and_store_scores(
+                choice=choice,
+                path_subject_group_config_id=choice.path_subject_group_config_id,
+                scores=scores,
+            )
+
+        # Expire choice's loaded scores collection so the subsequent eager
+        # re-fetch in router sees the new rows (identity-map cache safety).
+        self.db.expire(choice, attribute_names=["scores"])
+
+        return choice, _noop_callback
+
+    # ============================================================
+    # Internal helpers
+    # ============================================================
+
+    def _assert_choice_editable(
+        self, profile: AdmissionProfile, *, action: str
+    ) -> None:
+        """Shared precheck for delete/reorder/score-replace.
+
+        Reuses ADD_CHOICE_ALLOWED_STATUSES — same retroactive window.
+        """
+        if not profile.uses_choice_engine:
+            raise BusinessRuleViolation(
+                f"Hồ sơ này chạy quy trình cũ (single-NV), không thể {action}."
+            )
+        if profile.status not in ADD_CHOICE_ALLOWED_STATUSES:
+            raise BusinessRuleViolation(
+                f"Không thể {action} khi hồ sơ ở trạng thái "
+                f"'{profile.status}'. Chỉ cho phép khi 'draft' hoặc "
+                f"'revision_requested'."
+            )
+
+    async def _snapshot_and_store_scores(
+        self,
+        *,
+        choice: AdmissionProfileChoice,
+        path_subject_group_config_id: int,
+        scores: list,
+    ) -> None:
+        """Resolve snapshot values + insert ProfileChoiceScore rows.
+
+        For each input ``ChoiceScoreInput``:
+        - max_score_snapshot ← Subject.max_score (NOT NULL on column; fallback
+          to 10 for ACADEMIC_SUBJECT kind nếu NULL trên Subject)
+        - min_possible_score_snapshot ← Subject.min_possible_score (nullable)
+        - weight_snapshot ← SubjectGroupSubject.weight WHERE
+          subject_group_id == config.subject_group_id AND subject_id matches
+
+        Raises BusinessRuleViolation nếu subject_id không thuộc nhóm môn của
+        config (anti-tampering — FE cannot inject foreign subject).
+        """
+        from sqlalchemy import select as sa_select
+        from app.models import (
+            PathSubjectGroupConfig,
+            Subject,
+            SubjectGroupSubject,
+        )
+
+        # Load the config to know which subject_group is in play
+        config = await self.db.get(
+            PathSubjectGroupConfig, path_subject_group_config_id
+        )
+        if config is None:
+            raise ResourceNotFoundError(
+                f"Tổ hợp môn {path_subject_group_config_id} không tồn tại."
+            )
+
+        # Pre-load valid subject_ids in this subject_group + weights map
+        mapping_result = await self.db.execute(
+            sa_select(SubjectGroupSubject).where(
+                SubjectGroupSubject.subject_group_id == config.subject_group_id
+            )
+        )
+        mappings = list(mapping_result.scalars().all())
+        weight_by_subject: dict[int, Any] = {
+            m.subject_id: m.weight for m in mappings
+        }
+        valid_subject_ids = set(weight_by_subject.keys())
+
+        # Pre-load Subject rows for max/min snapshots
+        input_subject_ids = [s.subject_id for s in scores]
+        subject_result = await self.db.execute(
+            sa_select(Subject).where(Subject.id.in_(input_subject_ids))
+        )
+        subjects_by_id: dict[int, Subject] = {
+            sb.id: sb for sb in subject_result.scalars().all()
+        }
+
+        for input_score in scores:
+            sid = input_score.subject_id
+            if sid not in valid_subject_ids:
+                raise BusinessRuleViolation(
+                    f"Môn {sid} không thuộc tổ hợp của nguyện vọng này. "
+                    f"Chọn lại môn đúng tổ hợp."
+                )
+            subj = subjects_by_id.get(sid)
+            if subj is None:
+                raise ResourceNotFoundError(
+                    f"Môn {sid} không tồn tại."
+                )
+
+            # max_score fallback to 10 for ACADEMIC_SUBJECT per Subject column comment
+            max_snap = subj.max_score
+            if max_snap is None:
+                max_snap = 10
+            min_snap = subj.min_possible_score  # nullable
+            wt_snap = weight_by_subject.get(sid, 1)
+
+            await self.choice_repo.add_score(
+                admission_profile_choice_id=choice.id,
+                subject_id=sid,
+                score=input_score.score,
+                max_score_snapshot=max_snap,
+                weight_snapshot=wt_snap,
+                min_possible_score_snapshot=min_snap,
+            )

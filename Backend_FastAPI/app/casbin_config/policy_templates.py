@@ -175,6 +175,17 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # (get_choice_for_user) narrows to assigned officer scope.
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "GET"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "GET"},
+        # Phase 3 PR-3D-B BE-1 — Choice CRUD (retroactive add/edit NV).
+        # Officer can mutate choices on their assigned profile (IDOR
+        # get_choice_for_user narrows scope); manager + admin inherit via
+        # diamond. Accountant DENY block below. Service-layer status
+        # whitelist (draft + revision_requested) is the second guard.
+        # keyMatch4 wildcard matches single-segment {profile_id} +
+        # {choice_id} (per existing matcher in auth_model.conf).
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH"},
         # PR #7 — officer can create the official fee record for their own
         # assigned profile. Casbin admits the route; _fee_calc_authorized +
         # _compute_permissions narrow the scope to the owning officer on a
@@ -328,6 +339,14 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/admin-rollback",    "action": "POST", "eft": "deny"},
+        # PR-3D-B BE-1 — Choice CRUD: accountant explicitly denied per
+        # separation-of-duties; finance staff do not touch admission state.
+        # Mirror officer ALLOW above so accountant inheriting via diamond
+        # still bounces off deny effect.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "POST",   "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH",  "eft": "deny"},
     ]
 }
 
