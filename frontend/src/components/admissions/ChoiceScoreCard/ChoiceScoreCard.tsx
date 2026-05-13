@@ -23,7 +23,7 @@
  * settles in background. Local state diverges from props during edit
  * then re-syncs from server response onSettled.
  */
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Info, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -86,17 +86,20 @@ export function ChoiceScoreCard({
   const [editedScores, setEditedScores] = useState<EditableScore[]>(() =>
     choice.scores.map(toEditable),
   )
+  // Track last-seen choice.scores reference so we re-sync local state when
+  // the parent re-fetches (server invalidates after another mutation /
+  // socket data_updated). React docs-blessed "reset state on prop change"
+  // pattern — setState during render avoids the useEffect cascade and the
+  // `react-you-might-not-need-an-effect` lint error.
+  // See https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
+  const [lastChoiceScores, setLastChoiceScores] = useState(choice.scores)
+  if (lastChoiceScores !== choice.scores) {
+    setLastChoiceScores(choice.scores)
+    setEditedScores(choice.scores.map(toEditable))
+  }
   const [serverError, setServerError] = useState<string | null>(null)
 
   const mutation = useReplaceChoiceScores(profileId)
-
-  // Re-sync from props when the parent re-fetches (after another mutation
-  // succeeds or socket data_updated invalidates). Local edits in flight
-  // will be overwritten — acceptable per onBlur-save pattern (no long-lived
-  // unsaved drafts).
-  useEffect(() => {
-    setEditedScores(choice.scores.map(toEditable))
-  }, [choice.scores])
 
   const handleChange = (subjectId: number, raw: string) => {
     setEditedScores((prev) =>
