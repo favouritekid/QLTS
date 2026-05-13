@@ -462,3 +462,99 @@ async def test_admin_rollback_reason_missing_422(
     assert response.status_code == 422, (
         f"missing reason must trigger 422; got {response.status_code}"
     )
+
+
+# ============================================================================
+# E. Phase C-3 extended — additional happy path + critical negatives (4 tests)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_waitlist_promote_happy_path_manager(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_waitlisted: dict,
+):
+    """T10 happy path: manager + choice.decision=waitlisted + profile.status=
+    waitlisted → 200 với choice promoted to admitted + profile status=admitted.
+
+    Verifies TRANSITION_PAIR_TO_EVENT cascade end-to-end through router →
+    service → state machine → dispatch.
+    """
+    profile_id = pr3c_seed_waitlisted["profile_id"]
+    choice_id = pr3c_seed_waitlisted["choice_id_1"]
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": choice_id, "reason": "Manager manual promote test"},
+    )
+    assert response.status_code == 200, (
+        f"Expected 200; got {response.status_code}: {response.text}"
+    )
+    body = response.json()
+    assert body["choice_id"] == choice_id
+    assert body["profile_id"] == profile_id
+    assert body["decision"] == "admitted"
+    assert body["profile_status"] == "admitted"
+
+    # Verify DB state mutation persisted
+    async with AsyncSessionLocal() as s:
+        choice = await s.get(models.AdmissionProfileChoice, choice_id)
+        profile = await s.get(models.AdmissionProfile, profile_id)
+        assert choice.decision == "admitted"
+        assert profile.status == "admitted"
+
+
+@pytest.mark.asyncio
+async def test_publish_result_profile_not_found_404(
+    client: AsyncClient,
+    manager_token_headers: dict,
+):
+    """T6 unknown profile_id → 404 (IDOR anti-enumeration via get_admission_for_manager)."""
+    response = await client.post(
+        "/api/v2/admissions/99999999/publish-result",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 404, (
+        f"Unknown profile_id must return 404 anti-enumeration; got {response.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_waitlist_promote_choice_id_mismatch_returns_404(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_waitlisted: dict,
+):
+    """T10 IDOR ownership check: choice_id từ different profile → 404
+    (router defense-in-depth verifies choice.admission_profile_id matches
+    URL profile_id).
+    """
+    profile_id = pr3c_seed_waitlisted["profile_id"]
+    # choice_id 99999 doesn't belong to this profile
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": 99999, "reason": None},
+    )
+    assert response.status_code == 404, (
+        f"choice_id mismatch must return 404; got {response.status_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_reason_too_long_422(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    pr3c_seed_choices: dict,
+):
+    """T17 schema: reason > 500 chars → Pydantic max_length 422."""
+    profile_id = pr3c_seed_choices["profile_id"]
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "x" * 501},  # exceeds max_length=500
+    )
+    assert response.status_code == 422, (
+        f"reason > 500 chars must trigger Pydantic 422; got {response.status_code}"
+    )
