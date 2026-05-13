@@ -19,7 +19,7 @@
  * (parent must call `pushRecentReason` on its mutation success — exposed
  * via `recentReasonHandler` callback prop).
  */
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -63,16 +63,27 @@ export function AuditReasonDialog({
 }: AuditReasonDialogProps) {
   const config = AUDIT_ACTION_CONFIG[action]
   const [reason, setReason] = useState("")
-  const [recent, setRecent] = useState<string[]>([])
+  const [recent, setRecent] = useState<string[]>(() =>
+    open ? loadRecentReasons(action) : [],
+  )
 
   // Reload recent reasons whenever dialog opens (localStorage may have
-  // updated between opens) + reset reason text.
-  useEffect(() => {
+  // updated between opens) + reset reason text. React docs-blessed
+  // "reset state on prop change" pattern — setState during render avoids
+  // the useEffect cascade and the `react-hooks/set-state-in-effect` lint
+  // error. See:
+  // https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
+  const [lastOpenAction, setLastOpenAction] = useState<{ open: boolean; action: AuditAction }>({
+    open,
+    action,
+  })
+  if (lastOpenAction.open !== open || lastOpenAction.action !== action) {
+    setLastOpenAction({ open, action })
     if (open) {
       setReason("")
       setRecent(loadRecentReasons(action))
     }
-  }, [open, action])
+  }
 
   const trimmed = reason.trim()
   const tooShort = trimmed.length < config.minLength
