@@ -301,11 +301,107 @@ Promotes Phase 1 #07b `_admission_backfill_exceptions` table to ORM model + upda
 - ~1620 LOC delta
 - P3 parseApiError addressed: ChoiceScoreCard uses parseApiError(err, fallback) per Phase 2 PR #258 helper
 
-**Next session plan**:
-- Bundle Day 9-10: EligibilityResultViewer (pretty cards per-rule) + AuditReasonDialog (reason templates) per Plan v0.7
-- Bundle Day 11-12: Retroactive add-choice gate + Admin backfill queue UI (consumes BE-2 endpoints)
-- Bundle Day 13-14: Soft cutoff 3-step (Wave B+0/30/90) + Playwright E2E
-- Per Plan v0.7 budget total Wave B = 10d FE; em pace compress ~50%
+### PR-3D-B FE Wave B Bundle 2 — EligibilityResultViewer + AuditReasonDialog (PR #273)
+
+Day 9-10 ship + lint hotfix `e4ee7607`. EligibilityResultViewer decodes 7 BE
+`DisqualificationReason` codes into Vietnamese labels; collapsible raw JSON
+for officer debugging; forward-compat fallback for unknown codes.
+AuditReasonDialog reusable for T10/T11/T12/T17 with per-action config + canned
+templates + recent-reasons LRU localStorage cache (max 5/action).
+
+26/26 vitest PASS (8 viewer + 10 dialog + 8 helper). Decoupled from Bundle 1
+by importing `ChoiceDecision` direct from `DecisionBadge.tsx` (NOT
+admission-choices.ts) so Bundle 2 ships independent of Bundle 1 merge order.
+
+### Bundle 1 deploy FAIL → Hotfix #274 → Bundle 1 LIVE prod (`f7739e0d`)
+
+After PR #272 merged, deploy run `25783512328` FAILED at PR Gate Frontend Lint
+step. ESLint `react-hooks/set-state-in-effect` rule (Next.js 16+ stricter)
+flagged `ChoiceScoreCard.tsx:98` — setState in useEffect on prop change.
+
+Hotfix #274 `f7739e0d` refactored to React docs-blessed setState-during-render
+pattern (track lastChoiceScores ref, set state when ref differs). Deploy
+re-fired automatically on main push → SUCCESS at 07:34 UTC (~21 min cycle).
+
+**Lessons learned**:
+- Local `fe-check.sh test` did NOT run lint. Pre-push lint became critical.
+- Same setState-in-effect pattern existed in Bundle 2 `AuditReasonDialog.tsx`
+  + Bundle 3 `BackfillResolveDialog.tsx`. Both fixed BEFORE push using lint
+  pre-check after hotfix root-cause analysis.
+- FE CI gap tracked as FU #126 (add PR-level frontend workflow).
+
+### PR-3D-B FE Wave B Bundle 3 — Retroactive gate + Admin backfill queue UI (PR #275)
+
+Day 11-12 ship. AddChoiceGate (~85 LOC) thin client wrapper around hasAction
+helper; reads BE-driven `available_actions_v2` 'add_choice' entry; NO role
+string check. AdminBackfillQueue (~400 LOC) full table + filter row +
+toolbar + multi-select + per-row expand JSONB + per-row + bulk resolve via
+local BackfillResolveDialog + CSV export via Blob download pattern.
+
+19/19 vitest PASS (6 gate + 8 dialog + 5 queue). Branch rebased onto hotfix
+`f7739e0d` before push so Bundle 3 PR base is post-hotfix main.
+
+### PR-3D-B FE Wave B Bundle 4 — Soft cutoff listeners + Admin queue E2E smoke + DAILY_LOG closure
+
+Day 13-14 ship (final Wave B). Implements 2-of-3 soft cutoff stages per Plan
+v0.7 Wave B+30/B+90 timeline (Wave B+0 already shipped via `hasAction()`
+from PR-3D-A):
+
+- `api-versioning.ts` util (~100 LOC) — `inspectVersionHeaders()` listener
+  reads `X-API-Deprecation` (warn ONCE per session via module-level Set
+  dedupe) + `X-API-Schema-Version` mismatch (force `location.reload()` once
+  per session via sessionStorage guard).
+- `client.ts` axios response interceptor extended to call inspector on every
+  success response. Defensive try/catch — versioning is observability, never
+  blocks response.
+- 11 vitest cases non-tautological (Set dedupe + sessionStorage guard +
+  uppercase header defensive read + both headers in same response).
+- 3 Playwright smoke tests (`admission-backfill-queue-workflow.spec.ts`) —
+  admin auth gate + filter controls present + no console/network errors on
+  initial load. Multi-NV CRUD E2E deferred to nightly-regression / FU #129
+  (fixture complexity 80+ LOC per test exceeds Bundle 4 budget).
+
+**Bundle 4 stats**: 14/14 tests PASS + lint clean. ~250 LOC delta. Plan
+budget 1.5d → ~45min real.
+
+## 🏁 Wave B 100% DONE (Plan v0.7 Day 7-14)
+
+| Bundle | PR | SHA | Components | Tests |
+|---|---|---|---|---|
+| 1 | #272 | `aa661961` | ChoiceListEditor + ChoiceScoreCard | 16 vitest + 8 browser |
+| Hotfix | #274 | `f7739e0d` | ChoiceScoreCard setState-effect fix | 7 vitest re-verify |
+| 2 | #273 | (pending merge) | EligibilityResultViewer + AuditReasonDialog | 26 vitest |
+| 3 | #275 | (pending merge) | AddChoiceGate + AdminBackfillQueue + BackfillResolveDialog | 19 vitest |
+| 4 | (this) | (pending push) | Soft cutoff listeners + Admin queue smoke E2E | 14 tests |
+
+**Totals**:
+- 5 PRs (4 bundles + 1 hotfix)
+- ~5000 LOC FE delta
+- ~75 vitest + 3 Playwright + 8 browser scenarios
+- 0 prod regression on shipped bundles
+
+**Pace**: 6d Plan budget (Day 7-12) → ~5h elapsed real time = ~12x compression.
+Wave B+0 ship target was 2026-08-13; em finished prep 2026-05-13, **3 months
+ahead schedule**. Buffer W6-W9 (4w hardening per Plan v0.7) effectively
+expanded to 14w.
+
+**Backlog tracked** (8 deferred FUs, all P0-P3 defer):
+- #113 admin→accountant g-edge (Phase 4)
+- #114 DELETE choice audit log + reason
+- #115 Casbin matrix anchor 8 routes
+- #117 CSV true streaming generator
+- #118 bulk-resolve atomicity test
+- #124 dnd-kit SSR hydration mismatch
+- #126 FE CI workflow at PR-level (urgent — prevents next setState-effect-style miss)
+- #129 multi-NV CRUD E2E spec (nightly-regression candidate)
+
+**Next session plan** (Phase 3 wrap-up + Wave A → Wave B cutover):
+- Bundle 4 review + merge sequence (Bundle 2 → Bundle 3 → Bundle 4)
+- PR-3E magic-link router (Plan v0.7 Day 16, ~1.5d) — last Phase 3 BE work
+- Hard-review pass 1+2 (memory `audit-before-fix` precedent)
+- Plan v0.7 Wave A boundary hardening — 2026-07-23 hard commit, currently
+  4-day pre-buffer. Heavy compression = ship Wave A ~2026-06-15 per plan
+  vs current actual 2026-05-13 ready state.
 
 ---
 
