@@ -26,9 +26,12 @@ from app import database, models, schemas
 from app.core.deps import (
     CasbinAuth,
     get_admission_for_manager,
+    get_admission_for_user,
+    get_choice_for_user,
     require_admin,
 )
 from app.services import admission_choice_engine_service as choice_engine
+from app.services.admission_choice_service import AdmissionChoiceService
 from app.utils.exceptions import ResourceNotFoundError
 
 
@@ -280,3 +283,244 @@ async def admin_rollback_admission(
         profile_id=result["profile_id"],
         rolled_back_from=result["rolled_back_from"],
     )
+
+
+# =============================================================================
+# PR-3D-B BE-1 — Choice CRUD (POST/DELETE/PATCH)
+# =============================================================================
+# Retroactive multi-NV editing per Plan v0.7 Q-P3-12 Wave B FULL polish.
+# Service helpers in admission_choice_service.py enforce 4 prechecks
+# (uses_choice_engine + status whitelist + allow_multi_nv + max_choices).
+# IDOR gates: get_admission_for_user (POST) + get_choice_for_user (DELETE/PATCH).
+# Casbin: officer/manager/admin allow per PR-3D-B Casbin extend; accountant DENY.
+#
+# Route pattern: `/{profile_id}/choices[/{choice_id}[/scores]]` — plain int
+# path params (FastAPI's path-type validation enforces digit-only; Starlette
+# does NOT honor inline regex syntax per memory
+# `fastapi-route-regex-vs-casbin-keymatch-distinction`).
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/choices",
+    response_model=schemas.AdmissionProfileChoiceResponse,
+    status_code=201,
+    summary="Create a new choice (retroactive add-NV)",
+)
+async def create_choice(
+    profile_id: int,
+    payload: schemas.AdmissionProfileChoiceCreate,
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """POST /api/v2/admissions/{profile_id}/choices.
+
+    Create a new ``AdmissionProfileChoice`` row + N ``ProfileChoiceScore``
+    rows in a single atomic transaction. Snapshot pattern: Subject.max_score
+    + SubjectGroupSubject.weight frozen at write time.
+
+    **Prechecks** (BusinessRuleViolation → 400):
+    - profile.uses_choice_engine == True
+    - profile.status IN (draft, revision_requested)
+    - round.allow_multi_nv == True OR count < 1 (first choice always OK)
+    - existing_count < system_config.max_choices_per_profile
+    - path_subject_group_config.admission_path_id == admission_path_id
+    - each score.subject_id ∈ SubjectGroupSubject for the chosen group
+
+    **Security**:
+    - IDOR: ``get_admission_for_user`` (3-tier scope)
+    - Casbin: officer/manager/admin allow; accountant DENY
+    """
+    service = AdmissionChoiceService(db)
+    choice, post_commit_cb = await service.create_choice_with_scores(
+        profile=profile,
+        admission_path_id=payload.admission_path_id,
+        path_subject_group_config_id=payload.path_subject_group_config_id,
+        display_order=payload.display_order,
+        scores=payload.scores,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    # Re-fetch with eager-load for Contract-06 computed display fields
+    full_choice = await service.get_choice(choice.id, eager=True)
+
+    log.info(
+        "admissions_v2.create_choice",
+        profile_id=profile_id,
+        choice_id=choice.id,
+        actor_id=current_user.id,
+        display_order=payload.display_order,
+        score_count=len(payload.scores),
+    )
+
+    return schemas.AdmissionProfileChoiceResponse.model_validate(full_choice)
+
+
+@router.delete(
+    "/{profile_id}/choices/{choice_id}",
+    response_model=schemas.ChoiceDeleteResponse,
+    summary="Delete a choice (retroactive remove)",
+)
+async def delete_choice(
+    profile_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    choice: models.AdmissionProfileChoice = Depends(get_choice_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """DELETE /api/v2/admissions/{profile_id}/choices/{choice_id}.
+
+    Cascade-deletes child ``ProfileChoiceScore`` rows via FK ON DELETE CASCADE.
+
+    **Pre-checks** (raises 400 BusinessRuleViolation):
+    - profile.uses_choice_engine == True
+    - profile.status IN (draft, revision_requested)
+
+    **Ownership**: router verifies ``choice.admission_profile_id == profile_id``
+    (defense-in-depth — IDOR already narrows scope, this catches mismatched
+    URL paths).
+
+    **Security**:
+    - IDOR: ``get_choice_for_user`` (3-tier scope)
+    - Casbin: officer/manager/admin allow; accountant DENY
+    """
+    if choice.admission_profile_id != profile_id:
+        raise ResourceNotFoundError(
+            f"Choice {choice.id} không thuộc hồ sơ {profile_id}"
+        )
+
+    service = AdmissionChoiceService(db)
+    result, post_commit_cb = await service.delete_choice(
+        profile=choice.profile, choice=choice,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    log.info(
+        "admissions_v2.delete_choice",
+        profile_id=profile_id,
+        choice_id=result["choice_id"],
+        actor_id=current_user.id,
+    )
+
+    return schemas.ChoiceDeleteResponse(
+        choice_id=result["choice_id"],
+        profile_id=result["profile_id"],
+    )
+
+
+@router.patch(
+    "/{profile_id}/choices/{choice_id}",
+    response_model=schemas.AdmissionProfileChoiceResponse,
+    summary="Update choice display_order (reorder NV)",
+)
+async def update_choice_display_order(
+    profile_id: int,
+    payload: schemas.ChoiceUpdateDisplayOrderRequest,
+    db: AsyncSession = Depends(database.get_db),
+    choice: models.AdmissionProfileChoice = Depends(get_choice_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """PATCH /api/v2/admissions/{profile_id}/choices/{choice_id}.
+
+    Manual reorder. DB UNIQUE(profile_id, display_order) catches conflicting
+    swaps — FE typically defers updates client-side and sends one PATCH per
+    row in deterministic order.
+
+    **Pre-checks** (raises 400 BusinessRuleViolation):
+    - profile.uses_choice_engine == True
+    - profile.status IN (draft, revision_requested)
+    - new_display_order ≤ system_config.max_choices_per_profile
+
+    **Security**:
+    - IDOR: ``get_choice_for_user`` (3-tier scope)
+    - Casbin: officer/manager/admin allow; accountant DENY
+    """
+    if choice.admission_profile_id != profile_id:
+        raise ResourceNotFoundError(
+            f"Choice {choice.id} không thuộc hồ sơ {profile_id}"
+        )
+
+    service = AdmissionChoiceService(db)
+    updated, post_commit_cb = await service.update_choice_display_order(
+        profile=choice.profile,
+        choice=choice,
+        new_display_order=payload.display_order,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    full_choice = await service.get_choice(updated.id, eager=True)
+
+    log.info(
+        "admissions_v2.update_choice_display_order",
+        profile_id=profile_id,
+        choice_id=updated.id,
+        actor_id=current_user.id,
+        new_display_order=payload.display_order,
+    )
+
+    return schemas.AdmissionProfileChoiceResponse.model_validate(full_choice)
+
+
+@router.patch(
+    "/{profile_id}/choices/{choice_id}/scores",
+    response_model=schemas.AdmissionProfileChoiceResponse,
+    summary="Replace all scores on a choice",
+)
+async def replace_choice_scores(
+    profile_id: int,
+    payload: schemas.ChoiceScoresReplaceRequest,
+    db: AsyncSession = Depends(database.get_db),
+    choice: models.AdmissionProfileChoice = Depends(get_choice_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """PATCH /api/v2/admissions/{profile_id}/choices/{choice_id}/scores.
+
+    Idempotent replace — existing rows cleared then re-inserted with fresh
+    snapshots from Subject + SubjectGroupSubject. Empty list valid as "clear
+    all scores" intent.
+
+    **Pre-checks** (raises 400 BusinessRuleViolation):
+    - profile.uses_choice_engine == True
+    - profile.status IN (draft, revision_requested)
+    - each subject_id ∈ SubjectGroupSubject for choice's subject_group
+
+    **Security**:
+    - IDOR: ``get_choice_for_user`` (3-tier scope)
+    - Casbin: officer/manager/admin allow; accountant DENY
+    """
+    if choice.admission_profile_id != profile_id:
+        raise ResourceNotFoundError(
+            f"Choice {choice.id} không thuộc hồ sơ {profile_id}"
+        )
+
+    service = AdmissionChoiceService(db)
+    updated, post_commit_cb = await service.replace_choice_scores(
+        profile=choice.profile,
+        choice=choice,
+        scores=payload.scores,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    full_choice = await service.get_choice(updated.id, eager=True)
+
+    log.info(
+        "admissions_v2.replace_choice_scores",
+        profile_id=profile_id,
+        choice_id=updated.id,
+        actor_id=current_user.id,
+        score_count=len(payload.scores),
+    )
+
+    return schemas.AdmissionProfileChoiceResponse.model_validate(full_choice)

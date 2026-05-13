@@ -226,5 +226,41 @@ class AdmissionProfileChoiceUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# Resolve forward reference
+class ChoiceUpdateDisplayOrderRequest(BaseModel):
+    """PATCH /api/v2/admissions/{pid}/choices/{cid} payload.
+
+    PR-3D-B BE-1 — admin/officer/manager manual reorder. Single-row update
+    (FE batch reorder sends N PATCHes; DB UNIQUE(profile, display_order) is
+    safety net for transient duplicate).
+    """
+
+    display_order: int = Field(..., ge=1, le=10)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChoiceScoresReplaceRequest(BaseModel):
+    """PATCH /api/v2/admissions/{pid}/choices/{cid}/scores payload.
+
+    PR-3D-B BE-1 — replace ALL scores on a choice (idempotent set semantics).
+    Service clears existing rows + reinserts with fresh snapshots from
+    Subject + SubjectGroupSubject (max_score, weight).
+
+    Empty list is a valid "clear scores" intent.
+    """
+
+    scores: list["ChoiceScoreInput"] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChoiceDeleteResponse(BaseModel):
+    """DELETE /api/v2/admissions/{pid}/choices/{cid} response."""
+
+    choice_id: int
+    profile_id: int
+
+
+# Resolve forward references
 AdmissionProfileChoiceCreate.model_rebuild()
+ChoiceScoresReplaceRequest.model_rebuild()
