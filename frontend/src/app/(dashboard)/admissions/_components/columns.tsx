@@ -30,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { hasAction } from "@/lib/admission/permissions"
 
 // =============================================================================
 // STATUS CONFIGURATION
@@ -292,7 +293,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
                 </DropdownMenuItem>
               )}
 
-              {profile.available_actions?.includes("claim") && (
+              {hasAction(profile, "claim") && (
                 <DropdownMenuItem
                   onClick={() => options?.onClaim?.(profile)}
                   className="text-blue-600"

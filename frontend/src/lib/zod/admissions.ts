@@ -575,8 +575,26 @@ export const admissionProfileResponseSchema = z.object({
   // Validation errors (reasons for ineligibility)
   validation_errors: z.array(z.string()).default([]),
   
-  // Available workflow actions
+  // Available workflow actions (legacy string list — kept intact for
+  // backward compatibility through Wave B+90 soft cutoff per Plan v0.7
+  // P-UI-08. Consumers should migrate to `hasAction(profile, name)`
+  // helper which checks v2 typed shape first, falls back here.)
   available_actions: z.array(z.string()).default([]),
+
+  // Phase 3 PR-3D-A typed `available_actions_v2` (additive, OPTIONAL).
+  // Backend may populate this NEW field with `{action, target?, endpoint?}`
+  // shape; FE consumers via `hasAction()` helper handle both legacy +
+  // typed transparently. Wave B+90 (2026-12-15) drop legacy after FE
+  // fully migrates.
+  available_actions_v2: z
+    .array(
+      z.object({
+        action: z.string(),
+        target: z.number().int().positive().optional(),
+        endpoint: z.string().optional(),
+      })
+    )
+    .optional(),
 
   // Per-profile effective allowlist for the post-approval correction
   // dialog (mirrors AdmissionProfileResponse.minor_correction_fields).
