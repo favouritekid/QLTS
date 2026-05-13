@@ -290,11 +290,22 @@ Promotes Phase 1 #07b `_admission_backfill_exceptions` table to ORM model + upda
 | Day 16 PR-3E magic-link | May 27 | 📋 |
 | Wave A ship target | May 21 | tracking ahead |
 
+**Day 7 + Day 8 bundle ship**:
+- Day 7 (4bc61538) — ChoiceListEditor + Zod/API/hooks/DAILY_LOG, 9 vitest, 1021 LOC
+- Day 7 hotfix (5f89a520) — Zod v4 schema syntax fix (union+pipe → union+transform+pipe)
+- Day 8 — ChoiceScoreCard per-subject editor + range validation + onBlur save + revert-on-error, 7 vitest, ~600 LOC
+
+**Combined Day 7+8 stats**:
+- 16/16 vitest PASS
+- 9 new files (5 components + 4 lib/hooks/zod/api)
+- ~1620 LOC delta
+- P3 parseApiError addressed: ChoiceScoreCard uses parseApiError(err, fallback) per Phase 2 PR #258 helper
+
 **Next session plan**:
-- Start FE Wave B Day 7: `ChoiceListEditor` drag-drop dnd-kit (2.5d budget, highest priority component)
-- Consume freshly-deployed BE endpoints E2E
-- Per Plan v0.7 R13 recommendation: dnd-kit (active maintenance + Next.js 16 + React 19 compat)
-- Memory `react-query-mutation-cache-parity`: onSuccess MUST invalidate/setQueryData detail key when create/delete/reorder mutation fires
+- Bundle Day 9-10: EligibilityResultViewer (pretty cards per-rule) + AuditReasonDialog (reason templates) per Plan v0.7
+- Bundle Day 11-12: Retroactive add-choice gate + Admin backfill queue UI (consumes BE-2 endpoints)
+- Bundle Day 13-14: Soft cutoff 3-step (Wave B+0/30/90) + Playwright E2E
+- Per Plan v0.7 budget total Wave B = 10d FE; em pace compress ~50%
 
 ---
 
