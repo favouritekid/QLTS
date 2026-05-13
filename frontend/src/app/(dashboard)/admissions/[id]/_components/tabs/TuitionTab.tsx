@@ -42,6 +42,7 @@ import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/lib/stores/auth.store"
 import { hasFinanceAccess } from "@/lib/config/roles"
+import { hasAction } from "@/lib/admission/permissions"
 
 interface TuitionTabProps {
   profile: AdmissionProfileResponse
@@ -52,7 +53,9 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // PR #7 — inline calculation. Button visibility is driven entirely by
   // backend `available_actions`; no role-checking in the FE.
   const [calcDialogOpen, setCalcDialogOpen] = useState(false)
-  const canCalculateFee = profile.available_actions?.includes("calculate_fee") ?? false
+  // PR-3D-A Sub-1: hasAction() helper checks `available_actions_v2` typed
+  // (preferred) then legacy `available_actions` list (Wave B+90 soft cutoff).
+  const canCalculateFee = hasAction(profile, "calculate_fee")
   // Module-level role gate for the deep-link CTAs into /finance/*. The
   // proxy blocks officers from that area entirely — surfacing a button
   // that redirects them out of the page is a worse UX than hiding it.

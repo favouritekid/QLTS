@@ -121,6 +121,46 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
     bannerMessage: 'Hồ sơ đã được rút lại.',
     allowedActions: [],
   },
+  // Phase 3 PR-3D-A Sub-3: 4 NEW multi-NV states (Phase 1 #11 DB CHECK
+  // extension, choice-engine workflow). Status badge config trong
+  // `status-badge.config.ts` đã có entries từ Phase 1 — đây là
+  // text/banner config for legacy status-config consumers.
+  reviewing: {
+    label: 'Đang xét',
+    badgeVariant: 'default',
+    badgeColor: 'bg-info-50 text-info-700',
+    showBanner: true,
+    bannerType: 'info',
+    bannerMessage: 'Hồ sơ đang được xét duyệt qua engine.',
+    allowedActions: [],
+  },
+  result_published: {
+    label: 'Đã công bố kết quả',
+    badgeVariant: 'default',
+    badgeColor: 'bg-sky-50 text-sky-700',
+    showBanner: true,
+    bannerType: 'info',
+    bannerMessage: 'Kết quả tuyển sinh đã được công bố (T6).',
+    allowedActions: [],
+  },
+  admitted: {
+    label: 'Đậu',
+    badgeVariant: 'default',
+    badgeColor: 'bg-green-50 text-green-700',
+    showBanner: true,
+    bannerType: 'success',
+    bannerMessage: 'Chúc mừng — bạn đã trúng tuyển!',
+    allowedActions: ['confirm', 'withdraw'],
+  },
+  waitlisted: {
+    label: 'Chờ ghế',
+    badgeVariant: 'outline',
+    badgeColor: 'bg-amber-50 text-amber-700',
+    showBanner: true,
+    bannerType: 'warning',
+    bannerMessage: 'Hồ sơ đang chờ ghế (đã xét, chưa có slot).',
+    allowedActions: [],
+  },
 }
 
 // =============================================================================

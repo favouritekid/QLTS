@@ -94,6 +94,7 @@ import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 import { Pagination } from "@/components/common/table/Pagination"
 import { cn } from "@/lib/utils"
+import { hasAction } from "@/lib/admission/permissions"
 
 import {
   useListAdmissions,
@@ -372,8 +373,9 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     if (selectedProfiles.length === 0) {
       return { canApprove: false, canReject: false, canAssign: false }
     }
+    // PR-3D-A Sub-1: hasAction() helper — v2 typed shape preferred, legacy fallback
     const every = (action: string) =>
-      selectedProfiles.every((p) => p.available_actions?.includes(action) ?? false)
+      selectedProfiles.every((p) => hasAction(p, action))
     return {
       canApprove: every("approve"),
       canReject: every("reject"),
