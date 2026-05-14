@@ -4,24 +4,28 @@ consume endpoint.
 Endpoint under test:
 - POST /api/v2/admissions/magic-link/{action}/{token}
 
-5 contract tests:
+6 contract tests:
 1. Happy path confirm: valid token + correct CCCD last4 → 200, profile.status='confirmed'
 2. Action enum mismatch: URL action ≠ token row action_type → 404 (anti-enumeration)
 3. CCCD wrong: increments attempt_count + returns 400 + cooldown applied
 4. Expired token: expires_at in past → 400
 5. Not-yet-wired actions (submit/resubmit/withdraw): → 400 BusinessRuleViolation
+6. Hotfix R1 anchor: APPLICATION_STATUS_CHANGED dispatch fires after happy-path
+   confirm (parity with legacy /api/admissions/confirm/{token})
 
 Race + per-token rate-limit tests deferred to FU PR-CO-2-BE-2 (need concurrent
 client harness + Redis mocking).
 
 Non-tautological per memory `pattern-change-impact-audit`: each test asserts
-SPECIFIC status code + response body shape OR DB state mutation.
+SPECIFIC status code + response body shape OR DB state mutation OR dispatch
+call shape.
 """
 from __future__ import annotations
 
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -29,6 +33,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from app import models
+from app.core.events import SystemEvents
 from app.database import AsyncSessionLocal
 
 
@@ -291,3 +296,52 @@ async def test_consume_withdraw_action_returns_400_not_implemented(
         f"Expected 400 for not-yet-wired; got {response.status_code}: {response.text}"
     )
     assert "not yet enabled" in response.text.lower() or "withdraw" in response.text.lower()
+
+
+# ============================================================================
+# 6. Hotfix R1: APPLICATION_STATUS_CHANGED dispatch fires after confirm
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_consume_confirm_dispatches_status_changed_event(
+    client: AsyncClient,
+    magic_link_seed: dict,
+):
+    """Hotfix R1 anchor: v2 router MUST broadcast APPLICATION_STATUS_CHANGED.
+
+    The legacy /api/admissions/confirm/{token} (admissions.py:2160-2174)
+    fires this event after the candidate-facing callback so officer /
+    admin / socket clients see the status flip realtime. PR-CO-2-BE
+    initially missed this dispatch — this anchor prevents regression.
+
+    Asserts:
+      - safe_dispatch called once
+      - event = APPLICATION_STATUS_CHANGED
+      - payload contains application_id + lead_id + new_status='confirmed'
+      - dedupe_key namespaced on profile.id
+    """
+    with patch(
+        "app.routers.admissions_magic_link.safe_dispatch",
+        new=AsyncMock(),
+    ) as mock_dispatch:
+        response = await client.post(
+            f"/api/v2/admissions/magic-link/confirm/{magic_link_seed['token']}",
+            json={"cccd": magic_link_seed["last4"]},
+        )
+
+    assert response.status_code == 200, (
+        f"Happy-path confirm broke; got {response.status_code}: {response.text}"
+    )
+    assert mock_dispatch.call_count == 1, (
+        f"Expected 1 APPLICATION_STATUS_CHANGED dispatch, got {mock_dispatch.call_count}"
+    )
+
+    _, kwargs = mock_dispatch.call_args
+    assert kwargs["event"] is SystemEvents.APPLICATION_STATUS_CHANGED
+    payload = kwargs["payload"]
+    assert payload["application_id"] == magic_link_seed["profile_id"]
+    assert payload["lead_id"] == magic_link_seed["lead_id"]
+    assert payload["new_status"] == "confirmed"
+    assert payload["old_status"] == "approved"
+    assert kwargs["dedupe_key"] == f"admission_profile_confirmed:{magic_link_seed['profile_id']}"

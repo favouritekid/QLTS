@@ -16,6 +16,9 @@ name: Frontend Test (PR Gate)
 
 on:
   pull_request:
+    # Hotfix R15: skip CI on draft PRs (still run on ready_for_review).
+    # Reduces Actions minutes burn during hot-iteration drafting.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'frontend/**'
       - '.github/workflows/frontend-test.yml'
@@ -26,16 +29,21 @@ concurrency:
 
 jobs:
   fe-check:
+    # Hotfix R14: collapse the 4-way matrix into 2 jobs so we pay the
+    # ``npm ci`` install cost twice instead of four times. The cheap
+    # checks (type-check + lint + vitest) bundle into a single job; the
+    # expensive ``next build`` keeps its own runner for parallelism.
+    # Result: wall-clock budget <4 phút median holds even on cold cache.
     name: ${{ matrix.task.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         task:
-          - { name: 'Type check',  cmd: 'npm run type-check' }
-          - { name: 'Lint',        cmd: 'npm run lint' }
-          - { name: 'Unit tests',  cmd: 'npx vitest run --reporter=default' }
-          - { name: 'Build',       cmd: 'npm run build' }
+          - name: 'Check (type+lint+test)'
+            cmd: 'npm run type-check && npm run lint && npx vitest run --reporter=default'
+          - name: 'Build'
+            cmd: 'npm run build'
 
     steps:
       - uses: actions/checkout@v4
