@@ -1,0 +1,58 @@
+name: Frontend Test (PR Gate)
+
+# PR-CO-1 (Phase 3 close-out plan v2 LOCKED 2026-05-14)
+# Fixes FU #126 P0 infra debt: previously FE lint/test/build only ran on push:main
+# via deploy.yml. Bundle 1 hotfix #274 surfaced react-hooks/set-state-in-effect
+# rule (Next.js 16+ stricter) only at deploy gate, not PR gate.
+#
+# Cross-file sync (memory `ci-workflow-flag-cross-file-sync`):
+#   node-version '20'                     — matches deploy.yml:144 + dependency-audit.yml:99 + nightly-regression.yml:26
+#   cache: 'npm'                          — matches deploy.yml:145 + nightly-regression.yml:27
+#   cache-dependency-path: frontend/...   — matches deploy.yml:146 + nightly-regression.yml:28
+#
+# Performance budget: <4 phút median, <6 phút p95.
+# Fallback if >6 phút median sau 1w soak: investigate slowest job, consider
+# splitting vitest into shards or aggressive `.next/cache` pinning.
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-test.yml'
+
+concurrency:
+  group: fe-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fe-check:
+    name: ${{ matrix.task.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - { name: 'Type check',  cmd: 'npm run type-check' }
+          - { name: 'Lint',        cmd: 'npm run lint' }
+          - { name: 'Unit tests',  cmd: 'npx vitest run --reporter=default' }
+          - { name: 'Build',       cmd: 'npm run build' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: ${{ matrix.task.name }}
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: ${{ matrix.task.cmd }}

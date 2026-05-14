@@ -54,6 +54,51 @@ KHÔNG được "defer to cutover" với bất kỳ lý do gì — cherry-pick h
 
 ---
 
+## 2026-05-14 — 🎯 Phase 3 CLOSE-OUT kickoff (Day 0) — plan v2 LOCKED
+
+**Plan locked**: `Documents/PHASE3_CLOSEOUT_PLAN.md` v2 (3 open Qs locked: Q-CO-1=B, Q-CO-2=A, Q-CO-3=B). Reviewer-revised v0 → v1 → v2 trong 1 session.
+
+**S1 sequence post-lock** (active dev ~2.9d / calendar 4-5 working days):
+- **Day 1** PR-CO-1 FE CI workflow (~0.3d) — `chore/ci-frontend-pr-gate`
+- **Day 2-3** PR-CO-2-BE PR-3E magic-link router (~1.2d) — `feat/admission-phase3-06-magic-link-router-be`
+- **Day 4** PR-CO-2-FE PR-3E FE 4-action UI (~0.6d) — `feat/admission-phase3-06-magic-link-router-fe`
+- **Day 5** PR-CO-3 DELETE choice audit log (~0.3d) feat + PR-CO-4 Casbin matrix + bulk-resolve atomicity tests (~0.5d) pure test
+
+**Deferred S2/Phase 4**:
+- PR-CO-5 CSV true streaming (FU #117 perf — Phase 4 OK, QLTS scale chưa urgent)
+- PR-CO-6 Multi-NV E2E nightly (FU #129 — S2 hardening cùng 48h soak)
+- PR-CO-7 dnd-kit SSR (FU #124 P3 defer)
+
+**Wave A+B closure** Bundle 1-4 final squash SHAs (cosmetic N1 reference):
+- Wave A: `509b3354` (PR #270 DecisionBadge + hasAction)
+- BE foundation: `27a7a38e` (PR #271 Choice CRUD + Backfill admin 8 endpoints)
+- Bundle 1: `aa661961` (PR #272 ChoiceListEditor + ChoiceScoreCard) + hotfix `f7739e0d` (PR #274 setState-in-effect)
+- Bundle 2: `f20bf224` (PR #273 EligibilityResultViewer + AuditReasonDialog)
+- Bundle 3: `b804efe8` (PR #275 AddChoiceGate + AdminBackfillQueue)
+- Bundle 4: `7f859415` (PR #276 Soft cutoff listeners + Admin queue smoke E2E)
+
+**Pre-conditions S1 verified**:
+- ✅ Bundle 4 deploy run `25787180541` PASS (rerun 2026-05-14 13:18 UTC+7)
+- ✅ Resubmit bug `admission_service.py:6310` already fixed (memory `resubmit-notes-none-bug` CLOSED 2026-05-11; PR #234 `d8554bca`)
+- ✅ Plan v2 LOCKED; memory `phase3-wave-b-closure` next-session pointer added; MEMORY.md index updated
+
+**Reviewer findings applied v0 → v1 → v2** (audit trail):
+- 3 critical (C1 obsolete PR removed, C2 trigger stale fixed, C3 FE folder convention corrected to ROOT `app/magic-link/[action]/[token]/page.tsx`)
+- 7 mid (H1 bundle split nature, H2 Day 0 wording, H3 priority mismatch moot, H4 Q-CO-3 flipped A→B, H5 RC3 budget concrete <4 phút median, H6 cross-file workflow grep added, H7 active dev vs calendar distinction)
+- 4 nit (N1 DAILY_LOG cosmetic fold, N2 acceptance checklist consolidate Magic-link 1 gate, N3 memory không phình, N4 pre-condition checklist updated)
+
+**Tomorrow plan (Day 1)**:
+- PR-CO-1 FE CI workflow → tạo `.github/workflows/frontend-test.yml` (vitest + tsc + lint + build paths `frontend/**`, concurrency cancel-in-progress, cross-file grep node-version + cache-key vs deploy.yml/admission-contract-check.yml/dependency-audit.yml/nightly-regression.yml)
+- Anchor regression: draft PR cố tình break lint → verify gate FAIL
+- Budget <4 phút median, fallback matrix split >6 phút sau 1w soak
+
+**Notes**:
+- Wave A hard commit 2026-07-23 → buffer ~10.2w sau S1 ship
+- Mùa tuyển sinh 2026-08-01 mở với FULL Wave B polish
+- Solo dev R11 weekend reset áp dụng — không nén S1 < 4 calendar days
+
+---
+
 ## 2026-05-12 — 🚀 Phase 3 Multi-NV KICKOFF — Day 1 prep + plan v0.6 LOCKED
 
 **Plan locked**: `C:\Users\Admin\.claude\plans\noble-launching-cocoa.md` v0.6 + supplement `Documents/PHASE3_UI_DESIGN_V0.1.md` v0.5 (2-file canonical structure).

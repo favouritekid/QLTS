@@ -47,7 +47,9 @@ describe("getStatusConfig", () => {
       expect(config.label).toBe("Đã duyệt")
       expect(config.badgeColor).toContain("success")
       expect(config.showBanner).toBe(true)
-      expect(config.bannerType).toBe("success")
+      // 'approved' = intermediate state (awaiting candidate confirm) → bannerType 'info'.
+      // 'success' bannerType is reserved for 'confirmed' (post-candidate-confirm).
+      expect(config.bannerType).toBe("info")
       expect(config.allowedActions).toContain("enroll")
     })
 
