@@ -95,6 +95,7 @@ import {
   isDocumentRequirementSatisfied,
   isDocumentPendingVerification,
 } from "@/lib/utils/admission-helpers"
+import { API_BASE_URL } from "@/lib/api/client"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
@@ -866,7 +867,9 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
   const handleViewDocument = (filePath: string) => {
     if (!isSafeFilePath(filePath)) return
     const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
-    const url = `${process.env.NEXT_PUBLIC_API_URL || ""}/${cleanPath}`
+    // Use canonical API_BASE_URL (Zod-validated in lib/config/env.ts) instead
+    // of raw process.env — single source of truth, fails fast on misconfig.
+    const url = `${API_BASE_URL}/${cleanPath}`
     window.open(url, "_blank", "noopener,noreferrer")
   }
 
