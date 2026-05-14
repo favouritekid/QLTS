@@ -286,45 +286,43 @@ class AdmissionPathService:
                     "cần thay đổi."
                 )
 
-        # Create path
-        path = await self.repo.create(
-            {
-                "academic_info_id": data.academic_info_id,
-                "admission_method_id": data.admission_method_id,
-                "admission_round_id": admission_round_id,
-                "round_quota": data.round_quota,
-                "admit_quota": data.admit_quota,
-                "display_name": data.display_name,
-                "display_order": data.display_order,
-                "visibility": data.visibility,
-                "status": "draft",  # Always start as draft
-                # PR #6 — strict-by-default; admin may flip to True on create.
-                "allow_unverified_submission": data.allow_unverified_submission,
-                # Per-path correction allowlist — empty by default, admin may
-                # seed a list at create time. Schema validator already
-                # filtered out non-SAFE entries before reaching here.
-                "minor_correction_allowed_fields": list(
-                    data.minor_correction_allowed_fields or []
-                ),
-                # phase1_03 (#184 Wave 1 PR-1B'-FE/BE micro-patch) — 3
-                # admin-only fields. Pydantic shape already validated
-                # the audience ENUM + method_quota ge=0 + BonusRuleOverride
-                # range; convert the typed shape back to a JSONB-friendly
-                # dict for the JSONB column. None passes through unchanged
-                # (= legacy / no method cap / inherit method bonus default).
-                "applicable_to": (
-                    list(data.applicable_to)
-                    if data.applicable_to is not None
-                    else None
-                ),
-                "method_quota": data.method_quota,
-                "bonus_rule_override": (
-                    data.bonus_rule_override.model_dump()
-                    if data.bonus_rule_override is not None
-                    else None
-                ),
-            }
+        # Create path — drift-immune pattern (2026-05-14 PR #295 lesson
+        # from PR #294 round-flag drift): build the row payload from
+        # ``data.model_dump()`` so every field the Pydantic schema accepts
+        # is forwarded by construction. When schema adds a field, the
+        # service does NOT have to be edited in lockstep — Pydantic-side
+        # validation is the single source of truth.
+        #
+        # Two carve-outs that DON'T come straight from the payload:
+        #   - ``admission_round_id`` may have been auto-resolved to DOT_1
+        #     above (the payload value can be None); we override with the
+        #     resolved id.
+        #   - ``status`` is server-controlled — every newly created path
+        #     starts in ``draft`` regardless of what the caller sent.
+        #
+        # Two field-level shape conversions stay explicit because the
+        # column is JSONB but the Pydantic field is a typed shape /
+        # iterable: ``applicable_to`` (typed enum list → plain list) +
+        # ``bonus_rule_override`` (BonusRuleOverride → dict). They mirror
+        # the same conversions ``update_path`` applies post-model_dump.
+        payload_data = data.model_dump(exclude_unset=False)
+        payload_data["admission_round_id"] = admission_round_id
+        payload_data["status"] = "draft"
+        # minor_correction_allowed_fields: coerce None → [] (schema default
+        # is empty list, but a stale caller could pass None). Keep list()
+        # wrap so the column receives a fresh list instance, not the
+        # validator's internal reference.
+        payload_data["minor_correction_allowed_fields"] = list(
+            payload_data.get("minor_correction_allowed_fields") or []
         )
+        if payload_data.get("applicable_to") is not None:
+            payload_data["applicable_to"] = list(payload_data["applicable_to"])
+        if payload_data.get("bonus_rule_override") is not None:
+            inner = payload_data["bonus_rule_override"]
+            if hasattr(inner, "model_dump"):
+                payload_data["bonus_rule_override"] = inner.model_dump()
+
+        path = await self.repo.create(payload_data)
 
         return path, _noop_callback
 

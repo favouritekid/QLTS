@@ -153,6 +153,7 @@ jobs:
           tests/api/test_phase3_pr3d_b_admin_backfill.py
           tests/api/test_phase3_pr3e_magic_link.py
           tests/services/test_phase3_create_profile_inherits_multi_nv.py
+          tests/unit/test_admission_path_service_field_drift.py
           -q --tb=short
 
       # =====================================================================
