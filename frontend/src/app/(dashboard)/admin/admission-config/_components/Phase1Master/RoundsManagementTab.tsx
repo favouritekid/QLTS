@@ -77,6 +77,11 @@ interface FormState {
   start_date: string
   end_date: string
   is_active: boolean
+  // Phase 3 Q-P3-02 / Q-P3-06 surfaced via phase3_01 migration + this PR.
+  // Defaults mirror Pydantic AdmissionRoundBase to keep create + update + API
+  // contract aligned.
+  allow_multi_nv: boolean
+  confirm_expiry_hours: number
 }
 
 const EMPTY_FORM: FormState = {
@@ -85,6 +90,8 @@ const EMPTY_FORM: FormState = {
   start_date: "",
   end_date: "",
   is_active: true,
+  allow_multi_nv: false,
+  confirm_expiry_hours: 168,
 }
 
 const DEFAULT_4_ROUNDS = [
@@ -101,6 +108,8 @@ function formStateToCreatePayload(f: FormState) {
     start_date: f.start_date || null,
     end_date: f.end_date || null,
     is_active: f.is_active,
+    allow_multi_nv: f.allow_multi_nv,
+    confirm_expiry_hours: f.confirm_expiry_hours,
   }
 }
 
@@ -110,6 +119,8 @@ function formStateToUpdatePayload(f: FormState) {
     start_date: f.start_date || null,
     end_date: f.end_date || null,
     is_active: f.is_active,
+    allow_multi_nv: f.allow_multi_nv,
+    confirm_expiry_hours: f.confirm_expiry_hours,
   }
 }
 
@@ -120,6 +131,8 @@ function roundToFormState(r: AdmissionRoundResponse): FormState {
     start_date: r.start_date ?? "",
     end_date: r.end_date ?? "",
     is_active: r.is_active,
+    allow_multi_nv: r.allow_multi_nv,
+    confirm_expiry_hours: r.confirm_expiry_hours,
   }
 }
 
@@ -615,6 +628,52 @@ function RoundForm({
           onCheckedChange={(c) => setForm({ ...form, is_active: Boolean(c) })}
         />
         <Label htmlFor="is_active">Đang hoạt động</Label>
+      </div>
+
+      {/* Phase 3 Q-P3-02 — per-round multi-NV gate. Off by default; admin
+          flips on per round when the round should accept multi-choice
+          submissions. Engine + storefront read this same value. */}
+      <div className="flex items-start space-x-2">
+        <Checkbox
+          id="allow_multi_nv"
+          className="mt-1"
+          checked={form.allow_multi_nv}
+          onCheckedChange={(c) => setForm({ ...form, allow_multi_nv: Boolean(c) })}
+        />
+        <div className="space-y-1">
+          <Label htmlFor="allow_multi_nv">Cho phép nhiều nguyện vọng</Label>
+          <p className="text-xs text-muted-foreground">
+            Bật để thí sinh đăng ký nhiều ngành xếp thứ tự ưu tiên trong đợt
+            này. Tắt = mỗi hồ sơ chỉ 1 nguyện vọng (chế độ cũ).
+          </p>
+        </div>
+      </div>
+
+      {/* Phase 3 Q-P3-06 — per-round magic-link confirm expiry. Default
+          168h (7 ngày). Admin có thể rút ngắn (vd: 24h cho đợt gấp) hoặc
+          nới (vd: 336h=14d cho đợt dài). */}
+      <div className="space-y-2">
+        <Label htmlFor="confirm_expiry_hours">
+          Thời hạn xác nhận nhập học (giờ)
+        </Label>
+        <Input
+          id="confirm_expiry_hours"
+          type="number"
+          min={1}
+          max={8760}
+          value={form.confirm_expiry_hours}
+          onChange={(e) =>
+            setForm({
+              ...form,
+              confirm_expiry_hours: Number(e.target.value) || 0,
+            })
+          }
+        />
+        <p className="text-xs text-muted-foreground">
+          Sau khi trúng tuyển, thí sinh có {form.confirm_expiry_hours} giờ
+          (~{Math.round((form.confirm_expiry_hours / 24) * 10) / 10} ngày) để
+          xác nhận nhập học qua magic-link. Mặc định 168 giờ (7 ngày).
+        </p>
       </div>
     </div>
   )

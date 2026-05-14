@@ -347,6 +347,16 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"], // Only admin can access system configuration
         },
         {
+          // Phase 3 close-out 2026-05-14: runtime key-value system_config
+          // editor (max_choices_per_profile, current_intake_year, future
+          // gating flags). BE shipped phase1_13 PR-1D, FE was the missing
+          // piece — admin previously had to curl/SQL to mutate.
+          label: "Cấu hình hệ thống",
+          href: "/admin/system-config",
+          icon: Cog,
+          roles: ["admin"],
+        },
+        {
           label: "Monitoring",
           href: "/admin/monitoring",
           icon: Activity,
