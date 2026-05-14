@@ -184,6 +184,11 @@ export function RoundsManagementTab() {
         round_code: r.round_code,
         round_name: `${r.round_name} - ${academicYear}`,
         is_active: true,
+        // Phase 3 schema required these 2 fields; pre-seed defaults
+        // matching ``AdmissionRoundBase`` (multi-NV off, 7-day expiry).
+        // Admin can flip per-round via Sửa đợt after the bulk-create.
+        allow_multi_nv: false,
+        confirm_expiry_hours: 168,
       })),
     })
     setBulkCreateOpen(false)

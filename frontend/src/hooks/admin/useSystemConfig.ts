@@ -4,6 +4,7 @@
 "use client"
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { AxiosError } from "axios"
 import { toast } from "sonner"
 
 import {
@@ -15,6 +16,7 @@ import type {
   SystemConfigResponse,
   SystemConfigUpdate,
 } from "@/lib/zod/system-config"
+import type { ApiErrorResponse } from "@/types/api.types"
 import { handleApiError } from "@/lib/error-handler"
 
 const QK = {
@@ -33,7 +35,7 @@ export function useUpdateSystemConfig() {
   const qc = useQueryClient()
   return useMutation<
     SystemConfigResponse,
-    unknown,
+    AxiosError<ApiErrorResponse>,
     { key: string; data: SystemConfigUpdate }
   >({
     mutationFn: ({ key, data }) => updateSystemConfig(key, data),
