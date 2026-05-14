@@ -152,9 +152,16 @@ def _build_enforcer_from_templates(roles_to_seed):
     return enforcer
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def enforcer():
-    """Enforcer loaded with manager + officer + accountant templates."""
+    """Enforcer loaded with manager + officer + accountant templates.
+
+    Module-scoped because tests are read-only (.enforce() calls only, no
+    add_policy/remove_policy mutations — confirmed by grep). Building the
+    enforcer parses the model file + writes a tempfile policy + reloads —
+    not free at 49 matrix cells × per-function rebuilds. B3 M4 fixture
+    scope hardening (Tier B).
+    """
     roles = {
         "manager": MANAGER_TEMPLATE,
         "officer": OFFICER_TEMPLATE,
@@ -317,14 +324,14 @@ ROUTE_CHOICE_SCORES_PATCH = (
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def enforcer_with_admin_diamond():
     """Enforcer including ADMIN_TEMPLATE + full diamond inheritance.
 
     Distinct from the module-level ``enforcer`` fixture (manager+officer+
     accountant only) — choice CRUD matrix needs the admin diamond to
     verify FU #113 ``admin → accountant`` deny inheritance for all 4
-    choice routes.
+    choice routes. Module-scoped (read-only enforcer) per B3 M4.
     """
     from app.casbin_config.policy_templates import ADMIN_TEMPLATE
 
