@@ -771,10 +771,19 @@ async def test_revision_chain_phase3_01_after_phase2_06(setup_test_database):
     """ANCHOR Wave 3-A memory `pattern-change-impact-audit`:
     alembic revision chain lock — phase3_01.down_revision == phase2_06.
     """
+    from pathlib import Path
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
-    cfg = Config("/app/alembic.ini")
+    # 2026-05-14 fix: resolve alembic.ini relative to this test file
+    # instead of hardcoding ``/app/alembic.ini``. Docker container has
+    # /app/alembic.ini (works), but CI runners use the repo layout
+    # (Backend_FastAPI/alembic.ini) — hardcoded absolute path raised
+    # ``CommandError: No 'script_location' key found in configuration``
+    # on GitHub Actions because the empty Config() fell through. The
+    # alembic.ini lives 2 levels up from this test (tests/unit/).
+    alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+    cfg = Config(str(alembic_ini))
     script = ScriptDirectory.from_config(cfg)
     rev = script.get_revision("phase3_01")
     assert rev is not None, "phase3_01 revision not found"
