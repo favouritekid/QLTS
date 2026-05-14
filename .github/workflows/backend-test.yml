@@ -1,5 +1,13 @@
 name: Backend Test (PR Gate)
 
+# Touched 2026-05-14 alongside PR #288 (.gitignore session-pollution
+# cleanup) only to trigger this gate — branch protection ruleset 16381130
+# requires ``pytest`` to pass on every PR, but root-level config-only PRs
+# (.gitignore, README, etc.) do not match any path filter and would
+# otherwise sit at "expected, not run" forever. Future root-only PRs:
+# bundle a no-op workflow touch like this OR expand the path filter
+# below to include the affected root files explicitly.
+#
 # Sprint S2 hardening (memory `auto-merge-requires-full-ci-not-just-green`):
 # Closes the systemic gap surfaced by PR #283 orphan-merge. The existing
 # admission-contract-check.yml has a path filter (`services/admission*.py`,
