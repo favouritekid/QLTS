@@ -46,6 +46,7 @@ from .routers import (
     admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admin_backfill,  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (Q-P3-09)
     admissions,  # ✅ NEW: Admission Profile workflow
+    admissions_magic_link,  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link consume (4 actions)
     admissions_v2,  # ✅ #184 Phase 3 PR-3C Sub-3.3: multi-NV choice-engine endpoints (publish-result T6)
     auth,
     collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
@@ -783,6 +784,7 @@ fastapi_app.include_router(commissions.policy_router, prefix="/api")  # ✅ CTV 
 fastapi_app.include_router(commissions.record_router, prefix="/api")  # ✅ CTV P2: Commission records (Admin)
 fastapi_app.include_router(commissions.ctv_commission_router, prefix="/api")  # ✅ CTV P2: CTV commission view
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Profile workflow
+fastapi_app.include_router(admissions_magic_link.router)  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link (router declares /api/v2/admissions/magic-link prefix)
 fastapi_app.include_router(admissions_v2.router)  # ✅ #184 Phase 3 PR-3C: multi-NV choice-engine v2 (router declares /api/v2 prefix)
 fastapi_app.include_router(admin_backfill.router)  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (router declares /api/v2/admin prefix)
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
