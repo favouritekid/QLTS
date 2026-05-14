@@ -359,6 +359,17 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"], // Admin and Manager can restore deleted items
         },
         {
+          // Phase 3 PR-3D-B Bundle 3 (PR #275): admin queue for triaging
+          // backfill exceptions when migration cannot auto-map a legacy
+          // profile to the new multi-NV engine. Route deployed prod
+          // 2026-05-13 but was missing from the sidebar — admins had to
+          // remember the URL or rely on the recent-pages list.
+          label: "Backfill Queue",
+          href: "/admin/admission-backfill-queue",
+          icon: Database,
+          roles: ["admin"], // Admin-only — route is admin-gated via deps
+        },
+        {
           label: "Audit Logs",
           href: "/admin/audit-logs",
           icon: History,
