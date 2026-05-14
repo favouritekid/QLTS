@@ -18,8 +18,10 @@ Endpoints (Sub-3.3-3.5b incremental ship):
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
@@ -370,6 +372,7 @@ async def delete_choice(
     db: AsyncSession = Depends(database.get_db),
     choice: models.AdmissionProfileChoice = Depends(get_choice_for_user),
     current_user: models.User = CasbinAuth,
+    body: Optional[schemas.ChoiceDeleteRequest] = Body(default=None),
 ):
     """DELETE /api/v2/admissions/{profile_id}/choices/{choice_id}.
 
@@ -383,6 +386,11 @@ async def delete_choice(
     (defense-in-depth — IDOR already narrows scope, this catches mismatched
     URL paths).
 
+    **Audit (PR-CO-3, FU #114)**: optional body ``{ "reason": "..." }`` is
+    captured to ``user_activity_log`` with the choice snapshot + scores
+    so DELETEs leave a forensic trace. Body is optional — a payload-less
+    DELETE still writes the audit row with a null reason.
+
     **Security**:
     - IDOR: ``get_choice_for_user`` (3-tier scope)
     - Casbin: officer/manager/admin allow; accountant DENY
@@ -394,7 +402,10 @@ async def delete_choice(
 
     service = AdmissionChoiceService(db)
     result, post_commit_cb = await service.delete_choice(
-        profile=choice.profile, choice=choice,
+        profile=choice.profile,
+        choice=choice,
+        actor_id=current_user.id,
+        reason=body.reason if body else None,
     )
 
     await db.commit()
@@ -406,6 +417,7 @@ async def delete_choice(
         profile_id=profile_id,
         choice_id=result["choice_id"],
         actor_id=current_user.id,
+        has_reason=bool(body and body.reason),
     )
 
     return schemas.ChoiceDeleteResponse(

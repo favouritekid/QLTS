@@ -219,6 +219,7 @@ from .admission_profile_choice import (
     # PR-3D-B BE-1 — Choice CRUD endpoint schemas
     ChoiceUpdateDisplayOrderRequest,
     ChoiceScoresReplaceRequest,
+    ChoiceDeleteRequest,
     ChoiceDeleteResponse,
 )
 
