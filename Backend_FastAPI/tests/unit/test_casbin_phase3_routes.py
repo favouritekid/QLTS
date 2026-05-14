@@ -286,3 +286,144 @@ def test_admin_rollback_casbin_denies_admin_via_diamond_inheritance():
         "admin allow rule may have been accidentally added. T17 admin-rollback "
         "MUST use require_admin FastAPI dep, NOT CasbinAuth."
     )
+
+
+# ============================================================================
+# PR-CO-4 (FU #115) — Choice CRUD route Casbin matrix anchor
+# ============================================================================
+#
+# 4 PR-3D-B BE-1 routes × 4 roles = 16 cells. Locks the current Phase 3
+# state-after-Sub-3 contract:
+#
+#   - OFFICER  ALLOW via direct rules (policy_templates.py:176, 185-188)
+#   - MANAGER  ALLOW via diamond inheritance manager→officer
+#   - ACCOUNTANT  DENY via explicit deny rules (policy_templates.py:346-349)
+#   - ADMIN  DENY via diamond admin→accountant (Phase 4 cleanup tracked
+#     as FU #113 in memory `phase3-pr3d-b-backlog`). The router still works
+#     for admin because the choice CRUD endpoints use ``CasbinAuth`` —
+#     admin uses admin-rollback or operator override flows, not direct
+#     choice mutation. If FU #113 ever drops the diamond edge, this test
+#     must flip to ``True`` for admin or be deleted.
+#
+# Non-tautological per memory ``pattern-change-impact-audit``: each cell
+# asserts the EXACT enforce decision with the documented reason.
+
+ROUTE_CHOICES_POST = ("/api/v2/admissions/123/choices", "POST")
+ROUTE_CHOICE_DELETE = ("/api/v2/admissions/123/choices/456", "DELETE")
+ROUTE_CHOICE_PATCH = ("/api/v2/admissions/123/choices/456", "PATCH")
+ROUTE_CHOICE_SCORES_PATCH = (
+    "/api/v2/admissions/123/choices/456/scores",
+    "PATCH",
+)
+
+
+@pytest.fixture
+def enforcer_with_admin_diamond():
+    """Enforcer including ADMIN_TEMPLATE + full diamond inheritance.
+
+    Distinct from the module-level ``enforcer`` fixture (manager+officer+
+    accountant only) — choice CRUD matrix needs the admin diamond to
+    verify FU #113 ``admin → accountant`` deny inheritance for all 4
+    choice routes.
+    """
+    from app.casbin_config.policy_templates import ADMIN_TEMPLATE
+
+    lines = []
+    roles = {
+        "admin": ADMIN_TEMPLATE,
+        "manager": MANAGER_TEMPLATE,
+        "officer": OFFICER_TEMPLATE,
+        "accountant": ACCOUNTANT_TEMPLATE,
+    }
+    for template_name in roles:
+        role_subject = f"role:{template_name}"
+        rules = apply_template(template_name, role_subject)
+        for r in rules:
+            eft = r.get("eft", "allow")
+            lines.append(f"p, {r['subject']}, {r['object']}, {r['action']}, {eft}")
+
+    # Diamond inheritance per Phase 1 B1 docstring lines 42-47
+    lines.append("g, role:manager, role:officer")
+    lines.append("g, role:accountant, role:officer")
+    lines.append("g, role:admin, role:manager")
+    lines.append("g, role:admin, role:accountant")
+
+    policy_text = "\n".join(lines) + "\n"
+    tmp_policy = NamedTemporaryFile(
+        mode="w", suffix=".csv", delete=False, encoding="utf-8"
+    )
+    tmp_policy.write(policy_text)
+    tmp_policy.close()
+
+    return casbin.Enforcer(str(AUTH_MODEL_PATH), tmp_policy.name)
+
+
+@pytest.mark.parametrize(
+    "role,route,expected,reason",
+    [
+        # ---- OFFICER: 4 ALLOW via direct rules ----
+        ("role:officer", ROUTE_CHOICES_POST, True,
+         "Officer direct allow (policy_templates.py:185)"),
+        ("role:officer", ROUTE_CHOICE_DELETE, True,
+         "Officer direct allow (policy_templates.py:186)"),
+        ("role:officer", ROUTE_CHOICE_PATCH, True,
+         "Officer direct allow (policy_templates.py:187)"),
+        ("role:officer", ROUTE_CHOICE_SCORES_PATCH, True,
+         "Officer direct allow (policy_templates.py:188)"),
+        # ---- MANAGER: 4 ALLOW via diamond inheritance manager→officer ----
+        ("role:manager", ROUTE_CHOICES_POST, True,
+         "Manager inherits officer allow via diamond"),
+        ("role:manager", ROUTE_CHOICE_DELETE, True,
+         "Manager inherits officer allow via diamond"),
+        ("role:manager", ROUTE_CHOICE_PATCH, True,
+         "Manager inherits officer allow via diamond"),
+        ("role:manager", ROUTE_CHOICE_SCORES_PATCH, True,
+         "Manager inherits officer allow via diamond"),
+        # ---- ACCOUNTANT: 4 explicit DENY override inherited allow ----
+        ("role:accountant", ROUTE_CHOICES_POST, False,
+         "Accountant explicit deny (policy_templates.py:346)"),
+        ("role:accountant", ROUTE_CHOICE_DELETE, False,
+         "Accountant explicit deny (policy_templates.py:347)"),
+        ("role:accountant", ROUTE_CHOICE_PATCH, False,
+         "Accountant explicit deny (policy_templates.py:348)"),
+        ("role:accountant", ROUTE_CHOICE_SCORES_PATCH, False,
+         "Accountant explicit deny (policy_templates.py:349)"),
+        # ---- ADMIN: 4 DENY via diamond admin→accountant (FU #113 Phase 4) ----
+        # Memory `lead-active-user-casbin-pr4`: admin diamond inherits
+        # accountant explicit deny. Phase 4 cleanup will drop the
+        # ``g, role:admin, role:accountant`` edge — when that lands this
+        # row must flip to True. Until then, Casbin enforces the deny;
+        # admin operators use admin-rollback flow + operator override
+        # rather than direct choice mutation, so the broken-by-design
+        # Casbin gate is acceptable production behaviour.
+        ("role:admin", ROUTE_CHOICES_POST, False,
+         "Admin DENY via diamond admin→accountant (FU #113 Phase 4)"),
+        ("role:admin", ROUTE_CHOICE_DELETE, False,
+         "Admin DENY via diamond admin→accountant (FU #113 Phase 4)"),
+        ("role:admin", ROUTE_CHOICE_PATCH, False,
+         "Admin DENY via diamond admin→accountant (FU #113 Phase 4)"),
+        ("role:admin", ROUTE_CHOICE_SCORES_PATCH, False,
+         "Admin DENY via diamond admin→accountant (FU #113 Phase 4)"),
+    ],
+)
+def test_choice_crud_route_enforce_matrix(
+    enforcer_with_admin_diamond, role, route, expected, reason
+):
+    """16-cell Casbin enforce anchor for PR-3D-B BE-1 choice CRUD routes.
+
+    4 routes × 4 roles = 16 cells, each with documented expected reason.
+    Drift any rule in ``policy_templates.py`` and this lock fires loud:
+
+      - Drop accountant explicit deny → cell flips True → wrong (finance
+        staff would gain choice mutation)
+      - Drop diamond edge admin→accountant (FU #113) → admin cells flip
+        True → correct, but this test must update
+      - Move choice CRUD rule into manager-only template → officer cells
+        flip False → wrong (PR-3D-B contract broken)
+    """
+    obj, action = route
+    result = enforcer_with_admin_diamond.enforce(role, obj, action)
+    assert result is expected, (
+        f"Casbin enforce drift on choice CRUD: ({role}, {obj}, {action}) "
+        f"expected {expected}, got {result}. Reason: {reason}"
+    )
