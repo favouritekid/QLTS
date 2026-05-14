@@ -1,5 +1,17 @@
 name: Deploy to Production
 
+# Sprint S2 hardening item #4 (2026-05-14): the in-line test job was
+# removed. Pre-merge branch protection now requires the PR-level gates
+# (``pytest`` from backend-test.yml, ``Build`` + ``Check (type+lint+test)``
+# from frontend-test.yml, plus the dep audits) to pass before the squash
+# commit can land on main. The same content then arrives here, so
+# re-running the contract subset on push:main was duplicate work that
+# cost 3-5 phút per deploy without catching anything new.
+#
+# Direct pushes to main are blocked by the ``main branch protection``
+# ruleset (Block force pushes + Restrict deletions + Require PR before
+# merging). Anyone reaching push:main has already passed the PR gates.
+
 on:
   push:
     branches: [main]
@@ -9,169 +21,10 @@ on:
       - '.claude/**'
 
 jobs:
-  test:
-    name: PR Gate — Contract Tests
-    runs-on: ubuntu-latest
-
-    env:
-      APP_ENV: test
-      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
-      REDIS_URL: redis://localhost:6379/0
-      SECRET_KEY: test-secret-key-for-ci-only
-      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
-      # Mail settings — placeholders so app/config.py Settings() can instantiate.
-      # Tests must not actually send mail; smtp.example.com is unroutable on purpose.
-      MAIL_USERNAME: ci-test@example.com
-      MAIL_PASSWORD: ci-test-placeholder
-      MAIL_FROM: ci-test@example.com
-      MAIL_SERVER: smtp.example.com
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: qlts_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # =====================================================================
-      # BACKEND: Contract Tests (Phase 3)
-      # =====================================================================
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: Backend_FastAPI/requirements-dev.txt
-
-      - name: Install backend dependencies (dev)
-        working-directory: Backend_FastAPI
-        run: pip install -r requirements-dev.txt
-
-      - name: Backend — Lead assignment contract
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
-          -v --tb=short
-
-      - name: Backend — Admission workflow contract
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/api/test_admission_workflow_api.py
-          -v --tb=short
-
-      # ---------------------------------------------------------------------
-      # Notification reliability gate (added 2026-04-22 after the cleanup
-      # arc deploy surfaced 8 enabled-but-actionless rules). Coverage runs
-      # in non-DB mode because CI does not seed a production-shaped
-      # notification_rule table; the --check-db variant is reserved for
-      # the post-deploy SSH smoke step.
-      # ---------------------------------------------------------------------
-      - name: Backend — Notification event coverage
-        working-directory: Backend_FastAPI
-        # Phase1-Hotfix-4 (2026-05-07) — added --allow-deferred to mirror
-        # the policy already shipped in admission-contract-check.yml. The
-        # 4 deferred events have no current legacy writer and are tracked
-        # in ``state_service.DEFERRED_ADMISSION_EVENTS``; without the
-        # flag this gate exits 1 cho mọi cutover-branch deploy attempt
-        # (12 events declared, 4 không reachable). When Phase 3 wires
-        # the writers, drop the corresponding name(s) from this flag —
-        # the lock test ``test_check_notification_event_coverage_deferred
-        # .py`` fails until the Python set is updated to match.
-        # PR-3C Sub-3.5: T17 ADMISSION_ROLLED_BACK wired via
-        # TRANSITION_PAIR_TO_EVENT (11 pair entries). DEFERRED set
-        # now empty — coverage script runs WITHOUT --allow-deferred
-        # flag. ALL 12 ADMISSION_* events have a writer.
-        run: |
-          python -m app.scripts.check_notification_event_coverage
-
-      - name: Backend — Notification parity (unit)
-        working-directory: Backend_FastAPI
-        run: python -m pytest tests/unit/test_notification_parity.py -q --tb=short
-
-      - name: Backend — Notification dispatcher (integration)
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/integration/test_condition_dispatch.py
-          tests/services/test_notification_dispatcher.py
-          tests/integration/test_notification_core_v2.py
-          -q --tb=short
-
-      # ---------------------------------------------------------------------
-      # Arch-3 bundle contract gate (added 2026-04-23). Guards against:
-      # - strict= flag removal on dispatch_bundle → bulk_insert error
-      #   nukes outer admission mutation via internal db.rollback()
-      # - regression of pre_status propagation in bulk approve/reject
-      # - router-side paired dispatch returning (breaks atomic pair promise)
-      # ---------------------------------------------------------------------
-      - name: Backend — Notification bundle + admission contract
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/services/test_notification_bundle.py
-          tests/services/test_admission_bundle_contract.py
-          -q --tb=short
-
-      # =====================================================================
-      # FRONTEND: Type Check + Lint + Contract Tests (Phase 2)
-      # =====================================================================
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Frontend — Type check
-        working-directory: frontend
-        run: npm run type-check
-
-      - name: Frontend — Lint
-        working-directory: frontend
-        run: npm run lint
-
-      - name: Frontend — UI contract tests (Vitest)
-        working-directory: frontend
-        run: >-
-          npx vitest run
-          "src/app/(dashboard)/admissions/[id]/_components/AdmissionActions.test.tsx"
-          "src/app/(dashboard)/admissions/[id]/_components/tabs/PersonalInfoTab.test.tsx"
-          "src/components/leads/command-center/LeadsTable.test.tsx"
-          --reporter=verbose
-
   deploy:
     name: Deploy to VPS
-    needs: test
     runs-on: ubuntu-latest
     environment: production
-    if: github.ref == 'refs/heads/main'
     concurrency:
       group: deploy-production
       cancel-in-progress: true

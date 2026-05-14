@@ -28,9 +28,19 @@ on:
     # Skip draft PRs (mirror frontend-test.yml R15 pattern) to save
     # Actions minutes during hot iteration.
     types: [opened, synchronize, reopened, ready_for_review]
+    # Path filter must catch every PR type that branch-protection
+    # requires `pytest` to pass on — otherwise the gate reports
+    # "expected, not run" and the PR is unmergeable. Coverage:
+    #   - Backend_FastAPI/**  → BE source / tests / deps / migrations
+    #   - .github/workflows/**→ workflow / deploy mechanics (defensive:
+    #                            workflow refactors can break CI/CD)
+    #   - frontend/**         → FE may consume BE contract; full pytest
+    #                            re-verifies BE didn't drift even on
+    #                            FE-only PRs (cheap with pip cache)
     paths:
       - 'Backend_FastAPI/**'
-      - '.github/workflows/backend-test.yml'
+      - 'frontend/**'
+      - '.github/workflows/**'
 
 concurrency:
   group: be-pr-${{ github.ref }}
