@@ -38,6 +38,10 @@ const PUBLIC_ROUTE_PREFIXES = [
   // without being logged in. Backend exempts /api/admissions/confirm/*
   // from CSRF; frontend proxy must likewise let the page render.
   "/confirm",
+  // PR-CO-2-FE / PR-3E: multi-action magic-link landing (4 actions).
+  // Backend exempts /api/v2/admissions/magic-link/* from CSRF; the
+  // page itself is candidate-driven and must NOT bounce to /login.
+  "/magic-link",
 ];
 
 /**
