@@ -46,6 +46,9 @@ export default defineConfig({
       '.next',
       'coverage',
       '**/*.config.*',
+      // Playwright E2E specs use `@playwright/test` API, incompatible with vitest
+      // (FU PR-CO-1: surfaced when full vitest run added at PR gate)
+      'src/test/e2e/**',
     ],
 
     // Test timeout
