@@ -78,6 +78,16 @@ class AdmissionRoundService:
             start_date=payload.start_date,
             end_date=payload.end_date,
             is_active=payload.is_active,
+            # Phase 3 Q-P3-02 / Q-P3-06 — pass-through the 2 round flags
+            # that PR #292 added to the Pydantic schema + FE form. Before
+            # this hotfix the service was dropping both fields on the
+            # floor — admin could check "Cho phép nhiều nguyện vọng"
+            # in the create dialog, see a "Đã tạo đợt tuyển sinh" toast,
+            # but the persisted row would always come back with
+            # allow_multi_nv=false (caught by Phase 1 prod smoke
+            # 2026-05-14 immediately after PR #293 deploy).
+            allow_multi_nv=payload.allow_multi_nv,
+            confirm_expiry_hours=payload.confirm_expiry_hours,
         )
         self.db.add(round_obj)
         await self.db.flush()
@@ -87,6 +97,8 @@ class AdmissionRoundService:
             round_id=round_obj.id,
             academic_year=academic_year,
             round_code=payload.round_code,
+            allow_multi_nv=payload.allow_multi_nv,
+            confirm_expiry_hours=payload.confirm_expiry_hours,
             admin_id=current_admin.id,
         )
         return round_obj
@@ -121,6 +133,13 @@ class AdmissionRoundService:
                 start_date=item.start_date,
                 end_date=item.end_date,
                 is_active=item.is_active,
+                # Phase 3 pass-through — same drift as create() above.
+                # ``AdmissionRoundBulkCreateItem`` ships the 2 round
+                # flags with defaults (False / 168) so existing
+                # "Tạo nhanh 4 đợt" callers keep their legacy behavior
+                # without touching the FE call site.
+                allow_multi_nv=item.allow_multi_nv,
+                confirm_expiry_hours=item.confirm_expiry_hours,
             )
             self.db.add(round_obj)
             try:
