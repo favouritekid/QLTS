@@ -24,6 +24,7 @@ reasoning as the resend cap.
 """
 from __future__ import annotations
 
+import hashlib
 import structlog
 from typing import Final, Optional
 
@@ -37,9 +38,17 @@ WINDOW_SECONDS: Final[int] = 60
 
 
 def _key(token_value: str) -> str:
-    # Token is 256-bit URL-safe random — safe to embed in the Redis key
-    # directly. Namespaced ``mlt:`` (magic-link token) per plan v2 spec.
-    return f"mlt:{token_value}"
+    # Token is 256-bit URL-safe random — unguessable on the wire, but the
+    # plaintext form can still leak via Redis operational surfaces:
+    # ``redis-cli MONITOR`` (debug streaming), ``SLOWLOG`` snapshots, and
+    # RDB/AOF dumps all record the raw command incl. key name. Hashing
+    # truncates that exposure: the leak becomes a one-way hash, useless
+    # for impersonating the magic link inside the 60s rate window.
+    # SHA-256 hex truncated to 16 chars (64 bits) is plenty for collision
+    # resistance — Redis namespace ``mlt:`` already scopes per use case
+    # and the cardinality at any moment is bounded by live tokens.
+    h = hashlib.sha256(token_value.encode()).hexdigest()[:16]
+    return f"mlt:{h}"
 
 
 async def consume_attempt(token_value: str) -> Optional[int]:
