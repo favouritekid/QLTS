@@ -147,7 +147,24 @@ log "Pre-flight checks passed"
 # Step 2: Pull latest code
 # =============================================================================
 log "Step 2/8: Pulling latest code..."
+
+# L1 review FU (2026-05-14): snapshot the SHA we're moving from BEFORE the
+# pull so we can print "commits since last successful deploy" — makes the
+# concurrency cancel-in-progress + git-pull-HEAD pattern auditable. With
+# multiple PR merges in close succession the deploy log used to be opaque
+# about which commits actually rode this deploy (one run could ship 3 PRs
+# via git pull catch-up). Now the operator sees exactly what landed.
+_PRE_PULL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+
 git pull origin main
+
+_POST_PULL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
+if [ -n "$_PRE_PULL_SHA" ] && [ "$_PRE_PULL_SHA" != "$_POST_PULL_SHA" ]; then
+  log "Commits picked up by this deploy ($_PRE_PULL_SHA..$_POST_PULL_SHA):"
+  git log --oneline "$_PRE_PULL_SHA..$_POST_PULL_SHA" 2>/dev/null \
+    | sed 's/^/  /' \
+    || log "  (could not enumerate commit range — disregard)"
+fi
 
 # =============================================================================
 # Step 3: Process Nginx template

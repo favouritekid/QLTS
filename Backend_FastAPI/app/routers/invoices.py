@@ -43,9 +43,9 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/invoices", tags=["Finance - Invoices"])
 
 
-def get_client_ip(request: Request) -> str:
-    """Helper for rate limiting key generation."""
-    return request.client.host if request.client else "unknown"
+# H1 cleanup (2026-05-14): the local ``def get_client_ip`` previously
+# living here was dead code — never used as a slowapi ``key_func`` in
+# this file. Canonical helper lives in ``app.core.client_ip``.
 
 
 # ==============================================================================

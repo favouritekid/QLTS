@@ -7769,26 +7769,36 @@ async def verify_and_confirm(
     db: AsyncSession,
     token_value: str,
     last_digits: str,
+    token_obj: Optional[models.AdmissionConfirmationToken] = None,
 ) -> tuple[models.AdmissionProfile, callable]:
     """
     Verify CCCD and confirm admission via token.
-    
-    Called by: POST /confirm/{token}
-    
+
+    Called by: POST /confirm/{token}  (legacy single-action surface)
+               POST /api/v2/admissions/magic-link/confirm/{token}  (v2 multi-action)
+
     Steps:
     1. Validate token (exists, not expired, not used, not locked)
     2. Verify last 4 digits of citizen_id
     3. If match: confirm profile, mark token used
     4. If mismatch: increment attempts, lock if exceeded
-    
+
     Args:
         db: Database session
         token_value: Token string from URL
         last_digits: Last 4 digits of CCCD from user input
-        
+        token_obj: H3 review FU (2026-05-14) — caller may pass a
+            pre-fetched + locked token row (e.g. magic_link_service has
+            already invoked ``get_token_for_confirm`` to apply rate
+            limits + action-enum matching). When provided, the helper
+            skips the second round-trip lock acquisition and reuses
+            the caller's locked snapshot. Identity-map semantics make
+            this safe within the same ``AsyncSession``. If ``None``
+            (legacy default), behaviour unchanged.
+
     Returns:
         Tuple of (updated_profile, notification_callback)
-        
+
     Raises:
         ResourceNotFoundError: Token not found
         BadRequest: Token expired/used/locked or CCCD mismatch
@@ -7797,14 +7807,24 @@ async def verify_and_confirm(
     from app.config import settings
     from app.repositories import AdmissionRepository
 
+    # Repo is used unconditionally further below for
+    # ``increment_token_attempts`` regardless of whether the caller
+    # pre-fetched the locked token row.
     repo = AdmissionRepository(db)
-    # ADM-013: ``get_token_for_confirm`` performs a profile-first
-    # 3-step lock (resolve profile_id → SELECT profile FOR UPDATE →
-    # SELECT token FOR UPDATE → re-validate FK) so confirm shares the
-    # same lock order as override/finalize. The token row + the
-    # ``token_obj.profile`` instance are both locked when we proceed
-    # below; mutations land under the same row lock.
-    token_obj = await repo.get_token_for_confirm(token_value)
+
+    # H3 review FU (2026-05-14): skip the second ``get_token_for_confirm``
+    # round-trip when the caller already holds the locked row. ADM-013
+    # 3-step profile-first lock semantics still hold because the caller's
+    # fetch ran inside the same session/transaction (identity map keeps
+    # the locked row in scope until commit/rollback).
+    if token_obj is None:
+        # ADM-013: ``get_token_for_confirm`` performs a profile-first
+        # 3-step lock (resolve profile_id → SELECT profile FOR UPDATE →
+        # SELECT token FOR UPDATE → re-validate FK) so confirm shares
+        # the same lock order as override/finalize. The token row +
+        # ``token_obj.profile`` are both locked when we proceed below;
+        # mutations land under the same row lock.
+        token_obj = await repo.get_token_for_confirm(token_value)
 
     if not token_obj:
         raise ResourceNotFoundError("Invalid or expired confirmation link")

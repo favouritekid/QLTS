@@ -173,12 +173,19 @@ async def consume_token(
         # invoke the legacy path with the same digits so the existing
         # audit + dispatch + lock_count bookkeeping fires under the
         # exact same row lock we are still holding.
+        #
+        # H3 review FU (2026-05-14): pass the pre-fetched ``token_obj``
+        # so verify_and_confirm skips the second ``get_token_for_confirm``
+        # round-trip. Identity-map semantics within the same session
+        # make this safe; legacy ``/confirm/{token}`` consumers that
+        # don't pre-fetch fall through to the legacy fetch path.
         # The legacy function raises ``BadRequest`` (or attaches a
         # post-commit callback for the hard-lock case) — we propagate.
         await admission_service.verify_and_confirm(
             db=db,
             token_value=token_value,
             last_digits=cccd_last4,
+            token_obj=token_obj,
         )
         # Unreachable: the legacy path raises BadRequest on CCCD
         # mismatch. Defensive raise so the type checker can prove
@@ -194,13 +201,18 @@ async def consume_token(
         # short-circuit the freshness gates (still satisfied), pass
         # the CCCD check, atomic-update confirmed_at, dispatch the
         # APPLICATION_CONFIRMED event, and hand back the callback.
-        # Cost: one extra ``get_token_for_confirm`` round-trip inside
-        # the legacy function. Acceptable for shipping infrastructure
-        # without duplicating 200 lines of state-machine code.
+        #
+        # H3 review FU (2026-05-14): the ``token_obj=token_obj`` kwarg
+        # makes verify_and_confirm skip its own ``get_token_for_confirm``
+        # round-trip — zero extra DB query on the happy path. The
+        # legacy ``/confirm/{token}`` consumer omits the kwarg and
+        # still fetches as before. Identity-map within the same
+        # AsyncSession guarantees the locked row is reused.
         result_profile, callback = await admission_service.verify_and_confirm(
             db=db,
             token_value=token_value,
             last_digits=cccd_last4,
+            token_obj=token_obj,
         )
         return result_profile, callback
 
