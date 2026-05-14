@@ -56,6 +56,7 @@ EXEMPT_PATHS: List[str] = [
     "/api/auth/verify-mfa",  # MFA verification before login completes (no csrf_token cookie yet)
     "/api/ctv-register",  # Public CTV registration (no auth, rate-limited, pending approval)
     "/api/admissions/confirm/",  # Public magic-link confirmation (no auth required)
+    "/api/v2/admissions/magic-link/",  # PR-CO-2-BE / PR-3E: multi-action magic-link (4 actions, no auth)
     "/api/public/",
     "/api/webhooks/",
     "/docs",
