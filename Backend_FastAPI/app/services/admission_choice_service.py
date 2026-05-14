@@ -40,6 +40,7 @@ from app.repositories.admission_profile_choice_repository import (
     AdmissionProfileChoiceRepository,
 )
 from app.repositories.admission_path_repository import AdmissionPathRepository
+from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
 from app.utils.exceptions import BusinessRuleViolation, ResourceNotFoundError
 
@@ -270,6 +271,8 @@ class AdmissionChoiceService:
         *,
         profile: AdmissionProfile,
         choice: AdmissionProfileChoice,
+        actor_id: Optional[int] = None,
+        reason: Optional[str] = None,
     ) -> Tuple[dict, Callable]:
         """Delete a choice + cascade scores via FK ON DELETE CASCADE.
 
@@ -280,14 +283,63 @@ class AdmissionChoiceService:
         Note: scope is INTENTIONALLY tight. Once a profile transitions to
         ``submitted`` or beyond, choices are immutable per state machine —
         admin uses T17 rollback to allow editing again.
+
+        **Audit (PR-CO-3, FU #114)**: snapshot the choice + dispatch a
+        ``log_activity`` row BEFORE the DB DELETE so the row is captured
+        even if the FK cascade subsequently nukes ``profile_choice_score``
+        children. Without an audit trail the narrow status whitelist
+        (draft / revision_requested) leaves no forensic record for a
+        "where did NV 3 go?" complaint months later.
         """
         self._assert_choice_editable(profile, action="xoá nguyện vọng")
+
+        # Snapshot the row + score children BEFORE the cascade delete so
+        # the audit log carries the full forensic state. Resolve the
+        # scores via the repository to avoid relying on a lazy attribute.
+        score_rows = await self.choice_repo.list_scores_by_choice(choice.id)
+        snapshot = {
+            "choice_id": choice.id,
+            "profile_id": choice.admission_profile_id,
+            "admission_path_id": choice.admission_path_id,
+            "path_subject_group_config_id": choice.path_subject_group_config_id,
+            "display_order": choice.display_order,
+            "decision": choice.decision,
+            "scores": [
+                {
+                    "subject_id": s.subject_id,
+                    "score": str(s.score) if s.score is not None else None,
+                }
+                for s in score_rows
+            ],
+        }
 
         deleted = await self.choice_repo.delete(choice.id)
         if not deleted:
             raise ResourceNotFoundError(
                 f"Nguyện vọng {choice.id} không tồn tại hoặc đã xoá."
             )
+
+        # Audit AFTER the DELETE succeeds — both the snapshot and the
+        # activity row land under the same transaction, so the router
+        # commit makes them visible atomically. Reason is stamped into
+        # the description so audit-log readers see it without unpacking
+        # the JSONB changes payload.
+        description = (
+            f"Xoá NV {snapshot['display_order']} (path_id="
+            f"{snapshot['admission_path_id']})"
+        )
+        if reason:
+            description = f"{description} — Lý do: {reason}"
+
+        await log_activity(
+            self.db,
+            action="delete_choice",
+            resource_type="admission_profile_choice",
+            actor_id=actor_id,
+            resource_id=choice.id,
+            description=description,
+            changes={"before": snapshot, "reason": reason},
+        )
 
         return ({"choice_id": choice.id, "profile_id": profile.id},
                 _noop_callback)

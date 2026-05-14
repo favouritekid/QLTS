@@ -247,6 +247,114 @@ async def test_delete_choice_happy_manager(
         assert gone is None
 
 
+# ----------------------------------------------------------------------------
+# PR-CO-3 (FU #114) — DELETE choice audit-log anchor tests
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_choice_writes_audit_log_with_reason(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    manager_user_in_db: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """PR-CO-3 (FU #114): DELETE with ``{ "reason": "..." }`` writes an
+    audit row to ``user_activity_log`` with:
+
+      - action = 'delete_choice'
+      - resource_type = 'admission_profile_choice'
+      - resource_id = the deleted choice_id
+      - actor_id = current_user.id from auth context
+      - description includes the reason verbatim
+      - changes.before snapshots display_order + admission_path_id
+      - changes.reason persists the raw reason string
+
+    Without this anchor a forensic complaint "candidate says NV 3 was
+    deleted but no record shows it" is unverifiable.
+    """
+    profile_id = pr3d_b_seed_with_choice["profile_id"]
+    choice_id = pr3d_b_seed_with_choice["choice_id"]
+    expected_display_order = 1  # seeded by ``pr3d_b_seed_with_choice``
+    expected_path_id = pr3d_b_seed_with_choice["path_id"]
+    actor_id = manager_user_in_db["id"]
+    reason = "Candidate yêu cầu xoá nhầm NV 3"
+
+    # httpx ``AsyncClient.delete`` does not expose a ``json`` kwarg, so the
+    # generic ``.request`` path is used to ship the optional body. Mirrors
+    # how a real FE client (axios / fetch) sends ``DELETE`` with payload.
+    response = await client.request(
+        "DELETE",
+        f"/api/v2/admissions/{profile_id}/choices/{choice_id}",
+        headers=manager_token_headers,
+        json={"reason": reason},
+    )
+    assert response.status_code == 200, response.text
+
+    # Verify the audit-log row reached the DB in the same transaction.
+    async with AsyncSessionLocal() as s:
+        result = await s.execute(
+            models.UserActivityLog.__table__.select().where(
+                models.UserActivityLog.action == "delete_choice",
+                models.UserActivityLog.resource_id == choice_id,
+            )
+        )
+        rows = list(result.mappings())
+        assert len(rows) == 1, (
+            f"Expected exactly 1 audit row for delete_choice; got {len(rows)}"
+        )
+        row = rows[0]
+        assert row["resource_type"] == "admission_profile_choice"
+        assert row["actor_id"] == actor_id
+        assert reason in row["description"], (
+            f"Reason missing from description: {row['description']!r}"
+        )
+        changes = row["changes"]
+        assert changes["reason"] == reason
+        assert changes["before"]["choice_id"] == choice_id
+        assert changes["before"]["display_order"] == expected_display_order
+        assert changes["before"]["admission_path_id"] == expected_path_id
+
+
+@pytest.mark.asyncio
+async def test_delete_choice_writes_audit_log_without_body(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    manager_user_in_db: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """PR-CO-3 (FU #114): a payload-less DELETE still writes the audit row.
+
+    Reason becomes null, description omits the "Lý do: ..." suffix, and
+    ``changes.reason`` is explicitly null — the audit trail does not
+    disappear just because the operator didn't bother typing a reason.
+    """
+    profile_id = pr3d_b_seed_with_choice["profile_id"]
+    choice_id = pr3d_b_seed_with_choice["choice_id"]
+    actor_id = manager_user_in_db["id"]
+
+    response = await client.delete(
+        f"/api/v2/admissions/{profile_id}/choices/{choice_id}",
+        headers=manager_token_headers,
+        # No body — the typical "I just clicked delete" case.
+    )
+    assert response.status_code == 200, response.text
+
+    async with AsyncSessionLocal() as s:
+        result = await s.execute(
+            models.UserActivityLog.__table__.select().where(
+                models.UserActivityLog.action == "delete_choice",
+                models.UserActivityLog.resource_id == choice_id,
+            )
+        )
+        rows = list(result.mappings())
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["actor_id"] == actor_id
+        assert row["changes"]["reason"] is None
+        assert "Lý do:" not in row["description"]
+
+
 @pytest.mark.asyncio
 async def test_update_display_order_happy_manager(
     client: AsyncClient,

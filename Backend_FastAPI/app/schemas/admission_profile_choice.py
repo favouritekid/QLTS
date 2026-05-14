@@ -254,6 +254,26 @@ class ChoiceScoresReplaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ChoiceDeleteRequest(BaseModel):
+    """PR-CO-3 (FU #114) — optional audit body for DELETE choice.
+
+    Captured into ``user_activity_log.description`` + ``changes`` so a
+    candidate "where did NV 3 go?" complaint 3 months later has a
+    forensic trace (actor + reason + before-snapshot). Reason is
+    OPTIONAL — the audit row is still written without it; the body
+    itself is also optional on the wire so callers without a reason
+    can just ``DELETE`` with no payload.
+    """
+
+    reason: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Optional reason for deletion (audit trail)",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ChoiceDeleteResponse(BaseModel):
     """DELETE /api/v2/admissions/{pid}/choices/{cid} response."""
 
