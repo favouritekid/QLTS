@@ -169,6 +169,7 @@ jobs:
           tests/unit/test_admission_state_service_event_mapping.py
           tests/unit/test_client_ip_helper.py
           tests/unit/test_admission_confirmation_cooldown.py
+          tests/unit/test_magic_link_rate_limit_key_hashing.py
           -q --tb=short
 
       # =====================================================================
