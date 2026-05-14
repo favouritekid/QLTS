@@ -173,3 +173,65 @@ async def test_patch_confirm_expiry_hours_rejects_out_of_range(
         )
         row = result.scalar_one()
         assert row.confirm_expiry_hours == 168
+
+
+# ---------------------------------------------------------------------
+# Anchor 4 — POST create endpoint persists Phase 3 flags
+# ---------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_create_round_persists_phase3_flags(
+    client: AsyncClient,
+    admin_token_headers: dict,
+) -> None:
+    """Service drift caught by prod smoke 2026-05-14 immediately after
+    PR #293 deploy: admin checked ``Cho phép nhiều nguyện vọng`` in the
+    create dialog, the toast confirmed "Đã tạo đợt tuyển sinh", but the
+    persisted row came back with ``allow_multi_nv=false``.
+
+    Root cause: ``AdmissionRoundService.create`` (and ``bulk_create``)
+    instantiated ``OfferingAdmissionRound(...)`` with an explicit kwarg
+    list that did NOT include the 2 Phase 3 fields shipped via PR #292
+    Pydantic. Pydantic accepted the field on input, the service silently
+    dropped it before the INSERT. The PATCH anchors above passed because
+    ``update()`` uses ``setattr(round_obj, field, value)`` dynamically,
+    so the bug was confined to the explicit constructor sites.
+
+    Drift detector: if a future refactor reintroduces the explicit kwarg
+    list without the 2 flags, this anchor catches the regression at CI
+    Tier 2 before another prod surprise.
+    """
+    import time
+    suffix = int(time.time() * 1000) % 1_000_000
+    year = 2000 + (int(time.time()) % 100)
+    payload = {
+        "round_code": f"AT_C_{suffix}",
+        "round_name": f"Anchor create persist {suffix}",
+        "is_active": True,
+        "allow_multi_nv": True,
+        "confirm_expiry_hours": 72,
+    }
+    resp = await client.post(
+        f"/api/v2/admin/years/{year}/rounds",
+        json=payload,
+        headers=admin_token_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["allow_multi_nv"] is True, (
+        "Service dropped allow_multi_nv on INSERT — same drift as the "
+        f"2026-05-14 prod smoke incident. Response body: {body!r}"
+    )
+    assert body["confirm_expiry_hours"] == 72
+
+    # Round-trip via fresh GET against the DB-backed handler to prove the
+    # value actually persisted (not just echoed by the create response).
+    get_resp = await client.get(
+        f"/api/v2/admin/rounds/{body['id']}",
+        headers=admin_token_headers,
+    )
+    assert get_resp.status_code == 200
+    fresh = get_resp.json()
+    assert fresh["allow_multi_nv"] is True
+    assert fresh["confirm_expiry_hours"] == 72
