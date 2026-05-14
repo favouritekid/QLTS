@@ -34,7 +34,6 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -53,22 +52,20 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture
-async def seed_round_path_lead(admin_user_in_db):
+async def seed_round_path_lead(admin_user_in_db, seed_lead_dependencies):
     """Build the dependency chain create_profile / submit_and_evaluate need.
 
-    Returns a dict with everything the tests reach for + a callback
-    that flips ``round.allow_multi_nv`` in a fresh session so we test
-    the round flag's effect at create_profile time, not at fixture time.
+    Depends on ``seed_lead_dependencies`` to ensure the conftest-seeded
+    OrganizationUnit + MajorProgram + ConsultationStatus rows exist —
+    pulling them via ``select().scalar_one()`` without the dependency
+    raises ``NoResultFound`` in a fresh test DB (conftest seeds these
+    inside the fixture, not at schema init time).
     """
     suffix = uuid.uuid4().hex[:8]
+    unit_id = seed_lead_dependencies["unit_id"]
+    program_id = seed_lead_dependencies["major_program_id"]
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            # Org / unit — model class is ``OrganizationUnit`` (the field
-            # on Lead is ``unit_id``); fixture pulls any active unit.
-            unit = (
-                await s.execute(select(models.OrganizationUnit).limit(1))
-            ).scalar_one()
-
             # Offering chain
             offering_type_config = models.ConfigOfferingType(
                 code=f"p3_inh_{suffix}",
@@ -78,14 +75,9 @@ async def seed_round_path_lead(admin_user_in_db):
             s.add(offering_type_config)
             await s.flush()
 
-            # Program reference — model class is ``MajorProgram``.
-            program = (
-                await s.execute(select(models.MajorProgram).limit(1))
-            ).scalar_one()
-
             offering = models.ProgramOffering(
                 offering_type=f"p3_inh_{suffix}",
-                program_id=program.id,
+                program_id=program_id,
                 offering_type_id=offering_type_config.id,
             )
             s.add(offering)
@@ -144,7 +136,7 @@ async def seed_round_path_lead(admin_user_in_db):
                 phone=f"090{random.randint(1000000, 9999999)}",
                 email=f"p3_inh_{suffix}@test.com",
                 source="website",
-                unit_id=unit.id,
+                unit_id=unit_id,
                 offering_id=offering.id,
             )
             s.add(lead)
