@@ -6,8 +6,10 @@
  * single candidate browser) stay isolated.
  */
 import { useMutation } from "@tanstack/react-query"
+import type { AxiosError } from "axios"
 
 import { consumeMagicLinkToken } from "@/lib/api/magic-link"
+import type { ApiErrorResponse } from "@/lib/error-handler"
 import type {
   MagicLinkAction,
   MagicLinkConsumeRequest,
@@ -25,7 +27,7 @@ export function useMagicLinkConsume(
 ) {
   return useMutation<
     MagicLinkConsumeResponse,
-    unknown,
+    AxiosError<ApiErrorResponse>,
     MagicLinkConsumeRequest
   >({
     mutationKey: magicLinkKeys.consume(action, token),

@@ -168,6 +168,10 @@ describe("MagicLinkConsumeForm — validation", () => {
     await waitFor(() => {
       expect(mockConsumeMagicLinkToken).not.toHaveBeenCalled()
     })
+    // Strengthen non-tautological: assert the user-visible validation
+    // message renders, otherwise the test only proves react-hook-form's
+    // default-block behaviour rather than this schema's 4-digit rule.
+    expect(screen.getByText(/vui lòng nhập đúng 4 chữ số/i)).toBeInTheDocument()
   })
 })
 

@@ -33,8 +33,7 @@ import {
   type MagicLinkConsumeRequest,
   type MagicLinkConsumeResponse,
 } from "@/lib/zod/magic-link"
-import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
-import type { AxiosError } from "axios"
+import { handleApiError } from "@/lib/error-handler"
 
 // ---------------------------------------------------------------------------
 // Per-action copy. Pure config — no business logic (thin client).
@@ -184,7 +183,9 @@ export function MagicLinkConsumeForm({
         setResult(data)
       },
       onError: (err) => {
-        handleApiError(err as AxiosError<ApiErrorResponse>, {
+        // ``err`` is typed as ``AxiosError<ApiErrorResponse>`` via the
+        // mutation generic in ``useMagicLinkConsume`` — no cast needed.
+        handleApiError(err, {
           context: copy.submitLabel.toLowerCase(),
         })
         // Clear the input so the user can re-enter cleanly after a 400.

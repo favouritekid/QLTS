@@ -24,6 +24,11 @@ const PAGE_DESCRIPTION: Record<MagicLinkAction, string> = {
   withdraw: "Xác nhận rút hồ sơ tuyển sinh",
 }
 
+// Token URL must not be indexed by search engines. Defense-in-depth —
+// the URL only ships via email, but a leaked screenshot / copy-paste
+// into a public channel must not show up in a crawler index.
+const NOINDEX_ROBOTS = { index: false, follow: false } as const
+
 export async function generateMetadata({
   params,
 }: {
@@ -32,13 +37,19 @@ export async function generateMetadata({
   const { action } = await params
   const parsed = magicLinkActionSchema.safeParse(action)
   if (!parsed.success) {
-    return { title: "Liên kết không hợp lệ" }
+    return { title: "Liên kết không hợp lệ", robots: NOINDEX_ROBOTS }
   }
   return {
     title: PAGE_TITLE[parsed.data],
     description: PAGE_DESCRIPTION[parsed.data],
+    robots: NOINDEX_ROBOTS,
   }
 }
+
+// Token URL pages must never be cached by Next.js / CDN / proxy: each
+// request must hit the BE consume endpoint at request time so the
+// freshness gates (used / locked / expired) reflect server state.
+export const dynamic = "force-dynamic"
 
 // Placeholder params for Next.js 16 cacheComponents build validation.
 // Real {action, token} pairs are resolved at request time; the
