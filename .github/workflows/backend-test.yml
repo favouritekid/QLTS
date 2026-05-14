@@ -170,6 +170,7 @@ jobs:
           tests/unit/test_client_ip_helper.py
           tests/unit/test_admission_confirmation_cooldown.py
           tests/unit/test_magic_link_rate_limit_key_hashing.py
+          tests/api/test_admin_v2_admission_round_phase3_flags.py
           -q --tb=short
 
       # =====================================================================

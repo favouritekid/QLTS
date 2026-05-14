@@ -5,7 +5,7 @@
  * Anchor tests per memory pattern-change-impact-audit (P3-2 v8.2).
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { describe, expect, it, vi } from "vitest"
 
@@ -29,6 +29,12 @@ vi.mock("@/hooks/admissions/useAdmissionRounds", () => ({
               extended_at: null,
               extended_by_user_id: null,
               extension_reason: null,
+              // Phase 3 close-out 2026-05-14 — Q-P3-02 / Q-P3-06 fields
+              // surfaced via this PR. DOT_1 in this fixture is the
+              // "multi-NV enabled" round; DOT_2 below stays at server
+              // default (false / 168h) so the form can assert both paths.
+              allow_multi_nv: true,
+              confirm_expiry_hours: 72,
               created_at: "2026-05-09T00:00:00Z",
               updated_at: "2026-05-09T00:00:00Z",
             },
@@ -44,6 +50,8 @@ vi.mock("@/hooks/admissions/useAdmissionRounds", () => ({
               extended_at: null,
               extended_by_user_id: null,
               extension_reason: null,
+              allow_multi_nv: false,
+              confirm_expiry_hours: 168,
               created_at: "2026-05-09T00:00:00Z",
               updated_at: "2026-05-09T01:00:00Z",
             },
@@ -130,5 +138,33 @@ describe("RoundsManagementTab year-level", () => {
     // Restore button trên archived row KHÔNG bị disabled (admin có thể
     // restore đợt đã archive bất kỳ lúc nào).
     expect(restoreButtons[0]).not.toBeDisabled()
+  })
+
+  it("ANCHOR (Phase 3 close-out 2026-05-14): edit dialog seeds 2 Phase 3 fields from row", () => {
+    // Regression guard: if roundToFormState() ever drops the new Phase 3
+    // fields, the edit dialog will open with defaults (false / 168) for
+    // DOT_1 even though the row has (true / 72). The form would then
+    // silently overwrite the persisted multi-NV flag on next save —
+    // exactly the failure mode this anchor catches.
+    render(wrap(<RoundsManagementTab />))
+
+    // Open DOT_1 edit dialog. The fixture says DOT_1 has
+    // allow_multi_nv=true + confirm_expiry_hours=72.
+    const editButtons = screen.getAllByRole("button", { name: /Sửa đợt/i })
+    fireEvent.click(editButtons[0])
+
+    // Checkbox state mirrors the seeded value: TRUE for DOT_1.
+    const allowMultiNvCheckbox = screen.getByLabelText(
+      /Cho phép nhiều nguyện vọng/i
+    ) as HTMLInputElement
+    // Radix Checkbox reflects state via data-state="checked"; standard
+    // checked attribute also flips for accessibility.
+    expect(allowMultiNvCheckbox.getAttribute("data-state")).toBe("checked")
+
+    // NumberInput seeded with row.confirm_expiry_hours.
+    const expiryInput = screen.getByLabelText(
+      /Thời hạn xác nhận nhập học/i
+    ) as HTMLInputElement
+    expect(expiryInput.value).toBe("72")
   })
 })

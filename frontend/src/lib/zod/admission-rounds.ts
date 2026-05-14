@@ -7,12 +7,25 @@
  */
 import { z } from "zod"
 
+// Phase 3 round flags surfaced via phase3_01 migration columns + this PR's
+// Pydantic + FE wiring (Q-P3-02 allow_multi_nv, Q-P3-06 confirm_expiry_hours).
+// Keep validation bounds consistent with Backend_FastAPI/app/schemas/admission_round.py.
+const CONFIRM_EXPIRY_HOURS_MIN = 1
+const CONFIRM_EXPIRY_HOURS_MAX = 8760 // 1 year ceiling, sanity guard.
+
 export const AdmissionRoundCreateSchema = z.object({
   round_code: z.string().min(1).max(20),
   round_name: z.string().min(1).max(100),
   start_date: z.string().nullable().optional(),
   end_date: z.string().nullable().optional(),
   is_active: z.boolean().default(true),
+  allow_multi_nv: z.boolean().default(false),
+  confirm_expiry_hours: z
+    .number()
+    .int()
+    .min(CONFIRM_EXPIRY_HOURS_MIN)
+    .max(CONFIRM_EXPIRY_HOURS_MAX)
+    .default(168),
 })
 
 export const AdmissionRoundUpdateSchema = z.object({
@@ -20,6 +33,13 @@ export const AdmissionRoundUpdateSchema = z.object({
   start_date: z.string().nullable().optional(),
   end_date: z.string().nullable().optional(),
   is_active: z.boolean().optional(),
+  allow_multi_nv: z.boolean().optional(),
+  confirm_expiry_hours: z
+    .number()
+    .int()
+    .min(CONFIRM_EXPIRY_HOURS_MIN)
+    .max(CONFIRM_EXPIRY_HOURS_MAX)
+    .optional(),
 })
 
 export const AdmissionRoundExtendSchema = z.object({
@@ -36,6 +56,13 @@ export const AdmissionRoundBulkCreateItemSchema = z.object({
   start_date: z.string().nullable().optional(),
   end_date: z.string().nullable().optional(),
   is_active: z.boolean().default(true),
+  allow_multi_nv: z.boolean().default(false),
+  confirm_expiry_hours: z
+    .number()
+    .int()
+    .min(CONFIRM_EXPIRY_HOURS_MIN)
+    .max(CONFIRM_EXPIRY_HOURS_MAX)
+    .default(168),
 })
 
 export const AdmissionRoundBulkCreateSchema = z.object({
@@ -54,6 +81,8 @@ export const AdmissionRoundResponseSchema = z.object({
   extended_at: z.string().nullable(),
   extended_by_user_id: z.number().int().nullable(),
   extension_reason: z.string().nullable(),
+  allow_multi_nv: z.boolean(),
+  confirm_expiry_hours: z.number().int(),
   created_at: z.string(),
   updated_at: z.string(),
 })

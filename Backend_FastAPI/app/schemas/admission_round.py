@@ -29,6 +29,17 @@ class AdmissionRoundBase(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: bool = True
+    # Phase 3 Q-P3-02 — per-round multi-NV gate. DB column ships with
+    # server_default false; surface here so admin can flip via UI.
+    allow_multi_nv: bool = False
+    # Phase 3 Q-P3-06 — per-round candidate-confirm token expiry. DB
+    # column ships server_default 168h (7 days). >0 enforced by model.
+    confirm_expiry_hours: int = Field(
+        168,
+        ge=1,
+        le=8760,  # 1 year ceiling — sanity guard, not business rule.
+        description="Magic-link confirm token expiry, hours. Default 168 (7d).",
+    )
 
 
 class AdmissionRoundCreate(AdmissionRoundBase):
@@ -38,13 +49,23 @@ class AdmissionRoundCreate(AdmissionRoundBase):
 
 
 class AdmissionRoundUpdate(BaseModel):
-    """Partial update payload — all fields optional. Time-window/lifecycle
-    only Phase 2 (Q3 v8.2 — notification template defer Phase 3)."""
+    """Partial update payload — all fields optional.
+
+    Phase 3 PATCH (post Q-P3-02 / Q-P3-06): in addition to the Phase 2
+    time-window/lifecycle fields, surface ``allow_multi_nv`` and
+    ``confirm_expiry_hours`` so admin can toggle multi-NV per round and
+    tune confirm expiry via the admin UI. The previous comment ("Time-
+    window/lifecycle only Phase 2 — notification template defer Phase 3")
+    is now stale: phase3_01 added the DB columns 2026-05-12; this PR
+    wires the schema + UI.
+    """
 
     round_name: Optional[str] = Field(None, min_length=1, max_length=100)
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: Optional[bool] = None
+    allow_multi_nv: Optional[bool] = None
+    confirm_expiry_hours: Optional[int] = Field(None, ge=1, le=8760)
 
 
 class AdmissionRoundExtend(BaseModel):
@@ -74,6 +95,11 @@ class AdmissionRoundBulkCreateItem(BaseModel):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     is_active: bool = True
+    # Phase 3 Q-P3-02 / Q-P3-06 surfaced here so admin "Tạo nhanh 4 đợt"
+    # can pre-seed the multi-NV + confirm-expiry policy for all 4 rounds
+    # at once. Defaults match the per-round Pydantic Base above.
+    allow_multi_nv: bool = False
+    confirm_expiry_hours: int = Field(168, ge=1, le=8760)
 
 
 class AdmissionRoundBulkCreate(BaseModel):
@@ -112,6 +138,12 @@ class AdmissionRoundResponse(BaseModel):
     extended_at: Optional[datetime]
     extended_by_user_id: Optional[int]
     extension_reason: Optional[str]
+
+    # Phase 3 Q-P3-02 / Q-P3-06 (phase3_01 migration columns).
+    # Surfaced here so the FE round edit dialog can show + edit them
+    # and the engine + storefront can read them via the same payload.
+    allow_multi_nv: bool
+    confirm_expiry_hours: int
 
     created_at: datetime
     updated_at: datetime
