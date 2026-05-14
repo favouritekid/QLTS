@@ -63,8 +63,11 @@ async def seed_round_path_lead(admin_user_in_db):
     suffix = uuid.uuid4().hex[:8]
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            # Org / unit
-            unit = (await s.execute(select(models.Unit).limit(1))).scalar_one()
+            # Org / unit — model class is ``OrganizationUnit`` (the field
+            # on Lead is ``unit_id``); fixture pulls any active unit.
+            unit = (
+                await s.execute(select(models.OrganizationUnit).limit(1))
+            ).scalar_one()
 
             # Offering chain
             offering_type_config = models.ConfigOfferingType(
@@ -75,7 +78,10 @@ async def seed_round_path_lead(admin_user_in_db):
             s.add(offering_type_config)
             await s.flush()
 
-            program = (await s.execute(select(models.Program).limit(1))).scalar_one()
+            # Program reference — model class is ``MajorProgram``.
+            program = (
+                await s.execute(select(models.MajorProgram).limit(1))
+            ).scalar_one()
 
             offering = models.ProgramOffering(
                 offering_type=f"p3_inh_{suffix}",
@@ -144,16 +150,16 @@ async def seed_round_path_lead(admin_user_in_db):
             s.add(lead)
             await s.flush()
 
-            # Consultation (create_profile precondition in service v3)
-            stage = (
-                await s.execute(select(models.PipelineStage).limit(1))
-            ).scalar_one()
+            # Consultation (create_profile precondition — service rejects
+            # leads with no_consultation / consultation_missing_status).
+            # ``sts06`` ("Dong y tu van") is seeded by conftest and is
+            # non-universal so it passes the universal-status gate.
             consult = models.Consultation(
                 lead_id=lead.id,
                 method="phone",
                 notes="P3 inherit setup",
                 officer_id=admin_user_in_db["id"],
-                consultation_status_id=stage.id if hasattr(stage, "id") else None,
+                consultation_status_id="sts06",
             )
             s.add(consult)
 
