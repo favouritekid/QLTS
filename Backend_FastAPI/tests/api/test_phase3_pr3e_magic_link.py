@@ -298,6 +298,149 @@ async def test_consume_withdraw_action_returns_400_not_implemented(
     assert "not yet enabled" in response.text.lower() or "withdraw" in response.text.lower()
 
 
+# ----------------------------------------------------------------------------
+# H2 (review FU) — parity stub anchors for the other 2 not-yet-wired actions
+# ----------------------------------------------------------------------------
+# The PR-CO-2-BE infrastructure ships the 4-action router but only wires
+# the confirm handler; submit/resubmit/withdraw all return
+# ``BusinessRuleViolation`` 400 "not yet enabled" until FU PR-CO-2-BE-2.
+# The withdraw branch already had a stub anchor — this FU adds parity
+# coverage for submit + resubmit so a future wire of any single action
+# (without the others) cannot silently turn a 400 into a 500 / 200 here.
+#
+# Non-tautological per memory ``pattern-change-impact-audit``: each test
+# seeds an action-typed token + asserts the exact status code + body text
+# ("not yet enabled" or the action name) — the next dev wiring an action
+# must either (a) flip the stub assertion to a happy-path assertion, or
+# (b) remove the stub test entirely. Either signal makes the wire-up
+# explicit.
+
+
+@pytest.mark.asyncio
+async def test_consume_submit_action_returns_400_not_implemented(
+    client: AsyncClient,
+    seed_lead_dependencies: dict,
+):
+    """Token issued with action_type='submit' → 400 'not yet enabled'.
+
+    Mirror of ``test_consume_withdraw_action_returns_400_not_implemented``
+    for the submit branch. PR-CO-2-BE infrastructure ships the router
+    surface; submit handler is stubbed pending FU PR-CO-2-BE-2.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    citizen_id = f"7{ts:08d}3"[:12]
+    last4 = citizen_id[-4:]
+    token_value = secrets.token_urlsafe(32)
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = models.Lead(
+                full_name=f"PR-3E Submit Lead {ts}",
+                phone=f"095{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead)
+            await s.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=citizen_id,
+                status="draft",
+                applied_rules={},
+                academic_year=2026,
+            )
+            s.add(profile)
+            await s.flush()
+
+            token = models.AdmissionConfirmationToken(
+                profile_id=profile.id,
+                action_type="submit",
+                token=token_value,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                confirmed_at=None,
+                attempt_count=0,
+            )
+            s.add(token)
+
+    response = await client.post(
+        f"/api/v2/admissions/magic-link/submit/{token_value}",
+        json={"cccd": last4},
+    )
+    assert response.status_code == 400, (
+        f"Expected 400 for not-yet-wired submit; got "
+        f"{response.status_code}: {response.text}"
+    )
+    assert (
+        "not yet enabled" in response.text.lower()
+        or "submit" in response.text.lower()
+    )
+
+
+@pytest.mark.asyncio
+async def test_consume_resubmit_action_returns_400_not_implemented(
+    client: AsyncClient,
+    seed_lead_dependencies: dict,
+):
+    """Token issued with action_type='resubmit' → 400 'not yet enabled'.
+
+    Mirror of the withdraw + submit stub anchors. Closes H2 review
+    finding by giving each of the 3 not-yet-wired actions a parity
+    assertion so a partial wire-up cannot silently regress the
+    stubs that remain.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    citizen_id = f"7{ts:08d}4"[:12]
+    last4 = citizen_id[-4:]
+    token_value = secrets.token_urlsafe(32)
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = models.Lead(
+                full_name=f"PR-3E Resubmit Lead {ts}",
+                phone=f"094{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead)
+            await s.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=citizen_id,
+                status="revision_requested",
+                applied_rules={},
+                academic_year=2026,
+            )
+            s.add(profile)
+            await s.flush()
+
+            token = models.AdmissionConfirmationToken(
+                profile_id=profile.id,
+                action_type="resubmit",
+                token=token_value,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                confirmed_at=None,
+                attempt_count=0,
+            )
+            s.add(token)
+
+    response = await client.post(
+        f"/api/v2/admissions/magic-link/resubmit/{token_value}",
+        json={"cccd": last4},
+    )
+    assert response.status_code == 400, (
+        f"Expected 400 for not-yet-wired resubmit; got "
+        f"{response.status_code}: {response.text}"
+    )
+    assert (
+        "not yet enabled" in response.text.lower()
+        or "resubmit" in response.text.lower()
+    )
+
+
 # ============================================================================
 # 6. Hotfix R1: APPLICATION_STATUS_CHANGED dispatch fires after confirm
 # ============================================================================
