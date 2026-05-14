@@ -16,8 +16,11 @@ import type {
   SystemConfigResponse,
   SystemConfigUpdate,
 } from "@/lib/zod/system-config"
-import type { ApiErrorResponse } from "@/types/api.types"
-import { handleApiError } from "@/lib/error-handler"
+// Import ApiErrorResponse from error-handler so the mutation generic
+// matches the handleApiError parameter type. Two ApiErrorResponse defs
+// exist in this repo (types/api.types vs lib/error-handler) — pairing
+// with handleApiError requires the error-handler one.
+import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
 
 const QK = {
   list: () => ["system-config", "list"] as const,
