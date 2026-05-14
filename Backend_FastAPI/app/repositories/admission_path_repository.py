@@ -147,6 +147,13 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
 
         ✅ FIX: Eager load admission_method to prevent MissingGreenlet error
         when service code accesses admission_path.admission_method.status.
+
+        Phase 3 close-out 2026-05-14: also eager-load ``admission_round`` so
+        ``admission_service.create_profile`` can read
+        ``admission_path.admission_round.allow_multi_nv`` without a separate
+        SELECT when deciding ``new_profile.uses_choice_engine``. Adds one
+        IN-clause query (selectinload), not a JOIN — keeps the existing
+        FOR UPDATE-friendly shape used by callers.
         """
         query = (
             select(AdmissionPath)
@@ -155,7 +162,8 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 AdmissionPath.admission_method_id == admission_method_id
             )
             .options(
-                selectinload(AdmissionPath.admission_method)  # ← FIX: Eager load
+                selectinload(AdmissionPath.admission_method),  # ← FIX: Eager load
+                selectinload(AdmissionPath.admission_round),   # Phase 3 close-out
             )
         )
         result = await self.db.execute(query)

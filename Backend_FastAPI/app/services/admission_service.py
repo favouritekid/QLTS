@@ -2880,6 +2880,22 @@ async def create_profile(
         if oac_row:
             offering_config_id = oac_row
 
+    # Phase 3 close-out 2026-05-14 — Q-P3-02 inherit multi-NV mode from
+    # the round on profile creation. The DB column was added by
+    # phase3_01 with server_default=false but no service path was
+    # writing the True branch, so every new profile defaulted to
+    # legacy single-NV regardless of round configuration. Round flag is
+    # eager-loaded on ``admission_path.admission_round`` via the path
+    # repository so no extra SELECT here.
+    #
+    # Fallback chain:
+    #   round present + flag True  → True (Phase 3 multi-NV mode)
+    #   round present + flag False → False (legacy preserved)
+    #   round missing (data drift) → False (safe default, matches DB)
+    inherit_multi_nv: bool = bool(
+        getattr(getattr(admission_path, "admission_round", None), "allow_multi_nv", False)
+    )
+
     # Step 15: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
@@ -2889,6 +2905,7 @@ async def create_profile(
         family_info=[],
         academic_history=[],
         offering_admission_config_id=offering_config_id,
+        uses_choice_engine=inherit_multi_nv,
         # Pre-fill from Lead
         full_name=lead.full_name,
         phone=lead.phone,
@@ -3802,6 +3819,32 @@ async def submit_and_evaluate(
     # Initialize repository for document/citizen_id checks
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
+
+    # Phase 3 close-out 2026-05-14 — multi-NV profiles MUST carry at
+    # least one ``AdmissionProfileChoice`` before submit. Without this
+    # gate a candidate could submit an empty multi-NV profile, transition
+    # straight to ``reviewing``, then a manager's later publish-result
+    # call would invoke ``evaluate_cascade`` on an empty ``profile.choices``
+    # list — the for-loop iterates zero times and the engine silently
+    # returns ``CascadeResult(final_status='rejected')``, marking the
+    # candidate rejected without any human review.
+    #
+    # Counting via a scalar query (NOT loading the relation) keeps the
+    # FOR UPDATE lock semantics clean and avoids an eager-load that
+    # would otherwise require a relationship-aware lock variant.
+    if profile.uses_choice_engine:
+        from sqlalchemy import func as sa_func, select as sa_select
+        choice_count_result = await db.execute(
+            sa_select(sa_func.count(models.AdmissionProfileChoice.id)).where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+        )
+        choice_count = choice_count_result.scalar_one()
+        if choice_count == 0:
+            raise BadRequest(
+                "Hồ sơ đa nguyện vọng phải có ít nhất 1 nguyện vọng trước khi nộp. "
+                "Vui lòng thêm nguyện vọng tại bước Điểm & Điều kiện."
+            )
 
     # Must be in draft status
     if profile.status != "draft":
