@@ -350,21 +350,32 @@ async def test_bulk_resolve_partial_fail_rolls_back_all(backfill_seed: dict):
     """FU #118 anchor: if any row in the batch fails to persist, the
     WHOLE batch rolls back — counters never reflect a partial state.
 
-    Strategy:
-      - Call ``bulk_resolve_exceptions`` directly with our own session so
-        we own the transaction boundary (no router commit on the way).
-      - Patch ``AsyncSession.flush`` to raise after the in-memory ORM
-        mutations are applied to all rows but BEFORE the SQL UPDATEs
-        reach the DB. This simulates a connection drop / SQL constraint
-        violation mid-write.
-      - Verify the service propagates the exception.
-      - Verify, in a fresh session, that none of the seeded exceptions
-        carry ``resolved_at`` — atomic rollback held.
+    Strategy (reviewer M1 fix):
+      - Disable session ``autoflush`` so the pre-fetch ``db.execute(SELECT)``
+        cannot accidentally trigger our exploding flush BEFORE the mutation
+        loop runs. Without this, the test would pass vacuously: autoflush
+        would raise on the SELECT, no mutations would ever happen, and the
+        fresh-session check below would trivially confirm "no writes" —
+        without ever proving the service has atomicity.
+      - Monkey-patch ``AsyncSession.flush`` to raise. With autoflush off
+        this is hit ONLY by the explicit ``await db.flush()`` the service
+        calls AFTER the mutation loop completes (admission_backfill_service.py:180).
+      - Track flush invocation count so we can ASSERT the explicit
+        service-level flush actually executed — proves the mutation loop
+        ran before the failure injection (not skipped by an earlier raise).
+      - Wrap the call in ``async with session.begin()`` so a flush failure
+        rolls the whole transaction frame back (mirrors router commit
+        contract).
+      - Verify in a FRESH ``AsyncSessionLocal()`` (no identity-map carry-
+        over per memory ``async-session-gather``) that none of the rows
+        carry the mutations — atomic rollback held.
 
-    Non-tautological: the assertion uses a FRESH ``AsyncSessionLocal``
-    so identity-map carry-over from the failing session cannot mask
-    a partial write (memory ``async-session-gather`` precedent on
-    cross-session correctness).
+    Note: BE-2 admin backfill routes (4 endpoints under
+    ``/api/v2/admin/admission-backfill-*``) use ``require_admin`` FastAPI
+    dep, NOT ``CasbinAuth``. Casbin enforce matrix in
+    ``test_casbin_phase3_routes.py`` therefore covers only the 4 BE-1
+    choice CRUD routes; BE-2 admin gating is covered by the
+    ``test_list_manager_forbidden`` style tests above.
     """
     from app.services.admission_backfill_service import (
         bulk_resolve_exceptions,
@@ -373,24 +384,23 @@ async def test_bulk_resolve_partial_fail_rolls_back_all(backfill_seed: dict):
     ids = backfill_seed["exception_ids"]
     notes = "Atomicity test — should be rolled back."
 
-    # Run inside our own transaction frame so a flush failure rolls the
-    # whole begin() block back, just like the router would.
     failing_session = AsyncSessionLocal()
+    # Disable autoflush so only the EXPLICIT service-level flush triggers
+    # the exploding patch (reviewer M1 fix).
+    failing_session.sync_session.autoflush = False
+
+    flush_calls = 0
+
+    async def _explode(*args, **kwargs):
+        nonlocal flush_calls
+        flush_calls += 1
+        raise RuntimeError(
+            "Simulated DB error mid-bulk-resolve (FU #118 anchor)"
+        )
+
+    failing_session.flush = _explode  # type: ignore[assignment]
+
     try:
-        original_flush = failing_session.flush
-
-        async def _explode(*args, **kwargs):
-            # Allow internal autoflush bookkeeping to succeed once if
-            # SQLAlchemy needs it; only raise on the explicit service-level
-            # flush. The service has a single explicit await db.flush()
-            # AFTER the mutation loop — that's the call we want to fail.
-            raise RuntimeError(
-                "Simulated DB error mid-bulk-resolve (FU #118 anchor)"
-            )
-
-        # Monkeypatch the instance method
-        failing_session.flush = _explode  # type: ignore[assignment]
-
         with pytest.raises(RuntimeError, match="Simulated DB error"):
             async with failing_session.begin():
                 await bulk_resolve_exceptions(
@@ -399,10 +409,18 @@ async def test_bulk_resolve_partial_fail_rolls_back_all(backfill_seed: dict):
                     resolution_notes=notes,
                     actor_id=999,
                 )
-        # Restore so close() doesn't blow up
-        failing_session.flush = original_flush  # type: ignore[assignment]
     finally:
         await failing_session.close()
+
+    # Anchor: prove our explode hook was actually reached. Without this
+    # the test could PASS for the wrong reason if the service or its
+    # callers raised before the mutation loop (e.g., autoflush on SELECT).
+    assert flush_calls == 1, (
+        f"Expected exactly 1 flush() call (the explicit service-level "
+        f"flush after mutations); got {flush_calls}. If 0, autoflush "
+        f"or an earlier raise short-circuited the loop and the atomicity "
+        f"guarantee was NEVER exercised."
+    )
 
     # Verify atomicity in a fresh session — no row should carry the
     # resolved_at / resolution_notes / resolved_by_user_id mutations
