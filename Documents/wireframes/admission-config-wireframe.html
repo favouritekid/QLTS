@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wireframe — Cấu hình Tuyển sinh (Phase 2 v8.2)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .cell-button { transition: all 0.15s; }
+    .cell-button:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.08); }
+    [data-tab-content]:not([data-active="true"]) { display: none; }
+    .modal { display: none; }
+    .modal[data-open="true"] { display: flex; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+
+<!-- ========================================================================== -->
+<!-- HEADER — Filter context + Tabs                                              -->
+<!-- ========================================================================== -->
+<header class="bg-white border-b shadow-sm sticky top-0 z-20">
+  <div class="px-6 py-3 flex items-center gap-3 flex-wrap">
+    <div class="flex items-center gap-2">
+      <span class="text-slate-400">📁</span>
+      <h1 class="text-base font-semibold">Cấu hình Tuyển sinh</h1>
+    </div>
+
+    <div class="h-6 w-px bg-slate-300 mx-2"></div>
+
+    <div class="flex items-center gap-2 flex-wrap">
+      <label class="text-xs text-slate-500">Năm:</label>
+      <select class="border rounded px-2 py-1 text-sm bg-white">
+        <option>2026</option>
+        <option>2025</option>
+        <option>2027</option>
+      </select>
+
+      <label class="text-xs text-slate-500 ml-2">Hệ ĐT:</label>
+      <select class="border rounded px-2 py-1 text-sm bg-white">
+        <option>Cao đẳng – Chính quy</option>
+        <option>Trung cấp – Chính quy</option>
+        <option>Cao đẳng – VLVH</option>
+        <option>Tất cả hệ</option>
+      </select>
+
+      <label class="text-xs text-slate-500 ml-2">Đợt:</label>
+      <select class="border rounded px-2 py-1 text-sm bg-white">
+        <option>Tất cả</option>
+        <option>DOT_1</option>
+        <option>DOT_2</option>
+        <option>DOT_3</option>
+        <option>BO_SUNG</option>
+      </select>
+
+      <label class="text-xs text-slate-500 ml-2">Method:</label>
+      <select class="border rounded px-2 py-1 text-sm bg-white">
+        <option>Tất cả</option>
+        <option>Học bạ</option>
+        <option>THPT QG</option>
+        <option>DGNL</option>
+        <option>Tuyển thẳng</option>
+      </select>
+    </div>
+
+    <div class="ml-auto text-xs text-slate-500">
+      Filter persists across tabs ✓
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <nav class="px-6 flex gap-1 border-t border-slate-100">
+    <button data-tab="matrix" onclick="setTab('matrix')"
+      class="tab-btn px-4 py-2.5 border-b-2 border-blue-600 font-medium text-blue-600 text-sm">
+      📊 Ma trận chỉ tiêu
+    </button>
+    <button data-tab="paths" onclick="setTab('paths')"
+      class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-slate-600 hover:text-slate-900 text-sm">
+      📋 Danh sách Path
+    </button>
+    <button data-tab="rounds" onclick="setTab('rounds')"
+      class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-slate-600 hover:text-slate-900 text-sm">
+      📅 Đợt tuyển sinh
+    </button>
+    <button data-tab="methods" onclick="setTab('methods')"
+      class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-slate-600 hover:text-slate-900 text-sm">
+      🎯 Method & tiêu chí
+    </button>
+  </nav>
+</header>
+
+<!-- ========================================================================== -->
+<!-- TAB 1: MA TRẬN CHỈ TIÊU                                                     -->
+<!-- ========================================================================== -->
+<main data-tab-content="matrix" data-active="true" class="p-6">
+  <div class="bg-white rounded-lg shadow-sm border">
+    <div class="px-5 py-3 border-b flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-base">Ma trận chỉ tiêu năm 2026 — Cao đẳng-CQ</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Click cell để xem chi tiết các path theo method</p>
+      </div>
+      <div class="flex gap-1 bg-slate-100 rounded-lg p-1">
+        <button class="text-sm px-3 py-1 bg-white shadow rounded font-medium">🎯 Trúng tuyển</button>
+        <button class="text-sm px-3 py-1 text-slate-600 hover:text-slate-900">📥 Nộp hồ sơ</button>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b text-xs uppercase tracking-wide text-slate-600">
+          <tr>
+            <th class="px-4 py-2.5 text-left">Ngành</th>
+            <th class="px-3 py-2.5 text-right">Cap năm</th>
+            <th class="px-3 py-2.5 text-right">Đã rải</th>
+            <th class="px-3 py-2.5 text-right">Còn lại</th>
+            <th class="px-2 py-2.5 text-center w-32">DOT_1<br><span class="text-[10px] normal-case font-normal text-slate-400">01/03–30/04</span></th>
+            <th class="px-2 py-2.5 text-center w-32">DOT_2<br><span class="text-[10px] normal-case font-normal text-slate-400">01/06–31/07</span></th>
+            <th class="px-2 py-2.5 text-center w-32">DOT_3<br><span class="text-[10px] normal-case font-normal text-slate-400">15/08–10/09</span></th>
+            <th class="px-2 py-2.5 text-center w-32">BO_SUNG<br><span class="text-[10px] normal-case font-normal text-slate-400">15/09–25/10</span></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y">
+          <!-- Row 1: CNTT — happy path -->
+          <tr class="hover:bg-slate-50/50">
+            <td class="px-4 py-3">
+              <div class="font-medium">Công nghệ thông tin</div>
+              <div class="text-xs text-slate-500">6480201</div>
+            </td>
+            <td class="px-3 py-3 text-right font-medium">100</td>
+            <td class="px-3 py-3 text-right">85</td>
+            <td class="px-3 py-3 text-right text-emerald-600 font-medium">15 ✅</td>
+            <td class="px-2 py-2 text-center">
+              <button onclick="openCellDrawer('CNTT × DOT_1')" class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 50 / 📥 70</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">3 paths</div>
+                <div class="text-[10px] mt-0.5">🟢 2 act · ⏳ 1 draft</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button onclick="openCellDrawer('CNTT × DOT_2')" class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 35 / 📥 50</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">2 paths</div>
+                <div class="text-[10px] mt-0.5">🟢 active</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full hover:border-blue-400">
+                + Tạo path
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full hover:border-blue-400">
+                + Tạo path
+              </button>
+            </td>
+          </tr>
+
+          <!-- Row 2: Y sỹ ĐK — chưa rải -->
+          <tr class="hover:bg-slate-50/50">
+            <td class="px-4 py-3">
+              <div class="font-medium">Y sỹ đa khoa</div>
+              <div class="text-xs text-slate-500">6720101</div>
+            </td>
+            <td class="px-3 py-3 text-right font-medium">70</td>
+            <td class="px-3 py-3 text-right">0</td>
+            <td class="px-3 py-3 text-right text-amber-600">70 ⚠</td>
+            <td class="px-2 py-2 text-center">
+              <button onclick="openCellDrawer('Y sỹ × DOT_1')" class="cell-button bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold text-amber-700">🎯 0 / 📥 0</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">3 paths</div>
+                <div class="text-[10px] mt-0.5 text-amber-700">⏳ all draft</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+          </tr>
+
+          <!-- Row 3: Dược — VƯỢT CAP -->
+          <tr class="hover:bg-slate-50/50 bg-red-50/40">
+            <td class="px-4 py-3">
+              <div class="font-medium">Dược</div>
+              <div class="text-xs text-slate-500">6720201</div>
+            </td>
+            <td class="px-3 py-3 text-right font-medium">80</td>
+            <td class="px-3 py-3 text-right">85</td>
+            <td class="px-3 py-3 text-right text-red-600 font-semibold">-5 🚫 Vượt cap</td>
+            <td class="px-2 py-2 text-center">
+              <button class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 45 / 📥 60</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">2 paths</div>
+                <div class="text-[10px] mt-0.5">🟢 active</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 40 / 📥 55</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">2 paths</div>
+                <div class="text-[10px] mt-0.5">🟢 active</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+          </tr>
+
+          <!-- Row 4: Y học cổ truyền — partial -->
+          <tr class="hover:bg-slate-50/50">
+            <td class="px-4 py-3">
+              <div class="font-medium">Y học cổ truyền</div>
+              <div class="text-xs text-slate-500">6720102</div>
+            </td>
+            <td class="px-3 py-3 text-right font-medium">70</td>
+            <td class="px-3 py-3 text-right">25</td>
+            <td class="px-3 py-3 text-right text-emerald-600 font-medium">45 ✅</td>
+            <td class="px-2 py-2 text-center">
+              <button class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 25 / 📥 35</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">2 paths</div>
+                <div class="text-[10px] mt-0.5">🟡 1 act · 1 inact</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+          </tr>
+
+          <!-- Row 5: Tiếng Anh — unlimited cap -->
+          <tr class="hover:bg-slate-50/50">
+            <td class="px-4 py-3">
+              <div class="font-medium">Tiếng Anh</div>
+              <div class="text-xs text-slate-500">6220206</div>
+            </td>
+            <td class="px-3 py-3 text-right text-slate-400 italic">∞</td>
+            <td class="px-3 py-3 text-right">15</td>
+            <td class="px-3 py-3 text-right text-slate-400 italic">∞</td>
+            <td class="px-2 py-2 text-center">
+              <button class="cell-button bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md px-2 py-1.5 w-full text-left">
+                <div class="text-xs font-semibold">🎯 15 / 📥 20</div>
+                <div class="text-[10px] text-slate-600 mt-0.5">1 path</div>
+                <div class="text-[10px] mt-0.5">🟢 active</div>
+              </button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+            <td class="px-2 py-2 text-center">
+              <button class="text-slate-400 hover:text-blue-600 text-xs border border-dashed border-slate-300 rounded-md px-2 py-3 w-full">+ Tạo path</button>
+            </td>
+          </tr>
+        </tbody>
+        <tfoot class="bg-slate-50 border-t">
+          <tr>
+            <td class="px-4 py-2.5 font-medium text-sm" colspan="4">Tổng 5 ngành (filter Cao đẳng-CQ)</td>
+            <td class="px-2 py-2.5 text-center text-xs">🎯 135 / 📥 185</td>
+            <td class="px-2 py-2.5 text-center text-xs">🎯 75 / 📥 105</td>
+            <td class="px-2 py-2.5 text-center text-xs text-slate-400">—</td>
+            <td class="px-2 py-2.5 text-center text-xs text-slate-400">—</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="px-5 py-3 border-t bg-slate-50 text-xs text-slate-600 space-y-1">
+      <p>🟢 active · ⏳ draft · 🟡 mixed · 🔘 inactive · 🚫 vượt cap</p>
+      <p>Cell <strong>🎯 50</strong> = ∑ admit_quota của tất cả paths trong (ngành × đợt). <strong>📥 70</strong> = ∑ round_quota.</p>
+      <p>Click cell → drawer aggregate hiện list paths theo method · Click <strong>+ Tạo path</strong> → create flow</p>
+    </div>
+  </div>
+</main>
+
+<!-- ========================================================================== -->
+<!-- TAB 2: DANH SÁCH PATH                                                       -->
+<!-- ========================================================================== -->
+<main data-tab-content="paths" data-active="false" class="p-6">
+  <div class="bg-white rounded-lg shadow-sm border">
+    <div class="px-5 py-3 border-b flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold">Danh sách Path tuyển sinh</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Search/debug toàn bộ paths trong filter</p>
+      </div>
+      <div class="flex gap-2">
+        <input type="search" placeholder="Search path label..." class="border rounded px-3 py-1.5 text-sm">
+        <select class="border rounded px-2 py-1.5 text-sm">
+          <option>Status: Tất cả</option>
+          <option>Active</option>
+          <option>Draft</option>
+          <option>Inactive</option>
+          <option>Archived</option>
+        </select>
+      </div>
+    </div>
+
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b text-xs uppercase tracking-wide text-slate-600">
+        <tr>
+          <th class="px-4 py-2.5 text-left">Path label</th>
+          <th class="px-3 py-2.5 text-left">Ngành</th>
+          <th class="px-3 py-2.5 text-left">Đợt</th>
+          <th class="px-3 py-2.5 text-left">Method</th>
+          <th class="px-3 py-2.5 text-right">Submit cap</th>
+          <th class="px-3 py-2.5 text-right">Admit quota</th>
+          <th class="px-3 py-2.5 text-right">Đã nộp</th>
+          <th class="px-3 py-2.5 text-center">Status</th>
+          <th class="px-3 py-2.5 text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">CNTT (CĐ-CQ) / DOT_1 / Học bạ</td>
+          <td class="px-3 py-3">CNTT</td>
+          <td class="px-3 py-3"><span class="bg-slate-100 px-2 py-0.5 rounded text-xs">DOT_1</span></td>
+          <td class="px-3 py-3">Học bạ</td>
+          <td class="px-3 py-3 text-right">35</td>
+          <td class="px-3 py-3 text-right">25</td>
+          <td class="px-3 py-3 text-right">12</td>
+          <td class="px-3 py-3 text-center"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+          <td class="px-3 py-3 text-center"><button onclick="openPathDrawer('CNTT/DOT_1/Học bạ')" class="text-blue-600 hover:underline text-xs">Mở</button></td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">CNTT (CĐ-CQ) / DOT_1 / THPT QG</td>
+          <td class="px-3 py-3">CNTT</td>
+          <td class="px-3 py-3"><span class="bg-slate-100 px-2 py-0.5 rounded text-xs">DOT_1</span></td>
+          <td class="px-3 py-3">THPT QG</td>
+          <td class="px-3 py-3 text-right">25</td>
+          <td class="px-3 py-3 text-right">20</td>
+          <td class="px-3 py-3 text-right">6</td>
+          <td class="px-3 py-3 text-center"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+          <td class="px-3 py-3 text-center"><button class="text-blue-600 hover:underline text-xs">Mở</button></td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">CNTT (CĐ-CQ) / DOT_1 / DGNL</td>
+          <td class="px-3 py-3">CNTT</td>
+          <td class="px-3 py-3"><span class="bg-slate-100 px-2 py-0.5 rounded text-xs">DOT_1</span></td>
+          <td class="px-3 py-3">DGNL</td>
+          <td class="px-3 py-3 text-right">10</td>
+          <td class="px-3 py-3 text-right">5</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-center"><span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs">Draft</span></td>
+          <td class="px-3 py-3 text-center"><button class="text-blue-600 hover:underline text-xs">Mở</button></td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">CNTT (CĐ-CQ) / DOT_2 / Học bạ</td>
+          <td class="px-3 py-3">CNTT</td>
+          <td class="px-3 py-3"><span class="bg-slate-100 px-2 py-0.5 rounded text-xs">DOT_2</span></td>
+          <td class="px-3 py-3">Học bạ</td>
+          <td class="px-3 py-3 text-right">30</td>
+          <td class="px-3 py-3 text-right">20</td>
+          <td class="px-3 py-3 text-right">2</td>
+          <td class="px-3 py-3 text-center"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+          <td class="px-3 py-3 text-center"><button class="text-blue-600 hover:underline text-xs">Mở</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<!-- ========================================================================== -->
+<!-- TAB 3: ĐỢT TUYỂN SINH                                                       -->
+<!-- ========================================================================== -->
+<main data-tab-content="rounds" data-active="false" class="p-6">
+  <div class="bg-white rounded-lg shadow-sm border">
+    <div class="px-5 py-3 border-b flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold">Đợt tuyển sinh năm 2026</h2>
+        <p class="text-xs text-slate-500 mt-0.5">Quản metadata đợt — KHÔNG cấu hình quota tại đây</p>
+      </div>
+      <div class="flex gap-2">
+        <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">+ Tạo đợt</button>
+        <button class="bg-slate-100 text-sm px-3 py-1.5 rounded">📋 Tạo nhanh 4 đợt</button>
+        <button class="bg-slate-100 text-sm px-3 py-1.5 rounded">🔁 Clone paths giữa đợt</button>
+      </div>
+    </div>
+
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 border-b text-xs uppercase tracking-wide text-slate-600">
+        <tr>
+          <th class="px-4 py-2.5 text-left">Đợt</th>
+          <th class="px-3 py-2.5 text-left">Tên đợt</th>
+          <th class="px-3 py-2.5 text-left">Thời gian</th>
+          <th class="px-3 py-2.5 text-right"># Paths</th>
+          <th class="px-3 py-2.5 text-right">Tổng submit cap</th>
+          <th class="px-3 py-2.5 text-right">Tổng admit quota</th>
+          <th class="px-3 py-2.5 text-center">Status</th>
+          <th class="px-3 py-2.5 text-center">Action</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">DOT_1</td>
+          <td class="px-3 py-3">Đợt 1 - 2026</td>
+          <td class="px-3 py-3">01/03 → 30/04</td>
+          <td class="px-3 py-3 text-right">27</td>
+          <td class="px-3 py-3 text-right">420</td>
+          <td class="px-3 py-3 text-right">300</td>
+          <td class="px-3 py-3 text-center"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+          <td class="px-3 py-3 text-center text-xs">
+            <button class="text-blue-600 hover:underline">Sửa</button> ·
+            <button class="text-blue-600 hover:underline">Gia hạn</button> ·
+            <button class="text-red-600 hover:underline">Lưu trữ</button>
+          </td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">DOT_2</td>
+          <td class="px-3 py-3">Đợt 2 - 2026</td>
+          <td class="px-3 py-3">01/06 → 31/07</td>
+          <td class="px-3 py-3 text-right">18</td>
+          <td class="px-3 py-3 text-right">250</td>
+          <td class="px-3 py-3 text-right">180</td>
+          <td class="px-3 py-3 text-center"><span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs">Draft</span></td>
+          <td class="px-3 py-3 text-center text-xs">
+            <button class="text-blue-600 hover:underline">Sửa</button> ·
+            <button class="text-blue-600 hover:underline">Kích hoạt</button> ·
+            <button class="text-red-600 hover:underline">Lưu trữ</button>
+          </td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">DOT_3</td>
+          <td class="px-3 py-3">Đợt 3 - 2026</td>
+          <td class="px-3 py-3">15/08 → 10/09</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-center"><span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">Draft</span></td>
+          <td class="px-3 py-3 text-center text-xs">
+            <button class="text-blue-600 hover:underline">Sửa</button>
+          </td>
+        </tr>
+        <tr class="hover:bg-slate-50/50">
+          <td class="px-4 py-3 font-medium">BO_SUNG</td>
+          <td class="px-3 py-3">Đợt bổ sung - 2026</td>
+          <td class="px-3 py-3">15/09 → 25/10</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-right">0</td>
+          <td class="px-3 py-3 text-center"><span class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">Draft</span></td>
+          <td class="px-3 py-3 text-center text-xs">
+            <button class="text-blue-600 hover:underline">Sửa</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<!-- ========================================================================== -->
+<!-- TAB 4: METHOD & TIÊU CHÍ                                                    -->
+<!-- ========================================================================== -->
+<main data-tab-content="methods" data-active="false" class="p-6">
+  <div class="bg-white rounded-lg shadow-sm border p-5">
+    <h2 class="font-semibold mb-4">Method & Tiêu chí — Quản lý phương thức tuyển sinh</h2>
+    <p class="text-sm text-slate-600">List methods (Học bạ / THPT QG / Tuyển thẳng / DGNL / V-ACT) + criteria templates dùng chung. Tab này quản phương thức cấp trường, không phải per-path.</p>
+    <div class="mt-4 text-sm text-slate-500 italic">[Mockup placeholder — wireframe Tab 4 chi tiết sau]</div>
+  </div>
+</main>
+
+<!-- ========================================================================== -->
+<!-- DRAWER 1: AGGREGATE CELL (ngành × đợt)                                      -->
+<!-- ========================================================================== -->
+<div id="cell-drawer" class="modal fixed inset-0 bg-black/40 z-30 items-end justify-end" onclick="closeCellDrawer(event)">
+  <div onclick="event.stopPropagation()" class="bg-white w-full max-w-3xl h-full overflow-y-auto shadow-2xl">
+    <div class="sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between">
+      <div>
+        <div class="text-xs text-slate-500">Drawer aggregate</div>
+        <h3 id="cell-drawer-title" class="font-semibold text-base">CNTT × DOT_1 — Cao đẳng-CQ — 2026</h3>
+      </div>
+      <button onclick="closeCellDrawer()" class="text-slate-400 hover:text-slate-700 text-2xl">×</button>
+    </div>
+
+    <div class="p-5 space-y-5">
+      <!-- Context summary -->
+      <div class="bg-slate-50 rounded-lg p-4 grid grid-cols-3 gap-4 text-sm">
+        <div>
+          <div class="text-xs text-slate-500">Ngành</div>
+          <div class="font-medium mt-0.5">CNTT (Cao đẳng-CQ)</div>
+          <div class="text-xs text-slate-400">6480201 · academic_info_id=70</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">Đợt</div>
+          <div class="font-medium mt-0.5">DOT_1 - Đợt 1 năm 2026</div>
+          <div class="text-xs text-slate-400">01/03 → 30/04 · round_id=1</div>
+        </div>
+        <div>
+          <div class="text-xs text-slate-500">Cap năm CNTT</div>
+          <div class="font-medium mt-0.5">100 / Đã rải <span class="text-blue-600">85</span></div>
+          <div class="text-xs text-emerald-600">Còn 15 (sau khi save)</div>
+        </div>
+      </div>
+
+      <!-- Tier 1 running total -->
+      <div class="border border-blue-200 bg-blue-50 rounded-lg p-3 text-sm">
+        <div class="flex items-center justify-between">
+          <span class="font-medium">🧮 Tier 1 chain ngành CNTT</span>
+          <span class="text-xs text-slate-500">Live — mỗi cell change cập nhật ngay</span>
+        </div>
+        <div class="mt-2 grid grid-cols-4 gap-2 text-xs">
+          <div class="bg-white p-2 rounded">DOT_1: 50 → <strong class="text-blue-700">55</strong></div>
+          <div class="bg-white p-2 rounded">DOT_2: 35</div>
+          <div class="bg-white p-2 rounded">DOT_3: 0</div>
+          <div class="bg-white p-2 rounded">BO_SUNG: 0</div>
+        </div>
+        <div class="mt-2 text-xs">
+          ∑ ngành = <strong>90 / cap 100</strong> → Còn <strong class="text-emerald-700">10</strong> ✅
+        </div>
+      </div>
+
+      <!-- Paths table -->
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <h4 class="font-medium text-sm">Paths theo phương thức (3 paths trong cell)</h4>
+          <button class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">+ Thêm path method khác</button>
+        </div>
+        <table class="w-full text-sm border rounded">
+          <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+            <tr>
+              <th class="px-3 py-2 text-left">Method</th>
+              <th class="px-3 py-2 text-left">Status</th>
+              <th class="px-3 py-2 text-right">Submit cap</th>
+              <th class="px-3 py-2 text-right">Admit quota</th>
+              <th class="px-3 py-2 text-right">Đã nộp</th>
+              <th class="px-3 py-2 text-left">Criteria</th>
+              <th class="px-3 py-2 text-center">Action</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr>
+              <td class="px-3 py-2 font-medium">Học bạ</td>
+              <td class="px-3 py-2"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="35" class="w-20 border rounded px-2 py-1 text-right text-sm">
+              </td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="25" class="w-20 border rounded px-2 py-1 text-right text-sm bg-amber-50">
+              </td>
+              <td class="px-3 py-2 text-right text-slate-600">12</td>
+              <td class="px-3 py-2 text-xs">TC_HB2026_CNTT</td>
+              <td class="px-3 py-2 text-center">
+                <button onclick="openPathDrawer('CNTT/DOT_1/Học bạ')" class="text-blue-600 hover:underline text-xs">Mở chi tiết</button>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-medium">THPT QG</td>
+              <td class="px-3 py-2"><span class="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-xs">Active</span></td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="25" class="w-20 border rounded px-2 py-1 text-right text-sm">
+              </td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="20" class="w-20 border rounded px-2 py-1 text-right text-sm">
+              </td>
+              <td class="px-3 py-2 text-right text-slate-600">6</td>
+              <td class="px-3 py-2 text-xs">TC_THPT2026_CNTT</td>
+              <td class="px-3 py-2 text-center">
+                <button class="text-blue-600 hover:underline text-xs">Mở chi tiết</button>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-medium">DGNL</td>
+              <td class="px-3 py-2"><span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-xs">Draft</span></td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="10" class="w-20 border rounded px-2 py-1 text-right text-sm">
+              </td>
+              <td class="px-3 py-2 text-right">
+                <input type="number" value="5" class="w-20 border rounded px-2 py-1 text-right text-sm">
+              </td>
+              <td class="px-3 py-2 text-right text-slate-600">0</td>
+              <td class="px-3 py-2 text-xs">TC_DGNL2026_CNTT</td>
+              <td class="px-3 py-2 text-center">
+                <button class="text-blue-600 hover:underline text-xs">Mở chi tiết</button>
+              </td>
+            </tr>
+            <tr class="bg-slate-50 font-medium text-sm">
+              <td class="px-3 py-2" colspan="2">Tổng cell (3 paths)</td>
+              <td class="px-3 py-2 text-right">📥 70</td>
+              <td class="px-3 py-2 text-right">🎯 50 → <span class="text-blue-700">55</span></td>
+              <td class="px-3 py-2 text-right">18</td>
+              <td class="px-3 py-2" colspan="2"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="text-xs text-slate-500 space-y-1">
+        <p>⚠ <strong>Tier 2 invariant</strong> ràng buộc: admit_quota ≤ submit_cap mỗi path. Path Học bạ admit=25 ≤ submit=35 ✅</p>
+        <p>⚠ <strong>Tier 1 chain</strong>: ∑ admit_quota của ngành CNTT (qua all đợt) ≤ cap năm 100. Hiện 90 ✅</p>
+        <p>⚠ <strong>Tier 3</strong> (subject group quota) hiện trong path drawer chi tiết</p>
+      </div>
+
+      <div class="flex justify-end gap-2 pt-3 border-t">
+        <button onclick="closeCellDrawer()" class="bg-slate-100 px-4 py-2 rounded text-sm">Hủy</button>
+        <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm">Lưu thay đổi (3 paths)</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- DRAWER 2: PATH DETAIL                                                       -->
+<!-- ========================================================================== -->
+<div id="path-drawer" class="modal fixed inset-0 bg-black/40 z-40 items-end justify-end" onclick="closePathDrawer(event)">
+  <div onclick="event.stopPropagation()" class="bg-white w-full max-w-2xl h-full overflow-y-auto shadow-2xl">
+    <div class="sticky top-0 bg-white border-b px-5 py-3 flex items-center justify-between">
+      <div>
+        <div class="text-xs text-slate-500">Path detail</div>
+        <h3 class="font-semibold">CNTT (CĐ-CQ) / DOT_1 / Học bạ</h3>
+      </div>
+      <button onclick="closePathDrawer()" class="text-slate-400 hover:text-slate-700 text-2xl">×</button>
+    </div>
+
+    <div class="p-5 space-y-5">
+      <!-- Identity -->
+      <div>
+        <h4 class="font-medium text-sm mb-2 text-slate-700 uppercase tracking-wide text-xs">📌 Identity (3-col UNIQUE)</h4>
+        <div class="bg-slate-50 rounded-lg p-3 grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <div class="text-xs text-slate-500">Ngành / Năm / Hệ ĐT</div>
+            <div class="font-medium">CNTT / 2026 / CĐ-CQ</div>
+            <div class="text-xs text-slate-400">academic_info_id=70</div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-500">Đợt</div>
+            <div class="font-medium">DOT_1 - Đợt 1 năm 2026</div>
+            <div class="text-xs text-slate-400">round_id=1</div>
+          </div>
+          <div>
+            <div class="text-xs text-slate-500">Phương thức</div>
+            <div class="font-medium">Học bạ</div>
+            <div class="text-xs text-slate-400">method_id=1</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quota -->
+      <div>
+        <h4 class="font-medium text-sm mb-2 text-slate-700 uppercase tracking-wide text-xs">🎯 Chỉ tiêu</h4>
+        <div class="grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <label class="text-xs text-slate-500">Submit cap (round_quota)</label>
+            <input type="number" value="35" class="border rounded w-full px-3 py-1.5 mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Admit quota (Tier 1 root)</label>
+            <input type="number" value="25" class="border rounded w-full px-3 py-1.5 mt-1">
+            <p class="text-xs text-emerald-600 mt-0.5">25 ≤ 35 ✅ Tier 2</p>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Đã nộp</label>
+            <div class="border rounded px-3 py-1.5 mt-1 bg-slate-100 text-slate-600">12 (read-only)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Criteria -->
+      <div>
+        <h4 class="font-medium text-sm mb-2 text-slate-700 uppercase tracking-wide text-xs">📋 Tiêu chí (AdmissionCriteria 1:1 ADM-003)</h4>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <label class="text-xs text-slate-500">Code</label>
+            <input value="TC_HB2026_CNTT" class="border rounded w-full px-3 py-1.5 mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Min GPA</label>
+            <input type="number" value="6.5" class="border rounded w-full px-3 py-1.5 mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Min score</label>
+            <input type="number" value="18.00" class="border rounded w-full px-3 py-1.5 mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Max possible score</label>
+            <input type="number" value="30.00" class="border rounded w-full px-3 py-1.5 mt-1">
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Scoring method</label>
+            <select class="border rounded w-full px-3 py-1.5 mt-1">
+              <option>sum</option><option>average</option><option>weighted</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Subject selection mode</label>
+            <select class="border rounded w-full px-3 py-1.5 mt-1">
+              <option>fixed</option><option>best_n</option><option>any_n</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Subject Group Config (Phase 2 PR-2D) -->
+      <div>
+        <h4 class="font-medium text-sm mb-2 text-slate-700 uppercase tracking-wide text-xs">📚 Path Subject Group Config (Tier 3 chain)</h4>
+        <table class="w-full text-sm border rounded">
+          <thead class="bg-slate-50 text-xs">
+            <tr>
+              <th class="px-3 py-2 text-left">Group</th>
+              <th class="px-3 py-2 text-right">Min score</th>
+              <th class="px-3 py-2 text-right">Min subject</th>
+              <th class="px-3 py-2 text-right">Group quota</th>
+              <th class="px-3 py-2 text-left">Items</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            <tr>
+              <td class="px-3 py-2 font-medium">A00</td>
+              <td class="px-3 py-2 text-right"><input type="number" value="18.00" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-right"><input type="number" value="3.00" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-right"><input type="number" value="10" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-xs">Toán/Lý/Hóa</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 font-medium">A01</td>
+              <td class="px-3 py-2 text-right"><input type="number" value="19.00" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-right"><input type="number" value="4.00" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-right"><input type="number" value="15" class="w-20 border rounded px-2 py-1 text-right text-xs"></td>
+              <td class="px-3 py-2 text-xs">Toán/Lý/Anh</td>
+            </tr>
+            <tr class="bg-slate-50 text-xs font-medium">
+              <td class="px-3 py-2" colspan="3">Tổng group_quota</td>
+              <td class="px-3 py-2 text-right">25 / admit 25 ✅</td>
+              <td class="px-3 py-2"></td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="mt-2 text-xs text-blue-600 hover:underline">+ Thêm subject group</button>
+      </div>
+
+      <!-- Lifecycle -->
+      <div>
+        <h4 class="font-medium text-sm mb-2 text-slate-700 uppercase tracking-wide text-xs">🔄 Lifecycle</h4>
+        <div class="grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <label class="text-xs text-slate-500">Status</label>
+            <select class="border rounded w-full px-3 py-1.5 mt-1">
+              <option>active</option><option>draft</option><option>inactive</option><option>archived</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Visibility</label>
+            <select class="border rounded w-full px-3 py-1.5 mt-1">
+              <option>public</option><option>internal</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Activated</label>
+            <div class="border rounded px-3 py-1.5 mt-1 bg-slate-100 text-slate-600 text-xs">2026-05-09 by admin</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex justify-between pt-3 border-t">
+        <button class="text-red-600 hover:underline text-sm">Xóa path</button>
+        <div class="flex gap-2">
+          <button onclick="closePathDrawer()" class="bg-slate-100 px-4 py-2 rounded text-sm">Hủy</button>
+          <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm">Lưu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function setTab(name) {
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.remove('border-blue-600', 'text-blue-600', 'font-medium');
+      b.classList.add('border-transparent', 'text-slate-600');
+    });
+    document.querySelector(`[data-tab="${name}"]`).classList.add('border-blue-600', 'text-blue-600', 'font-medium');
+    document.querySelector(`[data-tab="${name}"]`).classList.remove('border-transparent', 'text-slate-600');
+    document.querySelectorAll('[data-tab-content]').forEach(c => c.dataset.active = 'false');
+    document.querySelector(`[data-tab-content="${name}"]`).dataset.active = 'true';
+  }
+  function openCellDrawer(label) {
+    document.getElementById('cell-drawer-title').textContent = label + ' — Cao đẳng-CQ — 2026';
+    document.getElementById('cell-drawer').dataset.open = 'true';
+  }
+  function closeCellDrawer(e) {
+    if (e && e.target !== e.currentTarget) return;
+    document.getElementById('cell-drawer').dataset.open = 'false';
+  }
+  function openPathDrawer(label) {
+    document.getElementById('path-drawer').dataset.open = 'true';
+  }
+  function closePathDrawer(e) {
+    if (e && e.target !== e.currentTarget) return;
+    document.getElementById('path-drawer').dataset.open = 'false';
+  }
+</script>
+
+</body>
+</html>

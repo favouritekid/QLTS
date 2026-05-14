@@ -283,3 +283,9 @@ local_backup/
 # 2026-05-14 S2 hardening session additions
 .branch_protection_*.png
 .decision_badge_*.png
+
+# Local-only / personal — NOT canonical artifacts
+# frontend/src/app/dev/ : dev-only preview pages (e.g., choice-editor-preview)
+# scripts/plan-loop.ps1 : personal PowerShell automation (Windows-specific)
+frontend/src/app/dev/
+scripts/plan-loop.ps1
