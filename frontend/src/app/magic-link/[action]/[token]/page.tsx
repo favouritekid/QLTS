@@ -46,10 +46,12 @@ export async function generateMetadata({
   }
 }
 
-// Token URL pages must never be cached by Next.js / CDN / proxy: each
-// request must hit the BE consume endpoint at request time so the
-// freshness gates (used / locked / expired) reflect server state.
-export const dynamic = "force-dynamic"
+// No explicit ``export const dynamic`` declaration: Next.js 16 with
+// ``cacheComponents: true`` (next.config.ts) is incompatible with that
+// route segment config. Pages opt INTO caching via the ``"use cache"``
+// directive; this page does not, so each request is dynamic by default
+// — the BE consume endpoint is hit at request time and the freshness
+// gates (used / locked / expired) reflect server state.
 
 // Placeholder params for Next.js 16 cacheComponents build validation.
 // Real {action, token} pairs are resolved at request time; the
