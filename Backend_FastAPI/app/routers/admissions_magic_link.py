@@ -21,18 +21,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database
+from ..core.events import SystemEvents
 from ..core.rate_limits import limiter, RateLimits
-
-
-def get_client_ip(request: Request) -> str:
-    """Helper for slowapi per-IP key generation."""
-    return request.client.host if request.client else "unknown"
+# Hotfix R8: XFF-aware client IP so the ``100/day`` per-IP cap really
+# keys off the candidate's IP rather than the nginx container.
+from ..core.client_ip import get_client_ip
 from ..schemas.magic_link import (
     MagicLinkAction,
     MagicLinkConsumeRequest,
     MagicLinkConsumeResponse,
 )
 from ..services import magic_link_service
+from ..services.notification_dispatcher import (
+    _rooms_for_admission,
+    safe_dispatch,
+)
 from ..utils.exceptions import BadRequest, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -96,6 +99,30 @@ async def consume_magic_link_token(
         # `verify_and_confirm` hand-off from the legacy confirm flow.
         if callback is not None:
             await callback()
+
+        # Hotfix R1: parity with legacy POST /api/admissions/confirm/{token}
+        # (admissions.py:2160-2174) — broadcast APPLICATION_STATUS_CHANGED so
+        # officer / admin / socket clients see the status flip realtime. The
+        # legacy callback only handles the candidate-facing notification; the
+        # status fanout is a separate concern.
+        # Officer-facing rooms are computed from the freshly committed
+        # ``profile`` (we've already refreshed above), so realtime listeners
+        # observe ``status='confirmed'`` consistent with the persisted state.
+        if action == MagicLinkAction.CONFIRM and profile.lead_id:
+            await safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile.id,
+                    "lead_id": profile.lead_id,
+                    "old_status": "approved",
+                    "new_status": "confirmed",
+                    "actor_id": 0,
+                    "actor_name": "Ứng viên xác nhận",
+                },
+                dedupe_key=f"admission_profile_confirmed:{profile.id}",
+                rooms=_rooms_for_admission(profile),
+            )
 
         return MagicLinkConsumeResponse(
             message="Yêu cầu đã được xử lý thành công.",

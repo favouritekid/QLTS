@@ -72,9 +72,11 @@ def _validate_payment_status(value: Optional[str]) -> None:
         )
 
 
-def get_client_ip(request: Request) -> str:
-    """Helper for rate limiting key generation."""
-    return request.client.host if request.client else "unknown"
+# Hotfix R8: import the X-Forwarded-For aware helper so the
+# ``100/day`` per-IP cap on /confirm/{token} keys off the real client
+# IP (nginx forwards XFF; the previous ``request.client.host`` returned
+# the nginx container IP and collapsed the cap to a prod-wide ceiling).
+from ..core.client_ip import get_client_ip  # noqa: E402
 
 
 # ==============================================================================
