@@ -1,0 +1,98 @@
+name: Backend Test (PR Gate)
+
+# Sprint S2 hardening (memory `auto-merge-requires-full-ci-not-just-green`):
+# Closes the systemic gap surfaced by PR #283 orphan-merge. The existing
+# admission-contract-check.yml has a path filter (`services/admission*.py`,
+# `core/events*.py`, ...) that DOES NOT include `Backend_FastAPI/tests/**`.
+# Result: a test-only PR (e.g., #283 PR-CO-4) could auto-merge with only
+# Dependency Audit running — the actual pytest suite that the PR modified
+# never ran in CI. The M1 fix shipped post-merge as an orphan commit
+# (PR #284 cherry-pick repair). This workflow eliminates that gap.
+#
+# Cross-file sync (memory `ci-workflow-flag-cross-file-sync`):
+#   python-version '3.12'   — matches deploy.yml + dependency-audit.yml
+#   cache: 'pip'            — matches deploy.yml
+#   cache-dependency-path   — matches deploy.yml test job
+#   Postgres + Redis services + env vars — mirror deploy.yml test job
+#   exactly so PR gate semantics == post-merge deploy gate semantics
+#
+# Trigger: ANY change under Backend_FastAPI/** — including tests/. No
+# path-filter loophole.
+#
+# Performance budget: <8 phút median (full pytest suite ~400 tests).
+# Fallback if >10 phút sustained: split into matrix shards or adopt
+# pytest-testmon for test impact analysis.
+
+on:
+  pull_request:
+    # Skip draft PRs (mirror frontend-test.yml R15 pattern) to save
+    # Actions minutes during hot iteration.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'Backend_FastAPI/**'
+      - '.github/workflows/backend-test.yml'
+
+concurrency:
+  group: be-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
+      # Mail settings — placeholders so app/config.py Settings() can instantiate.
+      # Tests must not actually send mail; smtp.example.com is unroutable on purpose.
+      MAIL_USERNAME: ci-test@example.com
+      MAIL_PASSWORD: ci-test-placeholder
+      MAIL_FROM: ci-test@example.com
+      MAIL_SERVER: smtp.example.com
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: Backend_FastAPI/requirements-dev.txt
+
+      - name: Install backend dependencies (dev)
+        working-directory: Backend_FastAPI
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pytest (full suite)
+        working-directory: Backend_FastAPI
+        run: python -m pytest tests/ -v --tb=short -q
