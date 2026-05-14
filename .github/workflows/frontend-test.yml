@@ -19,9 +19,15 @@ on:
     # Hotfix R15: skip CI on draft PRs (still run on ready_for_review).
     # Reduces Actions minutes burn during hot-iteration drafting.
     types: [opened, synchronize, reopened, ready_for_review]
+    # Branch protection requires `Build` and `Check (type+lint+test)` to
+    # pass on every PR. Path filter must catch every PR type or those
+    # required gates report "expected, not run" and the PR is
+    # unmergeable. Workflow-only PRs trigger here defensively so CI/CD
+    # refactors are still validated against the FE build pipeline.
     paths:
       - 'frontend/**'
-      - '.github/workflows/frontend-test.yml'
+      - 'Backend_FastAPI/**'
+      - '.github/workflows/**'
 
 concurrency:
   group: fe-pr-${{ github.ref }}

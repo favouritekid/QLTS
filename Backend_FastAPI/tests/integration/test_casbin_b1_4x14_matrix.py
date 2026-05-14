@@ -119,9 +119,20 @@ EXPECTED = {
     "role:manager": [
         True, True, True, True, True,
         True, True, True,
-        # Manager has no allow rule for /api/v2/* and no inherit from
-        # admin → no allow match → deny by effect.
-        False, False, False, False, False, False,
+        # /api/v2 cells (indices 8-13 below correspond to routes 9-14):
+        #   9  /api/v2/admissions/*/claim             POST  — no manager allow
+        #   10 /api/v2/admissions/*/request-revision  POST  — no manager allow
+        #   11 /api/v2/admissions/*/publish-result    POST  — PR-3B Sub-3 ALLOW (T6)
+        #   12 /api/v2/admissions/*/waitlist-promote  POST  — PR-3B Sub-3 ALLOW (T10)
+        #   13 /api/v2/admissions/*/waitlist-reject   POST  — PR-3B Sub-3 ALLOW (T11)
+        #   14 /api/v2/admissions/*/admin-rollback    POST  — admin-only (require_admin)
+        # 2026-05-14 fix: manager now has explicit allow on publish-
+        # result / waitlist-promote / waitlist-reject after PR-3B Sub-3
+        # (memory ``phase3-plan-locked`` GAP-11 + GAP-12 Casbin seed).
+        # The original matrix predates the Phase 3 multi-NV roll-out
+        # and locked these cells at False; the policy_templates.py
+        # MANAGER_TEMPLATE lines 386+ now seed the 3 allow rules.
+        False, False, True, True, True, False,
     ],
     "role:accountant": [
         # 1-5 inherits officer; baseline allow.
@@ -360,9 +371,20 @@ async def test_bite_verify_removing_one_deny_rule_breaks_matrix(
 # --- Sanity test: deny rules exist as seeded -------------------------------
 
 
-async def test_six_accountant_deny_rows_seeded(setup_test_database):
-    """Direct DB probe: after seed, casbin_rule has exactly 6 deny rows
-    for role:accountant on the expected routes."""
+async def test_accountant_deny_rows_seeded(setup_test_database):
+    """Direct DB probe: after seed, casbin_rule has the EXACT expected
+    set of deny rows for role:accountant.
+
+    History:
+      - B1 originally seeded 6 deny rows (Phase 1 hardening).
+      - PR-3D-B BE-1 (PR #271, 2026-05-13) added 4 deny rows for the
+        Phase 3 choice CRUD routes (policy_templates.py:346-349) so
+        finance staff cannot mutate multi-NV choices via /api/v2.
+      - Total NOW: 10 deny rows. Test name kept as
+        ``test_accountant_deny_rows_seeded`` (was
+        ``test_six_accountant_deny_rows_seeded``) to drop the stale
+        magic number from the API surface.
+    """
     db_url = os.environ["DATABASE_URL"]
     enforcer, engine = await _seed_test_db_and_load_enforcer(db_url)
     try:
@@ -382,12 +404,18 @@ async def test_six_accountant_deny_rows_seeded(setup_test_database):
             ).fetchall()
         observed = {(r.v1, r.v2) for r in rows}
         expected = {
+            # B1 Phase 1 baseline (6 rows)
             ("/api/v2/admissions/*/claim",            "POST"),
             ("/api/v2/admissions/*/request-revision", "POST"),
             ("/api/v2/admissions/*/publish-result",   "POST"),
             ("/api/v2/admissions/*/waitlist-promote", "POST"),
             ("/api/v2/admissions/*/waitlist-reject",  "POST"),
             ("/api/v2/admissions/*/admin-rollback",   "POST"),
+            # PR-3D-B BE-1 (PR #271) — choice CRUD accountant DENY (4 rows)
+            ("/api/v2/admissions/*/choices",          "POST"),
+            ("/api/v2/admissions/*/choices/*",        "DELETE"),
+            ("/api/v2/admissions/*/choices/*",        "PATCH"),
+            ("/api/v2/admissions/*/choices/*/scores", "PATCH"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "

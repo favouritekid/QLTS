@@ -55,8 +55,20 @@ def _make_path(
         scoring_method="sum",
         required_subject_count=3,
     )
-    subjects = [SimpleNamespace(code=c, name_vi=c) for c in allowed_subject_codes]
-    subject_group = SimpleNamespace(id=1, name="A00", subjects=subjects)
+    # Fixture mirror of SubjectGroup → SubjectGroupSubject (mapping) →
+    # Subject chain. Hotfix #267 ("SubjectGroup.subjects relation drift")
+    # switched the engine from ``group.subjects`` to ``group.subject_mappings``
+    # but this fixture file kept the old shape, so 5 tests in this file
+    # silently returned ``rejected`` (engine read an empty allowed_subjects
+    # list and fell through the scoring gate). 2026-05-14 fix: build the
+    # mapping shape that ``_resolve_allowed_subjects`` actually walks.
+    subject_mappings = [
+        SimpleNamespace(subject=SimpleNamespace(code=c, name_vi=c))
+        for c in allowed_subject_codes
+    ]
+    subject_group = SimpleNamespace(
+        id=1, name="A00", subject_mappings=subject_mappings,
+    )
     config = SimpleNamespace(
         id=1,
         admission_path_id=1,
