@@ -1429,6 +1429,17 @@ def _compute_frontend_fields(
         "submit": status == "draft" and (is_owner or is_manager or is_admin),
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
+        # "Công bố kết quả" trực tiếp từ submitted/reviewing → engine cascade
+        # auto-transition submitted→reviewing→result_published→admitted/rejected.
+        # Bỏ T2 start-review explicit step (YAGNI per user clarification).
+        # Mirror BE service guard publish_result(): uses_choice_engine=True +
+        # status IN (submitted, reviewing) + manager/admin role.
+        "publish_result": (
+            getattr(profile, "uses_choice_engine", False)
+            and status in ["submitted", "reviewing"]
+            and (is_manager or is_admin)
+        ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),

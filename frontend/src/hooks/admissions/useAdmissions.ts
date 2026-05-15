@@ -347,44 +347,17 @@ export function useApproveAdmission(id: number) {
 }
 
 /**
- * Phase 3 multi-NV: Start Review Hook
- * Manager transitions submitted → reviewing (T2 — Bắt đầu xét duyệt).
- *
- * Tiền đề trước khi gọi usePublishAdmissionResult. Chỉ active cho
- * profile.uses_choice_engine=true (BE check); legacy single-NV throw
- * BusinessRuleViolation.
- */
-export function useStartAdmissionReview(id: number) {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: () => admissionsApi.startAdmissionReview(id),
-    onSuccess: (data) => {
-      toast.success("Đã bắt đầu xét duyệt hồ sơ", {
-        description: `Trạng thái: ${getStatusConfig(data.status).label || data.status}`,
-      })
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
-    },
-    onError: (error: AxiosError<ApiErrorResponse>) => {
-      handleApiError(error, {
-        queryClient,
-        invalidateKeys: [[...admissionsKeys.detail(id)]],
-        context: "bắt đầu xét duyệt hồ sơ",
-      })
-    },
-  })
-}
-
-/**
  * Phase 3 multi-NV: Publish Result Hook (T6 engine cascade)
- * Manager triggers choice-engine cascade evaluation per NV theo display_order;
- * profile.status reviewing → result_published → admitted/rejected.
  *
- * BE pre-check: profile.status='reviewing' (gọi startAdmissionReview trước
- * nếu state='submitted'). Engine sequential: NV pass → admit + others skip;
- * waitlist → continue next NV.
+ * Manager/Admin click "Công bố kết quả" → BE auto-transition
+ * submitted→reviewing internal nếu cần → engine cascade evaluate per NV
+ * theo display_order → profile.status → result_published → admitted/
+ * rejected. 1-click flow (bỏ T2 start-review explicit per user
+ * clarification 2026-05-15 YAGNI).
+ *
+ * BE pre-check: profile.uses_choice_engine=true + status IN
+ * (submitted, reviewing). Engine sequential: NV pass → admit + others
+ * skip; waitlist → continue next NV.
  */
 export function usePublishAdmissionResult(id: number) {
   const queryClient = useQueryClient()

@@ -48,10 +48,8 @@ interface AdmissionActionsProps {
   onReject?: () => void
   isApproving?: boolean
   isRejecting?: boolean
-  // Phase 3 multi-NV state actions
-  onStartReview?: () => void
+  // Phase 3 multi-NV: 1-click publish-result (bỏ start-review YAGNI 2026-05-15)
   onPublishResult?: () => void
-  isStartingReview?: boolean
   isPublishingResult?: boolean
   // Claim/unclaim actions
   onClaim?: () => void
@@ -80,9 +78,7 @@ export function AdmissionActions({
   onReject,
   isApproving = false,
   isRejecting = false,
-  onStartReview,
   onPublishResult,
-  isStartingReview = false,
   isPublishingResult = false,
   onClaim,
   onUnclaim,
@@ -238,51 +234,15 @@ export function AdmissionActions({
             </Button>
           )}
 
-          {/* Phase 3 multi-NV: Start Review (T2) — chỉ hiện khi
-              profile.uses_choice_engine + status='submitted'. Manager/admin
-              khởi động bước xét duyệt; chuyển status submitted→reviewing,
-              tiền đề bắt buộc trước khi publish-result engine cascade.
-              Buttons gated theo profile state thay vì can() vì là intrinsic
-              state property (multi-NV intrinsic không phải permission). */}
-          {profile.uses_choice_engine && profile.status === "submitted" && onStartReview && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  disabled={isStartingReview}
-                  variant="default"
-                  className="bg-info-600 hover:bg-info-700"
-                >
-                  {isStartingReview ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ClipboardCheck className="w-4 h-4 mr-2" />}
-                  Bắt đầu xét duyệt
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Bắt đầu xét duyệt hồ sơ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hồ sơ sẽ chuyển trạng thái từ <strong>Đã nộp</strong> sang
-                    {" "}<strong>Đang xét duyệt</strong>. Sau khi review xong,
-                    bạn nhấn <strong>Công bố kết quả</strong> để hệ thống chạy
-                    engine xét tuần tự các nguyện vọng.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onStartReview}>
-                    Bắt đầu xét duyệt
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Phase 3 multi-NV: Publish Result (T6) — chỉ hiện khi
-              profile.status='reviewing'. Trigger engine cascade evaluate
-              tuần tự choices theo display_order; mỗi NV có decision (đậu/
-              trượt/skip/dự bị); profile.status reviewing→result_published→
-              admitted/rejected. KHÔNG REVERSIBLE qua endpoint này (chỉ admin
-              rollback qua T17 = transition về draft, mất mọi decision). */}
-          {profile.uses_choice_engine && profile.status === "reviewing" && onPublishResult && (
+          {/* Phase 3 multi-NV: Publish Result (T6) — Thin Client compliance
+              gate via can('publish_result') BE flag. Permission tự refine
+              theo profile.uses_choice_engine + status IN (submitted,
+              reviewing) + role manager/admin (xem
+              admission_service._compute_frontend_fields). 1-click flow:
+              BE auto-transition submitted→reviewing internal nếu cần →
+              engine cascade per NV → admitted/rejected. KHÔNG REVERSIBLE
+              (chỉ admin rollback qua T17 = về draft, mất mọi decision). */}
+          {can('publish_result') && onPublishResult && (
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button

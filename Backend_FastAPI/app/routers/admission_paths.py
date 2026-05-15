@@ -311,17 +311,19 @@ async def get_paths_by_round(
 ):
     """List ACTIVE admission paths trong 1 round.
 
-    Phase 3 multi-NV AddChoiceDialog: candidate/officer chọn ngành+method
-    để thêm NV mới trong cùng đợt đang xét. Cross-academic_info (different
-    majors); FE filter thêm theo path đã có trong choices nếu cần.
+    Phase 3 multi-NV AddChoiceDialog: officer+/manager+/admin chọn
+    ngành+method để thêm NV mới trong cùng đợt đang xét.
+    Cross-academic_info (different majors); FE filter thêm theo path đã
+    có trong choices nếu cần.
 
-    Security: authenticated user (Officer+); KHÔNG cần admin vì
-    candidate/officer flow đều dùng. BE precheck chính (uses_choice_engine,
-    allow_multi_nv, max_choices) áp dụng tại POST /choices.
+    Security: authenticated user (Officer+). Magic-link candidate flow
+    KHÔNG dùng endpoint này (no auth context); candidate-side AddChoice
+    via `/api/v2/admissions/{id}/choices` POST direct. BE precheck
+    (uses_choice_engine, allow_multi_nv, max_choices) áp dụng tại POST.
     """
     service = AdmissionPathService(db)
     paths, callback = await service.list_active_paths_by_round(round_id)
-    await db.commit()
+    # Read-only endpoint — KHÔNG cần db.commit() (nit fix #8)
     await callback()
 
     items = []
