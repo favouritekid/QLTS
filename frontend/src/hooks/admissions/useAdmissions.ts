@@ -347,9 +347,72 @@ export function useApproveAdmission(id: number) {
 }
 
 /**
+ * Phase 3 multi-NV: Start Review Hook
+ * Manager transitions submitted → reviewing (T2 — Bắt đầu xét duyệt).
+ *
+ * Tiền đề trước khi gọi usePublishAdmissionResult. Chỉ active cho
+ * profile.uses_choice_engine=true (BE check); legacy single-NV throw
+ * BusinessRuleViolation.
+ */
+export function useStartAdmissionReview(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => admissionsApi.startAdmissionReview(id),
+    onSuccess: (data) => {
+      toast.success("Đã bắt đầu xét duyệt hồ sơ", {
+        description: `Trạng thái: ${getStatusConfig(data.status).label || data.status}`,
+      })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "bắt đầu xét duyệt hồ sơ",
+      })
+    },
+  })
+}
+
+/**
+ * Phase 3 multi-NV: Publish Result Hook (T6 engine cascade)
+ * Manager triggers choice-engine cascade evaluation per NV theo display_order;
+ * profile.status reviewing → result_published → admitted/rejected.
+ *
+ * BE pre-check: profile.status='reviewing' (gọi startAdmissionReview trước
+ * nếu state='submitted'). Engine sequential: NV pass → admit + others skip;
+ * waitlist → continue next NV.
+ */
+export function usePublishAdmissionResult(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => admissionsApi.publishAdmissionResult(id),
+    onSuccess: (data) => {
+      toast.success("Đã công bố kết quả xét tuyển", {
+        description: `Trạng thái cuối: ${getStatusConfig(data.final_status).label || data.final_status}`,
+      })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "công bố kết quả xét tuyển",
+      })
+    },
+  })
+}
+
+/**
  * Reject Admission Hook
  * Manager/Admin action - transitions from submitted/resubmitted → rejected
- * 
+ *
  * Architecture Compliance:
  * - Uses centralized error handling (handleApiError)
  * - Handles 409 Conflict (optimistic locking)

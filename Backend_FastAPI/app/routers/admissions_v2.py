@@ -46,6 +46,81 @@ router = APIRouter(
 
 
 # =============================================================================
+# T2 — Start review (manager transition submitted → reviewing)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/start-review",
+    summary="T2 — Bắt đầu xét duyệt (chuyển submitted → reviewing)",
+)
+async def start_admission_review(
+    profile_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    current_user: models.User = CasbinAuth,
+):
+    """T2 start-review — manager khởi động bước xét duyệt cho hồ sơ multi-NV.
+
+    Required tiền đề trước khi gọi publish-result (engine cascade): profile
+    phải ở status ``reviewing``. Endpoint này transition ``submitted →
+    reviewing`` (Phase 3 T2 per state_machine line 87-88).
+
+    **Pre-checks**:
+    - profile.uses_choice_engine must be True (legacy single-NV không cần
+      bước này — manager dùng approve_admission trực tiếp)
+    - profile.status must be "submitted" (state_machine cho phép submitted
+      → reviewing)
+
+    **Security**:
+    - IDOR: ``get_admission_for_manager`` (3-tier scope)
+    - Casbin: manager/admin allow per PR-3B Sub-3 policy
+
+    **Dispatches**: state_service.transition() sẽ tự log audit + emit
+    ADMISSION_* event nếu rule cấu hình.
+    """
+    from app.services import admission_state_service
+    from app.utils.exceptions import BusinessRuleViolation
+
+    if not profile.uses_choice_engine:
+        raise BusinessRuleViolation(
+            "Hồ sơ legacy (single-NV) không dùng bước review. "
+            "Manager sử dụng approve/reject trực tiếp."
+        )
+    if profile.status != "submitted":
+        raise BusinessRuleViolation(
+            f"Chỉ hồ sơ trạng thái 'submitted' mới có thể bắt đầu xét duyệt. "
+            f"Trạng thái hiện tại: '{profile.status}'."
+        )
+
+    updated_profile, post_commit_cb = await admission_state_service.transition(
+        db,
+        profile,
+        "reviewing",
+        actor=current_user,
+        reason="Manager bắt đầu xét duyệt hồ sơ multi-NV",
+        source="api",
+    )
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    log.info(
+        "admissions_v2.start_review",
+        profile_id=profile_id,
+        old_status="submitted",
+        new_status="reviewing",
+        actor_id=current_user.id,
+    )
+
+    return {
+        "profile_id": updated_profile.id,
+        "status": updated_profile.status,
+        "message": "Đã chuyển hồ sơ sang trạng thái xét duyệt.",
+    }
+
+
+# =============================================================================
 # T6 — Publish result (admin batch trigger choice-engine cascade)
 # =============================================================================
 

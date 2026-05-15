@@ -48,6 +48,11 @@ interface AdmissionActionsProps {
   onReject?: () => void
   isApproving?: boolean
   isRejecting?: boolean
+  // Phase 3 multi-NV state actions
+  onStartReview?: () => void
+  onPublishResult?: () => void
+  isStartingReview?: boolean
+  isPublishingResult?: boolean
   // Claim/unclaim actions
   onClaim?: () => void
   onUnclaim?: () => void
@@ -75,6 +80,10 @@ export function AdmissionActions({
   onReject,
   isApproving = false,
   isRejecting = false,
+  onStartReview,
+  onPublishResult,
+  isStartingReview = false,
+  isPublishingResult = false,
   onClaim,
   onUnclaim,
   isClaiming = false,
@@ -227,6 +236,87 @@ export function AdmissionActions({
               {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
               Từ chối
             </Button>
+          )}
+
+          {/* Phase 3 multi-NV: Start Review (T2) — chỉ hiện khi
+              profile.uses_choice_engine + status='submitted'. Manager/admin
+              khởi động bước xét duyệt; chuyển status submitted→reviewing,
+              tiền đề bắt buộc trước khi publish-result engine cascade.
+              Buttons gated theo profile state thay vì can() vì là intrinsic
+              state property (multi-NV intrinsic không phải permission). */}
+          {profile.uses_choice_engine && profile.status === "submitted" && onStartReview && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  disabled={isStartingReview}
+                  variant="default"
+                  className="bg-info-600 hover:bg-info-700"
+                >
+                  {isStartingReview ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ClipboardCheck className="w-4 h-4 mr-2" />}
+                  Bắt đầu xét duyệt
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Bắt đầu xét duyệt hồ sơ?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Hồ sơ sẽ chuyển trạng thái từ <strong>Đã nộp</strong> sang
+                    {" "}<strong>Đang xét duyệt</strong>. Sau khi review xong,
+                    bạn nhấn <strong>Công bố kết quả</strong> để hệ thống chạy
+                    engine xét tuần tự các nguyện vọng.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction onClick={onStartReview}>
+                    Bắt đầu xét duyệt
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
+          {/* Phase 3 multi-NV: Publish Result (T6) — chỉ hiện khi
+              profile.status='reviewing'. Trigger engine cascade evaluate
+              tuần tự choices theo display_order; mỗi NV có decision (đậu/
+              trượt/skip/dự bị); profile.status reviewing→result_published→
+              admitted/rejected. KHÔNG REVERSIBLE qua endpoint này (chỉ admin
+              rollback qua T17 = transition về draft, mất mọi decision). */}
+          {profile.uses_choice_engine && profile.status === "reviewing" && onPublishResult && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  disabled={isPublishingResult}
+                  className="bg-success-600 hover:bg-success-700"
+                >
+                  {isPublishingResult ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
+                  Công bố kết quả
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Công bố kết quả xét tuyển?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Hệ thống sẽ chạy <strong>engine xét tuần tự các nguyện vọng</strong>
+                    {" "}theo thứ tự ưu tiên. Mỗi NV sẽ có quyết định riêng:
+                    {" "}<strong>Đậu</strong> / <strong>Trượt</strong> / <strong>Bị bỏ qua</strong>
+                    {" "}/ <strong>Dự bị</strong>. Hồ sơ sẽ chuyển sang trạng thái
+                    {" "}<strong>Đã công bố</strong> rồi <strong>Trúng tuyển</strong>
+                    {" "}hoặc <strong>Bị từ chối</strong>. Hành động không thể
+                    hoàn tác (chỉ admin có thể rollback về Nháp).
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={onPublishResult}
+                    className="bg-success-600 hover:bg-success-700"
+                  >
+                    Công bố kết quả
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
 
           {/* Claim/Unclaim Actions */}

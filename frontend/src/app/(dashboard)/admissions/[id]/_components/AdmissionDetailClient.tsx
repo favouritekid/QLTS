@@ -38,6 +38,8 @@ import {
   useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
+  useStartAdmissionReview,
+  usePublishAdmissionResult,
   useEnrollStudent,
   useDeleteAdmission,
   useClaimAdmission,
@@ -90,6 +92,9 @@ export function AdmissionDetailClient({
   const resubmitMutation = useResubmitAdmission(profileId)
   const approveMutation = useApproveAdmission(profileId)
   const rejectMutation = useRejectAdmission(profileId)
+  // Phase 3 multi-NV state actions: T2 (submitted→reviewing) + T6 (engine cascade)
+  const startReviewMutation = useStartAdmissionReview(profileId)
+  const publishResultMutation = usePublishAdmissionResult(profileId)
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
   const claimMutation = useClaimAdmission(profileId)
@@ -464,6 +469,10 @@ export function AdmissionDetailClient({
           onReject={handleReject}
           isApproving={approveMutation.isPending}
           isRejecting={rejectMutation.isPending}
+          onStartReview={() => startReviewMutation.mutate()}
+          onPublishResult={() => publishResultMutation.mutate()}
+          isStartingReview={startReviewMutation.isPending}
+          isPublishingResult={publishResultMutation.isPending}
           onClaim={handleClaim}
           onUnclaim={handleUnclaim}
           isClaiming={claimMutation.isPending}

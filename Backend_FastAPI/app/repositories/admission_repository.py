@@ -38,15 +38,22 @@ from app.repositories.base import BaseRepository
 
 # Phase 3 multi-NV: eager-load chain cho AdmissionProfile.choices + nested
 # relations cần thiết để Pydantic AdmissionProfileChoiceResponse compute
-# display_path_name + display_subject_group_name + scores nested. Without
-# explicit selectinload, lazy access trong async context raises
-# MissingGreenlet (matches pattern admission_profile_choice_repository.py:
-# 60-83 get_choice_for_user).
+# display_path_name + display_program_name + display_degree_level +
+# display_subject_group_name + scores nested. Without explicit selectinload,
+# lazy access trong async context raises MissingGreenlet (matches pattern
+# admission_profile_choice_repository.py:60-83 get_choice_for_user).
+#
+# Phase 3 follow-up Q1: chain academic_info → offering → program để
+# Pydantic compute_display_fields lấy được program.name + degree_level
+# (trước fix: chỉ load academic_info → program lazy → swallowed → empty
+# → display "2026 - hoc_ba - DOT_1" mất ngành/trình độ).
 def _choices_eager_load_options() -> tuple:
     return (
         selectinload(models.AdmissionProfile.choices).selectinload(
             AdmissionProfileChoice.admission_path
-        ).selectinload(AdmissionPath.academic_info),
+        ).selectinload(AdmissionPath.academic_info)
+        .selectinload(models.OfferingAcademicInfo.offering)
+        .selectinload(models.ProgramOffering.program),
         selectinload(models.AdmissionProfile.choices).selectinload(
             AdmissionProfileChoice.admission_path
         ).selectinload(AdmissionPath.admission_method),

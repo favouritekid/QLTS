@@ -144,7 +144,7 @@ function SortableChoiceRow({
       )}
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-semibold text-sm">
             NV{choice.display_order}
           </span>
@@ -152,12 +152,22 @@ function SortableChoiceRow({
             decision={choice.decision as ChoiceDecision}
             size="sm"
           />
+          {choice.display_degree_level && (
+            <span className="rounded-md border border-muted-foreground/30 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {choice.display_degree_level}
+            </span>
+          )}
         </div>
-        <p className="mt-0.5 truncate text-sm">
+        {choice.display_program_name && (
+          <p className="mt-1 truncate text-sm font-medium" title={choice.display_program_name}>
+            {choice.display_program_name}
+          </p>
+        )}
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
           {choice.display_path_name || "—"}
         </p>
         <p className="text-xs text-muted-foreground">
-          {choice.display_subject_group_name || "Chưa chọn tổ hợp"}
+          Tổ hợp: {choice.display_subject_group_name || "Chưa chọn"}
         </p>
         <div className="mt-2">{subjectsSummary}</div>
       </div>

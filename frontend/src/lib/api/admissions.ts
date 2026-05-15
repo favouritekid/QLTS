@@ -134,9 +134,55 @@ export async function minorCorrection(
 }
 
 /**
+ * Phase 3 multi-NV: Start review (Manager/Admin)
+ * POST /api/v2/admissions/{id}/start-review
+ *
+ * Transitions status submitted → reviewing. Tiền đề bắt buộc trước khi
+ * gọi publishAdmissionResult (engine cascade evaluate). Chỉ áp dụng cho
+ * profile.uses_choice_engine=true; legacy single-NV dùng approveAdmission.
+ */
+export async function startAdmissionReview(
+  id: number
+): Promise<{ profile_id: number; status: string; message: string }> {
+  const response = await api.post<{ profile_id: number; status: string; message: string }>(
+    `/api/v2/admissions/${id}/start-review`,
+    {}
+  )
+  return response.data
+}
+
+/**
+ * Phase 3 multi-NV: Publish result — trigger engine cascade (Manager/Admin)
+ * POST /api/v2/admissions/{id}/publish-result
+ *
+ * Engine xét tuần tự choices theo display_order, mark decision per NV,
+ * transition profile.status reviewing → result_published → admitted/rejected.
+ * Pre-check: profile.status='reviewing' (call startAdmissionReview trước
+ * nếu state='submitted').
+ */
+export async function publishAdmissionResult(
+  id: number
+): Promise<{
+  profile_id: number
+  final_status: string
+  admitted_choice_id: number | null
+  admitted_display_order: number | null
+  per_choice_decisions: Array<{ choice_id: number; decision: string }>
+}> {
+  const response = await api.post<{
+    profile_id: number
+    final_status: string
+    admitted_choice_id: number | null
+    admitted_display_order: number | null
+    per_choice_decisions: Array<{ choice_id: number; decision: string }>
+  }>(`/api/v2/admissions/${id}/publish-result`, {})
+  return response.data
+}
+
+/**
  * Reject admission profile (Manager/Admin action)
  * POST /api/admissions/{id}/reject
- * 
+ *
  * Transitions status from submitted/resubmitted → rejected
  * Requires rejection reason and version for optimistic locking
  */

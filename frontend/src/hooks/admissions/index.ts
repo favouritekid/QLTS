@@ -35,6 +35,9 @@ export {
   useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
+  // Phase 3 multi-NV state actions
+  useStartAdmissionReview,
+  usePublishAdmissionResult,
   useEnrollStudent,
   useDeleteAdmission,
   useUploadAdmissionDocument,

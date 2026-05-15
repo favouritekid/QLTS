@@ -61,6 +61,10 @@ export const admissionProfileChoiceResponseSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   display_path_name: z.string(),
+  // Phase 3 follow-up Q1: program name + degree level separate fields cho
+  // FE render badge "Y sỹ đa khoa · Cao đẳng" cạnh display_subject_group_name
+  display_program_name: z.string().default(""),
+  display_degree_level: z.string().default(""),
   display_subject_group_name: z.string(),
   scores: z.array(choiceScoreSummarySchema),
 })
