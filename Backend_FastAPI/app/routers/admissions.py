@@ -731,7 +731,7 @@ async def submit_admission_profile(
     - 400: Profile is not in draft status
     """
     try:
-        result = await admission_service.submit_and_evaluate(
+        result, post_commit = await admission_service.submit_and_evaluate(
             db=db,
             profile_id=profile_id,
             current_user=current_user,
@@ -740,65 +740,12 @@ async def submit_admission_profile(
         # Transaction commit
         await db.commit()
 
-        # Dispatch APPLICATION_STATUS_CHANGED for the draft → submitted transition.
-        # Service returns status="submitted" on success (not "approved"/"rejected").
-        if result["status"] == "submitted":
-            profile_row = await db.get(models.AdmissionProfile, profile_id)
-            _submit_lead = None
-            if profile_row and profile_row.lead_id:
-                _submit_lead = await db.get(models.Lead, profile_row.lead_id)
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": profile_row.lead_id if profile_row else None,
-                    "old_status": "draft",
-                    "new_status": "submitted",
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_submitted:{profile_id}",
-                rooms=_rooms_for_lead(_submit_lead),
-            )
-
-            # #16: ADMISSION_PROFILE_SUBMITTED (T1, non-outbox) is the
-            # new ADMISSION_* surface kept side-by-side with the legacy
-            # APPLICATION_STATUS_CHANGED bundle. The service used
-            # ``skip_dispatch=True`` because submit_and_evaluate returns
-            # a dict instead of the V3 (result, callback) tuple — so
-            # there's no callback channel through the service layer.
-            # Firing the matching event here keeps the dispatch
-            # AFTER ``db.commit()`` and uses ``safe_dispatch`` for the
-            # same fire-and-forget semantics as the legacy bundle.
-            # Phase 1 hotfix-2: enrich payload với ``submitted_at_iso``
-            # so the seeded ADMISSION_PROFILE_SUBMITTED template's
-            # ``$submitted_at_iso`` placeholder resolves at render
-            # time. Without this key, ``string.Template
-            # .safe_substitute`` leaves the literal text in the
-            # rendered notification body (per
-            # ``notification_dispatcher`` contract). ``profile_row
-            # .updated_at`` is the canonical timestamp the
-            # transition() canonical write set inside
-            # ``submit_and_evaluate`` — same value the audit row
-            # captured.
-            _submitted_at = (
-                profile_row.updated_at if profile_row else datetime.now(timezone.utc)
-            )
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.ADMISSION_PROFILE_SUBMITTED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": profile_row.lead_id if profile_row else None,
-                    "old_status": "draft",
-                    "new_status": "submitted",
-                    "actor_id": current_user.id,
-                    "submitted_at_iso": _submitted_at.isoformat(),
-                },
-                dedupe_key=f"admission:{profile_id}:submitted",
-                rooms=_rooms_for_lead(_submit_lead),
-            )
+        # Service-side post_commit fanout (V3 contract) — fires
+        # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
+        # captured at flush time. None when validation failed (status=
+        # "draft"); the service skips fanout in that case.
+        if post_commit is not None:
+            await post_commit()
 
         return result
 
