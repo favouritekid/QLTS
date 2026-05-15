@@ -12,30 +12,30 @@ Each template contains:
 - policies: List of policy rules (subject placeholder will be replaced)
 
 =============================================================================
-DIAMOND INHERITANCE PATTERN
+ROLE HIERARCHY PATTERN (TREE, post 2026-05-15 fix)
 =============================================================================
 
-Role hierarchy uses diamond inheritance for separation of duties:
+Role hierarchy uses tree-shape inheritance for separation of duties:
 
                        ┌─────────────┐
-                       │    Admin    │  Full system access
+                       │    Admin    │  Full system access (wildcard ALLOW)
                        └──────┬──────┘
-                         ▲         ▲
-              ┌──────────┘         └──────────┐
-              │                               │
-        ┌─────┴──────┐                 ┌──────┴─────┐
-        │  Manager   │                 │ Accountant │
-        │ (Users/    │                 │  (Finance  │
-        │  Leads)    │                 │   Ops)     │
-        └─────┬──────┘                 └──────┬─────┘
-              │                               │
-              └──────────┐     ┌──────────────┘
-                         ▼     ▼
+                              │
+                       ┌──────┴──────┐
+                       │  Manager    │  (Users/Leads/Admissions)
+                       └──────┬──────┘
+                              │
+              ┌───────────────┴──────────────┐
+              │                              │
+        ┌─────┴──────┐                ┌──────┴─────┐
+        │  Officer   │                │ Accountant │
+        │ (Admission │                │  (Finance  │
+        │ consultant)│                │   Ops)     │
+        └─────┬──────┘                └──────┬─────┘
+              │                              │
+              └────────────┬─────────────────┘
+                           ▼
                       ┌───────────┐
-                      │  Officer  │  Admission consultant
-                      └─────┬─────┘
-                            │
-                      ┌─────┴─────┐
                       │   User    │  Basic permissions
                       └───────────┘
 
@@ -44,12 +44,18 @@ Casbin Grouping Policies (g-type rules):
   g, role:accountant, role:officer
   g, role:manager, role:officer        # Manager does NOT inherit Accountant!
   g, role:admin, role:manager
-  g, role:admin, role:accountant       # Admin inherits BOTH branches
+
+REMOVED 2026-05-15: `g, role:admin, role:accountant` diamond edge.
+Reason: admin already has wildcard ALLOW `/*.*` so the inheritance edge
+only causes admin to inherit accountant DENY entries (admin-rollback,
+claim, request-revision, waitlist-promote) → admin gets unintended 403s.
+Tree shape preserves separation-of-duties while eliminating leaked DENYs.
+See alembic phase3_02 for prod data migration.
 
 Benefits:
   - Separation of Duties: Manager cannot do finance ops, Accountant cannot manage users
   - Least Privilege: Each role only has required permissions
-  - Admin Override: Admin inherits all permissions from both branches
+  - Admin Override: Admin has wildcard `/*.*` ALLOW (no inheritance needed)
 
 Template Design:
   - Each template defines ONLY the permissions UNIQUE to that role
@@ -337,11 +343,13 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/request-revision",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST", "eft": "deny"},
-        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST", "eft": "deny"},
+        # REMOVED 2026-05-15: /waitlist-reject endpoint không tồn tại trong
+        # router (chỉ có /waitlist-promote). Dead policy entry. Per phase3_02
+        # migration also DELETE row khỏi prod DB.
         {"subject": "{role}", "object": "/api/v2/admissions/*/admin-rollback",    "action": "POST", "eft": "deny"},
         # PR-3D-B BE-1 — Choice CRUD: accountant explicitly denied per
         # separation-of-duties; finance staff do not touch admission state.
-        # Mirror officer ALLOW above so accountant inheriting via diamond
+        # Mirror officer ALLOW above so accountant via tree inheritance
         # still bounces off deny effect.
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "POST",   "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},

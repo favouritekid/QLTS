@@ -21,8 +21,10 @@ from sqlalchemy.orm import selectinload
 from app.models import (
     AdmissionPath,
     AdmissionProfileChoice,
+    OfferingAcademicInfo,
     OfferingAdmissionRound,
     ProfileChoiceScore,
+    ProgramOffering,
 )
 
 
@@ -48,9 +50,18 @@ class AdmissionProfileChoiceRepository:
         """GAP-22: selectinload chain — Contract-06 computed display fields.
 
         Chain pre-loads:
-        - admission_path → academic_info + admission_method + admission_round
-        - path_subject_group_config → subject_group (Contract-06 fix v0.6)
+        - admission_path → academic_info → offering → program (degree_level + name)
+        - admission_path → admission_method (code)
+        - admission_path → admission_round (round_code)
+        - path_subject_group_config → subject_group (Contract-06)
         - scores → subject
+
+        Fix 2026-05-15 (E2E #4): added `.selectinload(OfferingAcademicInfo.offering)
+        .selectinload(ProgramOffering.program)` chain. Without it, schema
+        `_compute_display_fields` (admission_profile_choice.py:142) lazy-loads
+        `academic_info.offering.program` → `MissingGreenlet` 500 even though
+        the row was successfully inserted. Pattern mirrors
+        `admission_repository._choices_eager_load_options`.
         """
         # Imports local để tránh circular
         from app.models.admission_config.path_subject_group import (
@@ -61,14 +72,16 @@ class AdmissionProfileChoiceRepository:
             select(AdmissionProfileChoice)
             .where(AdmissionProfileChoice.id == choice_id)
             .options(
-                # admission_path → academic_info (program) + method + round
-                selectinload(AdmissionProfileChoice.admission_path).selectinload(
-                    AdmissionPath.academic_info
-                ),
+                # admission_path → academic_info → offering → program (FULL CHAIN)
+                selectinload(AdmissionProfileChoice.admission_path)
+                .selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
+                # admission_path → admission_method
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_method
                 ),
-                # admission_round qua AdmissionPath FK chain (Contract-06)
+                # admission_path → admission_round (Contract-06)
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_round
                 ),
@@ -76,7 +89,7 @@ class AdmissionProfileChoiceRepository:
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
                 ).selectinload(PathSubjectGroupConfig.subject_group),
-                # scores → subject (via choice.scores.selectinload trong model)
+                # scores → subject
                 selectinload(AdmissionProfileChoice.scores).selectinload(
                     ProfileChoiceScore.subject
                 ),
@@ -105,11 +118,18 @@ class AdmissionProfileChoiceRepository:
                 PathSubjectGroupConfig,
             )
             stmt = stmt.options(
-                selectinload(AdmissionProfileChoice.admission_path).selectinload(
-                    AdmissionPath.academic_info
-                ),
+                # admission_path → academic_info → offering → program (FULL CHAIN)
+                # Fix 2026-05-15 (E2E #4): mirror get_by_id_with_relations to
+                # avoid MissingGreenlet when caller passes list to schema.
+                selectinload(AdmissionProfileChoice.admission_path)
+                .selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_method
+                ),
+                selectinload(AdmissionProfileChoice.admission_path).selectinload(
+                    AdmissionPath.admission_round
                 ),
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
