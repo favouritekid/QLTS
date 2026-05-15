@@ -17,6 +17,8 @@
 
 import { z } from "zod"
 
+import { admissionProfileChoiceResponseSchema } from "./admission-choices"
+
 // ==============================================================================
 // HELPERS
 // ==============================================================================
@@ -525,6 +527,12 @@ export const admissionProfileResponseSchema = z.object({
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
   applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
+  // Phase 3 multi-NV gate. false = legacy single-NV ProfileSubjectScore flow
+  // (ScoresTab legacy form); true = ChoiceListEditor + ChoiceScoreCard render.
+  uses_choice_engine: z.boolean().default(false),
+  // Phase 3 multi-NV choices array. Empty cho legacy. BE eager-loads via
+  // selectinload chain (admission_repository.py _choices_eager_load_options).
+  choices: z.array(admissionProfileChoiceResponseSchema).default([]),
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),

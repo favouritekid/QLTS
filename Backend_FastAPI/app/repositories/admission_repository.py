@@ -25,7 +25,41 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
 from app.models import ProfileSubjectScore, ProfileDocument
+from app.models.admission_config.admission_path import AdmissionPath
+from app.models.admission_config.path_subject_group import (
+    PathSubjectGroupConfig,
+)
+from app.models.admission_profile_choice import (
+    AdmissionProfileChoice,
+    ProfileChoiceScore,
+)
 from app.repositories.base import BaseRepository
+
+
+# Phase 3 multi-NV: eager-load chain cho AdmissionProfile.choices + nested
+# relations cần thiết để Pydantic AdmissionProfileChoiceResponse compute
+# display_path_name + display_subject_group_name + scores nested. Without
+# explicit selectinload, lazy access trong async context raises
+# MissingGreenlet (matches pattern admission_profile_choice_repository.py:
+# 60-83 get_choice_for_user).
+def _choices_eager_load_options() -> tuple:
+    return (
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.academic_info),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.admission_method),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.admission_round),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.path_subject_group_config
+        ).selectinload(PathSubjectGroupConfig.subject_group),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.scores
+        ).selectinload(ProfileChoiceScore.subject),
+    )
 
 
 class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
@@ -650,6 +684,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+                *_choices_eager_load_options(),
             )
         )
         result = await self.db.execute(stmt)
@@ -686,6 +721,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+                *_choices_eager_load_options(),
             )
         )
         result = await self.db.execute(stmt)

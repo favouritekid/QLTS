@@ -19,6 +19,8 @@ import html
 
 from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, model_validator, ConfigDict
 
+from app.schemas.admission_profile_choice import AdmissionProfileChoiceResponse
+
 
 # ==============================================================================
 # NESTED SCHEMAS (for JSONB fields)
@@ -643,6 +645,16 @@ class AdmissionProfileResponse(BaseModel):
     # visibleSteps array per P-UI-01).
     uses_choice_engine: bool = False
 
+    # Phase 3 multi-NV choices array. Empty cho legacy profile
+    # (uses_choice_engine=False). GET endpoints (single/list) eager-load
+    # via AdmissionRepository._choices_eager_load_options() chain.
+    # Mutation endpoints (POST/PATCH/approve/reject/withdraw/...) trả
+    # empty list — caller refetch detail sau mutation nếu cần choices.
+    # Lazy-load safety enforced by _safely_handle_unloaded_choices()
+    # below (set_committed_value cho relation chưa load → tránh
+    # MissingGreenlet trong async context).
+    choices: List[AdmissionProfileChoiceResponse] = Field(default_factory=list)
+
     # ✅ Ticket #1: Use strict schema
     applied_rules: AppliedRulesSchema
 
@@ -867,6 +879,42 @@ class AdmissionProfileResponse(BaseModel):
         None,
         description="Backend-computed score pass/fail status: {total_status, subject_statuses: {code: status}}"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _safely_handle_unloaded_choices(cls, data: Any) -> Any:
+        """Skip lazy-load của ``choices`` relation khi serialize từ ORM.
+
+        Mutation endpoints (POST/PATCH/approve/reject/withdraw/...) trả
+        AdmissionProfile sau khi flush nhưng KHÔNG eager-load
+        ``choices``. Pydantic ``from_attributes=True`` sẽ getattr
+        choices → trigger lazy-load → ``MissingGreenlet`` trong async
+        context (Pydantic không thể await).
+
+        Fix: dùng SQLAlchemy ``set_committed_value`` để mark relation
+        "loaded" với empty list cho instances không qua eager-load
+        chain. GET endpoints (đã eager-load) skip nhánh này — ``choices``
+        đã ở ``state.unloaded`` không nữa.
+
+        Anti-pattern check: KHÔNG mutate user-data; chỉ inject empty
+        list cho relation collection (đúng default semantics khi
+        không có choices). Caller mutation endpoints không kỳ vọng
+        receive choices trong response.
+        """
+        if isinstance(data, dict):
+            return data
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            from sqlalchemy.orm.attributes import set_committed_value
+
+            state = sa_inspect(data, raiseerr=False)
+            if state is not None and "choices" in state.unloaded:
+                set_committed_value(data, "choices", [])
+        except Exception:
+            # Defensive: nếu data không phải ORM (vd unit-test mock),
+            # để Pydantic xử lý tự nhiên.
+            pass
+        return data
 
     model_config = ConfigDict(
         from_attributes=True,
