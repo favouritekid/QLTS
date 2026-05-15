@@ -35,7 +35,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, Plus, Trash2 } from "lucide-react"
+import { GripVertical, Pencil, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -47,7 +47,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { DecisionBadge } from "@/components/admissions/DecisionBadge"
+import { ChoiceScoreCard } from "@/components/admissions/ChoiceScoreCard"
 import {
   useDeleteChoice,
   useUpdateChoiceDisplayOrder,
@@ -73,6 +81,7 @@ interface SortableRowProps {
   canEdit: boolean
   isReordering: boolean
   onRequestRemove: (choice: AdmissionProfileChoiceResponse) => void
+  onRequestEditScores: (choice: AdmissionProfileChoiceResponse) => void
 }
 
 function SortableChoiceRow({
@@ -80,6 +89,7 @@ function SortableChoiceRow({
   canEdit,
   isReordering,
   onRequestRemove,
+  onRequestEditScores,
 }: SortableRowProps) {
   const {
     attributes,
@@ -153,15 +163,27 @@ function SortableChoiceRow({
       </div>
 
       {canEdit && (
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={`Xoá nguyện vọng ${choice.display_order}`}
-          disabled={isReordering}
-          onClick={() => onRequestRemove(choice)}
-        >
-          <Trash2 className="h-4 w-4 text-destructive" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Sửa điểm nguyện vọng ${choice.display_order}`}
+            disabled={isReordering}
+            onClick={() => onRequestEditScores(choice)}
+            data-testid={`edit-scores-${choice.id}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Xoá nguyện vọng ${choice.display_order}`}
+            disabled={isReordering}
+            onClick={() => onRequestRemove(choice)}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
       )}
     </li>
   )
@@ -184,6 +206,11 @@ export function ChoiceListEditor({
   // identity. Server is source of truth; this mirrors UI while mutations settle.
   const [optimisticOrder, setOptimisticOrder] = useState<number[] | null>(null)
   const [pendingRemove, setPendingRemove] =
+    useState<AdmissionProfileChoiceResponse | null>(null)
+  // Edit scores dialog state — open Dialog với ChoiceScoreCard cho choice
+  // được click. Save chạy qua useReplaceChoiceScores hook trong Card; dialog
+  // chỉ là container UX.
+  const [pendingEditScores, setPendingEditScores] =
     useState<AdmissionProfileChoiceResponse | null>(null)
 
   const updateOrder = useUpdateChoiceDisplayOrder(profileId)
@@ -289,6 +316,7 @@ export function ChoiceListEditor({
                   canEdit={canEdit}
                   isReordering={isReordering}
                   onRequestRemove={setPendingRemove}
+                  onRequestEditScores={setPendingEditScores}
                 />
               ))}
             </ol>
@@ -305,6 +333,34 @@ export function ChoiceListEditor({
           mới.
         </p>
       )}
+
+      <Dialog
+        open={pendingEditScores !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingEditScores(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Sửa điểm NV{pendingEditScores?.display_order ?? ""}
+            </DialogTitle>
+            <DialogDescription>
+              {pendingEditScores?.display_path_name || "—"}
+              {pendingEditScores?.display_subject_group_name
+                ? ` · ${pendingEditScores.display_subject_group_name}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingEditScores && (
+            <ChoiceScoreCard
+              profileId={profileId}
+              choice={pendingEditScores}
+              canEdit={canEdit}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={pendingRemove !== null}

@@ -198,6 +198,60 @@ export async function getCoverageMatrix(
 }
 
 // ============================================
+// PHASE 3 MULTI-NV ADD-CHOICE DIALOG SUPPORT
+// ============================================
+
+/**
+ * List active paths in a round (multi-NV AddChoiceDialog dropdown).
+ * Cross-academic_info — candidate có thể thêm NV ở ngành khác cùng đợt.
+ */
+export async function getPathsByRound(
+  roundId: number
+): Promise<{ total: number; items: AdmissionPathResponse[] }> {
+  const response = await api.get<{ total: number; items: AdmissionPathResponse[] }>(
+    `/api/admission-config/paths/by-round/${roundId}`
+  )
+  return response.data
+}
+
+/** Subject in a sg_config (nested response from BE custom shape). */
+export interface PathSubjectGroupConfigSubject {
+  subject_id: number
+  subject_code: string
+  subject_name: string
+  max_score: number
+  min_possible_score: number
+  position: number
+}
+
+/** Sg_config with nested subjects (multi-NV AddChoiceDialog dropdown 2). */
+export interface PathSubjectGroupConfigForChoice {
+  id: number
+  admission_path_id: number
+  subject_group_id: number
+  subject_group_code: string | null
+  subject_group_name: string | null
+  min_score: number | null
+  min_subject_score: number | null
+  group_quota: number | null
+  subjects: PathSubjectGroupConfigSubject[]
+}
+
+/**
+ * List sg_configs of a path with nested subjects (multi-NV AddChoiceDialog).
+ * User picks 1 sg_config → render N score inputs per subjects[].
+ */
+export async function getPathSubjectGroupConfigs(
+  pathId: number
+): Promise<{ total: number; items: PathSubjectGroupConfigForChoice[] }> {
+  const response = await api.get<{
+    total: number
+    items: PathSubjectGroupConfigForChoice[]
+  }>(`/api/admission-config/paths/${pathId}/subject-group-configs`)
+  return response.data
+}
+
+// ============================================
 // EXPORT DEFAULT OBJECT
 // ============================================
 
@@ -220,6 +274,9 @@ export const admissionPathsApi = {
   getPathDocuments,
   // Matrix
   getCoverageMatrix,
+  // Phase 3 multi-NV AddChoiceDialog
+  getPathsByRound,
+  getPathSubjectGroupConfigs,
 }
 
 export default admissionPathsApi

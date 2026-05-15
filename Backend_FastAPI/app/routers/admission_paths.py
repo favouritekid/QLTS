@@ -234,6 +234,104 @@ async def get_paths_for_offering(
 
 
 @router.get(
+    "/paths/{path_id}/subject-group-configs",
+    summary="Get subject-group configs of a path (multi-NV AddChoiceDialog)",
+)
+async def list_path_subject_group_configs(
+    path_id: int = PathParam(..., description="Admission path ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """List subject-group configs (tổ hợp môn) thuộc 1 path.
+
+    Phase 3 multi-NV AddChoiceDialog: candidate/officer chọn tổ hợp sau
+    khi pick path → fetch list configs → render dropdown 6 sg_config.
+    Eager-load subject_group + items + subject so FE render đầy đủ tên +
+    môn cho user choice.
+
+    Mirror admin endpoint ``/api/v2/admin/admission-paths/{id}/
+    subject-group-configs`` nhưng allow officer+ (non-admin) cho add-choice
+    flow. Read-only — không mutation.
+    """
+    from app.repositories.path_subject_group_repository import (
+        PathSubjectGroupRepository,
+    )
+    repo = PathSubjectGroupRepository(db)
+    configs = await repo.list_configs_by_path_with_subjects(path_id)
+
+    items = []
+    for c in configs:
+        sg = c.subject_group
+        subjects = []
+        if sg is not None and sg.subject_mappings:
+            for mapping in sorted(
+                sg.subject_mappings, key=lambda m: getattr(m, "position", 0) or 0
+            ):
+                s = mapping.subject
+                if s is None:
+                    continue
+                subjects.append({
+                    "subject_id": s.id,
+                    "subject_code": s.code,
+                    "subject_name": s.name_vi,
+                    "max_score": float(s.max_score) if s.max_score is not None else 10.0,
+                    "min_possible_score": (
+                        float(s.min_possible_score)
+                        if s.min_possible_score is not None
+                        else 0.0
+                    ),
+                    "position": getattr(mapping, "position", 0) or 0,
+                })
+        items.append({
+            "id": c.id,
+            "admission_path_id": c.admission_path_id,
+            "subject_group_id": c.subject_group_id,
+            "subject_group_code": getattr(sg, "code", None) if sg else None,
+            "subject_group_name": getattr(sg, "name", None) if sg else None,
+            "min_score": float(c.min_score) if c.min_score is not None else None,
+            "min_subject_score": (
+                float(c.min_subject_score) if c.min_subject_score is not None else None
+            ),
+            "group_quota": c.group_quota,
+            "subjects": subjects,
+        })
+
+    return {"total": len(items), "items": items}
+
+
+@router.get(
+    "/paths/by-round/{round_id}",
+    response_model=AdmissionPathListResponse,
+    summary="Get active paths in a round (multi-NV AddChoiceDialog)",
+)
+async def get_paths_by_round(
+    round_id: int = PathParam(..., description="Admission round ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """List ACTIVE admission paths trong 1 round.
+
+    Phase 3 multi-NV AddChoiceDialog: candidate/officer chọn ngành+method
+    để thêm NV mới trong cùng đợt đang xét. Cross-academic_info (different
+    majors); FE filter thêm theo path đã có trong choices nếu cần.
+
+    Security: authenticated user (Officer+); KHÔNG cần admin vì
+    candidate/officer flow đều dùng. BE precheck chính (uses_choice_engine,
+    allow_multi_nv, max_choices) áp dụng tại POST /choices.
+    """
+    service = AdmissionPathService(db)
+    paths, callback = await service.list_active_paths_by_round(round_id)
+    await db.commit()
+    await callback()
+
+    items = []
+    for path in paths:
+        items.append(await build_path_response(path, service, current_user))
+
+    return AdmissionPathListResponse(total=len(items), items=items)
+
+
+@router.get(
     "/paths", response_model=AdmissionPathListResponse, summary="List admission paths"
 )
 async def list_admission_paths(

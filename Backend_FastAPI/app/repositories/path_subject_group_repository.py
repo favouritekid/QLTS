@@ -37,6 +37,32 @@ class PathSubjectGroupRepository:
         )
         return list((await self.db.execute(stmt)).scalars().all())
 
+    async def list_configs_by_path_with_subjects(
+        self, admission_path_id: int
+    ) -> List[PathSubjectGroupConfig]:
+        """Phase 3 multi-NV AddChoiceDialog support: eager-load subject_group
+        + subject_mappings → subject for FE render score input forms.
+
+        Single round-trip: configs → subject_group → mappings → subject.
+        FE consumer needs subject.code/name/max_score per dropdown option.
+        """
+        from app.models.admission_config.subject import (
+            SubjectGroup,
+            SubjectGroupSubject,
+        )
+        stmt = (
+            select(PathSubjectGroupConfig)
+            .where(PathSubjectGroupConfig.admission_path_id == admission_path_id)
+            .options(
+                selectinload(PathSubjectGroupConfig.items),
+                selectinload(PathSubjectGroupConfig.subject_group)
+                .selectinload(SubjectGroup.subject_mappings)
+                .selectinload(SubjectGroupSubject.subject),
+            )
+            .order_by(PathSubjectGroupConfig.subject_group_id)
+        )
+        return list((await self.db.execute(stmt)).scalars().all())
+
     async def get_config_by_path_and_group(
         self, admission_path_id: int, subject_group_id: int
     ) -> Optional[PathSubjectGroupConfig]:

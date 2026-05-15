@@ -1,7 +1,6 @@
-import { useMemo, useEffect, useRef } from "react"
+import { useMemo, useEffect, useRef, useState } from "react"
 import { UseFormReturn, useWatch } from "react-hook-form"
 import { useQuery } from "@tanstack/react-query"
-import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
@@ -11,6 +10,7 @@ import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configApi } from "@/lib/api/config"
 import { ChoiceListEditor } from "@/components/admissions/ChoiceListEditor"
+import { AddChoiceDialog } from "@/components/admissions/AddChoiceDialog"
 import type { AppliedRules, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import type { AdmissionProfileChoiceResponse } from "@/lib/zod/admission-choices"
 
@@ -87,39 +87,12 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
   // form khi profile.uses_choice_engine=true. Component nhận BE-eager-loaded
   // choices array; hasAction("add_choice") gated server-side.
   if (profile?.uses_choice_engine === true && profile?.id) {
-    // Hard-code 5 matches prod system_config.max_choices_per_profile.
-    // Future: fetch via configApi.getSystemConfig if admin tunes per
-    // intake year. BE precheck `add_choice` enforces authoritative cap;
-    // FE value is UX hint only.
-    const maxChoices = 5
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calculator className="w-5 h-5" />
-            Danh sách nguyện vọng
-          </CardTitle>
-          <CardDescription>
-            Hồ sơ đa nguyện vọng — kéo thả để đổi thứ tự ưu tiên,
-            xoá nguyện vọng không mong muốn, hoặc thêm nguyện vọng mới
-            (tối đa {maxChoices}).
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ChoiceListEditor
-            profileId={profile.id}
-            choices={profile.choices ?? []}
-            maxChoices={maxChoices}
-            canEdit={isEditable}
-            onRequestAdd={() => {
-              toast.info(
-                "Tính năng Thêm nguyện vọng qua giao diện đang phát triển. " +
-                  "Liên hệ admin trong khi chờ.",
-              )
-            }}
-          />
-        </CardContent>
-      </Card>
+      <MultiNvScoresTab
+        profileId={profile.id}
+        choices={profile.choices ?? []}
+        isEditable={isEditable}
+      />
     )
   }
 
@@ -784,6 +757,82 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
         </Card>
       </div>
     </div>
+  )
+}
+
+// =============================================================================
+// MultiNvScoresTab — Phase 3 multi-NV branch của ScoresTab
+// =============================================================================
+
+interface MultiNvScoresTabProps {
+  profileId: number
+  choices: AdmissionProfileChoiceResponse[]
+  isEditable: boolean
+}
+
+/**
+ * Phase 3 multi-NV view: ChoiceListEditor (drag/delete/edit-scores) +
+ * AddChoiceDialog. Branch riêng để useState/useEffect không vi phạm
+ * react-hooks/rules-of-hooks (parent ScoresTab early-return).
+ *
+ * Hardcode max=5 matches prod system_config.max_choices_per_profile.
+ * Future: fetch via configApi.getSystemConfig() nếu admin tunes per
+ * intake year. BE precheck `add_choice` enforces authoritative cap;
+ * FE giá trị hint UX only.
+ *
+ * currentPathId derive từ choices[0] (NV1) để AddChoiceDialog resolve
+ * round_id + render danh sách path khả dụng cùng đợt. Nếu choices
+ * empty → button Add disabled trong ChoiceListEditor (canAddMore guard).
+ */
+function MultiNvScoresTab({
+  profileId,
+  choices,
+  isEditable,
+}: MultiNvScoresTabProps) {
+  const maxChoices = 5
+  const [addDialogOpen, setAddDialogOpen] = useState(false)
+
+  const sortedChoices = useMemo(
+    () => [...choices].sort((a, b) => a.display_order - b.display_order),
+    [choices],
+  )
+  const currentPathId =
+    sortedChoices.length > 0 ? sortedChoices[0].admission_path_id : null
+  const nextDisplayOrder =
+    sortedChoices.length > 0
+      ? Math.max(...sortedChoices.map((c) => c.display_order)) + 1
+      : 1
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Calculator className="w-5 h-5" />
+          Danh sách nguyện vọng
+        </CardTitle>
+        <CardDescription>
+          Hồ sơ đa nguyện vọng — kéo thả để đổi thứ tự ưu tiên,
+          sửa điểm, xoá nguyện vọng không mong muốn, hoặc thêm
+          nguyện vọng mới (tối đa {maxChoices}).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ChoiceListEditor
+          profileId={profileId}
+          choices={choices}
+          maxChoices={maxChoices}
+          canEdit={isEditable}
+          onRequestAdd={() => setAddDialogOpen(true)}
+        />
+        <AddChoiceDialog
+          profileId={profileId}
+          open={addDialogOpen}
+          onClose={() => setAddDialogOpen(false)}
+          nextDisplayOrder={nextDisplayOrder}
+          currentPathId={currentPathId}
+        />
+      </CardContent>
+    </Card>
   )
 }
 
