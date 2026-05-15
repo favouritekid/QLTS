@@ -427,6 +427,50 @@ export function useRejectAdmission(id: number) {
   })
 }
 
+/**
+ * E2E #10 fix 2026-05-15 — Request Revision hook (Manager/Admin)
+ * POST /api/admissions/{id}/request-revision
+ *
+ * Transitions submitted/resubmitted → revision_requested. Officer phụ
+ * trách nhận thông báo + có thể chỉnh sửa rồi nộp lại. Reason mandatory
+ * (BE Pydantic min_length=10) — currently caller passes placeholder via
+ * AdmissionDetailClient.handleRequestRevision; FU PR sẽ thêm textarea
+ * input dialog để manager nhập reason cụ thể.
+ *
+ * Pattern mirror useApproveAdmission/useRejectAdmission.
+ */
+export function useRequestRevisionAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.requestRevision(id, data),
+    onSuccess: (data) => {
+      if (data.status === "revision_requested") {
+        toast.success("Đã yêu cầu sửa hồ sơ", {
+          description: "Officer phụ trách đã nhận thông báo. Có thể nộp lại sau khi sửa.",
+        })
+      } else {
+        toast.info("Yêu cầu sửa đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`,
+        })
+      }
+
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "yêu cầu sửa hồ sơ",
+      })
+    },
+  })
+}
+
 export function useEnrollStudent(id: number) {
   const queryClient = useQueryClient()
   const router = useRouter()

@@ -92,6 +92,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
         profileId={profile.id}
         choices={profile.choices ?? []}
         isEditable={isEditable}
+        roundIdFromAppliedRules={appliedRules?.admission_round_id}
       />
     )
   }
@@ -768,6 +769,10 @@ interface MultiNvScoresTabProps {
   profileId: number
   choices: AdmissionProfileChoiceResponse[]
   isEditable: boolean
+  /** Fallback round_id từ profile.applied_rules khi profile chưa có NV nào
+   *  (currentPathId=null → AddChoiceDialog không resolve được round qua
+   *  path detail). E2E #6 fix 2026-05-15. */
+  roundIdFromAppliedRules?: number
 }
 
 /**
@@ -788,6 +793,7 @@ function MultiNvScoresTab({
   profileId,
   choices,
   isEditable,
+  roundIdFromAppliedRules,
 }: MultiNvScoresTabProps) {
   const maxChoices = 5
   const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -830,6 +836,7 @@ function MultiNvScoresTab({
           onClose={() => setAddDialogOpen(false)}
           nextDisplayOrder={nextDisplayOrder}
           currentPathId={currentPathId}
+          roundIdOverride={roundIdFromAppliedRules}
         />
       </CardContent>
     </Card>

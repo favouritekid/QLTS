@@ -38,6 +38,7 @@ import {
   useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
+  useRequestRevisionAdmission,
   usePublishAdmissionResult,
   useEnrollStudent,
   useDeleteAdmission,
@@ -94,6 +95,8 @@ export function AdmissionDetailClient({
   // Phase 3 multi-NV: 1-click publish (BE auto-transition submitted→reviewing
   // internal nếu cần; bỏ T2 start-review YAGNI 2026-05-15)
   const publishResultMutation = usePublishAdmissionResult(profileId)
+  // E2E #10 — request_revision (manager → officer fix flow)
+  const requestRevisionMutation = useRequestRevisionAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
   const claimMutation = useClaimAdmission(profileId)
@@ -391,6 +394,27 @@ export function AdmissionDetailClient({
     deleteMutation.mutate()
   }
 
+  // E2E #3 fix 2026-05-15 — useCallback wrap for stable function reference.
+  // Prior pattern `() => publishResultMutation.mutate()` re-created per
+  // render → Radix AlertDialogAction onClick captured stale ref → click
+  // sometimes did not fire mutate. Stable reference via useCallback +
+  // defensive preventDefault wrapper in AdmissionActions.tsx ensures mutate
+  // fires reliably across browser sessions.
+  const handlePublishResult = useCallback(() => {
+    publishResultMutation.mutate()
+  }, [publishResultMutation])
+
+  // E2E #10 — Request revision handler (manager → officer fix flow).
+  // Reason placeholder satisfies BE Pydantic min_length=10. FU PR sẽ
+  // thêm textarea input dialog cho manager nhập reason cụ thể.
+  const handleRequestRevision = useCallback(() => {
+    if (!vm?.version) return
+    requestRevisionMutation.mutate({
+      reason: "Vui lòng chỉnh sửa hồ sơ theo yêu cầu của Manager",
+      version: vm.version,
+    })
+  }, [requestRevisionMutation, vm?.version])
+
   // Claim/Unclaim Handlers
   const handleClaim = () => {
     if (!vm?.version) return
@@ -468,8 +492,10 @@ export function AdmissionDetailClient({
           onReject={handleReject}
           isApproving={approveMutation.isPending}
           isRejecting={rejectMutation.isPending}
-          onPublishResult={() => publishResultMutation.mutate()}
+          onPublishResult={handlePublishResult}
           isPublishingResult={publishResultMutation.isPending}
+          onRequestRevision={handleRequestRevision}
+          isRequestingRevision={requestRevisionMutation.isPending}
           onClaim={handleClaim}
           onUnclaim={handleUnclaim}
           isClaiming={claimMutation.isPending}

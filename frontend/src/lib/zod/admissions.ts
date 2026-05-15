@@ -454,6 +454,10 @@ export const appliedRulesSchema = z.object({
   snapshot_source: z.enum(["relational", "jsonb", "migration"]).optional(),
   admission_path_id: z.number().int().optional(),
   academic_info_id: z.number().int().optional(),
+  // Phase 2 v8.2 PR-2B snapshot admission_round_id từ path. Mirrors BE
+  // admission_service.py:2825. Used by AddChoiceDialog (E2E #6 fix
+  // 2026-05-15) để resolve round khi profile chưa có NV nào.
+  admission_round_id: z.number().int().positive().optional(),
 })
 
 export type AppliedRules = z.infer<typeof appliedRulesSchema>

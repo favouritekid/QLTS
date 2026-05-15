@@ -51,6 +51,9 @@ interface AdmissionActionsProps {
   // Phase 3 multi-NV: 1-click publish-result (bỏ start-review YAGNI 2026-05-15)
   onPublishResult?: () => void
   isPublishingResult?: boolean
+  // E2E #10 — Request revision (manager → officer fix flow)
+  onRequestRevision?: () => void
+  isRequestingRevision?: boolean
   // Claim/unclaim actions
   onClaim?: () => void
   onUnclaim?: () => void
@@ -80,6 +83,8 @@ export function AdmissionActions({
   isRejecting = false,
   onPublishResult,
   isPublishingResult = false,
+  onRequestRevision,
+  isRequestingRevision = false,
   onClaim,
   onUnclaim,
   isClaiming = false,
@@ -269,10 +274,58 @@ export function AdmissionActions({
                 <AlertDialogFooter>
                   <AlertDialogCancel>Hủy</AlertDialogCancel>
                   <AlertDialogAction
-                    onClick={onPublishResult}
+                    onClick={(e) => {
+                      // E2E #3 fix 2026-05-15 — defensive wrapper. Symptom:
+                      // Radix AlertDialogAction onClick sometimes did not
+                      // invoke handler in browser session. preventDefault
+                      // ensures dialog close handler doesn't swallow event;
+                      // explicit invoke guarantees mutate fires. Pattern
+                      // mirrored on request-revision below.
+                      e.preventDefault()
+                      onPublishResult?.()
+                    }}
                     className="bg-success-600 hover:bg-success-700"
                   >
                     Công bố kết quả
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
+          {/* E2E #10 — Request Revision (Yêu cầu sửa) for manager/admin.
+              Mirrors claim/unclaim AlertDialog pattern. Permission flag
+              `request_revision` already in _compute_frontend_fields:1443. */}
+          {can('request_revision') && onRequestRevision && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" disabled={isRequestingRevision}>
+                  {isRequestingRevision ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <ClipboardCheck className="w-4 h-4 mr-2" />
+                  )}
+                  Yêu cầu sửa
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Yêu cầu sửa hồ sơ?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Hồ sơ sẽ chuyển sang trạng thái <strong>Cần sửa</strong>.
+                    Officer phụ trách sẽ nhận thông báo và có thể chỉnh sửa
+                    rồi nộp lại.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => {
+                      e.preventDefault()
+                      onRequestRevision?.()
+                    }}
+                  >
+                    Yêu cầu sửa
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
