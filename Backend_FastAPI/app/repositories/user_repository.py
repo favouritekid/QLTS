@@ -237,10 +237,16 @@ class UserRepository(BaseRepository[models.User]):
         ✅ SPRINT 2: Added for user_service migration.
         ✅ SPRINT 7: Refactored to use shared filter logic.
         """
-        # Build base query with eager loading
+        # Build base query with eager loading.
+        # T-INFO-1 perf fix 2026-05-16 (QA Wave 6): dropped
+        # `selectinload(User.sessions)` — list endpoint /api/admin/users
+        # response shapes (UserAdminResponse, UserPickerSchema) do NOT
+        # surface sessions data, but eager-load was fetching ~900 prod
+        # rows per request, contributing ~1.4s of cold-path latency.
+        # Detail endpoints (get_by_id, get_by_ids) still load sessions
+        # vì admin profile + sessions tab cần.
         query = select(self.model).options(
             selectinload(models.User.unit),
-            selectinload(models.User.sessions),
         )
         
         unit_ids = []
