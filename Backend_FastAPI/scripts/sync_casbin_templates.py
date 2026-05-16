@@ -59,22 +59,33 @@ async def sync_templates():
     async with async_session() as session:
         service = CasbinPolicyService(session, enforcer)
         
-        # 2. Sync Officer Role
-        print("Syncing 'officer' role...")
-        result = await service.refresh_role_from_template(
-            role="role:officer",
-            template_id="officer", 
-            force=True, # Required to overwrite existing policies
-            applied_by=1 # System/Admin ID
-        )
-        
-        if result.get("success") is False:
-             print(f"❌ Failed to sync officer: {result.get('error')}")
-        else:
-             print(f"✅ Officer role synced: {result.get('added')} added, {result.get('removed')} removed.")
-
-        # You can add other roles here if needed
-        # await service.refresh_role_from_template("role:manager", "manager", force=True)
+        # 2. Sync ALL roles từ template (E2E F2 fix 2026-05-16 — script
+        # chỉ sync officer trước đây, manager/accountant/collaborator
+        # chưa sync khi template update).
+        # Admin KHÔNG cần sync — wildcard `/*` policy + inheritance từ
+        # manager đã đủ.
+        roles_to_sync = [
+            ("role:officer", "officer"),
+            ("role:manager", "manager"),
+            ("role:accountant", "accountant"),
+            ("role:collaborator", "collaborator"),
+        ]
+        for role_name, template_id in roles_to_sync:
+            print(f"Syncing '{role_name}' từ template '{template_id}'...")
+            result = await service.refresh_role_from_template(
+                role=role_name,
+                template_id=template_id,
+                force=True,  # Required to overwrite existing policies
+                applied_by=1,  # System/Admin ID
+            )
+            if result.get("success") is False:
+                print(f"  ❌ Failed: {result.get('error')}")
+            else:
+                print(
+                    f"  ✅ {role_name}: "
+                    f"{result.get('added')} added, "
+                    f"{result.get('removed')} removed."
+                )
 
     print("-" * 70)
     print(f"SYNC COMPLETE.")

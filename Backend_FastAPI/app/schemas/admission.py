@@ -616,6 +616,24 @@ class AppliedRulesSchema(BaseModel):
     schema_version: Optional[int] = None
     allow_unverified_submission: Optional[bool] = None
 
+    # E2E F1+F5 fix 2026-05-16 — 9 keys snapshot từ JSONB nhưng trước đây
+    # bị model_config extra="ignore" strip im lặng (memory pattern
+    # `service-explicit-dict-field-drop-pattern`). Cần expose qua API
+    # response cho:
+    # - FE AddChoiceDialog: derive round_id từ applied_rules khi profile
+    #   chưa có NV (E2E #6 root cause)
+    # - FE display: round_code, application_fee cho card hiển thị
+    # - FE engine config: subject_weights cho scoring detail
+    admission_round_id: Optional[int] = None  # Phase 2 v8.2 PR-2B snapshot
+    round_code: Optional[str] = None
+    application_fee: Optional[float] = None
+    requires_application_fee: Optional[bool] = None
+    fee_status: Optional[str] = None  # exempt/paid/pending/etc
+    method_quota: Optional[int] = None
+    applicable_to: Optional[Any] = None  # JSONB free-form (eligibility expr)
+    subject_weights: Optional[Dict[str, float]] = None
+    bonus_rule_override: Optional[Dict[str, Any]] = None  # JSONB nested rule
+
     model_config = ConfigDict(extra="ignore")
 
 

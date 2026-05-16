@@ -278,7 +278,9 @@ from .user import (
     UserBase,
     UserCreate,
     UserInDB,
+    UserPickerSchema,
     UsersPage,
+    UsersPagePicker,
     UserUpdate,
 )
 
