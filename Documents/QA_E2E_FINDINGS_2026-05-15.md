@@ -1,5 +1,61 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🔁 WAVE 3 RE-TEST — Admission module sau user fix (2026-05-16 ~11:30 UTC+7)
+
+### Kết quả
+
+| # | Sev | Status trước | Status sau re-test | Evidence |
+|---|---|---|---|---|
+| F1 | 🟥 | ✅ FIXED Wave 1 | ✅ STILL FIXED | Profile 42 API response: `applied_rules.admission_round_id=1`. Profile 39 trả null vì DB JSONB chỉ có 5 keys (created trước fix Wave 1) — NOT regression, là data legacy. |
+| F2 | 🟥 | ✅ FIXED Wave 1 | ✅ STILL FIXED | Officer POST /api/v2/admissions/42/choices NV3 → 201 created (id=15) |
+| F3 | 🟥 | ✅ FIXED Wave 1 | ✅ STILL FIXED | `/api/admin/users` officer view không có email/phone/mfa/password_reset |
+| F5 | 🟧 | ✅ FIXED Wave 1 | ✅ STILL FIXED | Profile 42 applied_rules có đủ: fee_status=`exempt`, application_fee=0.0, subject_weights, bonus_rule_override |
+| F6 | 🟧 | ✅ FIXED Wave 2 | ✅ STILL FIXED | Profile 42 `permissions.override=false` (correct vì status=draft, chỉ approved mới true) |
+| F7 | 🟧 | ✅ FIXED Wave 2 | ✅ STILL FIXED | Profile 42 `bypass_warning=false` (correct vì allow_unverified=false) |
+| F8 | 🟧 | ✅ FIXED Wave 2 | ✅ STILL FIXED | Accountant `GET /api/admissions` → 403 clean (Casbin gate) |
+| **W2-1** | 🟧 OPEN | 🔴 OPEN | 🎉 **NEWLY FIXED** | Endpoint thực `POST /api/admissions/{id}/send-magic-link` (KHÁC địa chỉ tôi đoán `/api/v2/admissions/magic-link/{action}` trong Wave 2 audit). FE `SendMagicLinkButton.tsx` + hook `useSendMagicLink.ts` + 3 actions submit/resubmit/withdraw đã wired. Withdraw consume end-to-end OK: profile 16 status `rejected` → `withdrawn` sau khi confirm với last 4 CCCD. |
+| F12 | 🟦 INFO | 🟦 INFO/dead | 🟦 BY DESIGN | `submitted → reviewing` transition vẫn còn trong allowed_transitions cho legacy single-NV path; multi-NV refactor 2026-05-15 chỉ remove `reviewing` khỏi cascade flow, không phải state machine. Acceptable. |
+| F13 | 🟦 INFO | 🟦 INFO/doc | 🟦 BY DESIGN | `GET /api/v2/admissions/{id}/choices` vẫn 405. Choices đọc qua parent endpoint `GET /api/admissions/{id}` field `.choices[]`. Doc-only fix. |
+| **W2-6** | 🟦 INFO | 🟦 dead policy | ⚠️ **FALSE ALARM** | Route `/api/v2/admissions/{profile_id}/waitlist-reject` thực sự **EXISTS** trong `admissions_v2.py:229`. Wave 2 audit sai do probe ở thời điểm Casbin chưa allow officer hoặc 422 schema validation bị nhầm thành 404. Verified: manager probe trả 422 (missing body fields), confirm route exist. Remove from "dead" list. |
+| W2-7 | 🟦 sanity | ✅ STILL OK | – | Send-magic-link cross-officer IDOR: officer 16 → profile 22 (officer 18) → 404 ✅ |
+
+### 🎉 Admission module: **11/11 findings RESOLVED**
+
+| Status | Count |
+|---|---|
+| ✅ FIXED | 8 (F1, F2, F3, F5, F6, F7, F8, W2-1) |
+| 🟦 BY DESIGN | 2 (F12, F13) |
+| ⚠️ FALSE ALARM | 1 (W2-6 — route exists) |
+| 🔴 OPEN | **0** |
+
+### W2-1 fix details (verified live)
+- BE endpoint: `POST /api/admissions/{id}/send-magic-link` body `{action: "submit"|"resubmit"|"withdraw"}` → returns `{magic_link_url, token_value, token_expires_at, sent_to_email, phone}`
+- BE state-machine guards per action:
+  - submit: chỉ cho draft
+  - resubmit: chỉ cho revision_requested
+  - withdraw: cho mọi state (verified trên rejected)
+- BE IDOR: cross-officer profile → 404
+- FE component: `SendMagicLinkButton.tsx` (line 30 import trong AdmissionActions.tsx)
+- FE hook: `useSendMagicLink.ts` calls `/api/admissions/{profileId}/send-magic-link`
+- Consume side: `POST /api/v2/admissions/magic-link/{action}/{token}` body `{cccd: "last4"}` → 200 (verified withdraw flow live)
+
+### Wave 3 execution log
+- **11:25** Restart backend → healthy
+- **11:27** Probe `/api/v2/admissions/magic-link/withdraw` (Wave 2 audit guess) → 404. Investigate FE → tìm endpoint thật `POST /api/admissions/{id}/send-magic-link`.
+- **11:28** W2-1 verified: withdraw 200, submit/resubmit 400 state-machine guards, IDOR 404, consume side end-to-end OK với CCCD 8017.
+- **11:29** Sanity recheck F1-F8: all still fixed.
+- **11:30** W2-6 re-investigate: route exists tại admissions_v2.py:229 — Wave 2 finding FALSE ALARM.
+- **11:30** F12 confirm by design: legacy single-NV vẫn dùng reviewing state.
+
+### Admission profiles state after Wave 3
+- Profile 16: `rejected` → **`withdrawn`** (consume test changed state — test artifact, có thể restore nếu cần)
+- Profile 42: `draft`, choices=3 (NV1 sg=12 B00 no scores, NV2 sg=71 A00 with scores, NV3 sg=42 D07 with scores)
+- Profile 39: unchanged (legacy fixture với 5-key snapshot)
+
+---
+
+
+
 ## 📊 FINDINGS BY MODULE — Tổng hợp theo nhóm
 
 Tổng cộng **20 findings** qua 2 wave (Wave 1: F1-F13, Wave 2: W2-1 đến W2-7).
