@@ -1143,26 +1143,29 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         profile_id: int,
         token: str,
         expires_at,
+        action_type: str = "confirm",
     ) -> models.AdmissionConfirmationToken:
         """
-        Issue (or refresh) the magic-link confirmation token for a profile.
+        Issue (or refresh) the magic-link token for a profile + action.
 
         ADM-023 (2026-04-29): when an existing token row is present we
         REUSE it — only ``token``, ``expires_at`` and ``confirmed_at``
         are updated. The brute-force counters (``attempt_count``,
         ``lock_until``, ``locked_at``, ``lock_count``) are PRESERVED so
         an abuser can't simply request a fresh link to escape the
-        ladder. The previous behaviour (``DELETE + INSERT``) reset
-        every counter and was the loophole flagged by the resend test.
+        ladder.
 
-        Operator-driven cooldown reset is a separate admin path (not
-        in scope for this PR); when it ships, that path will explicitly
-        zero ``lock_until`` / ``lock_count`` with an audit row.
+        Wave 7 (2026-05-16): add ``action_type`` param cho generate-side
+        của 3 actions submit/resubmit/withdraw (W2-1 fix). Default 'confirm'
+        cho backward-compat. Single token per profile semantics preserved
+        — generating link cho action mới sẽ overwrite existing token
+        (officer chỉ tạo 1 magic-link tại 1 thời điểm cho mỗi candidate).
 
         Args:
             profile_id: AdmissionProfile ID
             token: URL-safe random token string
             expires_at: Token expiration timestamp
+            action_type: One of confirm | submit | resubmit | withdraw
 
         Returns:
             The single token row (refreshed or newly created).
@@ -1178,11 +1181,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         ).scalar_one_or_none()
 
         if existing is not None:
-            # Refresh value + expiry, clear consumed marker so the new
-            # link is usable. Counters intentionally untouched.
+            # Refresh value + expiry + action_type, clear consumed marker
+            # so the new link is usable. Counters intentionally untouched.
             existing.token = token
             existing.expires_at = expires_at
             existing.confirmed_at = None
+            existing.action_type = action_type  # Wave 7 — overwrite action
             # New email window starts → previous reminder dedupes are
             # stale (different expires_at). Reset reminder markers so
             # the beat task re-fires for the new window.
@@ -1195,6 +1199,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id=profile_id,
             token=token,
             expires_at=expires_at,
+            action_type=action_type,
         )
         self.db.add(token_obj)
         await self.db.flush()

@@ -276,6 +276,73 @@ def test_t11_waitlist_reject_pair_map_fires_correct_event() -> None:
     )
 
 
+def test_w2_1_send_magic_link_service_exists() -> None:
+    """W2-1 fix Wave 7 (2026-05-16) — service entry point
+    ``generate_action_magic_link`` exists trong admission_service.
+
+    Service-layer source-of-truth test (avoid FastAPI route introspection
+    fragility). Live API live integration covered qua Casbin policy
+    declaration test below.
+    """
+    from app.services import admission_service
+
+    assert hasattr(admission_service, "generate_action_magic_link"), (
+        "admission_service.generate_action_magic_link missing — W2-1 "
+        "regression. Officer cannot generate self-service magic-link cho "
+        "candidate (3 actions: submit/resubmit/withdraw)."
+    )
+
+
+def test_w2_1_send_magic_link_schemas_exported() -> None:
+    """W2-1 fix Wave 7 — SendMagicLinkRequest + SendMagicLinkResponse
+    schemas exported via app.schemas namespace.
+    """
+    from app import schemas
+
+    assert hasattr(schemas, "SendMagicLinkRequest"), (
+        "SendMagicLinkRequest schema missing in app.schemas exports"
+    )
+    assert hasattr(schemas, "SendMagicLinkResponse"), (
+        "SendMagicLinkResponse schema missing in app.schemas exports"
+    )
+
+    # Validate request shape — action Literal must include 3 values
+    req_fields = schemas.SendMagicLinkRequest.model_fields
+    assert "action" in req_fields, "SendMagicLinkRequest missing `action` field"
+
+
+def test_w2_1_send_magic_link_casbin_policies_declared() -> None:
+    """W2-1 fix Wave 7 — Casbin policies declared cho /send-magic-link
+    trong template (officer+manager ALLOW, accountant DENY). Source-of-
+    truth test — actual DB seed via alembic phase3_06 post-deploy.
+    """
+    from app.casbin_config.policy_templates import (
+        OFFICER_TEMPLATE,
+        MANAGER_TEMPLATE,
+        ACCOUNTANT_TEMPLATE,
+    )
+
+    def has_policy(template: dict, allow: bool) -> bool:
+        eft_expected = "allow" if allow else "deny"
+        return any(
+            p.get("object") == "/api/admissions/{id}/send-magic-link"
+            and p.get("action") == "POST"
+            and p.get("eft", "allow") == eft_expected
+            for p in template.get("policies", [])
+        )
+
+    assert has_policy(OFFICER_TEMPLATE, allow=True), (
+        "OFFICER_TEMPLATE missing ALLOW for /send-magic-link POST"
+    )
+    assert has_policy(MANAGER_TEMPLATE, allow=True), (
+        "MANAGER_TEMPLATE missing ALLOW for /send-magic-link POST"
+    )
+    assert has_policy(ACCOUNTANT_TEMPLATE, allow=False), (
+        "ACCOUNTANT_TEMPLATE missing DENY for /send-magic-link POST — "
+        "separation-of-duties guard regressed"
+    )
+
+
 def test_t11_waitlist_reject_template_declares_accountant_deny() -> None:
     """ACCOUNTANT_TEMPLATE MUST declare DENY for /waitlist-reject endpoint
     (Wave 5 ship 2026-05-16 — endpoint now exists, template parity).

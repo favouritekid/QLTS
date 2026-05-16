@@ -1598,6 +1598,56 @@ class ConfirmTokenInfoResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SendMagicLinkRequest(BaseModel):
+    """W2-1 fix Wave 7 (2026-05-16) — Request body cho generate-side
+    magic-link cho 3 non-confirm actions.
+
+    Officer/manager/admin chọn action; BE validate state precondition +
+    overwrite existing token row với action_type new. UX mirror
+    /send-confirmation nhưng explicit action param.
+    """
+    action: Literal["submit", "resubmit", "withdraw"] = Field(
+        ...,
+        description=(
+            "Action type magic-link sẽ enable cho candidate self-service. "
+            "Confirm dùng /send-confirmation endpoint riêng (legacy path)."
+        ),
+    )
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class SendMagicLinkResponse(BaseModel):
+    """Response after generating magic-link cho non-confirm action.
+
+    Mirror SendConfirmationResponse shape — FE dialog copy URL pattern
+    reused (SendConfirmationButton component). Officer chia sẻ URL
+    manual qua Zalo/SMS tới candidate.
+    """
+    message: str
+    action: Literal["submit", "resubmit", "withdraw"]
+    token_expires_at: datetime
+    sent_to_email: Optional[str] = Field(
+        None,
+        description="Lead email (informational — KHÔNG auto-email cho Wave 7 MVP)",
+    )
+    phone: Optional[str] = Field(
+        None,
+        description="Lead phone (informational — officer manual share)",
+    )
+    token_value: Optional[str] = Field(
+        None,
+        description="Token value cho copy thủ công nếu cần",
+    )
+    magic_link_url: Optional[str] = Field(
+        None,
+        description=(
+            "Full magic-link URL (FRONTEND_URL + /magic-link/{action}/{token}). "
+            "FE landing pages tại PR #280 đã ship — candidate click link → "
+            "nhập CCCD → BE consume + apply action atomic."
+        ),
+    )
+
+
 class SendConfirmationResponse(BaseModel):
     """Response after sending confirmation link."""
     message: str
@@ -1801,6 +1851,8 @@ __all__ = [
     "ConfirmTokenResponse",
     "ConfirmTokenInfoResponse",
     "SendConfirmationResponse",
+    "SendMagicLinkRequest",
+    "SendMagicLinkResponse",
     # Aggregate schemas
     "AdmissionStatusCounts",
     "AdmissionStats",

@@ -27,6 +27,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
+import { SendMagicLinkButton } from "./SendMagicLinkButton"
 import { MinorCorrectionDialog } from "./MinorCorrectionDialog"
 
 interface AdmissionActionsProps {
@@ -446,6 +447,22 @@ export function AdmissionActions({
               See project_send_confirmation_ops_gaps. */}
           {can('send_confirmation') && (
             <SendConfirmationButton profileId={profile.id} />
+          )}
+
+          {/* W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3
+              candidate self-service actions. BE-driven permission flags
+              `send_submit_link` / `send_resubmit_link` / `send_withdraw_link`
+              tự kiểm tra state + role (mirror service precheck), nên FE
+              hiển thị button đúng lúc đúng action. Mỗi button tự handle
+              dialog + copy URL pattern (reuse SendConfirmationButton UX). */}
+          {can('send_submit_link') && (
+            <SendMagicLinkButton profileId={profile.id} action="submit" />
+          )}
+          {can('send_resubmit_link') && (
+            <SendMagicLinkButton profileId={profile.id} action="resubmit" />
+          )}
+          {can('send_withdraw_link') && (
+            <SendMagicLinkButton profileId={profile.id} action="withdraw" />
           )}
 
           {/* Post-approval minor correction. External `can()` gate

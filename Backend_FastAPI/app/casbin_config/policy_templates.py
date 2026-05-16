@@ -163,6 +163,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/resubmit", "action": "POST"},  # Resubmit after rejection
         {"subject": "{role}", "object": "/api/admissions/{id}/withdraw", "action": "POST"},  # Withdraw applicant-initiated
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        # W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3 non-confirm
+        # actions (submit/resubmit/withdraw). Officer triggers generate-side;
+        # candidate consume qua /magic-link/{action}/{token} (PR #280 wired).
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST"},
         # Post-approval minor correction — Casbin admits the role; service
         # narrows further with status whitelist + per-path allowlist +
         # HARD_DENY checks. IDOR via get_admission_for_user (admin all /
@@ -375,6 +379,7 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/withdraw",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/{id}/minor-correction", "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST", "eft": "deny"},  # W2-1 Wave 7 accountant deny
         {"subject": "{role}", "object": "/api/admissions/stats",          "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/status-counts",  "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET",  "eft": "deny"},
@@ -430,6 +435,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
         {"subject": "{role}", "object": "/api/admissions/{id}/drop", "action": "POST"},  # Drop enrolled student
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST"},  # W2-1 Wave 7 manager generate magic-link 3 actions
         # PR #5 — reviewer actions on individual documents. Casbin admits
         # the route at role level; admission_service enforces unit scope +
         # allowed doc_status per _compute_document_permissions.

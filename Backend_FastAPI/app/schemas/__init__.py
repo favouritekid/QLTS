@@ -196,6 +196,8 @@ from .admission import (
     ConfirmTokenResponse,
     ConfirmTokenInfoResponse,
     SendConfirmationResponse,
+    SendMagicLinkRequest,
+    SendMagicLinkResponse,
     # Aggregate schemas
     AdmissionStatusCounts,
     AdmissionStats,

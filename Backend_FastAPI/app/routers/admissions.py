@@ -2213,6 +2213,80 @@ async def send_confirmation_link(
 
 
 # ==============================================================================
+# W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3 actions
+# ==============================================================================
+
+
+@router.post(
+    "/{profile_id}/send-magic-link",
+    response_model=schemas.SendMagicLinkResponse,
+    summary="Generate magic-link cho candidate self-service (submit/resubmit/withdraw)",
+    description="""
+    Generate magic-link token cho candidate self-service. Mirror
+    /send-confirmation pattern nhưng cho 3 actions non-confirm.
+
+    **Called by:** Officer/Manager/Admin to enable candidate tự-service.
+    **Action:** Creates token với action_type, returns URL cho officer
+                copy + share manual qua Zalo/SMS (như SendConfirmation
+                dialog pattern).
+
+    **Permissions:**
+    - Officer: profile thuộc unit + assigned
+    - Manager: profile thuộc unit
+    - Admin: tất cả
+
+    **Body**: `{action: "submit" | "resubmit" | "withdraw"}`
+
+    **404 nếu**: profile không tồn tại / IDOR scope sai
+    **400 nếu**: action không hợp lệ / state mismatch (e.g. submit
+                cho profile không phải draft)
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def send_magic_link(
+    request: Request,
+    profile_id: int,
+    payload: schemas.SendMagicLinkRequest,
+    current_user: models.User = CasbinAuth,
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """W2-1 fix Wave 7 — Generate magic-link cho 3 candidate self-service
+    actions. Pattern mirror /send-confirmation nhưng cho non-confirm
+    actions."""
+    try:
+        token_obj = await admission_service.generate_action_magic_link(
+            db=db,
+            profile=profile,
+            action=payload.action,
+        )
+        await db.commit()
+
+        lead = profile.lead
+        # FE landing pages tại /magic-link/{action}/{token} (PR #280
+        # đã ship 4 actions). URL pattern matches CONSUME router shape.
+        magic_link_url = (
+            f"{settings.FRONTEND_URL.rstrip('/')}"
+            f"/magic-link/{payload.action}/{token_obj.token}"
+        )
+        return schemas.SendMagicLinkResponse(
+            message=(
+                f"Đã tạo liên kết {payload.action}. Sao chép và gửi cho "
+                "thí sinh qua Zalo/SMS."
+            ),
+            action=payload.action,
+            token_expires_at=token_obj.expires_at,
+            sent_to_email=lead.email if lead else None,
+            phone=lead.phone if lead else None,
+            token_value=token_obj.token,
+            magic_link_url=magic_link_url,
+        )
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
 # DROP STUDENT ENDPOINT
 # ==============================================================================
 

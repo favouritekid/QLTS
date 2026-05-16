@@ -1466,6 +1466,27 @@ def _compute_frontend_fields(
         # Only meaningful while waiting on the applicant — after `confirmed`,
         # no more tokens are generated.
         "send_confirmation": is_confirmation_eligible(profile) and (is_owner or is_manager or is_admin),
+        # W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3 candidate
+        # self-service actions. Mirrors send_confirmation permission shape
+        # (assigned officer / unit manager / admin) + per-action state
+        # validation handled service-side. Flag chỉ true khi profile state
+        # cho phép GENERATE link tương ứng (mirror service precheck —
+        # avoid showing button only to fail with 400 state mismatch).
+        "send_submit_link": (
+            status == "draft"
+            and (is_owner or is_manager or is_admin)
+        ),
+        "send_resubmit_link": (
+            status == "revision_requested"
+            and (is_owner or is_manager or is_admin)
+        ),
+        "send_withdraw_link": (
+            status in (
+                "draft", "submitted", "reviewing", "rejected",
+                "resubmitted", "revision_requested", "waitlisted",
+            )
+            and (is_owner or is_manager or is_admin)
+        ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
@@ -7745,6 +7766,103 @@ async def mark_student_dropped(
 # ==============================================================================
 # CONFIRMATION TOKEN FUNCTIONS (Magic Link)
 # ==============================================================================
+
+
+async def generate_action_magic_link(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    action: str,
+) -> models.AdmissionConfirmationToken:
+    """Generate magic link token cho 1 trong 3 actions self-service
+    candidate: submit / resubmit / withdraw (W2-1 fix Wave 7 2026-05-16).
+
+    Mirror semantic của ``generate_confirmation_token`` (action='confirm')
+    nhưng:
+    - Generic — accept ``action`` param
+    - State validation per-action (vs confirmation-eligible only)
+    - KHÔNG có Celery email task (officer copy URL từ FE dialog →
+      share manual qua Zalo/SMS — pattern reuse SendConfirmationButton).
+      Email auto-send Celery task có thể wire FU sau khi product clarify
+      template Vietnamese cho từng action.
+
+    State validation per action (mirror CONSUME-side magic_link_service
+    handler precheck, fail-fast trước khi token generated):
+    - submit:    profile.status == 'draft'
+    - resubmit:  profile.status == 'revision_requested'
+    - withdraw:  profile.status in (draft, submitted, reviewing, rejected,
+                                    resubmitted, revision_requested,
+                                    waitlisted)
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        action: One of submit | resubmit | withdraw (NOT confirm —
+                use generate_confirmation_token cho confirm path)
+
+    Returns:
+        AdmissionConfirmationToken row (single per profile, overwrites
+        any existing — officer chỉ tạo 1 active magic-link tại 1 thời
+        điểm cho mỗi candidate).
+
+    Raises:
+        BadRequest: action invalid hoặc profile.status không phù hợp
+    """
+    import secrets
+    from datetime import timedelta, datetime, timezone
+    from app.config import settings
+    from app.repositories import AdmissionRepository
+
+    if action not in ("submit", "resubmit", "withdraw"):
+        raise BadRequest(
+            f"Action '{action}' không hỗ trợ. Chỉ chấp nhận: "
+            "submit, resubmit, withdraw. Dùng /send-confirmation cho confirm."
+        )
+
+    # State validation per action — mirror magic_link_service handler
+    # precheck cho fast-fail UX (avoid generating link rồi candidate
+    # click → 400 state mismatch).
+    status = profile.status
+    if action == "submit" and status != "draft":
+        raise BadRequest(
+            f"Chỉ tạo magic-link 'submit' khi hồ sơ ở trạng thái 'draft'. "
+            f"Trạng thái hiện tại: '{status}'."
+        )
+    if action == "resubmit" and status != "revision_requested":
+        raise BadRequest(
+            f"Chỉ tạo magic-link 'resubmit' khi hồ sơ ở trạng thái "
+            f"'revision_requested'. Trạng thái hiện tại: '{status}'."
+        )
+    if action == "withdraw" and status not in (
+        "draft", "submitted", "reviewing", "rejected",
+        "resubmitted", "revision_requested", "waitlisted",
+    ):
+        raise BadRequest(
+            f"Hồ sơ ở trạng thái '{status}' không thể tạo magic-link "
+            f"'withdraw' (hồ sơ đã ở trạng thái cuối)."
+        )
+
+    # Generate secure token + repo upsert with action_type
+    token_value = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS
+    )
+    repo = AdmissionRepository(db)
+    token_obj = await repo.create_confirmation_token(
+        profile_id=profile.id,
+        token=token_value,
+        expires_at=expires_at,
+        action_type=action,
+    )
+
+    log.info(
+        "Magic-link token generated for action",
+        profile_id=profile.id,
+        action=action,
+        token_id=token_obj.id,
+        expires_at=expires_at.isoformat(),
+    )
+
+    return token_obj
 
 
 async def generate_confirmation_token(
