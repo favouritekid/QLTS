@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -341,8 +341,8 @@ async def drilldown_consultations(
     end_date: str = Query(None, alias="to"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    sort_by: str = Query("consultation_date"),
-    order: str = Query("desc"),
+    sort_by: Literal["consultation_date", "lead_name", "loss_reason_code", "status"] = Query("consultation_date"),  # W8-A.3.1
+    order: Literal["asc", "desc"] = Query("desc"),
     stage_id: str = Query(None),
     loss_reason_code: str = Query(None),
     consultation_kind: str = Query(None),
@@ -373,8 +373,8 @@ async def drilldown_transitions(
     end_date: str = Query(None, alias="to"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    sort_by: str = Query("changed_at"),
-    order: str = Query("desc"),
+    sort_by: Literal["changed_at", "lead_name", "old_stage_name", "new_stage_name", "outcome"] = Query("changed_at"),  # W8-A.3.1
+    order: Literal["asc", "desc"] = Query("desc"),
     stage_id: str = Query(None),
     outcome: str = Query(None, description="positive|negative"),
     final_only: bool = Query(False),
@@ -405,8 +405,8 @@ async def drilldown_cohorts(
     end_date: str = Query(None, alias="to"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    sort_by: str = Query("created_at"),
-    order: str = Query("desc"),
+    sort_by: Literal["created_at", "lead_name", "current_status"] = Query("created_at"),  # W8-A.3.1
+    order: Literal["asc", "desc"] = Query("desc"),
     cohort_result: str = Query(None, description="converted|lost|open"),
 ):
     """Cohorts drill-down: leads created in period with conversion result."""

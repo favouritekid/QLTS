@@ -6,7 +6,7 @@ Two separate routers:
 - admin_router: Admin/Manager endpoints for CTV management
 - ctv_router: CTV self-service endpoints
 """
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,8 +64,8 @@ async def list_collaborators(
     unit_id: Optional[int] = None,
     managed_by_officer_id: Optional[int] = None,
     search: Optional[str] = None,
-    sort_by: str = "created_at",
-    order: str = "desc",
+    sort_by: Literal["created_at", "updated_at", "full_name", "code", "status", "phone"] = "created_at",  # W8-A.3.1 fix 2026-05-16 — mirror ALLOWED_SORT_COLUMNS in collaborator_repository.py:19
+    order: Literal["asc", "desc"] = "desc",
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(check_permission),
 ):
