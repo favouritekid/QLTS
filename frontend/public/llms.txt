@@ -1,0 +1,18 @@
+# QLTS — Quản Lý Tuyển Sinh
+
+> Internal educational admission management system for Vietnamese institutions. Handles lead pipeline, admission profiles, multi-NV (multiple admission choices), document verification, fee/installment processing, KPI tracking, and notifications.
+
+QLTS is an authenticated staff/candidate application. Public crawling and LLM training data ingestion are not authorized — see robots.txt (`Disallow: /`). This file is published per [llmstxt.org](https://llmstxt.org/) convention so AI agents understand the boundary.
+
+## Tech stack
+
+- Backend: FastAPI (Python 3.12), SQLAlchemy 2.0 async, PostgreSQL 16, Redis, Celery
+- Frontend: Next.js 16 (App Router), React 19, TypeScript, Tailwind, Radix UI, React Query
+- Authorization: Casbin RBAC (admin/manager/officer/accountant/user)
+- Deployment: Docker Compose on VPS, Nginx reverse proxy with HTTPS
+
+## Out of scope for AI ingestion
+
+- User data (leads, admission profiles, candidate PII, payment records)
+- Configuration secrets, Casbin policies, JWT signing material
+- Operational logs, audit trails
