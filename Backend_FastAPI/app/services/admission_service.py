@@ -4384,9 +4384,15 @@ async def upload_document(
     file.file.seek(0)  # Reset to beginning
 
     if file_size > MAX_FILE_SIZE:
-        size_mb = file_size / (1024 * 1024)
+        # W7-B.c2 fix 2026-05-16: precise byte/MB display.
+        # `:.1f` rounded 10485761 bytes (10MB + 1 byte) → "10.0MB"
+        # giống max → user confused "tại sao reject?". Use exact bytes
+        # + 3-decimal MB so display KHÁC visually từ max.
+        size_mb_exact = file_size / (1024 * 1024)
+        max_mb_exact = MAX_FILE_SIZE / (1024 * 1024)
         raise BadRequest(
-            f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
+            f"File too large: {file_size:,} bytes ({size_mb_exact:.3f}MB). "
+            f"Maximum allowed: {MAX_FILE_SIZE:,} bytes ({max_mb_exact:.0f}MB)."
         )
 
     # ADM-019: content_type and extension are client-controlled. Sniff
@@ -5601,21 +5607,13 @@ async def approve_profile(
     _check_idor_access(profile, approver)
     from .admission_state_machine import validate_transition
 
-    # STATE VALIDATION (Business Rule)
-    try:
-        validate_transition(profile.status, "approved")
-    except ValueError as e:
-        log.warning(
-            "Invalid state transition for approve",
-            profile_id=profile.id,
-            current_status=profile.status,
-            error=str(e),
-        )
-        raise BadRequest(str(e))
-
-    # ✅ CRITICAL FIX #4: VERSION CHECK (Optimistic Locking) - Now REQUIRED
-    # Version is now mandatory in ApproveRequest schema (no longer optional)
-    # This prevents race conditions where 2 managers approve/reject simultaneously
+    # W7-A.1 fix 2026-05-16: VERSION CHECK MUST RUN BEFORE STATE VALIDATION.
+    # Before: 2 reviewers approve concurrently with same version=N. First
+    # commits status→approved; second acquires lock, finds status=approved,
+    # validate_transition("approved","approved") fails → 400 BadRequest.
+    # Wrong status: 400 misleads FE retry logic (think "invalid input"
+    # → show validation error). After fix: version check first → 409
+    # ConflictError → FE can show "refresh and retry" UX correctly.
     if data["version"] != profile.version:
         log.warning(
             "Optimistic locking conflict: Version mismatch",
@@ -5629,6 +5627,18 @@ async def approve_profile(
             f"Expected version {data['version']}, but current version is {profile.version}. "
             "Please refresh and try again."
         )
+
+    # STATE VALIDATION (Business Rule) — only after version match confirmed
+    try:
+        validate_transition(profile.status, "approved")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for approve",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
 
     # ✅ APPLICATION FEE CHECK
     # Per PHASE_WORKFLOW.md: Profile can only be approved if fee is paid or exempt
@@ -5826,10 +5836,27 @@ async def reject_profile(
 
     # IDOR Check (MOVED CHECK AFTER LOCK)
     _check_idor_access(profile, rejector)
-    
+
     from .admission_state_machine import validate_transition
 
-    # STATE VALIDATION
+    # W7-A.1 fix 2026-05-16: VERSION CHECK BEFORE STATE VALIDATION
+    # (same rationale as approve_profile — racing reviewer should see
+    # 409 ConflictError, not 400 "Invalid transition").
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch in reject",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=rejector.id,
+        )
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE VALIDATION — only after version match confirmed
     try:
         validate_transition(profile.status, "rejected")
     except ValueError as e:
@@ -5844,21 +5871,6 @@ async def reject_profile(
     # BUSINESS RULE: Reason is mandatory (already validated by schema)
     if not data.get("reason"):
         raise BadRequest("Rejection reason is required (min 10 characters)")
-
-    # ✅ CRITICAL FIX #4: VERSION CHECK - Now REQUIRED (no longer optional)
-    if data["version"] != profile.version:
-        log.warning(
-            "Optimistic locking conflict: Version mismatch in reject",
-            profile_id=profile.id,
-            expected_version=data["version"],
-            actual_version=profile.version,
-            user_id=rejector.id,
-        )
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
 
     # STATE CHANGE — caller still captures old_status for the legacy
     # bundle + commission callback below.
@@ -6023,20 +6035,7 @@ async def request_revision(
 
     from .admission_state_machine import validate_transition
 
-    try:
-        validate_transition(profile.status, "revision_requested")
-    except ValueError as e:
-        log.warning(
-            "Invalid state transition for revision request",
-            profile_id=profile.id,
-            current_status=profile.status,
-            error=str(e),
-        )
-        raise BadRequest(str(e))
-
-    if not data.get("reason"):
-        raise BadRequest("Revision reason is required (min 10 characters)")
-
+    # W7-A.1 fix 2026-05-16: VERSION CHECK BEFORE STATE VALIDATION.
     if data["version"] != profile.version:
         log.warning(
             "Optimistic locking conflict: Version mismatch in revision request",
@@ -6050,6 +6049,20 @@ async def request_revision(
             f"Expected version {data['version']}, but current version is {profile.version}. "
             "Please refresh and try again."
         )
+
+    try:
+        validate_transition(profile.status, "revision_requested")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for revision request",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    if not data.get("reason"):
+        raise BadRequest("Revision reason is required (min 10 characters)")
 
     # Caller still captures old_status for the legacy notification
     # bundle + commission callback below; transition() also captures
@@ -7630,6 +7643,18 @@ async def mark_student_dropped(
 
     _check_idor_access(profile, actor)
 
+    # W7-A.1 fix 2026-05-16: VERSION CHECK BEFORE STATE GUARDS.
+    # Race on drop: 2 admins click "mark dropped" concurrently with same
+    # version. First commits; second should see 409, not 400 "Student is
+    # already marked as dropped" — that wording suggests data error,
+    # actually it's a race.
+    if data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
     # Guard: Must be enrolled
     if profile.status != "enrolled":
         raise BadRequest(
@@ -7643,13 +7668,6 @@ async def mark_student_dropped(
 
     if not data.get("reason"):
         raise BadRequest("Drop reason is required (min 10 characters)")
-
-    if data["version"] != profile.version:
-        raise ConflictError(
-            f"Profile was modified by another user. "
-            f"Expected version {data['version']}, but current version is {profile.version}. "
-            "Please refresh and try again."
-        )
 
     # Side-channel: DO NOT change profile.status (stays "enrolled")
     profile.is_dropped = True

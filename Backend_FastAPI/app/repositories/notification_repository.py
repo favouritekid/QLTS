@@ -104,14 +104,20 @@ class NotificationRepository(BaseRepository[models.Notification]):
         """
         Get unread notifications for a specific user.
         Optionally restricted to a list of IDs.
+
+        W7-C.1 fix 2026-05-16: use `is not None` check thay vì truthy.
+        `notification_ids=[]` (empty list) is falsy in Python → trước đây
+        bypass ID filter → trả ALL unread của user → mark-as-read endpoint
+        marked TẤT CẢ inbox unread khi client gửi empty array. Sau fix,
+        empty list → ID filter `IN ()` → trả 0 rows (no-op as expected).
         """
         filters = [
             self.model.user_id == user_id,
             self.model.is_read == False
         ]
-        if notification_ids:
+        if notification_ids is not None:
             filters.append(self.model.id.in_(notification_ids))
-            
+
         query = select(self.model).where(and_(*filters))
         result = await self.db.execute(query)
         return list(result.scalars().all())
