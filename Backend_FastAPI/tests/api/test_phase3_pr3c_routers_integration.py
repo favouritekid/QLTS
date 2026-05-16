@@ -1017,6 +1017,14 @@ async def test_publish_result_manager_cross_unit_idor_denied(
             profile_id_alt = profile_alt.id
 
     # Manager from default unit tries to publish profile in other unit
+    # ⚠ TEST HYGIENE — `admin_token_headers` fixture above logged in as admin
+    # → stamped admin `access_token` cookie into `client.cookies` jar.
+    # Backend `get_token` reads cookie FIRST (deps.py:133 — cookie source
+    # over Authorization header), so without explicit clear the request
+    # gets authenticated as admin not manager (admin wildcard ALLOW → 200,
+    # masking IDOR check entirely). Clear cookies so Bearer Authorization
+    # header is the only auth source.
+    client.cookies.clear()
     response = await client.post(
         f"/api/v2/admissions/{profile_id_alt}/publish-result",
         headers=manager_token_headers,
