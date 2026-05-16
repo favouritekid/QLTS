@@ -233,8 +233,12 @@ async def get_all_leads(
     search: Optional[str] = Query(
         None, description="Search term for name, email, phone"
     ),
-    sort_by: str = Query("created_at", description="Field to sort by"),
-    order: str = Query("desc", description="Sort order (asc or desc)"),
+    sort_by: Literal[
+        "created_at", "updated_at", "full_name", "email", "phone",
+        "lead_score", "status", "source", "last_consultation_at",
+        "next_activity_at", "consultation_count", "cached_urgency_score",
+    ] = Query("created_at", description="Field to sort by — Literal enum mirror ALLOWED_SORT_FIELDS in lead_repository.py:402 (W8-A.3.1 fix 2026-05-16)"),
+    order: Literal["asc", "desc"] = Query("desc", description="Sort order"),
     # === PIPELINE STAGE FILTER ===
     pipeline_stage_id: Optional[str] = Query(
         None, description="Filter by pipeline stage ID(s) (comma-separated, e.g. 'stg01,stg02')"
@@ -336,8 +340,12 @@ async def export_leads(
     search: Optional[str] = Query(
         None, description="Search term for name, email, phone"
     ),
-    sort_by: str = Query("created_at", description="Field to sort by"),
-    order: str = Query("desc", description="Sort order (asc or desc)"),
+    sort_by: Literal[
+        "created_at", "updated_at", "full_name", "email", "phone",
+        "lead_score", "status", "source", "last_consultation_at",
+        "next_activity_at", "consultation_count", "cached_urgency_score",
+    ] = Query("created_at", description="Field to sort by — Literal enum mirror ALLOWED_SORT_FIELDS in lead_repository.py:402 (W8-A.3.1 fix 2026-05-16)"),
+    order: Literal["asc", "desc"] = Query("desc", description="Sort order"),
     pipeline_stage_id: Optional[str] = Query(
         None, description="Filter by pipeline stage ID(s) (comma-separated)"
     ),

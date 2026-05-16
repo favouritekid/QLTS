@@ -1004,28 +1004,43 @@ async def update_existing_user(
         assigned_by_user_id=current_admin.id  # ✅ PHASE 2: Track who made the assignment
     )
 
+    # W8-F.1 fix 2026-05-16: capture ALL needed attrs in plain Python vars
+    # BEFORE commit. `expire_on_commit=True` default expires attrs after
+    # commit; subsequent lazy access triggers connection ping path which
+    # fails in async middleware greenlet → MissingGreenlet 500. Plain-var
+    # capture decouples downstream notification/audit code from ORM state.
+    # Capture BOTH target user + current admin (both are ORM-tracked).
+    _updated_user_id = updated_user.id
+    _updated_username = updated_user.username
+    _updated_role = updated_user.role
+    _updated_unit_id = updated_user.unit_id
+    _current_admin_id = current_admin.id
+
     # ✅ TRANSACTION PATTERN: Commit and execute callback
     await db.commit()
     await callback()
 
-    # Best-effort audit log — business change already committed above
+    # Best-effort audit log — business change already committed above.
+    # W8-F.1 fix 2026-05-16: use captured plain-var IDs everywhere
+    # downstream so ORM session state (expired by commits + rollback)
+    # never triggers lazy load in middleware async context.
     try:
         _, log_callback = await log_admin_activity(
             db=db,
             request=request,
             action="update_user",
             resource_type="user",
-            actor_id=current_admin.id,
-            target_user_id=updated_user.id,
-            resource_id=updated_user.id,
-            description=f"Admin updated user: {updated_user.username}",
+            actor_id=_current_admin_id,
+            target_user_id=_updated_user_id,
+            resource_id=_updated_user_id,
+            description=f"Admin updated user: {_updated_username}",
             changes=changes if changes else None,
         )
         await db.commit()
         await log_callback()
     except Exception:
         await db.rollback()
-        log.error("Failed to persist audit log for update_user", user_id=updated_user.id, exc_info=True)
+        log.error("Failed to persist audit log for update_user", user_id=_updated_user_id, exc_info=True)
 
     # ✅ NOTIFICATION 2.0: Dispatch USER_ROLE_CHANGED if role or unit changed
     if "role" in changes or "unit_id" in changes:
@@ -1044,15 +1059,15 @@ async def update_existing_user(
             db=db,
             event=SystemEvents.USER_ROLE_CHANGED,
             payload={
-                "user_id": updated_user.id,
-                "old_role": changes.get("role", {}).get("old", updated_user.role),
-                "new_role": changes.get("role", {}).get("new", updated_user.role),
+                "user_id": _updated_user_id,
+                "old_role": changes.get("role", {}).get("old", _updated_role),
+                "new_role": changes.get("role", {}).get("new", _updated_role),
                 "old_unit_id": old_unit_id,
-                "new_unit_id": updated_user.unit_id,
-                "actor_id": current_admin.id,
+                "new_unit_id": _updated_unit_id,
+                "actor_id": _current_admin_id,
             },
-            dedupe_key=f"user_role_changed:{updated_user.id}:{updated_user.role}:{updated_user.unit_id}",
-            rooms=_rooms_for_user(updated_user.id),
+            dedupe_key=f"user_role_changed:{_updated_user_id}:{_updated_role}:{_updated_unit_id}",
+            rooms=_rooms_for_user(_updated_user_id),
         )
 
     # Dispatch USER_DEACTIVATED notification if status changed to inactive
@@ -1063,23 +1078,23 @@ async def update_existing_user(
             db=db,
             event=SystemEvents.USER_DEACTIVATED,
             payload={
-                "user_id": updated_user.id,
-                "username": updated_user.username,
+                "user_id": _updated_user_id,
+                "username": _updated_username,
                 "old_status": changes["status"]["old"],
                 "reason": "Account deactivated by administrator",
-                "actor_id": current_admin.id,
+                "actor_id": _current_admin_id,
             },
-            dedupe_key=f"user_deactivated:{updated_user.id}",
+            dedupe_key=f"user_deactivated:{_updated_user_id}",
             skip_preference_check=True,  # Critical notification
-            rooms=_rooms_for_user(updated_user.id),
+            rooms=_rooms_for_user(_updated_user_id),
         )
 
     # Send notification to user if admin updated their info
-    if current_admin.id != updated_user.id and changes:
+    if _current_admin_id != _updated_user_id and changes:
         log.info(
             "Admin updated user info, dispatching notification",
-            admin_id=current_admin.id,
-            target_user_id=updated_user.id,
+            admin_id=_current_admin_id,
+            target_user_id=_updated_user_id,
             changes=list(changes.keys()),
         )
         change_description = ", ".join([f"{key}" for key in changes.keys()])
@@ -1090,22 +1105,26 @@ async def update_existing_user(
             db=db,
             event=SystemEvents.USER_PROFILE_UPDATED,
             payload={
-                "user_id": updated_user.id,
+                "user_id": _updated_user_id,
                 "updated_fields": change_description,
-                "actor_id": current_admin.id,
+                "actor_id": _current_admin_id,
             },
-            dedupe_key=f"user_profile_updated:{updated_user.id}",
-            rooms=_rooms_for_user(updated_user.id),
+            dedupe_key=f"user_profile_updated:{_updated_user_id}",
+            rooms=_rooms_for_user(_updated_user_id),
         )
     else:
         log.debug(
             "Skipping notification",
-            admin_id=current_admin.id,
-            target_user_id=updated_user.id,
-            same_user=current_admin.id == updated_user.id,
+            admin_id=_current_admin_id,
+            target_user_id=_updated_user_id,
+            same_user=_current_admin_id == _updated_user_id,
             has_changes=bool(changes),
         )
 
+    # W8-F.1 fix: refresh ORM instance so FastAPI response serialization
+    # (UserAdminResponse `from_attributes=True`) doesn't hit lazy load
+    # on expired attrs in response middleware → MissingGreenlet.
+    await db.refresh(updated_user)
     return updated_user
 
 

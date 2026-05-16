@@ -1,5 +1,205 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🛡️ WAVE 8 — Security adversarial + Data integrity race (2026-05-16 ~20:30 UTC+7)
+
+### Scope
+
+| Mini-wave | Coverage | Method |
+|---|---|---|
+| W8-A.1 Mass-assignment | §Q.1.1: PUT profile/lead/admission sneak `role`/`unit_id`/`assigned_*`/`approved_*` | curl JSON + form |
+| W8-A.2 IDOR escalation | §Q.1.2: officer→cross-officer lead/profile; magic-link action mismatch + CCCD brute-force | curl |
+| W8-A.3 SQLi + XSS | §Q.1.3/4: `or '1'='1`, `pg_sleep`, UNION SELECT, sort_by injection, stored XSS in lead full_name | curl |
+| W8-A.4 JWT + Rate limit | §Q.1.5/Q.5: alg=none, sig tamper, role escalate, expired, login 5/min, magic-link cooldown | curl + jwt.encode |
+| W8-B.1 Race | §Q.3.3 + §Q.4.5: bulk-approve race blocked (account lockout), magic-link 3-step ADM-013 lock audit | code review + DB inventory |
+| W8-B.2 Audit + Dedupe | §Q.4.3/Q.4.7: entity_audit_log coverage, notification_delivery dedupe_key uniqueness | psql |
+
+### Findings summary
+
+| # | Sev | Module | Title |
+|---|---|---|---|
+| **W8-F.1** | 🟥 → ✅ | Admin users API | **FIXED 2026-05-16** — MissingGreenlet sau `db.commit()` (expire_on_commit expire attrs → downstream lazy hit pool ping → no greenlet → 500). Fix: capture all needed IDs (`_updated_user_id` + `_updated_username` + `_updated_role` + `_updated_unit_id` + `_current_admin_id`) trong plain vars BEFORE commit + `db.refresh(updated_user)` trước return. 2 anchor tests. |
+| **W8-A.3.1** | 🟧 → ✅ | Multi router | **FIXED 2026-05-16** — applied Literal pattern (Q-INFO-1 PR #299) sang 5 routes còn lại: `leads.py` (×2), `officer.py` drilldowns consultations/transitions/cohorts (×3), `collaborators.py` (×1). Mỗi Literal mirror repo ALLOWED_SORT_FIELDS / sort_map keys → 422 literal_error thay vì 200 silent fallback. |
+| **W8-A.3.2** | 🟦 | Defense-in-depth | XSS payload `<script>` stored + returned RAW trong `full_name`; depend hoàn toàn FE escape (React JSX OK nhưng risky nếu dangerouslySetInnerHTML xuất hiện) |
+| **W8-A.1** | ✅ | Mass-assignment | PUT profile/lead/admission whitelist schema; sneak `role`/`unit_id`/`status`/`approved_at` đều bị Pydantic drop |
+| **W8-A.2** | ✅ | IDOR | 3-tier officer/manager scope returns 404 đúng spec; magic-link action mismatch → 404, brute-force CCCD lock sau 5 attempts |
+| **W8-A.4** | ✅ | JWT/session | alg=none / tamper sig / role escalate / expired ALL → 401 INVALID_TOKEN |
+| **Q.5** | ✅ | Rate limit | Login spam 5/min, attempt 6 → 429 "5 per 1 minute"; persistent account lock 14p sau threshold |
+| **W8-B.1** | ✅ | Magic-link race | ADM-013 3-step lock pattern (profile → token → re-validate FK) verified ở `admission_repository.py:1232-1290` |
+| **W8-B.2.audit** | ✅ | Audit log | `entity_audit_log` records correctly với entity_type PascalCase (`AdmissionProfile`/`Lead`); 1896 rows tổng, recent mutations all captured |
+| **W8-B.2.dedupe** | ✅ | Celery dedupe | dedupe_key + channel + user_id triple correctly de-dupes; broadcast pattern (same key, multiple users) là EXPECTED không phải bug |
+
+---
+
+### W8-F.1 🟥 MAJOR — Admin PUT users 500 MissingGreenlet
+
+**Endpoint**: `PUT /api/admin/users/{id}`
+**Auth**: admin (id=15, role=admin)
+**Payload**: `{"full_name":"any value"}`
+**Expected**: 200 OK với updated user
+**Actual**: **500 INTERNAL_ERROR** reproducible mỗi lần
+
+**Backend log evidence**:
+```
+sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called; can't call await_only() here.
+  File ".../sqlalchemy/orm/loading.py:1674" in load_scalar_attributes
+  File ".../sqlalchemy/pool/base.py:1301" in _checkout result = pool._dialect._do_ping_w_event(dbapi_connection)
+  File ".../asyncpg.py:1160" in do_ping dbapi_connection.ping()
+  File ".../asyncpg.py:816" in ping _ = self.await_(self._async_ping())
+```
+
+**Root cause hypothesis**: Sau commit `0f1c2368` "perf(admin/users): drop eager-load User.sessions", có thể PUT path còn lazy-load attribute (sessions / login_history / role relationships) khi async context không spawn greenlet đúng. Stack trace cho thấy connection pool `do_ping` trigger trong `load_scalar_attributes` — implies expired-attribute refresh fires **after** async session unwound.
+
+**Risk**: **Admin cannot update ANY user** via standard PUT endpoint. Affects user profile edits, role changes, status activation/deactivation từ `/admin/users` page.
+
+**Investigation pointers**:
+- `app/routers/admin/users.py:857` (PUT handler) — kiểm tra eager-load pattern từ GET list query đã apply cho PUT response chưa
+- `UserAdminResponse` serialization có reference attribute expired sau `await db.commit()` không
+- Memory `feedback_async_session_gather` — similar AsyncSession race
+
+**Fix direction**:
+1. `await db.refresh(user, attribute_names=[...])` trước khi service return
+2. `selectinload(User.sessions)` (hoặc lazy attr triggering ping) trong update flow query
+3. Capture User → dict trước khi async session unwind
+
+---
+
+### W8-A.3.1 🟧 MAJOR — Q-INFO-1 sort_by Literal fix INCOMPLETE
+
+**Background**: Commit `23bf4324` ("Literal sort_by/order validation") chỉ patch `admissions.py:102`. 5 routers khác còn `sort_by: str` silent fallback.
+
+**Evidence**:
+```bash
+curl "http://localhost:8000/api/leads?sort_by=password&page_size=1"  → 200 (silent fallback)
+curl "http://localhost:8000/api/leads?sort_by=id;DROP&page_size=1"   → 200 (silent fallback)
+curl "http://localhost:8000/api/leads?sort_by=secret_field"          → 200 (silent fallback)
+```
+
+**Grep audit**:
+```
+admissions.py:102        sort_by: Literal[...]                       ✅ FIXED
+leads.py:236             sort_by: str = Query("created_at")          ❌ MISSED
+leads.py:339             sort_by: str = Query("created_at")          ❌ MISSED
+officer.py:344           sort_by: str = Query("consultation_date")   ❌ MISSED
+officer.py:376           sort_by: str = Query("changed_at")          ❌ MISSED
+officer.py:408           sort_by: str = Query("created_at")          ❌ MISSED
+collaborators.py:67      sort_by: str = "created_at"                 ❌ MISSED
+```
+
+**Memory lesson**: `ci-workflow-flag-cross-file-sync` — pattern lặp lại; khi swap pattern, grep ALL files trước commit. Q-INFO-1 patch missed 5 routers.
+
+**Fix**: Promote 5 routers → `Literal[allowed_fields]`; anchor test sweep `assert sort_by=invalid_xxx → 422`.
+
+---
+
+### W8-A.3.2 🟦 INFO — Stored XSS payload accepted raw
+
+`PUT /api/leads/410 {"full_name":"<script>alert(1)</script>"}` → 200; GET returns literal `<script>alert(1)</script>`. React 19 JSX auto-escape mitigates, NHƯNG:
+
+- **CSP header observed** ở W8-A.4: `script-src 'self' 'unsafe-inline' 'unsafe-eval'` — inline scripts ALLOWED ❗ — stored XSS exploitable nếu FE miss escape ở 1 chỗ
+- Defense-in-depth recommend: Pydantic validator regex hoặc `bleach.clean()` ở service layer
+- CSP tighten: drop `'unsafe-inline'` từ `script-src` (cần audit Next.js inline script usage trước)
+
+---
+
+### W8-A.1 ✅ Mass-assignment PROTECTED
+
+| Endpoint | Probe | Result |
+|---|---|---|
+| `PUT /api/profile` form sneak `role=admin&unit_id=1` | Officer | 200, role/unit_id IGNORED ✓ |
+| `PUT /api/leads/410` JSON `assigned_officer_id=15,unit_id=1,created_by=15,pipeline_stage=enrolled` | Officer | 200, extras dropped ✓ |
+| `PUT /api/admissions/42` JSON `status=enrolled,approved_at=...,approved_by=15,lead_id=24` | Officer | 200, extras dropped ✓ |
+| `PUT /api/admin/users/16` Officer self-escalate | Officer→admin | 403 Casbin DENY ✓ |
+| `PUT /api/admin/users/15` Officer demote admin | Officer→admin | 403 Casbin DENY ✓ |
+
+---
+
+### W8-A.2 ✅ IDOR 3-tier enforcement
+
+**Officer 16, unit 14** GET cross-officer in same unit (leads 38/133/24/209/156 owned bởi officer 18/23/25/26) → **all 404** ✓ (per memory `admission-profile-3-tier-idor`: 404 not 403).
+
+Officer GET admissions 14/22/39 (lead owned by officer 18) → 404 ✓
+Officer GET admissions 16/19/20/23 (lead owned by self) → 200 ✓
+
+**Magic-link**: action mismatch `/withdraw/{confirm_token}` → 404 (doesn't leak), CCCD brute 5 attempts → 400 cooldown ✓
+
+---
+
+### W8-A.4 ✅ JWT/session attacks rejected
+
+| Attack | Result |
+|---|---|
+| `alg=none` JWT admin claims | 401 INVALID_TOKEN |
+| Tampered sig (modified payload, kept sig) | 401 INVALID_TOKEN |
+| Officer token `role:admin` payload mod | 401 INVALID_TOKEN |
+| Expired HS256 token (exp=now-3600) | 401 INVALID_TOKEN |
+
+---
+
+### Q.5 ✅ Rate limit + account lockout
+
+```
+20 wrong logins in 12s:
+  1-5: 401 (wrong password)
+  6+:  429 "5 per 1 minute"
+Post-test legit login: 429 "Tài khoản tạm thời bị khóa... thử lại sau 14 phút" (retry-after=803s)
+```
+
+✅ Triple protection: rate limit / account lockout / CCCD length validator.
+
+---
+
+### W8-B.1 ✅ Magic-link 3-step lock (ADM-013) — design verified
+
+`admission_repository.py:1232-1290` `get_token_for_confirm`:
+1. Resolve `profile_id` from token
+2. `SELECT AdmissionProfile FOR UPDATE` for `profile_id`
+3. `SELECT AdmissionConfirmationToken FOR UPDATE` by token
+4. Re-validate FK
+
+Identical lock ordering across confirm/override/finalize → no deadlock. Caller idempotency: `confirmed_at IS NULL` predicate.
+
+**Live race test data-gap**: chỉ 1 unused token (id=25 profile 42 status=draft) thiếu `citizen_id`. Recommend seed fixture `magic_link_race_test.sql` cho future regression.
+
+---
+
+### W8-B.2 ✅ Audit log + dedupe semantics
+
+**Audit log** — recent mutations recorded với entity_type PascalCase:
+```
+1896|Lead|410|updated|13:43:42|actor 15
+1894|AdmissionProfile|42|updated|13:38:57|actor 16
+1892|AdmissionProfile|39|status_changed|13:09:11|actor 34 (manager loser từ W7-A.1 race)
+1891|AdmissionProfile|39|status_changed|11:54:30|actor 15 (admin race winner)
+```
+
+Wave 7 W7-A.1 race winner+loser cả 2 đều captured. ✅
+
+**Dedupe**:
+- 4649 deliveries, 1881 với dedupe_key, 1870 unique → 11 duplicate keys
+- Tất cả 11 duplicates: same key + same channel browser + DIFFERENT user_id (broadcast pattern)
+- Dispatcher `find_existing_user_ids_by_dedupe(user_ids, dedupe_key, channel)` correctly de-dupes per-user → ✅
+
+---
+
+### Wave 8 success criteria recap
+
+- ✅ 0 SQL injection, 0 IDOR escalation, 0 JWT forge
+- ✅ Rate limit + account lockout
+- ✅ Mass-assignment whitelist
+- ✅ Race lock + dedupe design verified
+- 🟥 1 MAJOR W8-F.1: Admin PUT users 500
+- 🟧 1 MAJOR W8-A.3.1: Q-INFO-1 fix incomplete (5 routers)
+- 🟦 1 INFO W8-A.3.2: XSS defense-in-depth + CSP unsafe-inline
+
+### Suggested fix order
+
+1. **W8-F.1** (P0, prod-blocking) — Diagnose MissingGreenlet, likely 1-file fix trong `admin/users.py:857` PUT handler
+2. **W8-A.3.1** (P1) — Promote 5 routers `sort_by: str` → `Literal[...]` + anchor test sweep
+3. **W8-A.3.2** (P2) — `bleach.clean()` hoặc Pydantic regex + audit CSP `unsafe-inline` removal
+4. Magic-link race seed fixture (test-debt FU)
+
+---
+
 ## 🌊 WAVE 7 — State race + File upload edge + Notification delivery (2026-05-16 ~19:00 UTC+7)
 
 ### Scope
