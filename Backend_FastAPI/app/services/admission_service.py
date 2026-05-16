@@ -246,7 +246,13 @@ def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Opt
     elif current_user.role == UserRole.OFFICER:
         return current_user.unit_id, current_user.id
     else:
-        raise PermissionDeniedError(f"Unexpected role '{current_user.role}' for admission access")
+        # F8 fix 2026-05-16: defense-in-depth fallback. The expected gate
+        # is at Casbin (ACCOUNTANT_TEMPLATE B1 deny block), so accountant
+        # never reaches here. If a new role bypasses Casbin we return a
+        # role-neutral message instead of leaking internal expectations.
+        raise PermissionDeniedError(
+            f"Vai trò '{current_user.role}' không có quyền truy cập danh sách hồ sơ tuyển sinh."
+        )
 
 
 def _check_idor_access(
@@ -1495,6 +1501,13 @@ def _compute_frontend_fields(
             )
         ),
         "delete": status == "draft" and is_admin,
+        # F6 fix 2026-05-16: Override = bypass normal eligibility flow,
+        # admin-only per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN §3.4.
+        # State machine allows ONLY approved → overridden (see
+        # admission_state_machine.ALLOWED_TRANSITIONS line 117-122).
+        # Without this flag the UI cannot surface an Override button,
+        # so admin would only be able to invoke /override via direct API.
+        "override": status == "approved" and is_admin,
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips
         # this back to False if the per-path effective allowlist is
@@ -1567,6 +1580,19 @@ def _compute_frontend_fields(
         profile.is_qualified = True
     
     profile.validation_errors = validation_errors
+
+    # F7 fix 2026-05-16: surface bypass-eligibility hazard to FE.
+    # When `applied_rules.allow_unverified_submission=True`, applicant can
+    # submit a profile despite missing required data (per Decision 1 in
+    # admission-audit-decisions-2026-04-24). Reviewer (admin/manager) can
+    # then approve a profile that is actually `eligibility_status=ineligible`
+    # — silently creating a student row with NULL name etc. UI must show
+    # warning + confirmation dialog before /approve fires.
+    profile.bypass_warning = bool(
+        applied_rules.get("allow_unverified_submission")
+        and profile.eligibility_status == "ineligible"
+        and status in ("submitted", "resubmitted", "reviewing")
+    )
 
     # =========================================================================
     # 4. VALIDATION SUMMARY (Grouped Errors for UX)

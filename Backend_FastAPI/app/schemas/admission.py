@@ -805,6 +805,16 @@ class AdmissionProfileResponse(BaseModel):
         default="pending",
         description="Backend-computed eligibility based on applied_rules"
     )
+
+    # F7: True when reviewer is about to act on a profile that bypassed
+    # eligibility (allow_unverified_submission=true + ineligible + still
+    # in a reviewable state). FE renders an orange warning banner +
+    # confirmation dialog in front of the Approve button so admin doesn't
+    # silently approve a profile with missing required data.
+    bypass_warning: bool = Field(
+        default=False,
+        description="True if profile bypassed eligibility check via allow_unverified_submission flag"
+    )
     
     # Validation errors (reasons why profile is not eligible)
     validation_errors: List[str] = Field(

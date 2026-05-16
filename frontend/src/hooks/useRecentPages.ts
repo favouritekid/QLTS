@@ -3,9 +3,10 @@
  * Custom hook for tracking recently visited pages
  * Provides quick access to frequently used pages in navigation
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { navigationConfig } from "@/lib/config/navigation";
+import { useAuthStore } from "@/lib/stores/auth.store";
 import type { NavItem } from "@/types/navigation";
 
 const STORAGE_KEY = "recent-pages";
@@ -26,6 +27,52 @@ export interface RecentPage {
   label: string;
   timestamp: number;
   visits: number;
+}
+
+/**
+ * Find the NavItem matching `path` in the navigation tree (recursive).
+ * Returns null if no item matches (e.g. dynamic detail routes like /leads/123).
+ */
+function findItemInNavigation(path: string, items?: NavItem[]): NavItem | null {
+  if (!items) {
+    for (const group of navigationConfig.groups) {
+      const found = findItemInNavigation(path, group.items);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const item of items) {
+    if (item.href === path) return item;
+    if (item.children && item.children.length > 0) {
+      const childMatch = findItemInNavigation(path, item.children);
+      if (childMatch) return childMatch;
+    }
+  }
+  return null;
+}
+
+/**
+ * Decide whether `path` is accessible to a user with given `role`.
+ *
+ * Rules:
+ * - Path matches a NavItem with `roles` declared → user role must be in that list.
+ * - Path matches a NavItem with `excludeRoles` containing the user's role → deny.
+ * - Path doesn't match any NavItem (dynamic detail like /leads/123) → allow
+ *   (route guards on the page itself bounce unauthorized users; we don't
+ *   want to over-prune detail pages from the recents list).
+ *
+ * Why this matters: F4 fix — `useRecentPages` writes ANY visited URL to
+ * localStorage which persists across login sessions. Without this filter,
+ * an admin URL visited in a prior session leaks into the next user's
+ * sidebar (officer/accountant) even though they cannot reach the page.
+ */
+function isPathAccessibleByRole(path: string, role: string | undefined): boolean {
+  if (!role) return false;
+  const item = findItemInNavigation(path);
+  if (!item) return true;
+  if (item.excludeRoles && item.excludeRoles.includes(role)) return false;
+  if (!item.roles || item.roles.length === 0) return true;
+  return item.roles.includes(role);
 }
 
 /**
@@ -176,6 +223,7 @@ interface UseRecentPagesReturn {
  */
 export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPagesReturn {
   const pathname = usePathname();
+  const userRole = useAuthStore((s) => s.user?.role);
   // Start with empty state to match SSR output
   const [recentPages, setRecentPages] = useState<RecentPage[]>([]);
   // Track hydration state with useState to trigger re-render
@@ -255,8 +303,16 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
     });
   }, []);
 
+  // F4 fix: filter out pages the current user cannot access. localStorage
+  // persists across logins, so an admin URL from a prior session would
+  // otherwise leak into the next user's sidebar.
+  const accessibleRecentPages = useMemo(
+    () => recentPages.filter((page) => isPathAccessibleByRole(page.path, userRole)),
+    [recentPages, userRole],
+  );
+
   return {
-    recentPages,
+    recentPages: accessibleRecentPages,
     clearRecent,
     removePage,
   };

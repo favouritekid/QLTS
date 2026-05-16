@@ -355,6 +355,38 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH",  "eft": "deny"},
+        # F8 + F9 fix 2026-05-16: accountant inherits Officer (g, role:accountant,
+        # role:officer) which grants admission/lead list endpoints. Finance
+        # workflows operate on profile_id passed from invoice/payment forms,
+        # not on full list views — accountant has no business need to enumerate
+        # admissions or leads, and `/api/leads` returns 391 leads with phone
+        # numbers (PII leak). admission_service._resolve_idor_filters also
+        # raises a defensive "Unexpected role 'accountant' for admission access"
+        # which leaks internal code state; deny at Casbin → clean 403 from
+        # gateway, service code never receives the role.
+        {"subject": "{role}", "object": "/api/admissions",                "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}",           "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}",           "action": "PUT",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions",                "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/submit",    "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/resubmit",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/withdraw",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/minor-correction", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/stats",          "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/status-counts",  "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads",                     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads",                     "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}",                "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}",                "action": "PUT",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/timeline",       "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/insights",       "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/audit-logs",     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations",  "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/check-duplicate",     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/import",              "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/import/template",     "action": "GET",  "eft": "deny"},
     ]
 }
 

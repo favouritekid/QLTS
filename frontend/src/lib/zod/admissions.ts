@@ -583,7 +583,13 @@ export const admissionProfileResponseSchema = z.object({
   
   // Eligibility status (backend-computed)
   eligibility_status: z.enum(["eligible", "ineligible", "pending"]).default("pending"),
-  
+
+  // F7: True when reviewer is about to act on a profile that bypassed
+  // eligibility (allow_unverified_submission=true + ineligible). FE
+  // renders an orange warning banner + confirmation dialog in front of
+  // the Approve button.
+  bypass_warning: z.boolean().default(false),
+
   // Validation errors (reasons for ineligibility)
   validation_errors: z.array(z.string()).default([]),
   

@@ -452,6 +452,28 @@ export function AdmissionDetailClient({
         {/* Status Banner for rejected/resubmitted profiles */}
         <StatusBanner status={profile.status} />
 
+        {/* F7 fix: surface bypass-eligibility hazard. BE flag combines
+            applied_rules.allow_unverified_submission + status reviewable +
+            eligibility_status=ineligible so FE just renders. Without this,
+            reviewer sees neutral "Chờ duyệt" badge and can silently approve
+            a hồ sơ với required fields missing → student row tên NULL. */}
+        {profile.bypass_warning && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border-2 border-warning-300 bg-warning-50 p-4 text-warning-900"
+          >
+            <p className="font-semibold mb-1">
+              ⚠️ Hồ sơ này được nộp trong chế độ bỏ qua xét duyệt sơ bộ
+            </p>
+            <p className="text-sm">
+              Đợt tuyển sinh cho phép nộp hồ sơ chưa đầy đủ
+              (<code>allow_unverified_submission=true</code>). Hồ sơ hiện có{" "}
+              <strong>{profile.validation_errors?.length ?? 0}</strong> lỗi chưa khắc phục.
+              Vui lòng xem tab <strong>"Vấn đề cần sửa"</strong> trước khi phê duyệt.
+            </p>
+          </div>
+        )}
+
         {/* TAB CONTENT */}
         <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}

@@ -77,48 +77,54 @@ def test_applied_rules_schema_includes_phase2_round_keys() -> None:
 # =====================================================================
 
 
-async def test_casbin_choices_crud_policies_seeded_for_officer() -> None:
-    """alembic phase3_03 MUST seed officer ALLOW + accountant DENY
-    cho /api/v2/admissions/*/choices CRUD endpoints (5 + 4 = 9 rows).
+def test_casbin_choices_crud_policies_declared_in_template() -> None:
+    """policy_templates.py MUST declare officer ALLOW + accountant DENY
+    cho /api/v2/admissions/*/choices CRUD endpoints (5 + 4 = 9 entries).
 
-    Pre-fix: officer 403 trên POST /choices vì policy chưa seed dù
-    template declared. Post-fix: officer can reach endpoint (BE precheck
-    handles business rules separately).
+    Test DB uses ``Base.metadata.create_all()`` not Alembic (per memory
+    `test-db-schema-source`), so DB-state assertions on data migrations
+    are unreliable. Source-of-truth is `policy_templates.py` — alembic
+    `phase3_03` and `scripts/sync_casbin_templates.py` both mirror this.
 
-    Regression sentinel: nếu sync drift again hoặc alembic rolled back
-    without re-seed, test fails surface immediately.
+    Pre-fix (F2): officer 403 trên POST /choices vì template entries
+    chưa được sync vào prod casbin_rule. Post-fix: template + sync
+    script + alembic align.
+
+    Regression sentinel: nếu ai accidentally remove choice CRUD policies
+    from OFFICER_TEMPLATE or ACCOUNTANT_TEMPLATE, test fail surface
+    immediately. Prod sync still requires phase3_03 alembic to run +
+    scripts/sync_casbin_templates.py for in-memory enforcer reload.
     """
-    async with AsyncSessionLocal() as s:
-        result = await s.execute(
-            text(
-                """
-                SELECT v0, v2, v3
-                FROM casbin_rule
-                WHERE ptype='p'
-                  AND v1 LIKE '/api/v2/admissions/%/choices%'
-                ORDER BY v0, v2, v3
-                """
-            )
-        )
-        rows = list(result.all())
-
-    # Expected exactly: 5 officer ALLOW + 4 accountant DENY = 9 rows
-    officer_allow_count = sum(
-        1 for r in rows if r.v0 == "role:officer" and r.v3 == "allow"
-    )
-    accountant_deny_count = sum(
-        1 for r in rows if r.v0 == "role:accountant" and r.v3 == "deny"
+    from app.casbin_config.policy_templates import (
+        OFFICER_TEMPLATE,
+        ACCOUNTANT_TEMPLATE,
     )
 
-    assert officer_allow_count == 5, (
-        f"Officer must have 5 ALLOW rows for /choices CRUD; "
-        f"got {officer_allow_count}. F2 regression — phase3_03 may not "
-        f"have run OR sync drift again."
+    officer_choice_policies = [
+        p
+        for p in OFFICER_TEMPLATE["policies"]
+        if "/v2/admissions/*/choices" in p.get("object", "")
+        and p.get("eft", "allow") == "allow"
+    ]
+    accountant_choice_denies = [
+        p
+        for p in ACCOUNTANT_TEMPLATE["policies"]
+        if "/v2/admissions/*/choices" in p.get("object", "")
+        and p.get("eft") == "deny"
+    ]
+
+    assert len(officer_choice_policies) == 5, (
+        f"OFFICER_TEMPLATE must declare 5 ALLOW entries for /choices CRUD "
+        f"(GET, POST, DELETE, PATCH, PATCH /scores); got "
+        f"{len(officer_choice_policies)}. F2 regression — template missing "
+        f"choice CRUD declarations means prod sync (phase3_03 + sync script) "
+        f"will skip officer policies."
     )
-    assert accountant_deny_count == 4, (
-        f"Accountant must have 4 DENY rows for /choices CRUD; "
-        f"got {accountant_deny_count}. F2 regression — separation-of-duties "
-        f"guard missing on prod."
+    assert len(accountant_choice_denies) == 4, (
+        f"ACCOUNTANT_TEMPLATE must declare 4 DENY entries for /choices "
+        f"mutating CRUD (POST, DELETE, PATCH, PATCH /scores); got "
+        f"{len(accountant_choice_denies)}. Separation-of-duties guard "
+        f"missing — accountant would inherit officer ALLOW via g-edge."
     )
 
 

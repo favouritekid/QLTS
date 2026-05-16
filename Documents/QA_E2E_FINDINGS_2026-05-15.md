@@ -1,5 +1,119 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## ✅ FINAL STATUS — ALL 9 FINDINGS RESOLVED (2026-05-16, sau Wave 2 fix)
+
+| # | Sev | Title | Status | Fix |
+|---|---|---|---|---|
+| F1 | 🟥→✅ | applied_rules.admission_round_id stripped | **FIXED Wave 1** | Pydantic schema include all keys |
+| F2 | 🟥→✅ | Casbin /v2/admissions/*/choices missing | **FIXED Wave 1** | Sync casbin_rule rows |
+| F3 | 🟥→✅ | PII leak /api/admin/users | **FIXED Wave 1** | Lightweight schema cho officer/accountant |
+| F4 | 🟧→✅ | Sidebar Backfill Queue leak cho officer | **FIXED Wave 2** | `useRecentPages.ts` filter recent pages by user role |
+| F5 | 🟧→✅ | applied_rules schema strip 8 keys | **FIXED Wave 1** | Cùng F1 fix |
+| F6 | 🟧→✅ | permissions thiếu key `override` | **FIXED Wave 2** | `_compute_frontend_fields` thêm `"override": status == "approved" and is_admin` |
+| F7 | 🟧→✅ | Bypass UX warning thiếu | **FIXED Wave 2** | BE thêm `bypass_warning` flag; FE banner ⚠️ + AlertDialog confirmation trước Approve |
+| F8 | 🟧→✅ | Accountant /api/admissions "Unexpected role" | **FIXED Wave 2** | Casbin DENY rules cho accountant; defensive msg cleanup |
+| F9 | 🟧→✅ | Accountant /api/leads PII leak (391 leads) | **FIXED Wave 2** | Casbin DENY rules cho /api/leads + nested endpoints |
+
+### Wave 2 verification (browser + curl, 2026-05-16 ~01:30 UTC+7)
+
+**F4 sidebar** — Officer dashboard reload:
+- BEFORE: sidebar uid=18_27 link "Backfill Queue"
+- AFTER: snapshot uid=21_4..21_27 — KHÔNG còn link Backfill Queue. Recent pages list giờ chỉ {42, Create, 410} đều accessible cho officer.
+
+**F6 override** — `GET /api/admissions/39` (admin):
+- BEFORE: permissions = 16 keys, không có `override`
+- AFTER: permissions có `"override": false` (correct: status=submitted không cho phép override; chỉ approved → overridden mới true)
+
+**F7 bypass_warning** — Browser admin → /admissions/39:
+- BE response: `"bypass_warning": true` returned
+- FE banner uid=24_140-148: "⚠️ Hồ sơ này được nộp trong chế độ bỏ qua xét duyệt sơ bộ" + 7 lỗi count + "Vui lòng xem tab 'Vấn đề cần sửa' trước khi phê duyệt."
+- Approve button text changed: "Phê duyệt" → "**Phê duyệt (vượt điều kiện)**" với haspopup="dialog"
+- Click → AlertDialog uid=25_0: heading "⚠️ Hồ sơ chưa đủ điều kiện" + bullet list 7 errors + 2 buttons "Để tôi xem lại" / "Vẫn phê duyệt"
+
+**F8 + F9 accountant DENY** — curl accountant probe:
+| Endpoint | Before | After |
+|---|---|---|
+| GET /api/admissions | 403 "Unexpected role 'accountant'" | **403 clean** (Casbin gate) |
+| GET /api/admissions/39 | 200 với data | **403 clean** |
+| GET /api/leads | 200 với 391 leads + phone | **403 clean** |
+| GET /api/leads/410 | 200 với PII | **404** (bị Casbin deny + IDOR scope) |
+| GET /api/leads/410/timeline | 200 | **404** |
+| GET /api/admin/users | 200 (sanitized — F3 already done) | 200 (kept allow per design) |
+
+### Code changes summary
+
+**BE**:
+- `Backend_FastAPI/app/services/admission_service.py`:
+  - Line ~1497: thêm `"override": status == "approved" and is_admin,` cho permissions
+  - Line ~1576: thêm `bypass_warning` boolean field computed sau eligibility
+  - Line ~249: replace "Unexpected role" defensive msg bằng Vietnamese role-neutral msg
+- `Backend_FastAPI/app/schemas/admission.py`:
+  - Thêm `bypass_warning: bool` field trong `AdmissionProfileResponse`
+- `Backend_FastAPI/app/casbin_config/policy_templates.py`:
+  - ACCOUNTANT_TEMPLATE B1 deny block: thêm 23 deny rules cho /api/admissions* + /api/leads*
+
+**FE**:
+- `frontend/src/hooks/useRecentPages.ts`:
+  - Thêm `findItemInNavigation()` + `isPathAccessibleByRole()` helpers
+  - Hook đọc `useAuthStore` → filter `recentPages` qua `useMemo`
+- `frontend/src/lib/zod/admissions.ts`:
+  - Thêm `bypass_warning: z.boolean().default(false)` vào schema
+- `frontend/src/app/(dashboard)/admissions/[id]/_components/AdmissionDetailClient.tsx`:
+  - Render warning banner khi `profile.bypass_warning === true`
+- `frontend/src/app/(dashboard)/admissions/[id]/_components/AdmissionActions.tsx`:
+  - Wrap Approve button trong AlertDialog confirmation khi `bypass_warning`; button text đổi "Phê duyệt (vượt điều kiện)"
+
+**DB**:
+- 23 INSERT rows vào `casbin_rule` (template_id='accountant_f8_f9') — accountant deny cho admissions/leads endpoints
+- POST /api/v2/admin/casbin/reload → policy_count=255 in-memory refreshed
+- Backend container restart cho code changes pick up
+
+### Final score
+- **9/9 findings RESOLVED** (3/3 BLOCKERS Wave 1 + 1/6 MAJOR Wave 1 + 5/5 remaining Wave 2)
+- **Multi-NV happy path**: ✅ End-to-end works
+- **3 personas RBAC matrix**: ✅ All denials clean (Casbin-gated, no defensive code leaks)
+- **Thin-Client compliance**: ✅ Sidebar permission-driven; bypass UX surface qua BE flag, không phải FE inference
+
+---
+
+## 🔁 RE-TEST RESULTS (2026-05-16, sau fix của user)
+
+| # | Sev | Title | Status | Evidence |
+|---|---|---|---|---|
+| **F1** | 🟥→✅ | applied_rules.admission_round_id stripped | **FIXED** | `GET /api/admissions/42` → `applied_rules.admission_round_id=1` (was null). FE AddChoiceDialog mở thành công với cascading dropdown. |
+| **F2** | 🟥→✅ | Casbin policy /v2/admissions/*/choices missing | **FIXED** | DB casbin_rule có 9 rows: officer GET/POST/PATCH/DELETE allow + accountant POST/PATCH/DELETE deny. Officer 16 POST choice trên profile 42 → 201 Created (NV2 id=14). |
+| **F3** | 🟥→✅ | PII leak via /api/admin/users | **FIXED** | Officer + Accountant response giờ chỉ có: id, username, full_name, role, status, unit_id, avatar_url, skills, availability_status. **REMOVED**: email, phone_number, mfa_enabled, password_reset_required, max_capacity. |
+| **F5** | 🟧→✅ | applied_rules schema strip 8 keys | **FIXED** | 29 keys returned (was 20). Tất cả 9 missing keys khôi phục đầy đủ. |
+| F4 | 🟧 | Sidebar leak Backfill Queue cho officer | ❌ **NOT FIXED** | Re-snapshot officer dashboard sidebar uid=17_27 + 18_27 vẫn còn link "Backfill Queue". |
+| F6 | 🟧 | permissions thiếu key `override` | ❌ **NOT FIXED** | Re-test admin GET /api/admissions/39 → permissions vẫn không có `override` (16 keys: edit/save/submit/approve/reject/publish_result/request_revision/resubmit/enroll/send_confirmation/drop/claim/unclaim/assign_officer/calculate_fee/delete/minor_correction/view). available_actions không có "override". |
+| F7 | 🟧 | Bypass UX warning không hiển thị | ❌ **NOT FIXED** (BE) | Profile 39: `eligibility_status=ineligible` + `allow_unverified_submission=true` — payload không đổi. UI side chưa probe lại nhưng backend không có warning flag mới. |
+| F8 | 🟧 | Accountant /api/admissions trả "Unexpected role" | ❌ **NOT FIXED** | curl accountant `GET /api/admissions` → 403 same defensive error msg. |
+| F9 | 🟧 | Accountant /api/leads PII leak | ❌ **NOT FIXED** | curl accountant `GET /api/leads` → 200 với 391 leads gồm phone+source+offering. |
+| F10 | 🟨 | Body validation chạy trước Casbin | ⏭️ skipped | Không re-test. |
+| F11 | 🟦 | Memory drift backfill-queue-no-nav | ⏭️ N/A | Memory note only. |
+| F12 | 🟦 | State machine `reviewing` legacy | ⏭️ skipped | Không re-test. |
+| F13 | 🟦 | GET /api/v2/admissions/{id}/choices không tồn tại | ⏭️ doc fix | Audit doc. |
+
+**Điểm số**: 4/9 actionable findings FIXED (3/3 BLOCKERS + 1/6 MAJOR).
+**Multi-NV happy path**: ✅ End-to-end works cho officer (create profile → view multi-NV tab → add choice qua API → UI render đúng "(2/5)" với drag handles + edit/delete buttons + dialog cascading).
+
+### Re-test execution log
+- **00:35** DB query confirms F2 — 9 Casbin rules cho /v2/admissions/*/choices (officer allow, accountant deny).
+- **00:40** Probe browser officer session: F1 + F5 + F2 + F3 cùng lúc → cả 4 fixed.
+- **00:48** Insert NV2 thành công via API (sg_config 71 = A00). Choice id=14, decision=pending.
+- **00:50** FE reload `/admissions/42` Step 4 → "Danh sách nguyện vọng (2/5)" hiển thị đầy đủ NV1+NV2 với scores + badges + edit/delete UI.
+- **00:51** Click "Thêm nguyện vọng" → dialog "Thêm nguyện vọng NV3" mở với cascading dropdown "Ngành / Phương thức xét tuyển". KHÔNG còn error "Không xác định được đợt xét tuyển".
+- **00:55** curl admin probe profile 39: F6 permissions vẫn thiếu `override`, F7 backend payload không đổi.
+- **00:55** curl accountant probe: F8 vẫn "Unexpected role", F9 vẫn list 391 leads với PII, F3 confirmed fixed.
+
+### Test artifacts (current state)
+- Profile #42: choice rows = 2 (id=12 sg=B00 không có scores; id=14 sg=A00 có scores math/physics/chemistry)
+- Lead 410: assigned officer 16, profile 42 attached
+- Stack vẫn dev local healthy
+
+---
+
+
 **Stack**: dev local · FE `http://localhost:3000` · BE `http://localhost:8000`
 **Playbook**: [`QA_E2E_PLAYBOOK_2026-05-15.md`](./QA_E2E_PLAYBOOK_2026-05-15.md)
 **Run by**: Chrome MCP browser automation

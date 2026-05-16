@@ -216,16 +216,71 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Manager Actions - Permission-based (ADR-FE-002) */}
+          {/* Manager Actions - Permission-based (ADR-FE-002).
+              F7 fix: when profile bypassed eligibility check
+              (`bypass_warning=true`), wrap Approve in a confirmation
+              dialog that lists the validation errors. Without this,
+              admin clicks Approve and silently approves a hồ sơ với
+              7 missing required fields → student row with NULL name. */}
           {can('approve') && onApprove && (
-            <Button
-              onClick={onApprove}
-              disabled={isApproving}
-              className="bg-success-600 hover:bg-success-700"
-            >
-              {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-              Phê duyệt
-            </Button>
+            profile.bypass_warning ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    disabled={isApproving}
+                    className="bg-warning-600 hover:bg-warning-700"
+                  >
+                    {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+                    Phê duyệt (vượt điều kiện)
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>⚠️ Hồ sơ chưa đủ điều kiện</AlertDialogTitle>
+                    <AlertDialogDescription asChild>
+                      <div className="space-y-2">
+                        <p>
+                          Đợt tuyển sinh này cho phép nộp hồ sơ chưa đầy đủ
+                          (<code>allow_unverified_submission=true</code>),
+                          nhưng hồ sơ hiện có{" "}
+                          <strong>{profile.validation_errors?.length ?? 0} lỗi</strong>
+                          {" "}chưa khắc phục:
+                        </p>
+                        {profile.validation_errors && profile.validation_errors.length > 0 && (
+                          <ul className="list-disc pl-5 text-sm max-h-40 overflow-y-auto">
+                            {profile.validation_errors.map((err, i) => (
+                              <li key={i}>{err}</li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="text-warning-800 font-medium">
+                          Phê duyệt sẽ tạo hồ sơ vào hệ thống với dữ liệu thiếu
+                          (ví dụ: tên ứng viên, ngày sinh, CCCD…). Bạn có chắc?
+                        </p>
+                      </div>
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Để tôi xem lại</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={(e) => { e.preventDefault(); onApprove(); }}
+                      className="bg-warning-600 hover:bg-warning-700"
+                    >
+                      Vẫn phê duyệt
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : (
+              <Button
+                onClick={onApprove}
+                disabled={isApproving}
+                className="bg-success-600 hover:bg-success-700"
+              >
+                {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+                Phê duyệt
+              </Button>
+            )
           )}
 
           {can('reject') && onReject && (
