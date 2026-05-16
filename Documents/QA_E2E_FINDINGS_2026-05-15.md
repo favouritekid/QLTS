@@ -21,8 +21,8 @@
 
 | # | Sev | Module | Title |
 |---|---|---|---|
-| **W7-C.1** | 🟥 | Notification | `POST /api/notifications/mark-as-read` với `notification_ids:[]` mark ALL unread của user |
-| **W7-A.1** | 🟧 | Admission state machine | Concurrent approve race → loser nhận 400 "Invalid transition" thay vì 409 Conflict |
+| **W7-C.1** | 🟥 → ✅ | Notification | **FIXED 2026-05-16** — `mark-as-read {"notification_ids":[]}` no-op (trước marking ALL unread). Fix: `notification_repository.py:112` `if notification_ids is not None`. Anchor `test_qa_wave7_notif_and_race.py::test_mark_as_read_empty_array_is_noop`. |
+| **W7-A.1** | 🟧 → ✅ | Admission state machine | **FIXED 2026-05-16** — Racing reviewer nhận 409 ConflictError thay vì 400. Fix: swap version check BEFORE state validation trong 4 services (approve, reject, request_revision, mark_student_dropped). W7-A.2 (version semantics) resolved cùng. 3 anchor tests. |
 | **W7-B.c2** | 🟦 | Frontend i18n | Lỗi 10MB+1 hiển thị "10.0MB (max 10MB)" — rounding gây confusing UX |
 | **W7-C.2** | 🟦 | Doc/playbook | Endpoint replay là `/replay` không phải `/retry` — playbook §L.3.3 stale |
 | **W7-A.2** | 🟦 | Schema | Field `version` trong approve/reject schema required nhưng NOT enforced — race phụ thuộc state machine catch |
