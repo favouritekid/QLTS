@@ -1,5 +1,141 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🎨 WAVE 6 — §R/§S/§T a11y + mobile + performance (2026-05-16 ~17:00 UTC+7)
+
+### Coverage matrix
+
+| Section | Test | Result |
+|---|---|---|
+| §R.1 Lighthouse a11y `/admissions/42` | desktop snapshot | **86/100** (7 failed audits) |
+| §R.2 Custom DOM probe | manual scan | 0 img/button/link issues; **2 orphan inputs** |
+| §R.2 Landmarks | main/nav/banner/skip-link | ✅ all present + `lang="vi"` |
+| §S.1 Mobile viewport 375×812 | emulated iPhone, no body overflow | ✅ |
+| §S.2 Touch targets | sidebar nav < 44×44 | **🟧 8+ targets 36×36** |
+| §S.2 Action bar mobile | sticky bottom w=549 > viewport 375 | **🟧 overflow ngang** |
+| §S.2 Sidebar collapse | hamburger present | ✅ |
+| §T.1 API timing 10 endpoints (5 runs each) | p50/p95 | mostly < 200ms ✅ |
+| §T.1 /api/officer/dashboard cold | first call | 🟧 433ms (then 210ms warm) |
+| §T.1 /api/admin/users cold | first call | 🟧 1.8s (then 44ms warm) |
+| §T.2 LCP profile detail | trace | ✅ 1352ms (good range) |
+| §T.2 CLS | trace | ✅ 0.04 (excellent <0.1) |
+| §T.2 TTFB | trace | 381ms — borderline |
+
+### NEW findings (6)
+
+| # | Sev | Module | Title | Detail |
+|---|---|---|---|---|
+| **R-BUG-1** | 🟧 | Admission (Step 1 Personal) | **2 input orphan không label** | PUT /admissions/{id} Step 1 personal-info có 2 textboxes thiếu label/aria-label: "Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố" và "Số nhà, tên đường". Chỉ có placeholder. Screen reader user sẽ không biết field nào. Fix: add `<label>` hoặc `aria-label`. |
+| **R-INFO-1** | 🟦 | Frontend global | Lighthouse a11y 86/100 — 7 audit fails | Cần inspect HTML report tại `chrome-devtools-mcp-Qd8qsF/report.html` để biết chi tiết 7 fails (color contrast, ARIA roles, focus order...). |
+| **S-BUG-1** | 🟧 | Frontend layout | **Sticky action bar overflow ngang mobile** (375px viewport) | DIV `.flex items-center gap-3` w=549px > viewport 375px → users phải scroll ngang để thấy buttons. Trên iPhone SE/13 cũ unusable. Fix: action bar responsive (stack vertically <640px hoặc reduce button labels to icons). |
+| **S-BUG-2** | 🟧 | Frontend sidebar | **Touch targets 32-36×36 < 44×44 Apple HIG** | Sidebar nav links 36×36, logo 32×32. Mobile tap accuracy thấp, accidental taps frequent. Fix: increase padding sidebar items mobile, hoặc collapse to hamburger ở all mobile widths (hiện vẫn show ở >mobile widths). |
+| **T-INFO-1** | 🟨 | Backend | `/api/admin/users` cold path 1.8s | First call sau backend restart slow → cached subsequent calls 44ms (40x faster). Có thể do query không có index, Casbin re-init, hoặc lazy-loaded relationships. Phase 1 P2 audit recommended. |
+| **T-INFO-2** | 🟨 | Backend | `/api/officer/dashboard` p95 433ms cold | Aggregation query (lead stats + KPI). Acceptable nhưng > 300ms target. Consider materialized view hoặc Redis cache 30s. |
+
+### Strong scores
+
+| Metric | Value | Target | Status |
+|---|---|---|---|
+| Lighthouse Best Practices | 100 | ≥90 | ✅ |
+| Lighthouse a11y | 86 | ≥90 | 🟨 |
+| LCP profile detail | 1352ms | <2500ms good / <1200ms fast | ✅ good |
+| CLS profile detail | 0.04 | <0.1 | ✅ excellent |
+| TTFB | 381ms | <600ms | ✅ |
+| API list endpoints p95 | <115ms | <500ms | ✅ |
+| API detail endpoints p95 | <61ms | <200ms | ✅ |
+| API notifications | <25ms | <100ms | ✅ |
+| Body overflow X mobile 375 | 0px | 0 | ✅ |
+| Sidebar hamburger collapse | works | works | ✅ |
+| `lang="vi"` page declaration | present | present | ✅ |
+| Skip-link to main content | present | present | ✅ |
+
+### Wave 6 execution log
+- **16:50** Login officer + navigate /admissions/42 (after Wave 5 token expiry)
+- **16:52** Lighthouse desktop snapshot: 86 a11y / 100 BP / 80 SEO. 7 failed audits.
+- **16:53** Custom DOM probe: 0 img/button/link issues; 2 orphan inputs (address fields)
+- **16:55** Mobile emulate 375×812: no body overflow, but action bar 549px overflow + 8 small touch targets
+- **16:58** Performance API timing: 10 endpoints × 5 runs. Most <100ms. Outliers: dashboard 433ms cold, admin/users 1.8s cold.
+- **17:00** Performance trace profile detail: LCP 1352ms (TTFB 381 + render 971), CLS 0.04
+
+### Wave 6 follow-ups
+1. **R-BUG-1 orphan inputs** 🟧 — add `<label htmlFor="...">` hoặc `aria-label` cho 2 address fields Step 1.
+2. **S-BUG-1 action bar overflow mobile** 🟧 — responsive layout: icon-only mode <640px, hoặc 2-row stack.
+3. **S-BUG-2 touch targets** 🟧 — increase padding sidebar mobile (min-height: 44px).
+4. **T-INFO-1 admin/users cold 1.8s** 🟨 — profile query, add DB index nếu thiếu, hoặc warmup script.
+5. **T-INFO-2 officer/dashboard 433ms** 🟨 — Redis cache 30s cho aggregation widgets.
+6. **R-INFO-1 Lighthouse 7 fails** 🟦 — inspect HTML report cho detailed audit list.
+
+---
+
+## 🎯 WAVE 5 BUG HUNTING — §Q Adversarial (2026-05-16 ~16:00 UTC+7)
+
+### Coverage matrix
+33 scenarios across 4 categories. **32 mitigated · 1 minor bug · 1 minor leniency · 1 by-design info**.
+
+| Section | Run | Pass | Bugs |
+|---|---|---|---|
+| §Q.1.1 Mass-assignment (status/year/applied_rules/is_dropped) | 4 | 4 ✅ | 0 |
+| §Q.1.2 IDOR escalation (cross-officer PATCH/admin audit/role escalate) | 3 | 3 ✅ | 0 |
+| §Q.1.3 SQL injection (OR 1=1, DROP TABLE, UNION SELECT password_hash) | 3 | 3 ✅ | 0 |
+| §Q.1.5 JWT tamper (role officer→admin no re-sign) | 1 | 1 ✅ | 0 |
+| §Q.1.6 CSRF (POST no X-CSRF-Token) | 1 | 1 ✅ | 0 |
+| §Q.2.1 Field validation boundary | 8 | 6 ✅ + 1 ⚠️ + 1 🟧 | 1 |
+| §Q.2.3 Pagination edge | 5 | 4 ✅ + 1 🟨 | 1 |
+| §Q.2.4 Bulk schema discovery | 1 | 1 ✅ | 0 |
+| §Q.3 State machine invalid jump | 2 | 2 ✅ | 0 |
+| §Q.4.3 Audit log gap | 1 | 1 ✅ | 0 |
+| §Q.4.4 Bulk version locking | 1 | 1 ✅ | 0 |
+| §Q.4.5 Magic-link race (5 parallel) | 1 | 1 ✅ | 0 |
+| §Q.4.6 Webhook signature | 2 | 2 🟦 by-design | 0 |
+| §Q.5 Rate limit login spam | 1 | 1 ✅ (429 from req 3) | 0 |
+
+### NEW findings (3)
+
+| # | Sev | Module | Title | Detail |
+|---|---|---|---|---|
+| **Q-BUG-1** | 🟧 → ⚠️ | Admission | **NOT REPRODUCIBLE 2026-05-16** | Repro test (dev current HEAD post-W4-1 hotfix): PUT emoji+version → **200 OK**; PUT emoji+missing-version → **422 validation** (clear "Field required" message, KHÔNG phải 400 parse). Có thể QA hit transient state, hoặc đã fixed bởi unrelated change. Source FastAPI `routing.py:369` chỉ raise 400 khi `request.json()` fail (malformed JSON, not unicode content). |
+| Q-INFO-1 | 🟨 → ✅ | Admission | **FIXED 2026-05-16** `GET /api/admissions?sort_by=invalid_field` → 200 silent ignore + `order=BAD` silent ignore. Fix: promote `sort_by: str` + `order: str` → `Literal[4 valid] + Literal["asc","desc"]` trong admissions.py:102-103. FastAPI auto-422 với clear "Input should be ..." message. Anchor `test_admissions_list_query_validation.py` (8 tests) lock. Mirror FE Zod `AdmissionListParams.sort_by` (đã sẵn enum) — không phá FE. |
+| Q-INFO-2 | 🟦 | Notifications | Zalo webhook accept no-sig requests (BY DESIGN) | `zalo_webhooks.py:43-44`: Zalo OA spec không bắt buộc HMAC. Backend log `signature_present` cho observability. CAVEAT: nếu handler trigger state mutations, kẻ tấn công inject fake events được — audit handler logic riêng. |
+
+### Strong defenses verified (33 probes)
+
+| Attack vector | Mitigation |
+|---|---|
+| Mass-assignment | Pydantic schema whitelist — 4/4 extra fields silently ignored ✅ |
+| SQL injection 3 payloads | SQLAlchemy parameterized; DB intact (lead 392 rows post-test) ✅ |
+| JWT tamper role escalation | HMAC signature verification → 401 ✅ |
+| CSRF | X-CSRF-Token required → 403 ✅ |
+| IDOR cross-officer | 404 (NOT 403, per AUTHORIZATION_GUIDELINES) ✅ |
+| Self-elevate via PUT /users/me | 405 Method Not Allowed ✅ |
+| CCCD/phone/dob boundary | 422 validation ✅ |
+| Pagination DoS page_size=10000 | 422 (le=100 schema) ✅ |
+| Invalid state jump draft→enrolled/approved | 400 clean Vietnamese msg + allowed transitions ✅ |
+| Bulk version locking | Per-item `{profile_id, version}` schema; per-item conflict ✅ |
+| Magic-link double-consume race | ADM-013 lock + `confirmed_at` predicate → 1/5 success ✅ |
+| Login bruteforce 20 attempts | Rate limit 429 from req 3 ✅ |
+| Audit log | entity_audit_log: AdmissionProfile created/updated/status_changed với actor_user_id ✅ |
+
+### Wave 5 execution log
+- **15:45** Q.1.1 mass-assignment 4 fields → all silently ignored (verified post-GET)
+- **15:47** Q.1.2/1.5/1.6: 403/401/405/422 đúng
+- **15:50** Q.1.3 SQLi 3 payloads → 200 escaped, lead table intact
+- **15:53** Q.2.1 emoji discovery → 400 parse error (BUG)
+- **15:55** Q.2.4 bulk schema: `items: List[{profile_id, version}]` — W2-3 finding revisited
+- **15:58** Q.4.5 magic-link race 5 parallel → 1 success + 4 already-used (ADM-013 lock perfect)
+- **16:00** Q.4.6 webhook by-design per Zalo spec, downgrade HIGH→INFO
+- **16:02** Q.5 rate limit → 429 from req 3
+
+### Wave 5 test artifacts
+- Profile 20: `draft` → `withdrawn` via Q.4.5 race test (consume succeeded). Restore SQL nếu cần.
+- Profile 42: version bumped (3+ PUT), name="Nguyễn Văn Test" applied.
+- Lead 392 (was 391) — 1 lead added during Wave 4 session.
+
+### Wave 5 follow-ups (priority)
+1. **Q-BUG-1 emoji parse** 🟧 — find body parser/Pydantic validator restricting 4-byte UTF-8. Likely 1-2 line fix.
+2. **Q-INFO-1 sort_by** 🟨 — add `Literal["created_at","updated_at","status",...]` enum vào pagination schema (5-min).
+3. **Q-INFO-2 Zalo webhook handler** 🟦 — audit `zalo_webhook` handler nội bộ; nếu có state mutation, add allowlist sender/app_id check.
+
+---
+
 ## 🔬 WAVE 4 — Chrome MCP runtime re-test (2026-05-16 ~15:30 UTC+7)
 
 ### Browser-verified admission fixes

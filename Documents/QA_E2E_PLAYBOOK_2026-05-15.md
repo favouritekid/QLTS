@@ -1236,3 +1236,255 @@ Playbook xanh khi:
 ---
 
 *End of Wave 2 expansion.*
+
+---
+
+# WAVE 3 BUG-HUNTING — §Q (2026-05-16)
+
+Allow mutation mode. 4 nhóm scenarios.
+
+## §Q.1 ADVERSARIAL
+
+### Q.1.1 Mass-assignment tampering
+| # | Endpoint | Payload | Expected | Bug |
+|---|---|---|---|---|
+| Q.1.1a | PUT /api/admissions/42 | `{status:"approved",approved_by_id:15}` | 422/ignored | Flipped without /approve |
+| Q.1.1b | PUT /api/admissions/42 | `{academic_year:2030}` | 422/ignored | Year overwritten |
+| Q.1.1c | PUT /api/admissions/42 | `{applied_rules:{allow_unverified_submission:true}}` | 422/ignored | Bypass flag escalated |
+| Q.1.1d | PUT /api/admissions/42 | `{is_dropped:true}` | 422/ignored | Drop via PUT |
+| Q.1.1e | PATCH choices/14 | `{decision:"admitted",waitlist_rank:1}` | 422 | Officer admits manually |
+
+### Q.1.2 IDOR escalation
+| # | Test | Expected |
+|---|---|---|
+| Q.1.2a | Officer 16 PATCH /api/v2/admissions/39/choices/{any} | 404 |
+| Q.1.2c | Accountant DELETE /api/v2/admissions/42/choices/{cid} | 403 |
+| Q.1.2d | Officer GET /api/admin/audit-logs?actor_id=15 | 403 hoặc filtered |
+| Q.1.2e | Officer PUT /api/users/me `{role:"admin"}` | 422/ignored |
+
+### Q.1.3 SQL injection
+| # | Test | Expected |
+|---|---|---|
+| Q.1.3a | GET /api/admissions?search=' OR '1'='1 | 200 normal |
+| Q.1.3b | GET /api/leads?search=test'); DROP TABLE lead;-- | 200 escaped |
+| Q.1.3c | GET /api/admin/users?role=officer' UNION... | 200 normal, no leak |
+
+### Q.1.4 XSS
+| # | Test | Expected |
+|---|---|---|
+| Q.1.4a | PUT family_info name=`<script>alert(1)</script>` → re-GET | HTML escaped |
+| Q.1.4b | PUT notes/consultation với XSS payload | Sanitized |
+
+### Q.1.5 Token/session
+| # | Test | Expected |
+|---|---|---|
+| Q.1.5a | Use access_token sau logout | 401 |
+| Q.1.5b | JWT tamper role officer→admin | 401 sig invalid |
+| Q.1.5c | Reuse old refresh_token | 401 |
+
+### Q.1.6 CSRF
+| # | Test | Expected |
+|---|---|---|
+| Q.1.6a | POST mutate không X-CSRF-Token | 403 |
+| Q.1.6b | Stale CSRF | 403 |
+
+## §Q.2 EDGE CASES
+
+### Q.2.1 Field validation
+| # | Field | Values | Expected |
+|---|---|---|---|
+| Q.2.1a-d | CCCD | 3 chars / 15 chars / whitespace / unicode digits | 422 |
+| Q.2.1e-g | full_name | "" / 1000 chars / "🎓📚" | 422/422/200 |
+| Q.2.1h-j | phone | "0123" / 13 digits / "+84..." | 422 |
+| Q.2.1k-n | dob | 1900 / 2030 / 0001 / invalid date | 422 |
+
+### Q.2.2 Score boundary
+| # | Values | Expected |
+|---|---|---|
+| Q.2.2a-f | -1 / 10.01 / "abc" / null / [] / 100 items | 422 |
+
+### Q.2.3 Pagination
+| # | Test | Expected |
+|---|---|---|
+| Q.2.3a-e | page=0 / -1 / page_size=10000 / page=99999 / sort_by=invalid | 422 hoặc 200 empty |
+
+### Q.2.4 Bulk limits
+| # | profile_ids | Expected |
+|---|---|---|
+| Q.2.4a-d | [] / dup / 1000 items / non-existent | 422 / partial |
+
+### Q.2.5 File upload
+| # | Test | Expected |
+|---|---|---|
+| Q.2.5a-f | 0-byte / 10MB exact / +1 byte / MIME spoof / path traversal / unicode name | per spec |
+
+## §Q.3 STATE MACHINE
+
+### Q.3.1 Risky transitions
+| # | Transition | Expected |
+|---|---|---|
+| Q.3.1a | CONFIRMED→DRAFT (admin rollback) | 200 + audit + tokens invalidated |
+| Q.3.1b | APPROVED→DRAFT | 200 + audit |
+| Q.3.1c | ENROLLED→DRAFT | 400 (final) |
+| Q.3.1d | WITHDRAW from CONFIRMED | per business |
+
+### Q.3.2 Invalid jumps
+| From → To | Expected |
+|---|---|
+| draft→approved | 400 |
+| draft→enrolled | 400 |
+| submitted→enrolled | 400 |
+| approved→rejected | 400 |
+| rejected→approved | 400 |
+| withdrawn→any | 400 (final) |
+| enrolled→any | 400 (final) |
+
+### Q.3.3 Concurrent race
+| # | Test | Expected |
+|---|---|---|
+| Q.3.3a | 2 admins approve concurrent | 1 success + 1 409 |
+| Q.3.3b | Approve + reject race | 409 |
+| Q.3.3c | Magic-link confirm + admin override race | 1 wins |
+
+## §Q.4 DATA INTEGRITY
+
+### Q.4.1 N+1 audit
+- GET /api/admissions?page_size=50 timing — <500ms expected
+
+### Q.4.2 FK cascade
+- DELETE profile có choices → cascade or 409
+- DELETE lead có profile → cascade or 409
+
+### Q.4.3 Audit log gap
+| Action | Expected entry |
+|---|---|
+| Choice CRUD | entity_audit_log row |
+| Approve / Override | row với old/new |
+| Document upload | row |
+
+### Q.4.4 Optimistic locking matrix
+| Endpoint | version check? |
+|---|---|
+| POST /admissions/bulk/approve | **UNKNOWN — probe** |
+| PATCH /v2/admissions/{id}/choices/{cid} | **UNKNOWN — probe** |
+
+### Q.4.5 Magic-link race
+- 2 candidates click cùng token → 1 success + 1 400 already used
+- Token expired exact lúc consume → 410 Gone
+
+### Q.4.6 Webhook
+- POST Zalo webhook không signature → 401
+- Invalid HMAC → 401
+
+### Q.4.7 Celery idempotency
+- Enrollment task retry → 1 student record
+- Notification dispatch x2 same dedupe_key → single
+
+## §Q.5 RATE LIMIT
+- POST /api/auth/login spam 100 → 429
+- Magic-link generate spam → cooldown
+- Magic-link consume wrong CCCD spam → hard-lock
+
+## Success criteria
+- 0 BLOCKER mới
+- ≤ 3 MAJOR mới
+- Resolve 5 HIGH-RISK: webhook sig, CONFIRMED→DRAFT cleanup, bulk-approve version, N+1 list, Celery idempotency
+
+*End of §Q.*
+
+---
+
+# WAVE 6 — §R/§S/§T (a11y · mobile · performance) 2026-05-16
+
+## §R UI Accessibility
+
+### R.1 Lighthouse a11y audit (key pages)
+- `/login`, `/dashboard/officer`, `/admissions`, `/admissions/{id}`, `/leads/{id}`, `/admin/users`
+- Target: score ≥ 90/100. Detail trong `chrome-devtools-mcp-*/report.html`
+
+### R.2 Custom DOM probe per page
+- 0 images không `alt`
+- 0 buttons không text/aria-label
+- 0 inputs orphan (không label + không aria-label + không wrapped in label)
+- Heading hierarchy không skip (h1 → h2 → h3, not h1 → h4)
+- `<html lang="vi">` present
+- Landmarks: `<main>`, `<nav>`, `<header>` exist
+- Skip-link `<a href="#main-content">` present
+
+### R.3 Keyboard navigation
+- Tab through entire form → all inputs reachable, focus visible outline
+- Esc closes dialogs
+- Enter submits forms
+- Arrow keys navigate dropdowns + tabs
+
+### R.4 Color contrast
+- Text < 18px need contrast ≥ 4.5:1
+- Probe Lighthouse contrast audit + manual check status badges
+
+## §S Mobile Responsive
+
+### S.1 Viewport matrix
+| Device | Width × Height | DPR | Touch |
+|---|---|---|---|
+| iPhone SE | 375×667 | 2 | yes |
+| iPhone 13 | 390×844 | 3 | yes |
+| iPhone 13 Pro Max | 428×926 | 3 | yes |
+| iPad mini | 768×1024 | 2 | yes |
+| iPad Pro | 1024×1366 | 2 | yes |
+
+### S.2 Checks per viewport
+- Body không có horizontal scroll
+- Sticky bottom action bar fit trong width
+- Modal/Dialog fit (max-width responsive)
+- Touch targets ≥ 44×44 (Apple HIG)
+- Sidebar collapse to hamburger ở <768px
+- Form fields stack vertically (single-column)
+- Tab nav scroll horizontally khi quá nhiều tabs
+- Table không overflow (responsive table or card view)
+
+### S.3 Mobile-specific probes
+- Pull-to-refresh không trigger reload trang khi đang trong dialog
+- Keyboard pop-up không che submit button
+- Click-to-call link tel: + email link mailto:
+- Bottom safe area iPhone X+ (notch padding)
+
+## §T Performance
+
+### T.1 API timing matrix (5 runs each, report p50/p95)
+| Endpoint | Target p95 | Cold cache OK |
+|---|---|---|
+| GET /api/admissions list | < 200ms | < 500ms |
+| GET /api/admissions/{id} | < 100ms | < 200ms |
+| GET /api/leads list | < 200ms | < 500ms |
+| GET /api/notifications | < 50ms | < 100ms |
+| GET /api/officer/dashboard | < 300ms | < 800ms |
+| GET /api/admin/users | < 150ms | < 500ms |
+
+### T.2 Page load (Chrome MCP performance_start_trace)
+- LCP target: < 2500ms (good), < 1200ms (fast)
+- FID/INP: < 100ms
+- CLS: < 0.1
+- TTFB: < 600ms
+- Trace cho profile detail + admissions list + officer dashboard
+
+### T.3 Large payload stress
+- GET /api/admissions?page_size=100 ≥ 500 profiles → response time + memory
+- GET /api/leads?page_size=100 with 391 leads — gzip on?
+- File upload 10MB document — measure end-to-end
+
+### T.4 N+1 detection
+- GET /api/admissions với selectinload → single query
+- GET /api/leads với assigned_officer denormalized hoặc joined
+- Profile detail có lazy-load tab data → measure tab switch latency
+
+### T.5 Cache hit/miss
+- First call cold → measure cold timing
+- 4 subsequent calls → cache warm timing
+- Compare delta (>10x = cache effective)
+
+## Success criteria
+- A11y: ≥ 90/100 trên 5 key pages, 0 orphan input, 0 missing alt
+- Mobile: 0 horizontal scroll, ≥44px touch targets, modal fit
+- Performance: LCP < 2500ms, p95 < 500ms cho all read endpoints
+
+*End of Wave 6 §R/§S/§T*

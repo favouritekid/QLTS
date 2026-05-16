@@ -19,7 +19,7 @@ Endpoints:
 """
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
@@ -99,8 +99,14 @@ async def list_admission_profiles(
     payment_status: str | None = Query(None, description="Filter by payment status (paid/unpaid/partial/no_fee)"),
     date_from: datetime | None = Query(None, description="Filter from date (created_at)"),
     date_to: datetime | None = Query(None, description="Filter to date (created_at)"),
-    sort_by: str = Query("created_at", description="Sort field (created_at, updated_at, full_name, status)"),
-    order: str = Query("desc", description="Sort order (asc, desc)"),
+    sort_by: Literal["created_at", "updated_at", "full_name", "status"] = Query(
+        "created_at",
+        description="Sort field — repo silently fell back to created_at for invalid values until 2026-05-16 (Q-INFO-1 fix). Mirror FE Zod `AdmissionListParams.sort_by`.",
+    ),
+    order: Literal["asc", "desc"] = Query(
+        "desc",
+        description="Sort order — repo defaulted to asc for any non-`desc` value until 2026-05-16. Mirror FE Zod `AdmissionListParams.order`.",
+    ),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(database.get_db),
