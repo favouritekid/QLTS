@@ -222,3 +222,79 @@ async def test_admin_users_endpoint_returns_full_shape_for_admin(
         f"Admin response missing expected fields: {missing}. "
         f"UserAdminResponse shape regressed. Got: {list(sample_user.keys())}"
     )
+
+
+# =====================================================================
+# Wave 5 — T11 waitlist-reject endpoint (ship 2026-05-16)
+# =====================================================================
+
+
+def test_t11_waitlist_reject_event_in_catalog() -> None:
+    """SystemEvents + EventDefinition catalog MUST declare
+    ADMISSION_WAITLIST_REJECTED (T11). Source-aware distinct từ
+    ADMISSION_DECISION_REJECTED (T9 cascade).
+
+    Catalog entry needed cho dispatcher resolve event metadata + future
+    notification rule wiring. Without entry, transition() PAIR map fires
+    Unknown event → silently dropped.
+    """
+    from app.core.events import SystemEvents
+    from app.core.event_catalog import EVENT_CATALOG
+
+    assert hasattr(SystemEvents, "ADMISSION_WAITLIST_REJECTED"), (
+        "SystemEvents enum missing ADMISSION_WAITLIST_REJECTED — Wave 5 "
+        "regression. T11 endpoint will fire orphan event."
+    )
+    assert SystemEvents.ADMISSION_WAITLIST_REJECTED.value == "admission_waitlist_rejected"
+
+    assert SystemEvents.ADMISSION_WAITLIST_REJECTED in EVENT_CATALOG, (
+        "EVENT_CATALOG missing ADMISSION_WAITLIST_REJECTED EventDefinition. "
+        "Required cho dispatcher resolve metadata + future rule wiring."
+    )
+
+
+def test_t11_waitlist_reject_pair_map_fires_correct_event() -> None:
+    """TRANSITION_PAIR_TO_EVENT MUST map (waitlisted, rejected) →
+    ADMISSION_WAITLIST_REJECTED, NOT generic ADMISSION_DECISION_REJECTED.
+
+    Source-aware mapping cho consumers distinguish first-pass reject
+    (T9 engine cascade) vs second-pass admin finalize (T11 manual).
+    Pattern mirror (waitlisted, admitted) → ADMISSION_WAITLIST_PROMOTED.
+    """
+    from app.core.events import SystemEvents
+    from app.services.admission_state_service import TRANSITION_PAIR_TO_EVENT
+
+    pair = ("waitlisted", "rejected")
+    assert pair in TRANSITION_PAIR_TO_EVENT, (
+        f"TRANSITION_PAIR_TO_EVENT missing {pair} — Wave 5 regression. "
+        f"T11 transition will fall through to generic decision event."
+    )
+    assert TRANSITION_PAIR_TO_EVENT[pair] is SystemEvents.ADMISSION_WAITLIST_REJECTED, (
+        f"Wrong event for {pair}; got "
+        f"{TRANSITION_PAIR_TO_EVENT[pair]}. Should be source-aware "
+        f"WAITLIST_REJECTED to distinguish from T9 cascade reject."
+    )
+
+
+def test_t11_waitlist_reject_template_declares_accountant_deny() -> None:
+    """ACCOUNTANT_TEMPLATE MUST declare DENY for /waitlist-reject endpoint
+    (Wave 5 ship 2026-05-16 — endpoint now exists, template parity).
+
+    phase3_02 dropped row when endpoint was dead; phase3_04 re-adds.
+    Template declaration ensures sync_casbin_templates.py preserves the
+    deny across future syncs (separation-of-duties — finance staff
+    không quyết định reject candidate dự bị).
+    """
+    from app.casbin_config.policy_templates import ACCOUNTANT_TEMPLATE
+
+    waitlist_reject_denies = [
+        p
+        for p in ACCOUNTANT_TEMPLATE["policies"]
+        if "waitlist-reject" in p.get("object", "")
+        and p.get("eft") == "deny"
+    ]
+    assert len(waitlist_reject_denies) == 1, (
+        f"ACCOUNTANT_TEMPLATE must declare exactly 1 DENY for /waitlist-reject; "
+        f"got {len(waitlist_reject_denies)}. Wave 5 separation-of-duties guard "
+        f"missing — accountant would inherit officer ALLOW via g-edge."
+    )

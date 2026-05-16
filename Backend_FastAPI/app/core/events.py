@@ -1234,6 +1234,12 @@ class SystemEvents(str, Enum):
     """T10 admin promotes waitlist → admitted. Audience: candidate.
     requires_outbox=True, bypass_consent_check=False."""
 
+    ADMISSION_WAITLIST_REJECTED = "admission_waitlist_rejected"
+    """T11 admin finalizes waitlist → rejected (Wave 5 ship 2026-05-16).
+    Source-aware: distinct từ ADMISSION_DECISION_REJECTED (engine cascade
+    T9). Manager/admin manually reject 1 waitlisted choice khi đợt closes
+    + slot không mở. Audience: candidate. requires_outbox=True."""
+
     ADMISSION_CONFIRMED = "admission_confirmed"
     """T12 candidate / officer / admin confirms admission. Audience: officer.
     requires_outbox=False. Distinct from ADMISSION_CONFIRMATION_REMINDER_*

@@ -235,6 +235,7 @@ LEGACY_STATUS_TO_EVENT: Dict[str, SystemEvents] = {
 # by ``tests/unit/test_admission_state_service_event_mapping.py``.
 TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
     ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,  # T10
+    ("waitlisted", "rejected"): SystemEvents.ADMISSION_WAITLIST_REJECTED,  # T11 (Wave 5 ship 2026-05-16)
     # Phase 3 PR-3C Sub-3.5 T17 — admin rollback to draft fires
     # ADMISSION_ROLLED_BACK regardless of source state. Pair entries
     # for ALL 11 non-draft non-final-WITHDRAWN/ENROLLED states which

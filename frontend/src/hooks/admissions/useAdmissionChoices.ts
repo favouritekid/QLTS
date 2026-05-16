@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   createChoice,
   deleteChoice,
+  rejectWaitlistedChoice,
   replaceChoiceScores,
   updateChoiceDisplayOrder,
 } from "@/lib/api/admission-choices"
@@ -99,6 +100,36 @@ export function useReplaceChoiceScores(profileId: number) {
       choiceId: number
       payload: ChoiceScoresReplaceRequest
     }) => replaceChoiceScores(profileId, choiceId, payload),
+    onSuccess: () => {
+      invalidateAfterChoiceMutation(queryClient, profileId)
+    },
+  })
+}
+
+/**
+ * Wave 5 ship 2026-05-16 — T11 waitlist-reject hook.
+ *
+ * Manager/admin manually finalize 1 NV dự bị → trượt khi đợt closes +
+ * slot không mở. Pattern mirror useDeleteChoice (mutation by choiceId)
+ * but with required `reason` payload (BE Pydantic min_length=10).
+ *
+ * Mutation invalidates both choices list + admission detail (profile.status
+ * may flip waitlisted → rejected per state machine T11 edge).
+ */
+export function useRejectWaitlistedChoice(profileId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      choiceId,
+      reason,
+    }: {
+      choiceId: number
+      reason: string
+    }) =>
+      rejectWaitlistedChoice(profileId, {
+        choice_id: choiceId,
+        reason,
+      }),
     onSuccess: () => {
       invalidateAfterChoiceMutation(queryClient, profileId)
     },

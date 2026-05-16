@@ -1707,6 +1707,38 @@ class AdmissionWaitlistPromoteResponse(BaseModel):
     choice_id: int
     decision: Literal["admitted"] = "admitted"
     profile_id: int
+
+
+class AdmissionWaitlistRejectRequest(BaseModel):
+    """T11 waitlist-reject endpoint request body (Wave 5 ship 2026-05-16).
+
+    Manager/admin manually finalize candidate dự bị → trượt khi đợt
+    closes + slot không mở. Mirror semantic của AdmissionWaitlistPromote
+    nhưng `reason` REQUIRED (negative decision needs audit context per
+    memory `phase3-pr-3d-b-backlog` "DELETE audit + reason").
+    """
+
+    choice_id: int = Field(..., gt=0, description="ID nguyện vọng reject từ waitlist")
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Lý do reject (audit) — required min 10 chars",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class AdmissionWaitlistRejectResponse(BaseModel):
+    """T11 waitlist-reject endpoint response.
+
+    Returned by `POST /api/v2/admissions/{profile_id}/waitlist-reject`
+    after admin/manager finalizes a waitlisted choice → rejected.
+    """
+
+    choice_id: int
+    decision: Literal["rejected"] = "rejected"
+    profile_id: int
     profile_status: Literal["admitted"] = "admitted"
 
 
@@ -1776,6 +1808,8 @@ __all__ = [
     "AdmissionPublishResultResponse",
     "AdmissionWaitlistPromoteRequest",
     "AdmissionWaitlistPromoteResponse",
+    "AdmissionWaitlistRejectRequest",
+    "AdmissionWaitlistRejectResponse",
     "AdmissionAdminRollbackRequest",
     "AdmissionAdminRollbackResponse",
 ]

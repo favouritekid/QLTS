@@ -546,6 +546,85 @@ async def promote_waitlisted_choice(
 
 
 # ============================================================================
+# Wave 5 — Waitlist reject helper (T11) — ship 2026-05-16
+# ============================================================================
+
+
+async def reject_waitlisted_choice(
+    db: AsyncSession,
+    choice: "AdmissionProfileChoice",
+    profile: "AdmissionProfile",
+    actor: Any,
+    reason: str,
+) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
+    """T11 manual reject: waitlisted → rejected (admin/manager action).
+
+    Used by `POST /api/v2/admissions/{profile_id}/waitlist-reject`
+    (Wave 5 ship 2026-05-16). Mirror semantic của
+    `promote_waitlisted_choice` (T10) — manager/admin manually finalize
+    candidate dự bị → trượt khi đợt closes + slot không mở.
+
+    Uses PR-3B Sub-2 `TRANSITION_PAIR_TO_EVENT` source-aware mapping:
+    `(waitlisted, rejected)` fires `ADMISSION_WAITLIST_REJECTED` (NOT
+    generic `ADMISSION_DECISION_REJECTED` từ T9 engine cascade).
+    Notification consumers cần distinguish first-pass reject (T9) vs
+    second-pass admin finalize (T11) cho audit + candidate UX.
+
+    PRE-CHECKS:
+        1. `choice.decision == "waitlisted"` — only waitlisted choices
+           can be rejected via T11 path (T9 cascade reject covers other)
+        2. `profile.status == "waitlisted"` — must match (engine sets
+           both together per cascade)
+
+    Difference vs promote:
+        - `reason` REQUIRED min 10 chars (admin justify negative
+          decision per memory phase3-pr-3d-b-backlog "DELETE audit +
+          reason"). Promote reason optional vì positive outcome.
+
+    Returns:
+        `(result_dict, post_commit_callback)` per V3.0 contract.
+    """
+    from . import admission_state_service as state_service
+
+    if choice.decision != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Nguyện vọng phải ở quyết định 'waitlisted'; current: '{choice.decision}'"
+        )
+    if profile.status != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
+        )
+
+    # Update choice decision FIRST so audit trail captures the source
+    choice.decision = "rejected"
+    await db.flush()
+
+    # State transition fires ADMISSION_WAITLIST_REJECTED via PAIR map
+    _, callback = await state_service.transition(
+        db, profile, "rejected",
+        actor=actor,
+        reason=reason,  # Required audit context
+        source="waitlist_reject",
+        event_metadata={
+            "rejected_from_waitlist": True,
+            "choice_id": choice.id,
+            "display_order": choice.display_order,
+            "reason": reason,
+        },
+    )
+
+    return (
+        {
+            "choice_id": choice.id,
+            "decision": "rejected",
+            "profile_id": profile.id,
+            "profile_status": "rejected",
+        },
+        callback,
+    )
+
+
+# ============================================================================
 # Sub-3.2 — Admin rollback helper (T17)
 # ============================================================================
 

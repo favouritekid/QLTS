@@ -161,6 +161,8 @@ from .admission import (
     AdmissionPublishResultResponse,
     AdmissionWaitlistPromoteRequest,
     AdmissionWaitlistPromoteResponse,
+    AdmissionWaitlistRejectRequest,
+    AdmissionWaitlistRejectResponse,
     AdmissionAdminRollbackRequest,
     AdmissionAdminRollbackResponse,
     EnrollStudentResponse,

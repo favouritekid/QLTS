@@ -92,9 +92,38 @@ export async function replaceChoiceScores(
   return admissionProfileChoiceResponseSchema.parse(response.data)
 }
 
+/**
+ * POST /api/v2/admissions/{profile_id}/waitlist-reject
+ *
+ * Wave 5 ship 2026-05-16 — T11 manager/admin manually finalize 1 NV
+ * dự bị → trượt khi đợt closes + slot không mở. Mirror waitlist-promote
+ * nhưng `reason` REQUIRED min 10 chars (negative decision audit).
+ *
+ * BE pre-checks (raises 400):
+ *   - choice.decision == "waitlisted"
+ *   - profile.status == "waitlisted"
+ *
+ * Casbin: manager/admin allow, accountant deny per template (separation-
+ * of-duties — finance staff không quyết định reject candidate).
+ *
+ * Returns response shape `{ choice_id, decision: "rejected", profile_id }`.
+ */
+export async function rejectWaitlistedChoice(
+  profileId: number,
+  payload: { choice_id: number; reason: string },
+): Promise<{ choice_id: number; decision: "rejected"; profile_id: number }> {
+  const response = await api.post<{
+    choice_id: number
+    decision: "rejected"
+    profile_id: number
+  }>(`/api/v2/admissions/${profileId}/waitlist-reject`, payload)
+  return response.data
+}
+
 export const admissionChoicesApi = {
   createChoice,
   deleteChoice,
   updateChoiceDisplayOrder,
   replaceChoiceScores,
+  rejectWaitlistedChoice,
 }

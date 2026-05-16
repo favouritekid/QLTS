@@ -220,6 +220,81 @@ async def waitlist_promote_choice(
 
 
 # =============================================================================
+# T11 — Waitlist reject (manager/admin manual finalize waitlist → rejected)
+# Wave 5 ship 2026-05-16
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/waitlist-reject",
+    response_model=schemas.AdmissionWaitlistRejectResponse,
+    summary="T11 — Reject waitlisted choice (manager/admin manual)",
+)
+async def waitlist_reject_choice(
+    profile_id: int,
+    payload: schemas.AdmissionWaitlistRejectRequest,
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    current_user: models.User = CasbinAuth,
+):
+    """T11 manual waitlist reject — manager/admin chọn 1 NV trên
+    waitlist chuyển sang rejected khi đợt closes + slot không mở.
+
+    Mirror waitlist_promote pattern. Difference:
+    - `reason` REQUIRED (negative decision needs audit)
+    - Fires ADMISSION_WAITLIST_REJECTED (NOT generic DECISION_REJECTED)
+
+    **Pre-checks** (raises 400 BusinessRuleViolation):
+    - choice.decision must be "waitlisted"
+    - profile.status must be "waitlisted"
+
+    **Security**:
+    - IDOR: `get_admission_for_manager` (profile-scoped 3-tier)
+    - Casbin: manager/admin allow per template; accountant deny
+      (separation-of-duties — waitlist reject is admission decision,
+      not finance op)
+    - Ownership: router verifies choice.admission_profile_id == profile.id
+
+    **Dispatches** (via state_service.transition() + PAIR map Wave 5):
+    - ADMISSION_WAITLIST_REJECTED (T11 source-aware, distinct từ T9
+      cascade DECISION_REJECTED)
+    """
+    # Fetch choice + verify ownership (router thin lookup, mirror promote)
+    choice = await db.get(models.AdmissionProfileChoice, payload.choice_id)
+    if choice is None or choice.admission_profile_id != profile.id:
+        # 404 anti-enumeration per IDOR pattern
+        raise ResourceNotFoundError(
+            f"Choice {payload.choice_id} không thuộc hồ sơ {profile_id}"
+        )
+
+    # Service helper (Wave 5 ship)
+    result, post_commit_cb = await choice_engine.reject_waitlisted_choice(
+        db,
+        choice=choice,
+        profile=profile,
+        actor=current_user,
+        reason=payload.reason,
+    )
+
+    await db.commit()
+    if post_commit_cb:
+        await post_commit_cb()
+
+    log.info(
+        "admissions_v2.waitlist_reject",
+        profile_id=profile_id,
+        choice_id=payload.choice_id,
+        actor_id=current_user.id,
+        reason_len=len(payload.reason),
+    )
+
+    return schemas.AdmissionWaitlistRejectResponse(
+        choice_id=result["choice_id"],
+        profile_id=result["profile_id"],
+    )
+
+
+# =============================================================================
 # T17 — Admin rollback (admin force profile back to draft, audit-logged)
 # =============================================================================
 

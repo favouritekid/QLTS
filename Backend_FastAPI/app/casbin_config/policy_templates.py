@@ -343,9 +343,11 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/request-revision",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST", "eft": "deny"},
-        # REMOVED 2026-05-15: /waitlist-reject endpoint không tồn tại trong
-        # router (chỉ có /waitlist-promote). Dead policy entry. Per phase3_02
-        # migration also DELETE row khỏi prod DB.
+        # RE-ADDED 2026-05-16 Wave 5: T11 waitlist-reject endpoint shipped.
+        # Phase3_02 dropped row from DB (endpoint was dead); phase3_04 re-adds
+        # since endpoint exists. Separation-of-duties — finance staff không
+        # quyết định reject candidate dự bị.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/admin-rollback",    "action": "POST", "eft": "deny"},
         # PR-3D-B BE-1 — Choice CRUD: accountant explicitly denied per
         # separation-of-duties; finance staff do not touch admission state.
