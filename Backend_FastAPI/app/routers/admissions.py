@@ -1552,8 +1552,7 @@ async def reject_admission(
     request: Request,
     profile_id: int,
     data: schemas.RejectRequest,
-    current_user: models.User = Depends(deps.get_current_active_user),  # ✅ FIX: Strict Active User Check
-    # profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # REMOVED: Service handles fetching with lock
+    current_user: models.User = CasbinAuth,  # F10 fix 2026-05-16: swap inline role check → Casbin dep so 403 fires before Pydantic body validation (was 422 schema leak for officer)
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -1561,8 +1560,11 @@ async def reject_admission(
 
     **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3):
     - Layer 1: Rate limiting (200 req/hour)
-    - Layer 2: RBAC via CasbinAuth (Manager/Admin only)
-    - Layer 3: IDOR via get_admission_for_manager (unit check)
+    - Layer 2: RBAC via CasbinAuth (Manager/Admin only) — enforced via
+      ``Depends(check_permission)`` which runs in `solve_dependencies`
+      BEFORE FastAPI parses the Pydantic body, so insufficient-perm
+      users get 403 without schema disclosure (F10 fix 2026-05-16).
+    - Layer 3: IDOR via service ``_check_idor_access`` (lead.unit_id check)
     - Layer 4: Service layer handles business logic
 
     **State Transition:**
@@ -1574,11 +1576,6 @@ async def reject_admission(
     - Reason is mandatory (10+ chars)
     - Optimistic locking via version check
     """
-    
-    # Check Manager/Admin Role explicitly since we removed CasbinAuth/IDOR dep
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
-         raise PermissionDeniedError("Only Managers or Admins can reject profiles")
-
     try:
         # 1. DELEGATE to Service (Service handles Locking + IDOR + bundle)
         result, callback = await admission_service.reject_profile(
@@ -1614,7 +1611,7 @@ async def request_revision(
     request: Request,
     profile_id: int,
     data: schemas.RevisionRequest,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = CasbinAuth,  # F10 fix 2026-05-16 (same pattern as reject_admission)
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -1628,10 +1625,10 @@ async def request_revision(
     - State transition via validate_transition()
     - Reason is mandatory (10+ chars)
     - Optimistic locking via version check
-    """
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
-        raise PermissionDeniedError("Only Managers or Admins can request revision")
 
+    RBAC enforced via CasbinAuth dep (runs before Pydantic body parse,
+    so officer/accountant get 403 without schema disclosure).
+    """
     try:
         result, callback = await admission_service.request_revision(
             db=db,
@@ -2307,7 +2304,7 @@ async def drop_student(
     request: Request,
     profile_id: int,
     data: schemas.DropStudentRequest,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = CasbinAuth,  # F10 fix 2026-05-16 (same pattern as reject_admission)
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -2321,10 +2318,10 @@ async def drop_student(
     - Must not already be dropped
     - Reason is mandatory (10+ chars)
     - Optimistic locking via version check
-    """
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
-        raise PermissionDeniedError("Only Managers or Admins can mark students as dropped")
 
+    RBAC enforced via CasbinAuth dep (runs before Pydantic body parse,
+    so officer/accountant get 403 without schema disclosure).
+    """
     try:
         result, callback = await admission_service.mark_student_dropped(
             db=db,

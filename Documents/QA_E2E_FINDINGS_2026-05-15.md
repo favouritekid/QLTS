@@ -1,5 +1,186 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🌊 WAVE 7 — State race + File upload edge + Notification delivery (2026-05-16 ~19:00 UTC+7)
+
+### Scope
+
+| Mini-wave | Coverage | Method |
+|---|---|---|
+| W7-A State machine race | §Q.3.3a/b: 2-reviewer concurrent approve, approve+reject | curl parallel POST |
+| W7-B File upload edge | §Q.2.5a-f: 0-byte, 10MB exact, 10MB+1, MIME spoof, path traversal filename, unicode filename | curl multipart |
+| W7-C Notification delivery | §L.1-L.6 + §Q.4.6: rules CRUD invalid event, replay, mark-read, consent, webhook sig | curl admin+manager |
+
+### Pre-condition
+
+- Stack healthy: backend / postgres / redis / celery up
+- Admin (id=15) + Manager `manager_qa` (id=34) logged in, password `@Abc12345!`
+- Probed profile id=39 (status=submitted, uses_choice_engine=false) for race test
+- Probed profile id=42 (status=draft, 6 doc checklist items) for file upload test
+
+### Findings summary
+
+| # | Sev | Module | Title |
+|---|---|---|---|
+| **W7-C.1** | 🟥 | Notification | `POST /api/notifications/mark-as-read` với `notification_ids:[]` mark ALL unread của user |
+| **W7-A.1** | 🟧 | Admission state machine | Concurrent approve race → loser nhận 400 "Invalid transition" thay vì 409 Conflict |
+| **W7-B.c2** | 🟦 | Frontend i18n | Lỗi 10MB+1 hiển thị "10.0MB (max 10MB)" — rounding gây confusing UX |
+| **W7-C.2** | 🟦 | Doc/playbook | Endpoint replay là `/replay` không phải `/retry` — playbook §L.3.3 stale |
+| **W7-A.2** | 🟦 | Schema | Field `version` trong approve/reject schema required nhưng NOT enforced — race phụ thuộc state machine catch |
+| **Q.4.6** | 🟦 | Zalo webhook | Returns 200 bất kể signature valid/missing — **INTENTIONAL** per Zalo OA spec (anti-retry-storm), code documented |
+| **W7-B.a-f** | ✅ | File upload | 0-byte/spoof rejected qua magic-byte sniff; 10MB exact OK; 10MB+1 rejected; path traversal + unicode filename **neutralized** bởi server-side `{doc_code}_{uuid}` rename |
+
+---
+
+### W7-C.1 🟥 MAJOR — mark-as-read empty array marks ALL
+
+**Endpoint**: `POST /api/notifications/mark-as-read`
+**Payload**: `{"notification_ids":[]}`
+**Expected**: No-op (mark 0 notifications) OR 400 validation
+**Actual**: Marks **ALL** unread notifications của user thành read
+
+**Repro evidence (2 distinct users)**:
+```
+ADMIN (id=15): unread 176 before → POST {notification_ids:[]} → "Marked 176" → unread 0 after
+MANAGER (id=34): unread 27 before → POST {notification_ids:[]} → "Marked 27" → unread 0 after
+```
+
+**Root cause** — `Backend_FastAPI/app/repositories/notification_repository.py:103-117`:
+```python
+async def get_unread_for_user(self, user_id, notification_ids=None):
+    filters = [self.model.user_id == user_id, self.model.is_read == False]
+    if notification_ids:           # ⚠️ empty list is falsy → ID filter skipped
+        filters.append(self.model.id.in_(notification_ids))
+    query = select(self.model).where(and_(*filters))
+    ...  # returns ALL unread for user khi notification_ids=[]
+```
+
+**Risk**:
+- Client UX: user click "Mark as read" với 0 checkbox selected → wipe toàn bộ inbox unread state
+- Not destructive (only read flag flipped) nhưng **irreversible from UI** — không có "mark as unread" bulk endpoint
+- Defensive: invariant `[] payload → 0 affected` bị vi phạm
+
+**Fix** (1 line):
+```python
+if notification_ids is not None:   # explicit None check instead of truthy check
+    filters.append(self.model.id.in_(notification_ids))
+```
+Hoặc reject empty list ở Pydantic schema: `notification_ids: List[int] = Field(min_length=1)`.
+
+**Note**: Memory `feedback_audit_before_fix` — đã verify code path trước, không chỉ symptom. Cùng pattern có thể tồn tại ở `bulk_delete_notifications` — cần audit `repo.bulk_delete_for_user()` xem có falsy-list bug tương tự không.
+
+---
+
+### W7-A.1 🟧 MAJOR — Concurrent approve race returns wrong status code
+
+**Endpoint**: `POST /api/admissions/{id}/approve`
+**Setup**: Profile 39 status=submitted version=5; admin + manager fire approve concurrent (~120ms apart)
+
+**Q.3.3a (2 reviewers approve)**:
+```
+ADMIN POST approve version=5 → 200 OK, profile v5→6 approved
+MGR   POST approve version=5 → 400 "Invalid transition: approved → approved.
+                                       Allowed transitions from approved: confirmed, draft, overridden"
+```
+
+**Q.3.3b (approve + reject race)**:
+```
+ADMIN POST approve version=8 → 200 OK, v8→9 approved
+MGR   POST reject version=8  → 400 "Invalid transition: approved → rejected"
+```
+
+**Expected**: 409 Conflict / Version Mismatch (optimistic lock). Spec ở `app/utils/exceptions.py`:
+```python
+ConflictError → 409   # optimistic locking
+```
+
+**Actual**: 400 "Invalid transition" — state machine guard catches the race **after** the first request commits, but:
+1. **Wrong HTTP status** (400 vs 409) misleads frontend retry logic. 409 = stale, refetch + retry; 400 = invalid input, show validation error.
+2. **Wrong error message** — UX says "Hồ sơ đang ở trạng thái không hợp lệ" thay vì "Hồ sơ đã được xử lý bởi reviewer khác, vui lòng refresh"
+3. **Version field was sent but NOT enforced** — second request had same version=5/8 as first; if state machine had bidirectional transitions (e.g., `approved↔approved` for re-approval), race would silently corrupt state without optimistic lock guard
+
+**Linked**: W7-A.2 (version field semantics)
+
+**Fix options**:
+- Service `approve_admission`/`reject_admission` raise `ConflictError` (→409) khi `profile.version != payload.version` BEFORE state machine check
+- Hoặc map state machine `BusinessRuleViolation` → 409 when source==target_after_other_commit
+
+---
+
+### W7-A.2 🟦 INFO — `version` field required nhưng không enforce optimistic lock
+
+`schemas.AdmissionApproveRequest` (và Reject) required `version: int`. Race test sent same version twice → both passed schema, không có DB version check → race chỉ được catch bởi state machine (transition validation). Nếu transition allow same-status loop (hypothetical re-approve), 2 reviewers approve sẽ silently overwrite nhau, audit log có 2 rows nhưng `assigned_reviewer_id` chỉ giữ người commit cuối.
+
+**Recommend**: Promote `version` to true optimistic lock — `UPDATE profile SET status=..., version=version+1 WHERE id=:id AND version=:current_v` returning row count; 0 rows → `ConflictError`.
+
+---
+
+### W7-B File upload edge — security posture STRONG ✅
+
+| # | Test | Expected | Actual | Status |
+|---|---|---|---|---|
+| W7-B.a | 0-byte file Content-Type=pdf | 400 reject | 400 "magic bytes không khớp" | ✅ |
+| W7-B.b | 10MB exact PDF | 200 accept | 200 OK | ✅ boundary inclusive |
+| W7-B.c | 10MB+1 byte PDF | 400 reject | 400 "File too large (10.0MB). Max 10MB" | ✅ rejected |
+| W7-B.d | PNG content claimed Content-Type=pdf | 400 reject | 400 "Content-Type 'application/pdf' không khớp nội dung thực tế (image/png)" | ✅ ADM-019 sniff |
+| W7-B.e | filename=`../../../../etc/passwd` (valid PDF body) | 200, but stored at safe path | 200, stored at `uploads/admissions/42/cccd_6079f9b75cf4.pdf` | ✅ filename overridden |
+| W7-B.f | filename=`hồ_sơ_📄.pdf` unicode + emoji | 200, sanitized | 200, stored at `uploads/admissions/42/giay_khai_sinh_8016378bdf2a.pdf` | ✅ same pattern |
+
+**Hardening confirmed**:
+- Magic-byte sniff (ADM-019) — rejects content/MIME mismatch
+- Server-side `{doc_code}_{uuid12}.{sniffed_ext}` filename — client-supplied filename completely ignored
+- Extension derived from sniffed kind (not from `.pdf`/`.exe` suffix)
+- 10MB boundary inclusive (file_size > MAX_FILE_SIZE)
+
+**Single minor cosmetic finding W7-B.c2** 🟦:
+- 10MB+1 byte (= 10485761 byte) hiển thị "File too large (10.0MB). Maximum allowed: 10MB"
+- "10.0MB" do `{:.1f}` rounding của `10485761/(1024*1024) ≈ 10.000001` → "10.0"
+- Confusing vì user thấy size == limit nhưng vẫn bị reject
+- Fix: hiển thị byte count exact hoặc `{:.3f}` precision: "File too large (10.000MB > 10MB)"
+
+---
+
+### W7-C Notification delivery probes
+
+| # | Endpoint | Method | Status | Notes |
+|---|---|---|---|---|
+| L.1 | `GET /api/notification-rules?page_size=5` | List | 200 (77 rules) | ✅ |
+| L.1.3 | `GET /api/notification-rules/metadata` | Schema | 200 (58 events, 5 channels) | zalo_bot=planned/internal, sms=planned |
+| L.1.8 | `POST /api/notification-rules` event=invalid | Edge | **400 "Unknown event 'xxx'. Verify event name is a valid SystemEvents member."** | ✅ fail-closed |
+| L.2 | `GET /api/notification-templates` | List | 200 (52 templates) | ✅ |
+| L.3 | `GET /api/notification-deliveries?status=failed` | List | 200 (31 failed, all `circuit_breaker_open` for email channel) | 🟨 see L.3-INFO below |
+| L.3.3 | `POST /api/notification-deliveries/4523/replay` | Retry | 200 "Delivery replayed and enqueued" | ✅ (playbook listed `/retry` — stale, see W7-C.2) |
+| L.4 | `GET /api/notification-consents` | List | 200 (392 consents) | ✅ |
+| L.6 | `GET /api/notifications?unread_only=true` | Inbox | 200 (admin 176 unread, mgr 27 unread before W7-C.1 wipe) | – |
+| L.6.2 | `POST /mark-as-read {ids:[]}` | Edge | **200 marked ALL** | 🟥 W7-C.1 BUG |
+| Q.4.6 | `POST /api/webhooks/zalo` no/invalid sig | Webhook | 200 "probe" mode | ℹ️ INTENTIONAL |
+
+**L.3-INFO** 🟦: 31/31 failed deliveries có error `circuit_breaker_open` cho channel email — circuit breaker đang tripped trên SMTP provider, không có deliveries nào fail vì lý do khác (timeout/auth/bounce). Check `GET /api/notification-deliveries/circuit-breakers` để xem trạng thái breaker hiện tại + manual reset endpoint `POST /circuit-breakers/{channel}/reset`. Nếu breaker chronically open → escalate provider SMTP creds / quotas.
+
+**Q.4.6** ℹ️ **NOT a bug**: Zalo webhook `POST /api/webhooks/zalo` returns 200 + `{status:ok,mode:probe}` cho unsigned + invalid-signature requests. Comment trong code (`zalo_webhooks.py:42-46`) giải thích đây là intentional per Zalo OA webhook spec — "endpoint phải return HTTP 200 within 2 seconds, signature verification optional". Best-effort: signature được log nhưng không reject. Nếu Zalo siết signature requirement, flip 1 gate ở line 69-74.
+
+### W7-C.2 🟦 INFO — Playbook stale endpoint
+
+Playbook §L.3.3 ghi `POST /api/notification-deliveries/{id}/retry` — endpoint thực tế là **`/replay`** (`notification_delivery_ops.py:253`). Update playbook để tránh confusion cho QA agent tiếp theo.
+
+---
+
+### Wave 7 success criteria recap
+
+- ✅ 0 BLOCKER — no production crash / data corruption / auth bypass
+- 🟥 1 MAJOR (W7-C.1) — mark-as-read empty array marks ALL (1-line fix)
+- 🟧 1 MAJOR (W7-A.1) — wrong status code for concurrent approve race (UX + retry logic)
+- 🟨 0 elevated
+- 🟦 3 INFO — version semantic, error message rounding, playbook stale
+
+### Suggested fix order
+
+1. **W7-C.1** (urgent, 1-line) — `if notification_ids is not None` in `notification_repository.py:112`. Add anchor test `test_mark_as_read_empty_array_marks_zero()`. Audit `bulk_delete_for_user` for same pattern.
+2. **W7-A.1** (medium) — promote `version` field to true optimistic lock in `approve_admission` + `reject_admission` services; raise `ConflictError(409)` on mismatch before state-machine guard fires.
+3. **W7-B.c2** (cosmetic) — better error message formatting.
+4. **W7-C.2** — sed playbook `/retry` → `/replay`.
+
+---
+
 ## 🎨 WAVE 6 — §R/§S/§T a11y + mobile + performance (2026-05-16 ~17:00 UTC+7)
 
 ### Coverage matrix
@@ -283,7 +464,7 @@ Tổng cộng **20 findings** qua 2 wave (Wave 1: F1-F13, Wave 2: W2-1 đến W2
 | # | Sev | Status | Title | Detail |
 |---|---|---|---|---|
 | F3 | 🟥 | ✅ FIXED | PII leak `/api/admin/users` cho officer + accountant (email, phone, mfa_enabled, password_reset_required) | Tạo lightweight schema chỉ trả id/username/full_name/role/status/unit_id/avatar_url. Email/phone/mfa removed. |
-| F10 | 🟨 | 🔴 OPEN | Body validation chạy trước Casbin → leak schema cho user không quyền (E2, E3, E8, E20 trả 422 thay vì 403) | Pydantic body validation chạy trước Casbin check. Best practice: Casbin trước → validation sau. Move dependency order trong FastAPI. |
+| F10 | 🟨 → ✅ | **FIXED 2026-05-16 (Batch F PR #303)** | Audit kết luận scope nhỏ hơn báo cáo gốc: chỉ 3/4 routes ảnh hưởng. **E20 FALSE ALARM** — `/api/leads/import` officer Casbin ALLOW (per memory `lead-import-role-contract` — officer được import self-scoped); 422 với empty file là behavior đúng. **E2/E3/E8** confirmed: `reject` + `request-revision` + `drop` dùng `Depends(get_current_active_user)` + inline `if role not in [ADMIN,MANAGER]` check. FastAPI `solve_dependencies` parse Pydantic body TRƯỚC function body → officer 422 leak field names (`reason`, `version`, `notes`, `fields`). **Fix**: swap → `CasbinAuth` dep. Casbin enforce trong solve_dependencies phase 1, BEFORE body parse → officer/accountant nhận 403 PERMISSION_DENIED không leak schema. Manager/Admin (Casbin ALLOW) vẫn 422 nếu body invalid — behavior đúng. Anchor `test_admission_action_routes_casbin_first.py` (6 tests) lock 3 routes × 2 roles × empty body matrix. |
 
 ### 📊 KPI (1 finding — open)
 
