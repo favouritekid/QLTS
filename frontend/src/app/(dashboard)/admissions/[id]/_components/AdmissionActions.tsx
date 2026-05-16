@@ -104,17 +104,23 @@ export function AdmissionActions({
   
   return (
     <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-      <div className="container max-w-7xl mx-auto h-16 px-6 flex items-center justify-between">
+      {/* Mobile (<640px): allow horizontal scroll inside bar so wide
+          action sets (e.g. step 7 with 5 buttons) stay reachable without
+          forcing the user to scroll the whole page. Wave 6 S-BUG-1 fix
+          (action bar 549px overflow at 375px viewport). */}
+      <div className="container max-w-7xl mx-auto h-16 px-3 sm:px-6 flex items-center justify-between gap-2 overflow-x-auto">
         {/* Status Badge */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-shrink-0">
           <span className="text-sm font-medium text-muted-foreground hidden sm:inline-block">
             Trạng thái:
           </span>
           <StatusBadge config={statusConfig} />
         </div>
 
-        {/* Action Buttons - Phase 2: Context-Based */}
-        <div className="flex items-center gap-3">
+        {/* Action Buttons - Phase 2: Context-Based.
+            flex-shrink-0 prevents buttons collapsing into ellipsis;
+            scroll lives on the outer container. */}
+        <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
           {/* DELETE - Always available if can('delete') */}
           {can('delete') && onDelete && (
             <AlertDialog>
