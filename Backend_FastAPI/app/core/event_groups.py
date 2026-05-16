@@ -107,6 +107,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.ADMISSION_DECISION_WAITLISTED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_DECISION_REJECTED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_WAITLIST_PROMOTED: NotificationEventGroup.APPLICATION,
+    SystemEvents.ADMISSION_WAITLIST_REJECTED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_CONFIRMED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_ENROLLED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_WITHDRAWN: NotificationEventGroup.APPLICATION,

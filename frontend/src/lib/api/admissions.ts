@@ -552,6 +552,10 @@ export const admissionsApi = {
   // Magic-link confirmation (public)
   getConfirmTokenInfo,
   confirmAdmissionByToken,
+  // Phase 3 multi-NV publish (Wave 2 — declared in API + hook ngày trước
+  // nhưng quên thêm vào export object → CI tsc bắt lỗi
+  // `Property 'publishAdmissionResult' does not exist`)
+  publishAdmissionResult,
 }
 
 export default admissionsApi

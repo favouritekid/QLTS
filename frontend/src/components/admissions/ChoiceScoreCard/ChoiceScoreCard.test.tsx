@@ -44,6 +44,8 @@ function makeChoice(
     created_at: "2026-05-13T05:00:00Z",
     updated_at: "2026-05-13T05:00:00Z",
     display_path_name: "CNTT 2026 - HSA - DOT_1",
+    display_program_name: "Cao đẳng Công nghệ thông tin",
+    display_degree_level: "Cao đẳng",
     display_subject_group_name: "Toán-Lý-Hoá",
     scores: [
       {

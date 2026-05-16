@@ -185,6 +185,7 @@ event=SystemEvents.ADMISSION_DECISION_ADMITTED            T7 (approved + overrid
 event=SystemEvents.ADMISSION_DECISION_WAITLISTED          T8 (choice-engine, Phase 3 PR-3B)
 event=SystemEvents.ADMISSION_DECISION_REJECTED            T9
 event=SystemEvents.ADMISSION_WAITLIST_PROMOTED            T10 (source-aware: waitlisted→admitted, Phase 3 PR-3B)
+event=SystemEvents.ADMISSION_WAITLIST_REJECTED            T11 (source-aware: waitlisted→rejected, Wave 5 ship 2026-05-16)
 event=SystemEvents.ADMISSION_CONFIRMED                    T12
 event=SystemEvents.ADMISSION_ENROLLED                     T13
 event=SystemEvents.ADMISSION_WITHDRAWN                    T14/T15/T16
