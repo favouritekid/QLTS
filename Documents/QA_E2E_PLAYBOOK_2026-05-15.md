@@ -992,7 +992,7 @@ Manager KHÔNG được phép:
 |---|---|---|---|
 | L.3.1 | `/admin/notification-deliveries` | `GET /api/notification-deliveries` | Outbox table |
 | L.3.2 | Filter by status (pending/sent/failed) | – | – |
-| L.3.3 | Click "Retry failed" cho 1 row | `POST /api/notification-deliveries/{id}/retry` | 200 |
+| L.3.3 | Click "Retry failed" cho 1 row | `POST /api/notification-deliveries/{id}/replay` | 200 |
 | L.3.4 | Verify worker pickup → outbox row → sent | Celery log | – |
 
 ### L.4 Consent management

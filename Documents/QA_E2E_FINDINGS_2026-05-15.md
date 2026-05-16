@@ -23,8 +23,8 @@
 |---|---|---|---|
 | **W7-C.1** | 🟥 → ✅ | Notification | **FIXED 2026-05-16** — `mark-as-read {"notification_ids":[]}` no-op (trước marking ALL unread). Fix: `notification_repository.py:112` `if notification_ids is not None`. Anchor `test_qa_wave7_notif_and_race.py::test_mark_as_read_empty_array_is_noop`. |
 | **W7-A.1** | 🟧 → ✅ | Admission state machine | **FIXED 2026-05-16** — Racing reviewer nhận 409 ConflictError thay vì 400. Fix: swap version check BEFORE state validation trong 4 services (approve, reject, request_revision, mark_student_dropped). W7-A.2 (version semantics) resolved cùng. 3 anchor tests. |
-| **W7-B.c2** | 🟦 | Frontend i18n | Lỗi 10MB+1 hiển thị "10.0MB (max 10MB)" — rounding gây confusing UX |
-| **W7-C.2** | 🟦 | Doc/playbook | Endpoint replay là `/replay` không phải `/retry` — playbook §L.3.3 stale |
+| **W7-B.c2** | 🟦 → ✅ | Backend BadRequest msg | **FIXED 2026-05-16** — admission_service.py:4389 format `"File too large: 10,485,761 bytes (10.001MB). Maximum allowed: 10,485,760 bytes (10MB)."` — exact byte count + 3-decimal MB so 10MB+1 visually distinct từ max (was `.1f` rounding hai số giống nhau). |
+| **W7-C.2** | 🟦 → ✅ | Doc/playbook | **FIXED 2026-05-16** — playbook L.3.3 `/retry` → `/replay` để match actual router endpoint `notification_delivery_ops.py:253`. |
 | **W7-A.2** | 🟦 | Schema | Field `version` trong approve/reject schema required nhưng NOT enforced — race phụ thuộc state machine catch |
 | **Q.4.6** | 🟦 | Zalo webhook | Returns 200 bất kể signature valid/missing — **INTENTIONAL** per Zalo OA spec (anti-retry-storm), code documented |
 | **W7-B.a-f** | ✅ | File upload | 0-byte/spoof rejected qua magic-byte sniff; 10MB exact OK; 10MB+1 rejected; path traversal + unicode filename **neutralized** bởi server-side `{doc_code}_{uuid}` rename |

@@ -4384,9 +4384,15 @@ async def upload_document(
     file.file.seek(0)  # Reset to beginning
 
     if file_size > MAX_FILE_SIZE:
-        size_mb = file_size / (1024 * 1024)
+        # W7-B.c2 fix 2026-05-16: precise byte/MB display.
+        # `:.1f` rounded 10485761 bytes (10MB + 1 byte) → "10.0MB"
+        # giống max → user confused "tại sao reject?". Use exact bytes
+        # + 3-decimal MB so display KHÁC visually từ max.
+        size_mb_exact = file_size / (1024 * 1024)
+        max_mb_exact = MAX_FILE_SIZE / (1024 * 1024)
         raise BadRequest(
-            f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
+            f"File too large: {file_size:,} bytes ({size_mb_exact:.3f}MB). "
+            f"Maximum allowed: {MAX_FILE_SIZE:,} bytes ({max_mb_exact:.0f}MB)."
         )
 
     # ADM-019: content_type and extension are client-controlled. Sniff
