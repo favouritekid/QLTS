@@ -469,7 +469,7 @@ export function AdmissionDetailClient({
               Đợt tuyển sinh cho phép nộp hồ sơ chưa đầy đủ
               (<code>allow_unverified_submission=true</code>). Hồ sơ hiện có{" "}
               <strong>{profile.validation_errors?.length ?? 0}</strong> lỗi chưa khắc phục.
-              Vui lòng xem tab <strong>"Vấn đề cần sửa"</strong> trước khi phê duyệt.
+              Vui lòng xem tab <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> trước khi phê duyệt.
             </p>
           </div>
         )}

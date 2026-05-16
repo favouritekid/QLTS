@@ -82,10 +82,24 @@ const SUBJECT_LABELS: Record<string, string> = {
 }
 
 
-export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTabProps) {
-  // Phase 3 multi-NV gate: render ChoiceListEditor thay legacy single-NV
-  // form khi profile.uses_choice_engine=true. Component nhận BE-eager-loaded
-  // choices array; hasAction("add_choice") gated server-side.
+/**
+ * Pure dispatcher (Wave 7 ship 2026-05-16 — CI fix react-hooks/rules-of-hooks).
+ *
+ * Trước đây ScoresTab có early-return `if (uses_choice_engine) return <MultiNvScoresTab/>`
+ * BEFORE all useMemo/useWatch/useEffect/useRef hooks → CI ESLint bắt 16 errors
+ * vì hooks run conditionally based on uses_choice_engine flag. Local lint
+ * passed (older eslint config) nhưng CI strict catch.
+ *
+ * Fix: split thành 3 components:
+ * - `ScoresTab` — pure dispatcher (no hooks, just routing)
+ * - `MultiNvScoresTab` — multi-NV branch (hooks self-contained, đã có Wave 2)
+ * - `LegacySingleNvScoresTab` — legacy single-NV branch (hooks self-contained)
+ *
+ * Each branch's hooks scope inside its own component → compliance hooks rules
+ * (hooks ALWAYS run in same order within each function body).
+ */
+export function ScoresTab(props: ScoresTabProps) {
+  const { isEditable, appliedRules, profile } = props
   if (profile?.uses_choice_engine === true && profile?.id) {
     return (
       <MultiNvScoresTab
@@ -96,7 +110,10 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
       />
     )
   }
+  return <LegacySingleNvScoresTab {...props} />
+}
 
+function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: ScoresTabProps) {
   // Phase 2 Fix: Read minGpa from appliedRules (no prop, no default)
   // @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #2, #3
   const minGpa = appliedRules?.min_gpa
