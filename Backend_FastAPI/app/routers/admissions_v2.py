@@ -367,6 +367,7 @@ async def admin_rollback_admission(
     return schemas.AdmissionAdminRollbackResponse(
         profile_id=result["profile_id"],
         rolled_back_from=result["rolled_back_from"],
+        already_at_target=result.get("already_at_target", False),
     )
 
 

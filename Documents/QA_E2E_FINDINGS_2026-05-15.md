@@ -1,5 +1,225 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🚢 WAVE 9 — Multi-NV publish engine + Bulk import/export (2026-05-16 ~21:45 UTC+7)
+
+### Scope
+
+| Mini-wave | Coverage | Method |
+|---|---|---|
+| W9-J.1 Publish-result | §J.1: POST /api/v2/admissions/{id}/publish-result RBAC + state guard | curl 3-persona |
+| W9-J.5 Admin rollback (T17) | §J.5: rollback RBAC + reason validation + final-state guard | curl + DB inspect |
+| W9-J.7 Edge cases | §J.7: rollback non-final → 400 invalid transition, 404 nonexistent, idempotent rollback | curl |
+| W9-N.1 Lead import CSV | §N.1: missing cols, empty, malformed, SQLi cell, XSS cell, BOM, dup phone, mass-assign cols, cross-unit smuggle | curl multipart |
+| W9-N.2 Lead export | §N.2: officer/manager scope, status filter SQLi | curl |
+| W9-N.3 Bulk-assign | §N.4: RBAC admin-only? Manager/officer denied | curl |
+
+### Findings summary
+
+| # | Sev | Module | Title |
+|---|---|---|---|
+| **W9-N.1.3** | 🟥 → ✅ | Lead import | **FIXED 2026-05-16** — replaced `_rooms_for_lead(lead)` (undefined `lead` var) → broadcast rooms `["role_admin", f"user_room_{current_user.id}", f"unit_{unit_id}"]`. Live verify: officer import 2 rows → 200 + 2 created_lead_ids + no 500. |
+| **W9-N.1.2** | 🟥 → ✅ | Lead import | **FIXED 2026-05-16** — `pd.read_csv(..., dtype=str)` + `pd.read_excel(..., dtype=str)`. Leading 0 preserved. Live verify: VN phone `0900000901` round-trip OK. |
+| **W9-N.1.1** | 🟧 → ✅ | Lead import contract | **FIXED 2026-05-16** — `required_columns` excludes `unit_id` khi `default_unit_id is not None` (officer flow). Docstring promise giờ khớp code. |
+| **W9-J.7.idem** | 🟦 → ✅ | Admin rollback UX | **FIXED 2026-05-16** — rollback already-draft → 200 với `already_at_target=True` (no-op). Schema `AdmissionAdminRollbackResponse.already_at_target: bool=False` added; service short-circuit trước state machine. |
+| **W9-J.5** | ✅ | Admin rollback T17 | RBAC officer/manager 403, admin 200; reason min 10 chars enforced 422; final-state enrolled correctly rejected 400; 404 missing |
+| **W9-J.3** | ✅ | Waitlist promote | Officer→404 (Casbin DENY pattern), choice without waitlist decision → 404 |
+| **W9-N.2** | ✅ | Lead export | Officer scope (40 leads), manager scope (98 unit leads), status filter parameterized — SQLi neutralized |
+| **W9-N.3** | ✅ | Bulk-assign RBAC | Manager + officer cả 2 → 403 PERMISSION_DENIED (admin-only endpoint by design) |
+
+---
+
+### W9-N.1.3 🟥 BLOCKER — officer_import_leads NameError sau commit thành công
+
+**Endpoint**: `POST /api/leads/import`
+**Auth**: officer (id=16, unit 14)
+**Trigger**: ANY successful import row (`result.successful_imports > 0`)
+
+**Root cause** — `Backend_FastAPI/app/routers/leads.py:1518`:
+```python
+# ✅ NOTIFICATION: Dispatch LEAD_IMPORTED for officer import
+if result.successful_imports > 0:
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_IMPORTED,
+        payload=EventPayload.for_lead_imported(...),
+        rooms=_rooms_for_lead(lead),   # ❌ NameError: name 'lead' is not defined
+    )
+```
+
+Variable `lead` chưa từng được define trong scope của `officer_import_leads`. Hàm import nhiều leads cùng lúc — không có 1 `lead` singular object để pass. Code 100% dead-path khi `successful_imports > 0`.
+
+**Live evidence** — DB lead 418 created OK (commit succeeded at line 1503), but request 500'd at line 1518:
+```sql
+SELECT id, full_name, email, phone, unit_id, assigned_officer_id, created_at FROM lead WHERE email='wi@example.com';
+418|Wave9 Intl|wi@example.com|0900000222|14|16|2026-05-16 14:40:58
+```
+
+```
+2026-05-16T14:41:09 ERROR:    Exception in ASGI application
+  File "/app/app/routers/leads.py", line 1518, in officer_import_leads
+    rooms=_rooms_for_lead(lead),
+NameError: name 'lead' is not defined
+172.18.0.1 - "POST /api/leads/import HTTP/1.1" 500
+```
+
+**Production risk**:
+1. **Commit succeeded** → DB has new leads
+2. **500 returned to client** → user sees "Failed to import" toast
+3. **User retries** → creates duplicates (or fails dedupe → confusion)
+4. **Silent notification miss** — `LEAD_IMPORTED` never fired → managers don't get notification badge
+5. **Bigger issue** — main branch + deployed prod. Officer cannot import leads end-to-end. Possible workaround: officer suspect failure even though data is in DB → manual SQL check.
+
+**Fix** (1-2 lines):
+- Option A (simplest): omit `rooms=` (broadcast to default rooms):
+  ```python
+  rooms=None,  # or just drop param if Optional
+  ```
+- Option B: build per-lead rooms list from `result.created_lead_ids`:
+  ```python
+  rooms=[room for lid in result.created_lead_ids for room in _rooms_for_lead_id(lid)]
+  ```
+- Option C: dispatch unit-broadcast room:
+  ```python
+  rooms=[f"unit:{current_user.unit_id}"]
+  ```
+
+**Anchor test**: `test_officer_import_succeeds_dispatches_without_nameerror()` — assert `result.successful_imports == N` AND HTTP 200.
+
+**Note**: Memory `solo-dev-aggressive-wave-ship` — should be hotfix bundled với W8 PR #304 nếu chưa merge. Bug đã LIVE trên main.
+
+---
+
+### W9-N.1.2 🟥 MAJOR — pandas strips leading zero from phone column
+
+**Endpoint**: `POST /api/leads/import` (CSV path)
+**Root cause** — `lead_service.py:3465`:
+```python
+df = pd.read_csv(io.BytesIO(file_content))   # ⚠️ no dtype=str
+```
+
+Pandas infers `phone` column dtype as int64 → strips leading zero → `0900000111` → `900000111` → 9 digits → fails VN phone regex `^0(3|5|7|8|9|2)\d{8,9}$` → row rejected.
+
+**Live evidence**:
+```
+Pre-import CSV row: phone="0900000111"
+Pydantic error: input_value='900000111'   ← leading 0 GONE
+Error: Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam (VD: 0901234567)
+```
+
+3/3 rows in `happy.csv` failed identically. Workaround `+84900000111` succeeded (no leading 0 to strip + normalizer converts to `0900000222`) — but blocks W9-N.1.3 NameError → 500.
+
+**Risk**: **0% success rate** for standard CSV exports from Excel/CRM where phone shipped as `0900000111` literal. End users (officers) **cannot import any leads** via the documented column format. Combined with N.1.3, end-to-end import is fully broken.
+
+**Fix** (1 line):
+```python
+df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl", dtype=str)
+```
+
+**Defensive add**: phone column-specific dtype `dtype={'phone': str, 'phone2': str}` to keep numeric inference on `gpa`, `lead_score` etc.
+
+**Memory**: Add `feedback_pandas_dtype_str_for_phone_id` — Pandas auto-inference strips leading zero on phone/postal/ID columns; always force `dtype=str` for these fields.
+
+---
+
+### W9-N.1.1 🟧 MAJOR — Lead import contract mismatch (unit_id docstring vs validator)
+
+**Docstring claim** (`leads.py:1462-1464`):
+> **Required columns:** full_name, email, phone, source
+> **Note:** unit_id sẽ được tự động set thành unit của officer.
+
+**Actual behavior**:
+```
+POST /api/leads/import without unit_id column:
+HTTP=400 {"detail":"File is missing required columns: unit_id"}
+```
+
+Validator (likely in `lead_service.import_leads_from_file_content`) checks `unit_id` as required column BEFORE service applies `default_unit_id=current_user.unit_id`.
+
+**Fix**:
+- Option A (preferred): drop `unit_id` from validator's required list; service-layer auto-fill survives
+- Option B: update docstring to say `unit_id` is required
+- Memory: lesson — keep docstring + validator + Zod schema in 3-way sync (similar pattern to `service-explicit-dict-field-drop-pattern`)
+
+---
+
+### W9-J.7.idem 🟦 INFO — Admin rollback already-draft UX
+
+`POST /api/v2/admissions/{id}/admin-rollback` khi profile ALREADY `status=draft`:
+```
+HTTP=400 {"detail":"Invalid transition: draft → draft. Allowed transitions from draft: submitted, withdrawn"}
+```
+
+Confusing UX for admin:
+1. Admin clicked "Rollback" → server should know admin WANTS draft → return 200 no-op
+2. OR clear message: "Hồ sơ đã ở trạng thái draft, không cần rollback"
+
+**Fix**: thêm pre-check ở `admin_rollback_profile` service: nếu `profile.status == 'draft'`, return idempotent success với message "Already at target state". State machine `validate_transition` chỉ fire khi source != target.
+
+---
+
+### W9-J.5 ✅ Admin rollback T17 — full matrix verified
+
+| Probe | Result |
+|---|---|
+| Officer → admin-rollback | 403 "Admin access required for this operation" ✓ |
+| Manager → admin-rollback | 403 (Casbin DENY at policy layer per memory) ✓ |
+| Admin → rollback approved profile 39 | 200 `{"rolled_back_from":"approved","status":"draft"}` ✓ |
+| Admin → rollback enrolled profile 22 | 400 "Hồ sơ ở trạng thái cuối ('enrolled') không thể rollback" ✓ |
+| Admin → rollback nonexistent 99999 | 404 "Hồ sơ 99999 không tồn tại" ✓ |
+| `{"reason":"short"}` (5 chars) | 422 "String should have at least 10 characters" ✓ |
+| `{"reason":""}` | 422 same as above ✓ |
+| `{}` (no reason) | 422 "Field required" ✓ |
+
+Reason min 10/max 500 chars enforced at Pydantic — service-layer defensive check matches.
+
+---
+
+### W9-N.2 ✅ Lead export
+
+| Probe | Result |
+|---|---|
+| Officer GET /api/leads/export?format=csv | 200, 40KB, 40 leads (assigned_officer_id=16 scope) |
+| Manager GET /api/leads/export?format=csv | 200, 98KB, 98 leads (full unit 14 scope) |
+| Admin status filter SQLi `status=qualified' OR 1=1--` | 200 with header row only (0 data rows) — payload treated as literal string, filter safely parameterized ✓ |
+
+CSV BOM (`﻿`) đầu file → Excel-compatible ✓.
+
+---
+
+### W9-N.3 ✅ Bulk-assign RBAC
+
+`POST /api/admin/users/leads/bulk-assign` payload `{lead_ids:[418,410,402],officer_id:16}`:
+- Officer (16): **403 PERMISSION_DENIED** ✓
+- Manager (manager_qa unit 14): **403 PERMISSION_DENIED** — by design (admin-only)
+
+Per memory `lead-bulk-assign-callbacks-pr6`, bulk_assign service contract supports manager scope, but Casbin policy gates only admin to this endpoint. If product wants manager bulk-assign within unit scope, need Casbin policy update + service unit-validation. Currently working as policy intends.
+
+---
+
+### Wave 9 success criteria recap
+
+- 🟥 **2 BLOCKER** in officer lead import path:
+  - W9-N.1.3: NameError 'lead' undefined → 500 after commit (data corruption risk)
+  - W9-N.1.2: pandas strips leading 0 → 0% phone validation pass rate
+- 🟧 1 MAJOR W9-N.1.1: docstring vs validator mismatch (unit_id required despite "auto-fill" claim)
+- 🟦 1 INFO W9-J.7.idem: rollback already-draft UX
+- ✅ Admin rollback T17 full matrix
+- ✅ Multi-NV waitlist promote (RBAC sane, no positive path tested — no `decision=waitlist` test data)
+- ✅ Lead export 3-tier scope + SQLi-safe
+- ✅ Bulk-assign RBAC
+
+### Suggested fix order
+
+1. **W9-N.1.3** (P0, prod-blocking) — 1-line fix `rooms=` param; bundle hotfix urgently. Confirm với git log nếu line 1518 mới recent ship.
+2. **W9-N.1.2** (P0, prod-blocking) — 1-line `dtype=str` ở pd.read_csv + pd.read_excel; anchor test for phone preservation.
+3. **W9-N.1.1** (P1) — Drop `unit_id` from required-columns validator; update docstring nếu retain required.
+4. **W9-J.7.idem** (P3) — Pre-check idempotent rollback in service.
+
+**Bundle recommendation**: W9-N.1.2 + W9-N.1.3 + W9-N.1.1 trong 1 hotfix PR "fix(lead-import): pandas dtype + officer dispatch NameError + unit_id column contract" — cùng file scope, < 10 LOC tổng, deploy chung.
+
+---
+
 ## 🛡️ WAVE 8 — Security adversarial + Data integrity race (2026-05-16 ~20:30 UTC+7)
 
 ### Scope
@@ -19,7 +239,7 @@
 |---|---|---|---|
 | **W8-F.1** | 🟥 → ✅ | Admin users API | **FIXED 2026-05-16** — MissingGreenlet sau `db.commit()` (expire_on_commit expire attrs → downstream lazy hit pool ping → no greenlet → 500). Fix: capture all needed IDs (`_updated_user_id` + `_updated_username` + `_updated_role` + `_updated_unit_id` + `_current_admin_id`) trong plain vars BEFORE commit + `db.refresh(updated_user)` trước return. 2 anchor tests. |
 | **W8-A.3.1** | 🟧 → ✅ | Multi router | **FIXED 2026-05-16** — applied Literal pattern (Q-INFO-1 PR #299) sang 5 routes còn lại: `leads.py` (×2), `officer.py` drilldowns consultations/transitions/cohorts (×3), `collaborators.py` (×1). Mỗi Literal mirror repo ALLOWED_SORT_FIELDS / sort_map keys → 422 literal_error thay vì 200 silent fallback. |
-| **W8-A.3.2** | 🟦 | Defense-in-depth | XSS payload `<script>` stored + returned RAW trong `full_name`; depend hoàn toàn FE escape (React JSX OK nhưng risky nếu dangerouslySetInnerHTML xuất hiện) |
+| **W8-A.3.2** | 🟦 → ✅ | Defense-in-depth | **FIXED 2026-05-16 (XSS escape part)** — UserUpdate `_escape_full_name` validator HTML-escape `<script>` → `&lt;script&gt;` server-side. Mirror pattern from admission_schema.py:70. Live verify: PUT user 20 với XSS payload → stored + returned escaped. **CSP audit**: prod CSP đã strict `script-src 'self'` (main.py:737); dev `unsafe-inline` ổn cho dev hot-reload. False alarm CSP part. |
 | **W8-A.1** | ✅ | Mass-assignment | PUT profile/lead/admission whitelist schema; sneak `role`/`unit_id`/`status`/`approved_at` đều bị Pydantic drop |
 | **W8-A.2** | ✅ | IDOR | 3-tier officer/manager scope returns 404 đúng spec; magic-link action mismatch → 404, brute-force CCCD lock sau 5 attempts |
 | **W8-A.4** | ✅ | JWT/session | alg=none / tamper sig / role escalate / expired ALL → 401 INVALID_TOKEN |

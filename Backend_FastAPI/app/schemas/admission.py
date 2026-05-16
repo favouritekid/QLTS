@@ -1818,6 +1818,7 @@ class AdmissionAdminRollbackResponse(BaseModel):
     profile_id: int
     status: Literal["draft"] = "draft"
     rolled_back_from: str  # The status the profile was in BEFORE rollback
+    already_at_target: bool = False  # W9-J.7.idem 2026-05-16: True when no-op (profile already draft)
 
 
 __all__ = [

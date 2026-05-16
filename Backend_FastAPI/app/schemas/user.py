@@ -156,6 +156,20 @@ class UserUpdate(BaseModel):
     skills: Optional[List[str]] = None
     unit_id: Optional[int] = None  # Organizational unit assignment
 
+    # W8-A.3.2 defense-in-depth 2026-05-16: HTML-escape user-supplied
+    # text fields. Frontend already escapes via React JSX, but server-
+    # side belt+suspenders prevents stored XSS if any downstream
+    # consumer (export CSV, PDF, email template, dangerouslySetInnerHTML
+    # leak) bypasses React escaping. Mirror pattern from admission
+    # schema (admission.py:70).
+    @field_validator("full_name", mode="before")
+    @classmethod
+    def _escape_full_name(cls, v):
+        if v is None or not isinstance(v, str):
+            return v
+        import html
+        return html.escape(v.strip())
+
 
 class UsersPage(BaseModel):
     total_count: int
