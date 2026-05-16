@@ -105,16 +105,12 @@ EXPECTED = {
         True, True, True, True, True,
         # 6-8 manager-only (wildcard /* .*)
         True, True, True,
-        # 9-14 future v2 routes — admin INHERITS accountant via
-        # diamond (g, role:admin, role:accountant); accountant carries
-        # explicit deny on these routes; deny-first effect propagates
-        # the deny via inheritance even though admin also matches the
-        # wildcard allow. This is the documented diamond-inheritance
-        # conflict from PLAN §3.3.b. The follow-up task (alongside #15
-        # wiring the real v2 endpoints) will either drop the
-        # admin↔accountant diamond edge or move admin's v2 actions to
-        # routes that do not collide with the accountant deny set.
-        False, False, False, False, False, False,
+        # 9-14 v2 routes — 2026-05-15 fix: `admin → accountant` diamond
+        # edge dropped (phase3_02 migration + main.py:378-383). Admin
+        # wildcard ALLOW is no longer poisoned by accountant explicit
+        # DENYs → admin enforces True on all 6 v2 routes (the desired
+        # post-fix shape; PLAN §3.3.b line 1407 intent finally realized).
+        True, True, True, True, True, True,
     ],
     "role:manager": [
         True, True, True, True, True,
@@ -135,8 +131,16 @@ EXPECTED = {
         False, False, True, True, True, False,
     ],
     "role:accountant": [
-        # 1-5 inherits officer; baseline allow.
-        True, True, True, True, True,
+        # 1-5 baseline — Wave 4 2026-05-16 added explicit accountant DENYs
+        # on /api/leads + /api/admissions* (F8/F9 tightening: accountant
+        # has no business reading lead/admission lists). Cell 5
+        # (/api/profile) remains True (no DENY rule).
+        #   1 /api/leads                    GET   — Wave 4 DENY
+        #   2 /api/admissions               GET   — Wave 4 DENY
+        #   3 /api/admissions/{id}          GET   — Wave 4 DENY
+        #   4 /api/admissions/{id}/submit   POST  — Wave 4 DENY
+        #   5 /api/profile                  GET   — no DENY → officer inherit
+        False, False, False, False, True,
         # 6-8 manager-only; accountant does NOT inherit manager →
         # no allow match → deny.
         False, False, False,
@@ -217,13 +221,14 @@ async def _seed_test_db_and_load_enforcer(
                         },
                     )
 
-            # Diamond inheritance g rules (mirror app/main.py:330).
+            # Tree inheritance g rules (mirror app/main.py:378-383 post
+            # 2026-05-15 fix — diamond `admin → accountant` edge removed
+            # so admin wildcard ALLOW is not poisoned by accountant DENYs).
             for child, parent in (
                 ("role:officer",    "role:user"),
                 ("role:accountant", "role:officer"),
                 ("role:manager",    "role:officer"),
                 ("role:admin",      "role:manager"),
-                ("role:admin",      "role:accountant"),
             ):
                 await conn.execute(
                     text(
@@ -380,10 +385,12 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
       - PR-3D-B BE-1 (PR #271, 2026-05-13) added 4 deny rows for the
         Phase 3 choice CRUD routes (policy_templates.py:346-349) so
         finance staff cannot mutate multi-NV choices via /api/v2.
-      - Total NOW: 10 deny rows. Test name kept as
-        ``test_accountant_deny_rows_seeded`` (was
-        ``test_six_accountant_deny_rows_seeded``) to drop the stale
-        magic number from the API surface.
+      - Wave 4 (2026-05-16) added 22 deny rows on /api/admissions/* +
+        /api/leads/* legacy routes (F8/F9 Casbin tightening — accountant
+        had no business reading lead/admission lists or mutating profiles).
+      - Wave 7 (2026-05-16) added 1 deny row on /api/admissions/{id}/
+        send-magic-link (W2-1 generate-side endpoint).
+      - Total NOW: 33 deny rows.
     """
     db_url = os.environ["DATABASE_URL"]
     enforcer, engine = await _seed_test_db_and_load_enforcer(db_url)
@@ -416,6 +423,33 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/v2/admissions/*/choices/*",        "DELETE"),
             ("/api/v2/admissions/*/choices/*",        "PATCH"),
             ("/api/v2/admissions/*/choices/*/scores", "PATCH"),
+            # Wave 4 (2026-05-16) — admission legacy routes deny (13 rows)
+            ("/api/admissions",                       "GET"),
+            ("/api/admissions",                       "POST"),
+            ("/api/admissions/{id}",                  "GET"),
+            ("/api/admissions/{id}",                  "PUT"),
+            ("/api/admissions/{id}/submit",           "POST"),
+            ("/api/admissions/{id}/resubmit",         "POST"),
+            ("/api/admissions/{id}/withdraw",         "POST"),
+            ("/api/admissions/{id}/minor-correction", "POST"),
+            ("/api/admissions/{id}/send-confirmation", "POST"),
+            ("/api/admissions/stats",                 "GET"),
+            ("/api/admissions/status-counts",         "GET"),
+            ("/api/admissions/academic-years",        "GET"),
+            # Wave 4 — lead legacy routes deny (10 rows)
+            ("/api/leads",                            "GET"),
+            ("/api/leads",                            "POST"),
+            ("/api/leads/{id}",                       "GET"),
+            ("/api/leads/{id}",                       "PUT"),
+            ("/api/leads/{id}/timeline",              "GET"),
+            ("/api/leads/{id}/insights",              "GET"),
+            ("/api/leads/{id}/audit-logs",            "GET"),
+            ("/api/leads/{id}/consultations",         "GET"),
+            ("/api/leads/check-duplicate",            "GET"),
+            ("/api/leads/import",                     "POST"),
+            ("/api/leads/import/template",            "GET"),
+            # Wave 7 (2026-05-16) — W2-1 magic-link generate accountant deny
+            ("/api/admissions/{id}/send-magic-link",  "POST"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "

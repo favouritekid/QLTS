@@ -73,9 +73,10 @@ def test_legacy_status_to_event_has_10_distinct_events() -> None:
 
 
 def test_transition_pair_to_event_locked_set() -> None:
-    """Phase 3 source-aware mapping locked. 12 pair entries total:
+    """Phase 3 source-aware mapping locked. 13 pair entries total:
 
     - T10 (waitlisted → admitted) → ADMISSION_WAITLIST_PROMOTED (PR-3B Sub-2)
+    - T11 (waitlisted → rejected) → ADMISSION_WAITLIST_REJECTED (Wave 5 2026-05-16)
     - T17 (11 source states → draft) → ADMISSION_ROLLED_BACK (PR-3C Sub-3.5)
 
     Adding new pair entries requires same audit discipline as
@@ -84,6 +85,8 @@ def test_transition_pair_to_event_locked_set() -> None:
     assert state_service.TRANSITION_PAIR_TO_EVENT == {
         # T10
         ("waitlisted", "admitted"): SystemEvents.ADMISSION_WAITLIST_PROMOTED,
+        # T11 (Wave 5) — distinguish manual waitlist rejection from cascade rejection
+        ("waitlisted", "rejected"): SystemEvents.ADMISSION_WAITLIST_REJECTED,
         # T17 — 11 pair entries (one per non-final non-WITHDRAWN/ENROLLED source)
         ("submitted",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
         ("reviewing",          "draft"): SystemEvents.ADMISSION_ROLLED_BACK,
@@ -152,18 +155,21 @@ def test_mapping_and_deferred_are_disjoint() -> None:
     assert overlap == set(), f"Events both mapped and deferred: {overlap!r}"
 
 
-def test_total_admission_events_is_12() -> None:
-    """B2.1 catalog ships 12 ADMISSION_* milestone events; Phase 3
-    PR-3B Sub-2 accounts for all 12:
+def test_total_admission_events_is_13() -> None:
+    """Catalog ships 13 ADMISSION_* milestone events post-Wave 5 2026-05-16:
     - 10 distinct events via LEGACY_STATUS_TO_EVENT (target-keyed)
-    - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED)
-    - 1 deferred (T17 ROLLED_BACK, awaits PR-3C router)
+    - 2 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED + T11 WAITLIST_REJECTED)
+    - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T17 ROLLED_BACK — 11 pair entries
+      collapse to single event name)
+
+    Wave 5 added T11 ADMISSION_WAITLIST_REJECTED to distinguish manual
+    waitlist rejection from generic engine cascade rejection.
     """
     mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
     pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
     deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
     total = len(mapped | pair | deferred)
-    assert total == 12
+    assert total == 13
 
 
 # ---------------------------------------------------------------------------
