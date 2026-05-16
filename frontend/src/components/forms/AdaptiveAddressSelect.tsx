@@ -215,6 +215,7 @@ export function AdaptiveAddressSelect({
                 value={residentialGroupValue ?? ""}
                 onChange={(e) => onResidentialGroupChange(e.target.value)}
                 placeholder="Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố"
+                aria-label="Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố"
                 disabled={disabled}
               />
             </div>
@@ -225,6 +226,7 @@ export function AdaptiveAddressSelect({
                 value={streetAddressValue ?? ""}
                 onChange={(e) => onStreetAddressChange(e.target.value)}
                 placeholder="Số nhà, tên đường"
+                aria-label="Số nhà, tên đường"
                 disabled={disabled}
               />
             </div>

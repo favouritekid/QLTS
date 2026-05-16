@@ -74,7 +74,9 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
           <Link
             href={link.href}
             className={cn(
-              "text-muted-foreground hover:bg-muted hover:text-foreground flex h-9 w-9 items-center justify-center rounded-lg transition-colors",
+              // Wave 6 S-BUG-2: min 44×44 touch target (Apple HIG, WCAG 2.5.5).
+              // Was h-9 w-9 (36×36) — failed mobile tap accuracy criterion.
+              "text-muted-foreground hover:bg-muted hover:text-foreground flex h-11 w-11 items-center justify-center rounded-lg transition-colors",
               isActive &&
                 "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
             )}
