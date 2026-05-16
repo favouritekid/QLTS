@@ -88,13 +88,19 @@ def upgrade() -> None:
             )
         )
 
-    # Insert correct entry (idempotent — skip if already exists)
+    # Insert correct entry (idempotent — skip if already exists).
+    # CRITICAL FIX 2026-05-16 (post-merge regression W4-1): include v3 column
+    # (eft = "allow") — Casbin model `p = sub, obj, act, eft` requires all 4
+    # fields. Missing v3 → NULL → load_policy() raises RuntimeError("invalid
+    # policy size") → 500 on every enforce() call → all admission endpoints
+    # crash. qae2e02 hotfix sweeps any NULL v3 rows already in DB.
     op.execute(
         sa.text(
             """
-            INSERT INTO casbin_rule (ptype, v0, v1, v2)
+            INSERT INTO casbin_rule (ptype, v0, v1, v2, v3)
             SELECT CAST('p' AS VARCHAR), CAST('role:manager' AS VARCHAR),
-                   CAST('/api/leads/export' AS VARCHAR), CAST('GET' AS VARCHAR)
+                   CAST('/api/leads/export' AS VARCHAR), CAST('GET' AS VARCHAR),
+                   CAST('allow' AS VARCHAR)
             WHERE NOT EXISTS (
                 SELECT 1 FROM casbin_rule
                 WHERE ptype = 'p'
@@ -108,14 +114,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Re-insert dead refunds policies (idempotent)
+    # Re-insert dead refunds policies (idempotent, v3='allow')
     for obj, act in DEAD_REFUNDS:
         op.execute(
             sa.text(
                 """
-                INSERT INTO casbin_rule (ptype, v0, v1, v2)
+                INSERT INTO casbin_rule (ptype, v0, v1, v2, v3)
                 SELECT CAST('p' AS VARCHAR), CAST(:v0 AS VARCHAR),
-                       CAST(:v1 AS VARCHAR), CAST(:v2 AS VARCHAR)
+                       CAST(:v1 AS VARCHAR), CAST(:v2 AS VARCHAR),
+                       CAST('allow' AS VARCHAR)
                 WHERE NOT EXISTS (
                     SELECT 1 FROM casbin_rule
                     WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
@@ -128,14 +135,16 @@ def downgrade() -> None:
             )
         )
 
-    # Restore wrong leads export paths + remove correct one
+    # Restore wrong leads export paths + remove correct one (downgrade
+    # also includes v3='allow' per Casbin policy contract).
     for obj, act in WRONG_LEADS_EXPORT:
         op.execute(
             sa.text(
                 """
-                INSERT INTO casbin_rule (ptype, v0, v1, v2)
+                INSERT INTO casbin_rule (ptype, v0, v1, v2, v3)
                 SELECT CAST('p' AS VARCHAR), CAST('role:manager' AS VARCHAR),
-                       CAST(:v1 AS VARCHAR), CAST(:v2 AS VARCHAR)
+                       CAST(:v1 AS VARCHAR), CAST(:v2 AS VARCHAR),
+                       CAST('allow' AS VARCHAR)
                 WHERE NOT EXISTS (
                     SELECT 1 FROM casbin_rule
                     WHERE ptype = 'p' AND v0 = 'role:manager'
