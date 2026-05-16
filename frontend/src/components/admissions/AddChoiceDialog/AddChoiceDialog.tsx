@@ -22,7 +22,7 @@
  *   - round.allow_multi_nv == True
  *   - existing_count < system_config.max_choices_per_profile
  */
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
@@ -118,18 +118,26 @@ export function AddChoiceDialog({
     return configsData?.items.find((c) => c.id === selectedConfigId) ?? null
   }, [configsData, selectedConfigId])
 
-  // Reset selections when dialog reopens
-  useEffect(() => {
+  // Reset selections when dialog reopens — derive via render-time
+  // comparison instead of useEffect cascade. React docs-blessed pattern:
+  // https://react.dev/learn/you-might-not-need-an-effect#resetting-all-state-when-a-prop-changes
+  // Avoids react-compiler `Calling setState synchronously within an effect`
+  // diagnostic on `npm run lint` (CI eslint stricter than local).
+  const [lastOpen, setLastOpen] = useState(open)
+  if (lastOpen !== open) {
+    setLastOpen(open)
     if (open) {
       setSelectedPathId(null)
       setSelectedConfigId(null)
       setScores([])
       setServerError(null)
     }
-  }, [open])
+  }
 
-  // Initialize scores rows when sg_config selected
-  useEffect(() => {
+  // Initialize scores rows when sg_config changes — same pattern.
+  const [lastConfigId, setLastConfigId] = useState<number | null>(selectedConfigId)
+  if (lastConfigId !== selectedConfigId) {
+    setLastConfigId(selectedConfigId)
     if (selectedConfig) {
       setScores(
         selectedConfig.subjects.map((s) => ({
@@ -141,7 +149,7 @@ export function AddChoiceDialog({
     } else {
       setScores([])
     }
-  }, [selectedConfig])
+  }
 
   const validateScore = (
     raw: string,

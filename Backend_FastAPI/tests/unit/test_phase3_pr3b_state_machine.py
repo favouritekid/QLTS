@@ -208,12 +208,19 @@ async def test_t10_waitlisted_to_admitted_fires_waitlist_promoted(
 
 @pytest.mark.asyncio
 async def test_t11_waitlisted_to_rejected(db_session, patched_audit_and_dispatch):
-    """T11: admin finalize reject from waitlist. Fires ADMISSION_DECISION_REJECTED."""
+    """T11: admin finalize reject from waitlist. Fires
+    ADMISSION_WAITLIST_REJECTED (source-aware, Wave 5 ship 2026-05-16).
+
+    Before Wave 5: pair (waitlisted, rejected) fell through to generic
+    ADMISSION_DECISION_REJECTED. After Wave 5: PAIR map distinguishes
+    second-pass admin finalize (T11 source) from first-pass cascade
+    reject (T9 source). Consumers cần distinguish for audit + UX.
+    """
     _, dispatch_mock = patched_audit_and_dispatch
     profile = _profile("waitlisted")
     await state_service.transition(db_session, profile, "rejected", actor=_actor())
     assert profile.status == "rejected"
-    assert dispatch_mock.await_args.kwargs["event"] == SystemEvents.ADMISSION_DECISION_REJECTED
+    assert dispatch_mock.await_args.kwargs["event"] == SystemEvents.ADMISSION_WAITLIST_REJECTED
 
 
 @pytest.mark.asyncio

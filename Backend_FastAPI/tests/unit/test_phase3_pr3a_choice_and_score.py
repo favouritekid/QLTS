@@ -790,9 +790,22 @@ async def test_revision_chain_phase3_01_after_phase2_06(setup_test_database):
     assert rev.down_revision == "phase2_06", (
         f"down_revision drift: got {rev.down_revision!r}, expected 'phase2_06'"
     )
-    # Head anchor — phase3_01 must be current head
+    # Head anchor — phase3_01 must be in the linear chain (ancestor of
+    # current head). Wave 1-7 added phase3_02..phase3_06 chain on top,
+    # so direct `head==phase3_01` check stale. Verify ancestry via
+    # walking down_revision chain from head back to phase3_01.
     heads = script.get_heads()
-    assert "phase3_01" in heads, f"phase3_01 not in heads: {heads}"
+    assert len(heads) == 1, f"Expected single head; got {heads}"
+    cur = script.get_revision(heads[0])
+    chain = []
+    while cur is not None:
+        chain.append(cur.revision)
+        if cur.down_revision is None:
+            break
+        cur = script.get_revision(cur.down_revision)
+    assert "phase3_01" in chain, (
+        f"phase3_01 not in revision chain from head {heads[0]}: {chain}"
+    )
 
 
 @pytest.mark.asyncio

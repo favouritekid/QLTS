@@ -216,6 +216,7 @@ async def waitlist_promote_choice(
     return schemas.AdmissionWaitlistPromoteResponse(
         choice_id=result["choice_id"],
         profile_id=result["profile_id"],
+        profile_status=result["profile_status"],
     )
 
 
@@ -291,6 +292,7 @@ async def waitlist_reject_choice(
     return schemas.AdmissionWaitlistRejectResponse(
         choice_id=result["choice_id"],
         profile_id=result["profile_id"],
+        profile_status=result["profile_status"],
     )
 
 

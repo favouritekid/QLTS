@@ -1757,6 +1757,7 @@ class AdmissionWaitlistPromoteResponse(BaseModel):
     choice_id: int
     decision: Literal["admitted"] = "admitted"
     profile_id: int
+    profile_status: Literal["admitted"] = "admitted"
 
 
 class AdmissionWaitlistRejectRequest(BaseModel):
@@ -1789,6 +1790,7 @@ class AdmissionWaitlistRejectResponse(BaseModel):
     choice_id: int
     decision: Literal["rejected"] = "rejected"
     profile_id: int
+    profile_status: Literal["rejected"] = "rejected"
     profile_status: Literal["admitted"] = "admitted"
 
 

@@ -341,7 +341,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                     </TooltipTrigger>
                     <TooltipContent side="bottom" className="max-w-xs">
                       <p className="text-xs">
-                        Lead cần ở trạng thái <strong>"Đồng ý tư vấn"</strong>
+                        Lead cần ở trạng thái <strong>&ldquo;Đồng ý tư vấn&rdquo;</strong>
                         {" "}trở lên + có <strong>chương trình đào tạo</strong>
                         {" "}+ <strong>lịch sử tư vấn</strong>. Hệ thống sẽ báo
                         nếu chưa đủ điều kiện sau khi nhấn nút.
