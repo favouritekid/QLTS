@@ -3461,10 +3461,16 @@ async def import_leads_from_file_content(
         if not file_content:
             raise ValueError("Empty file uploaded.")
 
+        # W9-N.1.2 fix 2026-05-16: force `dtype=str` on read so pandas
+        # doesn't infer phone column as int64 → strip leading 0 →
+        # `0900000111` → `900000111` → 9 digits → fail VN phone regex
+        # `^0(3|5|7|8|9|2)\d{8,9}$` → 100% standard CSV exports rejected.
+        # Forcing string dtype keeps every column as-typed; Pydantic
+        # downstream coerces what needs coercing.
         if file_extension == "csv":
-            df = pd.read_csv(io.BytesIO(file_content))
+            df = pd.read_csv(io.BytesIO(file_content), dtype=str)
         else:  # xlsx
-            df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+            df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl", dtype=str)
 
         log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
 
@@ -3489,7 +3495,17 @@ async def import_leads_from_file_content(
         )
 
     # --- 3. Validate columns and process data ---
-    required_columns = {"full_name", "email", "phone", "source", "unit_id"}
+    # W9-N.1.1 fix 2026-05-16: unit_id chỉ REQUIRED khi caller không
+    # cung cấp `default_unit_id` (admin import). Officer flow override
+    # mọi row với current_user.unit_id (line ~3628) → unit_id column
+    # trong CSV bị ignore. Docstring router nói "auto-set từ officer"
+    # → contract đúng. Trước fix, officer CSV thiếu unit_id column →
+    # 400 "Missing required columns: unit_id" → user khó khăn tạo CSV.
+    base_required = {"full_name", "email", "phone", "source"}
+    if default_unit_id is None:
+        required_columns = base_required | {"unit_id"}
+    else:
+        required_columns = base_required
 
     # Normalize column names (lowercase, strip, replace spaces)
     df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")

@@ -665,6 +665,21 @@ async def admin_rollback_profile(
             "Lý do rollback bắt buộc, tối thiểu 10 ký tự"
         )
 
+    # W9-J.7.idem fix 2026-05-16: idempotent no-op khi đã ở 'draft'.
+    # Trước: state machine raise "Invalid transition: draft → draft"
+    # → 400 confusing UX ("not allowed"). Sau: 200 với
+    # `already_at_target=true` cho FE phân biệt no-op vs actual rollback.
+    if rolled_back_from == "draft":
+        return (
+            {
+                "profile_id": profile.id,
+                "status": "draft",
+                "rolled_back_from": "draft",
+                "already_at_target": True,
+            },
+            None,
+        )
+
     _, callback = await state_service.transition(
         db, profile, "draft",
         actor=actor,

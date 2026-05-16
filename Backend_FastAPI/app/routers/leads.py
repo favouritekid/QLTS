@@ -1504,6 +1504,12 @@ async def officer_import_leads(
         await callback()
 
         # ✅ NOTIFICATION: Dispatch LEAD_IMPORTED for officer import
+        # W9-N.1.3 fix 2026-05-16: `lead` variable never defined trong
+        # officer_import_leads scope (bulk endpoint imports N leads, no
+        # singular Lead). Was `NameError` → 500 sau commit thành công
+        # → DB had rows nhưng client thấy "Failed to import" → user
+        # retries → duplicate / dedupe confusion. Fix: build rooms from
+        # actor unit + role_admin (broadcast to admins + officer's unit).
         if result.successful_imports > 0:
             await safe_dispatch(
                 db=db,
@@ -1515,7 +1521,10 @@ async def officer_import_leads(
                     filename=file.filename or "unknown",
                     created_lead_ids=result.created_lead_ids,
                 ),
-                rooms=_rooms_for_lead(lead),
+                rooms=(
+                    ["role_admin", f"user_room_{current_user.id}"]
+                    + ([f"unit_{current_user.unit_id}"] if current_user.unit_id else [])
+                ),
             )
 
         return result

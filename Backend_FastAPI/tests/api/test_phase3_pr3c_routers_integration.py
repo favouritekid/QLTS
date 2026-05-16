@@ -1471,13 +1471,24 @@ async def test_admin_rollback_response_schema_locked(
     )
     assert response.status_code == 200
     body = response.json()
-    expected_keys = {"profile_id", "status", "rolled_back_from"}
+    # W9-J.7.idem 2026-05-16: shape expanded with optional `already_at_target`
+    # (default False). FE consumer ignoring extra keys is fine; required
+    # keys still locked. Anchor verifies (a) all required keys present
+    # (b) no UNEXPECTED keys beyond the documented allowlist.
+    required_keys = {"profile_id", "status", "rolled_back_from"}
+    allowed_keys = required_keys | {"already_at_target"}
     actual_keys = set(body.keys())
-    assert actual_keys == expected_keys, (
-        f"T17 response keys drift. Expected: {expected_keys}, got: {actual_keys}. "
-        f"BUG: shape change without API version bump breaks FE consumer."
+    assert required_keys <= actual_keys, (
+        f"T17 response missing required keys. Required: {required_keys}, "
+        f"got: {actual_keys}."
+    )
+    assert actual_keys <= allowed_keys, (
+        f"T17 response has unexpected keys. Allowed: {allowed_keys}, "
+        f"got: {actual_keys}. BUG: shape drift without API version bump."
     )
     # Specific value verify
     assert body["status"] == "draft"
     assert body["rolled_back_from"] == "submitted"
     assert body["profile_id"] == profile_id
+    # New idempotent marker default False (this rollback was real, not no-op)
+    assert body.get("already_at_target") is False
