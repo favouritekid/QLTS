@@ -1,0 +1,7 @@
+# QLTS (Quản Lý Tuyển Sinh) — internal educational admission management system.
+# Not intended for public discovery or crawler indexing.
+# All staff/candidate access is auth-gated; surface routes have <meta name="robots" content="noindex">.
+User-agent: *
+Disallow: /
+
+# Sitemap intentionally omitted (no public content).
