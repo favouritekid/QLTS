@@ -1,5 +1,148 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 📊 FINDINGS BY MODULE — Tổng hợp theo nhóm
+
+Tổng cộng **20 findings** qua 2 wave (Wave 1: F1-F13, Wave 2: W2-1 đến W2-7).
+**Status**: ✅ 9 FIXED · 🔴 7 OPEN (cần fix) · 🟦 4 INFO/dead-policy/doc-drift
+
+### 🎓 ADMISSION (10 findings — 6 fixed, 2 open, 2 info)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| F1 | 🟥 | ✅ FIXED | `applied_rules.admission_round_id` bị Pydantic schema strip | AddChoiceDialog báo "Không xác định được đợt xét tuyển hiện tại" → multi-NV không add NV được. Fix: include all keys vào schema. |
+| F2 | 🟥 | ✅ FIXED | Casbin policy `/api/v2/admissions/*/choices` POST/PATCH/DELETE chưa seed | Officer 403 dù policy_templates.py declare. Fix: sync_casbin → 9 rules. |
+| F5 | 🟧 | ✅ FIXED | `applied_rules` schema strip 8 keys (round_id, round_code, fee_status, method_quota, applicable_to, application_fee, subject_weights, bonus_rule_override, requires_application_fee) | Root của F1. Cùng fix Pydantic schema. |
+| F6 | 🟧 | ✅ FIXED | `permissions` block thiếu key `override` | Admin không có UI button override. Fix: thêm `"override": status == "approved" and is_admin` vào `_compute_frontend_fields`. |
+| F7 | 🟧 | ✅ FIXED | Bypass UX warning không hiển thị (allow_unverified_submission silent approve) | Admin approve silent profile thiếu data. Fix: BE `bypass_warning` flag + FE banner ⚠️ + AlertDialog confirmation. |
+| F8 | 🟧 | ✅ FIXED | Accountant `/api/admissions` trả "Unexpected role" defensive msg | Replace bằng Casbin DENY (clean 403). Cleanup msg. |
+| W2-1 | 🟧 | 🔴 OPEN | **Multi-action magic-link GENERATE side vẫn GAP** | `POST /api/v2/admissions/magic-link/withdraw` + `/change-program` → 404. Consume side OK, generate side chưa wired. Candidate không tự-service withdraw/change-program từ email. Confirmed memory `magic-link-consume-shipped-generate-gap`. |
+| F13 | 🟦 | INFO/doc-drift | `GET /api/v2/admissions/{id}/choices` không tồn tại (405) | Choices đọc qua `GET /api/admissions/{id}` field `.choices[]`. Update playbook + Explore agent doc. |
+| F12 | 🟦 | INFO/dead | State machine `reviewing` state vẫn còn trong allowed_transitions | Phase 3 multi-NV refactor 2026-05-15 dự kiến bỏ. Legacy single-NV còn dùng — cần cleanup nếu intent là bỏ hoàn toàn. |
+| W2-6 | 🟦 | INFO/dead | `/api/v2/admissions/*/waitlist-reject` route đã removed nhưng policy entry vẫn còn | Dead policy. Cleanup template + DB. |
+| W2-7 | 🟦 | SANITY OK | Send-confirmation IDOR sanity check | Officer 16 → profile 22 (officer 18 owned) → 404 (correct scope). Không phải bug. |
+
+### 👥 LEAD (2 findings — 1 fixed, 1 open)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| F9 | 🟧 | ✅ FIXED | Accountant `GET /api/leads` lộ 391 leads + phone+source+offering | Casbin DENY 11 rules cho /api/leads* cho accountant. |
+| W2-3 | 🟧 | 🔴 OPEN | **`/api/leads/export/csv` + `/api/leads/export/excel` → 404** | Manager template line 382-383 allow nhưng router chưa implement. Manager click "Export CSV/Excel" sẽ fail im lặng. Cần wire 2 endpoints export. |
+
+### 💰 FINANCE (1 finding — open)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| W2-2 | 🟧 | 🔴 OPEN | **`GET /api/refunds` → 404** | Casbin ACCOUNTANT_TEMPLATE line 313 allow `/api/refunds GET`, nhưng route chưa exist. Dead policy entry — nếu refunds feature đã defer, xóa policy; nếu wire shipped sai prefix, kiểm tra mount. |
+
+### 🤝 CTV + COMMISSION (1 finding — open)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| W2-4 | 🟧 | 🔴 OPEN | **`/api/commission-policies` + `/api/commissions` → 404** | `commissions.policy_router` + `commissions.record_router` được include trong `main.py:790-791` ở prefix `/api`, nhưng endpoint trả 404. Có thể router internal prefix khác (e.g., `/cms-policies` thay vì `/commission-policies`). Admin click "Hoa hồng" / "Chính sách HH" sẽ thấy page rỗng. Cần grep router file để xem actual prefix. |
+
+### 👤 USER / AUTH (2 findings — 1 fixed, 1 open)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| F3 | 🟥 | ✅ FIXED | PII leak `/api/admin/users` cho officer + accountant (email, phone, mfa_enabled, password_reset_required) | Tạo lightweight schema chỉ trả id/username/full_name/role/status/unit_id/avatar_url. Email/phone/mfa removed. |
+| F10 | 🟨 | 🔴 OPEN | Body validation chạy trước Casbin → leak schema cho user không quyền (E2, E3, E8, E20 trả 422 thay vì 403) | Pydantic body validation chạy trước Casbin check. Best practice: Casbin trước → validation sau. Move dependency order trong FastAPI. |
+
+### 📊 KPI (1 finding — open)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| W2-5 | 🟨 | 🔴 OPEN | `GET /api/kpi-setup/` trả **404 thay vì 403** cho officer | Endpoint scope admin/manager (`require_admin_or_manager`). 404 leak existence nhỏ; nên trả 403 với "Admin or Manager access required" (giống `/api/v2/admin/admission-backfill-exceptions`). |
+
+### 🎨 FRONTEND / THIN-CLIENT (2 findings — 1 fixed, 1 info)
+
+| # | Sev | Status | Title | Detail |
+|---|---|---|---|---|
+| F4 | 🟧 | ✅ FIXED | Sidebar Officer leak admin nav "Backfill Queue" | `useRecentPages.ts` write ANY visited URL vào localStorage, persist cross-login → admin URL từ phiên trước leak vào nav officer. Fix: filter recentPages bằng `useAuthStore` + `isPathAccessibleByRole()` helper. |
+| F11 | 🟦 | INFO/memory-drift | Memory `phase3-admin-backfill-queue-no-nav` đã stale | Sidebar admin **CÓ** entry Backfill Queue (verified Wave 1). Memory cần update. |
+
+---
+
+## 🎯 PRIORITY ACTION ITEMS (cho 7 OPEN findings)
+
+| Priority | Module | Finding | Effort | Recommendation |
+|---|---|---|---|---|
+| **P0** | Admission | W2-1 magic-link generate gap | 3-5 ngày | Wire `POST /api/v2/admissions/magic-link/withdraw` + `/change-program` BE; FE button trong send-confirmation dialog. Self-service Vital cho candidate UX. |
+| **P1** | CTV | W2-4 commission 404 | 0.5 ngày | Grep `commissions.policy_router` + `record_router` xem internal prefix; sửa template/main.py để khớp. |
+| **P1** | Finance | W2-2 refunds 404 | 0.5 ngày | Quyết định: (a) implement `GET /api/refunds`, hoặc (b) xóa policy entry nếu refunds defer. |
+| **P2** | Lead | W2-3 leads export 404 | 1 ngày | Implement 2 endpoints `/api/leads/export/csv` + `/excel` (đã có template, FE button). |
+| **P3** | KPI | W2-5 kpi-setup 404→403 | 5 phút | Đổi route guard từ generic 404 sang `require_admin_or_manager` để trả 403 clean. |
+| **P3** | User/Auth | F10 validation order | 2-4h | Refactor FastAPI dependency order — Casbin check trước Pydantic body validation. |
+| **P4** | Admission | F12 + W2-6 dead state/policy | 1-2h | Cleanup `allowed_transitions` `reviewing` (nếu legacy bỏ) + xóa `waitlist-reject` policy entry. |
+
+**Defer (INFO only)**: F11 (memory update), F13 (doc update), W2-7 (sanity OK).
+
+---
+
+## 🌊 WAVE 2 EXPANSION — Sections H–P coverage (run 2026-05-16)
+
+### Coverage matrix
+
+| Section | Scenarios run | Pass | Issues found |
+|---|---|---|---|
+| §H Manager persona | 7 probes (login + unit-scope + DENY matrix + override transition) | 7 ✅ | 0 |
+| §I Finance E2E | 7 endpoints (fees/invoices/payments/accounting/installments/refunds/dashboard) | 6 ✅ | 1 (refunds 404) |
+| §J Multi-NV publish | publish-result + waitlist + admin-rollback denial | 3 ✅ | 1 (waitlist-reject route missing — known F13 extension) |
+| §K Magic-link | send-confirmation IDOR + multi-action generate side | 1 ✅ + 2 expected gap | 1 (generate side gap confirmed) |
+| §L Notifications | 7 admin endpoints (rules/templates/delivery/consent/preferences/inbox/metadata) | 7 ✅ | 0 |
+| §M KPI | officer dashboard/stats/leaderboard/my-kpi-plan | 4 ✅ | 1 (kpi-setup 404 cho officer — minor) |
+| §N Bulk + Import/Export | template + admission/leads export | 2 ✅ | 2 (leads export csv/excel 404) |
+| §O CTV + Commission | collaborators + commission-policies + commissions | 1 ✅ | 2 (commission endpoints 404 — router prefix mystery) |
+| §P Cross-cutting | optimistic locking 409 + sessions + login-history + pipeline | 5 ✅ | 0 |
+
+**Score**: 36/43 scenarios passed (84%). 7 issues found (4 endpoint mismatches + 3 known gaps).
+
+### NEW findings từ Wave 2
+
+| # | Sev | Section | Title | Evidence |
+|---|---|---|---|---|
+| W2-1 | 🟧 | §K | **Multi-action magic-link GENERATE side vẫn GAP** — confirmed memory `magic-link-consume-shipped-generate-gap`. Endpoint `POST /api/v2/admissions/magic-link/withdraw` và `change-program` → 404. Consume side OK (router included), nhưng generate POST endpoint chưa wired. Candidate không thể tự-service withdraw / change-program từ email. | curl: `POST /api/v2/admissions/magic-link/withdraw` → 404; `POST /api/v2/admissions/magic-link/change-program` → 404 |
+| W2-2 | 🟧 | §I | **GET /api/refunds → 404 "Not Found"** — Casbin policy ACCOUNTANT_TEMPLATE line 313 allow `/api/refunds GET`, nhưng route chưa exist. Dead policy entry. | curl accountant: `GET /api/refunds` → `{"detail":"Not Found","error_code":"HTTP_404"}` |
+| W2-3 | 🟧 | §N | **Leads export endpoints 404** — `/api/leads/export/csv` và `/api/leads/export/excel` không tồn tại. Manager template line 382-383 allow nhưng router chưa implement. Manager click "Export CSV" sẽ fail im lặng. | curl manager: 404 cho cả 2 endpoints. `grep -nE '"/.*"' leads.py | grep -i export` → 0 results |
+| W2-4 | 🟧 | §O | **Commission endpoints 404** — `/api/commission-policies` và `/api/commissions` → 404 dù `commissions.policy_router` + `commissions.record_router` được include trong main.py:790-791. Có thể router internal prefix khác (e.g., `/cms-policies` thay vì `/commission-policies`). Admin click "Hoa hồng" sẽ thấy page rỗng. | curl admin: 404 cả 2; main.py xác nhận router included tại `/api` prefix; cần grep router file để xem actual prefix |
+| W2-5 | 🟨 | §M | **GET /api/kpi-setup/ trả 404 cho officer** thay vì 403 — endpoint scope admin/manager (`require_admin_or_manager`). 404 leak existence nhỏ; preferred 403 với "Admin or Manager access required". | curl officer: `GET /api/kpi-setup/` → 404 |
+| W2-6 | 🟦 | §J | **`/api/v2/admissions/*/waitlist-reject` route đã removed** (per policy template comment line 346-348) nhưng policy entry vẫn còn. Extension của F13 — dead policy. | curl officer/manager: 404 |
+| W2-7 | 🟦 | §K | Send-confirmation IDOR works correctly: officer 16 → profile 22 (officer 18 owned) → 404. Sanity OK. | – |
+
+### Wave 2 PASS highlights
+
+- ✅ **§H Manager persona end-to-end OK**: login, unit-scope, claim/unclaim, bulk approve/reject, request-revision, override allowed (passed Casbin, 400 state-machine), 6/6 DENY matrix
+- ✅ **§P.1 Optimistic locking VERIFIED**: `PUT /api/admissions/17` với version=1 (stale, current=6) → **409 Conflict** với clean Vietnamese msg "Profile was modified by another user. Expected version 1, but current version is 6. Please refresh and try again."
+- ✅ **§L Notifications**: tất cả 7 admin endpoints (rules/metadata/templates/deliveries/consents/preferences/inbox) trả 200
+- ✅ **§I Finance**: 6/7 endpoints trả 200, đã empty data nhưng route hoạt động
+- ✅ **§M KPI Officer dashboard**: 4 endpoints (dashboard/stats/leaderboard/my-kpi-plan) trả 200 đầy đủ
+- ✅ **§N admission export**: `/api/admissions/export` → 200 (Wave 1 audit guess wrong)
+
+### Wave 2 execution log (~01:50-02:10 UTC+7)
+
+- **01:50** Seed manager_qa (id=34, unit 14, role=manager). Verify login OK.
+- **01:55** §H Manager probes: 391 leads unit 14 (false alarm cross-unit — only unit 14 has leads); 11 admissions visible (cross-officer same-unit OK); override on rejected → 400 state-machine; DENY 6/6 (admin/users 422 = passes Casbin per template wildcard); finalize 403.
+- **02:00** §I Finance: fees/invoices/payments/accounting/installments/dashboard OK; **refunds 404**.
+- **02:03** §J Multi-NV: profile 42 submit fail (validation: missing scores NV1 + unverified docs — strict mode); admin publish-result 400 (state=draft); officer waitlist-promote 403 + admin-rollback 403; **waitlist-reject 404 (route removed)**.
+- **02:05** §K Magic-link: officer send-confirmation profile 22 → 404 IDOR; **multi-action generate /magic-link/withdraw + /change-program 404 — gap confirmed**.
+- **02:07** §L Notifications: all 7 admin endpoints 200 ✅.
+- **02:08** §M KPI: officer 4/5 endpoints 200; **kpi-setup 404**.
+- **02:09** §N: import/template 200; **leads export csv/excel 404**; admissions/export 200.
+- **02:10** §O CTV: collaborators 200; **commission-policies + commissions 404**.
+- **02:11** §P: optimistic locking 409 verified; sessions + login-history + pipeline endpoints OK.
+
+### Wave 2 cleanup
+
+| Item | Note |
+|---|---|
+| manager_qa user (id=34) | New test account; bạn có thể giữ hoặc delete sau audit |
+| Profile 42 state | Still draft (validation fail prevents submit). NV1 chưa nhập scores, NV2 có scores. Documents chưa verify. |
+
+---
+
+
+
+
+
 ## ✅ FINAL STATUS — ALL 9 FINDINGS RESOLVED (2026-05-16, sau Wave 2 fix)
 
 | # | Sev | Title | Status | Fix |
@@ -143,8 +286,9 @@
 | F9 | 🟧 | Lead PII leak | Accountant `GET /api/leads` → 200 với 391 leads, lộ phone+source+offering — accountant không cần list này |
 | F10 | 🟨 | Validation order | E2/E3/E8/E20 trả 422 (validation) thay vì 403 — body validation chạy trước Casbin → leak schema cho user không quyền |
 | F11 | 🟦 | Memory drift | `phase3-admin-backfill-queue-no-nav` đã stale — sidebar admin **CÓ** entry Backfill Queue (uid sidebar 6_67) |
-| F12 | 🟦 | State machine doc drift | Allowed transitions submitted → reviewing vẫn còn (qua error msg "Allowed transitions from submitted: approved, draft, rejected, **reviewing**, revision_requested, withdrawn") dù refactor 2026-05-15 nói bỏ `reviewing` cho multi-NV; legacy single-NV còn dùng |
-| F13 | 🟦 | Endpoint audit | `GET /api/v2/admissions/{id}/choices` → **405 Method Not Allowed** (route không tồn tại); choices đọc qua `GET /api/admissions/{id}` `.choices[]`. Playbook + Explore agent table cũ có sai. |
+| F12 | 🟦→✅ | State machine doc drift | **CLARIFIED 2026-05-16 Wave 6**: `reviewing` state KHÔNG bị bỏ — Wave 2 commit a7ab21d0 (publish-result simplified flow) chỉ bỏ explicit T2 start-review ENDPOINT/BUTTON, nhưng state machine giữ `reviewing` làm intermediate. publish_result() giờ auto-transition `submitted → reviewing → engine cascade` atomic internal. Allowed transitions error msg đúng — không phải drift. |
+| F13 | 🟦→✅ | Endpoint audit | **VERIFIED 2026-05-16 Wave 6**: choices đọc qua `GET /api/admissions/{id}` `.choices[]` (eager-loaded via `_choices_eager_load_options()` chain). KHÔNG có endpoint `GET /api/v2/admissions/{id}/choices` (405 đúng). Playbook updated. |
+| T11 | 🟥→✅ | Waitlist reject (NEW Wave 5+6) | Implement T11 endpoint `POST /api/v2/admissions/{id}/waitlist-reject` (manager/admin manually finalize NV dự bị → trượt). BE: service + router + schema + event + PAIR map + alembic phase3_04 (accountant DENY) + phase3_05 (NotificationRule seed). FE: API + hook + 2 buttons + AuditReasonDialog wire trong ChoiceListEditor (cả T10 promote cùng wire). |
 
 ---
 

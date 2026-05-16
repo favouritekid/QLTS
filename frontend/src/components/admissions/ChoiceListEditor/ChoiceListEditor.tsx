@@ -35,7 +35,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, Pencil, Plus, Trash2 } from "lucide-react"
+import { CheckCircle2, CircleX, GripVertical, Pencil, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -56,10 +56,17 @@ import {
 } from "@/components/ui/dialog"
 import { DecisionBadge } from "@/components/admissions/DecisionBadge"
 import { ChoiceScoreCard } from "@/components/admissions/ChoiceScoreCard"
+import { AuditReasonDialog } from "@/components/admissions/AuditReasonDialog"
+import { pushRecentReason } from "@/components/admissions/AuditReasonDialog/reason-templates"
 import {
   useDeleteChoice,
+  usePromoteWaitlistedChoice,
+  useRejectWaitlistedChoice,
   useUpdateChoiceDisplayOrder,
 } from "@/hooks/admissions/useAdmissionChoices"
+import { toast } from "sonner"
+import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
+import type { AxiosError } from "axios"
 import type {
   AdmissionProfileChoiceResponse,
   ChoiceDecision,
@@ -82,6 +89,13 @@ interface SortableRowProps {
   isReordering: boolean
   onRequestRemove: (choice: AdmissionProfileChoiceResponse) => void
   onRequestEditScores: (choice: AdmissionProfileChoiceResponse) => void
+  /** Wave 6 ship 2026-05-16 — T10 waitlist-promote callback. Button
+   *  shown when choice.decision === 'waitlisted'. BE Casbin gates
+   *  actual permission (manager/admin allow, officer/accountant deny).
+   *  FE shows button optimistically; toast surfaces 403 nếu deny. */
+  onRequestPromoteWaitlisted: (choice: AdmissionProfileChoiceResponse) => void
+  /** Wave 5/6 ship — T11 waitlist-reject callback. Same gating model. */
+  onRequestRejectWaitlisted: (choice: AdmissionProfileChoiceResponse) => void
 }
 
 function SortableChoiceRow({
@@ -90,6 +104,8 @@ function SortableChoiceRow({
   isReordering,
   onRequestRemove,
   onRequestEditScores,
+  onRequestPromoteWaitlisted,
+  onRequestRejectWaitlisted,
 }: SortableRowProps) {
   const {
     attributes,
@@ -172,29 +188,61 @@ function SortableChoiceRow({
         <div className="mt-2">{subjectsSummary}</div>
       </div>
 
-      {canEdit && (
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Sửa điểm nguyện vọng ${choice.display_order}`}
-            disabled={isReordering}
-            onClick={() => onRequestEditScores(choice)}
-            data-testid={`edit-scores-${choice.id}`}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Xoá nguyện vọng ${choice.display_order}`}
-            disabled={isReordering}
-            onClick={() => onRequestRemove(choice)}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-        </div>
-      )}
+      <div className="flex items-center gap-1">
+        {canEdit && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Sửa điểm nguyện vọng ${choice.display_order}`}
+              disabled={isReordering}
+              onClick={() => onRequestEditScores(choice)}
+              data-testid={`edit-scores-${choice.id}`}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Xoá nguyện vọng ${choice.display_order}`}
+              disabled={isReordering}
+              onClick={() => onRequestRemove(choice)}
+            >
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          </>
+        )}
+        {/* Wave 6 ship 2026-05-16 — T10 promote + T11 reject manager actions.
+            Show khi choice.decision === 'waitlisted'. BE Casbin gates actual
+            permission (officer/accountant deny via template; manager/admin
+            allow). FE always shows button; 403 surfaces qua handleApiError
+            toast (memory `audit-report-accuracy` — don't infer permission
+            FE-side, let BE be source of truth). */}
+        {choice.decision === "waitlisted" && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Chuyển nguyện vọng ${choice.display_order} từ dự bị lên trúng tuyển`}
+              disabled={isReordering}
+              onClick={() => onRequestPromoteWaitlisted(choice)}
+              data-testid={`promote-waitlisted-${choice.id}`}
+            >
+              <CheckCircle2 className="h-4 w-4 text-success-600" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Từ chối nguyện vọng ${choice.display_order} đang ở dự bị`}
+              disabled={isReordering}
+              onClick={() => onRequestRejectWaitlisted(choice)}
+              data-testid={`reject-waitlisted-${choice.id}`}
+            >
+              <CircleX className="h-4 w-4 text-destructive" />
+            </Button>
+          </>
+        )}
+      </div>
     </li>
   )
 }
@@ -222,9 +270,18 @@ export function ChoiceListEditor({
   // chỉ là container UX.
   const [pendingEditScores, setPendingEditScores] =
     useState<AdmissionProfileChoiceResponse | null>(null)
+  // Wave 6 ship 2026-05-16 — T10 promote + T11 reject pending state.
+  // Both open AuditReasonDialog with action-specific config. Parent owns
+  // mutation per AuditReasonDialog contract.
+  const [pendingPromote, setPendingPromote] =
+    useState<AdmissionProfileChoiceResponse | null>(null)
+  const [pendingReject, setPendingReject] =
+    useState<AdmissionProfileChoiceResponse | null>(null)
 
   const updateOrder = useUpdateChoiceDisplayOrder(profileId)
   const deleteChoiceMutation = useDeleteChoice(profileId)
+  const promoteMutation = usePromoteWaitlistedChoice(profileId)
+  const rejectMutation = useRejectWaitlistedChoice(profileId)
 
   const orderedChoices = useMemo(() => {
     if (optimisticOrder === null) {
@@ -266,6 +323,53 @@ export function ChoiceListEditor({
     deleteChoiceMutation.mutate(pendingRemove.id, {
       onSettled: () => setPendingRemove(null),
     })
+  }
+
+  // Wave 6 — T10 promote handler. Mutation fires with reason from
+  // AuditReasonDialog; on success toast + cache invalidate via hook;
+  // on error handleApiError surfaces 403 (officer/accountant) cleanly.
+  const handleConfirmPromote = (reason: string) => {
+    if (!pendingPromote) return
+    promoteMutation.mutate(
+      { choiceId: pendingPromote.id, reason },
+      {
+        onSuccess: () => {
+          toast.success(
+            `Đã chuyển NV${pendingPromote.display_order} từ dự bị lên trúng tuyển`,
+          )
+          pushRecentReason("waitlist_promote", reason)
+        },
+        onError: (err) => {
+          handleApiError(err as AxiosError<ApiErrorResponse>, {
+            context: "chuyển nguyện vọng từ dự bị",
+          })
+        },
+        onSettled: () => setPendingPromote(null),
+      },
+    )
+  }
+
+  // Wave 5/6 — T11 reject handler. Reason mandatory min 10 (BE schema
+  // enforces; AuditReasonDialog FE validate parity).
+  const handleConfirmReject = (reason: string) => {
+    if (!pendingReject) return
+    rejectMutation.mutate(
+      { choiceId: pendingReject.id, reason },
+      {
+        onSuccess: () => {
+          toast.success(
+            `Đã từ chối NV${pendingReject.display_order} đang ở dự bị`,
+          )
+          pushRecentReason("waitlist_reject", reason)
+        },
+        onError: (err) => {
+          handleApiError(err as AxiosError<ApiErrorResponse>, {
+            context: "từ chối nguyện vọng dự bị",
+          })
+        },
+        onSettled: () => setPendingReject(null),
+      },
+    )
   }
 
   const canAddMore = canEdit && choices.length < maxChoices
@@ -327,6 +431,8 @@ export function ChoiceListEditor({
                   isReordering={isReordering}
                   onRequestRemove={setPendingRemove}
                   onRequestEditScores={setPendingEditScores}
+                  onRequestPromoteWaitlisted={setPendingPromote}
+                  onRequestRejectWaitlisted={setPendingReject}
                 />
               ))}
             </ol>
@@ -403,6 +509,32 @@ export function ChoiceListEditor({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Wave 6 ship 2026-05-16 — T10 waitlist-promote audit dialog.
+          AuditReasonDialog manages reason text + recent-reasons UX;
+          parent owns mutation + toast. */}
+      <AuditReasonDialog
+        action="waitlist_promote"
+        open={pendingPromote !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingPromote(null)
+        }}
+        onConfirm={handleConfirmPromote}
+        isSubmitting={promoteMutation.isPending}
+      />
+
+      {/* Wave 5/6 ship — T11 waitlist-reject audit dialog. Mirror promote
+          với action="waitlist_reject" — config + templates per
+          AUDIT_ACTION_CONFIG.waitlist_reject (reason min 10 chars). */}
+      <AuditReasonDialog
+        action="waitlist_reject"
+        open={pendingReject !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingReject(null)
+        }}
+        onConfirm={handleConfirmReject}
+        isSubmitting={rejectMutation.isPending}
+      />
     </section>
   )
 }

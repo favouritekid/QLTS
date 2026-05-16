@@ -1,8 +1,28 @@
 # QA E2E PLAYBOOK — Chrome MCP Dev Local
-**Created**: 2026-05-15
+**Created**: 2026-05-15 · **Wave 2 expanded**: 2026-05-16
 **Target**: dev local stack (FE `http://localhost:3000`, BE `http://localhost:8000`)
-**Mục tiêu**: phát hiện **gaps / RBAC / IDOR / Thin-Client violations** trên 3 personas.
-**Output**: findings ghi vào `Documents/QA_E2E_FINDINGS_2026-05-15.md` (tạo khi chạy).
+**Mục tiêu**: phát hiện **gaps / RBAC / IDOR / Thin-Client violations** trên 4 personas + cross-cutting workflows.
+**Output**: findings ghi vào `Documents/QA_E2E_FINDINGS_2026-05-15.md`.
+
+## Index
+- §0 Pre-flight (env, accounts, test data)
+- §1 Persona A — Admin
+- §2 Persona B — Officer (B-flow happy path + C/D edge cases + E RBAC + F Thin-Client)
+- §3 Persona C — Accountant
+- §4 Cross-persona RBAC matrix
+- §5 IDOR matrix
+- §6 Cross-cutting probes (realtime / errors / mobile)
+- §7 Cleanup
+- §8 Success criteria
+- §H Persona M — **Manager** (unit-scope, claim, bulk ops, request-revision)
+- §I Finance E2E (fee → invoice → payment → refund → accounting period)
+- §J Multi-NV Result Publishing (publish-result engine cascade, waitlist, admin-rollback)
+- §K Magic-link self-service (3 actions, resend cooldown ladder, generate-side gap)
+- §L Notifications (rules, templates, delivery ops, consent, channel prefs)
+- §M KPI tracking (plan setup, monthly snapshot, dashboards)
+- §N Bulk + Import/Export (lead CSV import, partial success, admission bulk)
+- §O CTV + Commission (self-reg, claim/approve, commission policy)
+- §P Cross-cutting (optimistic locking 409, audit log, Socket.IO realtime, sessions)
 
 ---
 
@@ -55,6 +75,7 @@ docker compose ps      # 6 services: backend / frontend / postgres / redis / cel
 | **A · Admin** | 15 | `admin` | hapham1388@gmail.com | admin | 12 | `/login` |
 | **B · Officer** | 16 | `nguyenhuuhieu` | hieu9993@gmail.com | officer | 14 | `/login` |
 | **C · Accountant** | 24 | `kpahdrim` | hdrim0405@gmail.com | accountant | 15 | `/login` |
+| **M · Manager** | 34 | `manager_qa` | manager_qa@qlts.local | manager | 14 | `/login` |
 
 > ⚠️ Admin account = chính account của user (hapham1388@gmail.com). Sau khi E2E xong, user có thể tự đổi password lại qua `/settings/security` hoặc giữ `@Abc12345!` cho session test tiếp theo.
 
@@ -620,8 +641,9 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 - Stats: `/stats`, `/status-counts`, `/academic-years`, `/fee-status`, `/record-fee-payment`
 
 **Admissions v2 multi-NV** (prefix `/api/v2/admissions`):
-- Choices: POST/GET `/{id}/choices`, PATCH/DELETE `/{id}/choices/{cid}`, PATCH `/{id}/choices/{cid}/scores`
-- Result: `/{id}/publish-result`, `/{id}/waitlist-promote`, `/{id}/waitlist-reject`, `/{id}/admin-rollback`
+- Choices: POST `/{id}/choices` (create choice). PATCH/DELETE `/{id}/choices/{cid}`, PATCH `/{id}/choices/{cid}/scores`. **NO `GET /{id}/choices` endpoint** — choices read qua `GET /api/admissions/{id}` `.choices[]` field (eager-loaded by `_choices_eager_load_options()` chain). F13 verified 2026-05-16 — old table listing GET was incorrect.
+- Result: `/{id}/publish-result` (T6 1-click), `/{id}/waitlist-promote` (T10), `/{id}/waitlist-reject` (T11 — shipped Wave 5 2026-05-16), `/{id}/admin-rollback` (T17)
+- Note: **no explicit T2 `/start-review` endpoint** — publish_result auto-transitions `submitted → reviewing → engine cascade` atomic. State machine giữ `reviewing` làm intermediate state (F12 verified 2026-05-16 — không phải drift).
 
 **Multi-action magic-link** (prefix `/api/v2/admissions/magic-link`):
 - Consume side wired; **generate side GAP** per memory.
@@ -646,4 +668,571 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 ---
 
-*End of playbook.*
+# WAVE 2 EXPANSION — Sections H to P (added 2026-05-16)
+
+## §H. PERSONA M — MANAGER (id=34 manager_qa, unit 14)
+
+> Manager là persona quan trọng nhất bị thiếu trong Wave 1. Manager khác admin: scope theo unit (14 = Phòng Tuyển Sinh), KHÔNG cross-unit. Khác officer: thấy ALL profile/lead trong unit (officer chỉ thấy assigned).
+
+### H.0 Login + scope verify
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.0.1 | Navigate `/login` → manager_qa / @Abc12345! | POST `/api/auth/login` | 200, role=manager, unit_id=14 | – |
+| H.0.2 | Redirect `/dashboard` (NOT /dashboard/officer) | – | Manager landing có "Team dashboard" widgets | snapshot sidebar: Lead List + Pipeline + Admission + Finance (read) + Audit Logs |
+| H.0.3 | Sidebar **không có**: Backfill Queue, Notification Templates (admin-only) | – | Verify role gate | snapshot |
+| H.0.4 | Sidebar **có**: Lead Distribution Rules, KPI Hub (read) | – | – | – |
+
+### H.1 Unit-scope IDOR contract
+Mục đích: manager 14 see ALL profiles/leads of unit 14, KHÔNG see unit 15/19.
+
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.1.1 | GET `/api/admissions` | – | List ALL profiles có lead.unit_id=14 (≥7 profiles officer 16 + officer 18) | network — count >=7 |
+| H.1.2 | GET `/api/admissions/17` (officer 16's draft) | – | 200, full detail (unit-wide) | – |
+| H.1.3 | GET `/api/admissions/39` (officer 18's submitted) | – | 200, full detail | – |
+| H.1.4 | GET `/api/admissions/{id}` của unit khác (cần seed) | – | **404** (cross-unit IDOR) | – |
+| H.1.5 | GET `/api/leads?page_size=10` | – | Trả leads of unit 14 only (NOT 391 of all units) | network count |
+| H.1.6 | GET `/api/leads/{id}` cross-unit | – | **404** | – |
+
+### H.2 Claim/unclaim workflow
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.2.1 | Mở `/admissions/39` (submitted, no reviewer assigned) | – | Button "Nhận duyệt" visible | – |
+| H.2.2 | Click "Nhận duyệt" → confirm | `POST /api/admissions/39/claim` body `{version}` | 200, `assigned_reviewer_id=34`, badge "Bạn đang xét" | network response |
+| H.2.3 | Refresh → button đổi thành "Bỏ nhận" | – | – | – |
+| H.2.4 | **Race**: 2nd browser tab manager khác (admin) click claim → 409 ConflictError | – | – | – |
+| H.2.5 | Click "Bỏ nhận" | `POST /api/admissions/39/unclaim` | 200, `assigned_reviewer_id=null` | – |
+| H.2.6 | Officer (switch persona) cũng có thể claim (per Casbin) — admin/manager/officer all allowed? Verify | – | – | – |
+
+### H.3 Approve / Reject workflow (single)
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.3.1 | Manager claim profile 39 trước | – | – | – |
+| H.3.2 | Click "Phê duyệt (vượt điều kiện)" (vì bypass_warning=true) | – | AlertDialog F7 hiện | – |
+| H.3.3 | Cancel dialog → KHÔNG approve | – | state vẫn submitted | – |
+| H.3.4 | Tạo profile khác state submitted, eligible → approve clean | `POST /api/admissions/{id}/approve` body `{notes, version}` | 200, state → approved, `approved_by_id=34`, `approved_at` set | – |
+| H.3.5 | Click "Từ chối" → dialog nhập reason ≥20 ký tự | `POST /api/admissions/{id}/reject` body `{reason, version}` | 200, state → rejected, `rejection_reason` saved | – |
+| H.3.6 | **Edge**: reject reason 5 ký tự | – | 422 ValidationError | – |
+
+### H.4 Request revision workflow
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.4.1 | Profile state submitted → click "Yêu cầu sửa" | – | Dialog nhập reason | – |
+| H.4.2 | Submit reason | `POST /api/admissions/{id}/request-revision` body `{reason, version}` | 200, state → revision_requested, `revision_reason` saved | – |
+| H.4.3 | Switch persona Officer (chính chủ) → mở profile → fields editable | – | Banner reason hiển thị | – |
+| H.4.4 | Officer sửa + click "Nộp lại" | `POST /api/admissions/{id}/resubmit` | state → resubmitted | – |
+| H.4.5 | Manager review again | – | Cycle close | – |
+
+### H.5 Bulk operations
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.5.1 | `/admissions` list → checkbox 3 profiles draft cùng unit | – | Action bar hiển thị "Đã chọn 3" | – |
+| H.5.2 | Click "Bulk approve" → confirm | `POST /api/admissions/bulk/approve` body `{profile_ids:[...], notes}` | 200, response `{succeeded:[], failed:[{id, reason}]}` | network — count partial success |
+| H.5.3 | **Edge**: bulk approve profile thuộc unit khác → bị silently skip | – | failed array contains skipped ids | – |
+| H.5.4 | **Edge**: bulk approve profile state ≠ submitted/resubmitted → state guard fail | – | failed array | – |
+| H.5.5 | `POST /api/admissions/bulk/reject` body `{profile_ids, reason}` | – | Same shape | – |
+| H.5.6 | `POST /api/admissions/bulk/assign` reviewer_id | – | All bulk-claimed (assigned_reviewer_id set) | – |
+
+### H.6 Lead bulk-assign
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.6.1 | `/leads` list → multi-select 5 leads unit 14 | – | Action bar | – |
+| H.6.2 | Click "Phân lại officer" → chọn officer 18 | `POST /api/leads/bulk-assign` body `{lead_ids:[], officer_id:18}` | 200, all 5 leads `assigned_officer_id=18` | – |
+| H.6.3 | **Quota check**: nếu officer 18 đạt max_capacity → bulk skip | – | – | – |
+| H.6.4 | **Edge**: bulk-assign cross-unit lead → forbidden hoặc silent skip | – | – | – |
+
+### H.7 Lead distribution rules
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| H.7.1 | Navigate `/admin/distribution` | – | List rules | – |
+| H.7.2 | Manager allowed read-only? hay create? Per policy template | – | Verify per role | – |
+| H.7.3 | Trigger distribution preview | `GET /api/leads/distribution-preview` | – | – |
+
+### H.8 Manager dashboard
+| Step | Action | Expected |
+|---|---|---|
+| H.8.1 | Navigate `/dashboard` (manager view) | Team KPI widgets: team total, distribution, avg processing time |
+| H.8.2 | KPI hub click | Per-officer breakdown |
+| H.8.3 | Audit logs button | Manager can xem audit logs cho unit 14 |
+
+### H.9 Manager DENY matrix (RBAC)
+Manager KHÔNG được phép:
+| Endpoint | Method | Expected |
+|---|---|---|
+| `/api/admin/users` POST | – | 403 (admin only create) |
+| `/api/v2/admin/years/{y}/rounds` POST | – | 403 |
+| `/api/admission-config/paths/{id}/activate` POST | – | 403 (per template comment "Admin only activate") |
+| `/api/admissions/{id}/override` POST | – | **TEST**: per template line 393, manager CÓ override → expect 200/400 state-machine, NOT 403 |
+| `/api/admissions/{id}/finalize` POST | – | 403 (admin only per Decision 10) |
+| `/api/v2/admin/admission-backfill-exceptions` GET | – | 403 |
+| `/api/v2/admin/casbin/reload` POST | – | 403 |
+| `/api/admin/policies` POST | – | 403 |
+
+---
+
+## §I. FINANCE END-TO-END
+
+> Maker-checker pattern: accountant record/issue → manager verify. Test bằng 2 personas tuần tự.
+
+### I.0 Pre-condition
+- Tìm profile state `approved`/`confirmed`/`enrolled` để tính fee — DB query: `SELECT id FROM admission_profile WHERE status IN ('approved','confirmed','enrolled');`
+- Hoặc dùng admin override profile 42 → approved trước
+
+### I.1 Fee calculate (officer / accountant)
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| I.1.1 | Login officer 16 → profile có state approved (cần setup) | – | – | – |
+| I.1.2 | Profile detail → Step 6 Học phí → button "Tính học phí" | `POST /api/fees/calculate` body `{profile_id, installment_plan_id}` | 201, fee row created với `status=pending` | network — return fee.id |
+| I.1.3 | Verify GET `/api/fees/summary/{profile_id}` | – | Fee summary: tuition, discount, payable | – |
+| I.1.4 | **Edge**: profile state ≠ approved/confirmed/enrolled | – | 400 BusinessRuleViolation | – |
+| I.1.5 | **Edge**: officer KHÔNG own profile → 404 IDOR | – | – | – |
+
+### I.2 Discount / Waive (accountant / manager)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.2.1 | Switch accountant → mở fee detail | `GET /api/fees/{id}` | 200 |
+| I.2.2 | Click "Miễn giảm" → form `{discount_type, amount, reason}` | `POST /api/fees/{id}/waive` | 200, fee.discount_amount updated |
+| I.2.3 | **Edge**: discount > fee.total_amount → 422 | – | – |
+| I.2.4 | Manager click "Hủy fee" | `POST /api/fees/{id}/cancel` body `{reason}` | 200, status → cancelled |
+| I.2.5 | **Edge**: cancel fee đã có invoice issued → 400 BusinessRuleViolation | – | – |
+| I.2.6 | Recalculate | `POST /api/fees/{id}/recalculate` | – |
+
+### I.3 Invoice issue (accountant)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.3.1 | Fee detail → click "Tạo hóa đơn" | `POST /api/invoices` body `{fee_id, due_date, ...}` | 201, invoice.status=draft |
+| I.3.2 | Click "Phát hành" | `PUT /api/invoices/{id}/issue` | 200, invoice.status=issued, invoice_number generated |
+| I.3.3 | **Edge**: issue twice → 400 already issued | – | – |
+| I.3.4 | Manager click "Hủy hóa đơn" (cancel) | `PUT /api/invoices/{id}/cancel` body `{reason}` | 200 (manager+ only per template line 431) |
+| I.3.5 | Click "Áp dụng phạt trễ" | `POST /api/invoices/{id}/apply-penalty` | – |
+| I.3.6 | **Edge**: accountant tries cancel → 403 (manager only) | – | – |
+
+### I.4 Payment record + verify (maker-checker)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.4.1 | Accountant `/finance/payments` → "Ghi nhận thanh toán tiền mặt" | `POST /api/payments` body `{invoice_id, amount, method:cash, ...}` | 201, payment.status=pending |
+| I.4.2 | **Edge**: amount > invoice.balance → 422 | – | – |
+| I.4.3 | Same accountant verify own payment? | `PUT /api/payments/{id}/verify` | Per business rule (maker=checker allowed?) — verify behavior |
+| I.4.4 | Switch manager → verify pending payment | `PUT /api/payments/{id}/verify` | 200, status=verified, invoice.balance decreased |
+| I.4.5 | Manager reject payment | `PUT /api/payments/{id}/reject` body `{reason}` | 200, status=rejected |
+| I.4.6 | Create payment intent (online) | `POST /api/payments/intents` | 200, returns redirect_url |
+| I.4.7 | Get intent status | `GET /api/payments/intents/{id}` | – |
+| I.4.8 | Webhook callback gateway (simulate VNPay IPN) | `POST /api/payments/callback/vnpay` | 200 hoặc signature fail → 401 |
+
+### I.5 Refund flow
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.5.1 | Accountant request refund | `POST /api/refunds/request` body `{payment_id, amount, reason}` | 201, refund.status=pending |
+| I.5.2 | Manager approve refund | `POST /api/refunds/{id}/approve` | 200, status=approved |
+| I.5.3 | Accountant process refund | `PUT /api/refunds/{id}/process` body `{transaction_ref}` | 200, status=processed |
+| I.5.4 | Verify REFUND_PROCESSED notification fired (per memory dormant flag — known gap) | – | Check `/api/notifications` officer/applicant; if no notification → 🟦 expected gap |
+
+### I.6 Accounting period close
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.6.1 | Admin navigate `/finance/accounting` | `GET /api/accounting/periods` | List periods (open/closed) |
+| I.6.2 | Click "Tạo kỳ" (admin) | `POST /api/accounting/periods` body `{period_code, start_date, end_date}` | 201, status=open |
+| I.6.3 | **Edge**: tạo period overlap → 409 | – | – |
+| I.6.4 | Click "Đóng kỳ" | `PUT /api/accounting/periods/{id}/close` | 200, status=closed, snapshot tạo |
+| I.6.5 | After close: tạo invoice/payment trong period đó | – | 400 — period closed, không tạo được |
+| I.6.6 | View period summary | `GET /api/accounting/periods/{id}/summary` | Aggregated revenue/refund/AR |
+
+### I.7 Installment plan setup
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.7.1 | Admin `/admin/installment-plans` → list | `GET /api/installment-plans` | List plans (FULL/TWO_TERM/QUARTERLY etc.) |
+| I.7.2 | Plan detail | `GET /api/installment-plans/{id}` | Schedule per semester |
+| I.7.3 | Per-semester partial-block (memory `semester-tuition-refactor`) — test ember rule | – | Verify discount no carry-over |
+
+### I.8 Tuition discount management
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| I.8.1 | Admin `/admin/tuition-discount` | – | List discount policies |
+| I.8.2 | CRUD discount policy | – | – |
+
+### I.9 Finance dashboard
+| Step | Action | Endpoint |
+|---|---|---|
+| I.9.1 | Navigate `/finance` (accountant) | `GET /api/finance/dashboard` |
+| I.9.2 | Verify widgets: revenue today, pending payments count, overdue invoices | – |
+
+---
+
+## §J. MULTI-NV RESULT PUBLISHING ENGINE
+
+> Chỉ áp dụng cho profile `uses_choice_engine=true` (DOT_1 multi-NV). Sau Manager/Admin publish → engine cascade auto-evaluate từng NV theo priority.
+
+### J.0 Pre-condition
+- Profile multi-NV, state submitted/resubmitted, ≥1 choice, scores đầy đủ. Profile 42 sau khi nhập scores + submit qua officer.
+
+### J.1 Publish-result trigger
+| Step | Action | Endpoint | Expected | Probe |
+|---|---|---|---|---|
+| J.1.1 | Manager/Admin mở profile 42 (sau khi officer submit) | – | Button "Công bố kết quả" visible (vì uses_choice_engine=true) | – |
+| J.1.2 | Click → AlertDialog cảnh báo "Hành động không thể hoàn tác" | – | – | – |
+| J.1.3 | Confirm | `POST /api/v2/admissions/42/publish-result` body `{notes?}` | 200, state submitted→reviewing→result_published, engine cascade per NV | network — response trả `choices_decisions[]` |
+| J.1.4 | Profile detail tự refresh | – | Header status badge "Đã công bố" hoặc "Trúng tuyển" | – |
+| J.1.5 | Mỗi NV có DecisionBadge: admitted/waitlisted/rejected/skip | – | snapshot choice list — color badges | – |
+
+### J.2 Engine cascade scenarios
+| Scenario | Setup | Expected |
+|---|---|---|
+| J.2.1 All admit | 2 NV cùng pass eligibility | NV1=admitted, NV2=skip (engine chỉ chọn ưu tiên cao nhất) |
+| J.2.2 NV1 reject, NV2 admit | NV1 GPA thấp, NV2 GPA ổn | NV1=rejected, NV2=admitted |
+| J.2.3 All reject | Cả 2 fail | profile.status = rejected, choices both rejected |
+| J.2.4 NV1 waitlist, NV2 admit | NV1 đầy quota, NV2 ổn | NV1=waitlisted (rank set), NV2=admitted |
+| J.2.5 All waitlist | Tất cả NV đầy | profile state có thể "Trên waitlist" |
+
+### J.3 Waitlist promote
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| J.3.1 | Profile có choice waitlist → manager click "Lên waitlist" | `POST /api/v2/admissions/{id}/waitlist-promote` body `{choice_id}` | 200, choice.decision=admitted, profile state update |
+| J.3.2 | **Edge**: promote choice không trong waitlist → 400 | – | – |
+| J.3.3 | Accountant try → 403 (per Casbin deny block) | – | – |
+
+### J.4 Waitlist reject
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| J.4.1 | Click "Loại khỏi waitlist" | `POST /api/v2/admissions/{id}/waitlist-reject` body `{choice_id, reason}` | 200, choice.decision=rejected |
+
+### J.5 Admin-rollback (T17)
+> KHÔNG REVERSIBLE — rollback xóa toàn bộ decisions, profile về state draft.
+
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| J.5.1 | Admin mở profile state result_published/admitted | – | Button "Rollback về Nháp" (admin only) | – |
+| J.5.2 | Click → dialog cảnh báo "Mất tất cả decisions" | – | – |
+| J.5.3 | Confirm | `POST /api/v2/admissions/{id}/admin-rollback` body `{reason}` | 200, state → draft, all choices.decision=pending |
+| J.5.4 | Manager try → 403 (admin only) | – | – |
+| J.5.5 | Officer try → 403 | – | – |
+
+### J.6 Score snapshot status verify
+| Step | Action | Expected |
+|---|---|---|
+| J.6.1 | Sau publish-result, GET profile | `score_snapshot_status` cho mỗi choice: passing/failing |
+| J.6.2 | `eligibility_check_result` per choice (JSONB) chứa: required_subject_count, scoring_method, computed_score |
+
+### J.7 Edge cases
+- Engine timeout (DB lock contention) → state stays submitted, transactional rollback
+- Profile thiếu choice → 400 "Hồ sơ đa nguyện vọng phải có ít nhất 1 nguyện vọng" (B12a)
+- All choices rejected: state → rejected; vs at least 1 admitted: state → result_published
+
+---
+
+## §K. MAGIC-LINK SELF-SERVICE
+
+> Memory `magic-link-consume-shipped-generate-gap-2026-05-15`: consume side wired, GENERATE side gap (no BE endpoint cho 3 actions self-service multi-action). Re-verify trong run này.
+
+### K.1 Generate magic-link (officer/manager send to candidate)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| K.1.1 | Profile state admitted/confirmed → officer click "Gửi liên kết xác nhận" | `POST /api/admissions/{id}/send-confirmation` body `{action?:confirm}` | 200, response trả `confirm_url` |
+| K.1.2 | Verify token created in DB: `SELECT * FROM admission_confirmation_token WHERE admission_profile_id={id}` | – | 1 row with action=confirm, ttl 168h |
+| K.1.3 | **Multi-action probe**: gửi cho action=withdraw / change-program | – | Verify endpoint accept hay reject (per memory: generate side gap, có thể 400) |
+
+### K.2 Consume magic-link (public, no auth)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| K.2.1 | Mở incognito → navigate `/magic-link/confirm/{token}` | `GET /api/admissions/confirm/{token}` | 200, page load với profile preview |
+| K.2.2 | Verify CCCD last 3 digits → submit | `POST /api/admissions/confirm/{token}` body `{cccd_partial:'999'}` | 200, state admitted → confirmed |
+| K.2.3 | **Edge**: CCCD sai | – | 401 unauthorized |
+| K.2.4 | **Edge**: token expired (TTL > 168h) | – | 410 Gone |
+| K.2.5 | **Edge**: token đã dùng | – | 409 already used |
+| K.2.6 | Multi-action consume (withdraw): /api/v2/admissions/magic-link/withdraw/{token} | – | Per memory consume side OK |
+| K.2.7 | Multi-action consume (change-program) | – | – |
+
+### K.3 Resend cooldown ladder (memory `adm-023-028-magic-link`)
+| Step | Action | Expected |
+|---|---|---|
+| K.3.1 | Click resend lần 1 | Cooldown 5 phút |
+| K.3.2 | Click trong 5 phút | UI block + tooltip "Chờ X phút" |
+| K.3.3 | Sau 5 phút resend lần 2 | Cooldown 30 phút |
+| K.3.4 | Lần 3 | Cooldown 120 phút |
+| K.3.5 | Lần 4+ | 1440 phút |
+| K.3.6 | Hard-lock sau 30 lần | 423 Locked |
+| K.3.7 | Cap 3/24h | 429 TooManyRequests |
+
+### K.4 Copy-link
+| Step | Action | Expected |
+|---|---|---|
+| K.4.1 | Dialog "Gửi liên kết" có button "Copy link" | Clipboard chứa confirm_url full token |
+
+### K.5 Reminder beat (Celery)
+| Step | Action | Expected |
+|---|---|---|
+| K.5.1 | Sau X giờ candidate chưa click → reminder gửi tự động | Check celery_beat schedule + outbox |
+| K.5.2 | Pre-flight gate `lead_contact` action — nếu chưa setup → reminder block | Verify guard |
+
+---
+
+## §L. NOTIFICATIONS (Rules / Templates / Delivery / Consent)
+
+### L.1 Admin Notification Rules CRUD
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| L.1.1 | Admin `/admin/notification-rules` | `GET /api/notification-rules` | List rules |
+| L.1.2 | Click "Tạo rule" → form (event, channel, template, recipient) | – | – |
+| L.1.3 | `GET /api/notification-rules/metadata` | – | Returns events list, channels, resolver_types cho form builder |
+| L.1.4 | Submit create | `POST /api/notification-rules` | 201, rule row created |
+| L.1.5 | Edit rule | `PUT /api/notification-rules/{id}` | 200 |
+| L.1.6 | Disable rule | `PATCH /api/notification-rules/{id}` body `{is_enabled:false}` | – |
+| L.1.7 | Delete rule | `DELETE /api/notification-rules/{id}` | 204 |
+| L.1.8 | **Edge**: rule reference event không tồn tại trong SystemEvents enum → 400 | – | – |
+
+### L.2 Templates
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| L.2.1 | `/admin/notification-templates` | `GET /api/notification-templates` | List |
+| L.2.2 | CRUD template (subject, body, variables list) | – | – |
+| L.2.3 | Preview template với dummy data | `POST /api/notification-templates/{id}/preview` | Returns rendered email/zalo body |
+| L.2.4 | Test send (admin) | `POST /api/notification-templates/{id}/test-send` body `{recipient}` | 200, message sent |
+
+### L.3 Delivery Ops
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| L.3.1 | `/admin/notification-deliveries` | `GET /api/notification-deliveries` | Outbox table |
+| L.3.2 | Filter by status (pending/sent/failed) | – | – |
+| L.3.3 | Click "Retry failed" cho 1 row | `POST /api/notification-deliveries/{id}/retry` | 200 |
+| L.3.4 | Verify worker pickup → outbox row → sent | Celery log | – |
+
+### L.4 Consent management
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| L.4.1 | `/admin/notification-consents` | `GET /api/notification-consents` | List user consent (email/zalo/sms toggle) |
+| L.4.2 | User self-service `/settings/notifications` (or similar) | – | Toggle per channel |
+| L.4.3 | If consent=false cho zalo → rule fire vẫn skip zalo channel | – | Verify outbox count = email only |
+
+### L.5 Channel preferences impact
+| Scenario | Setup | Expected delivery |
+|---|---|---|
+| L.5.1 | User A consent email=on, zalo=off; rule channels [email, zalo] | Email sent, Zalo skipped |
+| L.5.2 | User B consent email=off, zalo=on | Email skipped, Zalo sent |
+| L.5.3 | Critical notification (override_critical=true trong rule) | Sent regardless of consent |
+
+### L.6 Inbox bell
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| L.6.1 | Officer click bell icon | `GET /api/notifications?page=1&page_size=10&unread_only=true` | Unread count badge |
+| L.6.2 | Click notification → mark read | `POST /api/notifications/mark-as-read` body `{notification_ids:[]}` | – |
+| L.6.3 | "Mark all as read" | `POST /api/notifications/mark-all-as-read` | – |
+| L.6.4 | Delete notification | `DELETE /api/notifications/{id}` | 204 |
+
+---
+
+## §M. KPI TRACKING & DASHBOARDS
+
+### M.1 KPI plan setup (admin)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| M.1.1 | `/admin/kpi-setup` | `GET /api/kpi-setup/` | List plans |
+| M.1.2 | Tạo plan: metric (e.g., "admissions_approved"), period (month), target_value | `POST /api/kpi-plans` | 201 |
+| M.1.3 | Assign plan to officer 16 | – | – |
+| M.1.4 | Plan-month config: per month target có thể khác nhau | – | – |
+
+### M.2 KPI hub (admin)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| M.2.1 | `/admin/kpi-hub` | – | Aggregated KPI view all officers |
+| M.2.2 | Per-officer breakdown | – | – |
+
+### M.3 Officer dashboard widgets
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| M.3.1 | Login officer 16 → `/dashboard/officer` | `GET /api/officer/dashboard` | Widget: assigned leads count, KPI progress, availability |
+| M.3.2 | `GET /api/officer/stats` | – | Daily/weekly stats |
+| M.3.3 | `GET /api/officer/leaderboard` | – | Team ranking |
+| M.3.4 | `GET /api/officer/upcoming-activities` | – | Calendar events |
+| M.3.5 | Toggle availability | `POST /api/officer/availability` | 200 |
+| M.3.6 | `GET /api/officer/my-kpi-plan` | – | Assigned KPI plans + actual |
+| M.3.7 | `GET /api/officer/recommendations` (Phase 7) | – | Recommended next actions |
+
+### M.4 Monthly snapshot (Celery)
+| Step | Action | Expected |
+|---|---|---|
+| M.4.1 | Wait for celery_beat trigger (monthly_snapshot task) | snapshot rows tạo trong kpi_monthly_snapshot |
+| M.4.2 | Officer dashboard refresh → actual_value updated | – |
+| M.4.3 | **Edge**: trigger manually qua admin | – |
+
+### M.5 Manager team dashboard
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| M.5.1 | Manager `/dashboard` | – | Team KPI aggregated |
+| M.5.2 | `GET /api/officer/team-stats` | – | Per officer stats for manager |
+
+---
+
+## §N. BULK OPERATIONS + IMPORT/EXPORT
+
+### N.1 Lead import CSV
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| N.1.1 | Manager `/leads` → "Import" → download template | `GET /api/leads/import/template` | CSV template file |
+| N.1.2 | Upload CSV 5 leads valid | `POST /api/leads/import` multipart | 200, `LeadImportResult{success_count:5, error_count:0}` |
+| N.1.3 | Upload CSV với 3 valid + 2 invalid (sai format phone) | – | `{success_count:3, error_count:2, errors:[{row,field,message}]}` |
+| N.1.4 | Upload CSV > 10MB | – | 413 nginx |
+| N.1.5 | Upload .exe (sai format) | – | 415/422 |
+| N.1.6 | Officer thử import | – | 200 per policy template (officer cũng có /api/leads/import POST) HOẶC 403 — verify hành vi |
+
+### N.2 Lead export
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| N.2.1 | Manager `/leads` → "Export CSV" | `GET /api/leads/export/csv` | File download |
+| N.2.2 | "Export Excel" | `GET /api/leads/export/excel` | – |
+| N.2.3 | Export với filter (status, unit) | `GET /api/leads/export?status=qualified&unit_id=14` | Filtered results |
+| N.2.4 | Officer export | – | Per policy (officer template có /api/leads/export GET) |
+
+### N.3 Lead bulk-delete (manager+)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| N.3.1 | Multi-select 3 leads → "Xóa hàng loạt" | `POST /api/leads/bulk-delete` body `{lead_ids}` | 200, soft-delete (deleted_at set) |
+| N.3.2 | Verify audit log entries per lead | – | – |
+
+### N.4 Admission bulk
+- Đã cover ở §H.5
+
+### N.5 Admission profile export (nếu có)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| N.5.1 | Manager `/admissions` → "Export" | `GET /api/admissions/export` | File OR 404 if not implemented (gap) |
+
+---
+
+## §O. CTV (COLLABORATOR) + COMMISSION
+
+### O.1 Public self-registration
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.1.1 | Incognito navigate `/register-ctv` | – | Form public |
+| O.1.2 | Submit form (name, phone, email, bank info) | `POST /api/collaborators/register` (public) | 201, CTV row status=pending |
+| O.1.3 | Redirect `/register-ctv/success` | – | – |
+
+### O.2 Admin approve CTV
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.2.1 | Admin `/admin/collaborators` | `GET /api/collaborators` | List CTV |
+| O.2.2 | Filter status=pending | – | – |
+| O.2.3 | Click "Phê duyệt" | `POST /api/collaborators/{id}/approve` | 200, CTV → active, User account auto-created với role=collaborator |
+| O.2.4 | CTV nhận email với password tạm | – | Verify notification fired |
+| O.2.5 | Suspend CTV | `POST /api/collaborators/{id}/suspend` | – |
+| O.2.6 | Reactivate | `POST /api/collaborators/{id}/reactivate` | – |
+
+### O.3 CTV self-service
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.3.1 | CTV login → `/ctv` dashboard | – | Earnings, leads submitted, commission status |
+| O.3.2 | Submit new lead | `POST /api/ctv/leads` body `{full_name, phone, offering_id, ...}` | 201, lead row referrer_id=ctv.id |
+| O.3.3 | View claimed leads | `GET /api/ctv/leads` | – |
+
+### O.4 Lead claim (CTV claim lead pool)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.4.1 | CTV claim lead unassigned | `POST /api/ctv/leads/{id}/claim` | 201, lead_claim row pending |
+| O.4.2 | Admin review claim | `POST /api/collaborators/{id}/review-lead-claim` body `{lead_id, decision:approve, notes}` | – |
+| O.4.3 | Approve → lead.referrer_id set, CTV eligible commission | – | – |
+| O.4.4 | Reject → claim void | – | – |
+
+### O.5 Commission policy (admin)
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.5.1 | `/admin/commission-policies` | `GET /api/commission-policies` | List |
+| O.5.2 | CRUD policy: per program rate, fixed amount, tiered | `POST /api/commission-policies` | 201 |
+
+### O.6 Commission record
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| O.6.1 | Trigger: lead → enrolled → commission record auto-created | – | Verify DB `commission_record` table |
+| O.6.2 | Admin `/admin/commissions` | `GET /api/commissions` | List records |
+| O.6.3 | Approve/pay record | – | status pending → approved → paid |
+| O.6.4 | CTV view own commissions | `GET /api/ctv/commissions` | – |
+
+---
+
+## §P. CROSS-CUTTING WORKFLOWS
+
+### P.1 Optimistic locking matrix
+Probe each mutate endpoint with stale `version` to test 409 ConflictError:
+
+| Endpoint | Has version field | Expected if stale |
+|---|---|---|
+| `PUT /api/admissions/{id}` | yes | 409 |
+| `POST /api/admissions/{id}/approve` | yes | 409 |
+| `POST /api/admissions/{id}/reject` | yes | 409 |
+| `POST /api/admissions/{id}/override` | yes (per memory ADM-015) | 409 |
+| `POST /api/admissions/{id}/claim` | yes | 409 |
+| `POST /api/admissions/{id}/resubmit` | yes | 409 |
+| `POST /api/admissions/bulk/approve` | ❓ — known gap per audit | TEST: per-profile version check OR none |
+| `POST /api/admissions/bulk/reject` | ❓ | – |
+
+### P.2 Audit log verify
+| Action | Expected entity_audit_log entry |
+|---|---|
+| Admission approve | row {entity=admission_profile, action=approved, actor_id, old.status='submitted', new.status='approved'} |
+| Profile override | row với reason mandatory |
+| Fee waive | row finance audit |
+| Payment verify | maker-checker audit |
+| Lead bulk-assign | N rows (per lead) |
+| Document upload | row |
+| Magic-link consume | row action=confirmed_via_magic_link |
+
+Probe: `GET /api/admin/audit-logs?actor_id={id}&entity_type=admission_profile` → count match expected.
+
+### P.3 Socket.IO real-time
+| Step | Action | Expected |
+|---|---|---|
+| P.3.1 | Tab A officer mở profile 42 | Socket connect |
+| P.3.2 | Tab B admin edit profile 42 (PUT) | `data_updated` event fire |
+| P.3.3 | Tab A receive event → query invalidate (300ms debounce per memory `adm-032-doc-mutations-realtime`) | UI refresh |
+| P.3.4 | Cross-unit event scope: officer unit 14 KHÔNG receive event của profile unit 19 | Verify scope filter |
+
+### P.4 Sessions + login history
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| P.4.1 | Login officer | – | Suspicious login alert nếu IP/device mới (per snapshot) |
+| P.4.2 | `/settings/security` → active sessions | `GET /api/sessions` | List sessions per device |
+| P.4.3 | Revoke 1 session | `DELETE /api/sessions/{id}` | 204 |
+| P.4.4 | Revoke all (except current) | `POST /api/sessions/revoke-all` | – |
+| P.4.5 | Login history | `GET /api/security/login-history` | List với IP, location, device, risk_score |
+| P.4.6 | "Not me" report | `POST /api/security/not-me` body `{login_id}` | 200 |
+
+### P.5 Lead pipeline stage transitions
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| P.5.1 | Lead status: new → contacted → qualified → interested → enrolled/declined | `PATCH /api/leads/{id}/status` body `{status, notes}` | 200 |
+| P.5.2 | `POST /api/leads/{id}/action` body `{action_type, payload}` | – | – |
+| P.5.3 | Allowed-next-status enforcement | `GET /api/pipeline/allowed-next-statuses?from={status}` | List valid next states |
+| P.5.4 | **Edge**: skip stage (qualified → enrolled trực tiếp) | – | 400 BusinessRuleViolation |
+
+### P.6 Consultation status
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| P.6.1 | `GET /api/leads/{id}/consultations` | – | List |
+| P.6.2 | Create consultation | `POST /api/leads/{id}/consultations` body `{status, content, next_action}` | 201 |
+| P.6.3 | Update | `PUT /api/leads/{id}/consultations/{cid}` | – |
+| P.6.4 | Delete own | `DELETE /api/leads/{id}/consultations/{cid}` | – |
+| P.6.5 | SmartConsultationStatusSelector privileged options (per F2 thin-client probe) | – | Verify admin/manager see extra |
+
+### P.7 Admission survey/feedback
+| Step | Action | Endpoint | Expected |
+|---|---|---|---|
+| P.7.1 | Profile state enrolled → survey trigger | – | Survey link sent |
+| P.7.2 | Applicant submit feedback | `POST /api/admissions/{id}/survey` (verify exist) | – |
+
+---
+
+## SUCCESS CRITERIA — Wave 2 expanded
+
+Playbook xanh khi:
+- ✅ Wave 1: B1-B22 happy path + RBAC matrix + IDOR matrix pass
+- ✅ Wave 2 sections H/I/J/K/L/M/N/O/P: ≥80% scenarios pass, 0 new BLOCKER, ≤3 new MAJOR
+- ✅ Manager persona unit-scope verified (H.1)
+- ✅ Finance maker-checker pattern OK (I.4)
+- ✅ Multi-NV publish-result engine cascade tested ≥3 scenarios (J.2)
+- ✅ Magic-link consume side full cycle (K.2); generate side gap documented nếu vẫn tồn tại
+- ✅ Notification rule trigger → delivery → mark-read end-to-end (L.1+L.6)
+- ✅ Bulk operations partial success handling (H.5 + N.1)
+- ✅ Audit log entries verify ≥5 mutation actions (P.2)
+- ✅ Optimistic locking 409 ≥3 endpoints (P.1)
+
+---
+
+*End of Wave 2 expansion.*

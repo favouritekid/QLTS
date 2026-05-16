@@ -93,6 +93,29 @@ export async function replaceChoiceScores(
 }
 
 /**
+ * POST /api/v2/admissions/{profile_id}/waitlist-promote
+ *
+ * Wave 6 ship 2026-05-16 — T10 manager/admin manually promote 1 NV dự bị
+ * → trúng tuyển khi có chỉ tiêu trống. BE endpoint đã exist từ
+ * Phase 3 PR-3C; FE wire muộn cùng Wave 6 với T11 reject để admin queue
+ * có cả 2 action.
+ *
+ * `reason` optional (positive decision không bắt buộc justify) nhưng FE
+ * dialog enforce ≥10 chars cho parity với reject (admin UX consistent).
+ */
+export async function promoteWaitlistedChoice(
+  profileId: number,
+  payload: { choice_id: number; reason?: string },
+): Promise<{ choice_id: number; decision: "admitted"; profile_id: number }> {
+  const response = await api.post<{
+    choice_id: number
+    decision: "admitted"
+    profile_id: number
+  }>(`/api/v2/admissions/${profileId}/waitlist-promote`, payload)
+  return response.data
+}
+
+/**
  * POST /api/v2/admissions/{profile_id}/waitlist-reject
  *
  * Wave 5 ship 2026-05-16 — T11 manager/admin manually finalize 1 NV
@@ -125,5 +148,6 @@ export const admissionChoicesApi = {
   deleteChoice,
   updateChoiceDisplayOrder,
   replaceChoiceScores,
+  promoteWaitlistedChoice,
   rejectWaitlistedChoice,
 }
