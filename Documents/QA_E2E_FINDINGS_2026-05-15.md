@@ -1,5 +1,51 @@
 # QA E2E FINDINGS — 2026-05-15 → 2026-05-16
 
+## 🔬 WAVE 4 — Chrome MCP runtime re-test (2026-05-16 ~15:30 UTC+7)
+
+### Browser-verified admission fixes
+
+| # | Test | Evidence (snapshot UID) | Status |
+|---|---|---|---|
+| F4 | Officer sidebar không có "Backfill Queue" | uid=27_3..27_27 — sidebar 7 nav items + 5 recent pages (Performance Dashboard/39/42/Create/410), không có Backfill Queue | ✅ |
+| F1+F2 | Profile 42 Step 4 → "Thêm nguyện vọng" dialog | uid=30_0 dialog "Thêm nguyện vọng NV4" + cascading dropdown "Ngành / Phương thức xét tuyển", KHÔNG còn error "Không xác định được đợt" | ✅ |
+| F2 list | "Danh sách nguyện vọng (3/5)" với NV1+NV2+NV3 render đầy đủ | uid=29_4..29_55 — 3 choices với drag handles + edit/delete buttons; NV2+NV3 scores hiển thị `math/physics/chemistry` 7.00/7.50/8.00 và `math/chemistry/english` 7.00/7.50/8.00 | ✅ |
+| W2-1 officer | "Gửi link rút hồ sơ" dialog mở với URL + Copy | uid=32_0 dialog "Liên kết rút hồ sơ tuyển sinh" + URL `http://localhost:3000/magic-link/withdraw/uXEM8R...` + Copy + Close. Expiry 23/5/2026 (7 ngày) | ✅ |
+| W2-1 admin | Admin profile 39 also có "Gửi link rút hồ sơ" button | uid=33_220 visible cho admin trên submitted profile | ✅ |
+| F6 | Admin trên profile 39 KHÔNG có Override button (status=submitted, only approved → overridden) | uid=33_215..219 chỉ có: Tiếp tục/Phê duyệt vượt điều kiện/Từ chối/Yêu cầu sửa/Nhận duyệt — không có Override (correct per state machine) | ✅ |
+| F7 | Admin profile 39 banner ⚠️ + "Phê duyệt (vượt điều kiện)" | uid=33_140-148 banner "⚠️ Hồ sơ này được nộp trong chế độ bỏ qua xét duyệt sơ bộ" + 7 lỗi count; uid=33_216 button "Phê duyệt (vượt điều kiện)" với haspopup="dialog" | ✅ |
+
+### 🟥 BLOCKER REGRESSION found + FIXED in Wave 4
+
+| # | Sev | Title | Root Cause | Fix |
+|---|---|---|---|---|
+| **W4-1** | 🟥 → ✅ | **ALL admission GET endpoints 500 "invalid policy size"** | Casbin row id=924 `role:manager / /api/leads/export / GET` có v3 (eft) NULL. Casbin model `p = sub, obj, act, eft` requires 4 fields; NULL eft raises RuntimeError ở matcher. Row được insert trong wave fix W2-3 (PR #297 qae2e01) nhưng INSERT chỉ 4 cột (ptype, v0, v1, v2) thiếu v3. | **Operational** (dev): `UPDATE casbin_rule SET v3='allow' WHERE id=924`; reload Casbin → 200 OK. **Source fix** (PR hotfix qae2e02): (1) Patch qae2e01 source INSERT include v3='allow' cho fresh installs; (2) qae2e02 migration sweep `UPDATE WHERE v3 IS NULL` defense-in-depth cho existing envs (prod chạy chain qae2e01→qae2e02 → guarantee 0 NULL trước Casbin reload); (3) Anchor test `test_no_policy_rows_with_null_eft` query live DB ngăn future regression; (4) Memory `casbin-insert-must-include-eft` lock pattern. |
+
+### Wave 4 execution log
+- **15:25** Login officer → sidebar verified clean (F4)
+- **15:26** Navigate `/admissions/42` → page CRASH với 500 error. Console: `API Error (500) ... <AdmissionDetailPageContent>` → ErrorBoundary catch
+- **15:27** Probe BE: ALL profiles (16/17/18/20/39/42) → 500. Logs reveal: `RuntimeError: invalid policy size`
+- **15:28** Audit casbin_rule: found row id=924 với v3 NULL (manager export endpoint, recent fix gone wrong).
+- **15:29** Fix v3='allow' + reload Casbin → all profiles 200
+- **15:30** Reload browser → profile 42 load OK; Step 4 → "(3/5)"; AddChoiceDialog NV4 mở OK; "Gửi link rút hồ sơ" dialog OK
+- **15:32** Admin login → profile 39 → F7 banner + warning button OK
+
+### Final admission status sau Wave 4
+
+| Layer | Status |
+|---|---|
+| All Wave 1-2 admission BE fixes (F1, F2, F3, F5, F6, F7, F8) | ✅ Runtime-verified browser |
+| Wave 3 user fix W2-1 (multi-action magic-link generate) | ✅ Runtime-verified browser (URL generated + copy dialog OK) |
+| Wave 4 regression W4-1 (Casbin v3 NULL) | ✅ Fixed in DB + reload |
+| **Admission module open bugs** | **0** |
+
+### Wave 4 cleanup notes
+
+- Row 924 trong casbin_rule có template_id=NULL (manual insert, không track template lineage). Cần verify `policy_templates.py` có entry tương ứng và sync proper format (`eft: "allow"`) khi seed lại từ template — nếu không sẽ tái xuất hiện sau lần reset Casbin tiếp theo.
+- Profile 16 vẫn ở state `withdrawn` (sau Wave 3 magic-link consume test). Restore nếu cần data fixture cũ.
+- Profile 42 hiện 3 choices (NV1 no-scores, NV2 A00, NV3 D07).
+
+---
+
 ## 🔁 WAVE 3 RE-TEST — Admission module sau user fix (2026-05-16 ~11:30 UTC+7)
 
 ### Kết quả

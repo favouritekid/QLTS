@@ -19,10 +19,14 @@ test fail loudly.
 """
 from __future__ import annotations
 
+import pytest
+from sqlalchemy import text
+
 from app.casbin_config.policy_templates import (
     ACCOUNTANT_TEMPLATE,
     MANAGER_TEMPLATE,
 )
+from app.database import AsyncSessionLocal
 from app.main import fastapi_app
 
 
@@ -103,4 +107,44 @@ def test_leads_export_template_matches_actual_route():
         f"Orphan MANAGER_TEMPLATE entries pointing to non-existent paths "
         f"(/api/leads/export/csv|excel are 404; actual route uses "
         f"query param ?format=): {orphans}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_policy_rows_with_null_eft():
+    """W4-1 hotfix anchor: KHÔNG có 'p' (policy) row nào có v3 (eft) NULL.
+
+    Casbin model `p = sub, obj, act, eft` REQUIRE đầy đủ 4 fields. NULL v3
+    triggers `RuntimeError("invalid policy size")` trên load_policy() →
+    Casbin enforcer chết → all endpoints crash 500.
+
+    History (PR #297 deploy 2026-05-16):
+    - Migration qae2e01 INSERT thiếu cột v3 → row 924 NULL eft
+    - Manifest qua FE: GET /api/admissions/{id} → 500
+    - User fix manual UPDATE row 924 SET v3='allow'
+    - qae2e02 hotfix sweep + qae2e01 source patched include v3
+
+    Pattern bug từng xuất hiện trong nhiều migrations cũ
+    (bb2j3k4l5m6n, dd5m6n7o8p9q, idor20260216001) — đó là tại sao test
+    này là DB-runtime check, không chỉ template check.
+
+    Re-introducing INSERT thiếu v3 sẽ fail test này.
+    """
+    async with AsyncSessionLocal() as s:
+        result = await s.execute(
+            text(
+                """
+                SELECT id, v0, v1, v2, template_id
+                FROM casbin_rule
+                WHERE ptype = 'p' AND v3 IS NULL
+                ORDER BY id
+                LIMIT 20
+                """
+            )
+        )
+        rows = result.fetchall()
+    assert not rows, (
+        f"Found {len(rows)} policy rows with NULL eft — will crash Casbin "
+        f"load_policy(). Fix migration to include v3='allow' or 'deny'. "
+        f"Offending rows: {[(r.id, r.v0, r.v1, r.v2, r.template_id) for r in rows]}"
     )
