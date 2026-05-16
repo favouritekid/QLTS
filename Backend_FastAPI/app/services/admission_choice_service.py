@@ -29,6 +29,7 @@ Tighten ngăn typosquat `/api/v2/admissions/abc/choices` đụng route khác.
 """
 from typing import Any, Callable, Optional, Tuple  # noqa: F401
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -42,7 +43,11 @@ from app.repositories.admission_profile_choice_repository import (
 from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
-from app.utils.exceptions import BusinessRuleViolation, ResourceNotFoundError
+from app.utils.exceptions import (
+    BusinessRuleViolation,
+    DuplicateResourceError,
+    ResourceNotFoundError,
+)
 
 
 # Status whitelist cho add_choice retroactive (P1 fix #5 v2.12)
@@ -185,12 +190,28 @@ class AdmissionChoiceService:
         # ============================================================
         # All prechecks pass — create choice
         # ============================================================
-        choice = await self.choice_repo.create(
-            admission_profile_id=profile.id,
-            admission_path_id=admission_path_id,
-            path_subject_group_config_id=path_subject_group_config_id,
-            display_order=display_order,
-        )
+        # Wrap IntegrityError → DuplicateResourceError (E2E #5 fix
+        # 2026-05-15). UNIQUE constraints fail mode previously bubbled
+        # raw IntegrityError → 500. UNIQUE candidates:
+        #   - uq_admission_profile_choice (profile_id, admission_path_id,
+        #     path_subject_group_config_id) — duplicate ngành+tổ hợp
+        #   - uq_admission_profile_choice_display_order (profile_id,
+        #     display_order) — duplicate priority slot
+        # MUST rollback BEFORE raise — otherwise next statement on the
+        # session deadlocks (per `lead_service.py` pattern).
+        try:
+            choice = await self.choice_repo.create(
+                admission_profile_id=profile.id,
+                admission_path_id=admission_path_id,
+                path_subject_group_config_id=path_subject_group_config_id,
+                display_order=display_order,
+            )
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise DuplicateResourceError(
+                "Nguyện vọng trùng lặp — đã tồn tại NV cùng (ngành, tổ hợp) "
+                "hoặc cùng thứ tự ưu tiên."
+            ) from exc
 
         return choice, _noop_callback
 

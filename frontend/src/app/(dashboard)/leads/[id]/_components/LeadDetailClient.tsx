@@ -29,6 +29,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -320,14 +321,34 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                   Xem hồ sơ tuyển sinh
                 </Button>
               ) : (
-                <Button
-                  variant="default"
-                  className="bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200"
-                  onClick={() => router.push(`/admissions/create?lead_id=${leadId}`)}
-                >
-                  <FileText className="mr-1.5 h-4 w-4" />
-                  Tạo hồ sơ tuyển sinh
-                </Button>
+                /* E2E #2 + #11 fix 2026-05-15 — Tooltip wrap "Tạo hồ sơ"
+                   button. Lead phải ở trạng thái ≥ "Đồng ý tư vấn" (sts06)
+                   để BE create_profile prereq pass. Tooltip thông báo officer
+                   trước khi click thay vì click → 400 toast.
+                   FU PR: add `lead.permissions.create_admission` BE flag để
+                   FE disable button cleanly (Thin Client compliant). */
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="default"
+                        className="bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200"
+                        onClick={() => router.push(`/admissions/create?lead_id=${leadId}`)}
+                      >
+                        <FileText className="mr-1.5 h-4 w-4" />
+                        Tạo hồ sơ tuyển sinh
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs">
+                      <p className="text-xs">
+                        Lead cần ở trạng thái <strong>&ldquo;Đồng ý tư vấn&rdquo;</strong>
+                        {" "}trở lên + có <strong>chương trình đào tạo</strong>
+                        {" "}+ <strong>lịch sử tư vấn</strong>. Hệ thống sẽ báo
+                        nếu chưa đủ điều kiện sau khi nhấn nút.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )
             )}
             <DropdownMenu>

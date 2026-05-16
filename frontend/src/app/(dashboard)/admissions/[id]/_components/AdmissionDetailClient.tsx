@@ -38,6 +38,8 @@ import {
   useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
+  useRequestRevisionAdmission,
+  usePublishAdmissionResult,
   useEnrollStudent,
   useDeleteAdmission,
   useClaimAdmission,
@@ -90,6 +92,11 @@ export function AdmissionDetailClient({
   const resubmitMutation = useResubmitAdmission(profileId)
   const approveMutation = useApproveAdmission(profileId)
   const rejectMutation = useRejectAdmission(profileId)
+  // Phase 3 multi-NV: 1-click publish (BE auto-transition submitted→reviewing
+  // internal nếu cần; bỏ T2 start-review YAGNI 2026-05-15)
+  const publishResultMutation = usePublishAdmissionResult(profileId)
+  // E2E #10 — request_revision (manager → officer fix flow)
+  const requestRevisionMutation = useRequestRevisionAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
   const claimMutation = useClaimAdmission(profileId)
@@ -387,6 +394,27 @@ export function AdmissionDetailClient({
     deleteMutation.mutate()
   }
 
+  // E2E #3 fix 2026-05-15 — useCallback wrap for stable function reference.
+  // Prior pattern `() => publishResultMutation.mutate()` re-created per
+  // render → Radix AlertDialogAction onClick captured stale ref → click
+  // sometimes did not fire mutate. Stable reference via useCallback +
+  // defensive preventDefault wrapper in AdmissionActions.tsx ensures mutate
+  // fires reliably across browser sessions.
+  const handlePublishResult = useCallback(() => {
+    publishResultMutation.mutate()
+  }, [publishResultMutation])
+
+  // E2E #10 — Request revision handler (manager → officer fix flow).
+  // Reason placeholder satisfies BE Pydantic min_length=10. FU PR sẽ
+  // thêm textarea input dialog cho manager nhập reason cụ thể.
+  const handleRequestRevision = useCallback(() => {
+    if (!vm?.version) return
+    requestRevisionMutation.mutate({
+      reason: "Vui lòng chỉnh sửa hồ sơ theo yêu cầu của Manager",
+      version: vm.version,
+    })
+  }, [requestRevisionMutation, vm?.version])
+
   // Claim/Unclaim Handlers
   const handleClaim = () => {
     if (!vm?.version) return
@@ -423,6 +451,28 @@ export function AdmissionDetailClient({
       >
         {/* Status Banner for rejected/resubmitted profiles */}
         <StatusBanner status={profile.status} />
+
+        {/* F7 fix: surface bypass-eligibility hazard. BE flag combines
+            applied_rules.allow_unverified_submission + status reviewable +
+            eligibility_status=ineligible so FE just renders. Without this,
+            reviewer sees neutral "Chờ duyệt" badge and can silently approve
+            a hồ sơ với required fields missing → student row tên NULL. */}
+        {profile.bypass_warning && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border-2 border-warning-300 bg-warning-50 p-4 text-warning-900"
+          >
+            <p className="font-semibold mb-1">
+              ⚠️ Hồ sơ này được nộp trong chế độ bỏ qua xét duyệt sơ bộ
+            </p>
+            <p className="text-sm">
+              Đợt tuyển sinh cho phép nộp hồ sơ chưa đầy đủ
+              (<code>allow_unverified_submission=true</code>). Hồ sơ hiện có{" "}
+              <strong>{profile.validation_errors?.length ?? 0}</strong> lỗi chưa khắc phục.
+              Vui lòng xem tab <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> trước khi phê duyệt.
+            </p>
+          </div>
+        )}
 
         {/* TAB CONTENT */}
         <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
@@ -464,6 +514,10 @@ export function AdmissionDetailClient({
           onReject={handleReject}
           isApproving={approveMutation.isPending}
           isRejecting={rejectMutation.isPending}
+          onPublishResult={handlePublishResult}
+          isPublishingResult={publishResultMutation.isPending}
+          onRequestRevision={handleRequestRevision}
+          isRequestingRevision={requestRevisionMutation.isPending}
           onClaim={handleClaim}
           onUnclaim={handleUnclaim}
           isClaiming={claimMutation.isPending}

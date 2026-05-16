@@ -25,7 +25,48 @@ from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
 from app.models import ProfileSubjectScore, ProfileDocument
+from app.models.admission_config.admission_path import AdmissionPath
+from app.models.admission_config.path_subject_group import (
+    PathSubjectGroupConfig,
+)
+from app.models.admission_profile_choice import (
+    AdmissionProfileChoice,
+    ProfileChoiceScore,
+)
 from app.repositories.base import BaseRepository
+
+
+# Phase 3 multi-NV: eager-load chain cho AdmissionProfile.choices + nested
+# relations cần thiết để Pydantic AdmissionProfileChoiceResponse compute
+# display_path_name + display_program_name + display_degree_level +
+# display_subject_group_name + scores nested. Without explicit selectinload,
+# lazy access trong async context raises MissingGreenlet (matches pattern
+# admission_profile_choice_repository.py:60-83 get_choice_for_user).
+#
+# Phase 3 follow-up Q1: chain academic_info → offering → program để
+# Pydantic compute_display_fields lấy được program.name + degree_level
+# (trước fix: chỉ load academic_info → program lazy → swallowed → empty
+# → display "2026 - hoc_ba - DOT_1" mất ngành/trình độ).
+def _choices_eager_load_options() -> tuple:
+    return (
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.academic_info)
+        .selectinload(models.OfferingAcademicInfo.offering)
+        .selectinload(models.ProgramOffering.program),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.admission_method),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.admission_round),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.path_subject_group_config
+        ).selectinload(PathSubjectGroupConfig.subject_group),
+        selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.scores
+        ).selectinload(ProfileChoiceScore.subject),
+    )
 
 
 class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
@@ -650,6 +691,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+                *_choices_eager_load_options(),
             )
         )
         result = await self.db.execute(stmt)
@@ -686,6 +728,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+                *_choices_eager_load_options(),
             )
         )
         result = await self.db.execute(stmt)
@@ -1100,26 +1143,29 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         profile_id: int,
         token: str,
         expires_at,
+        action_type: str = "confirm",
     ) -> models.AdmissionConfirmationToken:
         """
-        Issue (or refresh) the magic-link confirmation token for a profile.
+        Issue (or refresh) the magic-link token for a profile + action.
 
         ADM-023 (2026-04-29): when an existing token row is present we
         REUSE it — only ``token``, ``expires_at`` and ``confirmed_at``
         are updated. The brute-force counters (``attempt_count``,
         ``lock_until``, ``locked_at``, ``lock_count``) are PRESERVED so
         an abuser can't simply request a fresh link to escape the
-        ladder. The previous behaviour (``DELETE + INSERT``) reset
-        every counter and was the loophole flagged by the resend test.
+        ladder.
 
-        Operator-driven cooldown reset is a separate admin path (not
-        in scope for this PR); when it ships, that path will explicitly
-        zero ``lock_until`` / ``lock_count`` with an audit row.
+        Wave 7 (2026-05-16): add ``action_type`` param cho generate-side
+        của 3 actions submit/resubmit/withdraw (W2-1 fix). Default 'confirm'
+        cho backward-compat. Single token per profile semantics preserved
+        — generating link cho action mới sẽ overwrite existing token
+        (officer chỉ tạo 1 magic-link tại 1 thời điểm cho mỗi candidate).
 
         Args:
             profile_id: AdmissionProfile ID
             token: URL-safe random token string
             expires_at: Token expiration timestamp
+            action_type: One of confirm | submit | resubmit | withdraw
 
         Returns:
             The single token row (refreshed or newly created).
@@ -1135,11 +1181,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         ).scalar_one_or_none()
 
         if existing is not None:
-            # Refresh value + expiry, clear consumed marker so the new
-            # link is usable. Counters intentionally untouched.
+            # Refresh value + expiry + action_type, clear consumed marker
+            # so the new link is usable. Counters intentionally untouched.
             existing.token = token
             existing.expires_at = expires_at
             existing.confirmed_at = None
+            existing.action_type = action_type  # Wave 7 — overwrite action
             # New email window starts → previous reminder dedupes are
             # stale (different expires_at). Reset reminder markers so
             # the beat task re-fires for the new window.
@@ -1152,6 +1199,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id=profile_id,
             token=token,
             expires_at=expires_at,
+            action_type=action_type,
         )
         self.db.add(token_obj)
         await self.db.flush()

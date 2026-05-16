@@ -12,30 +12,30 @@ Each template contains:
 - policies: List of policy rules (subject placeholder will be replaced)
 
 =============================================================================
-DIAMOND INHERITANCE PATTERN
+ROLE HIERARCHY PATTERN (TREE, post 2026-05-15 fix)
 =============================================================================
 
-Role hierarchy uses diamond inheritance for separation of duties:
+Role hierarchy uses tree-shape inheritance for separation of duties:
 
                        ┌─────────────┐
-                       │    Admin    │  Full system access
+                       │    Admin    │  Full system access (wildcard ALLOW)
                        └──────┬──────┘
-                         ▲         ▲
-              ┌──────────┘         └──────────┐
-              │                               │
-        ┌─────┴──────┐                 ┌──────┴─────┐
-        │  Manager   │                 │ Accountant │
-        │ (Users/    │                 │  (Finance  │
-        │  Leads)    │                 │   Ops)     │
-        └─────┬──────┘                 └──────┬─────┘
-              │                               │
-              └──────────┐     ┌──────────────┘
-                         ▼     ▼
+                              │
+                       ┌──────┴──────┐
+                       │  Manager    │  (Users/Leads/Admissions)
+                       └──────┬──────┘
+                              │
+              ┌───────────────┴──────────────┐
+              │                              │
+        ┌─────┴──────┐                ┌──────┴─────┐
+        │  Officer   │                │ Accountant │
+        │ (Admission │                │  (Finance  │
+        │ consultant)│                │   Ops)     │
+        └─────┬──────┘                └──────┬─────┘
+              │                              │
+              └────────────┬─────────────────┘
+                           ▼
                       ┌───────────┐
-                      │  Officer  │  Admission consultant
-                      └─────┬─────┘
-                            │
-                      ┌─────┴─────┐
                       │   User    │  Basic permissions
                       └───────────┘
 
@@ -44,12 +44,18 @@ Casbin Grouping Policies (g-type rules):
   g, role:accountant, role:officer
   g, role:manager, role:officer        # Manager does NOT inherit Accountant!
   g, role:admin, role:manager
-  g, role:admin, role:accountant       # Admin inherits BOTH branches
+
+REMOVED 2026-05-15: `g, role:admin, role:accountant` diamond edge.
+Reason: admin already has wildcard ALLOW `/*.*` so the inheritance edge
+only causes admin to inherit accountant DENY entries (admin-rollback,
+claim, request-revision, waitlist-promote) → admin gets unintended 403s.
+Tree shape preserves separation-of-duties while eliminating leaked DENYs.
+See alembic phase3_02 for prod data migration.
 
 Benefits:
   - Separation of Duties: Manager cannot do finance ops, Accountant cannot manage users
   - Least Privilege: Each role only has required permissions
-  - Admin Override: Admin inherits all permissions from both branches
+  - Admin Override: Admin has wildcard `/*.*` ALLOW (no inheritance needed)
 
 Template Design:
   - Each template defines ONLY the permissions UNIQUE to that role
@@ -157,6 +163,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/resubmit", "action": "POST"},  # Resubmit after rejection
         {"subject": "{role}", "object": "/api/admissions/{id}/withdraw", "action": "POST"},  # Withdraw applicant-initiated
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        # W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3 non-confirm
+        # actions (submit/resubmit/withdraw). Officer triggers generate-side;
+        # candidate consume qua /magic-link/{action}/{token} (PR #280 wired).
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST"},
         # Post-approval minor correction — Casbin admits the role; service
         # narrows further with status whitelist + per-path allowlist +
         # HARD_DENY checks. IDOR via get_admission_for_user (admin all /
@@ -337,16 +347,53 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/request-revision",  "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST", "eft": "deny"},
+        # RE-ADDED 2026-05-16 Wave 5: T11 waitlist-reject endpoint shipped.
+        # Phase3_02 dropped row from DB (endpoint was dead); phase3_04 re-adds
+        # since endpoint exists. Separation-of-duties — finance staff không
+        # quyết định reject candidate dự bị.
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/admin-rollback",    "action": "POST", "eft": "deny"},
         # PR-3D-B BE-1 — Choice CRUD: accountant explicitly denied per
         # separation-of-duties; finance staff do not touch admission state.
-        # Mirror officer ALLOW above so accountant inheriting via diamond
+        # Mirror officer ALLOW above so accountant via tree inheritance
         # still bounces off deny effect.
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices",           "action": "POST",   "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH",  "eft": "deny"},
+        # F8 + F9 fix 2026-05-16: accountant inherits Officer (g, role:accountant,
+        # role:officer) which grants admission/lead list endpoints. Finance
+        # workflows operate on profile_id passed from invoice/payment forms,
+        # not on full list views — accountant has no business need to enumerate
+        # admissions or leads, and `/api/leads` returns 391 leads with phone
+        # numbers (PII leak). admission_service._resolve_idor_filters also
+        # raises a defensive "Unexpected role 'accountant' for admission access"
+        # which leaks internal code state; deny at Casbin → clean 403 from
+        # gateway, service code never receives the role.
+        {"subject": "{role}", "object": "/api/admissions",                "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}",           "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}",           "action": "PUT",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions",                "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/submit",    "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/resubmit",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/withdraw",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/minor-correction", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST", "eft": "deny"},  # W2-1 Wave 7 accountant deny
+        {"subject": "{role}", "object": "/api/admissions/stats",          "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/status-counts",  "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads",                     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads",                     "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}",                "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}",                "action": "PUT",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/timeline",       "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/insights",       "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/audit-logs",     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations",  "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/check-duplicate",     "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/import",              "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/import/template",     "action": "GET",  "eft": "deny"},
     ]
 }
 
@@ -388,6 +435,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile
         {"subject": "{role}", "object": "/api/admissions/{id}/drop", "action": "POST"},  # Drop enrolled student
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST"},  # W2-1 Wave 7 manager generate magic-link 3 actions
         # PR #5 — reviewer actions on individual documents. Casbin admits
         # the route at role level; admission_service enforces unit scope +
         # allowed doc_status per _compute_document_permissions.

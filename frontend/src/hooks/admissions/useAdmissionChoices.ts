@@ -10,6 +10,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   createChoice,
   deleteChoice,
+  promoteWaitlistedChoice,
+  rejectWaitlistedChoice,
   replaceChoiceScores,
   updateChoiceDisplayOrder,
 } from "@/lib/api/admission-choices"
@@ -99,6 +101,67 @@ export function useReplaceChoiceScores(profileId: number) {
       choiceId: number
       payload: ChoiceScoresReplaceRequest
     }) => replaceChoiceScores(profileId, choiceId, payload),
+    onSuccess: () => {
+      invalidateAfterChoiceMutation(queryClient, profileId)
+    },
+  })
+}
+
+/**
+ * Wave 6 ship 2026-05-16 — T10 waitlist-promote hook.
+ *
+ * Manager/admin manually promote 1 NV dự bị → trúng tuyển khi có chỉ
+ * tiêu trống. BE endpoint pre-existing từ Phase 3 PR-3C; FE wire muộn
+ * cùng Wave 6 với T11 reject để admin queue có cả 2 action.
+ *
+ * `reason` optional ở BE (promote positive decision không bắt buộc
+ * justify), nhưng FE AuditReasonDialog enforce ≥10 chars cho UX
+ * consistent với reject.
+ */
+export function usePromoteWaitlistedChoice(profileId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      choiceId,
+      reason,
+    }: {
+      choiceId: number
+      reason?: string
+    }) =>
+      promoteWaitlistedChoice(profileId, {
+        choice_id: choiceId,
+        reason,
+      }),
+    onSuccess: () => {
+      invalidateAfterChoiceMutation(queryClient, profileId)
+    },
+  })
+}
+
+/**
+ * Wave 5 ship 2026-05-16 — T11 waitlist-reject hook.
+ *
+ * Manager/admin manually finalize 1 NV dự bị → trượt khi đợt closes +
+ * slot không mở. Pattern mirror useDeleteChoice (mutation by choiceId)
+ * but with required `reason` payload (BE Pydantic min_length=10).
+ *
+ * Mutation invalidates both choices list + admission detail (profile.status
+ * may flip waitlisted → rejected per state machine T11 edge).
+ */
+export function useRejectWaitlistedChoice(profileId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      choiceId,
+      reason,
+    }: {
+      choiceId: number
+      reason: string
+    }) =>
+      rejectWaitlistedChoice(profileId, {
+        choice_id: choiceId,
+        reason,
+      }),
     onSuccess: () => {
       invalidateAfterChoiceMutation(queryClient, profileId)
     },

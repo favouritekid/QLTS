@@ -945,6 +945,35 @@ _ADMISSION_EVENTS: tuple = (
         bypass_consent_check=False,
     ),
 
+    # 8b. T11 — admin finalizes waitlist → rejected (Wave 5 ship 2026-05-16).
+    # Source-aware distinct from generic ADMISSION_DECISION_REJECTED (T9
+    # engine cascade). Manager/admin manually reject 1 waitlisted choice
+    # khi đợt closes + slot không mở. Notification rule unwired by default
+    # (operator must seed via /admin/notification-rules); fail-closed at
+    # dispatcher per T9 pattern.
+    EventDefinition(
+        event=SystemEvents.ADMISSION_WAITLIST_REJECTED,
+        category="application",
+        display_name="Bị loại khỏi danh sách dự bị",
+        description="Admin finalized waitlisted profile to rejected (T11). Candidate audience. Outbox guaranteed; consent honored.",
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("rejected_at_iso", "string", "ISO datetime reject"),
+            _var("reason", "string", "Lý do reject (audit)"),
+            _var("path_id", "integer", "ID admission_path bị reject", False),
+        ),
+        default_resolver="specific_users",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=20,
+        dedup_key_template="admission:${application_id}:waitlist_rejected",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
+    ),
+
     # 9. T12 — candidate / officer / admin confirms admission.
     EventDefinition(
         event=SystemEvents.ADMISSION_CONFIRMED,

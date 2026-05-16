@@ -586,6 +586,17 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "success",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },
+    # Wave 5 ship 2026-05-16 — T11 admin finalize waitlist → rejected.
+    # Source-aware distinct từ ADMISSION_DECISION_REJECTED (T9 cascade).
+    SystemEvents.ADMISSION_WAITLIST_REJECTED: {
+        "title_template": "Bị loại khỏi danh sách dự bị",
+        "message_template": (
+            "Hồ sơ #${application_id} đã bị loại khỏi danh sách dự bị "
+            "lúc ${rejected_at_iso}. Lý do: ${reason}."
+        ),
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
     SystemEvents.ADMISSION_CONFIRMED: {
         "title_template": "Xác nhận nhập học",
         "message_template": "Hồ sơ #${application_id} đã xác nhận nhập học (qua ${confirmed_via}).",

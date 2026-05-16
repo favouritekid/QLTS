@@ -35,6 +35,10 @@ export {
   useResubmitAdmission,
   useApproveAdmission,
   useRejectAdmission,
+  // E2E #10 fix 2026-05-15 — manager request_revision flow
+  useRequestRevisionAdmission,
+  // Phase 3 multi-NV: 1-click publish (bỏ start-review YAGNI)
+  usePublishAdmissionResult,
   useEnrollStudent,
   useDeleteAdmission,
   useUploadAdmissionDocument,

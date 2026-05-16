@@ -78,6 +78,14 @@ class AdmissionProfileChoiceResponse(BaseModel):
         default="",
         description='Format: "{program_name} {academic_year} - {method_code} - {round_code}"',
     )
+    display_program_name: str = Field(
+        default="",
+        description="Tên ngành (vd 'Y sỹ đa khoa') — separate cho FE render badge",
+    )
+    display_degree_level: str = Field(
+        default="",
+        description="Trình độ (vd 'Cao đẳng', 'Trung cấp') — render badge cạnh ngành",
+    )
     display_subject_group_name: str = Field(
         default="",
         description="Format: subject_group.name (vd 'Toán-Lý-Hoá')",
@@ -120,20 +128,30 @@ class AdmissionProfileChoiceResponse(BaseModel):
         config = getattr(data, "path_subject_group_config", None)
 
         display_path_parts: list[str] = []
+        program_name_out = ""
+        degree_level_out = ""
         if path is not None:
             academic_info = getattr(path, "academic_info", None)
-            program = (
-                getattr(academic_info, "program", None)
-                if academic_info is not None
-                else None
-            )
+            # Phase 3 follow-up Q1: program lives at offering.program (not
+            # academic_info.program directly). Try both paths defensively
+            # — eager-load chain admission_repository._choices_eager_load_options
+            # now chains academic_info → offering → program for new code,
+            # but legacy callers may still pass shallow object.
+            program = None
+            if academic_info is not None:
+                offering = getattr(academic_info, "offering", None)
+                if offering is not None:
+                    program = getattr(offering, "program", None)
+                if program is None:
+                    program = getattr(academic_info, "program", None)
             method = getattr(path, "admission_method", None)
             round_obj = getattr(path, "admission_round", None)
 
             if program is not None:
-                program_name = getattr(program, "name", None) or ""
-                if program_name:
-                    display_path_parts.append(program_name)
+                program_name_out = getattr(program, "name", None) or ""
+                degree_level_out = getattr(program, "degree_level", None) or ""
+                if program_name_out:
+                    display_path_parts.append(program_name_out)
             if academic_info is not None:
                 year = getattr(academic_info, "academic_year", None)
                 if year:
@@ -148,6 +166,8 @@ class AdmissionProfileChoiceResponse(BaseModel):
                     display_path_parts.append(round_code)
 
         out["display_path_name"] = " - ".join(display_path_parts)
+        out["display_program_name"] = program_name_out
+        out["display_degree_level"] = degree_level_out
 
         subject_group_name = ""
         if config is not None:

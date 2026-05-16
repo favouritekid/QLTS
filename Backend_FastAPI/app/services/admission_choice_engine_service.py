@@ -401,25 +401,42 @@ async def evaluate_cascade(
 async def publish_result(
     db: AsyncSession,
     profile: "AdmissionProfile",
+    *,
+    actor: Optional[Any] = None,
 ) -> Tuple[CascadeResult, Optional[Callable[[], Awaitable[None]]]]:
     """T6 publish-result service entry point (router-facing).
 
     Thin wrapper trên `evaluate_cascade()` adding pre-condition guards.
     Used by `POST /api/v2/admissions/{id}/publish-result` router (Sub-3.3).
 
+    SIMPLIFIED FLOW 2026-05-15: bỏ T2 start-review explicit step (YAGNI
+    cho solo-manager system). Endpoint giờ accept cả `submitted` lẫn
+    `reviewing` state; nếu `submitted` → internal transition
+    submitted→reviewing trước khi engine evaluate (atomic). State machine
+    giữ nguyên — `reviewing` vẫn là intermediate state cho engine cascade
+    audit trail (state_history ghi cả 2 transitions).
+
     PRE-CHECKS (raises BusinessRuleViolation):
         1. `profile.uses_choice_engine == True` — only multi-NV profiles
            publish via choice engine; legacy single-NV profiles flow qua
            existing `admission_service.review_*` paths.
-        2. `profile.status == "reviewing"` — engine evaluates from
-           reviewing state ONLY. Other states blocked by state machine
-           (T6 edge: reviewing → result_published only).
+        2. `profile.status` IN ("submitted", "reviewing") — manager click
+           "Công bố kết quả" trực tiếp từ submitted (1-click) HOẶC từ
+           reviewing (legacy 2-step still supported nếu admin set state
+           manual qua state machine).
 
     NO `begin_nested()` wrap here — single-profile publish ships within
     the router's outer transaction. Batch-publish (future Phase 4 ship)
     would wrap per-profile in begin_nested with `dispatch_event(strict=True)`
     propagation per memory `dispatch-bundle-strict-required`. For single-
     profile case, FastAPI dependency rollback on exception suffices.
+
+    Args:
+        db: Caller async session.
+        profile: AdmissionProfile to publish.
+        actor: User triggering publish (manager/admin) — passed to
+               state_service.transition() cho audit trail. Optional cho
+               backward-compat (Phase 3 caller chưa pass).
 
     Returns:
         `(CascadeResult, post_commit_callback)` per V3.0 contract.
@@ -430,13 +447,30 @@ async def publish_result(
         BusinessRuleViolation: pre-check failure (engine flag / wrong state)
                                 or downstream state machine edge rejection.
     """
+    from . import admission_state_service as state_service
+
     if not getattr(profile, "uses_choice_engine", False):
         raise BusinessRuleViolation(
             "Hồ sơ không bật multi-NV choice engine — không thể publish qua engine"
         )
-    if profile.status != "reviewing":
+    if profile.status not in ("submitted", "reviewing"):
         raise BusinessRuleViolation(
-            f"Hồ sơ phải ở trạng thái 'reviewing' để publish; trạng thái hiện tại: '{profile.status}'"
+            f"Hồ sơ phải ở trạng thái 'submitted' hoặc 'reviewing' để publish; "
+            f"trạng thái hiện tại: '{profile.status}'"
+        )
+
+    # Auto-transition submitted → reviewing trước engine cascade. Engine
+    # vẫn cần reviewing state làm intermediate (per state_machine T6 edge:
+    # reviewing → result_published only). transition() handle audit log
+    # + dispatch event ADMISSION_REVIEW_STARTED nếu rule cấu hình.
+    if profile.status == "submitted":
+        await state_service.transition(
+            db,
+            profile,
+            "reviewing",
+            actor=actor,
+            reason="Auto-transition trước engine cascade (publish_result)",
+            source="api",
         )
 
     return await evaluate_cascade(db, profile)
@@ -506,6 +540,85 @@ async def promote_waitlisted_choice(
             "decision": "admitted",
             "profile_id": profile.id,
             "profile_status": "admitted",
+        },
+        callback,
+    )
+
+
+# ============================================================================
+# Wave 5 — Waitlist reject helper (T11) — ship 2026-05-16
+# ============================================================================
+
+
+async def reject_waitlisted_choice(
+    db: AsyncSession,
+    choice: "AdmissionProfileChoice",
+    profile: "AdmissionProfile",
+    actor: Any,
+    reason: str,
+) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
+    """T11 manual reject: waitlisted → rejected (admin/manager action).
+
+    Used by `POST /api/v2/admissions/{profile_id}/waitlist-reject`
+    (Wave 5 ship 2026-05-16). Mirror semantic của
+    `promote_waitlisted_choice` (T10) — manager/admin manually finalize
+    candidate dự bị → trượt khi đợt closes + slot không mở.
+
+    Uses PR-3B Sub-2 `TRANSITION_PAIR_TO_EVENT` source-aware mapping:
+    `(waitlisted, rejected)` fires `ADMISSION_WAITLIST_REJECTED` (NOT
+    generic `ADMISSION_DECISION_REJECTED` từ T9 engine cascade).
+    Notification consumers cần distinguish first-pass reject (T9) vs
+    second-pass admin finalize (T11) cho audit + candidate UX.
+
+    PRE-CHECKS:
+        1. `choice.decision == "waitlisted"` — only waitlisted choices
+           can be rejected via T11 path (T9 cascade reject covers other)
+        2. `profile.status == "waitlisted"` — must match (engine sets
+           both together per cascade)
+
+    Difference vs promote:
+        - `reason` REQUIRED min 10 chars (admin justify negative
+          decision per memory phase3-pr-3d-b-backlog "DELETE audit +
+          reason"). Promote reason optional vì positive outcome.
+
+    Returns:
+        `(result_dict, post_commit_callback)` per V3.0 contract.
+    """
+    from . import admission_state_service as state_service
+
+    if choice.decision != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Nguyện vọng phải ở quyết định 'waitlisted'; current: '{choice.decision}'"
+        )
+    if profile.status != "waitlisted":
+        raise BusinessRuleViolation(
+            f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
+        )
+
+    # Update choice decision FIRST so audit trail captures the source
+    choice.decision = "rejected"
+    await db.flush()
+
+    # State transition fires ADMISSION_WAITLIST_REJECTED via PAIR map
+    _, callback = await state_service.transition(
+        db, profile, "rejected",
+        actor=actor,
+        reason=reason,  # Required audit context
+        source="waitlist_reject",
+        event_metadata={
+            "rejected_from_waitlist": True,
+            "choice_id": choice.id,
+            "display_order": choice.display_order,
+            "reason": reason,
+        },
+    )
+
+    return (
+        {
+            "choice_id": choice.id,
+            "decision": "rejected",
+            "profile_id": profile.id,
+            "profile_status": "rejected",
         },
         callback,
     )

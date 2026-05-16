@@ -19,6 +19,8 @@ import html
 
 from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, model_validator, ConfigDict
 
+from app.schemas.admission_profile_choice import AdmissionProfileChoiceResponse
+
 
 # ==============================================================================
 # NESTED SCHEMAS (for JSONB fields)
@@ -614,6 +616,24 @@ class AppliedRulesSchema(BaseModel):
     schema_version: Optional[int] = None
     allow_unverified_submission: Optional[bool] = None
 
+    # E2E F1+F5 fix 2026-05-16 — 9 keys snapshot từ JSONB nhưng trước đây
+    # bị model_config extra="ignore" strip im lặng (memory pattern
+    # `service-explicit-dict-field-drop-pattern`). Cần expose qua API
+    # response cho:
+    # - FE AddChoiceDialog: derive round_id từ applied_rules khi profile
+    #   chưa có NV (E2E #6 root cause)
+    # - FE display: round_code, application_fee cho card hiển thị
+    # - FE engine config: subject_weights cho scoring detail
+    admission_round_id: Optional[int] = None  # Phase 2 v8.2 PR-2B snapshot
+    round_code: Optional[str] = None
+    application_fee: Optional[float] = None
+    requires_application_fee: Optional[bool] = None
+    fee_status: Optional[str] = None  # exempt/paid/pending/etc
+    method_quota: Optional[int] = None
+    applicable_to: Optional[Any] = None  # JSONB free-form (eligibility expr)
+    subject_weights: Optional[Dict[str, float]] = None
+    bonus_rule_override: Optional[Dict[str, Any]] = None  # JSONB nested rule
+
     model_config = ConfigDict(extra="ignore")
 
 
@@ -642,6 +662,16 @@ class AdmissionProfileResponse(BaseModel):
     # "Nguyện vọng" hiển thị có điều kiện theo flag này (dynamic
     # visibleSteps array per P-UI-01).
     uses_choice_engine: bool = False
+
+    # Phase 3 multi-NV choices array. Empty cho legacy profile
+    # (uses_choice_engine=False). GET endpoints (single/list) eager-load
+    # via AdmissionRepository._choices_eager_load_options() chain.
+    # Mutation endpoints (POST/PATCH/approve/reject/withdraw/...) trả
+    # empty list — caller refetch detail sau mutation nếu cần choices.
+    # Lazy-load safety enforced by _safely_handle_unloaded_choices()
+    # below (set_committed_value cho relation chưa load → tránh
+    # MissingGreenlet trong async context).
+    choices: List[AdmissionProfileChoiceResponse] = Field(default_factory=list)
 
     # ✅ Ticket #1: Use strict schema
     applied_rules: AppliedRulesSchema
@@ -775,6 +805,16 @@ class AdmissionProfileResponse(BaseModel):
         default="pending",
         description="Backend-computed eligibility based on applied_rules"
     )
+
+    # F7: True when reviewer is about to act on a profile that bypassed
+    # eligibility (allow_unverified_submission=true + ineligible + still
+    # in a reviewable state). FE renders an orange warning banner +
+    # confirmation dialog in front of the Approve button so admin doesn't
+    # silently approve a profile with missing required data.
+    bypass_warning: bool = Field(
+        default=False,
+        description="True if profile bypassed eligibility check via allow_unverified_submission flag"
+    )
     
     # Validation errors (reasons why profile is not eligible)
     validation_errors: List[str] = Field(
@@ -867,6 +907,42 @@ class AdmissionProfileResponse(BaseModel):
         None,
         description="Backend-computed score pass/fail status: {total_status, subject_statuses: {code: status}}"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _safely_handle_unloaded_choices(cls, data: Any) -> Any:
+        """Skip lazy-load của ``choices`` relation khi serialize từ ORM.
+
+        Mutation endpoints (POST/PATCH/approve/reject/withdraw/...) trả
+        AdmissionProfile sau khi flush nhưng KHÔNG eager-load
+        ``choices``. Pydantic ``from_attributes=True`` sẽ getattr
+        choices → trigger lazy-load → ``MissingGreenlet`` trong async
+        context (Pydantic không thể await).
+
+        Fix: dùng SQLAlchemy ``set_committed_value`` để mark relation
+        "loaded" với empty list cho instances không qua eager-load
+        chain. GET endpoints (đã eager-load) skip nhánh này — ``choices``
+        đã ở ``state.unloaded`` không nữa.
+
+        Anti-pattern check: KHÔNG mutate user-data; chỉ inject empty
+        list cho relation collection (đúng default semantics khi
+        không có choices). Caller mutation endpoints không kỳ vọng
+        receive choices trong response.
+        """
+        if isinstance(data, dict):
+            return data
+        try:
+            from sqlalchemy import inspect as sa_inspect
+            from sqlalchemy.orm.attributes import set_committed_value
+
+            state = sa_inspect(data, raiseerr=False)
+            if state is not None and "choices" in state.unloaded:
+                set_committed_value(data, "choices", [])
+        except Exception:
+            # Defensive: nếu data không phải ORM (vd unit-test mock),
+            # để Pydantic xử lý tự nhiên.
+            pass
+        return data
 
     model_config = ConfigDict(
         from_attributes=True,
@@ -1522,6 +1598,56 @@ class ConfirmTokenInfoResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SendMagicLinkRequest(BaseModel):
+    """W2-1 fix Wave 7 (2026-05-16) — Request body cho generate-side
+    magic-link cho 3 non-confirm actions.
+
+    Officer/manager/admin chọn action; BE validate state precondition +
+    overwrite existing token row với action_type new. UX mirror
+    /send-confirmation nhưng explicit action param.
+    """
+    action: Literal["submit", "resubmit", "withdraw"] = Field(
+        ...,
+        description=(
+            "Action type magic-link sẽ enable cho candidate self-service. "
+            "Confirm dùng /send-confirmation endpoint riêng (legacy path)."
+        ),
+    )
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class SendMagicLinkResponse(BaseModel):
+    """Response after generating magic-link cho non-confirm action.
+
+    Mirror SendConfirmationResponse shape — FE dialog copy URL pattern
+    reused (SendConfirmationButton component). Officer chia sẻ URL
+    manual qua Zalo/SMS tới candidate.
+    """
+    message: str
+    action: Literal["submit", "resubmit", "withdraw"]
+    token_expires_at: datetime
+    sent_to_email: Optional[str] = Field(
+        None,
+        description="Lead email (informational — KHÔNG auto-email cho Wave 7 MVP)",
+    )
+    phone: Optional[str] = Field(
+        None,
+        description="Lead phone (informational — officer manual share)",
+    )
+    token_value: Optional[str] = Field(
+        None,
+        description="Token value cho copy thủ công nếu cần",
+    )
+    magic_link_url: Optional[str] = Field(
+        None,
+        description=(
+            "Full magic-link URL (FRONTEND_URL + /magic-link/{action}/{token}). "
+            "FE landing pages tại PR #280 đã ship — candidate click link → "
+            "nhập CCCD → BE consume + apply action atomic."
+        ),
+    )
+
+
 class SendConfirmationResponse(BaseModel):
     """Response after sending confirmation link."""
     message: str
@@ -1634,6 +1760,40 @@ class AdmissionWaitlistPromoteResponse(BaseModel):
     profile_status: Literal["admitted"] = "admitted"
 
 
+class AdmissionWaitlistRejectRequest(BaseModel):
+    """T11 waitlist-reject endpoint request body (Wave 5 ship 2026-05-16).
+
+    Manager/admin manually finalize candidate dự bị → trượt khi đợt
+    closes + slot không mở. Mirror semantic của AdmissionWaitlistPromote
+    nhưng `reason` REQUIRED (negative decision needs audit context per
+    memory `phase3-pr-3d-b-backlog` "DELETE audit + reason").
+    """
+
+    choice_id: int = Field(..., gt=0, description="ID nguyện vọng reject từ waitlist")
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Lý do reject (audit) — required min 10 chars",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class AdmissionWaitlistRejectResponse(BaseModel):
+    """T11 waitlist-reject endpoint response.
+
+    Returned by `POST /api/v2/admissions/{profile_id}/waitlist-reject`
+    after admin/manager finalizes a waitlisted choice → rejected.
+    """
+
+    choice_id: int
+    decision: Literal["rejected"] = "rejected"
+    profile_id: int
+    profile_status: Literal["rejected"] = "rejected"
+    profile_status: Literal["admitted"] = "admitted"
+
+
 class AdmissionAdminRollbackRequest(BaseModel):
     """T17 admin-rollback endpoint request body.
 
@@ -1693,6 +1853,8 @@ __all__ = [
     "ConfirmTokenResponse",
     "ConfirmTokenInfoResponse",
     "SendConfirmationResponse",
+    "SendMagicLinkRequest",
+    "SendMagicLinkResponse",
     # Aggregate schemas
     "AdmissionStatusCounts",
     "AdmissionStats",
@@ -1700,6 +1862,8 @@ __all__ = [
     "AdmissionPublishResultResponse",
     "AdmissionWaitlistPromoteRequest",
     "AdmissionWaitlistPromoteResponse",
+    "AdmissionWaitlistRejectRequest",
+    "AdmissionWaitlistRejectResponse",
     "AdmissionAdminRollbackRequest",
     "AdmissionAdminRollbackResponse",
 ]

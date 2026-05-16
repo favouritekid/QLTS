@@ -241,16 +241,37 @@ async def test_consume_expired_token_returns_400(
 
 
 @pytest.mark.asyncio
-async def test_consume_withdraw_action_returns_400_not_implemented(
+async def test_consume_withdraw_happy_path(
     client: AsyncClient,
     seed_lead_dependencies: dict,
 ):
-    """Token issued with action_type='withdraw' → 400 'not yet enabled'.
+    """Token issued with action_type='withdraw' → 200 + status='withdrawn'.
 
-    PR-CO-2-BE infrastructure ships the 4-action router surface but only
-    wires the confirm handler. submit/resubmit/withdraw are stubbed as
-    BusinessRuleViolation pending FU PR-CO-2-BE-2.
+    FU PR-CO-2-BE-2 (2026-05-15) wires the withdraw handler. Candidate
+    self-service magic-link with correct CCCD must:
+      1. Transition profile to 'withdrawn' (terminal state)
+      2. Stamp token.confirmed_at (one-shot consumption)
+      3. Persist withdrawal reason on the profile
+
+    Was previously a stub asserting 400 'not yet enabled' before wire.
     """
+    # sts08 (lead status for withdrawn profiles) is NOT in the default
+    # conftest seed list — seed it inline so lead_admission_sync can
+    # update lead.consultation_status_id post-withdraw. Mirrors the
+    # ``seed_sts08`` fixture in ``tests/services/test_admission_withdraw.py``.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            existing = await s.get(models.ConsultationStatus, "sts08")
+            if existing is None:
+                s.add(
+                    models.ConsultationStatus(
+                        id="sts08",
+                        name="Tu choi tu van",
+                        color_code="#FF0000",
+                        stage_id="stg02",
+                    )
+                )
+
     ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     citizen_id = f"7{ts:08d}2"[:12]
     last4 = citizen_id[-4:]
@@ -274,6 +295,7 @@ async def test_consume_withdraw_action_returns_400_not_implemented(
                 status="submitted",
                 applied_rules={},
                 academic_year=2026,
+                version=1,
             )
             s.add(profile)
             await s.flush()
@@ -292,103 +314,49 @@ async def test_consume_withdraw_action_returns_400_not_implemented(
         f"/api/v2/admissions/magic-link/withdraw/{token_value}",
         json={"cccd": last4},
     )
-    assert response.status_code == 400, (
-        f"Expected 400 for not-yet-wired; got {response.status_code}: {response.text}"
+    assert response.status_code == 200, (
+        f"Expected 200 for wired withdraw; got {response.status_code}: {response.text}"
     )
-    assert "not yet enabled" in response.text.lower() or "withdraw" in response.text.lower()
-
-
-# ----------------------------------------------------------------------------
-# H2 (review FU) — parity stub anchors for the other 2 not-yet-wired actions
-# ----------------------------------------------------------------------------
-# The PR-CO-2-BE infrastructure ships the 4-action router but only wires
-# the confirm handler; submit/resubmit/withdraw all return
-# ``BusinessRuleViolation`` 400 "not yet enabled" until FU PR-CO-2-BE-2.
-# The withdraw branch already had a stub anchor — this FU adds parity
-# coverage for submit + resubmit so a future wire of any single action
-# (without the others) cannot silently turn a 400 into a 500 / 200 here.
-#
-# Non-tautological per memory ``pattern-change-impact-audit``: each test
-# seeds an action-typed token + asserts the exact status code + body text
-# ("not yet enabled" or the action name) — the next dev wiring an action
-# must either (a) flip the stub assertion to a happy-path assertion, or
-# (b) remove the stub test entirely. Either signal makes the wire-up
-# explicit.
-
-
-@pytest.mark.asyncio
-async def test_consume_submit_action_returns_400_not_implemented(
-    client: AsyncClient,
-    seed_lead_dependencies: dict,
-):
-    """Token issued with action_type='submit' → 400 'not yet enabled'.
-
-    Mirror of ``test_consume_withdraw_action_returns_400_not_implemented``
-    for the submit branch. PR-CO-2-BE infrastructure ships the router
-    surface; submit handler is stubbed pending FU PR-CO-2-BE-2.
-    """
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
-    citizen_id = f"7{ts:08d}3"[:12]
-    last4 = citizen_id[-4:]
-    token_value = secrets.token_urlsafe(32)
 
     async with AsyncSessionLocal() as s:
-        async with s.begin():
-            lead = models.Lead(
-                full_name=f"PR-3E Submit Lead {ts}",
-                phone=f"095{ts:07d}"[:10],
-                unit_id=seed_lead_dependencies["unit_id"],
-                pipeline_stage_id=seed_lead_dependencies["stage_id"],
-                source="walkin",
+        token_q = await s.execute(
+            select(models.AdmissionConfirmationToken).where(
+                models.AdmissionConfirmationToken.token == token_value
             )
-            s.add(lead)
-            await s.flush()
+        )
+        token_after = token_q.scalar_one()
+        assert token_after.confirmed_at is not None, "Token must be consumed"
 
-            profile = models.AdmissionProfile(
-                lead_id=lead.id,
-                citizen_id=citizen_id,
-                status="draft",
-                applied_rules={},
-                academic_year=2026,
-            )
-            s.add(profile)
-            await s.flush()
+        profile_after = await s.get(models.AdmissionProfile, token_after.profile_id)
+        assert profile_after.status == "withdrawn", (
+            f"Profile must transition to 'withdrawn'; got '{profile_after.status}'"
+        )
 
-            token = models.AdmissionConfirmationToken(
-                profile_id=profile.id,
-                action_type="submit",
-                token=token_value,
-                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-                confirmed_at=None,
-                attempt_count=0,
-            )
-            s.add(token)
 
-    response = await client.post(
-        f"/api/v2/admissions/magic-link/submit/{token_value}",
-        json={"cccd": last4},
-    )
-    assert response.status_code == 400, (
-        f"Expected 400 for not-yet-wired submit; got "
-        f"{response.status_code}: {response.text}"
-    )
-    assert (
-        "not yet enabled" in response.text.lower()
-        or "submit" in response.text.lower()
-    )
+# ----------------------------------------------------------------------------
+# Submit + resubmit happy-path anchors (FU PR-CO-2-BE-2 wire, 2026-05-15)
+# ----------------------------------------------------------------------------
+# Pre-wire these tests asserted 400 "not yet enabled" stubs. After the
+# wire FU lands, both actions deliver real candidate-side flows and
+# must transition the profile through the state machine.
+#
+# Edge cases (validation failure, state mismatch, terminal blocked,
+# IDOR bypass anchor, anti-regression officer-submit) live in the
+# dedicated wire test file ``test_magic_link_3_actions_wire.py`` so
+# this file remains the consume-router happy-path contract suite.
 
 
 @pytest.mark.asyncio
-async def test_consume_resubmit_action_returns_400_not_implemented(
+async def test_consume_resubmit_happy_path(
     client: AsyncClient,
     seed_lead_dependencies: dict,
 ):
-    """Token issued with action_type='resubmit' → 400 'not yet enabled'.
+    """Token action_type='resubmit' on revision_requested profile → 200.
 
-    Mirror of the withdraw + submit stub anchors. Closes H2 review
-    finding by giving each of the 3 not-yet-wired actions a parity
-    assertion so a partial wire-up cannot silently regress the
-    stubs that remain.
+    The state edge ``revision_requested → resubmitted`` already exists
+    in ``ALLOWED_TRANSITIONS`` so the standard ``resubmit_profile``
+    accepts the candidate path with ``officer=None``. Asserts the
+    transition + token consumption.
     """
     ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     citizen_id = f"7{ts:08d}4"[:12]
@@ -413,6 +381,7 @@ async def test_consume_resubmit_action_returns_400_not_implemented(
                 status="revision_requested",
                 applied_rules={},
                 academic_year=2026,
+                version=1,
             )
             s.add(profile)
             await s.flush()
@@ -431,14 +400,25 @@ async def test_consume_resubmit_action_returns_400_not_implemented(
         f"/api/v2/admissions/magic-link/resubmit/{token_value}",
         json={"cccd": last4},
     )
-    assert response.status_code == 400, (
-        f"Expected 400 for not-yet-wired resubmit; got "
+    assert response.status_code == 200, (
+        f"Expected 200 for wired resubmit; got "
         f"{response.status_code}: {response.text}"
     )
-    assert (
-        "not yet enabled" in response.text.lower()
-        or "resubmit" in response.text.lower()
-    )
+
+    async with AsyncSessionLocal() as s:
+        token_q = await s.execute(
+            select(models.AdmissionConfirmationToken).where(
+                models.AdmissionConfirmationToken.token == token_value
+            )
+        )
+        token_after = token_q.scalar_one()
+        assert token_after.confirmed_at is not None, "Token must be consumed"
+
+        profile_after = await s.get(models.AdmissionProfile, token_after.profile_id)
+        assert profile_after.status == "resubmitted", (
+            f"Profile must transition to 'resubmitted'; "
+            f"got '{profile_after.status}'"
+        )
 
 
 # ============================================================================

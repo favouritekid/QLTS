@@ -25,7 +25,7 @@ Security Features:
 import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Tuple, Callable
+from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal
 import structlog
 from sqlalchemy import or_, and_, select, func
@@ -246,17 +246,27 @@ def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Opt
     elif current_user.role == UserRole.OFFICER:
         return current_user.unit_id, current_user.id
     else:
-        raise PermissionDeniedError(f"Unexpected role '{current_user.role}' for admission access")
+        # F8 fix 2026-05-16: defense-in-depth fallback. The expected gate
+        # is at Casbin (ACCOUNTANT_TEMPLATE B1 deny block), so accountant
+        # never reaches here. If a new role bypasses Casbin we return a
+        # role-neutral message instead of leaking internal expectations.
+        raise PermissionDeniedError(
+            f"Vai trò '{current_user.role}' không có quyền truy cập danh sách hồ sơ tuyển sinh."
+        )
 
 
 def _check_idor_access(
     profile: models.AdmissionProfile,
-    current_user: models.User,
+    current_user: Optional[models.User],
 ) -> None:
     """
     3-tier IDOR Protection for admission profiles.
 
     Rules:
+    - System (current_user=None): Bypass — used by magic-link candidate path
+      where the caller has already verified CCCD against the profile (token
+      acts as proof of identity, IDOR is not applicable to a candidate
+      acting on their own profile).
     - Admin: Full access to all profiles
     - Manager: Access profiles where lead.unit_id == user.unit_id
     - Officer: Access profiles where lead.assigned_officer_id == user.id AND lead.unit_id == user.unit_id
@@ -264,6 +274,9 @@ def _check_idor_access(
     Raises:
         ResourceNotFoundError: Returns 404 to prevent resource enumeration
     """
+    if current_user is None:
+        return
+
     if current_user.role == UserRole.ADMIN:
         return
 
@@ -1429,6 +1442,17 @@ def _compute_frontend_fields(
         "submit": status == "draft" and (is_owner or is_manager or is_admin),
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
+        # "Công bố kết quả" trực tiếp từ submitted/reviewing → engine cascade
+        # auto-transition submitted→reviewing→result_published→admitted/rejected.
+        # Bỏ T2 start-review explicit step (YAGNI per user clarification).
+        # Mirror BE service guard publish_result(): uses_choice_engine=True +
+        # status IN (submitted, reviewing) + manager/admin role.
+        "publish_result": (
+            getattr(profile, "uses_choice_engine", False)
+            and status in ["submitted", "reviewing"]
+            and (is_manager or is_admin)
+        ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
@@ -1442,6 +1466,27 @@ def _compute_frontend_fields(
         # Only meaningful while waiting on the applicant — after `confirmed`,
         # no more tokens are generated.
         "send_confirmation": is_confirmation_eligible(profile) and (is_owner or is_manager or is_admin),
+        # W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3 candidate
+        # self-service actions. Mirrors send_confirmation permission shape
+        # (assigned officer / unit manager / admin) + per-action state
+        # validation handled service-side. Flag chỉ true khi profile state
+        # cho phép GENERATE link tương ứng (mirror service precheck —
+        # avoid showing button only to fail with 400 state mismatch).
+        "send_submit_link": (
+            status == "draft"
+            and (is_owner or is_manager or is_admin)
+        ),
+        "send_resubmit_link": (
+            status == "revision_requested"
+            and (is_owner or is_manager or is_admin)
+        ),
+        "send_withdraw_link": (
+            status in (
+                "draft", "submitted", "reviewing", "rejected",
+                "resubmitted", "revision_requested", "waitlisted",
+            )
+            and (is_owner or is_manager or is_admin)
+        ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
@@ -1484,6 +1529,13 @@ def _compute_frontend_fields(
             )
         ),
         "delete": status == "draft" and is_admin,
+        # F6 fix 2026-05-16: Override = bypass normal eligibility flow,
+        # admin-only per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN §3.4.
+        # State machine allows ONLY approved → overridden (see
+        # admission_state_machine.ALLOWED_TRANSITIONS line 117-122).
+        # Without this flag the UI cannot surface an Override button,
+        # so admin would only be able to invoke /override via direct API.
+        "override": status == "approved" and is_admin,
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips
         # this back to False if the per-path effective allowlist is
@@ -1556,6 +1608,19 @@ def _compute_frontend_fields(
         profile.is_qualified = True
     
     profile.validation_errors = validation_errors
+
+    # F7 fix 2026-05-16: surface bypass-eligibility hazard to FE.
+    # When `applied_rules.allow_unverified_submission=True`, applicant can
+    # submit a profile despite missing required data (per Decision 1 in
+    # admission-audit-decisions-2026-04-24). Reviewer (admin/manager) can
+    # then approve a profile that is actually `eligibility_status=ineligible`
+    # — silently creating a student row with NULL name etc. UI must show
+    # warning + confirmation dialog before /approve fires.
+    profile.bypass_warning = bool(
+        applied_rules.get("allow_unverified_submission")
+        and profile.eligibility_status == "ineligible"
+        and status in ("submitted", "resubmitted", "reviewing")
+    )
 
     # =========================================================================
     # 4. VALIDATION SUMMARY (Grouped Errors for UX)
@@ -3762,8 +3827,8 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
 async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
-    current_user: models.User,
-) -> Dict[str, Any]:
+    current_user: Optional[models.User],
+) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """
     Submit AdmissionProfile for evaluation (auto-approve or return errors).
 
@@ -3774,19 +3839,28 @@ async def submit_and_evaluate(
     4. JSON structures are valid (already validated by Pydantic)
 
     Security:
-    - IDOR: Check lead.unit_id == user.unit_id
+    - IDOR: Check lead.unit_id == user.unit_id (bypassed if current_user=None;
+      magic-link path verifies CCCD before invoking).
     - Snapshot: Use applied_rules ONLY (never query ProgramOffering)
 
     Args:
         db: Database session
         profile_id: AdmissionProfile ID
-        current_user: Current authenticated user
+        current_user: Current authenticated user, or None for magic-link
+            self-service candidate path (CCCD already verified upstream).
 
     Returns:
-        Dict with:
-        - status: "approved" or "rejected"
-        - message: Success message (if approved)
-        - errors: List of error messages (if rejected)
+        Tuple of (result_dict, post_commit_callback):
+        - result_dict shape unchanged from V2:
+            * {"status": "submitted", "message": ..., "validation_errors": None}
+            * {"status": "draft", "message": None, "validation_errors": [...]}
+        - post_commit_callback: async no-arg callable. Router MUST await
+          AFTER db.commit(). None when validation failed (status="draft" —
+          no notification fanout for unsuccessful submit). When status=
+          "submitted", fires APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_
+          SUBMITTED with the same payload shape the router built in V2.
+          Closing over actor_id/actor_name/lead_id captured at flush time
+          keeps the dispatch independent of post-commit DB state.
 
     Raises:
         ResourceNotFoundError: Profile not found
@@ -4050,16 +4124,19 @@ async def submit_and_evaluate(
         log.warning(
             "Admission profile submission failed - validation errors",
             profile_id=profile_id,
-            user_id=current_user.id,
+            user_id=current_user.id if current_user else None,
             errors_count=len(errors),
             errors=errors,
         )
 
-        return {
-            "status": "draft",  # ✅ FIX: Stay in draft, not "rejected"
-            "message": None,
-            "validation_errors": errors,  # ✅ FIX: Match schema field name
-        }
+        return (
+            {
+                "status": "draft",  # ✅ FIX: Stay in draft, not "rejected"
+                "message": None,
+                "validation_errors": errors,  # ✅ FIX: Match schema field name
+            },
+            None,  # No post-commit callback when validation failed
+        )
     else:
         # Phase 2 v8.2 PR-2B v2 — Atomic submit per-path counter (SPEC
         # §4.1 line 4100-4107 pattern). Tier 2 quota guard: increment
@@ -4105,15 +4182,14 @@ async def submit_and_evaluate(
         # and raises BusinessRuleViolation if illegal — caller maps to
         # 400 the same way BadRequest did before.
         #
-        # ``skip_dispatch=True`` here is intentional: this service path
-        # returns a dict (not the V3 ``(result, callback)`` tuple), so
-        # there is no callback channel to surface the
-        # ADMISSION_PROFILE_SUBMITTED post-commit callback. The router
-        # already fires APPLICATION_STATUS_CHANGED via ``safe_dispatch``
-        # after ``db.commit()`` for this flow; the matching
-        # ADMISSION_PROFILE_SUBMITTED dispatch is added side-by-side in
-        # the router as part of #16 so the dispatch happens AFTER the
-        # commit instead of inside an open transaction.
+        # ``skip_dispatch=True`` is retained: this function builds its
+        # own ``_post_commit_dispatch`` callback at the bottom of the
+        # success branch (V3 ``(result, callback)`` tuple contract,
+        # post-magic-link wire FU). Letting state_transition() also
+        # dispatch ADMISSION_PROFILE_SUBMITTED would duplicate the
+        # event. The single source of truth lives in our callback so
+        # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
+        # always fire side-by-side AFTER ``db.commit()``.
         try:
             profile, _ = await state_transition(
                 db,
@@ -4141,15 +4217,76 @@ async def submit_and_evaluate(
         log.info(
             "Admission profile submitted successfully",
             profile_id=profile_id,
-            user_id=current_user.id,
+            user_id=current_user.id if current_user else None,
             citizen_id=profile.citizen_id,
         )
 
-        return {
-            "status": "submitted",  # ✅ FIX: submitted status
-            "message": "Hồ sơ đã được nộp thành công. Chờ phê duyệt từ Manager.",
-            "validation_errors": None,  # ✅ FIX: Match schema field name
-        }
+        # Capture payload fields at flush time so the post-commit
+        # callback does not depend on the session staying loaded.
+        # Mirrors the V2 router shape (admissions.py post-#293) so the
+        # candidate magic-link flow and the officer dashboard flow
+        # produce identical APPLICATION_STATUS_CHANGED + ADMISSION_
+        # PROFILE_SUBMITTED notifications. ``actor_id``/``actor_name``
+        # fall back to None/"Hệ thống (magic-link)" when current_user
+        # is the magic-link self-service path (Item Magic-Link FU).
+        from .notification_dispatcher import (
+            safe_dispatch as _safe_dispatch,
+            _rooms_for_lead as _rooms_for_lead_helper,
+        )
+
+        _capture_lead_id = profile.lead_id
+        _capture_lead = profile.lead  # eager-loaded above via selectinload
+        _capture_actor_id = current_user.id if current_user else None
+        _capture_actor_name = (
+            (current_user.full_name or current_user.username)
+            if current_user
+            else "Hệ thống (magic-link)"
+        )
+        _capture_submitted_at_iso = (
+            profile.updated_at.isoformat()
+            if profile.updated_at
+            else datetime.now(timezone.utc).isoformat()
+        )
+        _capture_rooms = _rooms_for_lead_helper(_capture_lead)
+
+        async def _post_commit_dispatch() -> None:
+            await _safe_dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": _capture_lead_id,
+                    "old_status": "draft",
+                    "new_status": "submitted",
+                    "actor_id": _capture_actor_id,
+                    "actor_name": _capture_actor_name,
+                },
+                dedupe_key=f"admission_profile_submitted:{profile_id}",
+                rooms=_capture_rooms,
+            )
+            await _safe_dispatch(
+                db=db,
+                event=SystemEvents.ADMISSION_PROFILE_SUBMITTED,
+                payload={
+                    "application_id": profile_id,
+                    "lead_id": _capture_lead_id,
+                    "old_status": "draft",
+                    "new_status": "submitted",
+                    "actor_id": _capture_actor_id,
+                    "submitted_at_iso": _capture_submitted_at_iso,
+                },
+                dedupe_key=f"admission:{profile_id}:submitted",
+                rooms=_capture_rooms,
+            )
+
+        return (
+            {
+                "status": "submitted",  # ✅ FIX: submitted status
+                "message": "Hồ sơ đã được nộp thành công. Chờ phê duyệt từ Manager.",
+                "validation_errors": None,  # ✅ FIX: Match schema field name
+            },
+            _post_commit_dispatch,
+        )
 
 
 async def upload_document(
@@ -6230,21 +6367,27 @@ async def check_application_fee_status(
 async def resubmit_profile(
     db: AsyncSession,
     profile_id: int,
-    officer: models.User,
+    officer: Optional[models.User],
     data: Dict[str, Any],
 ) -> tuple[models.AdmissionProfile, Any]:
     """
-    Resubmit rejected profile (Officer action).
+    Resubmit profile.
 
     Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
-    - Transition: REJECTED → RESUBMITTED
-    - Officer fixes issues and resubmits for Manager review
-    - Optional notes about what was fixed
+    - Transitions: REJECTED → RESUBMITTED (officer dashboard path)
+                   REVISION_REQUESTED → RESUBMITTED (candidate magic-link
+                   self-service; state edge already in ALLOWED_TRANSITIONS).
+    - Officer fixes issues and resubmits for Manager review, OR candidate
+      resubmits via magic-link after the manager requested a revision.
+    - Optional notes about what was fixed.
 
     Args:
         db: Database session
         profile_id: AdmissionProfile ID
-        officer: User performing resubmit
+        officer: User performing resubmit. ``None`` for candidate
+            magic-link self-service path (CCCD already verified upstream).
+            Audit/notification user-attribution fields fall back to
+            null/system-labelled values when ``None``.
         data: ResubmitRequest data (notes)
 
     Returns:
@@ -6257,7 +6400,7 @@ async def resubmit_profile(
     # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
-    
+
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
@@ -6274,9 +6417,21 @@ async def resubmit_profile(
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
-    # IDOR Check (MOVED CHECK AFTER LOCK)
+    # IDOR Check (MOVED CHECK AFTER LOCK). Bypassed when officer is None
+    # (magic-link path verifies CCCD).
     _check_idor_access(profile, officer)
-    
+
+    # Actor attribution capture (officer dashboard vs. magic-link
+    # self-service). All downstream audit/notification consumers
+    # already accept Optional ids; the human-readable label is used
+    # only in notification payloads.
+    _actor_id: Optional[int] = officer.id if officer else None
+    _actor_name: str = (
+        (officer.full_name or officer.username)
+        if officer
+        else "Ứng viên (magic-link)"
+    )
+
     from .admission_state_machine import validate_transition
 
     # STATE VALIDATION
@@ -6313,7 +6468,7 @@ async def resubmit_profile(
         source="api",
         extra_fields={
             "resubmitted_at": datetime.now(timezone.utc),
-            "resubmitted_by_id": officer.id,
+            "resubmitted_by_id": _actor_id,
             "resubmit_notes": data.get("notes"),
         },
     )
@@ -6328,7 +6483,7 @@ async def resubmit_profile(
                 "assigned_reviewer_id": {"old": old_reviewer, "new": None},
                 "assigned_at": {"old": str(profile.assigned_at) if profile.assigned_at else None, "new": None},
             },
-            actor_user_id=officer.id,
+            actor_user_id=_actor_id,
             source="api",
         )
     profile.assigned_reviewer_id = None
@@ -6349,7 +6504,7 @@ async def resubmit_profile(
     await sync_lead_from_admission(
         db=db,
         profile=profile,
-        changed_by_user_id=officer.id,
+        changed_by_user_id=_actor_id,
         reason=f"Profile resubmitted: {(data.get('notes') or 'No notes')[:50]}",
     )
 
@@ -6361,7 +6516,7 @@ async def resubmit_profile(
     log.info(
         "Admission profile resubmitted",
         profile_id=profile.id,
-        officer_id=officer.id,
+        officer_id=_actor_id,
     )
 
     # Path C / Arch-3: paired notification bundle + commission callback.
@@ -6377,8 +6532,8 @@ async def resubmit_profile(
                     "lead_id": profile.lead_id,
                     "old_status": _old_status_for_audit,
                     "new_status": "resubmitted",
-                    "actor_id": officer.id,
-                    "actor_name": officer.full_name or officer.username,
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
                 },
                 dedupe_key=f"admission_profile_resubmitted:{profile_id}",
                 rooms=_rooms_for_admission(profile),
@@ -6390,8 +6545,8 @@ async def resubmit_profile(
                     "lead_name": f"Profile #{profile_id}",
                     "old_status": _old_status_for_audit,
                     "new_status": "sts07",
-                    "actor_id": officer.id,
-                    "actor_name": officer.full_name or officer.username,
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts07",
                 rooms=_rooms_for_admission(profile),
@@ -6403,10 +6558,14 @@ async def resubmit_profile(
         bundle_callback = bundle.callback
 
     commission_callback = None
-    if profile.lead_id:
+    # Commission attribution requires a real actor (sts07 itself doesn't
+    # forward-trigger commissions, but regression bookkeeping records the
+    # cancelling actor). Skip for the magic-link candidate path —
+    # candidate-driven resubmit is not a commission-relevant event.
+    if profile.lead_id and _actor_id is not None:
         captured_lead_id = profile.lead_id
         captured_old = _old_status_for_audit
-        captured_actor_id = officer.id
+        captured_actor_id = _actor_id
 
         async def _commission_callback():
             await safe_check_commission_on_status_change(
@@ -7043,19 +7202,23 @@ async def delete_profile(
 async def withdraw_profile(
     db: AsyncSession,
     profile_id: int,
-    actor: models.User,
+    actor: Optional[models.User],
     data: Dict[str, Any],
 ) -> tuple[models.AdmissionProfile, Any]:
     """
     Withdraw admission profile.
 
-    Allowed from: DRAFT, SUBMITTED, REJECTED, RESUBMITTED
+    Allowed from: DRAFT, SUBMITTED, REJECTED, RESUBMITTED, REVISION_REQUESTED
+    (state machine enforces — see ALLOWED_TRANSITIONS)
     Target: WITHDRAWN (final state)
 
     Args:
         db: Database session
         profile_id: AdmissionProfile ID
-        actor: User performing withdrawal
+        actor: User performing withdrawal. ``None`` for candidate
+            magic-link self-service path (CCCD already verified upstream).
+            Audit/notification user-attribution fields fall back to
+            null/system-labelled values when ``None``.
         data: WithdrawRequest data (reason - required, version - required)
 
     Returns:
@@ -7080,7 +7243,19 @@ async def withdraw_profile(
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
+    # IDOR bypass when actor=None (magic-link path verifies CCCD).
     _check_idor_access(profile, actor)
+
+    # Actor attribution capture (officer dashboard vs. magic-link
+    # self-service). All downstream audit/notification consumers
+    # already accept Optional ids; the human-readable label is used
+    # only in notification payloads.
+    _actor_id: Optional[int] = actor.id if actor else None
+    _actor_name: str = (
+        (actor.full_name or actor.username)
+        if actor
+        else "Ứng viên (magic-link)"
+    )
 
     from .admission_state_machine import validate_transition
 
@@ -7108,13 +7283,10 @@ async def withdraw_profile(
     # Caller still captures old_status for the legacy bundle below.
     _old_status_for_audit = profile.status
 
-    # Phase 1 hotfix-2: enrich payload với ``from_status`` +
-    # ``withdrawn_by_role`` so the seeded ADMISSION_WITHDRAWN
-    # template's placeholders resolve at render time. ``actor``
-    # always has a User row in Phase 1 (withdraw is staff-only via
-    # /withdraw endpoint per state machine + RBAC); the ``"system"``
-    # fallback is forward-compat with Phase 3 magic-link withdraw
-    # (action_type='withdraw') which would pass ``actor=None``.
+    # Phase 1 hotfix-2 + magic-link FU: enrich payload với ``from_status``
+    # + ``withdrawn_by_role`` so the seeded ADMISSION_WITHDRAWN template's
+    # placeholders resolve at render time. ``actor=None`` (magic-link
+    # candidate self-service) maps to role "system" for the template.
     profile, transition_callback = await state_transition(
         db,
         profile,
@@ -7147,14 +7319,14 @@ async def withdraw_profile(
     await sync_lead_from_admission(
         db=db,
         profile=profile,
-        changed_by_user_id=actor.id,
+        changed_by_user_id=_actor_id,
         reason=f"Admission profile withdrawn: {data['reason'][:50]}",
     )
 
     log.info(
         "Admission profile withdrawn",
         profile_id=profile.id,
-        actor_id=actor.id,
+        actor_id=_actor_id,
         old_status=_old_status_for_audit,
     )
 
@@ -7173,8 +7345,8 @@ async def withdraw_profile(
                     "lead_id": profile.lead_id,
                     "old_status": _old_status_for_audit,
                     "new_status": "withdrawn",
-                    "actor_id": actor.id,
-                    "actor_name": actor.full_name or actor.username,
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
                 },
                 dedupe_key=f"admission_profile_withdrawn:{profile_id}",
                 rooms=_rooms_for_admission(profile),
@@ -7186,8 +7358,8 @@ async def withdraw_profile(
                     "lead_name": f"Profile #{profile_id}",
                     "old_status": _old_status_for_audit,
                     "new_status": "sts08",
-                    "actor_id": actor.id,
-                    "actor_name": actor.full_name or actor.username,
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
                 },
                 dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
                 rooms=_rooms_for_admission(profile),
@@ -7594,6 +7766,103 @@ async def mark_student_dropped(
 # ==============================================================================
 # CONFIRMATION TOKEN FUNCTIONS (Magic Link)
 # ==============================================================================
+
+
+async def generate_action_magic_link(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    action: str,
+) -> models.AdmissionConfirmationToken:
+    """Generate magic link token cho 1 trong 3 actions self-service
+    candidate: submit / resubmit / withdraw (W2-1 fix Wave 7 2026-05-16).
+
+    Mirror semantic của ``generate_confirmation_token`` (action='confirm')
+    nhưng:
+    - Generic — accept ``action`` param
+    - State validation per-action (vs confirmation-eligible only)
+    - KHÔNG có Celery email task (officer copy URL từ FE dialog →
+      share manual qua Zalo/SMS — pattern reuse SendConfirmationButton).
+      Email auto-send Celery task có thể wire FU sau khi product clarify
+      template Vietnamese cho từng action.
+
+    State validation per action (mirror CONSUME-side magic_link_service
+    handler precheck, fail-fast trước khi token generated):
+    - submit:    profile.status == 'draft'
+    - resubmit:  profile.status == 'revision_requested'
+    - withdraw:  profile.status in (draft, submitted, reviewing, rejected,
+                                    resubmitted, revision_requested,
+                                    waitlisted)
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        action: One of submit | resubmit | withdraw (NOT confirm —
+                use generate_confirmation_token cho confirm path)
+
+    Returns:
+        AdmissionConfirmationToken row (single per profile, overwrites
+        any existing — officer chỉ tạo 1 active magic-link tại 1 thời
+        điểm cho mỗi candidate).
+
+    Raises:
+        BadRequest: action invalid hoặc profile.status không phù hợp
+    """
+    import secrets
+    from datetime import timedelta, datetime, timezone
+    from app.config import settings
+    from app.repositories import AdmissionRepository
+
+    if action not in ("submit", "resubmit", "withdraw"):
+        raise BadRequest(
+            f"Action '{action}' không hỗ trợ. Chỉ chấp nhận: "
+            "submit, resubmit, withdraw. Dùng /send-confirmation cho confirm."
+        )
+
+    # State validation per action — mirror magic_link_service handler
+    # precheck cho fast-fail UX (avoid generating link rồi candidate
+    # click → 400 state mismatch).
+    status = profile.status
+    if action == "submit" and status != "draft":
+        raise BadRequest(
+            f"Chỉ tạo magic-link 'submit' khi hồ sơ ở trạng thái 'draft'. "
+            f"Trạng thái hiện tại: '{status}'."
+        )
+    if action == "resubmit" and status != "revision_requested":
+        raise BadRequest(
+            f"Chỉ tạo magic-link 'resubmit' khi hồ sơ ở trạng thái "
+            f"'revision_requested'. Trạng thái hiện tại: '{status}'."
+        )
+    if action == "withdraw" and status not in (
+        "draft", "submitted", "reviewing", "rejected",
+        "resubmitted", "revision_requested", "waitlisted",
+    ):
+        raise BadRequest(
+            f"Hồ sơ ở trạng thái '{status}' không thể tạo magic-link "
+            f"'withdraw' (hồ sơ đã ở trạng thái cuối)."
+        )
+
+    # Generate secure token + repo upsert with action_type
+    token_value = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        days=settings.ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS
+    )
+    repo = AdmissionRepository(db)
+    token_obj = await repo.create_confirmation_token(
+        profile_id=profile.id,
+        token=token_value,
+        expires_at=expires_at,
+        action_type=action,
+    )
+
+    log.info(
+        "Magic-link token generated for action",
+        profile_id=profile.id,
+        action=action,
+        token_id=token_obj.id,
+        expires_at=expires_at.isoformat(),
+    )
+
+    return token_obj
 
 
 async def generate_confirmation_token(

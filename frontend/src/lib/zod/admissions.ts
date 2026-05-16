@@ -17,6 +17,8 @@
 
 import { z } from "zod"
 
+import { admissionProfileChoiceResponseSchema } from "./admission-choices"
+
 // ==============================================================================
 // HELPERS
 // ==============================================================================
@@ -452,6 +454,10 @@ export const appliedRulesSchema = z.object({
   snapshot_source: z.enum(["relational", "jsonb", "migration"]).optional(),
   admission_path_id: z.number().int().optional(),
   academic_info_id: z.number().int().optional(),
+  // Phase 2 v8.2 PR-2B snapshot admission_round_id từ path. Mirrors BE
+  // admission_service.py:2825. Used by AddChoiceDialog (E2E #6 fix
+  // 2026-05-15) để resolve round khi profile chưa có NV nào.
+  admission_round_id: z.number().int().positive().optional(),
 })
 
 export type AppliedRules = z.infer<typeof appliedRulesSchema>
@@ -525,6 +531,12 @@ export const admissionProfileResponseSchema = z.object({
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
   applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
+  // Phase 3 multi-NV gate. false = legacy single-NV ProfileSubjectScore flow
+  // (ScoresTab legacy form); true = ChoiceListEditor + ChoiceScoreCard render.
+  uses_choice_engine: z.boolean().default(false),
+  // Phase 3 multi-NV choices array. Empty cho legacy. BE eager-loads via
+  // selectinload chain (admission_repository.py _choices_eager_load_options).
+  choices: z.array(admissionProfileChoiceResponseSchema).default([]),
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),
@@ -571,7 +583,13 @@ export const admissionProfileResponseSchema = z.object({
   
   // Eligibility status (backend-computed)
   eligibility_status: z.enum(["eligible", "ineligible", "pending"]).default("pending"),
-  
+
+  // F7: True when reviewer is about to act on a profile that bypassed
+  // eligibility (allow_unverified_submission=true + ineligible). FE
+  // renders an orange warning banner + confirmation dialog in front of
+  // the Approve button.
+  bypass_warning: z.boolean().default(false),
+
   // Validation errors (reasons for ineligibility)
   validation_errors: z.array(z.string()).default([]),
   

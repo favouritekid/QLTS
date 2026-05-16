@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef } from "react"
+import { useMemo, useEffect, useRef, useState } from "react"
 import { UseFormReturn, useWatch } from "react-hook-form"
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,7 +9,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configApi } from "@/lib/api/config"
+import { ChoiceListEditor } from "@/components/admissions/ChoiceListEditor"
+import { AddChoiceDialog } from "@/components/admissions/AddChoiceDialog"
 import type { AppliedRules, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AdmissionProfileChoiceResponse } from "@/lib/zod/admission-choices"
 
 // Internal interface for UI logic compatibility
 interface AdmissionCriterion {
@@ -28,6 +31,7 @@ interface ScoresTabProps {
   appliedRules?: AppliedRules | null
   // Phase 7: Backend-computed scores (source of truth)
   profile?: {
+    id?: number
     total_score?: number | null
     average_score?: number | null
     // Phase 2 Fix: Read qualification status from backend
@@ -42,6 +46,13 @@ interface ScoresTabProps {
     } | null
     // Backend validation errors (actual reasons for not qualifying)
     validation_errors?: string[]
+    // Phase 3 multi-NV gate + choices array. Empty cho legacy profile
+    // (uses_choice_engine=false). Repository eager-loads via
+    // _choices_eager_load_options() chain. ChoiceListEditor receives
+    // canEdit prop derived from isEditable (BE-driven via parent
+    // permissions) — no additional action-gating needed at this layer.
+    uses_choice_engine?: boolean
+    choices?: AdmissionProfileChoiceResponse[]
   }
 }
 
@@ -71,7 +82,38 @@ const SUBJECT_LABELS: Record<string, string> = {
 }
 
 
-export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTabProps) {
+/**
+ * Pure dispatcher (Wave 7 ship 2026-05-16 — CI fix react-hooks/rules-of-hooks).
+ *
+ * Trước đây ScoresTab có early-return `if (uses_choice_engine) return <MultiNvScoresTab/>`
+ * BEFORE all useMemo/useWatch/useEffect/useRef hooks → CI ESLint bắt 16 errors
+ * vì hooks run conditionally based on uses_choice_engine flag. Local lint
+ * passed (older eslint config) nhưng CI strict catch.
+ *
+ * Fix: split thành 3 components:
+ * - `ScoresTab` — pure dispatcher (no hooks, just routing)
+ * - `MultiNvScoresTab` — multi-NV branch (hooks self-contained, đã có Wave 2)
+ * - `LegacySingleNvScoresTab` — legacy single-NV branch (hooks self-contained)
+ *
+ * Each branch's hooks scope inside its own component → compliance hooks rules
+ * (hooks ALWAYS run in same order within each function body).
+ */
+export function ScoresTab(props: ScoresTabProps) {
+  const { isEditable, appliedRules, profile } = props
+  if (profile?.uses_choice_engine === true && profile?.id) {
+    return (
+      <MultiNvScoresTab
+        profileId={profile.id}
+        choices={profile.choices ?? []}
+        isEditable={isEditable}
+        roundIdFromAppliedRules={appliedRules?.admission_round_id}
+      />
+    )
+  }
+  return <LegacySingleNvScoresTab {...props} />
+}
+
+function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: ScoresTabProps) {
   // Phase 2 Fix: Read minGpa from appliedRules (no prop, no default)
   // @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #2, #3
   const minGpa = appliedRules?.min_gpa
@@ -733,6 +775,88 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
         </Card>
       </div>
     </div>
+  )
+}
+
+// =============================================================================
+// MultiNvScoresTab — Phase 3 multi-NV branch của ScoresTab
+// =============================================================================
+
+interface MultiNvScoresTabProps {
+  profileId: number
+  choices: AdmissionProfileChoiceResponse[]
+  isEditable: boolean
+  /** Fallback round_id từ profile.applied_rules khi profile chưa có NV nào
+   *  (currentPathId=null → AddChoiceDialog không resolve được round qua
+   *  path detail). E2E #6 fix 2026-05-15. */
+  roundIdFromAppliedRules?: number
+}
+
+/**
+ * Phase 3 multi-NV view: ChoiceListEditor (drag/delete/edit-scores) +
+ * AddChoiceDialog. Branch riêng để useState/useEffect không vi phạm
+ * react-hooks/rules-of-hooks (parent ScoresTab early-return).
+ *
+ * Hardcode max=5 matches prod system_config.max_choices_per_profile.
+ * Future: fetch via configApi.getSystemConfig() nếu admin tunes per
+ * intake year. BE precheck `add_choice` enforces authoritative cap;
+ * FE giá trị hint UX only.
+ *
+ * currentPathId derive từ choices[0] (NV1) để AddChoiceDialog resolve
+ * round_id + render danh sách path khả dụng cùng đợt. Nếu choices
+ * empty → button Add disabled trong ChoiceListEditor (canAddMore guard).
+ */
+function MultiNvScoresTab({
+  profileId,
+  choices,
+  isEditable,
+  roundIdFromAppliedRules,
+}: MultiNvScoresTabProps) {
+  const maxChoices = 5
+  const [addDialogOpen, setAddDialogOpen] = useState(false)
+
+  const sortedChoices = useMemo(
+    () => [...choices].sort((a, b) => a.display_order - b.display_order),
+    [choices],
+  )
+  const currentPathId =
+    sortedChoices.length > 0 ? sortedChoices[0].admission_path_id : null
+  const nextDisplayOrder =
+    sortedChoices.length > 0
+      ? Math.max(...sortedChoices.map((c) => c.display_order)) + 1
+      : 1
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Calculator className="w-5 h-5" />
+          Danh sách nguyện vọng
+        </CardTitle>
+        <CardDescription>
+          Hồ sơ đa nguyện vọng — kéo thả để đổi thứ tự ưu tiên,
+          sửa điểm, xoá nguyện vọng không mong muốn, hoặc thêm
+          nguyện vọng mới (tối đa {maxChoices}).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ChoiceListEditor
+          profileId={profileId}
+          choices={choices}
+          maxChoices={maxChoices}
+          canEdit={isEditable}
+          onRequestAdd={() => setAddDialogOpen(true)}
+        />
+        <AddChoiceDialog
+          profileId={profileId}
+          open={addDialogOpen}
+          onClose={() => setAddDialogOpen(false)}
+          nextDisplayOrder={nextDisplayOrder}
+          currentPathId={currentPathId}
+          roundIdOverride={roundIdFromAppliedRules}
+        />
+      </CardContent>
+    </Card>
   )
 }
 

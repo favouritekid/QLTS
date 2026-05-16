@@ -134,9 +134,38 @@ export async function minorCorrection(
 }
 
 /**
+ * Phase 3 multi-NV: Publish result — trigger engine cascade (Manager/Admin)
+ * POST /api/v2/admissions/{id}/publish-result
+ *
+ * Engine xét tuần tự choices theo display_order, mark decision per NV,
+ * transition profile.status (submitted/reviewing) → reviewing →
+ * result_published → admitted/rejected. BE auto-transition
+ * submitted→reviewing internal nếu cần (1-click flow per user
+ * clarification 2026-05-15; bỏ T2 start-review explicit YAGNI).
+ */
+export async function publishAdmissionResult(
+  id: number
+): Promise<{
+  profile_id: number
+  final_status: string
+  admitted_choice_id: number | null
+  admitted_display_order: number | null
+  per_choice_decisions: Array<{ choice_id: number; decision: string }>
+}> {
+  const response = await api.post<{
+    profile_id: number
+    final_status: string
+    admitted_choice_id: number | null
+    admitted_display_order: number | null
+    per_choice_decisions: Array<{ choice_id: number; decision: string }>
+  }>(`/api/v2/admissions/${id}/publish-result`, {})
+  return response.data
+}
+
+/**
  * Reject admission profile (Manager/Admin action)
  * POST /api/admissions/{id}/reject
- * 
+ *
  * Transitions status from submitted/resubmitted → rejected
  * Requires rejection reason and version for optimistic locking
  */
@@ -523,6 +552,10 @@ export const admissionsApi = {
   // Magic-link confirmation (public)
   getConfirmTokenInfo,
   confirmAdmissionByToken,
+  // Phase 3 multi-NV publish (Wave 2 — declared in API + hook ngày trước
+  // nhưng quên thêm vào export object → CI tsc bắt lỗi
+  // `Property 'publishAdmissionResult' does not exist`)
+  publishAdmissionResult,
 }
 
 export default admissionsApi

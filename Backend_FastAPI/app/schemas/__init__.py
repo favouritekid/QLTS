@@ -161,6 +161,8 @@ from .admission import (
     AdmissionPublishResultResponse,
     AdmissionWaitlistPromoteRequest,
     AdmissionWaitlistPromoteResponse,
+    AdmissionWaitlistRejectRequest,
+    AdmissionWaitlistRejectResponse,
     AdmissionAdminRollbackRequest,
     AdmissionAdminRollbackResponse,
     EnrollStudentResponse,
@@ -194,6 +196,8 @@ from .admission import (
     ConfirmTokenResponse,
     ConfirmTokenInfoResponse,
     SendConfirmationResponse,
+    SendMagicLinkRequest,
+    SendMagicLinkResponse,
     # Aggregate schemas
     AdmissionStatusCounts,
     AdmissionStats,
@@ -278,7 +282,9 @@ from .user import (
     UserBase,
     UserCreate,
     UserInDB,
+    UserPickerSchema,
     UsersPage,
+    UsersPagePicker,
     UserUpdate,
 )
 

@@ -121,6 +121,16 @@ class AdmissionPathService:
         paths = await self.repo.get_paths_by_academic_info(academic_info_id)
         return paths, _noop_callback
 
+    async def list_active_paths_by_round(
+        self, admission_round_id: int
+    ) -> Tuple[List[AdmissionPath], PostCommitCallback]:
+        """List active paths trong 1 round. Dùng cho AddChoiceDialog
+        candidate-side: render dropdown ngành/method khả dụng để thêm NV
+        mới trong cùng đợt đang xét tuyển.
+        """
+        paths = await self.repo.get_active_paths_by_round(admission_round_id)
+        return paths, _noop_callback
+
     async def get_distinct_years(self) -> Tuple[List[int], PostCommitCallback]:
         """
         Get all distinct academic years.

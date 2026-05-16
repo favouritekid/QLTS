@@ -236,7 +236,7 @@ async def create_new_user(
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
-@router.get("", response_model=schemas.UsersPage)
+@router.get("")
 async def get_all_users(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
@@ -244,13 +244,42 @@ async def get_all_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=500),
 ):
-    """(Admin only) Lấy danh sách tất cả người dùng với phân trang, filter, search."""
+    """List users với phân trang, filter, search.
+
+    E2E F3 fix 2026-05-16 — response shape varies theo caller role để
+    chống PII leak (memory `service-explicit-dict-field-drop-pattern`):
+    - manager / admin: full ``UsersPage`` (UserAdminResponse) — bao gồm
+      email, phone_number, mfa_enabled, password_reset_required,
+      max_capacity (admin context cần đầy đủ thông tin lead-routing +
+      security audit).
+    - officer / accountant / collaborator / user: ``UsersPagePicker``
+      (UserPickerSchema) — chỉ id, username, full_name, role, status,
+      unit_id, avatar_url, skills, availability_status. Đủ cho UI
+      picker / dropdown / "ai phụ trách" display, KHÔNG leak PII.
+
+    Casbin allow GET /api/admin/users cho mọi role (existing behavior
+    cho user-picker). Schema branching closes data-shape leak.
+
+    response_model removed (Union[UsersPage, UsersPagePicker] would lose
+    OpenAPI clarity); FastAPI auto-serializes Pydantic instance returned.
+    """
     skip = (page - 1) * page_size
     query_params = dict(request.query_params)
     total, users = await user_service.get_users(
         db, params=query_params, skip=skip, limit=page_size
     )
-    return {"total_count": total, "users": users}
+
+    # Privileged roles get full PII shape; everyone else gets picker.
+    privileged_roles = {"admin", "manager"}
+    if current_admin.role in privileged_roles:
+        return schemas.UsersPage(
+            total_count=total,
+            users=[schemas.UserAdminResponse.model_validate(u) for u in users],
+        )
+    return schemas.UsersPagePicker(
+        total_count=total,
+        users=[schemas.UserPickerSchema.model_validate(u) for u in users],
+    )
 
 
 

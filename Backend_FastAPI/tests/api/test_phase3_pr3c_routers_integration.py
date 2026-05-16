@@ -242,6 +242,59 @@ async def test_publish_result_happy_path_manager(
 
 
 @pytest.mark.asyncio
+async def test_publish_result_accepts_submitted_state_simplified_2026_05_15(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3c_seed_reviewing: dict,
+):
+    """Phase 3 simplified flow 2026-05-15 — bỏ T2 explicit start-review.
+
+    publish_result() giờ accept cả `submitted` lẫn `reviewing` state. Khi
+    profile ở `submitted`, BE auto-transition submitted→reviewing→
+    result_published→admitted/rejected internal trong 1 atomic call.
+
+    Anchor test verify pattern simplified flow (NOT regression to old
+    "must be reviewing" guard). Trước fix: status='submitted' raised
+    BusinessRuleViolation 400. Sau fix: 200 OK + final_status valid.
+    """
+    profile_id = pr3c_seed_reviewing["profile_id"]
+
+    # Reset profile từ 'reviewing' (seed default) về 'submitted' để verify
+    # publish-result tự handle 1-click flow.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{profile_id}/publish-result",
+        headers=manager_token_headers,
+    )
+
+    # 200 = simplified flow accept submitted + auto-transition + cascade complete
+    # 400 = old "must be reviewing" guard would fire (regression!)
+    assert response.status_code == 200, (
+        f"Simplified flow must accept submitted state directly; "
+        f"got {response.status_code}: {response.text}"
+    )
+    body = response.json()
+    assert body["profile_id"] == profile_id
+    assert body["final_status"] in {"admitted", "rejected", "waitlisted"}, (
+        f"Engine must produce final decision; got {body['final_status']}"
+    )
+
+    # Verify state machine traversed correctly: submitted → reviewing →
+    # result_published → admitted/rejected (audit trail captures all 3
+    # transitions). Re-fetch profile để check final state landed.
+    async with AsyncSessionLocal() as s:
+        profile_after = await s.get(models.AdmissionProfile, profile_id)
+        assert profile_after.status in {"admitted", "rejected", "waitlisted"}, (
+            f"Profile must reach final state; got status={profile_after.status}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_admin_rollback_happy_path_admin(
     client: AsyncClient,
     admin_token_headers: dict,
@@ -964,6 +1017,14 @@ async def test_publish_result_manager_cross_unit_idor_denied(
             profile_id_alt = profile_alt.id
 
     # Manager from default unit tries to publish profile in other unit
+    # ⚠ TEST HYGIENE — `admin_token_headers` fixture above logged in as admin
+    # → stamped admin `access_token` cookie into `client.cookies` jar.
+    # Backend `get_token` reads cookie FIRST (deps.py:133 — cookie source
+    # over Authorization header), so without explicit clear the request
+    # gets authenticated as admin not manager (admin wildcard ALLOW → 200,
+    # masking IDOR check entirely). Clear cookies so Bearer Authorization
+    # header is the only auth source.
+    client.cookies.clear()
     response = await client.post(
         f"/api/v2/admissions/{profile_id_alt}/publish-result",
         headers=manager_token_headers,

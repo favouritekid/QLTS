@@ -1,8 +1,9 @@
-"""PR-CO-2-BE / PR-3E (Phase 3 close-out plan v2 LOCKED 2026-05-14):
+"""PR-CO-2-BE / PR-3E (Phase 3 close-out plan v2 LOCKED 2026-05-14)
++ FU PR-CO-2-BE-2 (magic-link 3-actions wire, 2026-05-15):
 multi-action magic-link consume service.
 
 Sits in front of the existing single-action confirm path
-(``admission_service.verify_and_confirm``) and the eventual
+(``admission_service.verify_and_confirm``) and the
 submit/resubmit/withdraw handlers. Responsibilities:
 
   1. Per-token rate limit (5/60s, Redis ``mlt:{token}``, fail-closed)
@@ -16,18 +17,16 @@ existing ADM-013 3-step profile-first lock in
 ``confirmed_at IS NULL`` predicate at consume time make concurrent
 consumes serialise to a single winner.
 
-This PR-CO-2-BE wires ``confirm`` only; submit/resubmit/withdraw stub
-out with 501 NOT_IMPLEMENTED and surface as follow-ups (FU PR-CO-2-BE-2).
-The infrastructure (router, rate limit, CSRF exempt, schemas, action
-enum match) ships fully so the candidate-facing FE landing pages in
-PR-CO-2-FE can integrate against a stable contract.
+All four actions (confirm/submit/resubmit/withdraw) are wired. The
+3 non-confirm actions delegate to the existing service functions with
+``current_user=None`` / ``actor=None`` (CCCD acts as proof of identity;
+``_check_idor_access`` early-returns for ``None`` per its V3 contract).
 """
 from __future__ import annotations
 
 import hmac
-import secrets
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional, Tuple
+from typing import Awaitable, Callable, Optional, Tuple
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +35,6 @@ from .. import models
 from ..config import settings
 from ..utils.exceptions import (
     BadRequest,
-    BusinessRuleViolation,
     ResourceNotFoundError,
 )
 from . import admission_service
@@ -74,8 +72,11 @@ async def consume_token(
     Raises:
         ResourceNotFoundError: Token missing OR action_type mismatch
             (both return 404 to avoid leaking token existence).
-        BadRequest: Rate limit hit, expired/used/locked, CCCD wrong.
-        BusinessRuleViolation: 501 for not-yet-wired actions.
+        BadRequest: Rate limit hit, expired/used/locked, CCCD wrong, or
+            (for ``submit``) profile validation failed.
+        ConflictError / domain exceptions from the underlying service:
+            propagated as-is so the router's existing handler maps to
+            the right status.
     """
     # Step 1 — Per-token rate limit. Fail-closed when Redis breaker open.
     count = await consume_attempt(token_value)
@@ -216,18 +217,117 @@ async def consume_token(
         )
         return result_profile, callback
 
-    # PR-CO-2-BE follow-up scope (FU PR-CO-2-BE-2): wire submit /
-    # resubmit / withdraw handlers. Stubbed 501 here so the router
-    # surface ships intact for the FE landing pages; activating the
-    # remaining 3 actions is BE-only and can land without a new FE
-    # deploy. Tracked in plan v2 Day 5 follow-up.
-    log.warning(
-        "Magic-link action not yet wired",
-        action=action,
+    # FU PR-CO-2-BE-2 — wired handlers for submit / resubmit / withdraw.
+    # Each handler:
+    #   1. Stamps token.confirmed_at = NOW() inside the same row lock so
+    #      concurrent consumes serialise (mirrors the confirm path's
+    #      atomicity guarantee).
+    #   2. Delegates to the existing officer-side service function with
+    #      ``current_user=None`` / ``actor=None``. The service layer's
+    #      ``_check_idor_access`` early-returns for ``None`` (CCCD has
+    #      already proven identity at step 5 above).
+    #   3. Returns ``(profile, post_commit_callback)`` — router commits
+    #      then awaits the callback.
+    if action == "submit":
+        return await _handle_submit(db, token_obj, profile)
+    if action == "resubmit":
+        return await _handle_resubmit(db, token_obj, profile)
+    if action == "withdraw":
+        return await _handle_withdraw(db, token_obj, profile)
+
+    # Unknown action — should be unreachable because the router enum
+    # match (step 3) already filtered. Defensive 404 mirroring the
+    # earlier "invalid token / action" branches.
+    raise ResourceNotFoundError("Invalid or expired confirmation link")
+
+
+# =========================================================================
+# Action handlers (FU PR-CO-2-BE-2)
+# =========================================================================
+
+
+async def _handle_submit(
+    db: AsyncSession,
+    token_obj: "models.AdmissionConfirmationToken",
+    profile: "models.AdmissionProfile",
+) -> Tuple["models.AdmissionProfile", PostCommitCallback]:
+    """Candidate magic-link submit (draft → submitted).
+
+    Delegates to ``admission_service.submit_and_evaluate(current_user=None)``.
+    The Item A submit guard (count(choices) >= 1 for multi-NV profiles)
+    applies automatically — a candidate cannot submit an empty multi-NV
+    profile via magic-link any more than via dashboard.
+    """
+    token_obj.confirmed_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    result_dict, post_commit = await admission_service.submit_and_evaluate(
+        db=db,
         profile_id=profile.id,
-        token_prefix=token_value[:8],
+        current_user=None,
     )
-    raise BusinessRuleViolation(
-        f"Magic-link action '{action}' is not yet enabled. "
-        "Please use the in-app workflow for now."
+
+    if result_dict.get("status") != "submitted":
+        # Validation errors — the service rolled the profile back to
+        # ``draft`` and returned the error list. Surface as 400 so the
+        # FE landing page can render the validation issues.
+        errors = result_dict.get("validation_errors") or []
+        joined = "; ".join(errors) if errors else "Hồ sơ chưa hợp lệ để nộp."
+        raise BadRequest(joined)
+
+    return profile, post_commit
+
+
+async def _handle_resubmit(
+    db: AsyncSession,
+    token_obj: "models.AdmissionConfirmationToken",
+    profile: "models.AdmissionProfile",
+) -> Tuple["models.AdmissionProfile", PostCommitCallback]:
+    """Candidate magic-link resubmit (revision_requested → resubmitted).
+
+    State edge ``revision_requested → resubmitted`` already exists in
+    ``ALLOWED_TRANSITIONS`` (admission_state_machine.py), so the standard
+    ``resubmit_profile`` handles the candidate path with no edge add.
+    """
+    token_obj.confirmed_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    result_profile, callback = await admission_service.resubmit_profile(
+        db=db,
+        profile_id=profile.id,
+        officer=None,
+        data={
+            "notes": "Ứng viên tự nộp lại qua magic-link",
+            # version omitted intentionally — candidate flow doesn't
+            # surface optimistic-locking version to the public FE.
+        },
     )
+    return result_profile, callback
+
+
+async def _handle_withdraw(
+    db: AsyncSession,
+    token_obj: "models.AdmissionConfirmationToken",
+    profile: "models.AdmissionProfile",
+) -> Tuple["models.AdmissionProfile", PostCommitCallback]:
+    """Candidate magic-link withdraw — withdraw_profile already accepts
+    ``actor=None`` after FU PR-CO-2-BE-2 hardening.
+
+    The current ``profile.version`` is read inside the service after the
+    row lock — passing it here from the pre-lock snapshot would be racy.
+    The service treats a version match against its own re-read as the
+    optimistic-locking gate.
+    """
+    token_obj.confirmed_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    result_profile, callback = await admission_service.withdraw_profile(
+        db=db,
+        profile_id=profile.id,
+        actor=None,
+        data={
+            "reason": "Ứng viên tự rút hồ sơ qua magic-link",
+            "version": profile.version,
+        },
+    )
+    return result_profile, callback

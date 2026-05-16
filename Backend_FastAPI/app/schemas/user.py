@@ -162,6 +162,43 @@ class UsersPage(BaseModel):
     users: List["UserAdminResponse"]
 
 
+class UserPickerSchema(BaseModel):
+    """Lightweight user shape cho non-privileged role queries (E2E F3 fix
+    2026-05-16). Officer + accountant + collaborator cần list user cho
+    UI picker (assign officer / select reviewer) nhưng KHÔNG cần PII của
+    user khác (email, phone, mfa_enabled, password_reset_required).
+
+    Whitelist-only — fields not listed are dropped during serialization.
+    Mirrors UserAdminResponse cấu trúc nhưng strip:
+        - email (PII)
+        - phone_number (PII)
+        - mfa_enabled (security info — useful for targeted attacks)
+        - password_reset_required (info disclosure)
+        - max_capacity (admin-internal lead-routing detail)
+
+    Use case: dropdown picker, list display "ai phụ trách hồ sơ này",
+    avatar circle với name. Manager+admin vẫn dùng full UserAdminResponse.
+    """
+    id: int
+    username: str
+    full_name: Optional[str] = None
+    role: str
+    status: str
+    unit_id: Optional[int] = None
+    avatar_url: Optional[str] = None
+    skills: Optional[List[str]] = None
+    availability_status: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsersPagePicker(BaseModel):
+    """Paginated container cho UserPickerSchema list. Mirrors UsersPage
+    shape — chỉ thay users element type."""
+    total_count: int
+    users: List[UserPickerSchema]
+
+
 class User(UserBase):
     id: int
     email: str  # Override EmailStr: response serialization must not reject DB values (e.g. placeholder emails)

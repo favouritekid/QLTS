@@ -337,42 +337,49 @@ async def lifespan(app: FastAPI):
                     )
 
                     # =========================================================================
-                    # FIX: SEED ROLE INHERITANCE (g-policies) - Diamond Inheritance Pattern
+                    # SEED ROLE INHERITANCE (g-policies) - Tree Hierarchy
                     # =========================================================================
-                    # Diamond Hierarchy (Separation of Duties):
+                    # Tree Hierarchy (Separation of Duties):
                     #
                     #                    ┌─────────┐
                     #                    │  Admin  │
                     #                    └────┬────┘
-                    #                      ▲   ▲
-                    #          ┌───────────┘   └───────────┐
-                    #          │                           │
-                    #     ┌────┴─────┐               ┌─────┴────┐
-                    #     │ Manager  │               │Accountant│
-                    #     └────┬─────┘               └─────┬────┘
-                    #          │                           │
-                    #          └───────────┐   ┌───────────┘
-                    #                      ▼   ▼
-                    #                    ┌─────────┐
-                    #                    │ Officer │
-                    #                    └────┬────┘
                     #                         │
-                    #                    ┌────┴────┐
-                    #                    │  User   │
-                    #                    └─────────┘
+                    #                    ┌────┴─────┐
+                    #                    │ Manager  │
+                    #                    └────┬─────┘
+                    #                         │
+                    #     ┌──────────────┬────┴────┐
+                    #     │              │         │
+                    # ┌───┴────┐  ┌──────┴────┐ (other officer-derived roles)
+                    # │Officer │  │Accountant │
+                    # └───┬────┘  └──────┬────┘
+                    #     │              │
+                    #     └──────┬───────┘
+                    #            │
+                    #       ┌────┴────┐
+                    #       │  User   │
+                    #       └─────────┘
+                    #
+                    # FIX 2026-05-15: removed `g, admin → accountant` diamond edge.
+                    # Reason: admin already has wildcard ALLOW `/*.*` so the redundant
+                    # inheritance only causes admin to inherit accountant DENY entries
+                    # (admin-rollback, claim, request-revision, waitlist-promote) →
+                    # admin gets unintended 403s on those endpoints. Tree shape preserves
+                    # separation-of-duties (admin ≠ accountant in audit trail) while
+                    # eliminating the inherited-DENY bug.
                     #
                     # Benefits:
                     # - Manager: User/Lead management (admission workflow)
                     # - Accountant: Finance operations (payments, invoices)
                     # - Manager does NOT inherit Accountant (separation of duties)
-                    # - Admin inherits BOTH branches (full access)
+                    # - Admin inherits from Manager only; accountant DENYs no longer leak
                     #
                     role_inheritance = [
                         ("g", "role:officer", "role:user"),       # Officer inherits from User
                         ("g", "role:accountant", "role:officer"), # Accountant inherits from Officer
                         ("g", "role:manager", "role:officer"),    # Manager inherits from Officer (NOT from Accountant!)
                         ("g", "role:admin", "role:manager"),      # Admin inherits from Manager
-                        ("g", "role:admin", "role:accountant"),   # Admin ALSO inherits from Accountant (Diamond!)
                     ]
                     
                     from sqlalchemy import text

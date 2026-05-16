@@ -347,9 +347,45 @@ export function useApproveAdmission(id: number) {
 }
 
 /**
+ * Phase 3 multi-NV: Publish Result Hook (T6 engine cascade)
+ *
+ * Manager/Admin click "Công bố kết quả" → BE auto-transition
+ * submitted→reviewing internal nếu cần → engine cascade evaluate per NV
+ * theo display_order → profile.status → result_published → admitted/
+ * rejected. 1-click flow (bỏ T2 start-review explicit per user
+ * clarification 2026-05-15 YAGNI).
+ *
+ * BE pre-check: profile.uses_choice_engine=true + status IN
+ * (submitted, reviewing). Engine sequential: NV pass → admit + others
+ * skip; waitlist → continue next NV.
+ */
+export function usePublishAdmissionResult(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => admissionsApi.publishAdmissionResult(id),
+    onSuccess: (data) => {
+      toast.success("Đã công bố kết quả xét tuyển", {
+        description: `Trạng thái cuối: ${getStatusConfig(data.final_status).label || data.final_status}`,
+      })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "công bố kết quả xét tuyển",
+      })
+    },
+  })
+}
+
+/**
  * Reject Admission Hook
  * Manager/Admin action - transitions from submitted/resubmitted → rejected
- * 
+ *
  * Architecture Compliance:
  * - Uses centralized error handling (handleApiError)
  * - Handles 409 Conflict (optimistic locking)
@@ -386,6 +422,50 @@ export function useRejectAdmission(id: number) {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
         context: "từ chối hồ sơ"
+      })
+    },
+  })
+}
+
+/**
+ * E2E #10 fix 2026-05-15 — Request Revision hook (Manager/Admin)
+ * POST /api/admissions/{id}/request-revision
+ *
+ * Transitions submitted/resubmitted → revision_requested. Officer phụ
+ * trách nhận thông báo + có thể chỉnh sửa rồi nộp lại. Reason mandatory
+ * (BE Pydantic min_length=10) — currently caller passes placeholder via
+ * AdmissionDetailClient.handleRequestRevision; FU PR sẽ thêm textarea
+ * input dialog để manager nhập reason cụ thể.
+ *
+ * Pattern mirror useApproveAdmission/useRejectAdmission.
+ */
+export function useRequestRevisionAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.requestRevision(id, data),
+    onSuccess: (data) => {
+      if (data.status === "revision_requested") {
+        toast.success("Đã yêu cầu sửa hồ sơ", {
+          description: "Officer phụ trách đã nhận thông báo. Có thể nộp lại sau khi sửa.",
+        })
+      } else {
+        toast.info("Yêu cầu sửa đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`,
+        })
+      }
+
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "yêu cầu sửa hồ sơ",
       })
     },
   })

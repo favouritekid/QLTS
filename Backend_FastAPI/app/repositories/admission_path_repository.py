@@ -113,7 +113,7 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     ) -> List[AdmissionPath]:
         """
         Get all paths for a specific academic info (offering + year).
-        
+
         Returns:
             List of AdmissionPath with relationships loaded
         """
@@ -131,6 +131,40 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 ).selectinload(CriteriaSubjectGroup.subject_group),
             )
             .order_by(AdmissionPath.display_order, AdmissionPath.id)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_active_paths_by_round(
+        self,
+        admission_round_id: int,
+    ) -> List[AdmissionPath]:
+        """List active paths trong 1 round, dùng cho AddChoiceDialog
+        candidate-side: chọn ngành/method để thêm NV mới trong cùng đợt
+        đang xét. Filter status='active' (cloned draft paths bị skip).
+
+        Eager-load chain match ``get_paths_by_academic_info`` đủ cho
+        ``build_path_response`` Pydantic serialize (criteria + activator +
+        academic_info chain). Without full chain, MissingGreenlet fires
+        khi Pydantic getattr trên unloaded relations trong async context.
+        """
+        query = (
+            select(AdmissionPath)
+            .where(
+                AdmissionPath.admission_round_id == admission_round_id,
+                AdmissionPath.status == "active",
+            )
+            .options(
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
+                selectinload(AdmissionPath.admission_method),
+                selectinload(AdmissionPath.activator),
+                selectinload(AdmissionPath.criteria).selectinload(
+                    AdmissionCriteria.subject_group_mappings
+                ).selectinload(CriteriaSubjectGroup.subject_group),
+            )
+            .order_by(AdmissionPath.academic_info_id, AdmissionPath.admission_method_id)
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
