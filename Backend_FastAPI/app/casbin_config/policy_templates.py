@@ -313,11 +313,10 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},
 
-        # REFUNDS - Request + Process (approve is manager only)
-        {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
-        {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
-        {"subject": "{role}", "object": "/api/refunds/request", "action": "POST"},
-        {"subject": "{role}", "object": "/api/refunds/{id}/process", "action": "PUT"},
+        # REFUNDS — DEAD POLICY removed 2026-05-16. Refunds module deferred
+        # (no router exists; live probe /api/refunds → 404). Per memory
+        # `finance-event-decisions`, REFUND_PROCESSED tagged internal_future
+        # với 0 prod traffic. Promote back when router ships.
 
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
@@ -418,8 +417,12 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/{id}", "action": "PUT"},
         {"subject": "{role}", "object": "/api/leads/{id}/assign", "action": "POST"},
-        {"subject": "{role}", "object": "/api/leads/export/csv", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/export/excel", "action": "GET"},
+        # Lead export — single endpoint với ?format=csv|excel|json query param
+        # (router: leads.py:315 @router.get("/export")). Fixed 2026-05-16:
+        # previous entries /api/leads/export/csv + /export/excel pointed to
+        # non-existent paths (live probe → 404), leaving FE blocked when
+        # manager clicked "Xuất CSV/Excel".
+        {"subject": "{role}", "object": "/api/leads/export", "action": "GET"},
         # Bulk operations (manager-specific)
         {"subject": "{role}", "object": "/api/leads/bulk-assign", "action": "POST"},  # Bulk assign
         {"subject": "{role}", "object": "/api/leads/distribution-preview", "action": "GET"},  # Preview distribution

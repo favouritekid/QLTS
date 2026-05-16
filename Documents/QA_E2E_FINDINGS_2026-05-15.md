@@ -82,19 +82,19 @@ Tổng cộng **20 findings** qua 2 wave (Wave 1: F1-F13, Wave 2: W2-1 đến W2
 | # | Sev | Status | Title | Detail |
 |---|---|---|---|---|
 | F9 | 🟧 | ✅ FIXED | Accountant `GET /api/leads` lộ 391 leads + phone+source+offering | Casbin DENY 11 rules cho /api/leads* cho accountant. |
-| W2-3 | 🟧 | 🔴 OPEN | **`/api/leads/export/csv` + `/api/leads/export/excel` → 404** | Manager template line 382-383 allow nhưng router chưa implement. Manager click "Export CSV/Excel" sẽ fail im lặng. Cần wire 2 endpoints export. |
+| W2-3 | 🟧→✅ | **FIXED 2026-05-16 follow-up PR** | `/api/leads/export/csv` + `/api/leads/export/excel` → 404 | **Root cause khác hypothesis ban đầu**: router thực tế tồn tại tại `/api/leads/export` single endpoint với `?format=csv\|excel\|json` query param (leads.py:315). Casbin MANAGER_TEMPLATE 2 entry sai path → 404 silent. Fix: replace 2 wrong entries by 1 correct `/api/leads/export GET`. Alembic `qae2e01` cleanup live DB. Anchor `test_qa_e2e_casbin_path_alignment.py` lock. |
 
 ### 💰 FINANCE (1 finding — open)
 
 | # | Sev | Status | Title | Detail |
 |---|---|---|---|---|
-| W2-2 | 🟧 | 🔴 OPEN | **`GET /api/refunds` → 404** | Casbin ACCOUNTANT_TEMPLATE line 313 allow `/api/refunds GET`, nhưng route chưa exist. Dead policy entry — nếu refunds feature đã defer, xóa policy; nếu wire shipped sai prefix, kiểm tra mount. |
+| W2-2 | 🟧→✅ | **FIXED 2026-05-16 follow-up PR** | `GET /api/refunds` → 404 — DEAD POLICY | Refunds module deferred per memory `finance-event-decisions` (REFUND_PROCESSED tagged internal_future, 0 prod traffic, router không có). Removed 4 dead entries (`/api/refunds`, `/api/refunds/{id}`, `/api/refunds/request`, `/api/refunds/{id}/process`) từ ACCOUNTANT_TEMPLATE. Alembic `qae2e01` cleanup live DB. Anchor `test_qa_e2e_casbin_path_alignment.py` lock. Promote khi router ships. |
 
 ### 🤝 CTV + COMMISSION (1 finding — open)
 
 | # | Sev | Status | Title | Detail |
 |---|---|---|---|---|
-| W2-4 | 🟧 | 🔴 OPEN | **`/api/commission-policies` + `/api/commissions` → 404** | `commissions.policy_router` + `commissions.record_router` được include trong `main.py:790-791` ở prefix `/api`, nhưng endpoint trả 404. Có thể router internal prefix khác (e.g., `/cms-policies` thay vì `/commission-policies`). Admin click "Hoa hồng" / "Chính sách HH" sẽ thấy page rỗng. Cần grep router file để xem actual prefix. |
+| W2-4 | 🟧→⚠️ | **FALSE ALARM 2026-05-16** | Probe `/api/commission-policies` → 404 nhưng đúng path actual là `/api/admin/commission-policies` (router internal prefix `/admin/commission-policies` + main.py mount `/api`). Casbin template (line 491-499) + FE Axios (`frontend/src/lib/api/commissions.ts:24`) đều dùng path đúng `/api/admin/commission-policies`. Probe ban đầu (W2-4) sai path. Live verify: `curl /api/admin/commission-policies` → 401 (route exists, auth required). No action needed. |
 
 ### 👤 USER / AUTH (2 findings — 1 fixed, 1 open)
 
@@ -107,7 +107,7 @@ Tổng cộng **20 findings** qua 2 wave (Wave 1: F1-F13, Wave 2: W2-1 đến W2
 
 | # | Sev | Status | Title | Detail |
 |---|---|---|---|---|
-| W2-5 | 🟨 | 🔴 OPEN | `GET /api/kpi-setup/` trả **404 thay vì 403** cho officer | Endpoint scope admin/manager (`require_admin_or_manager`). 404 leak existence nhỏ; nên trả 403 với "Admin or Manager access required" (giống `/api/v2/admin/admission-backfill-exceptions`). |
+| W2-5 | 🟨→⚠️ | **FALSE ALARM 2026-05-16** | Path `/api/kpi-setup/` không tồn tại (404 đúng — natural Not Found cho non-existent path). Actual route là `/api/admin/kpi-setup/coverage` (kpi_setup.py:14 prefix + main.py:811 include không thêm prefix). Live verify: officer hit đúng path `/api/admin/kpi-setup/coverage` → 401 (require_admin_or_manager raises 403 with auth; 401 with no auth). Probe ban đầu (W2-5) sai path. No action needed. |
 
 ### 🎨 FRONTEND / THIN-CLIENT (2 findings — 1 fixed, 1 info)
 
