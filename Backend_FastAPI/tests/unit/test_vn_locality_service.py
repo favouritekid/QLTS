@@ -1,0 +1,186 @@
+"""Unit tests for VnLocalityService (Q9 #07 PR4).
+
+CSV import (commune + high_school) + sample seed + search dropdown.
+Idempotent behavior + malformed-row collection are the main contracts.
+"""
+from __future__ import annotations
+
+import pytest
+import pytest_asyncio
+
+from app.database import AsyncSessionLocal
+from app.services.vn_locality_service import (
+    SAMPLE_HIGH_SCHOOLS,
+    VnLocalityService,
+)
+
+
+pytestmark = [pytest.mark.unit, pytest.mark.asyncio]
+
+
+@pytest_asyncio.fixture
+async def db(setup_test_database):
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+            await session.close()
+
+
+# ---------------------------------------------------------------------------
+# Commune CSV import
+# ---------------------------------------------------------------------------
+
+
+async def test_commune_import_inserts_valid_rows(db) -> None:
+    csv = (
+        b"commune_code,province,district,ward,area_code\n"
+        b"C001,Ha Noi,Ha Dong,Phuong A,KV3\n"
+        b"C002,Dak Lak,Buon Ma Thuot,Phuong B,KV1\n"
+    )
+    service = VnLocalityService(db)
+    result, _ = await service.import_commune_csv(csv)
+    assert result["inserted"] == 2
+    assert result["skipped_existing"] == 0
+    assert result["error_rows"] == []
+
+
+async def test_commune_import_skips_duplicate_active_row(db) -> None:
+    csv = (
+        b"commune_code,province,district,ward,area_code\n"
+        b"C001,Ha Noi,Ha Dong,Phuong A,KV3\n"
+    )
+    service = VnLocalityService(db)
+    # First import — insert
+    r1, _ = await service.import_commune_csv(csv)
+    assert r1["inserted"] == 1
+    # Second import — skipped (idempotent)
+    r2, _ = await service.import_commune_csv(csv)
+    assert r2["inserted"] == 0
+    assert r2["skipped_existing"] == 1
+
+
+async def test_commune_import_collects_malformed_rows(db) -> None:
+    csv = (
+        b"commune_code,province,district,ward,area_code\n"
+        b"C001,Ha Noi,Ha Dong,Phuong A,KV3\n"          # OK
+        b"C002,Ha Noi,Ha Dong,Phuong B,KV2_NT\n"        # bad: underscore form
+        b"C003,Ha Noi,Ha Dong,Phuong C,INVALID\n"       # bad: not KV*
+    )
+    service = VnLocalityService(db)
+    result, _ = await service.import_commune_csv(csv)
+    assert result["inserted"] == 1
+    assert len(result["error_rows"]) == 2
+    # Each error carries row_num (1=header, so first data row = 2)
+    assert all("row_num" in e and "error" in e for e in result["error_rows"])
+
+
+# ---------------------------------------------------------------------------
+# High school CSV import
+# ---------------------------------------------------------------------------
+
+
+async def test_high_school_import_inserts_valid_rows(db) -> None:
+    csv = (
+        b"name,province,district,ward,kv_code\n"
+        b"THPT A,Ha Noi,Ha Dong,Phuong 1,KV3\n"
+        b"THPT B,Ha Noi,Cau Giay,Phuong 2,KV3\n"
+    )
+    service = VnLocalityService(db)
+    result, _ = await service.import_high_school_csv(csv)
+    assert result["inserted"] == 2
+
+
+async def test_high_school_import_skips_existing_by_name_province(db) -> None:
+    csv = b"name,province,district,ward,kv_code\nTHPT A,Ha Noi,Ha Dong,Phuong 1,KV3\n"
+    service = VnLocalityService(db)
+    await service.import_high_school_csv(csv)
+    r2, _ = await service.import_high_school_csv(csv)
+    assert r2["inserted"] == 0
+    assert r2["skipped_existing"] == 1
+
+
+async def test_high_school_kv_code_optional(db) -> None:
+    """MOET CSV may not always include kv_code — admin will fill later
+    via priority backfill UI. Should accept None."""
+    csv = b"name,province,district,ward,kv_code\nTHPT C,Ha Noi,,,\n"
+    service = VnLocalityService(db)
+    result, _ = await service.import_high_school_csv(csv)
+    assert result["inserted"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Sample seed
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_sample_inserts_5_rows(db) -> None:
+    service = VnLocalityService(db)
+    result, _ = await service.seed_sample_high_schools()
+    assert result["inserted"] == 5
+    assert result["total_in_seed"] == len(SAMPLE_HIGH_SCHOOLS)
+
+
+async def test_seed_sample_idempotent(db) -> None:
+    service = VnLocalityService(db)
+    await service.seed_sample_high_schools()
+    r2, _ = await service.seed_sample_high_schools()
+    # Second run: all 5 already exist → 0 inserted
+    assert r2["inserted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Search dropdown
+# ---------------------------------------------------------------------------
+
+
+async def test_search_high_school_case_insensitive_partial(db) -> None:
+    """ilike does case-insensitive but NOT diacritic normalization —
+    candidate FE may send the user's exact typed string. Verify the
+    canonical-form search works (search by partial diacritic-matching
+    substring)."""
+    service = VnLocalityService(db)
+    await service.seed_sample_high_schools()
+    # Search by diacritic-matching substring (case-insensitive)
+    results = await service.search_high_schools("lê quý đôn", limit=10)
+    assert len(results) >= 1
+    assert any("Lê Quý Đôn" in r.name for r in results)
+
+
+async def test_search_respects_is_active(db) -> None:
+    """Soft-deleted rows (is_active=false) must NOT appear in search."""
+    service = VnLocalityService(db)
+    await service.seed_sample_high_schools()
+    # Soft-delete one row
+    from sqlalchemy import update
+
+    from app.models.vn_locality import VnHighSchool
+
+    await db.execute(
+        update(VnHighSchool)
+        .where(VnHighSchool.name == "THPT Lê Quý Đôn")
+        .values(is_active=False)
+    )
+    await db.flush()
+    results = await service.search_high_schools("Lê Quý Đôn", limit=10)
+    assert not any(r.name == "THPT Lê Quý Đôn" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Commune lookup (PR5 special-case KV resolution)
+# ---------------------------------------------------------------------------
+
+
+async def test_lookup_commune_kv_returns_area_code(db) -> None:
+    csv = b"commune_code,province,district,ward,area_code\nC001,DL,BMT,W1,KV1\n"
+    service = VnLocalityService(db)
+    await service.import_commune_csv(csv)
+    kv = await service.lookup_commune_kv("C001")
+    assert kv == "KV1"
+
+
+async def test_lookup_commune_kv_missing_returns_none(db) -> None:
+    service = VnLocalityService(db)
+    kv = await service.lookup_commune_kv("NONEXISTENT")
+    assert kv is None
