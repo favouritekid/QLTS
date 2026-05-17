@@ -157,6 +157,19 @@ async def test_search_high_school_prefix_does_not_match_midname(db) -> None:
     assert results == []
 
 
+async def test_csv_decode_non_utf8_raises_friendly_validation_error(db) -> None:
+    """N2 fix: bytes that can't decode as UTF-8 (vd: CP1258 Excel-VN
+    export) must raise a domain ValidationError with admin-friendly
+    hint instead of opaque 500 from UnicodeDecodeError."""
+    from app.utils.exceptions import ValidationError as DomainValidationError
+
+    # Bytes 0xE9 (é in latin1/cp1258) is invalid as UTF-8 lead byte
+    bad_csv = b"commune_code,province,district,ward,area_code\nC1,H\xe9 Noi,X,Y,KV3\n"
+    service = VnLocalityService(db)
+    with pytest.raises(DomainValidationError, match="UTF-8"):
+        await service.import_commune_csv(bad_csv)
+
+
 async def test_csv_decode_strips_utf8_bom(db) -> None:
     """CR-M2 fix: Excel-exported CSVs often start with UTF-8 BOM
     (\\xef\\xbb\\xbf). Without utf-8-sig decode, first header column

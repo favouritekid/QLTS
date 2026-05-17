@@ -25,6 +25,21 @@ from app.schemas.vn_locality import (
     VnCommuneAreaMapRow,
     VnHighSchoolRow,
 )
+from app.utils.exceptions import ValidationError as DomainValidationError
+
+
+def _decode_csv_bytes(csv_bytes: bytes) -> str:
+    """N2 fix: utf-8-sig handles Excel BOM, but CP1258 / latin1 / other
+    Excel-VN encodings raise UnicodeDecodeError → bubbles up as opaque
+    500. Catch + re-raise as domain ValidationError so router returns
+    422 with a clear "save as CSV UTF-8" hint."""
+    try:
+        return csv_bytes.decode("utf-8-sig", errors="strict")
+    except UnicodeDecodeError:
+        raise DomainValidationError(
+            "CSV phải encode UTF-8. Trong Excel chọn 'Save As → CSV UTF-8 "
+            "(Comma delimited) (*.csv)' rồi upload lại."
+        )
 
 
 PostCommitCallback = Optional[Callable[[], Awaitable[None]]]
@@ -67,7 +82,7 @@ class VnLocalityService:
 
         Returns ``{inserted, skipped_existing, error_rows}``.
         """
-        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig", errors="strict")))
+        reader = csv.DictReader(io.StringIO(_decode_csv_bytes(csv_bytes)))
         inserted = 0
         skipped = 0
         errors: list[dict] = []
@@ -122,7 +137,7 @@ class VnLocalityService:
 
         CR-M2: ``utf-8-sig`` decode strips Excel-exported BOM.
         """
-        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig", errors="strict")))
+        reader = csv.DictReader(io.StringIO(_decode_csv_bytes(csv_bytes)))
         inserted = 0
         skipped = 0
         errors: list[dict] = []
