@@ -309,6 +309,29 @@ async def evaluate_cascade(
         path = choice.admission_path
         choice.bonus_rule_snapshot = resolve_effective_bonus_rule(path)
 
+        # Q9 #07 PR2b: snapshot priority bonus (KV + UT) at T6 publish
+        # time alongside bonus_rule_snapshot. Same freeze semantic — later
+        # admin edits to priority_*_config tables do NOT mutate the
+        # snapshot. Engine treats NULL rule + missing rates as 0đ
+        # (graceful for legacy 315 profiles without backfill).
+        from app.services.priority_service import calculate_priority_bonus
+
+        round_obj = getattr(path, "admission_round", None)
+        academic_year = (
+            getattr(round_obj, "academic_year", None) if round_obj else None
+        )
+        if academic_year is not None:
+            (
+                choice.priority_area_bonus_snapshot,
+                choice.priority_object_bonus_snapshot,
+                choice.priority_config_snapshot,
+            ) = await calculate_priority_bonus(
+                db=db,
+                profile=profile,
+                rule=choice.bonus_rule_snapshot,
+                academic_year=academic_year,
+            )
+
         # Per-choice decision (gates + scoring)
         decision, score_result, reason_codes = _evaluate_single_choice(
             profile, choice,
