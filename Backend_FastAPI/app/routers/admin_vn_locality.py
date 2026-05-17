@@ -29,6 +29,18 @@ from app.services.vn_locality_service import VnLocalityService
 MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
 
 
+def _require_csv_filename(filename: str | None) -> None:
+    """F.6 fix: reject non-CSV uploads at the router boundary so admin
+    sees an immediate 400 instead of "201 inserted=0" after the service
+    successfully decodes the file (a binary PDF/txt can decode as UTF-8
+    by accident, then DictReader reads junk header → 0 valid rows)."""
+    if not filename or not filename.lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File phải có đuôi .csv",
+        )
+
+
 log = structlog.get_logger(__name__)
 
 admin_router = APIRouter(
@@ -64,6 +76,7 @@ async def import_commune_csv(
     Malformed rows collected into ``error_rows`` for admin to fix."""
     # CR-M1: pre-read size check (Content-Length header). Post-read check
     # below catches the case where client lied about size.
+    _require_csv_filename(file.filename)
     if file.size is not None and file.size > MAX_CSV_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -105,6 +118,7 @@ async def import_high_school_csv(
 
     Expected columns: ``name,province,district,ward,kv_code``. Idempotent —
     skips (name, province) already active."""
+    _require_csv_filename(file.filename)
     if file.size is not None and file.size > MAX_CSV_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,

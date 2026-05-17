@@ -3593,6 +3593,28 @@ async def update_profile(
         profile.academic_history = data["academic_history"]
         flag_modified(profile, "academic_history")
 
+    # =========================================================================
+    # Q9 #07 W11-BE.F.7 fix — persist 7 priority bonus fields from payload.
+    # Without these set-statements the engine (CR-P0 wire-up) sees NULL
+    # and computes 0đ bonus for every profile — feature dormant.
+    # =========================================================================
+    if "high_school_id" in data:
+        profile.high_school_id = data["high_school_id"]
+    if "high_school_kv_resolved" in data:
+        profile.high_school_kv_resolved = data["high_school_kv_resolved"]
+    if "permanent_commune_code" in data:
+        profile.permanent_commune_code = data["permanent_commune_code"]
+    if "area_resolution_basis" in data:
+        profile.area_resolution_basis = data["area_resolution_basis"]
+    if "area_resolution_reason" in data:
+        profile.area_resolution_reason = data["area_resolution_reason"]
+    if "priority_object_codes" in data and data["priority_object_codes"] is not None:
+        profile.priority_object_codes = data["priority_object_codes"]
+        flag_modified(profile, "priority_object_codes")
+    if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
+        profile.priority_object_evidence = data["priority_object_evidence"]
+        flag_modified(profile, "priority_object_evidence")
+
     # ✅ Phase 6: Update Admission Scores
     if "admission_scores" in data and data["admission_scores"] is not None:
         # Extract subject scores map from Pydantic model dict

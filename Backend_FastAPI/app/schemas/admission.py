@@ -483,8 +483,52 @@ class AdmissionProfileUpdate(BaseModel):
         description="Admission scores (GPA or subject scores) for dynamic scoring"
     )
 
+    # =========================================================================
+    # Q9 #07 W11-BE.F.7 fix — priority bonus fields (phase1_08b migration)
+    # =========================================================================
+    # Candidate sets these during draft via PR5 FE. Without these on the
+    # Update schema, the PUT endpoint silently drops the 7 priority columns
+    # and the CR-P0 engine wire-up never sees real data.
+    high_school_id: Optional[int] = Field(
+        None,
+        description="FK to vn_high_school (PRIMARY KV basis per TT 05/2021)"
+    )
+    high_school_kv_resolved: Optional[str] = Field(
+        None,
+        pattern=r"^KV[1-9](-NT)?$",
+        description="KV snapshot 'KV1'/'KV2-NT'/'KV2'/'KV3' (hyphen canonical)"
+    )
+    permanent_commune_code: Optional[str] = Field(
+        None, max_length=20,
+        description="BNV commune code — BACKUP KV resolution for special case"
+    )
+    area_resolution_basis: Optional[str] = Field(
+        None,
+        pattern=r"^(high_school|permanent_address_special|manual_override)$",
+        description="How KV was resolved (enum — mirror of phase1_08b CHECK)"
+    )
+    area_resolution_reason: Optional[str] = Field(
+        None,
+        description="Required when basis='manual_override'"
+    )
+    priority_object_codes: Optional[List[str]] = Field(
+        None,
+        description="UT đối tượng codes thí sinh khai (vd: ['04','06'])"
+    )
+    priority_object_evidence: Optional[Dict[str, Dict[str, Any]]] = Field(
+        None,
+        description=(
+            "Evidence dict keyed by sub_code: "
+            "{'04': {'document_id': 123, 'status': 'pending|verified|rejected', ...}}"
+        )
+    )
+
     # Field validators to convert empty strings to None (for pattern fields)
-    @field_validator('phone', 'citizen_id', mode='before')
+    @field_validator(
+        'phone', 'citizen_id', 'high_school_kv_resolved', 'area_resolution_basis',
+        'permanent_commune_code',
+        mode='before',
+    )
     @classmethod
     def empty_str_to_none(cls, v):
         """Convert empty strings to None to bypass pattern validation."""
@@ -704,6 +748,17 @@ class AdmissionProfileResponse(BaseModel):
     permanent_street_address: Optional[str] = None
     place_of_birth: Optional[str] = None
     native_place: Optional[str] = None
+
+    # =========================================================================
+    # Q9 #07 W11-BE.F.7 — priority bonus fields (READ side)
+    # =========================================================================
+    high_school_id: Optional[int] = None
+    high_school_kv_resolved: Optional[str] = None
+    permanent_commune_code: Optional[str] = None
+    area_resolution_basis: Optional[str] = None
+    area_resolution_reason: Optional[str] = None
+    priority_object_codes: list[str] = Field(default_factory=list)
+    priority_object_evidence: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     # Scores (Dynamic Calculation)
     admission_scores: Optional[AdmissionScoreSchema] = None

@@ -42,6 +42,32 @@ def _decode_csv_bytes(csv_bytes: bytes) -> str:
         )
 
 
+# F.5 fix: required columns per CSV format. DictReader otherwise silently
+# parses any header into a dict; rows with wrong-named columns would
+# either silently pass with all-None fields (admin tưởng OK), or fail
+# Pydantic per-row (noisy). Upfront header check returns a clear 422.
+COMMUNE_CSV_REQUIRED_COLS = {
+    "commune_code", "province", "district", "ward", "area_code",
+}
+HIGH_SCHOOL_CSV_REQUIRED_COLS = {"name", "province"}  # district/ward/kv_code optional
+
+
+def _validate_csv_header(
+    reader: csv.DictReader, required_cols: set[str], format_name: str
+) -> None:
+    """Raise DomainValidationError if reader.fieldnames missing any
+    required column. Called before per-row parsing so admin gets a
+    single clear error instead of N row-level errors."""
+    header = set(reader.fieldnames or [])
+    missing = required_cols - header
+    if missing:
+        raise DomainValidationError(
+            f"CSV {format_name} thiếu cột bắt buộc: "
+            f"{', '.join(sorted(missing))}. "
+            f"Header phải có: {', '.join(sorted(required_cols))}."
+        )
+
+
 PostCommitCallback = Optional[Callable[[], Awaitable[None]]]
 
 
@@ -83,6 +109,7 @@ class VnLocalityService:
         Returns ``{inserted, skipped_existing, error_rows}``.
         """
         reader = csv.DictReader(io.StringIO(_decode_csv_bytes(csv_bytes)))
+        _validate_csv_header(reader, COMMUNE_CSV_REQUIRED_COLS, "commune")
         inserted = 0
         skipped = 0
         errors: list[dict] = []
@@ -136,8 +163,13 @@ class VnLocalityService:
         creates 2 distinct rows (correct — different schools).
 
         CR-M2: ``utf-8-sig`` decode strips Excel-exported BOM.
+        F.5: header validated upfront so admin sees one clear error
+        instead of N row-level errors when the wrong CSV is uploaded.
         """
         reader = csv.DictReader(io.StringIO(_decode_csv_bytes(csv_bytes)))
+        _validate_csv_header(
+            reader, HIGH_SCHOOL_CSV_REQUIRED_COLS, "high_school"
+        )
         inserted = 0
         skipped = 0
         errors: list[dict] = []

@@ -157,6 +157,33 @@ async def test_search_high_school_prefix_does_not_match_midname(db) -> None:
     assert results == []
 
 
+async def test_commune_csv_missing_header_column_raises_validation(db) -> None:
+    """F.5 fix: CSV with header missing a required column must raise
+    a single clear DomainValidationError up-front instead of silently
+    inserting 0 rows with N per-row Pydantic errors (admin tưởng OK)."""
+    from app.utils.exceptions import ValidationError as DomainValidationError
+
+    # Header missing 'area_code'
+    bad_csv = (
+        b"commune_code,province,district,ward\n"
+        b"C001,Ha Noi,Ha Dong,Phuong A\n"
+    )
+    service = VnLocalityService(db)
+    with pytest.raises(DomainValidationError, match="area_code"):
+        await service.import_commune_csv(bad_csv)
+
+
+async def test_high_school_csv_missing_header_column_raises_validation(db) -> None:
+    """F.5 fix: same upfront-header-check for HS import."""
+    from app.utils.exceptions import ValidationError as DomainValidationError
+
+    # Header missing 'name' (required) — kv_code/district/ward are optional
+    bad_csv = b"province,district,ward,kv_code\nHa Noi,Ha Dong,Phuong 1,KV3\n"
+    service = VnLocalityService(db)
+    with pytest.raises(DomainValidationError, match="name"):
+        await service.import_high_school_csv(bad_csv)
+
+
 async def test_csv_decode_non_utf8_raises_friendly_validation_error(db) -> None:
     """N2 fix: bytes that can't decode as UTF-8 (vd: CP1258 Excel-VN
     export) must raise a domain ValidationError with admin-friendly
