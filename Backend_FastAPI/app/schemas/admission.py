@@ -407,6 +407,57 @@ class AdmissionProfileCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+# =============================================================================
+# Q9 #07 W11-BE.F.7 — priority bonus support types (M1 + M2 review-2 fix)
+# =============================================================================
+
+# M1: per-item regex for priority_object_codes — mirror of phase1_08b
+# CHECK constraint ``sub_code ~ '^[0-9]{2}$'``. Without this annotation
+# Pydantic accepts any string and the engine silently sees no matches
+# (graceful 0đ but undiscoverable from API response).
+PrioritySubCode = Annotated[
+    str, StringConstraints(pattern=r"^[0-9]{2}$")
+]
+
+
+class PriorityObjectEvidenceEntry(BaseModel):
+    """M2: enforce shape of each evidence dict value.
+
+    Without this nested model, ``Dict[str, Dict[str, Any]]`` admitted any
+    inner dict (vd: ``{'random': 'stuff'}``) — engine read ``.get('status')``
+    and silently treated as unverified. Strict shape catches typos at the
+    Pydantic boundary so admin/candidate get a clear 422 instead of a
+    silent 0đ on calculation day.
+    """
+    status: Literal["pending", "verified", "rejected"] = Field(
+        ...,
+        description="Verification state. Engine only counts 'verified' for bonus."
+    )
+    document_id: Optional[int] = Field(
+        default=None,
+        description="FK to profile_document (the uploaded evidence file)"
+    )
+    verified_by: Optional[int] = Field(
+        default=None,
+        description="user.id who flipped status to verified/rejected"
+    )
+    verified_at: Optional[datetime] = Field(
+        default=None,
+        description="When officer recorded verify/reject decision"
+    )
+    reject_reason: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Required if status='rejected'"
+    )
+    requested_at: Optional[datetime] = Field(
+        default=None,
+        description="When candidate submitted the UT claim"
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AdmissionProfileUpdate(BaseModel):
     """
     Schema for updating AdmissionProfile (only allowed when status = 'draft').
@@ -511,16 +562,27 @@ class AdmissionProfileUpdate(BaseModel):
         None,
         description="Required when basis='manual_override'"
     )
-    priority_object_codes: Optional[List[str]] = Field(
+    priority_object_codes: Optional[List[PrioritySubCode]] = Field(
         None,
-        description="UT đối tượng codes thí sinh khai (vd: ['04','06'])"
+        max_length=20,
+        description=(
+            "UT đối tượng codes thí sinh khai (vd: ['04','06']). "
+            "M1 review-2 fix: per-item regex ``^[0-9]{2}$`` mirrors phase1_08b "
+            "CHECK so garbage codes (vd: 'INVALID_99') fail at 422 instead of "
+            "silently scoring 0đ at T6."
+        ),
     )
-    priority_object_evidence: Optional[Dict[str, Dict[str, Any]]] = Field(
+    priority_object_evidence: Optional[
+        Dict[PrioritySubCode, PriorityObjectEvidenceEntry]
+    ] = Field(
         None,
         description=(
-            "Evidence dict keyed by sub_code: "
-            "{'04': {'document_id': 123, 'status': 'pending|verified|rejected', ...}}"
-        )
+            "Evidence dict keyed by sub_code → typed entry. "
+            "M2 review-2 fix: strict nested shape (status enum + optional "
+            "document_id / verified_by / verified_at / reject_reason) "
+            "catches typos at boundary instead of letting them pass through "
+            "to the engine as silently-unverified."
+        ),
     )
 
     # Field validators to convert empty strings to None (for pattern fields)
@@ -572,6 +634,54 @@ class AdmissionProfileUpdate(BaseModel):
         """
         from app.services.admission_invariants import validate_logical_dates
         validate_logical_dates(self.model_dump())
+        return self
+
+    @model_validator(mode='after')
+    def validate_priority_basis_invariants(self) -> 'AdmissionProfileUpdate':
+        """H1 review-2 fix: cross-field invariants for area_resolution_basis.
+
+        Each basis value implies a specific supporting field must be set:
+        * ``manual_override`` → area_resolution_reason (required for audit)
+        * ``high_school`` → high_school_id OR high_school_kv_resolved
+        * ``permanent_address_special`` → permanent_commune_code
+
+        Without this check, FE could submit basis='manual_override' without
+        a reason → engine still applies the calculated KV but the audit
+        trail has no explanation; or basis='high_school' without an HS id
+        → engine has nothing to look up → silent 0đ.
+
+        IMPORTANT caveat (same shape as ``validate_logical_dates`` above):
+        validator runs on PAYLOAD ONLY. A request that sends only ``basis``
+        relying on a DB-persisted supporting field will be REJECTED here —
+        which is intentional: the candidate FE PR5 sends the supporting
+        field in the same payload as ``basis`` since both come from the
+        same form section. Service-layer candidate-state check (in
+        ``update_profile``) handles the post-submit minor_correction case
+        if/when that path becomes available.
+        """
+        basis = self.area_resolution_basis
+        if basis is None:
+            return self  # not touching basis → invariant doesn't apply
+
+        if basis == "manual_override":
+            if not (self.area_resolution_reason and self.area_resolution_reason.strip()):
+                raise ValueError(
+                    "area_resolution_basis='manual_override' yêu cầu "
+                    "area_resolution_reason (lý do override)."
+                )
+        elif basis == "high_school":
+            if self.high_school_id is None and not self.high_school_kv_resolved:
+                raise ValueError(
+                    "area_resolution_basis='high_school' yêu cầu "
+                    "high_school_id hoặc high_school_kv_resolved."
+                )
+        elif basis == "permanent_address_special":
+            if not self.permanent_commune_code:
+                raise ValueError(
+                    "area_resolution_basis='permanent_address_special' yêu cầu "
+                    "permanent_commune_code."
+                )
+
         return self
 
 

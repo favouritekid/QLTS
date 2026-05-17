@@ -3599,7 +3599,22 @@ async def update_profile(
     # and computes 0đ bonus for every profile — feature dormant.
     # =========================================================================
     if "high_school_id" in data:
-        profile.high_school_id = data["high_school_id"]
+        # M3 review-2 fix: validate FK existence at the service boundary
+        # so admin gets a 422 with a friendly message instead of a 500
+        # IntegrityError when high_school_id points to a missing row.
+        new_hs_id = data["high_school_id"]
+        if new_hs_id is not None:
+            from app.models.vn_locality import VnHighSchool
+            existing_hs = await db.get(VnHighSchool, new_hs_id)
+            if existing_hs is None:
+                from app.utils.exceptions import (
+                    ValidationError as _ValidationError,
+                )
+                raise _ValidationError(
+                    f"Trường THPT id={new_hs_id} không tồn tại trong "
+                    "danh mục vn_high_school. Vui lòng chọn lại từ dropdown."
+                )
+        profile.high_school_id = new_hs_id
     if "high_school_kv_resolved" in data:
         profile.high_school_kv_resolved = data["high_school_kv_resolved"]
     if "permanent_commune_code" in data:
