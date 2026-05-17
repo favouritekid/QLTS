@@ -457,6 +457,35 @@ class PriorityObjectEvidenceEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    @model_validator(mode='after')
+    def validate_status_dependencies(self) -> 'PriorityObjectEvidenceEntry':
+        """m-RV2-1 polish: enforce audit trail completeness per status.
+
+        * status='rejected' → reject_reason required (non-empty after
+          strip). Without this, officer can reject a UT claim without
+          logging WHY — the candidate has no recourse and audit shows
+          a bare rejection.
+        * status='verified' → verified_by required (user.id of the
+          officer who approved). Without this, the engine snapshot
+          + bonus calculation has no chain of responsibility.
+
+        Note: ``pending`` (the initial candidate-submitted state) needs
+        neither — that's the whole point of a pending evidence row.
+        """
+        if self.status == "rejected":
+            if not (self.reject_reason and self.reject_reason.strip()):
+                raise ValueError(
+                    "status='rejected' yêu cầu reject_reason (officer "
+                    "phải ghi rõ lý do từ chối chứng cứ UT)."
+                )
+        elif self.status == "verified":
+            if self.verified_by is None:
+                raise ValueError(
+                    "status='verified' yêu cầu verified_by (user.id "
+                    "của officer xác minh)."
+                )
+        return self
+
 
 class AdmissionProfileUpdate(BaseModel):
     """

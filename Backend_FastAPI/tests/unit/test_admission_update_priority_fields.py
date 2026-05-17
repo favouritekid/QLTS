@@ -436,6 +436,81 @@ def test_m2_evidence_canonical_shape_passes() -> None:
     assert obj.priority_object_evidence["04"].document_id == 123
 
 
+def test_m_rv2_1_rejected_without_reason_fails() -> None:
+    """m-RV2-1: officer status='rejected' must provide reject_reason
+    so audit trail shows WHY the UT claim was denied."""
+    from pydantic import ValidationError
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    with pytest.raises(ValidationError, match="reject_reason"):
+        AdmissionProfileUpdate(
+            version=1,
+            priority_object_evidence={
+                "04": {"status": "rejected"},
+            },
+        )
+
+
+def test_m_rv2_1_rejected_with_blank_reason_fails() -> None:
+    """m-RV2-1: whitespace-only reason fails (not just truly null)."""
+    from pydantic import ValidationError
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    with pytest.raises(ValidationError, match="reject_reason"):
+        AdmissionProfileUpdate(
+            version=1,
+            priority_object_evidence={
+                "04": {"status": "rejected", "reject_reason": "   "},
+            },
+        )
+
+
+def test_m_rv2_1_rejected_with_reason_passes() -> None:
+    """m-RV2-1 happy path: rejected with reason → accepted."""
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    obj = AdmissionProfileUpdate(
+        version=1,
+        priority_object_evidence={
+            "04": {
+                "status": "rejected",
+                "reject_reason": "Giấy tờ không khớp với hồ sơ gốc",
+                "verified_by": 45,
+            },
+        },
+    )
+    assert obj.priority_object_evidence["04"].reject_reason
+
+
+def test_m_rv2_1_verified_without_verified_by_fails() -> None:
+    """m-RV2-1: officer status='verified' must record verified_by
+    (chain of responsibility for the bonus calculation)."""
+    from pydantic import ValidationError
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    with pytest.raises(ValidationError, match="verified_by"):
+        AdmissionProfileUpdate(
+            version=1,
+            priority_object_evidence={
+                "04": {"status": "verified", "document_id": 123},
+            },
+        )
+
+
+def test_m_rv2_1_pending_allows_minimal_shape() -> None:
+    """m-RV2-1 negative: 'pending' is the initial candidate state and
+    needs neither reason nor verified_by — that's the point of pending."""
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    obj = AdmissionProfileUpdate(
+        version=1,
+        priority_object_evidence={
+            "04": {"status": "pending", "document_id": 123},
+        },
+    )
+    assert obj.priority_object_evidence["04"].status == "pending"
+
+
 async def test_m3_put_high_school_id_garbage_returns_friendly_400(
     client: AsyncClient,
     officer_user_in_db: dict,
