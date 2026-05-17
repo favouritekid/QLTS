@@ -43,6 +43,7 @@ from .routers import (
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
+    admin_priority_config,  # ✅ Q9 #07 PR3: priority KV/UT bonus configs per year + clone + seed TT 05/2021
     admin_v2_system_config,  # ✅ #184 PR-1D / phase1_13: admin runtime config
     admin_backfill,  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (Q-P3-09)
     admissions,  # ✅ NEW: Admission Profile workflow
@@ -800,6 +801,7 @@ fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/adm
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
 fastapi_app.include_router(admin_v2_path_subject_group.router)  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone
+fastapi_app.include_router(admin_priority_config.router)  # ✅ Q9 #07 PR3: priority KV/UT configs (router declares full prefix)
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes
