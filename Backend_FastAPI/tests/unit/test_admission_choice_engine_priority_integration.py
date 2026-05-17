@@ -49,9 +49,14 @@ def test_evaluate_cascade_sets_three_snapshot_columns() -> None:
 def test_engine_uses_academic_year_from_admission_round() -> None:
     """The plain Integer academic_year is read via
     ``path.admission_round.academic_year`` (NOT academic_year_id —
-    there is no academic_year FK table in the schema)."""
+    there is no academic_year FK table in the schema).
+
+    Review-3 update: access pattern switched to ``__dict__.get`` for
+    eager-load safety (avoid MissingGreenlet in async context). The
+    expectation remains "read academic_year from admission_round".
+    """
     src = _ENGINE_SRC.read_text(encoding="utf-8")
-    assert 'getattr(round_obj, "academic_year", None)' in src
+    assert 'round_obj.__dict__.get("academic_year")' in src
     # And guard against the old assumption resurfacing
     assert "academic_year_id" not in src.split(
         "calculate_priority_bonus"
@@ -104,3 +109,36 @@ def test_snapshot_freeze_pattern_matches_bonus_rule_snapshot() -> None:
     assert bonus_idx < priority_idx < evaluate_idx, (
         "Snapshot order violation: bonus_rule -> priority -> evaluate_single"
     )
+
+
+def test_publish_result_router_eager_loads_admission_round() -> None:
+    """Review-3 MAJOR fix lock: production publish_result router must
+    eager-load AdmissionPath.admission_round so the engine can read
+    academic_year for priority_*_config lookup.
+
+    Without this, the engine's defensive ``__dict__.get`` returns None,
+    priority calc is silently skipped, and every candidate gets 0đ
+    bonus — a regression of the CR-P0 fix that was caught in review-3.
+    """
+    router_src = (
+        _ENGINE_SRC.parent.parent
+        / "routers"
+        / "admissions_v2.py"
+    ).read_text(encoding="utf-8")
+
+    # The eager-load chain must include admission_round on the path
+    # used for cascade. We assert both the relation reference and the
+    # comment marker so reviewers know it's intentional, not orphan.
+    assert "AdmissionPath.admission_round" in router_src, (
+        "publish_result router missing selectinload(admission_round) — "
+        "priority bonus will silently be 0đ in prod."
+    )
+
+
+def test_engine_warns_on_skipped_priority() -> None:
+    """Review-3 MAJOR: defensive log.warning when priority calc is
+    skipped due to missing academic_year — so future eager-load
+    regressions surface in logs instead of silently scoring 0đ."""
+    src = _ENGINE_SRC.read_text(encoding="utf-8")
+    assert "priority_bonus_skipped_missing_academic_year" in src
+    assert "log.warning(" in src

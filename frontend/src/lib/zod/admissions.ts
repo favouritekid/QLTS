@@ -390,13 +390,14 @@ export const admissionProfileUpdateSchema = z.object({
   // UT (đối tượng): priority_object_codes + per-code evidence dict.
   // =========================================================================
   high_school_id: z.number().int().nullable().optional(),
-  high_school_kv_resolved: z
-    .string()
-    .regex(/^KV[1-9](-NT)?$/, "Mã KV phải là KV1/KV2-NT/KV2/KV3")
-    .nullable()
-    .optional()
-    .or(z.literal(""))
-    .transform(v => v === "" ? null : v),
+  high_school_kv_resolved: z.preprocess(
+    v => (v === "" ? null : v),
+    z
+      .string()
+      .regex(/^KV[1-9](-NT)?$/, "Mã KV phải là KV1/KV2-NT/KV2/KV3")
+      .nullable()
+      .optional(),
+  ),
   permanent_commune_code: nullableString(20),
   area_resolution_basis: z
     .enum(["high_school", "permanent_address_special", "manual_override"])

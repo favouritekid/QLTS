@@ -371,6 +371,23 @@ async def evaluate_cascade(
         academic_year = (
             round_obj.__dict__.get("academic_year") if round_obj else None
         )
+        if academic_year is None:
+            # Review-3 MAJOR fix: observable defense-in-depth so a prod
+            # caller that forgot to eager-load admission_round surfaces
+            # in logs instead of silently scoring 0đ for every candidate.
+            # The router-side fix (selectinload AdmissionPath.admission_round)
+            # closes the current gap; this warning catches future regressions.
+            log.warning(
+                "priority_bonus_skipped_missing_academic_year",
+                profile_id=getattr(profile, "id", None),
+                choice_id=getattr(choice, "id", None),
+                path_id=getattr(path, "id", None),
+                reason=(
+                    "admission_round relation not eager-loaded (or NULL "
+                    "academic_year). Priority bonus will be 0đ for this "
+                    "choice — verify the caller's selectinload chain."
+                ),
+            )
         if academic_year is not None:
             (
                 choice.priority_area_bonus_snapshot,

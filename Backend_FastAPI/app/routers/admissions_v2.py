@@ -100,6 +100,14 @@ async def publish_admission_result(
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.admission_method),
+            # Q9 #07 review-3 fix: eager-load admission_round so the
+            # priority bonus engine (CR-P0) can read academic_year for
+            # priority_*_config lookup. Without this chain, the engine
+            # falls back to __dict__.get(...) → None → skip priority
+            # calc → 0đ bonus on every candidate (silent regression).
+            selectinload(models.AdmissionProfile.choices)
+            .selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.admission_round),
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.criteria),

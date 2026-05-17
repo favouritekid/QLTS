@@ -16,7 +16,11 @@
 
 import { describe, it, expect } from "vitest"
 
-import { appliedRulesSchema, subjectGroupSnapshotSchema } from "./admissions"
+import {
+  admissionProfileUpdateSchema,
+  appliedRulesSchema,
+  subjectGroupSnapshotSchema,
+} from "./admissions"
 
 describe("subjectGroupSnapshotSchema (nested weights)", () => {
   it("parses a group with weights", () => {
@@ -126,5 +130,108 @@ describe("appliedRulesSchema (top-level subject_weights)", () => {
         method_type: "subject_based" as const,
       }),
     ).toThrow()
+  })
+})
+
+
+// =============================================================================
+// Q9 #07 PR5/A — Priority bonus Zod schemas (review-3 m-FE-3 fix)
+// =============================================================================
+//
+// Lock the FE Zod parity with BE Pydantic for the 7 priority fields.
+// Without these tests, a future refactor could silently relax / drop
+// validation and the FE would accept garbage that BE then 400s on,
+// degrading UX to "click submit then see red".
+
+describe("admissionProfileUpdateSchema priority fields (Q9 #07)", () => {
+  const baseline = { version: 1 }
+
+  it("accepts canonical sub_codes + verified evidence", () => {
+    const parsed = admissionProfileUpdateSchema.parse({
+      ...baseline,
+      priority_object_codes: ["04", "06"],
+      priority_object_evidence: {
+        "04": { status: "verified" },
+        "06": { status: "pending", document_id: 123 },
+      },
+    })
+    expect(parsed.priority_object_codes).toEqual(["04", "06"])
+    expect(parsed.priority_object_evidence?.["04"].status).toBe("verified")
+  })
+
+  it("rejects garbage UT code (per-item regex from prioritySubCodeSchema)", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_codes: ["INVALID_99"],
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence with bad status enum", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "04": { status: "approved_typo" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence with extra unknown keys (.strict mirror of BE extra=forbid)", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "04": { status: "verified", random_extra: "x" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence dict keyed by non-canonical sub_code", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "INVALID_KEY": { status: "verified" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects KV2_NT (underscore) — only KV2-NT (hyphen) canonical", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        high_school_kv_resolved: "KV2_NT",
+      }),
+    ).toThrow()
+  })
+
+  it("accepts KV2-NT (hyphen canonical form)", () => {
+    const parsed = admissionProfileUpdateSchema.parse({
+      ...baseline,
+      high_school_kv_resolved: "KV2-NT",
+    })
+    expect(parsed.high_school_kv_resolved).toBe("KV2-NT")
+  })
+
+  it("rejects invalid area_resolution_basis enum value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        area_resolution_basis: "highschool",
+      }),
+    ).toThrow()
+  })
+
+  it("preprocess empty string high_school_kv_resolved -> null", () => {
+    const parsed = admissionProfileUpdateSchema.parse({
+      ...baseline,
+      high_school_kv_resolved: "",
+    })
+    expect(parsed.high_school_kv_resolved).toBeNull()
   })
 })
