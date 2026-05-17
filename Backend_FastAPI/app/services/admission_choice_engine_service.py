@@ -360,9 +360,16 @@ async def evaluate_cascade(
         # create a circular dep at module load time of this engine file.
         from app.services.priority_service import calculate_priority_bonus
 
-        round_obj = getattr(path, "admission_round", None)
+        # Eager-load-safe access via __dict__.get (NOT getattr): plain
+        # ``getattr(path, "admission_round", None)`` would trigger a
+        # SQLAlchemy lazy-load in async context → MissingGreenlet on
+        # paths that don't pre-load the relation (existing Phase 3 API
+        # tests + legacy callers). __dict__.get returns None when the
+        # relation hasn't been eager-loaded, letting us skip the
+        # priority calc gracefully instead of crashing.
+        round_obj = path.__dict__.get("admission_round")
         academic_year = (
-            getattr(round_obj, "academic_year", None) if round_obj else None
+            round_obj.__dict__.get("academic_year") if round_obj else None
         )
         if academic_year is not None:
             (
@@ -380,9 +387,12 @@ async def evaluate_cascade(
         # so the snapshot columns actually affect admit/reject. Without
         # this, ưu tiên candidates get the snapshot written but still
         # bounced for raw-score < min_score (quy chế Bộ vi phạm).
+        # getattr-with-default keeps existing Phase 3 SimpleNamespace
+        # stubs working when academic_year is missing → snapshot fields
+        # never set → read would AttributeError on the stub.
         priority_bonus_total = (
-            (choice.priority_area_bonus_snapshot or Decimal("0"))
-            + (choice.priority_object_bonus_snapshot or Decimal("0"))
+            (getattr(choice, "priority_area_bonus_snapshot", None) or Decimal("0"))
+            + (getattr(choice, "priority_object_bonus_snapshot", None) or Decimal("0"))
         )
 
         # Per-choice decision (gates + scoring + priority bonus)
