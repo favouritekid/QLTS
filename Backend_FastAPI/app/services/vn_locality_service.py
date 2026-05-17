@@ -60,9 +60,14 @@ class VnLocalityService:
         """Parse + upsert commune rows. Expected CSV columns:
         commune_code,province,district,ward,area_code
 
+        Idempotency key: ``commune_code`` (BNV's immutable identifier).
+        CR-M2: ``utf-8-sig`` decode strips the BOM that Excel-exported
+        CSVs commonly include — without this the first header column
+        parses as ``\\ufeffcommune_code`` and every row fails validation.
+
         Returns ``{inserted, skipped_existing, error_rows}``.
         """
-        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8")))
+        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig", errors="strict")))
         inserted = 0
         skipped = 0
         errors: list[dict] = []
@@ -110,9 +115,14 @@ class VnLocalityService:
         """Parse + upsert high school rows. Expected CSV columns:
         name,province,district,ward,kv_code
 
-        Skips rows where (name, province) already active.
+        Idempotency key: ``(name, province)`` — MOET CSV has no stable
+        unique identifier across years; (name, province) is the
+        practical compromise. NOTE: same school name in 2 provinces
+        creates 2 distinct rows (correct — different schools).
+
+        CR-M2: ``utf-8-sig`` decode strips Excel-exported BOM.
         """
-        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8")))
+        reader = csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig", errors="strict")))
         inserted = 0
         skipped = 0
         errors: list[dict] = []
@@ -189,12 +199,17 @@ class VnLocalityService:
     async def search_high_schools(
         self, query: str, limit: int = 20
     ) -> list[VnHighSchool]:
-        """Searchable dropdown source: case-insensitive prefix match on
-        name. Returns active rows only."""
+        """CR-M3 fix: prefix match (NOT substring) — index-friendly +
+        cleaner UX. Vietnamese school names canonically start with
+        'THPT' or 'Trường THPT' so candidate types the school's actual
+        name (vd 'Lê Quý Đôn') and we surface anything starting with
+        that string.
+
+        Returns active rows only (is_active=true)."""
         stmt = (
             select(VnHighSchool)
             .where(
-                VnHighSchool.name.ilike(f"%{query}%"),
+                VnHighSchool.name.ilike(f"{query}%"),
                 VnHighSchool.is_active.is_(True),
             )
             .order_by(VnHighSchool.name)

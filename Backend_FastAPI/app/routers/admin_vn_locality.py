@@ -10,16 +10,23 @@ vn_high_school (Q9 #07 PR4).
   source for candidate FE (read; not admin-only)
 """
 import structlog
-from fastapi import APIRouter, Depends, File, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
 from app.core.deps import get_current_active_user, require_admin
+from app.core.rate_limits import RateLimits, limiter
 from app.schemas.vn_locality import (
     CsvImportResponse,
     VnHighSchoolResponse,
 )
 from app.services.vn_locality_service import VnLocalityService
+
+
+# CR-M1: cap CSV upload at 10MB to prevent OOM via accidental/malicious
+# huge file. Matches the QLTS lead-import precedent (lead-import-size-pr7
+# memory). Real BNV/MOET CSVs are well under 1MB (~11k rows max).
+MAX_CSV_SIZE_BYTES = 10 * 1024 * 1024
 
 
 log = structlog.get_logger(__name__)
@@ -55,7 +62,19 @@ async def import_commune_csv(
     Expected columns: ``commune_code,province,district,ward,area_code``.
     Idempotent — skips rows where (commune_code, active) already exists.
     Malformed rows collected into ``error_rows`` for admin to fix."""
+    # CR-M1: pre-read size check (Content-Length header). Post-read check
+    # below catches the case where client lied about size.
+    if file.size is not None and file.size > MAX_CSV_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
+        )
     csv_bytes = await file.read()
+    if len(csv_bytes) > MAX_CSV_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
+        )
     service = VnLocalityService(db)
     result, callback = await service.import_commune_csv(csv_bytes)
     await db.commit()
@@ -86,7 +105,17 @@ async def import_high_school_csv(
 
     Expected columns: ``name,province,district,ward,kv_code``. Idempotent —
     skips (name, province) already active."""
+    if file.size is not None and file.size > MAX_CSV_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
+        )
     csv_bytes = await file.read()
+    if len(csv_bytes) > MAX_CSV_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
+        )
     service = VnLocalityService(db)
     result, callback = await service.import_high_school_csv(csv_bytes)
     await db.commit()
@@ -133,18 +162,23 @@ async def seed_sample_high_schools(
 # =============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)
 @public_router.get(
     "/high-schools/search",
     response_model=list[VnHighSchoolResponse],
 )
 async def search_high_schools(
+    request: Request,
     q: str = Query(min_length=1, max_length=100),
     limit: int = Query(20, ge=1, le=50),
     db: AsyncSession = Depends(database.get_db),
     _user=Depends(get_current_active_user),
 ) -> list[VnHighSchoolResponse]:
-    """Case-insensitive name search for candidate dropdown.
-    Returns active rows only (is_active=true)."""
+    """Case-insensitive prefix search for candidate dropdown.
+    Returns active rows only (is_active=true).
+
+    m-CR-4 fix: rate-limited via slowapi to prevent typing-fast spam.
+    CR-M3 fix: prefix match (not substring) — index-friendly + cleaner UX."""
     service = VnLocalityService(db)
     rows = await service.search_high_schools(q, limit=limit)
     return [VnHighSchoolResponse.model_validate(r) for r in rows]

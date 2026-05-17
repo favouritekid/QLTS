@@ -135,17 +135,41 @@ async def test_seed_sample_idempotent(db) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_search_high_school_case_insensitive_partial(db) -> None:
-    """ilike does case-insensitive but NOT diacritic normalization —
-    candidate FE may send the user's exact typed string. Verify the
-    canonical-form search works (search by partial diacritic-matching
-    substring)."""
+async def test_search_high_school_prefix_match(db) -> None:
+    """CR-M3 fix: prefix ilike (not substring). Candidate types from
+    the start of the school name (canonical form 'THPT <name>'). Index-
+    friendly + cleaner UX vs substring 'L' matching everything with L."""
     service = VnLocalityService(db)
     await service.seed_sample_high_schools()
-    # Search by diacritic-matching substring (case-insensitive)
-    results = await service.search_high_schools("lê quý đôn", limit=10)
+    # Realistic flow: candidate types "THPT Lê" → dropdown filters
+    results = await service.search_high_schools("thpt lê", limit=10)
     assert len(results) >= 1
     assert any("Lê Quý Đôn" in r.name for r in results)
+
+
+async def test_search_high_school_prefix_does_not_match_midname(db) -> None:
+    """Lock the prefix-vs-substring change: 'Lê' alone (without THPT
+    prefix) should NOT match — old substring behavior would have."""
+    service = VnLocalityService(db)
+    await service.seed_sample_high_schools()
+    results = await service.search_high_schools("Lê Quý", limit=10)
+    # All seeded names start with "THPT", so "Lê Quý" prefix matches zero
+    assert results == []
+
+
+async def test_csv_decode_strips_utf8_bom(db) -> None:
+    """CR-M2 fix: Excel-exported CSVs often start with UTF-8 BOM
+    (\\xef\\xbb\\xbf). Without utf-8-sig decode, first header column
+    becomes '\\ufeffcommune_code' and every row fails Pydantic parse."""
+    csv_with_bom = (
+        b"\xef\xbb\xbf"  # UTF-8 BOM
+        b"commune_code,province,district,ward,area_code\n"
+        b"C001,Ha Noi,Ha Dong,Phuong A,KV3\n"
+    )
+    service = VnLocalityService(db)
+    result, _ = await service.import_commune_csv(csv_with_bom)
+    assert result["inserted"] == 1
+    assert result["error_rows"] == []
 
 
 async def test_search_respects_is_active(db) -> None:
