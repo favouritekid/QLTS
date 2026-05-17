@@ -76,8 +76,8 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
   const [applyAreaBonus, setApplyAreaBonus] = useState<boolean>(
     path?.bonus_rule_override?.apply_area_bonus ?? false
   );
-  const [applySubjectBonus, setApplySubjectBonus] = useState<boolean>(
-    path?.bonus_rule_override?.apply_subject_bonus ?? false
+  const [applyObjectBonus, setApplyObjectBonus] = useState<boolean>(
+    path?.bonus_rule_override?.apply_object_bonus ?? false
   );
   const [maxTotalBonusInput, setMaxTotalBonusInput] = useState<string>(
     path?.bonus_rule_override?.max_total_bonus != null
@@ -175,7 +175,7 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
     }
     return {
       apply_area_bonus: applyAreaBonus,
-      apply_subject_bonus: applySubjectBonus,
+      apply_object_bonus: applyObjectBonus,
       max_total_bonus: maxTotal,
     };
   }
@@ -518,19 +518,19 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
                     htmlFor="apply-area-bonus"
                     className="text-sm cursor-pointer"
                   >
-                    Cộng điểm khu vực (KV1 / KV2_NT / KV2 / KV3)
+                    Cộng điểm khu vực (KV1 / KV2-NT / KV2 / KV3)
                   </Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <Checkbox
-                    id="apply-subject-bonus"
-                    checked={applySubjectBonus}
-                    onCheckedChange={(v) => setApplySubjectBonus(v === true)}
+                    id="apply-object-bonus"
+                    checked={applyObjectBonus}
+                    onCheckedChange={(v) => setApplyObjectBonus(v === true)}
                     disabled={!isAdmin}
-                    aria-label="Cộng điểm môn ưu tiên"
+                    aria-label="Cộng điểm đối tượng ưu tiên"
                   />
                   <Label
-                    htmlFor="apply-subject-bonus"
+                    htmlFor="apply-object-bonus"
                     className="text-sm cursor-pointer"
                   >
                     Cộng điểm đối tượng ưu tiên (mã 01..07)

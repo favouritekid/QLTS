@@ -90,14 +90,17 @@ class BonusRuleOverride(BaseModel):
 
     apply_area_bonus: bool = Field(
         description=(
-            "Apply the area bonus (KV1 / KV2_NT / KV2 / KV3) when "
-            "computing the effective score for this path."
+            "Apply KV bonus (KV1 / KV2-NT / KV2 / KV3) per TT 05/2021 "
+            "Phụ lục 01 — rates from priority_area_config per academic_year."
         ),
     )
-    apply_subject_bonus: bool = Field(
+    apply_object_bonus: bool = Field(
         description=(
-            "Apply per-subject bonus (priority objects 01..07) when "
-            "computing the effective score."
+            "Apply UT đối tượng bonus (nhóm UT1/UT2, sub_codes 01..07+) "
+            "per TT 05/2021 Phụ lục 01 — rates from priority_object_config "
+            "per academic_year. Multi-UT: chỉ tính diện cao nhất (max). "
+            "(Renamed from apply_subject_bonus in Q9 #07 PR1 to match the "
+            "actual intent — see phase1_08a migration.)"
         ),
     )
     max_total_bonus: Optional[float] = Field(
@@ -105,8 +108,9 @@ class BonusRuleOverride(BaseModel):
         ge=0,
         le=10,
         description=(
-            "Cap on the combined bonus (area + subject) in points. "
-            "NULL = no cap. Range 0..10 matches the GPA scale."
+            "Cap on the combined bonus (area + object) in points. "
+            "NULL = no cap (TT 05/2021 không cap; admin có thể set per quy "
+            "chế trường). Range 0..10 matches the GPA scale."
         ),
     )
 

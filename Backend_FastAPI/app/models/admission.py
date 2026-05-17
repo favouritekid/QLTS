@@ -15,7 +15,7 @@ Architecture:
 """
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -66,6 +66,13 @@ class AdmissionProfile(Base):
         CheckConstraint(
             "confirmed_via IN ('magic_link','admin_override','officer') OR confirmed_via IS NULL",
             name="ck_admission_profile_confirmed_via"
+        ),
+        # Q9 #07 PR1 — area_resolution_basis enum CHECK (mirror of phase1_08b).
+        # Catches typo 'highschool' vs 'high_school' at DB layer.
+        CheckConstraint(
+            "area_resolution_basis IS NULL OR area_resolution_basis IN "
+            "('high_school', 'permanent_address_special', 'manual_override')",
+            name="ck_admission_profile_area_resolution_basis"
         ),
     )
 
@@ -188,6 +195,50 @@ class AdmissionProfile(Base):
     permanent_street_address: Mapped[str] = mapped_column(
         String(255), nullable=True,
         comment="Số nhà, tên đường — street address line, free-text"
+    )
+
+    # =========================================================================
+    # Q9 #07 PR1 — Priority Bonus demographics (phase1_08b migration)
+    # See Backend_FastAPI/alembic/versions/phase1_08b_priority_demographics_gdnn.py
+    # =========================================================================
+
+    # High school resolution (PRIMARY KV basis per TT 05/2021 Điều 7+11)
+    high_school_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("vn_high_school.id", ondelete="RESTRICT"),
+        nullable=True,
+        comment="FK to vn_high_school. RESTRICT prevents hard delete; admin uses is_active=false instead."
+    )
+    high_school_kv_resolved: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True,
+        comment="KV snapshot at submit time, computed from high_school_id"
+    )
+    # Permanent address resolution (BACKUP basis for special case: PT DTNT, quân nhân, lớp dự bị)
+    permanent_commune_code: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True,
+        comment="Loose ref to vn_commune_area_map.commune_code (no DB FK)"
+    )
+    area_resolution_basis: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True,
+        comment="'high_school' | 'permanent_address_special' | 'manual_override'"
+    )
+    area_resolution_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment="Required when area_resolution_basis='manual_override'"
+    )
+    # UT đối tượng codes + evidence (per TT 05/2021 Phụ lục 01 nhóm 01-07)
+    priority_object_codes: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        comment="Array of UT sub_codes thí sinh khai: ['04','06']"
+    )
+    priority_object_evidence: Mapped[dict[str, dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+        comment="{'04': {'document_id': 123, 'status': 'pending|verified|rejected', 'verified_by': 45, 'verified_at': '...', 'reject_reason': null}}"
     )
 
     place_of_birth: Mapped[str] = mapped_column(String(255), nullable=True)

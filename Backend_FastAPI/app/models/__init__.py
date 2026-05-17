@@ -114,6 +114,10 @@ from .entity_audit_log import EntityAuditLog  # Generic audit trail for any enti
 # Administrative Geography (Temporal Versioning)
 from .administrative_node import AdministrativeNode, AdministrativeLevel
 
+# Q9 #07 PR1 — Priority bonus configs + VN locality dictionaries (phase1_08b)
+from .priority_config import PriorityAreaConfig, PriorityObjectConfig
+from .vn_locality import VnCommuneAreaMap, VnHighSchool
+
 # Finance Module (Phase 0+1: Foundation)
 from .finance import (
     # Enums
@@ -228,6 +232,11 @@ __all__ = [
     # Administrative Geography
     "AdministrativeNode",
     "AdministrativeLevel",
+    # Q9 #07 PR1 — Priority bonus configs + VN locality dictionaries
+    "PriorityAreaConfig",
+    "PriorityObjectConfig",
+    "VnCommuneAreaMap",
+    "VnHighSchool",
     # Finance Module (Phase 0+1: Foundation)
     # Enums
     "FeeTypeEnum",
