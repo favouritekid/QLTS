@@ -18,6 +18,7 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Trash2, GraduationCap } from "lucide-react"
 import { VnSchoolPicker } from "@/components/admissions/VnSchoolPicker"
+import { VN_SCHOOL_LEVELS } from "@/lib/zod/admissions"
 import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
@@ -93,7 +94,11 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     onChange={(v) => {
                                         form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
                                         form.setValue(`academic_history.${index}.school_name`, v.school_name, { shouldDirty: true })
-                                        form.setValue(`academic_history.${index}.level`, v.level as any, { shouldDirty: true })
+                                        form.setValue(
+                                            `academic_history.${index}.level`,
+                                            v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
+                                            { shouldDirty: true },
+                                        )
                                     }}
                                     disabled={!isEditable}
                                 />

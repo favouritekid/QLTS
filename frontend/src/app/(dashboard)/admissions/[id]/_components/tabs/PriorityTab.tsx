@@ -26,6 +26,7 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescripti
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Award, ShieldCheck, AlertCircle, Info, Lightbulb, Loader2, Lock, CheckCircle2 } from "lucide-react"
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
+import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface PriorityTabProps {
@@ -98,14 +99,22 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
       vocational_qualification: vocational ?? null,
       area_resolution_basis: areaBasis ?? null,
       permanent_commune_code: communeCode ?? null,
-      academic_history: (academicHistory as any) ?? null,
+      academic_history:
+        (academicHistory as PreviewPriorityKvRequest["academic_history"]) ?? null,
     },
     !!cultural, // only fire when cultural set
   )
 
   // BE-frozen snapshot (post T1 submit)
-  const frozenSnapshot = (profile as any).priority_resolution_snapshot as
-    | { kv_resolved?: string; rule_applied?: string; pathway?: string; breakdown?: any; requires_manual_override?: boolean; reason?: string }
+  const frozenSnapshot = profile.priority_resolution_snapshot as
+    | {
+        kv_resolved?: string
+        rule_applied?: string
+        pathway?: string
+        breakdown?: Record<string, unknown>
+        requires_manual_override?: boolean
+        reason?: string
+      }
     | null
     | undefined
   const hasFrozen = !!frozenSnapshot?.kv_resolved
