@@ -188,10 +188,10 @@ describe("PriorityTab", () => {
       />
     )
     expect(
-      screen.getByText(/Thí sinh thuộc 1 trong 4 nhóm đặc biệt/i)
+      screen.getByText(/Thí sinh thuộc nhóm đặc biệt/i)
     ).toBeInTheDocument()
     expect(
-      screen.getByLabelText(/Mã xã\/phường hộ khẩu thường trú/i)
+      screen.getByLabelText(/Mã xã\/phường nơi thường trú/i)
     ).toBeInTheDocument()
     expect(
       screen.getByPlaceholderText(/01_00025.*Phường Giảng Võ/i)
@@ -202,7 +202,7 @@ describe("PriorityTab", () => {
     mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
     expect(
-      screen.queryByLabelText(/Mã xã\/phường hộ khẩu thường trú/i)
+      screen.queryByLabelText(/Mã xã\/phường nơi thường trú/i)
     ).not.toBeInTheDocument()
   })
 

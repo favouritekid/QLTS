@@ -58,8 +58,8 @@ const KV_BADGE: Record<string, { color: string; label: string }> = {
 
 const PATHWAY_LABEL_VI: Record<string, string> = {
   thpt_multi_school: "Theo lịch sử học các trường THPT (3 năm cấp 3)",
-  commune_fallback: "Theo hộ khẩu thường trú",
-  commune_special: "Theo hộ khẩu (trường hợp đặc biệt)",
+  commune_fallback: "Theo nơi thường trú",
+  commune_special: "Theo nơi thường trú (trường hợp đặc biệt)",
   manual: "Cán bộ ấn định thủ công",
   not_resolved: "Chưa xác định được",
 }
@@ -68,7 +68,7 @@ const RULE_LABEL_VI: Record<string, string> = {
   longest_duration: "Trường học lâu nhất",
   tiebreak_graduation_school: "Trường tốt nghiệp (khi thời gian học bằng nhau)",
   ambiguous_requires_manual: "Cần cán bộ xem xét (2 lựa chọn ngang nhau)",
-  commune_lookup: "Tra cứu theo mã xã/phường hộ khẩu",
+  commune_lookup: "Tra cứu theo mã xã/phường nơi thường trú",
   manual_override: "Cán bộ ấn định thủ công",
 }
 
@@ -135,7 +135,8 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         <CardContent className="space-y-2 text-sm text-info-900/80">
           <p>
             Xác định <strong>Khu vực ưu tiên (KV)</strong> để cộng điểm tuyển sinh theo
-            Thông tư 05/2021/TT-BLĐTBXH Phụ lục 01.
+            Thông tư <strong>05/2021/TT-BLĐTBXH</strong> Phụ lục 01 + Thông tư <strong>27/2017/TT-BLĐTBXH</strong> về liên thông
+            (vẫn còn hiệu lực trong giai đoạn chuyển tiếp Luật GDNN 2025).
           </p>
           <ul className="text-xs space-y-1 list-disc pl-5">
             <li><strong>KV1</strong>: +<strong>0,75đ</strong> — vùng miền núi, dân tộc thiểu số, biên giới, hải đảo</li>
@@ -145,7 +146,8 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
           </ul>
           <p className="text-xs pt-1">
             <strong>Hệ thống tự động tính</strong> ngay khi khai đủ trình độ + trường đã học (tab <em>Học tập</em>).
-            Bật <strong>Trường hợp đặc biệt</strong> nếu là <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, quân nhân tại ngũ, bộ đội xuất ngũ</em>.
+            Bật <strong>Trường hợp đặc biệt</strong> nếu là <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, lớp tạo nguồn, quân nhân/công an tại ngũ hoặc xuất ngũ</em>
+            {" "}— KV theo nơi thường trú (riêng quân nhân: theo nơi đóng quân ≥18 tháng nếu cao hơn — cần cán bộ xác nhận).
           </p>
         </CardContent>
       </Card>
@@ -338,7 +340,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             Trường hợp đặc biệt
           </CardTitle>
           <CardDescription className="text-sm">
-            Chỉ bật nếu thí sinh thuộc 1 trong 4 nhóm dùng hộ khẩu để xác định KV thay vì trường học.
+            Chỉ bật nếu thí sinh thuộc 1 trong 5 nhóm dùng nơi thường trú để xác định KV thay vì trường học (per TT 05/2021 Phụ lục 01 Mục 4+6).
           </CardDescription>
         </CardHeader>
 
@@ -360,10 +362,10 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
                 </FormControl>
                 <div className="space-y-1 leading-none">
                   <FormLabel className="text-sm font-medium">
-                    Thí sinh thuộc 1 trong 4 nhóm đặc biệt
+                    Thí sinh thuộc nhóm đặc biệt
                   </FormLabel>
                   <FormDescription className="text-xs leading-relaxed">
-                    Bao gồm: học sinh <strong>Phổ thông Dân tộc Nội trú</strong>, <strong>lớp dự bị đại học</strong>, <strong>quân nhân tại ngũ</strong>, hoặc <strong>bộ đội xuất ngũ</strong>. Khi bật, KV tính theo mã xã/phường hộ khẩu thường trú thay vì trường học.
+                    Bao gồm: học sinh <strong>Phổ thông Dân tộc Nội trú</strong>, <strong>lớp dự bị đại học</strong>, <strong>lớp tạo nguồn</strong> (theo QĐ Bộ/UBND tỉnh), <strong>quân nhân/CAND tại ngũ</strong> hoặc <strong>xuất ngũ</strong> (đóng quân ≥18 tháng). Khi bật, KV theo mã xã/phường nơi thường trú thay vì trường học. <em>Riêng quân nhân: pháp lý cho phép MAX(KV đóng quân, KV nơi thường trú trước nhập ngũ) — cần cán bộ xác nhận thủ công.</em>
                   </FormDescription>
                 </div>
                 <FormMessage />
@@ -377,7 +379,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
               name="permanent_commune_code"
               render={({ field }) => (
                 <FormItem className="pl-12">
-                  <FormLabel className="text-sm">Mã xã/phường hộ khẩu thường trú</FormLabel>
+                  <FormLabel className="text-sm">Mã xã/phường nơi thường trú</FormLabel>
                   <FormControl>
                     <Input
                       {...field}
@@ -390,7 +392,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
                   </FormControl>
                   <FormDescription className="text-xs">
                     Định dạng: <code>{`{mã tỉnh 2 số}_{mã phường 5 số BNV}`}</code>.
-                    Lấy từ giấy CCCD hoặc sổ hộ khẩu mặt sau.
+                    Lấy từ CCCD chip / VNeID / xác nhận cư trú (theo Luật Cư trú 2020 — sổ hộ khẩu giấy đã bỏ từ 01/01/2023).
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
