@@ -63,32 +63,46 @@ function HarnessWrapper({
 }
 
 describe("PriorityTab", () => {
-  it("renders 2 main dropdown sections", () => {
+  it("renders intro card + snapshot card + 2 input sections", () => {
     render(<HarnessWrapper profile={buildProfile()} />)
+    expect(screen.getByText(/Về phần này/i)).toBeInTheDocument()
+    expect(screen.getByText(/Khu vực ưu tiên đã xác định/i)).toBeInTheDocument()
     expect(screen.getAllByText(/Trình độ học vấn/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Trình độ văn hóa/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Trình độ chuyên môn/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Cơ sở xác định KV/i).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Cách tính khu vực ưu tiên/i).length).toBeGreaterThan(0)
   })
 
-  it("preview matrix shows NOT_RESOLVED when cultural not set", () => {
+  it("intro card explains KV rates (KV1 0.75đ, KV2-NT 0.50đ, KV2 0.25đ, KV3 không cộng)", () => {
     render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/NOT_RESOLVED/i)).toBeInTheDocument()
-    expect(screen.getByText(/Cần khai trình độ văn hóa trước/i)).toBeInTheDocument()
+    expect(screen.getByText(/0,75đ/)).toBeInTheDocument()
+    expect(screen.getByText(/0,50đ/)).toBeInTheDocument()
+    expect(screen.getByText(/0,25đ/)).toBeInTheDocument()
+    expect(screen.getByText(/không cộng điểm/i)).toBeInTheDocument()
   })
 
-  it("preview matrix shows THPT when cultural=graduated_thpt", () => {
+  it("snapshot empty state when profile has no resolved KV", () => {
+    render(<HarnessWrapper profile={buildProfile()} />)
+    expect(screen.getByText(/Chưa được tính/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/KV sẽ tự động xác định khi hồ sơ được nộp/i)
+    ).toBeInTheDocument()
+  })
+
+  it("preview shows 'Chưa đủ thông tin' when cultural not set", () => {
+    render(<HarnessWrapper profile={buildProfile()} />)
+    expect(screen.getByText(/Chưa đủ thông tin/i)).toBeInTheDocument()
+  })
+
+  it("preview shows 'Theo trường THPT/GDTX' when cultural=graduated_thpt", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
         defaults={{ cultural_education_level: "graduated_thpt" }}
       />
     )
-    expect(screen.getByText(/^THPT$/)).toBeInTheDocument()
-    expect(screen.getByText(/KV resolve từ lịch sử học THPT/i)).toBeInTheDocument()
+    expect(screen.getByText(/Theo trường THPT\/GDTX đã học/i)).toBeInTheDocument()
   })
 
-  it("preview matrix shows TC when graduated_thcs + trung_cap (liên thông path)", () => {
+  it("preview shows 'Theo trường Trung cấp' khi graduated_thcs + trung_cap (liên thông)", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -98,11 +112,10 @@ describe("PriorityTab", () => {
         }}
       />
     )
-    expect(screen.getByText(/^TC$/)).toBeInTheDocument()
-    expect(screen.getByText(/KV resolve từ lịch sử học TC/i)).toBeInTheDocument()
+    expect(screen.getByText(/Theo trường Trung cấp đã học/i)).toBeInTheDocument()
   })
 
-  it("preview matrix shows COMMUNE_FALLBACK when graduated_thcs + none", () => {
+  it("preview shows 'Theo hộ khẩu' khi graduated_thcs + none (COMMUNE_FALLBACK)", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -112,10 +125,12 @@ describe("PriorityTab", () => {
         }}
       />
     )
-    expect(screen.getByText(/COMMUNE_FALLBACK/i)).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/Theo hộ khẩu thường trú/i).length
+    ).toBeGreaterThan(0)
   })
 
-  it("preview matrix shows COMMUNE_SPECIAL when basis=permanent_address_special", () => {
+  it("preview shows 'Theo hộ khẩu (đặc biệt)' khi basis=permanent_address_special", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -125,10 +140,12 @@ describe("PriorityTab", () => {
         }}
       />
     )
-    expect(screen.getByText(/COMMUNE_SPECIAL/i)).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/Theo hộ khẩu \(trường hợp đặc biệt\)/i).length
+    ).toBeGreaterThan(0)
   })
 
-  it("preview matrix shows MANUAL when basis=manual_override", () => {
+  it("preview shows 'Cán bộ ấn định thủ công' khi basis=manual_override", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -138,10 +155,12 @@ describe("PriorityTab", () => {
         }}
       />
     )
-    expect(screen.getByText(/^MANUAL$/)).toBeInTheDocument()
+    expect(
+      screen.getAllByText(/Cán bộ ấn định thủ công/i).length
+    ).toBeGreaterThan(0)
   })
 
-  it("commune_code input shown when basis=permanent_address_special", () => {
+  it("commune_code input shown khi basis=permanent_address_special", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -151,10 +170,10 @@ describe("PriorityTab", () => {
     expect(
       screen.getByText(/Mã xã\/phường hộ khẩu thường trú/i)
     ).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/01_00025/i)).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/01_00025.*Phường Giảng Võ/i)).toBeInTheDocument()
   })
 
-  it("commune_code input hidden when basis=high_school (default)", () => {
+  it("commune_code input hidden khi basis=high_school (default)", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -166,20 +185,20 @@ describe("PriorityTab", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("manual_override basis shows warning callout", () => {
+  it("manual_override basis shows warning callout 'chế độ thủ công'", () => {
     render(
       <HarnessWrapper
         profile={buildProfile()}
         defaults={{ area_resolution_basis: "manual_override" }}
       />
     )
-    expect(screen.getAllByText(/Manual Override/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/chế độ thủ công/i)).toBeInTheDocument()
     expect(
-      screen.getByText(/Lý do override bắt buộc khai báo/i)
+      screen.getByText(/Lý do thay đổi/i)
     ).toBeInTheDocument()
   })
 
-  it("renders snapshot card when profile has priority_resolution_snapshot", () => {
+  it("renders KV badge + Vietnamese pathway label when snapshot has data", () => {
     const profile = buildProfile({
       // @ts-expect-error — snapshot is dynamic JSONB, not in static type yet
       priority_resolution_snapshot: {
@@ -190,20 +209,14 @@ describe("PriorityTab", () => {
       },
     })
     render(<HarnessWrapper profile={profile} />)
+    // KV badge với rate label
+    expect(screen.getByText(/KV2 \(\+0,25đ\)/)).toBeInTheDocument()
+    // Vietnamese pathway label (not raw code)
     expect(
-      screen.getByText(/Kết quả xác định KV \(Backend\)/i)
+      screen.getByText(/Theo lịch sử học các trường THPT/i)
     ).toBeInTheDocument()
-    expect(screen.getByText(/^KV2$/)).toBeInTheDocument()
     expect(
-      screen.getByText("tiebreak_graduation_school")
+      screen.getByText(/Trường tốt nghiệp \(khi thời gian học bằng nhau\)/i)
     ).toBeInTheDocument()
-    expect(screen.getByText("thpt_multi_school")).toBeInTheDocument()
-  })
-
-  it("does NOT render snapshot card when profile has no snapshot", () => {
-    render(<HarnessWrapper profile={buildProfile()} />)
-    expect(
-      screen.queryByText(/Kết quả xác định KV \(Backend\)/i)
-    ).not.toBeInTheDocument()
   })
 })
