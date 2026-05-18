@@ -358,7 +358,33 @@ async def evaluate_cascade(
         # (graceful for legacy 315 profiles without backfill).
         # Lazy import: priority_service imports app.models which would
         # create a circular dep at module load time of this engine file.
-        from app.services.priority_service import calculate_priority_bonus
+        from app.services.priority_service import (
+            calculate_priority_bonus,
+            freeze_priority_snapshot,
+        )
+
+        # Q9 #07 Phase C — Re-freeze priority_resolution_snapshot at T6 engine.
+        # T1 submit already froze with submit-time data; T6 re-freezes in
+        # case academic_history / cultural fields were edited during
+        # revision_requested cycle. Mirrors Q-P3-11 bonus_rule_snapshot
+        # double-freeze pattern. Best-effort: if KV resolution fails (eg
+        # missing commune data Phase B.2 pending), engine continues — the
+        # downstream calculate_priority_bonus reads snapshot.kv_resolved
+        # = None and returns 0đ gracefully.
+        try:
+            await freeze_priority_snapshot(
+                profile=profile,
+                db=db,
+                frozen_at_status="engine_T6",
+                resolved_by="system",
+            )
+        except Exception as kv_freeze_exc:  # noqa: BLE001
+            log.warning(
+                "priority_snapshot_freeze_failed_at_engine",
+                profile_id=getattr(profile, "id", None),
+                choice_id=getattr(choice, "id", None),
+                error=str(kv_freeze_exc),
+            )
 
         # Eager-load-safe access via __dict__.get (NOT getattr): plain
         # ``getattr(path, "admission_round", None)`` would trigger a

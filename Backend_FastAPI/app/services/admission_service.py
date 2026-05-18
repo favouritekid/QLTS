@@ -4212,6 +4212,35 @@ async def submit_and_evaluate(
         # event. The single source of truth lives in our callback so
         # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
         # always fire side-by-side AFTER ``db.commit()``.
+
+        # Q9 #07 Phase C — Freeze priority resolution snapshot at T1.
+        # Captures kv_resolved + breakdown immutably at submit time so
+        # subsequent admin edits to vn_school_kv_assignment / vn_commune_area_map
+        # don't mutate the candidate's resolved KV. T6 evaluate_cascade
+        # re-freezes with current rates per Q-P3-11 snapshot pattern.
+        # Lazy import: priority_service imports app.models which would
+        # create a circular dep at module load time.
+        from .priority_service import freeze_priority_snapshot as _freeze_kv
+
+        try:
+            await _freeze_kv(
+                profile=profile,
+                db=db,
+                frozen_at_status="submitted_T1",
+                resolved_by="system",
+            )
+        except Exception as freeze_exc:  # noqa: BLE001 — defensive: never block submit
+            log.warning(
+                "priority_snapshot_freeze_failed_at_submit",
+                profile_id=profile_id,
+                error=str(freeze_exc),
+                reason=(
+                    "KV resolution failed during submit T1; profile still "
+                    "submits but priority_resolution_snapshot stays empty. "
+                    "Engine T6 will retry freeze."
+                ),
+            )
+
         try:
             profile, _ = await state_transition(
                 db,
