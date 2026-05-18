@@ -20,12 +20,16 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.vn_locality import VnCommuneAreaMap, VnHighSchool
-from app.schemas.vn_locality import (
-    VnCommuneAreaMapRow,
-    VnHighSchoolRow,
-)
+from app.models.vn_locality import VnCommuneAreaMap
+from app.schemas.vn_locality import VnCommuneAreaMapRow
 from app.utils.exceptions import ValidationError as DomainValidationError
+
+# VnHighSchool DROPPED in phase1_09 — see app/models/vn_school.py for the
+# 3-table replacement family. Old methods (import_high_school_csv,
+# seed_sample_high_schools, search_high_schools) REMOVED from this service;
+# routes also removed from admin_vn_locality.py. Replacement will live in
+# Phase B.1 import script (app/scripts/import_moet_schools_2025.py) +
+# new VnSchool admin search service (Phase D candidate FE).
 
 
 def _decode_csv_bytes(csv_bytes: bytes) -> str:
@@ -49,7 +53,9 @@ def _decode_csv_bytes(csv_bytes: bytes) -> str:
 COMMUNE_CSV_REQUIRED_COLS = {
     "commune_code", "province", "district", "ward", "area_code",
 }
-HIGH_SCHOOL_CSV_REQUIRED_COLS = {"name", "province"}  # district/ward/kv_code optional
+# HIGH_SCHOOL_CSV_REQUIRED_COLS DROPPED phase1_09. New THPT import will live
+# in app/scripts/import_moet_schools_2025.py (Phase B.1) — uses MOET file
+# structure directly, không cần required_cols const ở service layer.
 
 
 def _validate_csv_header(
@@ -75,16 +81,8 @@ async def _noop_callback() -> None:
     return None
 
 
-# Demo seed (5 rows) so the candidate FE dropdown can render something
-# usable before the admin uploads the real MOET CSV. Rows are inserted
-# on first call only; subsequent calls skip existing names.
-SAMPLE_HIGH_SCHOOLS: list[dict[str, Any]] = [
-    {"name": "THPT Lê Quý Đôn", "province": "Hà Nội", "district": "Hà Đông", "kv_code": "KV3"},
-    {"name": "THPT Chu Văn An", "province": "Hà Nội", "district": "Tây Hồ", "kv_code": "KV3"},
-    {"name": "THPT Nguyễn Thị Minh Khai", "province": "Hồ Chí Minh", "district": "Quận 3", "kv_code": "KV3"},
-    {"name": "THPT chuyên Lê Hồng Phong", "province": "Hồ Chí Minh", "district": "Quận 5", "kv_code": "KV3"},
-    {"name": "THPT DTNT N'Trang Lơng", "province": "Đắk Lắk", "district": "Buôn Ma Thuột", "kv_code": "KV1"},
-]
+# SAMPLE_HIGH_SCHOOLS DROPPED phase1_09. Demo seed for VnSchool family
+# will live in app/scripts/import_moet_schools_2025.py (Phase B.1).
 
 
 class VnLocalityService:
@@ -148,122 +146,8 @@ class VnLocalityService:
         )
 
     # =========================================================================
-    # vn_high_school
+    # VnHighSchool methods DROPPED phase1_09 — see vn_school family (TBD service)
     # =========================================================================
-
-    async def import_high_school_csv(
-        self, csv_bytes: bytes
-    ) -> Tuple[dict[str, Any], PostCommitCallback]:
-        """Parse + upsert high school rows. Expected CSV columns:
-        name,province,district,ward,kv_code
-
-        Idempotency key: ``(name, province)`` — MOET CSV has no stable
-        unique identifier across years; (name, province) is the
-        practical compromise. NOTE: same school name in 2 provinces
-        creates 2 distinct rows (correct — different schools).
-
-        CR-M2: ``utf-8-sig`` decode strips Excel-exported BOM.
-        F.5: header validated upfront so admin sees one clear error
-        instead of N row-level errors when the wrong CSV is uploaded.
-        """
-        reader = csv.DictReader(io.StringIO(_decode_csv_bytes(csv_bytes)))
-        _validate_csv_header(
-            reader, HIGH_SCHOOL_CSV_REQUIRED_COLS, "high_school"
-        )
-        inserted = 0
-        skipped = 0
-        errors: list[dict] = []
-
-        for row_num, raw in enumerate(reader, start=2):
-            # csv.DictReader returns "" for blank cells; Pydantic regex
-            # pattern would reject "" — convert to None so optional fields
-            # stay optional (MOET CSV often omits kv_code / ward).
-            cleaned = {k: (v if v != "" else None) for k, v in raw.items()}
-            try:
-                row = VnHighSchoolRow.model_validate(cleaned)
-            except ValidationError as e:
-                errors.append({"row_num": row_num, "error": str(e)})
-                continue
-
-            existing = await self.db.execute(
-                select(VnHighSchool.id)
-                .where(
-                    VnHighSchool.name == row.name,
-                    VnHighSchool.province == row.province,
-                    VnHighSchool.is_active.is_(True),
-                )
-                .limit(1)
-            )
-            if existing.scalar_one_or_none() is not None:
-                skipped += 1
-                continue
-
-            self.db.add(VnHighSchool(**row.model_dump()))
-            inserted += 1
-
-        await self.db.flush()
-        return (
-            {
-                "inserted": inserted,
-                "skipped_existing": skipped,
-                "error_rows": errors,
-            },
-            _noop_callback,
-        )
-
-    async def seed_sample_high_schools(
-        self,
-    ) -> Tuple[dict[str, Any], PostCommitCallback]:
-        """Insert 5 demo rows (Q9 #07 hybrid C2: ship empty + free-text
-        fallback, but a handful of rows let candidate FE dropdown +
-        Chrome MCP smoke test work end-to-end without waiting on the
-        real MOET CSV)."""
-        inserted = 0
-        for row_data in SAMPLE_HIGH_SCHOOLS:
-            existing = await self.db.execute(
-                select(VnHighSchool.id)
-                .where(
-                    VnHighSchool.name == row_data["name"],
-                    VnHighSchool.province == row_data["province"],
-                    VnHighSchool.is_active.is_(True),
-                )
-                .limit(1)
-            )
-            if existing.scalar_one_or_none() is not None:
-                continue
-            self.db.add(VnHighSchool(**row_data))
-            inserted += 1
-        await self.db.flush()
-        return (
-            {"inserted": inserted, "total_in_seed": len(SAMPLE_HIGH_SCHOOLS)},
-            _noop_callback,
-        )
-
-    # =========================================================================
-    # Read endpoints (used by PR5 candidate FE)
-    # =========================================================================
-
-    async def search_high_schools(
-        self, query: str, limit: int = 20
-    ) -> list[VnHighSchool]:
-        """CR-M3 fix: prefix match (NOT substring) — index-friendly +
-        cleaner UX. Vietnamese school names canonically start with
-        'THPT' or 'Trường THPT' so candidate types the school's actual
-        name (vd 'Lê Quý Đôn') and we surface anything starting with
-        that string.
-
-        Returns active rows only (is_active=true)."""
-        stmt = (
-            select(VnHighSchool)
-            .where(
-                VnHighSchool.name.ilike(f"{query}%"),
-                VnHighSchool.is_active.is_(True),
-            )
-            .order_by(VnHighSchool.name)
-            .limit(limit)
-        )
-        result = await self.db.execute(stmt)
-        return list(result.scalars().all())
 
     async def lookup_commune_kv(
         self, commune_code: str

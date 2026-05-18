@@ -29,26 +29,9 @@ class VnCommuneAreaMapResponse(VnCommuneAreaMapRow):
     effective_to: Optional[date] = None
 
 
-class VnHighSchoolRow(BaseModel):
-    """Single CSV row payload for high school import (MOET format)."""
-    name: str = Field(min_length=1, max_length=255)
-    province: Optional[str] = Field(default=None, max_length=100)
-    district: Optional[str] = Field(default=None, max_length=100)
-    ward: Optional[str] = Field(default=None, max_length=100)
-    kv_code: Optional[str] = Field(
-        default=None,
-        pattern=r"^KV[1-9](-NT)?$",
-        description="Denormalized from vn_commune_area_map; optional if unknown",
-    )
-
-
-class VnHighSchoolResponse(VnHighSchoolRow):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    is_active: bool
-    effective_from: date
-    effective_to: Optional[date] = None
+# VnHighSchoolRow + VnHighSchoolResponse DROPPED phase1_09 (Q9 #07 PR5 v1.3).
+# Replaced by VnSchool family schemas (TBD in Phase B.1 import script
+# + Phase D candidate FE). See Documents/Q9_07_PR5_REDESIGN.md v1.3.
 
 
 class CsvImportResponse(BaseModel):

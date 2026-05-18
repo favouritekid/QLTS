@@ -383,31 +383,35 @@ export const admissionProfileUpdateSchema = z.object({
   documents_checklist: z.array(documentItemSchema).optional().nullable(),
 
   // =========================================================================
-  // Q9 #07 — Priority bonus fields (mirror of BE AdmissionProfileUpdate).
-  // KV (khu vực) PRIMARY basis: high_school_id → server-derived kv_resolved.
+  // Q9 #07 PR5 v1.3 (phase1_09) — Priority bonus fields (2-field parallel).
+  // Trình độ văn hóa: 5 options (Hoàn thành THCS / Tốt nghiệp THCS / Hoàn thành
+  //   THPT / Tốt nghiệp THPT / Tốt nghiệp GDTX) — per Luật GDNN 2014/2025.
+  // Trình độ chuyên môn: 4 options (Chưa có / Sơ cấp / Trung cấp / Cao đẳng).
   // KV BACKUP for special case (PT DTNT / quân nhân): permanent_commune_code.
-  // KV manual override: high_school_kv_resolved + area_resolution_reason.
   // UT (đối tượng): priority_object_codes + per-code evidence dict.
+  // Multi-school history live in academic_history JSONB array (NOT single field).
+  // Legacy (PR1 phase1_08b) high_school_id / kv_resolved / area_resolution_reason
+  //   DROPPED in phase1_09.
   // =========================================================================
-  high_school_id: z.number().int().nullable().optional(),
-  // m-FE-2 (review-3 INFO) revert: z.preprocess infers input as `unknown`
-  // which breaks react-hook-form's UseFormReturn type inference downstream
-  // (TS2719 in AdmissionDetailClient.tsx). Verbose chain is more cognitive
-  // overhead but preserves the string input type so the form types stay
-  // narrow. Keep the chain.
-  high_school_kv_resolved: z
-    .string()
-    .regex(/^KV[1-9](-NT)?$/, "Mã KV phải là KV1/KV2-NT/KV2/KV3")
+  cultural_education_level: z
+    .enum([
+      "completed_thcs",
+      "graduated_thcs",
+      "completed_thpt",
+      "graduated_thpt",
+      "graduated_gdtx",
+    ])
     .nullable()
-    .optional()
-    .or(z.literal(""))
-    .transform(v => v === "" ? null : v),
+    .optional(),
+  vocational_qualification: z
+    .enum(["none", "so_cap", "trung_cap", "cao_dang"])
+    .nullable()
+    .optional(),
   permanent_commune_code: nullableString(20),
   area_resolution_basis: z
     .enum(["high_school", "permanent_address_special", "manual_override"])
     .nullable()
     .optional(),
-  area_resolution_reason: z.string().nullable().optional(),
   priority_object_codes: z.array(prioritySubCodeSchema).max(20).nullable().optional(),
   priority_object_evidence: z
     .record(prioritySubCodeSchema, priorityObjectEvidenceEntrySchema)
@@ -561,17 +565,18 @@ export const admissionProfileResponseSchema = z.object({
   place_of_birth: z.string().nullable(),
   native_place: z.string().nullable(),
 
-  // Q9 #07 priority bonus — READ side (mirror of BE AdmissionProfileResponse).
+  // Q9 #07 v1.3 priority bonus — READ side (mirror of BE AdmissionProfileResponse).
+  // 2-field parallel design (phase1_09): cultural + vocational.
   // Defaults match BE: list/dict default-factory, scalars nullable.
-  high_school_id: z.number().int().nullable().optional(),
-  high_school_kv_resolved: z.string().nullable().optional(),
+  cultural_education_level: z.string().nullable().optional(),
+  vocational_qualification: z.string().nullable().optional(),
   permanent_commune_code: z.string().nullable().optional(),
   area_resolution_basis: z.string().nullable().optional(),
-  area_resolution_reason: z.string().nullable().optional(),
   priority_object_codes: z.array(z.string()).default([]),
   priority_object_evidence: z
     .record(z.string(), priorityObjectEvidenceEntrySchema)
     .default({}),
+  priority_resolution_snapshot: z.record(z.string(), z.unknown()).default({}),
 
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),

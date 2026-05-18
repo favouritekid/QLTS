@@ -1,25 +1,21 @@
 # app/routers/admin_vn_locality.py
-"""Admin CSV import + search endpoints for vn_commune_area_map +
-vn_high_school (Q9 #07 PR4).
+"""Admin CSV import endpoints for vn_commune_area_map (Q9 #07 PR4).
 
+Phase1_09 redesign (2026-05-18) removed VnHighSchool endpoints — see
+``Documents/Q9_07_PR5_REDESIGN.md`` v1.3. VnSchool family endpoints
+(THCS + THPT + TRUNG_HOC_NGHE) will live under /admin/vn-school/* in
+Phase B.1 import script + Phase D candidate FE.
+
+Current endpoints:
 * POST /api/v2/admin/vn-locality/communes/import — upload BNV CSV
-* POST /api/v2/admin/vn-locality/high-schools/import — upload MOET CSV
-* POST /api/v2/admin/vn-locality/high-schools/seed-sample — 5 demo rows
-  (admin one-shot bootstrap so FE dropdown has data pre-MOET CSV)
-* GET  /api/v2/vn-locality/high-schools/search?q=X — searchable dropdown
-  source for candidate FE (read; not admin-only)
 """
 import structlog
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
-from app.core.deps import get_current_active_user, require_admin
-from app.core.rate_limits import RateLimits, limiter
-from app.schemas.vn_locality import (
-    CsvImportResponse,
-    VnHighSchoolResponse,
-)
+from app.core.deps import require_admin
+from app.schemas.vn_locality import CsvImportResponse
 from app.services.vn_locality_service import VnLocalityService
 
 
@@ -48,14 +44,13 @@ admin_router = APIRouter(
     tags=["Admin v2 - VN Locality Import"],
 )
 
-public_router = APIRouter(
-    prefix="/api/v2/vn-locality",
-    tags=["VN Locality - Public Read"],
-)
+# public_router DROPPED phase1_09 — was only used for /high-schools/search
+# (also DROPPED). Will be re-introduced trong Phase D candidate FE with
+# new prefix /api/v2/vn-school/* (VnSchool family).
 
 
 # =============================================================================
-# Admin: CSV imports + sample seed
+# Admin: CSV imports (commune only post-phase1_09)
 # =============================================================================
 
 
@@ -104,95 +99,18 @@ async def import_commune_csv(
     return CsvImportResponse(**result)
 
 
-@admin_router.post(
-    "/high-schools/import",
-    response_model=CsvImportResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def import_high_school_csv(
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(database.get_db),
-    user=Depends(require_admin),
-) -> CsvImportResponse:
-    """Upload high school CSV (MOET format).
-
-    Expected columns: ``name,province,district,ward,kv_code``. Idempotent —
-    skips (name, province) already active."""
-    _require_csv_filename(file.filename)
-    if file.size is not None and file.size > MAX_CSV_SIZE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
-        )
-    csv_bytes = await file.read()
-    if len(csv_bytes) > MAX_CSV_SIZE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"CSV vượt {MAX_CSV_SIZE_BYTES // (1024 * 1024)}MB",
-        )
-    service = VnLocalityService(db)
-    result, callback = await service.import_high_school_csv(csv_bytes)
-    await db.commit()
-    if callback:
-        await callback()
-    log.info(
-        "vn_high_school_csv_imported",
-        filename=file.filename,
-        inserted=result["inserted"],
-        skipped=result["skipped_existing"],
-        error_count=len(result["error_rows"]),
-        actor=user.id,
-    )
-    return CsvImportResponse(**result)
-
-
-@admin_router.post(
-    "/high-schools/seed-sample",
-    status_code=status.HTTP_201_CREATED,
-)
-async def seed_sample_high_schools(
-    db: AsyncSession = Depends(database.get_db),
-    user=Depends(require_admin),
-) -> dict:
-    """One-shot bootstrap of 5 demo high school rows so candidate FE
-    dropdown works before admin uploads the real MOET CSV. Idempotent —
-    skips already-existing rows by name+province."""
-    service = VnLocalityService(db)
-    result, callback = await service.seed_sample_high_schools()
-    await db.commit()
-    if callback:
-        await callback()
-    log.info(
-        "vn_high_school_sample_seeded",
-        inserted=result["inserted"],
-        total_in_seed=result["total_in_seed"],
-        actor=user.id,
-    )
-    return result
-
-
 # =============================================================================
-# Public: searchable dropdown source (used by candidate FE)
+# REMOVED phase1_09 (Q9 #07 PR5 redesign 2026-05-18)
 # =============================================================================
-
-
-@limiter.limit(RateLimits.DATA_READ)
-@public_router.get(
-    "/high-schools/search",
-    response_model=list[VnHighSchoolResponse],
-)
-async def search_high_schools(
-    request: Request,
-    q: str = Query(min_length=1, max_length=100),
-    limit: int = Query(20, ge=1, le=50),
-    db: AsyncSession = Depends(database.get_db),
-    _user=Depends(get_current_active_user),
-) -> list[VnHighSchoolResponse]:
-    """Case-insensitive prefix search for candidate dropdown.
-    Returns active rows only (is_active=true).
-
-    m-CR-4 fix: rate-limited via slowapi to prevent typing-fast spam.
-    CR-M3 fix: prefix match (not substring) — index-friendly + cleaner UX."""
-    service = VnLocalityService(db)
-    rows = await service.search_high_schools(q, limit=limit)
-    return [VnHighSchoolResponse.model_validate(r) for r in rows]
+# 3 endpoints below REMOVED — VnHighSchool table dropped, replaced by
+# VnSchool family (level='THPT'). New endpoints will be exposed under
+# /admin/vn-school/* trong Phase B.1 import script + Phase D candidate FE.
+#
+# Dropped endpoints:
+#   POST /admin/vn-locality/high-schools/import
+#   POST /admin/vn-locality/high-schools/seed-sample
+#   GET  /vn-locality/high-schools/search
+#
+# FE/clients should switch to /admin/vn-school/* (when ready). Pre-PR5
+# any cached call to these endpoints will now 404 (correct behavior —
+# better than 500 from NotImplementedError stub).

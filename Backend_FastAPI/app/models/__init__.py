@@ -116,7 +116,10 @@ from .administrative_node import AdministrativeNode, AdministrativeLevel
 
 # Q9 #07 PR1 — Priority bonus configs + VN locality dictionaries (phase1_08b)
 from .priority_config import PriorityAreaConfig, PriorityObjectConfig
-from .vn_locality import VnCommuneAreaMap, VnHighSchool
+from .vn_locality import VnCommuneAreaMap
+# Q9 #07 PR5 v1.3 (phase1_09) — VN school 3-table family + SCD
+# Replaces VnHighSchool (PR1 single-table placeholder, dropped phase1_09)
+from .vn_school import VnSchool, VnSchoolNameHistory, VnSchoolKvAssignment
 
 # Finance Module (Phase 0+1: Foundation)
 from .finance import (
@@ -236,7 +239,10 @@ __all__ = [
     "PriorityAreaConfig",
     "PriorityObjectConfig",
     "VnCommuneAreaMap",
-    "VnHighSchool",
+    # VnHighSchool removed in phase1_09 — see VnSchool family below
+    "VnSchool",
+    "VnSchoolNameHistory",
+    "VnSchoolKvAssignment",
     # Finance Module (Phase 0+1: Foundation)
     # Enums
     "FeeTypeEnum",

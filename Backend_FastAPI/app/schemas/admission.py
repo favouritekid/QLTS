@@ -564,32 +564,37 @@ class AdmissionProfileUpdate(BaseModel):
     )
 
     # =========================================================================
-    # Q9 #07 W11-BE.F.7 fix — priority bonus fields (phase1_08b migration)
+    # Q9 #07 Priority bonus fields
+    # PR1 phase1_08b (legacy): high_school_id, high_school_kv_resolved,
+    #   area_resolution_reason — DROPPED in phase1_09 v1.3
+    # PR5 phase1_09 (current): cultural_education_level + vocational_qualification
+    #   + permanent_commune_code + area_resolution_basis (kept)
     # =========================================================================
-    # Candidate sets these during draft via PR5 FE. Without these on the
-    # Update schema, the PUT endpoint silently drops the 7 priority columns
-    # and the CR-P0 engine wire-up never sees real data.
-    high_school_id: Optional[int] = Field(
+    cultural_education_level: Optional[str] = Field(
         None,
-        description="FK to vn_high_school (PRIMARY KV basis per TT 05/2021)"
+        pattern=r"^(completed_thcs|graduated_thcs|completed_thpt|graduated_thpt|graduated_gdtx)$",
+        description=(
+            "Trình độ văn hóa: completed_thcs | graduated_thcs | "
+            "completed_thpt | graduated_thpt | graduated_gdtx. Nullable cho "
+            "draft; required tại submit T1."
+        ),
     )
-    high_school_kv_resolved: Optional[str] = Field(
+    vocational_qualification: Optional[str] = Field(
         None,
-        pattern=r"^KV[1-9](-NT)?$",
-        description="KV snapshot 'KV1'/'KV2-NT'/'KV2'/'KV3' (hyphen canonical)"
+        pattern=r"^(none|so_cap|trung_cap|cao_dang)$",
+        description=(
+            "Trình độ chuyên môn: none | so_cap | trung_cap | cao_dang. "
+            "DB default 'none' nếu omitted (NOT NULL constraint)."
+        ),
     )
     permanent_commune_code: Optional[str] = Field(
         None, max_length=20,
-        description="BNV commune code — BACKUP KV resolution for special case"
+        description="BNV commune code — BACKUP KV cho 4 special cases + commune_fallback"
     )
     area_resolution_basis: Optional[str] = Field(
         None,
         pattern=r"^(high_school|permanent_address_special|manual_override)$",
-        description="How KV was resolved (enum — mirror of phase1_08b CHECK)"
-    )
-    area_resolution_reason: Optional[str] = Field(
-        None,
-        description="Required when basis='manual_override'"
+        description="How KV was resolved (enum — mirror of CHECK constraint)"
     )
     priority_object_codes: Optional[List[PrioritySubCode]] = Field(
         None,
@@ -616,8 +621,8 @@ class AdmissionProfileUpdate(BaseModel):
 
     # Field validators to convert empty strings to None (for pattern fields)
     @field_validator(
-        'phone', 'citizen_id', 'high_school_kv_resolved', 'area_resolution_basis',
-        'permanent_commune_code',
+        'phone', 'citizen_id', 'area_resolution_basis',
+        'permanent_commune_code', 'cultural_education_level', 'vocational_qualification',
         mode='before',
     )
     @classmethod
@@ -667,49 +672,34 @@ class AdmissionProfileUpdate(BaseModel):
 
     @model_validator(mode='after')
     def validate_priority_basis_invariants(self) -> 'AdmissionProfileUpdate':
-        """H1 review-2 fix: cross-field invariants for area_resolution_basis.
+        """H1 cross-field invariants for area_resolution_basis (v1.3 phase1_09).
 
         Each basis value implies a specific supporting field must be set:
-        * ``manual_override`` → area_resolution_reason (required for audit)
-        * ``high_school`` → high_school_id OR high_school_kv_resolved
-        * ``permanent_address_special`` → permanent_commune_code
+        * ``permanent_address_special`` → permanent_commune_code (4 cases TT)
+        * ``manual_override`` → manual reason goes vào priority_resolution_snapshot
+          at engine time (no payload field — admin/officer fills via separate endpoint)
+        * ``high_school`` → academic_history với THPT/TC entries (multi-school rule)
+          Validated by service-layer after lookup vào academic_history.
 
-        Without this check, FE could submit basis='manual_override' without
-        a reason → engine still applies the calculated KV but the audit
-        trail has no explanation; or basis='high_school' without an HS id
-        → engine has nothing to look up → silent 0đ.
+        v1.3 changes: 'high_school' basis no longer references single field;
+        candidate khai trường qua academic_history JSONB. area_resolution_reason
+        column DROPPED — canonical reason lives in priority_resolution_snapshot.
 
-        IMPORTANT caveat (same shape as ``validate_logical_dates`` above):
-        validator runs on PAYLOAD ONLY. A request that sends only ``basis``
-        relying on a DB-persisted supporting field will be REJECTED here —
-        which is intentional: the candidate FE PR5 sends the supporting
-        field in the same payload as ``basis`` since both come from the
-        same form section. Service-layer candidate-state check (in
-        ``update_profile``) handles the post-submit minor_correction case
-        if/when that path becomes available.
+        IMPORTANT caveat: validator runs on PAYLOAD ONLY. Service-layer check
+        in ``update_profile`` handles cross-field with DB-persisted state.
         """
         basis = self.area_resolution_basis
         if basis is None:
             return self  # not touching basis → invariant doesn't apply
 
-        if basis == "manual_override":
-            if not (self.area_resolution_reason and self.area_resolution_reason.strip()):
-                raise ValueError(
-                    "area_resolution_basis='manual_override' yêu cầu "
-                    "area_resolution_reason (lý do override)."
-                )
-        elif basis == "high_school":
-            if self.high_school_id is None and not self.high_school_kv_resolved:
-                raise ValueError(
-                    "area_resolution_basis='high_school' yêu cầu "
-                    "high_school_id hoặc high_school_kv_resolved."
-                )
-        elif basis == "permanent_address_special":
+        if basis == "permanent_address_special":
             if not self.permanent_commune_code:
                 raise ValueError(
                     "area_resolution_basis='permanent_address_special' yêu cầu "
-                    "permanent_commune_code."
+                    "permanent_commune_code (4 trường hợp đặc biệt TT 05/2021)."
                 )
+        # 'high_school' + 'manual_override' validation moved to service-layer
+        # (need academic_history context not available in pure schema validator)
 
         return self
 
@@ -889,15 +879,15 @@ class AdmissionProfileResponse(BaseModel):
     native_place: Optional[str] = None
 
     # =========================================================================
-    # Q9 #07 W11-BE.F.7 — priority bonus fields (READ side)
+    # Q9 #07 Priority bonus fields (READ side) — v1.3 phase1_09
     # =========================================================================
-    high_school_id: Optional[int] = None
-    high_school_kv_resolved: Optional[str] = None
+    cultural_education_level: Optional[str] = None
+    vocational_qualification: Optional[str] = None
     permanent_commune_code: Optional[str] = None
     area_resolution_basis: Optional[str] = None
-    area_resolution_reason: Optional[str] = None
     priority_object_codes: list[str] = Field(default_factory=list)
     priority_object_evidence: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    priority_resolution_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
     # Scores (Dynamic Calculation)
     admission_scores: Optional[AdmissionScoreSchema] = None

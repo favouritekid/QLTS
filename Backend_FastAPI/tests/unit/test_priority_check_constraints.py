@@ -53,9 +53,9 @@ def _check_constraint_sql(table, name: str) -> str:
             "KV[1-9](-NT)?",
         ),
         (
-            "VnHighSchool",
-            "ck_vn_high_school_kv_code_format",
-            "KV[1-9](-NT)?",
+            "VnSchool",  # phase1_09: replaces VnHighSchool with level enum
+            "ck_vn_school_level",
+            "THCS",  # check level enum includes THCS
         ),
     ],
 )

@@ -3594,41 +3594,26 @@ async def update_profile(
         flag_modified(profile, "academic_history")
 
     # =========================================================================
-    # Q9 #07 W11-BE.F.7 fix — persist 7 priority bonus fields from payload.
-    # Without these set-statements the engine (CR-P0 wire-up) sees NULL
-    # and computes 0đ bonus for every profile — feature dormant.
+    # Q9 #07 PR5 v1.3 phase1_09 — persist priority bonus fields from payload.
+    # 2-field parallel design: cultural_education_level + vocational_qualification.
+    # Legacy high_school_id / kv_resolved / area_resolution_reason DROPPED.
     # =========================================================================
-    if "high_school_id" in data:
-        # M3 review-2 fix: validate FK existence at the service boundary
-        # so admin gets a 422 with a friendly message instead of a 500
-        # IntegrityError when high_school_id points to a missing row.
-        new_hs_id = data["high_school_id"]
-        if new_hs_id is not None:
-            from app.models.vn_locality import VnHighSchool
-            existing_hs = await db.get(VnHighSchool, new_hs_id)
-            if existing_hs is None:
-                from app.utils.exceptions import (
-                    ValidationError as _ValidationError,
-                )
-                raise _ValidationError(
-                    f"Trường THPT id={new_hs_id} không tồn tại trong "
-                    "danh mục vn_high_school. Vui lòng chọn lại từ dropdown."
-                )
-        profile.high_school_id = new_hs_id
-    if "high_school_kv_resolved" in data:
-        profile.high_school_kv_resolved = data["high_school_kv_resolved"]
+    if "cultural_education_level" in data:
+        profile.cultural_education_level = data["cultural_education_level"]
+    if "vocational_qualification" in data and data["vocational_qualification"] is not None:
+        profile.vocational_qualification = data["vocational_qualification"]
     if "permanent_commune_code" in data:
         profile.permanent_commune_code = data["permanent_commune_code"]
     if "area_resolution_basis" in data:
         profile.area_resolution_basis = data["area_resolution_basis"]
-    if "area_resolution_reason" in data:
-        profile.area_resolution_reason = data["area_resolution_reason"]
     if "priority_object_codes" in data and data["priority_object_codes"] is not None:
         profile.priority_object_codes = data["priority_object_codes"]
         flag_modified(profile, "priority_object_codes")
     if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
         profile.priority_object_evidence = data["priority_object_evidence"]
         flag_modified(profile, "priority_object_evidence")
+    # Note: priority_resolution_snapshot KHÔNG set qua candidate payload —
+    # frozen at submit T1 + re-frozen at engine T6 (service-layer only).
 
     # ✅ Phase 6: Update Admission Scores
     if "admission_scores" in data and data["admission_scores"] is not None:

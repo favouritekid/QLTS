@@ -26,9 +26,12 @@ def test_vn_commune_area_map_model_is_importable() -> None:
     assert VnCommuneAreaMap.__tablename__ == "vn_commune_area_map"
 
 
-def test_vn_high_school_model_is_importable() -> None:
-    from app.models import VnHighSchool
-    assert VnHighSchool.__tablename__ == "vn_high_school"
+def test_vn_school_models_are_importable() -> None:
+    """phase1_09: VnHighSchool DROPPED, replaced by VnSchool family."""
+    from app.models import VnSchool, VnSchoolNameHistory, VnSchoolKvAssignment
+    assert VnSchool.__tablename__ == "vn_school"
+    assert VnSchoolNameHistory.__tablename__ == "vn_school_name_history"
+    assert VnSchoolKvAssignment.__tablename__ == "vn_school_kv_assignment"
 
 
 @pytest.mark.parametrize(
@@ -59,10 +62,28 @@ def test_vn_high_school_model_is_importable() -> None:
             },
         ),
         (
-            "VnHighSchool",
+            "VnSchool",
             {
-                "id", "name", "province", "district", "ward",
-                "kv_code", "is_active", "effective_from", "effective_to",
+                "id", "moet_school_code", "moet_province_code", "moet_district_code",
+                "name", "address", "province", "district", "ward",
+                "level", "is_dtnt", "is_active",
+                "merged_into_id", "merge_effective_date",
+                "created_at", "updated_at",
+            },
+        ),
+        (
+            "VnSchoolNameHistory",
+            {
+                "id", "school_id", "name",
+                "effective_from", "effective_to", "notes", "created_at",
+            },
+        ),
+        (
+            "VnSchoolKvAssignment",
+            {
+                "id", "school_id", "kv_code",
+                "effective_from_year", "effective_to_year",
+                "source", "notes", "created_by", "created_at",
             },
         ),
     ],
@@ -89,11 +110,10 @@ def test_bonus_points_uses_numeric_4_2() -> None:
         assert col.type.scale == 2
 
 
-def test_vn_high_school_is_active_defaults_true() -> None:
-    """Soft-delete flag default — admin "deletes" by flipping to false,
-    FK RESTRICT on admission_profile.high_school_id blocks hard DELETE."""
-    from app.models import VnHighSchool
-    col = VnHighSchool.__table__.columns["is_active"]
+def test_vn_school_is_active_defaults_true() -> None:
+    """phase1_09: VnSchool soft-delete flag is_active (replaces VnHighSchool)."""
+    from app.models import VnSchool
+    col = VnSchool.__table__.columns["is_active"]
     assert col.nullable is False
 
 
@@ -107,6 +127,8 @@ def test_models_are_in_base_metadata() -> None:
         "priority_area_config",
         "priority_object_config",
         "vn_commune_area_map",
-        "vn_high_school",
+        "vn_school",  # phase1_09: replaces vn_high_school
+        "vn_school_name_history",
+        "vn_school_kv_assignment",
     ):
         assert tbl in table_names, f"{tbl} not registered in Base.metadata"

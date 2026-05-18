@@ -201,23 +201,6 @@ describe("admissionProfileUpdateSchema priority fields (Q9 #07)", () => {
     ).toThrow()
   })
 
-  it("rejects KV2_NT (underscore) — only KV2-NT (hyphen) canonical", () => {
-    expect(() =>
-      admissionProfileUpdateSchema.parse({
-        ...baseline,
-        high_school_kv_resolved: "KV2_NT",
-      }),
-    ).toThrow()
-  })
-
-  it("accepts KV2-NT (hyphen canonical form)", () => {
-    const parsed = admissionProfileUpdateSchema.parse({
-      ...baseline,
-      high_school_kv_resolved: "KV2-NT",
-    })
-    expect(parsed.high_school_kv_resolved).toBe("KV2-NT")
-  })
-
   it("rejects invalid area_resolution_basis enum value", () => {
     expect(() =>
       admissionProfileUpdateSchema.parse({
@@ -227,11 +210,76 @@ describe("admissionProfileUpdateSchema priority fields (Q9 #07)", () => {
     ).toThrow()
   })
 
-  it("preprocess empty string high_school_kv_resolved -> null", () => {
+  // ==========================================================================
+  // Q9 #07 PR5 v1.3 phase1_09 — cultural + vocational 2-field parallel
+  // ==========================================================================
+
+  it("accepts cultural_education_level enum values (5 options)", () => {
+    const values = [
+      "completed_thcs", "graduated_thcs",
+      "completed_thpt", "graduated_thpt", "graduated_gdtx",
+    ]
+    for (const v of values) {
+      const parsed = admissionProfileUpdateSchema.parse({
+        ...baseline,
+        cultural_education_level: v,
+      })
+      expect(parsed.cultural_education_level).toBe(v)
+    }
+  })
+
+  it("rejects invalid cultural_education_level value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        cultural_education_level: "tot_nghiep_thpt",  // wrong format
+      }),
+    ).toThrow()
+  })
+
+  it("accepts vocational_qualification enum values (4 options)", () => {
+    const values = ["none", "so_cap", "trung_cap", "cao_dang"]
+    for (const v of values) {
+      const parsed = admissionProfileUpdateSchema.parse({
+        ...baseline,
+        vocational_qualification: v,
+      })
+      expect(parsed.vocational_qualification).toBe(v)
+    }
+  })
+
+  it("rejects invalid vocational_qualification value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        vocational_qualification: "trung_cap_nghe",  // wrong key
+      }),
+    ).toThrow()
+  })
+
+  it("accepts both fields parallel (Tốt nghiệp THPT + TC)", () => {
     const parsed = admissionProfileUpdateSchema.parse({
       ...baseline,
-      high_school_kv_resolved: "",
+      cultural_education_level: "graduated_thpt",
+      vocational_qualification: "trung_cap",
     })
-    expect(parsed.high_school_kv_resolved).toBeNull()
+    expect(parsed.cultural_education_level).toBe("graduated_thpt")
+    expect(parsed.vocational_qualification).toBe("trung_cap")
+  })
+
+  it("dropped fields no longer in schema (high_school_id, kv_resolved, reason)", () => {
+    // Strict schema would reject extras, but admissionProfileUpdateSchema
+    // uses default Zod behavior (strip unknown). Verify by checking parsed
+    // shape doesn't contain dropped fields.
+    const probePayload: Record<string, unknown> = {
+      ...baseline,
+      high_school_id: 42,  // dropped in phase1_09
+      high_school_kv_resolved: "KV1",  // dropped
+      area_resolution_reason: "Legacy reason",  // dropped
+    }
+    const parsed = admissionProfileUpdateSchema.parse(probePayload)
+    expect("high_school_id" in parsed).toBe(false)
+    expect("high_school_kv_resolved" in parsed).toBe(false)
+    expect("area_resolution_reason" in parsed).toBe(false)
   })
 })

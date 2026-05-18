@@ -142,17 +142,27 @@ async def _resolve_area_bonus(
 ) -> tuple[Decimal, dict[str, Any]]:
     """Lookup the KV rate for the profile's resolved area_code.
 
-    Per TT 05/2021 Điều 7+11: KV xác định theo trường THPT (PRIMARY)
-    hoặc hộ khẩu thường trú (special case). PR1 stores the resolved
-    code in ``profile.high_school_kv_resolved``; backfill PR7 fills
-    legacy rows. NULL → 0đ (graceful).
+    v1.3 phase1_09: KV resolved code lives in
+    ``profile.priority_resolution_snapshot.kv_resolved`` (frozen at T1
+    submit + re-frozen at T6 engine, per Q-P3-11 snapshot pattern).
+    Falls back to legacy ``profile.high_school_kv_resolved`` getattr
+    for backward-compat during cutover transition (column DROPPED in
+    phase1_09 so getattr returns None on real ORM, but kept for test
+    SimpleNamespace stubs).
+
+    NULL → 0đ (graceful — candidate chưa fill diploma info).
 
     Returns ``(bonus_points, meta_dict)`` where meta is merged into the
     config_snapshot for audit.
     """
     from app.models.priority_config import PriorityAreaConfig
 
-    area_code = getattr(profile, "high_school_kv_resolved", None)
+    # v1.3: read from snapshot.kv_resolved (canonical post-phase1_09)
+    snapshot = getattr(profile, "priority_resolution_snapshot", None) or {}
+    area_code = snapshot.get("kv_resolved") if isinstance(snapshot, dict) else None
+    # Backward-compat fallback for test stubs + legacy code paths
+    if not area_code:
+        area_code = getattr(profile, "high_school_kv_resolved", None)
     meta: dict[str, Any] = {"area_code": area_code, "area_rate": None}
     if not area_code:
         return _ZERO, meta

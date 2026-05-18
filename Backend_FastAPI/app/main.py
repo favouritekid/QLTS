@@ -803,8 +803,8 @@ fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
 fastapi_app.include_router(admin_v2_path_subject_group.router)  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone
 fastapi_app.include_router(admin_priority_config.router)  # ✅ Q9 #07 PR3: priority KV/UT configs (router declares full prefix)
-fastapi_app.include_router(admin_vn_locality.admin_router)  # ✅ Q9 #07 PR4: admin CSV import for commune + high school
-fastapi_app.include_router(admin_vn_locality.public_router)  # ✅ Q9 #07 PR4: public HS search dropdown for candidate FE
+fastapi_app.include_router(admin_vn_locality.admin_router)  # ✅ Q9 #07 PR4: admin commune CSV import
+# public_router DROPPED phase1_09 — HS search endpoint re-introduced in Phase D as /admin/vn-school/*
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes

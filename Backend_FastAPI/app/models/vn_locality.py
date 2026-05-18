@@ -42,7 +42,7 @@ from datetime import date
 from typing import Optional
 
 import sqlalchemy as sa
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, Integer, String
+from sqlalchemy import CheckConstraint, Date, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -98,57 +98,7 @@ class VnCommuneAreaMap(Base):
         )
 
 
-class VnHighSchool(Base):
-    """High school dictionary with denormalized KV for fast resolution.
-
-    Lookup pattern (PR5 candidate FE primary case, PR2 engine):
-        SELECT kv_code
-        FROM vn_high_school
-        WHERE id = :hs_id
-          AND is_active = true
-          AND effective_from <= CURRENT_DATE
-          AND (effective_to IS NULL OR effective_to > CURRENT_DATE)
-    """
-
-    __tablename__ = "vn_high_school"
-    __table_args__ = (
-        # Mirror of phase1_08b CHECK — kv_code is nullable but if set must match.
-        CheckConstraint(
-            "kv_code IS NULL OR kv_code ~ '^KV[1-9](-NT)?$'",
-            name="ck_vn_high_school_kv_code_format",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    province: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    district: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    ward: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    kv_code: Mapped[Optional[str]] = mapped_column(
-        String(20),
-        nullable=True,
-        comment="Denormalized from vn_commune_area_map for fast lookup",
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default=sa.text("true"),
-        comment=(
-            "Soft-delete flag; FK admission_profile.high_school_id RESTRICT "
-            "prevents hard DELETE while profiles reference row"
-        ),
-    )
-
-    effective_from: Mapped[date] = mapped_column(
-        Date,
-        nullable=False,
-        server_default=sa.text("CURRENT_DATE"),
-    )
-    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-
-    def __repr__(self) -> str:
-        return (
-            f"<VnHighSchool id={self.id} name={self.name!r} "
-            f"kv={self.kv_code} active={self.is_active}>"
-        )
+# VnHighSchool DROPPED in phase1_09 (Q9 #07 PR5 redesign 2026-05-18).
+# Replaced by 3-table family (VnSchool + VnSchoolNameHistory +
+# VnSchoolKvAssignment) in app.models.vn_school per multi-school + SCD
+# design. See Documents/Q9_07_PR5_REDESIGN.md v1.3 cho rationale.
