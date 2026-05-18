@@ -107,14 +107,33 @@ export type PriorityObjectEvidenceEntry = z.infer<
 /**
  * Academic Record Schema
  * Stored in admission_profile.academic_history JSONB array
+ *
+ * Q9 #07 Phase D.1 extensions (2026-05-18):
+ * - school_id: FK to vn_school.id (canonical school for KV resolution)
+ * - level: school level (THCS/THPT/etc.) — auto-derived when school_id set
+ * - grade_to: final grade at this school (engine tiebreak)
+ *
+ * Mirror of Backend `AcademicRecordSchema` in app/schemas/admission.py.
  */
+export const VN_SCHOOL_LEVELS = ["THCS", "THPT", "THCS_THPT", "TRUNG_HOC_NGHE", "OTHER"] as const
+
 export const academicRecordSchema = z
   .object({
+    school_id: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .nullable(),
     school_name: z
       .string()
       .min(1, "Tên trường không được để trống")
       .max(255, "Tên trường không được quá 255 ký tự")
       .trim(),
+    level: z
+      .enum(VN_SCHOOL_LEVELS)
+      .optional()
+      .nullable(),
     year_from: z
       .number()
       .int("Năm bắt đầu phải là số nguyên")
@@ -125,6 +144,13 @@ export const academicRecordSchema = z
       .int("Năm kết thúc phải là số nguyên")
       .min(1900, "Năm kết thúc phải từ 1900 trở lên")
       .max(2100, "Năm kết thúc không được quá 2100"),
+    grade_to: z
+      .number()
+      .int("Lớp cuối phải là số nguyên")
+      .min(1, "Lớp cuối tối thiểu là 1")
+      .max(12, "Lớp cuối tối đa là 12")
+      .optional()
+      .nullable(),
     gpa: z
       .number()
       .min(0, "GPA phải từ 0 trở lên")

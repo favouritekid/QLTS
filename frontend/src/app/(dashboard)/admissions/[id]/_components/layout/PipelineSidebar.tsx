@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { AlertCircle, User, Users, GraduationCap, Calculator, FileText, Wallet, CheckSquare, ChevronDown, ChevronUp } from "lucide-react"
+import { AlertCircle, User, Users, GraduationCap, Award, Calculator, FileText, Wallet, CheckSquare, ChevronDown, ChevronUp } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -29,10 +29,11 @@ const STEPS = [
     { id: 1, label: "Thông tin cá nhân", icon: User },
     { id: 2, label: "Gia đình / Giám hộ", icon: Users },
     { id: 3, label: "Học tập", icon: GraduationCap },
-    { id: 4, label: "Điểm & Điều kiện", icon: Calculator },
-    { id: 5, label: "Tài liệu pháp lý", icon: FileText },
-    { id: 6, label: "Học phí", icon: Wallet },
-    { id: 7, label: "Hoàn tất & Nộp", icon: CheckSquare },
+    { id: 4, label: "Trình độ & Ưu tiên", icon: Award },
+    { id: 5, label: "Điểm & Điều kiện", icon: Calculator },
+    { id: 6, label: "Tài liệu pháp lý", icon: FileText },
+    { id: 7, label: "Học phí", icon: Wallet },
+    { id: 8, label: "Hoàn tất & Nộp", icon: CheckSquare },
 ]
 
 export function PipelineSidebar({ 

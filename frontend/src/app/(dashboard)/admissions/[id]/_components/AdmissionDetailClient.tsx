@@ -64,6 +64,7 @@ import { StatusBanner } from "@/components/ui/StatusBanner"
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
 import { FamilyTab } from "./tabs/FamilyTab"
 import { AcademicHistoryTab } from "./tabs/AcademicHistoryTab"
+import { PriorityTab } from "./tabs/PriorityTab"
 import { ScoresTab } from "./tabs/ScoresTab"
 import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
@@ -479,10 +480,11 @@ export function AdmissionDetailClient({
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}
-          {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
-          {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
-          {currentStep === 6 && <TuitionTab profile={profile} />}
-          {currentStep === 7 && (
+          {currentStep === 4 && <PriorityTab form={form} profile={profile} isEditable={can('edit')} />}
+          {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
+          {currentStep === 6 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
+          {currentStep === 7 && <TuitionTab profile={profile} />}
+          {currentStep === 8 && (
             <FinalizeTab
               profile={profile}
               isEligible={isEligible}

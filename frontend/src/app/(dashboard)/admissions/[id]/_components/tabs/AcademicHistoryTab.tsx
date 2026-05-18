@@ -2,8 +2,12 @@
 
 /**
  * Academic History Tab Component
- * 
- * Dynamic form for managing school records.
+ *
+ * Q9 #07 Phase D.1: dynamic form for managing school records với
+ * VnSchool autocomplete dropdown. Selected school populates school_id +
+ * level + current_kv display. Free-text fallback nếu trường ngoài hệ
+ * thống. Engine `resolve_kv_for_profile()` chỉ resolve KV cho entries
+ * có school_id link.
  */
 
 import { useFieldArray, UseFormReturn } from "react-hook-form"
@@ -13,6 +17,7 @@ import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Trash2, GraduationCap } from "lucide-react"
+import { VnSchoolPicker } from "@/components/admissions/VnSchoolPicker"
 import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
@@ -28,9 +33,12 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
 
   const addRecord = () => {
     append({
+      school_id: null,
       school_name: "",
+      level: null,
       year_from: new Date().getFullYear() - 3,
       year_to: new Date().getFullYear(),
+      grade_to: null,
       gpa: null,
     })
   }
@@ -70,25 +78,53 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                         </div>
                         
                         <div className="grid gap-6 md:grid-cols-2">
-                        <div className="md:col-span-2">
-                            <FormField
-                            control={form.control}
-                            name={`academic_history.${index}.school_name`}
-                            render={({ field }) => (
-                                <FormItem>
-                                <FormLabel className="text-xs">Tên trường</FormLabel>
+                        <div className="md:col-span-2 space-y-2">
+                            <FormItem>
+                                <FormLabel className="text-xs">Tên trường (tìm trong danh mục)</FormLabel>
                                 <FormControl>
-                                    <Input
-                                    {...field}
-                                    placeholder="VD: THPT Nguyễn Huệ"
-                                    disabled={!isEditable}
-                                    className="bg-background"
+                                    <VnSchoolPicker
+                                        value={{
+                                            school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
+                                            school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
+                                            level: form.watch(`academic_history.${index}.level`) ?? null,
+                                            current_kv: null,
+                                        }}
+                                        onChange={(v) => {
+                                            form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
+                                            form.setValue(`academic_history.${index}.school_name`, v.school_name, { shouldDirty: true })
+                                            form.setValue(`academic_history.${index}.level`, v.level as any, { shouldDirty: true })
+                                        }}
+                                        disabled={!isEditable}
                                     />
                                 </FormControl>
-                                <FormMessage />
-                                </FormItem>
+                                <FormMessage>
+                                    {form.formState.errors.academic_history?.[index]?.school_name?.message}
+                                </FormMessage>
+                            </FormItem>
+                            {/* Free-text fallback if no school_id picked */}
+                            {!form.watch(`academic_history.${index}.school_id`) && (
+                                <FormField
+                                    control={form.control}
+                                    name={`academic_history.${index}.school_name`}
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel className="text-xs text-muted-foreground">
+                                                Hoặc nhập tên thủ công (trường ngoài danh mục)
+                                            </FormLabel>
+                                            <FormControl>
+                                                <Input
+                                                    {...field}
+                                                    value={field.value ?? ""}
+                                                    placeholder="VD: THPT Nguyễn Huệ"
+                                                    disabled={!isEditable}
+                                                    className="bg-background"
+                                                />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
                             )}
-                            />
                         </div>
                         
                         <div className="grid grid-cols-2 gap-4">
@@ -137,7 +173,31 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             />
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-3 gap-4">
+                            <FormField
+                                control={form.control}
+                                name={`academic_history.${index}.grade_to`}
+                                render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel className="text-xs">Lớp cuối</FormLabel>
+                                    <FormControl>
+                                    <Input
+                                        {...field}
+                                        type="number"
+                                        min={1}
+                                        max={12}
+                                        placeholder="VD: 12"
+                                        disabled={!isEditable}
+                                        value={field.value ?? ""}
+                                        className="bg-background"
+                                        onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : null)}
+                                    />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                                )}
+                            />
+
                              <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.gpa`}
@@ -162,7 +222,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 </FormItem>
                                 )}
                             />
-                            
+
                             <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.graduation_type`}
