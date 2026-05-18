@@ -57,8 +57,7 @@ const KV_BADGE: Record<string, { color: string; label: string }> = {
 }
 
 const PATHWAY_LABEL_VI: Record<string, string> = {
-  thpt_multi_school: "Theo lịch sử học các trường THPT",
-  tc_multi_school: "Theo lịch sử học các trường Trung cấp",
+  thpt_multi_school: "Theo lịch sử học các trường THPT (3 năm cấp 3)",
   commune_fallback: "Theo hộ khẩu thường trú",
   commune_special: "Theo hộ khẩu (trường hợp đặc biệt)",
   manual: "Cán bộ ấn định thủ công",

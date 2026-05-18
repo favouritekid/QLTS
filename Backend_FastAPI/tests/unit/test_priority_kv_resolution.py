@@ -44,10 +44,12 @@ from app.services.priority_service import (
         # Row 3: completed_thpt + (so_cap | none) → COMMUNE_FALLBACK
         ("completed_thpt", "so_cap", None, "COMMUNE_FALLBACK"),
         ("completed_thpt", "none", None, "COMMUNE_FALLBACK"),
-        # Row 4: graduated_thcs + (trung_cap | cao_dang) → TC
-        ("graduated_thcs", "trung_cap", None, "TC"),
-        ("graduated_thcs", "cao_dang", None, "TC"),
-        # Row 5: graduated_thcs + (so_cap | none) → COMMUNE_FALLBACK
+        # Rows 4+5 merged (per nghiệp vụ user 2026-05-18): graduated_thcs →
+        # COMMUNE_FALLBACK regardless of vocational. Original v1.3 design had
+        # Row 4 → TC basis cho liên thông TC pathway, NHƯNG user clarified:
+        # TN THCS bất kể có TC nghề → KV theo hộ khẩu (case 1 generic).
+        ("graduated_thcs", "trung_cap", None, "COMMUNE_FALLBACK"),
+        ("graduated_thcs", "cao_dang", None, "COMMUNE_FALLBACK"),
         ("graduated_thcs", "so_cap", None, "COMMUNE_FALLBACK"),
         ("graduated_thcs", "none", None, "COMMUNE_FALLBACK"),
         # Row 6: completed_thcs + any → COMMUNE_FALLBACK
@@ -308,55 +310,32 @@ async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
 
 
 @pytest.mark.asyncio
-async def test_resolve_kv_tc_accepts_trung_hoc_nghe():
-    """Row 4 fix: graduated_thcs + trung_cap + level='TRUNG_HOC_NGHE' (canonical
-    vn_school enum value) → KV resolve.
+async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
+    """Nghiệp vụ user 2026-05-18: TN THCS bất kể có bằng TC → KV theo hộ khẩu.
 
-    Bug (Q9 #07 Phase D.4 audit): basis 'TC' filter previously expected
-    level=='TC' which never matches Phase D.1 schema enum
-    {THCS, THPT, THCS_THPT, TRUNG_HOC_NGHE, OTHER}. Fix accepts both
-    'TRUNG_HOC_NGHE' (canonical) and 'TC' (legacy text fallback).
+    Original v1.3 design Row 4 (TC basis cho liên thông TC pathway) overridden
+    by trường nghiệp vụ. Engine should fallback to commune_lookup even when
+    candidate khai TC school history.
     """
     profile = _mock_profile(
         cultural_education_level="graduated_thcs",
         vocational_qualification="trung_cap",
+        permanent_commune_code="40_03139",
         academic_history=[
             {
                 "school_id": 200,
-                "level": "TRUNG_HOC_NGHE",  # ← canonical vn_school enum
+                "level": "TRUNG_HOC_NGHE",  # candidate khai TC nhưng engine ignore
                 "year_from": 2022,
                 "year_to": 2024,
                 "grade_to": 12,
             },
         ],
     )
-    db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
+    db = _mock_db(commune_kv="KV1")
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV1"
-    assert meta["pathway"] == "tc_multi_school"
-    assert meta["breakdown"]["target_level"] == "TC"
-
-
-@pytest.mark.asyncio
-async def test_resolve_kv_tc_accepts_legacy_tc_text():
-    """Backward compat: legacy academic_history with level='TC' text still works."""
-    profile = _mock_profile(
-        cultural_education_level="graduated_thcs",
-        vocational_qualification="cao_dang",
-        academic_history=[
-            {
-                "school_id": 200,
-                "level": "TC",  # ← legacy
-                "year_from": 2022,
-                "year_to": 2024,
-                "grade_to": 12,
-            },
-        ],
-    )
-    db = _mock_db(school_kv_sequence=["KV2-NT", "KV2-NT", "KV2-NT"])
-    kv, meta = await resolve_kv_for_profile(profile, db)
-    assert kv == "KV2-NT"
-    assert meta["pathway"] == "tc_multi_school"
+    assert meta["pathway"] == "commune_fallback"
+    assert meta["rule_applied"] == "commune_lookup"
 
 
 # =============================================================================

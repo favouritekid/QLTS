@@ -291,8 +291,8 @@ def _derive_kv_basis_level(
 
     Returns one of:
       'THPT'              — apply 3-year THPT multi-school rule (rows 1, 2)
-      'TC'                — apply TC time multi-school rule (rows 2-fallthrough, 4)
-      'COMMUNE_FALLBACK'  — THCS only / so_cap / completed_thpt+none (rows 3, 5, 6)
+      'COMMUNE_FALLBACK'  — TN THCS bất kể vocational / so_cap / completed_thpt+none
+                            (rows 3, 4+5 merged, 6) — per nghiệp vụ trường 2026-05-18
       'COMMUNE_SPECIAL'   — 4 special cases bypass (row 8)
       'MANUAL'            — admin override (row 9)
       'NOT_RESOLVED'      — cultural chưa khai (row 7, draft)
@@ -317,11 +317,15 @@ def _derive_kv_basis_level(
             return "COMMUNE_FALLBACK"
         return "THPT"  # Rows 1 + 2
 
-    # Rows 4, 5: graduated_thcs + vocational branching
+    # Rows 4, 5: graduated_thcs → COMMUNE_FALLBACK regardless of vocational.
+    #
+    # Nghiệp vụ trường (user confirmed 2026-05-18): TN THCS bất kể đã có TC nghề
+    # hay chưa → KV theo nơi thường trú (hộ khẩu), KHÔNG theo trường TC nghề.
+    # Lý do: TT 05/2021 verbatim Mục 1 "tốt nghiệp trung học" — TN THCS chưa
+    # đủ "lịch sử trung học phổ thông" để tính KV theo trường. Override
+    # v1.3 design doc Row 4 (TC basis) — engine TC pathway = DEAD code path.
     if cultural == "graduated_thcs":
-        if vocational in ("trung_cap", "cao_dang"):
-            return "TC"  # Row 4
-        return "COMMUNE_FALLBACK"  # Row 5
+        return "COMMUNE_FALLBACK"  # Rows 4 + 5 merged
 
     # Row 6: completed_thcs (any vocational) → fallback
     if cultural == "completed_thcs":
@@ -465,19 +469,15 @@ async def resolve_kv_for_profile(
             "reason": "fallback_no_commune",
         }
 
-    # --- Rows 1, 2, 4: multi-school rule (THPT or TC) ---
-    # Level matching: basis "THPT" matches both standalone THPT + liên cấp
-    # THCS_THPT (candidate học liên cấp 2-3 + tốt nghiệp THPT). Basis "TC"
-    # matches canonical "TRUNG_HOC_NGHE" (vn_school enum) + legacy "TC"
-    # text. Memory note: vn_school.level enum = THCS/THPT/THCS_THPT/
-    # TRUNG_HOC_NGHE/OTHER per phase1_09 schema; AcademicRecordSchema
-    # validates same set per Phase D.1 (Q9 #07).
-    if basis == "THPT":
-        accepted_levels = {"THPT", "THCS_THPT"}
-    elif basis == "TC":
-        accepted_levels = {"TRUNG_HOC_NGHE", "TC"}
-    else:  # defensive (shouldn't reach here)
-        accepted_levels = {basis}
+    # --- Rows 1, 2: THPT multi-school rule (per TT 05/2021 Mục 1+2+3) ---
+    # basis="THPT" matches standalone THPT + liên cấp THCS_THPT (candidate
+    # học liên cấp 2-3 + tốt nghiệp THPT). Memory note: vn_school.level enum
+    # = THCS/THPT/THCS_THPT/TRUNG_HOC_NGHE/OTHER per phase1_09; mirror trong
+    # AcademicRecordSchema Phase D.1 (Q9 #07).
+    #
+    # NOTE: Row 4 (graduated_thcs + TC) folded into COMMUNE_FALLBACK per
+    # nghiệp vụ trường 2026-05-18. TC basis code removed (was dead path).
+    accepted_levels = {"THPT", "THCS_THPT"}
 
     history = getattr(profile, "academic_history", None) or []
     basis_entries = [
@@ -487,7 +487,7 @@ async def resolve_kv_for_profile(
         and e.get("school_id")
     ]
 
-    pathway = "thpt_multi_school" if basis == "THPT" else "tc_multi_school"
+    pathway = "thpt_multi_school"
 
     if not basis_entries:
         return None, {
