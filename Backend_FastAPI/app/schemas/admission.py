@@ -2036,6 +2036,49 @@ class AdmissionAdminRollbackResponse(BaseModel):
     already_at_target: bool = False  # W9-J.7.idem 2026-05-16: True when no-op (profile already draft)
 
 
+# =============================================================================
+# Q9 #07 Phase D — Live KV preview (draft state, no snapshot save)
+# =============================================================================
+
+
+class PreviewPriorityKvRequest(BaseModel):
+    """Optional form overrides for live KV preview. NULL fields fall back to profile current state.
+
+    Used by candidate FE PriorityTab + AcademicHistoryTab to compute KV
+    real-time as user edits form, BEFORE submit (T1) freezes snapshot.
+
+    All fields optional — endpoint can be called with empty body to
+    resolve KV from profile state-as-is.
+    """
+
+    cultural_education_level: Optional[str] = Field(None)
+    vocational_qualification: Optional[str] = Field(None)
+    area_resolution_basis: Optional[str] = Field(None)
+    permanent_commune_code: Optional[str] = Field(None, max_length=20)
+    academic_history: Optional[List[AcademicRecordSchema]] = Field(None)
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+
+class PreviewPriorityKvResponse(BaseModel):
+    """Engine resolve_kv_for_profile() result for FE preview.
+
+    Mirror of internal engine return tuple `(kv, meta)`. KV is None when
+    engine cannot resolve (e.g., missing cultural level, no qualifying
+    entries, manual override pending). `requires_manual_override=True`
+    signals officer/admin must intervene.
+    """
+
+    kv_resolved: Optional[str] = Field(None, description="KV1 | KV2-NT | KV2 | KV3, or None")
+    pathway: Optional[str] = Field(None, description="thpt_multi_school | tc_multi_school | commune_fallback | commune_special | manual | not_resolved")
+    rule_applied: Optional[str] = Field(None, description="longest_duration | tiebreak_graduation_school | ambiguous_requires_manual | commune_lookup | manual_override")
+    requires_manual_override: bool = Field(False)
+    reason: Optional[str] = Field(None, description="Why KV not resolved (e.g., cultural_not_set, no_qualifying_entries)")
+    breakdown: Optional[dict] = Field(None, description="Detailed per-year-per-school breakdown for audit")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -2082,4 +2125,7 @@ __all__ = [
     "AdmissionWaitlistRejectResponse",
     "AdmissionAdminRollbackRequest",
     "AdmissionAdminRollbackResponse",
+    # Q9 #07 Phase D — Live KV preview
+    "PreviewPriorityKvRequest",
+    "PreviewPriorityKvResponse",
 ]

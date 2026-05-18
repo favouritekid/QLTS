@@ -1,17 +1,19 @@
 /**
- * PriorityTab — Vitest unit tests (Q9 #07 Phase D.3)
+ * PriorityTab — Vitest unit tests (Q9 #07 Phase D.2+D.4 redesign)
  *
- * Verifies:
- * - Renders 3 sections (cultural/vocational + basis + snapshot)
- * - Preview matrix derives basis correctly (THPT/TC/COMMUNE_FALLBACK/etc.)
- * - area_resolution_basis switch reveals commune_code input
- * - Manual override basis shows warning callout
- * - Snapshot card renders when profile has priority_resolution_snapshot
+ * Tests the live-preview UX with BE auto-resolve.
+ * - Intro card with KV rates
+ * - Snapshot card: "tạm tính" vs "đã chốt" header
+ * - KV badge color-coded by KV1/KV2/KV2-NT/KV3
+ * - Switch toggle for special case (replaces old "Cách tính KV" dropdown)
+ * - commune_code input conditional on switch ON
+ *
+ * Mocks usePreviewPriorityKv hook to avoid network.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest"
 import { useForm } from "react-hook-form"
 import { Form } from "@/components/ui/form"
-import { render, screen, fireEvent } from "@/test/utils/test-utils"
+import { render, screen } from "@/test/utils/test-utils"
 import { PriorityTab } from "./PriorityTab"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
@@ -21,6 +23,12 @@ beforeAll(() => {
     Element.prototype.hasPointerCapture = vi.fn(() => false)
   }
 })
+
+// Mock live preview hook — control returned data per test
+const mockPreview = vi.fn()
+vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
+  usePreviewPriorityKv: (...args: unknown[]) => mockPreview(...args),
+}))
 
 function buildProfile(overrides?: Partial<AdmissionProfileResponse>) {
   return {
@@ -53,6 +61,7 @@ function HarnessWrapper({
       vocational_qualification: defaults?.vocational_qualification ?? "none",
       area_resolution_basis: defaults?.area_resolution_basis ?? null,
       permanent_commune_code: defaults?.permanent_commune_code ?? null,
+      academic_history: defaults?.academic_history ?? null,
     } as any,
   })
   return (
@@ -63,104 +72,115 @@ function HarnessWrapper({
 }
 
 describe("PriorityTab", () => {
-  it("renders intro card + snapshot card + 2 input sections", () => {
-    render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Về phần này/i)).toBeInTheDocument()
-    expect(screen.getByText(/Khu vực ưu tiên đã xác định/i)).toBeInTheDocument()
-    expect(screen.getAllByText(/Trình độ học vấn/i).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Cách tính khu vực ưu tiên/i).length).toBeGreaterThan(0)
+  beforeAll(() => {
+    mockPreview.mockReset?.()
   })
 
-  it("intro card explains KV rates (KV1 0.75đ, KV2-NT 0.50đ, KV2 0.25đ, KV3 không cộng)", () => {
+  it("renders intro card + KV rates table", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
+    expect(screen.getByText(/Về phần này/i)).toBeInTheDocument()
     expect(screen.getByText(/0,75đ/)).toBeInTheDocument()
     expect(screen.getByText(/0,50đ/)).toBeInTheDocument()
     expect(screen.getByText(/0,25đ/)).toBeInTheDocument()
-    expect(screen.getByText(/không cộng điểm/i)).toBeInTheDocument()
+    expect(screen.getByText(/không cộng/i)).toBeInTheDocument()
   })
 
-  it("snapshot empty state when profile has no resolved KV", () => {
+  it("snapshot card shows 'tạm tính' header in draft state", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Chưa được tính/i)).toBeInTheDocument()
-    expect(
-      screen.getByText(/KV sẽ tự động xác định khi hồ sơ được nộp/i)
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Khu vực ưu tiên \(tạm tính\)/i)).toBeInTheDocument()
   })
 
-  it("preview shows 'Chưa đủ thông tin' when cultural not set", () => {
-    render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Chưa đủ thông tin/i)).toBeInTheDocument()
+  it("snapshot card shows 'đã chốt' header when frozen + non-draft status", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
+    const profile = buildProfile({
+      status: "submitted" as any,
+      // @ts-expect-error JSONB dynamic
+      priority_resolution_snapshot: {
+        kv_resolved: "KV2",
+        pathway: "thpt_multi_school",
+        rule_applied: "longest_duration",
+      },
+    })
+    render(<HarnessWrapper profile={profile} />)
+    expect(screen.getByText(/Khu vực ưu tiên \(đã chốt\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/KV2 \(\+0,25đ\)/)).toBeInTheDocument()
   })
 
-  it("preview shows 'Theo trường THPT/GDTX' when cultural=graduated_thpt", () => {
+  it("live preview KV1 badge shows when preview returns KV1", () => {
+    mockPreview.mockReturnValue({
+      data: {
+        kv_resolved: "KV1",
+        pathway: "thpt_multi_school",
+        rule_applied: "longest_duration",
+        requires_manual_override: false,
+        reason: null,
+        breakdown: { kv_totals: { KV1: 3 }, winner_years: 3 },
+      },
+      isLoading: false,
+    })
     render(
       <HarnessWrapper
         profile={buildProfile()}
         defaults={{ cultural_education_level: "graduated_thpt" }}
       />
     )
-    expect(screen.getByText(/Theo trường THPT\/GDTX đã học/i)).toBeInTheDocument()
+    expect(screen.getByText(/KV1 \(\+0,75đ\)/)).toBeInTheDocument()
+    expect(screen.getByText(/sẽ chốt khi nộp hồ sơ/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Theo lịch sử học các trường THPT/i)
+    ).toBeInTheDocument()
   })
 
-  it("preview shows 'Theo trường Trung cấp' khi graduated_thcs + trung_cap (liên thông)", () => {
+  it("live preview loading state shows spinner text", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: true })
     render(
       <HarnessWrapper
         profile={buildProfile()}
-        defaults={{
-          cultural_education_level: "graduated_thcs",
-          vocational_qualification: "trung_cap",
-        }}
+        defaults={{ cultural_education_level: "graduated_thpt" }}
       />
     )
-    expect(screen.getByText(/Theo trường Trung cấp đã học/i)).toBeInTheDocument()
+    expect(screen.getByText(/Đang tính/i)).toBeInTheDocument()
   })
 
-  it("preview shows 'Theo hộ khẩu' khi graduated_thcs + none (COMMUNE_FALLBACK)", () => {
+  it("'Chưa đủ thông tin' message when cultural not set", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
+    render(<HarnessWrapper profile={buildProfile()} />)
+    expect(screen.getByText(/Chưa đủ thông tin để tính KV/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Vui lòng khai trình độ văn hóa/i)
+    ).toBeInTheDocument()
+  })
+
+  it("preview returns null KV with manual override flag → shows 'Cần cán bộ xem xét'", () => {
+    mockPreview.mockReturnValue({
+      data: {
+        kv_resolved: null,
+        pathway: null,
+        rule_applied: "ambiguous_requires_manual",
+        requires_manual_override: true,
+        reason: "tied_graduation_year_and_grade",
+        breakdown: null,
+      },
+      isLoading: false,
+    })
     render(
       <HarnessWrapper
         profile={buildProfile()}
-        defaults={{
-          cultural_education_level: "graduated_thcs",
-          vocational_qualification: "none",
-        }}
+        defaults={{ cultural_education_level: "graduated_thpt" }}
       />
     )
     expect(
-      screen.getAllByText(/Theo hộ khẩu thường trú/i).length
-    ).toBeGreaterThan(0)
-  })
-
-  it("preview shows 'Theo hộ khẩu (đặc biệt)' khi basis=permanent_address_special", () => {
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{
-          cultural_education_level: "graduated_thpt",
-          area_resolution_basis: "permanent_address_special",
-        }}
-      />
-    )
+      screen.getByText(/Cần cán bộ xem xét\/ấn định thủ công/i)
+    ).toBeInTheDocument()
     expect(
-      screen.getAllByText(/Theo hộ khẩu \(trường hợp đặc biệt\)/i).length
-    ).toBeGreaterThan(0)
+      screen.getByText(/Có 2 trường ngang nhau/i)
+    ).toBeInTheDocument()
   })
 
-  it("preview shows 'Cán bộ ấn định thủ công' khi basis=manual_override", () => {
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{
-          cultural_education_level: "graduated_thpt",
-          area_resolution_basis: "manual_override",
-        }}
-      />
-    )
-    expect(
-      screen.getAllByText(/Cán bộ ấn định thủ công/i).length
-    ).toBeGreaterThan(0)
-  })
-
-  it("commune_code input shown khi basis=permanent_address_special", () => {
+  it("special case toggle (switch) renders + reveals commune_code input when ON", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(
       <HarnessWrapper
         profile={buildProfile()}
@@ -168,55 +188,47 @@ describe("PriorityTab", () => {
       />
     )
     expect(
-      screen.getByText(/Mã xã\/phường hộ khẩu thường trú/i)
+      screen.getByText(/Thí sinh thuộc 1 trong 4 nhóm đặc biệt/i)
     ).toBeInTheDocument()
-    expect(screen.getByPlaceholderText(/01_00025.*Phường Giảng Võ/i)).toBeInTheDocument()
+    expect(
+      screen.getByLabelText(/Mã xã\/phường hộ khẩu thường trú/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText(/01_00025.*Phường Giảng Võ/i)
+    ).toBeInTheDocument()
   })
 
-  it("commune_code input hidden khi basis=high_school (default)", () => {
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ area_resolution_basis: "high_school" }}
-      />
-    )
+  it("special case toggle OFF hides commune_code input", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
+    render(<HarnessWrapper profile={buildProfile()} />)
     expect(
-      screen.queryByText(/Mã xã\/phường hộ khẩu thường trú/i)
+      screen.queryByLabelText(/Mã xã\/phường hộ khẩu thường trú/i)
     ).not.toBeInTheDocument()
   })
 
-  it("manual_override basis shows warning callout 'chế độ thủ công'", () => {
+  it("does NOT render old 'Cách tính KV' dropdown (replaced by switch)", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
+    render(<HarnessWrapper profile={buildProfile()} />)
+    // Old dropdown labels — should NOT exist
+    expect(
+      screen.queryByText(/Bình thường \(mặc định\)/i)
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Override thủ công \(cần officer phê duyệt\)/i)
+    ).not.toBeInTheDocument()
+  })
+
+  it("manual_override basis shows admin warning callout", () => {
+    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(
       <HarnessWrapper
         profile={buildProfile()}
         defaults={{ area_resolution_basis: "manual_override" }}
       />
     )
-    expect(screen.getByText(/chế độ thủ công/i)).toBeInTheDocument()
+    expect(screen.getByText(/Manual Override/i)).toBeInTheDocument()
     expect(
       screen.getByText(/Lý do thay đổi/i)
-    ).toBeInTheDocument()
-  })
-
-  it("renders KV badge + Vietnamese pathway label when snapshot has data", () => {
-    const profile = buildProfile({
-      // @ts-expect-error — snapshot is dynamic JSONB, not in static type yet
-      priority_resolution_snapshot: {
-        kv_resolved: "KV2",
-        rule_applied: "tiebreak_graduation_school",
-        pathway: "thpt_multi_school",
-        breakdown: { winner_years: 3, graduation_school_id: 162 },
-      },
-    })
-    render(<HarnessWrapper profile={profile} />)
-    // KV badge với rate label
-    expect(screen.getByText(/KV2 \(\+0,25đ\)/)).toBeInTheDocument()
-    // Vietnamese pathway label (not raw code)
-    expect(
-      screen.getByText(/Theo lịch sử học các trường THPT/i)
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/Trường tốt nghiệp \(khi thời gian học bằng nhau\)/i)
     ).toBeInTheDocument()
   })
 })

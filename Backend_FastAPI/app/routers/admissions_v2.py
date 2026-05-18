@@ -628,3 +628,78 @@ async def replace_choice_scores(
     )
 
     return schemas.AdmissionProfileChoiceResponse.model_validate(full_choice)
+
+
+
+# =============================================================================
+# Q9 #07 Phase D — Live KV preview (draft state, no snapshot save)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/preview-priority-kv",
+    response_model=schemas.PreviewPriorityKvResponse,
+    summary="Live KV preview — resolve khu vực ưu tiên without saving snapshot",
+)
+async def preview_priority_kv(
+    profile_id: int,
+    payload: schemas.PreviewPriorityKvRequest = Body(default_factory=lambda: schemas.PreviewPriorityKvRequest()),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+):
+    """Real-time KV resolution cho FE draft state (Q9 #07 Phase D.4).
+
+    Gọi sau debounce khi candidate/officer edit form. Engine resolve_kv_for_profile()
+    chạy với profile state hiện tại + payload overrides → trả về kv_resolved
+    + breakdown WITHOUT lưu snapshot.
+
+    Snapshot chính thức vẫn frozen ở T1 submit + T6 publish per Phase C wiring.
+
+    Payload override behavior (all fields optional):
+    - NULL field → fall back profile DB value
+    - Non-NULL field → temporary override cho preview (không persist)
+
+    Security:
+    - IDOR: get_admission_for_user (3-tier scope: admin all + manager unit + officer assigned)
+    - Casbin: standard read scope (any authenticated user with profile access)
+    """
+    from copy import copy
+    from app.services.priority_service import resolve_kv_for_profile
+
+    # Build transient profile-like object: profile DB state + form overrides.
+    # Shallow copy + override avoids SQLAlchemy session mutation persisting.
+    preview_profile = copy(profile)
+    if payload.cultural_education_level is not None:
+        preview_profile.cultural_education_level = payload.cultural_education_level
+    if payload.vocational_qualification is not None:
+        preview_profile.vocational_qualification = payload.vocational_qualification
+    if payload.area_resolution_basis is not None:
+        preview_profile.area_resolution_basis = (
+            None if payload.area_resolution_basis == "" else payload.area_resolution_basis
+        )
+    if payload.permanent_commune_code is not None:
+        preview_profile.permanent_commune_code = (
+            None if payload.permanent_commune_code == "" else payload.permanent_commune_code
+        )
+    if payload.academic_history is not None:
+        preview_profile.academic_history = [
+            r.model_dump(exclude_none=False) for r in payload.academic_history
+        ]
+
+    kv, meta = await resolve_kv_for_profile(preview_profile, db)
+
+    log.info(
+        "admissions_v2.preview_priority_kv",
+        profile_id=profile_id,
+        kv_resolved=kv,
+        pathway=meta.get("pathway"),
+    )
+
+    return schemas.PreviewPriorityKvResponse(
+        kv_resolved=kv,
+        pathway=meta.get("pathway"),
+        rule_applied=meta.get("rule_applied"),
+        requires_manual_override=meta.get("requires_manual_override", False),
+        reason=meta.get("reason"),
+        breakdown=meta.get("breakdown"),
+    )

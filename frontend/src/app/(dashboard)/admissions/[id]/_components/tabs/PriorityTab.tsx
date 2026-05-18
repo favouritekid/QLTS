@@ -1,28 +1,31 @@
 "use client"
 
 /**
- * Priority Tab (Q9 #07 Phase D.2 + UX polish)
+ * Priority Tab (Q9 #07 Phase D.2 + UX polish + D.4 live preview)
  *
  * Xác định Khu vực ưu tiên (KV) tuyển sinh per TT 05/2021/TT-BLĐTBXH
  * Phụ lục 01 + Luật GDNN 2014/2025.
  *
- * Layout (officer-focused):
- *   1. Intro card — mục đích + KV rates + 4 trường hợp đặc biệt
- *   2. Snapshot card — KV đã xác định (BE authoritative, prominent)
- *   3. Trình độ học vấn — 2 dropdowns cultural + vocational
- *   4. Cơ sở xác định — area_resolution_basis + commune_code khi cần
+ * Smart auto-resolve:
+ * - Live preview via POST /api/v2/admissions/{id}/preview-priority-kv
+ * - Debounced 500ms khi cultural/vocational/history thay đổi
+ * - Hiển thị "Tạm tính: KV1 (+0,75đ)" trước T1 submit
+ * - "Đã chốt: KV1" khi profile.priority_resolution_snapshot exists
  *
- * BE source of truth (frontend CLAUDE.md thin-client):
- * - FE preview matrix is informational only
- * - profile.priority_resolution_snapshot is authoritative (frozen T1/T6)
+ * Layout:
+ *   1. Intro card — mục đích + KV rates + 4 trường hợp đặc biệt
+ *   2. Snapshot card — KV live preview hoặc frozen result (BE authoritative)
+ *   3. Trình độ học vấn — 2 dropdowns cultural + vocational
+ *   4. Trường hợp đặc biệt toggle (replaces dropdown — auto-detect basis)
  */
 import { UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Award, ShieldCheck, AlertCircle, Info, Lightbulb } from "lucide-react"
+import { Award, ShieldCheck, AlertCircle, Info, Lightbulb, Loader2, Lock, CheckCircle2 } from "lucide-react"
+import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface PriorityTabProps {
@@ -46,29 +49,11 @@ const VOCATIONAL_OPTIONS = [
   { value: "cao_dang", label: "Cao đẳng" },
 ]
 
-const AREA_BASIS_OPTIONS = [
-  {
-    value: "high_school",
-    label: "Bình thường — tự động tính theo trường đã học",
-    description: "Phù hợp với đa số thí sinh. Hệ thống lấy KV từ lịch sử các trường THPT/THCS đã ghi ở tab Học tập.",
-  },
-  {
-    value: "permanent_address_special",
-    label: "Đặc biệt — học PT DTNT / lớp dự bị / quân nhân / xuất ngũ",
-    description: "Dành cho 4 nhóm: học sinh PT Dân tộc Nội trú, lớp dự bị đại học, đang là quân nhân, hoặc bộ đội xuất ngũ. KV tính theo xã/phường hộ khẩu thường trú.",
-  },
-  {
-    value: "manual_override",
-    label: "Cán bộ ấn định khu vực khác (cần lý do)",
-    description: "Trường hợp ngoại lệ — cán bộ tuyển sinh chỉ định KV thủ công với lý do bắt buộc. Áp dụng khi tình huống không khớp 2 nhóm trên.",
-  },
-] as const
-
-const KV_TONE_VI: Record<string, { color: string; label: string }> = {
-  KV1: { color: "bg-emerald-100 text-emerald-800 border-emerald-200", label: "KV1 (+0,75đ)" },
-  "KV2-NT": { color: "bg-blue-100 text-blue-800 border-blue-200", label: "KV2-NT (+0,50đ)" },
-  KV2: { color: "bg-amber-100 text-amber-800 border-amber-200", label: "KV2 (+0,25đ)" },
-  KV3: { color: "bg-gray-100 text-gray-800 border-gray-200", label: "KV3 (không cộng điểm)" },
+const KV_BADGE: Record<string, { color: string; label: string }> = {
+  KV1: { color: "bg-emerald-100 text-emerald-800 border-emerald-300", label: "KV1 (+0,75đ)" },
+  "KV2-NT": { color: "bg-blue-100 text-blue-800 border-blue-300", label: "KV2-NT (+0,50đ)" },
+  KV2: { color: "bg-amber-100 text-amber-800 border-amber-300", label: "KV2 (+0,25đ)" },
+  KV3: { color: "bg-gray-100 text-gray-800 border-gray-300", label: "KV3 (không cộng)" },
 }
 
 const PATHWAY_LABEL_VI: Record<string, string> = {
@@ -83,84 +68,60 @@ const PATHWAY_LABEL_VI: Record<string, string> = {
 const RULE_LABEL_VI: Record<string, string> = {
   longest_duration: "Trường học lâu nhất",
   tiebreak_graduation_school: "Trường tốt nghiệp (khi thời gian học bằng nhau)",
-  ambiguous_requires_manual: "Cần cán bộ xem xét — có 2 lựa chọn ngang nhau",
+  ambiguous_requires_manual: "Cần cán bộ xem xét (2 lựa chọn ngang nhau)",
   commune_lookup: "Tra cứu theo mã xã/phường hộ khẩu",
   manual_override: "Cán bộ ấn định thủ công",
 }
 
-/**
- * FE preview cách tính KV (giải thích cho user, không phải BE authoritative).
- * Mirror logic `_derive_kv_basis_level()` trong app/services/priority_service.py.
- */
-function previewBasis(
-  cultural: string | null | undefined,
-  vocational: string | null | undefined,
-  areaBasis: string | null | undefined,
-): { label: string; tone: "info" | "warn"; description: string } | null {
-  if (areaBasis === "permanent_address_special") {
-    return {
-      label: "Theo hộ khẩu (trường hợp đặc biệt)",
-      tone: "info",
-      description: "Hệ thống sẽ tra mã xã/phường hộ khẩu để xác định KV.",
-    }
-  }
-  if (areaBasis === "manual_override") {
-    return {
-      label: "Cán bộ ấn định thủ công",
-      tone: "warn",
-      description: "Cán bộ tuyển sinh sẽ chỉ định KV với lý do bắt buộc khai báo.",
-    }
-  }
-  if (!cultural) {
-    return {
-      label: "Chưa đủ thông tin",
-      tone: "warn",
-      description: "Vui lòng chọn trình độ văn hóa để tiếp tục.",
-    }
-  }
+const REASON_VI: Record<string, string> = {
+  cultural_not_set: "Chưa khai trình độ văn hóa",
+  no_qualifying_entries: "Lịch sử học chưa đủ trường phù hợp với trình độ",
+  tied_graduation_year_and_grade: "Có 2 trường ngang nhau về thời gian + lớp tốt nghiệp — cần cán bộ xem xét",
+}
 
-  const grad_thpt = ["graduated_thpt", "graduated_gdtx"].includes(cultural)
-  const completed_thpt = cultural === "completed_thpt"
-  const grad_thcs = cultural === "graduated_thcs"
-  const completed_thcs = cultural === "completed_thcs"
-  const has_higher_voc = ["trung_cap", "cao_dang"].includes(vocational ?? "none")
-
-  if (grad_thpt) return {
-    label: "Theo trường THPT/GDTX đã học",
-    tone: "info",
-    description: "KV tự động tính từ các trường THPT/GDTX ghi ở tab Học tập. Thông tư 05/2021 áp dụng quy tắc trường học lâu nhất + ưu tiên trường tốt nghiệp khi thời gian học bằng nhau.",
-  }
-  if (completed_thpt && has_higher_voc) return {
-    label: "Theo trường THPT đã học (liên thông từ TC/CĐ)",
-    tone: "info",
-    description: "Chưa tốt nghiệp THPT nhưng đã có bằng Trung cấp/Cao đẳng → áp dụng đường liên thông, KV vẫn tính theo lịch sử THPT.",
-  }
-  if (grad_thcs && has_higher_voc) return {
-    label: "Theo trường Trung cấp đã học",
-    tone: "info",
-    description: "Đã tốt nghiệp THCS + có bằng Trung cấp/Cao đẳng → KV tính từ trường Trung cấp đã học ghi ở tab Học tập.",
-  }
-  if (completed_thpt || grad_thcs || completed_thcs) return {
-    label: "Theo hộ khẩu thường trú",
-    tone: "info",
-    description: "Trình độ chưa đủ để dùng lịch sử trường học → hệ thống lấy KV theo xã/phường hộ khẩu thường trú (cần khai mã xã ở tab Thông tin cá nhân).",
-  }
-  return null
+function localizeReason(reason: string | null | undefined): string | null {
+  if (!reason) return null
+  return REASON_VI[reason] ?? reason
 }
 
 export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const cultural = form.watch("cultural_education_level")
   const vocational = form.watch("vocational_qualification")
   const areaBasis = form.watch("area_resolution_basis")
-  const preview = previewBasis(cultural, vocational, areaBasis)
+  const communeCode = form.watch("permanent_commune_code")
+  const academicHistory = form.watch("academic_history")
 
-  // BE-computed snapshot (authoritative — frozen T1/T6)
-  const snapshot = (profile as any).priority_resolution_snapshot as
+  // Live preview hook — debounced 500ms
+  const { data: preview, isLoading: previewLoading } = usePreviewPriorityKv(
+    profile.id,
+    {
+      cultural_education_level: cultural ?? null,
+      vocational_qualification: vocational ?? null,
+      area_resolution_basis: areaBasis ?? null,
+      permanent_commune_code: communeCode ?? null,
+      academic_history: (academicHistory as any) ?? null,
+    },
+    !!cultural, // only fire when cultural set
+  )
+
+  // BE-frozen snapshot (post T1 submit)
+  const frozenSnapshot = (profile as any).priority_resolution_snapshot as
     | { kv_resolved?: string; rule_applied?: string; pathway?: string; breakdown?: any; requires_manual_override?: boolean; reason?: string }
     | null
     | undefined
+  const hasFrozen = !!frozenSnapshot?.kv_resolved
+  const isFrozen = hasFrozen && profile.status !== "draft"
 
-  const kvBadge = snapshot?.kv_resolved ? KV_TONE_VI[snapshot.kv_resolved] : null
+  // Pick which result to display: frozen wins if exists, else live preview
+  const displayKv = isFrozen ? frozenSnapshot?.kv_resolved : preview?.kv_resolved
+  const displayPathway = isFrozen ? frozenSnapshot?.pathway : preview?.pathway
+  const displayRule = isFrozen ? frozenSnapshot?.rule_applied : preview?.rule_applied
+  const displayReason = isFrozen ? frozenSnapshot?.reason : preview?.reason
+  const displayBreakdown = isFrozen ? frozenSnapshot?.breakdown : preview?.breakdown
+  const displayRequiresManual = isFrozen ? frozenSnapshot?.requires_manual_override : preview?.requires_manual_override
+
+  const kvBadge = displayKv ? KV_BADGE[displayKv] : null
+  const isSpecialCase = areaBasis === "permanent_address_special"
 
   return (
     <div className="space-y-6">
@@ -178,92 +139,112 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             Thông tư 05/2021/TT-BLĐTBXH Phụ lục 01.
           </p>
           <ul className="text-xs space-y-1 list-disc pl-5">
-            <li><strong>KV1</strong>: cộng <strong>0,75đ</strong> — vùng miền núi, dân tộc thiểu số, biên giới, hải đảo</li>
-            <li><strong>KV2-NT</strong>: cộng <strong>0,50đ</strong> — nông thôn không thuộc KV1</li>
-            <li><strong>KV2</strong>: cộng <strong>0,25đ</strong> — thành phố thuộc tỉnh, thị xã, phường ngoại thành TP trực thuộc TƯ</li>
-            <li><strong>KV3</strong>: <strong>không cộng điểm</strong> — nội thành TP trực thuộc TƯ (Hà Nội, HCM, ...)</li>
+            <li><strong>KV1</strong>: +<strong>0,75đ</strong> — vùng miền núi, dân tộc thiểu số, biên giới, hải đảo</li>
+            <li><strong>KV2-NT</strong>: +<strong>0,50đ</strong> — nông thôn không thuộc KV1</li>
+            <li><strong>KV2</strong>: +<strong>0,25đ</strong> — thành phố thuộc tỉnh, phường ngoại thành TP trực thuộc TƯ</li>
+            <li><strong>KV3</strong>: <strong>không cộng</strong> — nội thành TP trực thuộc TƯ (Hà Nội, HCM, ...)</li>
           </ul>
           <p className="text-xs pt-1">
-            <strong>Cách tính:</strong> Mặc định KV lấy tự động từ lịch sử các trường đã học (tab <em>Học tập</em>).
-            Có 4 trường hợp đặc biệt dùng hộ khẩu thay vì trường học: <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, quân nhân tại ngũ, bộ đội xuất ngũ</em>.
+            <strong>Hệ thống tự động tính</strong> ngay khi khai đủ trình độ + trường đã học (tab <em>Học tập</em>).
+            Bật <strong>Trường hợp đặc biệt</strong> nếu là <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, quân nhân tại ngũ, bộ đội xuất ngũ</em>.
           </p>
         </CardContent>
       </Card>
 
-      {/* ───────── 2. SNAPSHOT KV (BE result, prominent) ───────── */}
-      <Card className="border-2 border-primary/20 shadow-sm">
+      {/* ───────── 2. LIVE / FROZEN SNAPSHOT (prominent, top) ───────── */}
+      <Card className={`border-2 shadow-sm ${isFrozen ? "border-primary/40 bg-primary/5" : kvBadge ? "border-emerald-200" : "border-muted"}`}>
         <CardHeader className="pb-2">
           <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-            <Award className="h-5 w-5 text-primary" />
-            Khu vực ưu tiên đã xác định
+            {isFrozen ? <Lock className="h-5 w-5 text-primary" /> : <Award className="h-5 w-5 text-emerald-600" />}
+            {isFrozen ? "Khu vực ưu tiên (đã chốt)" : "Khu vực ưu tiên (tạm tính)"}
           </CardTitle>
           <CardDescription className="text-sm">
-            Kết quả tự động từ hệ thống — được khóa lại khi nộp hồ sơ (T1) và khi công bố trúng tuyển (T6).
+            {isFrozen
+              ? "Đã khóa khi nộp hồ sơ — không thể thay đổi (chỉ admin override được)."
+              : "Hệ thống tính theo thời gian thực dựa vào thông tin bạn khai. KV chính thức sẽ được chốt khi nộp hồ sơ."}
           </CardDescription>
         </CardHeader>
-        <CardContent className="pt-2">
-          {!snapshot && (
-            <div className="rounded-lg border border-dashed p-4 bg-muted/30 text-sm text-muted-foreground flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              <span>
-                <strong>Chưa được tính.</strong> KV sẽ tự động xác định khi hồ sơ được nộp.
-                Vui lòng khai đầy đủ trình độ học vấn ở phần dưới.
-              </span>
+        <CardContent className="pt-2 space-y-3">
+          {/* Loading state */}
+          {previewLoading && !preview && !isFrozen && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Đang tính...
             </div>
           )}
-          {snapshot && (
-            <div className="space-y-3">
-              {kvBadge ? (
-                <div className="flex items-center gap-3">
-                  <span className={`inline-flex items-center px-3 py-1.5 rounded-md text-base font-bold border ${kvBadge.color}`}>
-                    {kvBadge.label}
-                  </span>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-warning-200 bg-warning-50 p-3 text-sm flex gap-2">
-                  <AlertCircle className="h-4 w-4 mt-0.5 text-warning-700 shrink-0" />
-                  <div>
-                    <p className="font-medium text-warning-800">Chưa xác định được KV</p>
-                    {snapshot.reason && (
-                      <p className="text-xs text-warning-700 mt-1">Lý do: {snapshot.reason}</p>
-                    )}
-                    {snapshot.requires_manual_override && (
-                      <p className="text-xs text-warning-700 mt-1">→ Cần cán bộ ấn định thủ công.</p>
-                    )}
-                  </div>
-                </div>
-              )}
 
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                {snapshot.pathway && (
-                  <div>
-                    <span className="text-xs text-muted-foreground block">Cách tính</span>
-                    <span className="text-sm">
-                      {PATHWAY_LABEL_VI[snapshot.pathway] ?? snapshot.pathway}
-                    </span>
-                  </div>
-                )}
-                {snapshot.rule_applied && (
-                  <div>
-                    <span className="text-xs text-muted-foreground block">Quy tắc áp dụng</span>
-                    <span className="text-sm">
-                      {RULE_LABEL_VI[snapshot.rule_applied] ?? snapshot.rule_applied}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {snapshot.breakdown && (
-                <details className="text-xs border rounded p-2 bg-muted/30">
-                  <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                    Xem chi tiết kỹ thuật (dành cho cán bộ kiểm tra)
-                  </summary>
-                  <pre className="mt-2 overflow-auto text-[10px]">
-                    {JSON.stringify(snapshot.breakdown, null, 2)}
-                  </pre>
-                </details>
+          {/* Has KV resolved */}
+          {kvBadge && (
+            <div className="flex items-center gap-3">
+              <span className={`inline-flex items-center px-4 py-2 rounded-md text-base font-bold border ${kvBadge.color}`}>
+                {kvBadge.label}
+              </span>
+              {!isFrozen && <span className="text-xs text-muted-foreground">(sẽ chốt khi nộp hồ sơ)</span>}
+              {isFrozen && (
+                <span className="text-xs text-primary flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> Đã chốt
+                </span>
               )}
             </div>
+          )}
+
+          {/* No KV yet — explain why */}
+          {!previewLoading && !kvBadge && (
+            <div className="rounded-lg border border-dashed p-3 bg-muted/30 text-sm flex gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+              <div>
+                <p className="font-medium text-muted-foreground">Chưa đủ thông tin để tính KV</p>
+                {displayReason && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Lý do: {localizeReason(displayReason)}
+                  </p>
+                )}
+                {!cultural && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Vui lòng khai trình độ văn hóa ở phần dưới.
+                  </p>
+                )}
+                {cultural && !academicHistory?.length && !isSpecialCase && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Vui lòng khai lịch sử học ở tab <em>Học tập</em>.
+                  </p>
+                )}
+                {displayRequiresManual && (
+                  <p className="text-xs text-warning-700 mt-1">
+                    → Cần cán bộ xem xét/ấn định thủ công.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Details: pathway + rule */}
+          {(displayPathway || displayRule) && kvBadge && (
+            <div className="grid grid-cols-2 gap-3 text-sm pt-2 border-t">
+              {displayPathway && (
+                <div>
+                  <span className="text-xs text-muted-foreground block">Cách tính</span>
+                  <span className="text-sm">{PATHWAY_LABEL_VI[displayPathway] ?? displayPathway}</span>
+                </div>
+              )}
+              {displayRule && (
+                <div>
+                  <span className="text-xs text-muted-foreground block">Quy tắc</span>
+                  <span className="text-sm">{RULE_LABEL_VI[displayRule] ?? displayRule}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {displayBreakdown && kvBadge && (
+            <details className="text-xs border rounded p-2 bg-muted/30">
+              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                Xem chi tiết tính toán (cán bộ kiểm tra)
+              </summary>
+              <pre className="mt-2 overflow-auto text-[10px]">
+                {JSON.stringify(displayBreakdown, null, 2)}
+              </pre>
+            </details>
           )}
         </CardContent>
       </Card>
@@ -276,7 +257,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             Trình độ học vấn
           </CardTitle>
           <CardDescription className="text-sm">
-            Khai 2 trình độ song song: văn hóa (THCS/THPT/GDTX) và chuyên môn nghề (Sơ cấp/Trung cấp/Cao đẳng nếu có).
+            Khai 2 trình độ song song — hệ thống dựa vào đây để tự xác định cách tính KV.
           </CardDescription>
         </CardHeader>
 
@@ -347,80 +328,56 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
               )}
             />
           </div>
-
-          {/* Preview cách tính (dựa trên input hiện tại, BE quyết định cuối) */}
-          {preview && (
-            <div className={`rounded-lg border p-3 ${preview.tone === "warn" ? "bg-warning-50 border-warning-200" : "bg-info-50/50 border-info-200"} flex gap-2`}>
-              <Info className={`h-4 w-4 mt-0.5 shrink-0 ${preview.tone === "warn" ? "text-warning-700" : "text-info-700"}`} />
-              <div className="text-sm space-y-1">
-                <div>
-                  <span className="text-xs text-muted-foreground">Dự kiến cách tính KV:</span>{" "}
-                  <strong>{preview.label}</strong>
-                </div>
-                <p className="text-xs text-muted-foreground">{preview.description}</p>
-              </div>
-            </div>
-          )}
         </CardContent>
       </Card>
 
-      {/* ───────── 4. CƠ SỞ XÁC ĐỊNH KV ───────── */}
+      {/* ───────── 4. TRƯỜNG HỢP ĐẶC BIỆT (toggle, replaces dropdown) ───────── */}
       <Card className="shadow-sm border-border">
         <CardHeader className="pb-2">
           <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
             <ShieldCheck className="h-5 w-5" />
-            Cách tính khu vực ưu tiên
+            Trường hợp đặc biệt
           </CardTitle>
           <CardDescription className="text-sm">
-            Mặc định <strong>Bình thường</strong> (tự động theo trường đã học). Chỉ đổi nếu thí sinh thuộc trường hợp đặc biệt hoặc cần cán bộ ấn định thủ công.
+            Chỉ bật nếu thí sinh thuộc 1 trong 4 nhóm dùng hộ khẩu để xác định KV thay vì trường học.
           </CardDescription>
         </CardHeader>
 
-        <CardContent className="space-y-6 pt-4">
+        <CardContent className="space-y-4 pt-4">
           <FormField
             control={form.control}
             name="area_resolution_basis"
-            render={({ field }) => {
-              const selectedOption = AREA_BASIS_OPTIONS.find((o) => o.value === field.value)
-              return (
-                <FormItem>
-                  <FormLabel className="text-sm">Cách tính</FormLabel>
-                  <Select
-                    onValueChange={(v) => field.onChange(v === "_none" ? null : v)}
-                    value={field.value ?? "_none"}
+            render={({ field }) => (
+              <FormItem className="flex items-start gap-3 space-y-0">
+                <FormControl>
+                  <Switch
+                    checked={field.value === "permanent_address_special"}
+                    onCheckedChange={(checked) => {
+                      field.onChange(checked ? "permanent_address_special" : null)
+                    }}
                     disabled={!isEditable}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="bg-background h-auto py-2">
-                        <SelectValue placeholder="Bình thường — tự động theo trường đã học" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="_none">— Bình thường (mặc định) —</SelectItem>
-                      {AREA_BASIS_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedOption && (
-                    <FormDescription className="text-xs leading-relaxed">
-                      {selectedOption.description}
-                    </FormDescription>
-                  )}
-                  <FormMessage />
-                </FormItem>
-              )
-            }}
+                    aria-label="Bật trường hợp đặc biệt"
+                  />
+                </FormControl>
+                <div className="space-y-1 leading-none">
+                  <FormLabel className="text-sm font-medium">
+                    Thí sinh thuộc 1 trong 4 nhóm đặc biệt
+                  </FormLabel>
+                  <FormDescription className="text-xs leading-relaxed">
+                    Bao gồm: học sinh <strong>Phổ thông Dân tộc Nội trú</strong>, <strong>lớp dự bị đại học</strong>, <strong>quân nhân tại ngũ</strong>, hoặc <strong>bộ đội xuất ngũ</strong>. Khi bật, KV tính theo mã xã/phường hộ khẩu thường trú thay vì trường học.
+                  </FormDescription>
+                </div>
+                <FormMessage />
+              </FormItem>
+            )}
           />
 
-          {areaBasis === "permanent_address_special" && (
+          {isSpecialCase && (
             <FormField
               control={form.control}
               name="permanent_commune_code"
               render={({ field }) => (
-                <FormItem>
+                <FormItem className="pl-12">
                   <FormLabel className="text-sm">Mã xã/phường hộ khẩu thường trú</FormLabel>
                   <FormControl>
                     <Input
@@ -442,14 +399,14 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             />
           )}
 
+          {/* Admin/manager-only manual override (advanced) */}
           {areaBasis === "manual_override" && (
             <div className="rounded-lg border p-3 bg-warning-50 border-warning-200 flex gap-2">
               <AlertCircle className="h-4 w-4 mt-0.5 text-warning-700 shrink-0" />
               <div className="text-sm space-y-1">
-                <p className="font-medium text-warning-800">Lưu ý — chế độ thủ công</p>
+                <p className="font-medium text-warning-800">Manual Override (cán bộ ấn định)</p>
                 <p className="text-xs text-warning-700">
-                  KV sẽ được cán bộ tuyển sinh chỉ định sau khi thí sinh nộp hồ sơ.
-                  Lý do thay đổi <strong>bắt buộc</strong> khai báo và lưu vào nhật ký kiểm toán.
+                  KV được cán bộ tuyển sinh chỉ định sau khi thí sinh nộp hồ sơ. Lý do thay đổi <strong>bắt buộc</strong> khai báo và lưu vào nhật ký kiểm toán.
                 </p>
               </div>
             </div>
