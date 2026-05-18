@@ -86,6 +86,15 @@ celerybeat.pid
 # GeoIP databases (large binary files - must be downloaded separately)
 Backend_FastAPI/geoip/
 
+# Q9 #07 Phase B external raw sources (large + canonical from chinhphu.vn / MOET)
+# Includes: signed PDF, mirror HTML, MOET Excel masters. Re-download via curl
+# or copy from user's MOET 21/4/2025 OneDrive folder when needed.
+Documents/reports/qd861_raw/
+
+# Q9 #07 Phase B.2 Stage 1A draft (heuristic, deprecated — user requested discard)
+# Keep script + tests; do not commit generated CSV.
+Backend_FastAPI/app/seed/vn_commune_kv_stage1a.csv
+
 # IDEs
 .vscode/
 .idea/
