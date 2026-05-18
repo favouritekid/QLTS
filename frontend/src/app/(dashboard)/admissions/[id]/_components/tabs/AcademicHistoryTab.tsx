@@ -79,28 +79,30 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                         
                         <div className="grid gap-6 md:grid-cols-2">
                         <div className="md:col-span-2 space-y-2">
-                            <FormItem>
-                                <FormLabel className="text-xs">Tên trường (tìm trong danh mục)</FormLabel>
-                                <FormControl>
-                                    <VnSchoolPicker
-                                        value={{
-                                            school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
-                                            school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
-                                            level: form.watch(`academic_history.${index}.level`) ?? null,
-                                            current_kv: null,
-                                        }}
-                                        onChange={(v) => {
-                                            form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
-                                            form.setValue(`academic_history.${index}.school_name`, v.school_name, { shouldDirty: true })
-                                            form.setValue(`academic_history.${index}.level`, v.level as any, { shouldDirty: true })
-                                        }}
-                                        disabled={!isEditable}
-                                    />
-                                </FormControl>
-                                <FormMessage>
-                                    {form.formState.errors.academic_history?.[index]?.school_name?.message}
-                                </FormMessage>
-                            </FormItem>
+                            <div className="space-y-1">
+                                <label className="text-xs font-medium leading-none">
+                                    Tên trường (tìm trong danh mục)
+                                </label>
+                                <VnSchoolPicker
+                                    value={{
+                                        school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
+                                        school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
+                                        level: form.watch(`academic_history.${index}.level`) ?? null,
+                                        current_kv: null,
+                                    }}
+                                    onChange={(v) => {
+                                        form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
+                                        form.setValue(`academic_history.${index}.school_name`, v.school_name, { shouldDirty: true })
+                                        form.setValue(`academic_history.${index}.level`, v.level as any, { shouldDirty: true })
+                                    }}
+                                    disabled={!isEditable}
+                                />
+                                {form.formState.errors.academic_history?.[index]?.school_name?.message && (
+                                    <p className="text-xs text-destructive">
+                                        {form.formState.errors.academic_history[index]?.school_name?.message as string}
+                                    </p>
+                                )}
+                            </div>
                             {/* Free-text fallback if no school_id picked */}
                             {!form.watch(`academic_history.${index}.school_id`) && (
                                 <FormField
