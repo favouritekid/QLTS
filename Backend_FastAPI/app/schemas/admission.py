@@ -407,6 +407,86 @@ class AdmissionProfileCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+# =============================================================================
+# Q9 #07 W11-BE.F.7 — priority bonus support types (M1 + M2 review-2 fix)
+# =============================================================================
+
+# M1: per-item regex for priority_object_codes — mirror of phase1_08b
+# CHECK constraint ``sub_code ~ '^[0-9]{2}$'``. Without this annotation
+# Pydantic accepts any string and the engine silently sees no matches
+# (graceful 0đ but undiscoverable from API response).
+PrioritySubCode = Annotated[
+    str, StringConstraints(pattern=r"^[0-9]{2}$")
+]
+
+
+class PriorityObjectEvidenceEntry(BaseModel):
+    """M2: enforce shape of each evidence dict value.
+
+    Without this nested model, ``Dict[str, Dict[str, Any]]`` admitted any
+    inner dict (vd: ``{'random': 'stuff'}``) — engine read ``.get('status')``
+    and silently treated as unverified. Strict shape catches typos at the
+    Pydantic boundary so admin/candidate get a clear 422 instead of a
+    silent 0đ on calculation day.
+    """
+    status: Literal["pending", "verified", "rejected"] = Field(
+        ...,
+        description="Verification state. Engine only counts 'verified' for bonus."
+    )
+    document_id: Optional[int] = Field(
+        default=None,
+        description="FK to profile_document (the uploaded evidence file)"
+    )
+    verified_by: Optional[int] = Field(
+        default=None,
+        description="user.id who flipped status to verified/rejected"
+    )
+    verified_at: Optional[datetime] = Field(
+        default=None,
+        description="When officer recorded verify/reject decision"
+    )
+    reject_reason: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Required if status='rejected'"
+    )
+    requested_at: Optional[datetime] = Field(
+        default=None,
+        description="When candidate submitted the UT claim"
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode='after')
+    def validate_status_dependencies(self) -> 'PriorityObjectEvidenceEntry':
+        """m-RV2-1 polish: enforce audit trail completeness per status.
+
+        * status='rejected' → reject_reason required (non-empty after
+          strip). Without this, officer can reject a UT claim without
+          logging WHY — the candidate has no recourse and audit shows
+          a bare rejection.
+        * status='verified' → verified_by required (user.id of the
+          officer who approved). Without this, the engine snapshot
+          + bonus calculation has no chain of responsibility.
+
+        Note: ``pending`` (the initial candidate-submitted state) needs
+        neither — that's the whole point of a pending evidence row.
+        """
+        if self.status == "rejected":
+            if not (self.reject_reason and self.reject_reason.strip()):
+                raise ValueError(
+                    "status='rejected' yêu cầu reject_reason (officer "
+                    "phải ghi rõ lý do từ chối chứng cứ UT)."
+                )
+        elif self.status == "verified":
+            if self.verified_by is None:
+                raise ValueError(
+                    "status='verified' yêu cầu verified_by (user.id "
+                    "của officer xác minh)."
+                )
+        return self
+
+
 class AdmissionProfileUpdate(BaseModel):
     """
     Schema for updating AdmissionProfile (only allowed when status = 'draft').
@@ -483,8 +563,68 @@ class AdmissionProfileUpdate(BaseModel):
         description="Admission scores (GPA or subject scores) for dynamic scoring"
     )
 
+    # =========================================================================
+    # Q9 #07 Priority bonus fields
+    # PR1 phase1_08b (legacy): high_school_id, high_school_kv_resolved,
+    #   area_resolution_reason — DROPPED in phase1_09 v1.3
+    # PR5 phase1_09 (current): cultural_education_level + vocational_qualification
+    #   + permanent_commune_code + area_resolution_basis (kept)
+    # =========================================================================
+    cultural_education_level: Optional[str] = Field(
+        None,
+        pattern=r"^(completed_thcs|graduated_thcs|completed_thpt|graduated_thpt|graduated_gdtx)$",
+        description=(
+            "Trình độ văn hóa: completed_thcs | graduated_thcs | "
+            "completed_thpt | graduated_thpt | graduated_gdtx. Nullable cho "
+            "draft; required tại submit T1."
+        ),
+    )
+    vocational_qualification: Optional[str] = Field(
+        None,
+        pattern=r"^(none|so_cap|trung_cap|cao_dang)$",
+        description=(
+            "Trình độ chuyên môn: none | so_cap | trung_cap | cao_dang. "
+            "DB default 'none' nếu omitted (NOT NULL constraint)."
+        ),
+    )
+    permanent_commune_code: Optional[str] = Field(
+        None, max_length=20,
+        description="BNV commune code — BACKUP KV cho 4 special cases + commune_fallback"
+    )
+    area_resolution_basis: Optional[str] = Field(
+        None,
+        pattern=r"^(high_school|permanent_address_special|manual_override)$",
+        description="How KV was resolved (enum — mirror of CHECK constraint)"
+    )
+    priority_object_codes: Optional[List[PrioritySubCode]] = Field(
+        None,
+        max_length=20,
+        description=(
+            "UT đối tượng codes thí sinh khai (vd: ['04','06']). "
+            "M1 review-2 fix: per-item regex ``^[0-9]{2}$`` mirrors phase1_08b "
+            "CHECK so garbage codes (vd: 'INVALID_99') fail at 422 instead of "
+            "silently scoring 0đ at T6."
+        ),
+    )
+    priority_object_evidence: Optional[
+        Dict[PrioritySubCode, PriorityObjectEvidenceEntry]
+    ] = Field(
+        None,
+        description=(
+            "Evidence dict keyed by sub_code → typed entry. "
+            "M2 review-2 fix: strict nested shape (status enum + optional "
+            "document_id / verified_by / verified_at / reject_reason) "
+            "catches typos at boundary instead of letting them pass through "
+            "to the engine as silently-unverified."
+        ),
+    )
+
     # Field validators to convert empty strings to None (for pattern fields)
-    @field_validator('phone', 'citizen_id', mode='before')
+    @field_validator(
+        'phone', 'citizen_id', 'area_resolution_basis',
+        'permanent_commune_code', 'cultural_education_level', 'vocational_qualification',
+        mode='before',
+    )
     @classmethod
     def empty_str_to_none(cls, v):
         """Convert empty strings to None to bypass pattern validation."""
@@ -528,6 +668,39 @@ class AdmissionProfileUpdate(BaseModel):
         """
         from app.services.admission_invariants import validate_logical_dates
         validate_logical_dates(self.model_dump())
+        return self
+
+    @model_validator(mode='after')
+    def validate_priority_basis_invariants(self) -> 'AdmissionProfileUpdate':
+        """H1 cross-field invariants for area_resolution_basis (v1.3 phase1_09).
+
+        Each basis value implies a specific supporting field must be set:
+        * ``permanent_address_special`` → permanent_commune_code (4 cases TT)
+        * ``manual_override`` → manual reason goes vào priority_resolution_snapshot
+          at engine time (no payload field — admin/officer fills via separate endpoint)
+        * ``high_school`` → academic_history với THPT/TC entries (multi-school rule)
+          Validated by service-layer after lookup vào academic_history.
+
+        v1.3 changes: 'high_school' basis no longer references single field;
+        candidate khai trường qua academic_history JSONB. area_resolution_reason
+        column DROPPED — canonical reason lives in priority_resolution_snapshot.
+
+        IMPORTANT caveat: validator runs on PAYLOAD ONLY. Service-layer check
+        in ``update_profile`` handles cross-field with DB-persisted state.
+        """
+        basis = self.area_resolution_basis
+        if basis is None:
+            return self  # not touching basis → invariant doesn't apply
+
+        if basis == "permanent_address_special":
+            if not self.permanent_commune_code:
+                raise ValueError(
+                    "area_resolution_basis='permanent_address_special' yêu cầu "
+                    "permanent_commune_code (4 trường hợp đặc biệt TT 05/2021)."
+                )
+        # 'high_school' + 'manual_override' validation moved to service-layer
+        # (need academic_history context not available in pure schema validator)
+
         return self
 
 
@@ -704,6 +877,17 @@ class AdmissionProfileResponse(BaseModel):
     permanent_street_address: Optional[str] = None
     place_of_birth: Optional[str] = None
     native_place: Optional[str] = None
+
+    # =========================================================================
+    # Q9 #07 Priority bonus fields (READ side) — v1.3 phase1_09
+    # =========================================================================
+    cultural_education_level: Optional[str] = None
+    vocational_qualification: Optional[str] = None
+    permanent_commune_code: Optional[str] = None
+    area_resolution_basis: Optional[str] = None
+    priority_object_codes: list[str] = Field(default_factory=list)
+    priority_object_evidence: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    priority_resolution_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
     # Scores (Dynamic Calculation)
     admission_scores: Optional[AdmissionScoreSchema] = None

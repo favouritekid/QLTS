@@ -232,6 +232,15 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
+          // Q9 #07 PR3 — KV/UT bonus rates per TT 05/2021. Admin-only
+          // (BE enforces require_admin on every endpoint) so manager
+          // is excluded from the sidebar entry as well.
+          label: "Cấu hình Ưu tiên",
+          href: "/admin/priority-config",
+          icon: Calculator,
+          roles: ["admin"],
+        },
+        {
           label: "Organization Tree",
           href: "/admin/organization-tree",
           icon: FolderTree,

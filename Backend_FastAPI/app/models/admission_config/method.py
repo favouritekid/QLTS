@@ -70,13 +70,14 @@ class AdmissionMethod(Base):
     )
 
     # phase1_02 (#184 Wave 1) — method-level default bonus rule.
-    # Schema: {"apply_area_bonus": bool, "apply_subject_bonus": bool,
+    # Schema: {"apply_area_bonus": bool, "apply_object_bonus": bool,
     # "max_total_bonus": float}. NULL = bonus disabled fallback.
+    # (apply_subject_bonus renamed -> apply_object_bonus in phase1_08a / Q9 #07 PR1.)
     # Path-level override via AdmissionPath.bonus_rule_override.
     # Resolution rule (PLAN line 787-789):
     #   effective = path.bonus_rule_override
     #               ?? method.default_bonus_rule
-    #               ?? {"apply_area_bonus": false, "apply_subject_bonus": false}
+    #               ?? {"apply_area_bonus": false, "apply_object_bonus": false}
     default_bonus_rule = Column(
         JSONB,
         nullable=True,

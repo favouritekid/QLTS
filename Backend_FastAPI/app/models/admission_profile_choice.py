@@ -33,6 +33,7 @@ Service invariant (P1 fix #4 v1.3): ``path_subject_group_config.
 admission_path_id == admission_profile_choice.admission_path_id``.
 """
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import (
@@ -147,6 +148,30 @@ class AdmissionProfileChoice(Base):
         JSONB,
         nullable=True,
         comment="Q-P3-11: BonusRule snapshot tại T6 publish (NOT T1)",
+    )
+
+    # Q9 #07 PR1 — Priority bonus snapshots at T6 publish (phase1_08b)
+    # See Backend_FastAPI/alembic/versions/phase1_08b_priority_demographics_gdnn.py
+    priority_area_bonus_snapshot: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(4, 2),
+        nullable=True,
+        comment="KV bonus applied at T6, snapshot from priority_area_config",
+    )
+    priority_object_bonus_snapshot: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(4, 2),
+        nullable=True,
+        comment=(
+            "UT bonus applied at T6 (max of verified UT codes), snapshot "
+            "from priority_object_config"
+        ),
+    )
+    priority_config_snapshot: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "Frozen rates + resolution_basis + resolved_at at T6 publish "
+            "time for audit replay"
+        ),
     )
 
     created_at: Mapped[datetime] = mapped_column(

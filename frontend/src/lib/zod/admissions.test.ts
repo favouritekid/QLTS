@@ -16,7 +16,11 @@
 
 import { describe, it, expect } from "vitest"
 
-import { appliedRulesSchema, subjectGroupSnapshotSchema } from "./admissions"
+import {
+  admissionProfileUpdateSchema,
+  appliedRulesSchema,
+  subjectGroupSnapshotSchema,
+} from "./admissions"
 
 describe("subjectGroupSnapshotSchema (nested weights)", () => {
   it("parses a group with weights", () => {
@@ -126,5 +130,156 @@ describe("appliedRulesSchema (top-level subject_weights)", () => {
         method_type: "subject_based" as const,
       }),
     ).toThrow()
+  })
+})
+
+
+// =============================================================================
+// Q9 #07 PR5/A — Priority bonus Zod schemas (review-3 m-FE-3 fix)
+// =============================================================================
+//
+// Lock the FE Zod parity with BE Pydantic for the 7 priority fields.
+// Without these tests, a future refactor could silently relax / drop
+// validation and the FE would accept garbage that BE then 400s on,
+// degrading UX to "click submit then see red".
+
+describe("admissionProfileUpdateSchema priority fields (Q9 #07)", () => {
+  const baseline = { version: 1 }
+
+  it("accepts canonical sub_codes + verified evidence", () => {
+    const parsed = admissionProfileUpdateSchema.parse({
+      ...baseline,
+      priority_object_codes: ["04", "06"],
+      priority_object_evidence: {
+        "04": { status: "verified" },
+        "06": { status: "pending", document_id: 123 },
+      },
+    })
+    expect(parsed.priority_object_codes).toEqual(["04", "06"])
+    expect(parsed.priority_object_evidence?.["04"].status).toBe("verified")
+  })
+
+  it("rejects garbage UT code (per-item regex from prioritySubCodeSchema)", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_codes: ["INVALID_99"],
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence with bad status enum", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "04": { status: "approved_typo" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence with extra unknown keys (.strict mirror of BE extra=forbid)", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "04": { status: "verified", random_extra: "x" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects evidence dict keyed by non-canonical sub_code", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        priority_object_evidence: {
+          "INVALID_KEY": { status: "verified" },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it("rejects invalid area_resolution_basis enum value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        area_resolution_basis: "highschool",
+      }),
+    ).toThrow()
+  })
+
+  // ==========================================================================
+  // Q9 #07 PR5 v1.3 phase1_09 — cultural + vocational 2-field parallel
+  // ==========================================================================
+
+  it("accepts cultural_education_level enum values (5 options)", () => {
+    const values = [
+      "completed_thcs", "graduated_thcs",
+      "completed_thpt", "graduated_thpt", "graduated_gdtx",
+    ]
+    for (const v of values) {
+      const parsed = admissionProfileUpdateSchema.parse({
+        ...baseline,
+        cultural_education_level: v,
+      })
+      expect(parsed.cultural_education_level).toBe(v)
+    }
+  })
+
+  it("rejects invalid cultural_education_level value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        cultural_education_level: "tot_nghiep_thpt",  // wrong format
+      }),
+    ).toThrow()
+  })
+
+  it("accepts vocational_qualification enum values (4 options)", () => {
+    const values = ["none", "so_cap", "trung_cap", "cao_dang"]
+    for (const v of values) {
+      const parsed = admissionProfileUpdateSchema.parse({
+        ...baseline,
+        vocational_qualification: v,
+      })
+      expect(parsed.vocational_qualification).toBe(v)
+    }
+  })
+
+  it("rejects invalid vocational_qualification value", () => {
+    expect(() =>
+      admissionProfileUpdateSchema.parse({
+        ...baseline,
+        vocational_qualification: "trung_cap_nghe",  // wrong key
+      }),
+    ).toThrow()
+  })
+
+  it("accepts both fields parallel (Tốt nghiệp THPT + TC)", () => {
+    const parsed = admissionProfileUpdateSchema.parse({
+      ...baseline,
+      cultural_education_level: "graduated_thpt",
+      vocational_qualification: "trung_cap",
+    })
+    expect(parsed.cultural_education_level).toBe("graduated_thpt")
+    expect(parsed.vocational_qualification).toBe("trung_cap")
+  })
+
+  it("dropped fields no longer in schema (high_school_id, kv_resolved, reason)", () => {
+    // Strict schema would reject extras, but admissionProfileUpdateSchema
+    // uses default Zod behavior (strip unknown). Verify by checking parsed
+    // shape doesn't contain dropped fields.
+    const probePayload: Record<string, unknown> = {
+      ...baseline,
+      high_school_id: 42,  // dropped in phase1_09
+      high_school_kv_resolved: "KV1",  // dropped
+      area_resolution_reason: "Legacy reason",  // dropped
+    }
+    const parsed = admissionProfileUpdateSchema.parse(probePayload)
+    expect("high_school_id" in parsed).toBe(false)
+    expect("high_school_kv_resolved" in parsed).toBe(false)
+    expect("area_resolution_reason" in parsed).toBe(false)
   })
 })

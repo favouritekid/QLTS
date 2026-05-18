@@ -15,7 +15,7 @@ Architecture:
 """
 
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy import Boolean, CheckConstraint, Column, Date, Index, Integer, Numeric, SmallInteger, String, Text, DateTime, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -66,6 +66,27 @@ class AdmissionProfile(Base):
         CheckConstraint(
             "confirmed_via IN ('magic_link','admin_override','officer') OR confirmed_via IS NULL",
             name="ck_admission_profile_confirmed_via"
+        ),
+        # Q9 #07 PR1 — area_resolution_basis enum CHECK (mirror of phase1_08b).
+        # Catches typo 'highschool' vs 'high_school' at DB layer.
+        CheckConstraint(
+            "area_resolution_basis IS NULL OR area_resolution_basis IN "
+            "('high_school', 'permanent_address_special', 'manual_override')",
+            name="ck_admission_profile_area_resolution_basis"
+        ),
+        # Q9 #07 PR5 v1.3 (phase1_09) — Trình độ văn hóa enum CHECK.
+        # Mirror migration constraint for Base.metadata.create_all() test DB.
+        CheckConstraint(
+            "cultural_education_level IS NULL OR cultural_education_level IN "
+            "('completed_thcs', 'graduated_thcs', "
+            "'completed_thpt', 'graduated_thpt', 'graduated_gdtx')",
+            name="ck_admission_profile_cultural_education_level"
+        ),
+        # Q9 #07 PR5 v1.3 — Trình độ chuyên môn enum CHECK.
+        CheckConstraint(
+            "vocational_qualification IN "
+            "('none', 'so_cap', 'trung_cap', 'cao_dang')",
+            name="ck_admission_profile_vocational_qualification"
         ),
     )
 
@@ -188,6 +209,74 @@ class AdmissionProfile(Base):
     permanent_street_address: Mapped[str] = mapped_column(
         String(255), nullable=True,
         comment="Số nhà, tên đường — street address line, free-text"
+    )
+
+    # =========================================================================
+    # Q9 #07 Priority Bonus demographics
+    # PR1 phase1_08b: initial cols (some dropped in phase1_09 — see below)
+    # PR5 phase1_09: 2-field parallel (cultural + vocational) + snapshot
+    # See Documents/Q9_07_PR5_REDESIGN.md v1.3 cho design rationale
+    # =========================================================================
+
+    # --- Trình độ văn hóa + chuyên môn (2-field parallel, v1.3 phase1_09) ---
+    cultural_education_level: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True,
+        comment=(
+            "Trình độ văn hóa (phổ thông): completed_thcs | graduated_thcs | "
+            "completed_thpt | graduated_thpt | graduated_gdtx. Nullable cho "
+            "draft state; required tại submit T1."
+        )
+    )
+    vocational_qualification: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="none",
+        server_default=text("'none'"),
+        comment=(
+            "Trình độ chuyên môn (nghề nghiệp): none | so_cap | trung_cap | "
+            "cao_dang. NOT NULL DEFAULT 'none' — auto fill legacy + new."
+        )
+    )
+    # --- Permanent address resolution (BACKUP basis cho 4 special cases) ---
+    permanent_commune_code: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True,
+        comment="Loose ref to vn_commune_area_map.commune_code (no DB FK)"
+    )
+    area_resolution_basis: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True,
+        comment="'high_school' | 'permanent_address_special' | 'manual_override'"
+    )
+    # NOTE: high_school_id + high_school_kv_resolved + area_resolution_reason
+    # DROPPED trong phase1_09. KV result giờ live in priority_resolution_snapshot;
+    # multi-school history live in academic_history JSONB.
+
+    # --- UT đối tượng codes + evidence (TT 05/2021 Phụ lục 01 nhóm 01-07) ---
+    priority_object_codes: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        comment="Array of UT sub_codes thí sinh khai: ['04','06']"
+    )
+    priority_object_evidence: Mapped[dict[str, dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+        comment="{'04': {'document_id': 123, 'status': 'pending|verified|rejected', 'verified_by': 45, 'verified_at': '...', 'reject_reason': null}}"
+    )
+    # --- Priority resolution snapshot (v1.3 phase1_09 — Q-P3-11 pattern) ---
+    priority_resolution_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+        comment=(
+            "Frozen KV resolution at submit T1 + re-frozen at engine T6. "
+            "Shape: {kv_resolved, rule_applied, pathway, breakdown, "
+            "frozen_at, frozen_at_status, manual_override_reason}. "
+            "Empty {} = draft state (service computes real-time preview)."
+        )
     )
 
     place_of_birth: Mapped[str] = mapped_column(String(255), nullable=True)

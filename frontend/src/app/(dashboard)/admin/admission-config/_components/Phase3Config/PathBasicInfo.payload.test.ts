@@ -42,7 +42,7 @@ function buildMethodQuotaPayload(methodQuotaInput: string): number | null {
 function buildBonusOverridePayload(args: {
   enabled: boolean
   applyAreaBonus: boolean
-  applySubjectBonus: boolean
+  applyObjectBonus: boolean
   maxTotalBonusInput: string
 }): BonusRuleOverride | null {
   if (!args.enabled) return null
@@ -60,7 +60,7 @@ function buildBonusOverridePayload(args: {
   }
   return {
     apply_area_bonus: args.applyAreaBonus,
-    apply_subject_bonus: args.applySubjectBonus,
+    apply_object_bonus: args.applyObjectBonus,
     max_total_bonus: maxTotal,
   }
 }
@@ -160,7 +160,7 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: false,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "2.5",
       }),
     ).toBeNull()
@@ -171,12 +171,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: false,
+        applyObjectBonus: false,
         maxTotalBonusInput: "2.75",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: false,
+      apply_object_bonus: false,
       max_total_bonus: 2.75,
     })
   })
@@ -189,12 +189,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: true,
+      apply_object_bonus: true,
       max_total_bonus: null,
     })
   })
@@ -209,12 +209,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: false,
-        applySubjectBonus: false,
+        applyObjectBonus: false,
         maxTotalBonusInput: "0",
       }),
     ).toEqual({
       apply_area_bonus: false,
-      apply_subject_bonus: false,
+      apply_object_bonus: false,
       max_total_bonus: 0,
     })
   })
@@ -224,12 +224,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "abc",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: true,
+      apply_object_bonus: true,
       max_total_bonus: null,
     })
   })
@@ -243,12 +243,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "11.5",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: true,
+      apply_object_bonus: true,
       max_total_bonus: 10,
     })
   })
@@ -258,12 +258,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "-2.0",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: true,
+      apply_object_bonus: true,
       max_total_bonus: 0,
     })
   })
@@ -273,12 +273,12 @@ describe("buildBonusOverridePayload", () => {
       buildBonusOverridePayload({
         enabled: true,
         applyAreaBonus: true,
-        applySubjectBonus: true,
+        applyObjectBonus: true,
         maxTotalBonusInput: "10",
       }),
     ).toEqual({
       apply_area_bonus: true,
-      apply_subject_bonus: true,
+      apply_object_bonus: true,
       max_total_bonus: 10,
     })
   })

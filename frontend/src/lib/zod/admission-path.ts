@@ -60,7 +60,7 @@ export type AdmissionAudience = z.infer<typeof admissionAudienceEnum>
 export const bonusRuleOverrideSchema = z
   .object({
     apply_area_bonus: z.boolean(),
-    apply_subject_bonus: z.boolean(),
+    apply_object_bonus: z.boolean(),
     max_total_bonus: z.number().min(0).max(10).nullable().optional(),
   })
   .strict()

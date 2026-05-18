@@ -71,6 +71,40 @@ export const familyMemberSchema = z.object({
 export type FamilyMember = z.infer<typeof familyMemberSchema>
 
 /**
+ * Priority Bonus — UT đối tượng sub_code regex (Q9 #07 PR1/PR5).
+ *
+ * Mirror of phase1_08b CHECK ``sub_code ~ '^[0-9]{2}$'`` + Pydantic
+ * PrioritySubCode in BE schemas/admission.py. 2-digit numeric like
+ * "01".."07+" per TT 05/2021 Phụ lục 01.
+ */
+export const prioritySubCodeSchema = z
+  .string()
+  .regex(/^[0-9]{2}$/, "Mã UT phải là 2 chữ số (vd: '04')")
+
+/**
+ * Priority Object Evidence Entry — nested shape for each evidence dict
+ * value in priority_object_evidence JSONB. Mirror of BE
+ * PriorityObjectEvidenceEntry (Q9 #07 review-2 + m-RV2-1).
+ *
+ * Status enum gates the engine bonus calc — only "verified" contributes.
+ * Cross-field invariants on BE (rejected → reject_reason, verified →
+ * verified_by) surface as 400 ValidationError from PUT; FE form should
+ * pre-validate to give a faster red-state.
+ */
+export const priorityObjectEvidenceEntrySchema = z.object({
+  status: z.enum(["pending", "verified", "rejected"]),
+  document_id: z.number().int().nullable().optional(),
+  verified_by: z.number().int().nullable().optional(),
+  verified_at: z.string().datetime({ offset: true }).nullable().optional(),
+  reject_reason: z.string().max(500).nullable().optional(),
+  requested_at: z.string().datetime({ offset: true }).nullable().optional(),
+}).strict()
+
+export type PriorityObjectEvidenceEntry = z.infer<
+  typeof priorityObjectEvidenceEntrySchema
+>
+
+/**
  * Academic Record Schema
  * Stored in admission_profile.academic_history JSONB array
  */
@@ -347,6 +381,42 @@ export const admissionProfileUpdateSchema = z.object({
   academic_history: z.array(academicRecordSchema).optional().nullable(),
   admission_scores: admissionScoreSchema.optional().nullable(),
   documents_checklist: z.array(documentItemSchema).optional().nullable(),
+
+  // =========================================================================
+  // Q9 #07 PR5 v1.3 (phase1_09) — Priority bonus fields (2-field parallel).
+  // Trình độ văn hóa: 5 options (Hoàn thành THCS / Tốt nghiệp THCS / Hoàn thành
+  //   THPT / Tốt nghiệp THPT / Tốt nghiệp GDTX) — per Luật GDNN 2014/2025.
+  // Trình độ chuyên môn: 4 options (Chưa có / Sơ cấp / Trung cấp / Cao đẳng).
+  // KV BACKUP for special case (PT DTNT / quân nhân): permanent_commune_code.
+  // UT (đối tượng): priority_object_codes + per-code evidence dict.
+  // Multi-school history live in academic_history JSONB array (NOT single field).
+  // Legacy (PR1 phase1_08b) high_school_id / kv_resolved / area_resolution_reason
+  //   DROPPED in phase1_09.
+  // =========================================================================
+  cultural_education_level: z
+    .enum([
+      "completed_thcs",
+      "graduated_thcs",
+      "completed_thpt",
+      "graduated_thpt",
+      "graduated_gdtx",
+    ])
+    .nullable()
+    .optional(),
+  vocational_qualification: z
+    .enum(["none", "so_cap", "trung_cap", "cao_dang"])
+    .nullable()
+    .optional(),
+  permanent_commune_code: nullableString(20),
+  area_resolution_basis: z
+    .enum(["high_school", "permanent_address_special", "manual_override"])
+    .nullable()
+    .optional(),
+  priority_object_codes: z.array(prioritySubCodeSchema).max(20).nullable().optional(),
+  priority_object_evidence: z
+    .record(prioritySubCodeSchema, priorityObjectEvidenceEntrySchema)
+    .nullable()
+    .optional(),
 })
 
 export type AdmissionProfileUpdateInput = z.input<
@@ -494,6 +564,20 @@ export const admissionProfileResponseSchema = z.object({
   permanent_street_address: z.string().nullable(),
   place_of_birth: z.string().nullable(),
   native_place: z.string().nullable(),
+
+  // Q9 #07 v1.3 priority bonus — READ side (mirror of BE AdmissionProfileResponse).
+  // 2-field parallel design (phase1_09): cultural + vocational.
+  // Defaults match BE: list/dict default-factory, scalars nullable.
+  cultural_education_level: z.string().nullable().optional(),
+  vocational_qualification: z.string().nullable().optional(),
+  permanent_commune_code: z.string().nullable().optional(),
+  area_resolution_basis: z.string().nullable().optional(),
+  priority_object_codes: z.array(z.string()).default([]),
+  priority_object_evidence: z
+    .record(z.string(), priorityObjectEvidenceEntrySchema)
+    .default({}),
+  priority_resolution_snapshot: z.record(z.string(), z.unknown()).default({}),
+
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),

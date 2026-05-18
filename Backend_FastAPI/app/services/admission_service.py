@@ -3593,6 +3593,28 @@ async def update_profile(
         profile.academic_history = data["academic_history"]
         flag_modified(profile, "academic_history")
 
+    # =========================================================================
+    # Q9 #07 PR5 v1.3 phase1_09 — persist priority bonus fields from payload.
+    # 2-field parallel design: cultural_education_level + vocational_qualification.
+    # Legacy high_school_id / kv_resolved / area_resolution_reason DROPPED.
+    # =========================================================================
+    if "cultural_education_level" in data:
+        profile.cultural_education_level = data["cultural_education_level"]
+    if "vocational_qualification" in data and data["vocational_qualification"] is not None:
+        profile.vocational_qualification = data["vocational_qualification"]
+    if "permanent_commune_code" in data:
+        profile.permanent_commune_code = data["permanent_commune_code"]
+    if "area_resolution_basis" in data:
+        profile.area_resolution_basis = data["area_resolution_basis"]
+    if "priority_object_codes" in data and data["priority_object_codes"] is not None:
+        profile.priority_object_codes = data["priority_object_codes"]
+        flag_modified(profile, "priority_object_codes")
+    if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
+        profile.priority_object_evidence = data["priority_object_evidence"]
+        flag_modified(profile, "priority_object_evidence")
+    # Note: priority_resolution_snapshot KHÔNG set qua candidate payload —
+    # frozen at submit T1 + re-frozen at engine T6 (service-layer only).
+
     # ✅ Phase 6: Update Admission Scores
     if "admission_scores" in data and data["admission_scores"] is not None:
         # Extract subject scores map from Pydantic model dict

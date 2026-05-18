@@ -60,8 +60,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-import structlog
+from decimal import Decimal
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.events import SystemEvents
@@ -69,6 +70,7 @@ from ..utils.exceptions import BusinessRuleViolation
 from .admission_scoring_service import (
     AdmissionScoringService,
     AdmissionScoreResult,
+    DisqualificationReason,
     ProfileStatus,
 )
 
@@ -138,16 +140,23 @@ def resolve_effective_bonus_rule(path: "AdmissionPath") -> Optional[Dict[str, An
 def _evaluate_single_choice(
     profile: "AdmissionProfile",
     choice: "AdmissionProfileChoice",
+    priority_bonus: Decimal = Decimal("0"),
 ) -> Tuple[str, Optional[AdmissionScoreResult], List[str]]:
     """Evaluate ONE choice in isolation — gates first, then scoring.
+
+    Q9 #07 CR-P0 fix: ``priority_bonus`` is added to ``final_score``
+    after the raw score is calculated, and the ``passed`` flag is
+    re-checked against ``min_score``. Without this addition the snapshot
+    columns are decorative — quy chế Bộ GDĐT bị vi phạm vì candidate
+    ưu tiên KHÔNG được hưởng quyền lợi cộng điểm.
 
     Returns:
         (decision, score_result_or_none, reason_codes)
         decision ∈ {'admitted', 'rejected'} — waitlist deferred Q-P3-05
 
-    Side effects: NONE — pure decision computation. Caller writes
-    `choice.decision` + `choice.eligibility_check_result` based on returned
-    decision + reason codes.
+    Side effects: mutates ``score_result.final_score`` / ``score_result.passed`` /
+    ``score_result.failure_reasons`` / ``score_result.disqualification_codes``
+    when priority bonus flips the pass/fail outcome.
     """
     reason_codes: List[str] = []
     path = choice.admission_path
@@ -189,6 +198,39 @@ def _evaluate_single_choice(
             allowed_subjects=allowed_subjects,
             subject_weights=None,  # Phase 4: read from path snapshot
         )
+
+        # Q9 #07 CR-P0: apply priority bonus to final_score + re-check
+        # passed flag against min_score threshold. This is the load-
+        # bearing line — without it the snapshot columns get written
+        # but the decision is computed from raw score only, silently
+        # rejecting candidates who qualify for the bonus.
+        if (
+            score_result.status == ProfileStatus.VALID
+            and score_result.final_score is not None
+            and priority_bonus > Decimal("0")
+        ):
+            boosted = score_result.final_score + priority_bonus
+            min_threshold = score_result.min_score_threshold
+            score_result.final_score = boosted
+            if min_threshold is None or boosted >= min_threshold:
+                # Bonus flipped fail → pass. Clean up the "below min"
+                # disqualification artifacts so audit shows what really
+                # happened (raw fail + bonus rescue).
+                was_failing_on_min = (
+                    DisqualificationReason.BELOW_MIN_SCORE.value
+                    in score_result.disqualification_codes
+                )
+                if was_failing_on_min:
+                    score_result.disqualification_codes = [
+                        c for c in score_result.disqualification_codes
+                        if c != DisqualificationReason.BELOW_MIN_SCORE.value
+                    ]
+                    score_result.failure_reasons = [
+                        r for r in score_result.failure_reasons
+                        if "điểm chuẩn" not in r.lower()
+                    ]
+                score_result.passed = True
+
         reason_codes.extend(score_result.disqualification_codes)
         if score_result.status == ProfileStatus.INVALID:
             return "rejected", score_result, reason_codes
@@ -309,9 +351,70 @@ async def evaluate_cascade(
         path = choice.admission_path
         choice.bonus_rule_snapshot = resolve_effective_bonus_rule(path)
 
-        # Per-choice decision (gates + scoring)
+        # Q9 #07 PR2b: snapshot priority bonus (KV + UT) at T6 publish
+        # time alongside bonus_rule_snapshot. Same freeze semantic — later
+        # admin edits to priority_*_config tables do NOT mutate the
+        # snapshot. Engine treats NULL rule + missing rates as 0đ
+        # (graceful for legacy 315 profiles without backfill).
+        # Lazy import: priority_service imports app.models which would
+        # create a circular dep at module load time of this engine file.
+        from app.services.priority_service import calculate_priority_bonus
+
+        # Eager-load-safe access via __dict__.get (NOT getattr): plain
+        # ``getattr(path, "admission_round", None)`` would trigger a
+        # SQLAlchemy lazy-load in async context → MissingGreenlet on
+        # paths that don't pre-load the relation (existing Phase 3 API
+        # tests + legacy callers). __dict__.get returns None when the
+        # relation hasn't been eager-loaded, letting us skip the
+        # priority calc gracefully instead of crashing.
+        round_obj = path.__dict__.get("admission_round")
+        academic_year = (
+            round_obj.__dict__.get("academic_year") if round_obj else None
+        )
+        if academic_year is None:
+            # Review-3 MAJOR fix: observable defense-in-depth so a prod
+            # caller that forgot to eager-load admission_round surfaces
+            # in logs instead of silently scoring 0đ for every candidate.
+            # The router-side fix (selectinload AdmissionPath.admission_round)
+            # closes the current gap; this warning catches future regressions.
+            log.warning(
+                "priority_bonus_skipped_missing_academic_year",
+                profile_id=getattr(profile, "id", None),
+                choice_id=getattr(choice, "id", None),
+                path_id=getattr(path, "id", None),
+                reason=(
+                    "admission_round relation not eager-loaded (or NULL "
+                    "academic_year). Priority bonus will be 0đ for this "
+                    "choice — verify the caller's selectinload chain."
+                ),
+            )
+        if academic_year is not None:
+            (
+                choice.priority_area_bonus_snapshot,
+                choice.priority_object_bonus_snapshot,
+                choice.priority_config_snapshot,
+            ) = await calculate_priority_bonus(
+                db=db,
+                profile=profile,
+                rule=choice.bonus_rule_snapshot,
+                academic_year=academic_year,
+            )
+
+        # Q9 #07 CR-P0: feed the priority bonus total into the decision
+        # so the snapshot columns actually affect admit/reject. Without
+        # this, ưu tiên candidates get the snapshot written but still
+        # bounced for raw-score < min_score (quy chế Bộ vi phạm).
+        # getattr-with-default keeps existing Phase 3 SimpleNamespace
+        # stubs working when academic_year is missing → snapshot fields
+        # never set → read would AttributeError on the stub.
+        priority_bonus_total = (
+            (getattr(choice, "priority_area_bonus_snapshot", None) or Decimal("0"))
+            + (getattr(choice, "priority_object_bonus_snapshot", None) or Decimal("0"))
+        )
+
+        # Per-choice decision (gates + scoring + priority bonus)
         decision, score_result, reason_codes = _evaluate_single_choice(
-            profile, choice,
+            profile, choice, priority_bonus=priority_bonus_total,
         )
         choice.decision = decision
 

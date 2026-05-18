@@ -4,7 +4,7 @@ fields on ``AdmissionPathCreate`` / ``AdmissionPathUpdate`` /
 phase1_02).
 
 Codex P2 review on PR-1B' chốt: ``bonus_rule_override`` ships as a
-typed Pydantic shape (``apply_area_bonus`` / ``apply_subject_bonus``
+typed Pydantic shape (``apply_area_bonus`` / ``apply_object_bonus``
 / ``max_total_bonus``) instead of a raw JSONB blob. This file
 locks:
 
@@ -44,20 +44,20 @@ from app.schemas.admission_path import (
 def test_bonus_rule_override_accepts_all_three_fields() -> None:
     payload = {
         "apply_area_bonus": True,
-        "apply_subject_bonus": False,
+        "apply_object_bonus": False,
         "max_total_bonus": 2.75,
     }
     rule = BonusRuleOverride.model_validate(payload)
     assert rule.apply_area_bonus is True
-    assert rule.apply_subject_bonus is False
+    assert rule.apply_object_bonus is False
     assert rule.max_total_bonus == pytest.approx(2.75)
 
 
 def test_bonus_rule_override_max_total_bonus_optional_null() -> None:
     """``max_total_bonus`` is the only optional field — NULL = no
-    cap on the combined area + subject bonus."""
+    cap on the combined area + object bonus."""
     rule = BonusRuleOverride.model_validate(
-        {"apply_area_bonus": False, "apply_subject_bonus": False}
+        {"apply_area_bonus": False, "apply_object_bonus": False}
     )
     assert rule.max_total_bonus is None
 
@@ -67,11 +67,11 @@ def test_bonus_rule_override_requires_apply_area_bonus() -> None:
     boolean choice rather than implying False via omission."""
     with pytest.raises(ValidationError):
         BonusRuleOverride.model_validate(
-            {"apply_subject_bonus": True, "max_total_bonus": 1.0}
+            {"apply_object_bonus": True, "max_total_bonus": 1.0}
         )
 
 
-def test_bonus_rule_override_requires_apply_subject_bonus() -> None:
+def test_bonus_rule_override_requires_apply_object_bonus() -> None:
     with pytest.raises(ValidationError):
         BonusRuleOverride.model_validate(
             {"apply_area_bonus": True, "max_total_bonus": 1.0}
@@ -84,7 +84,7 @@ def test_bonus_rule_override_max_total_bonus_lower_bound() -> None:
         BonusRuleOverride.model_validate(
             {
                 "apply_area_bonus": True,
-                "apply_subject_bonus": True,
+                "apply_object_bonus": True,
                 "max_total_bonus": -0.1,
             }
         )
@@ -97,7 +97,7 @@ def test_bonus_rule_override_max_total_bonus_upper_bound() -> None:
         BonusRuleOverride.model_validate(
             {
                 "apply_area_bonus": True,
-                "apply_subject_bonus": True,
+                "apply_object_bonus": True,
                 "max_total_bonus": 10.01,
             }
         )
@@ -111,7 +111,7 @@ def test_bonus_rule_override_rejects_extra_keys() -> None:
         BonusRuleOverride.model_validate(
             {
                 "apply_area_bonus": True,
-                "apply_subject_bonus": True,
+                "apply_object_bonus": True,
                 "max_total_bonus": 1.0,
                 "stray_key": "ignored_silently?",
             }
@@ -173,7 +173,7 @@ def test_create_bonus_rule_override_passes_through_typed() -> None:
     payload = _create_baseline_payload() | {
         "bonus_rule_override": {
             "apply_area_bonus": True,
-            "apply_subject_bonus": True,
+            "apply_object_bonus": True,
             "max_total_bonus": 2.0,
         },
     }
@@ -220,7 +220,7 @@ def test_update_bonus_rule_override_typed() -> None:
         {
             "bonus_rule_override": {
                 "apply_area_bonus": False,
-                "apply_subject_bonus": True,
+                "apply_object_bonus": True,
                 "max_total_bonus": None,
             }
         }
@@ -235,9 +235,20 @@ def test_update_bonus_rule_override_typed() -> None:
 
 
 def _response_baseline_payload() -> dict:
-    """Minimum valid response payload mirroring what the BE emits."""
+    """Minimum valid response payload mirroring what the BE emits.
+
+    W11-T.1 fix (Q9 #07 PR1 bundle per memory test-fixture-drift-after-
+    policy-refactor): added 3 FK id fields that Phase 2 PR-2B v2 +
+    Phase 3 PR-3A made REQUIRED on AdmissionPathResponse
+    (``academic_info_id`` / ``admission_method_id`` /
+    ``admission_round_id``) — fixture had drifted since the schema bump.
+    """
     return {
         "id": 1,
+        # Phase 2 + Phase 3 required FK ids — drifted fixture, see W11-T.1.
+        "academic_info_id": 1,
+        "admission_method_id": 1,
+        "admission_round_id": 1,
         "status": "draft",
         "display_name": "CNTT 2026 — Xét học bạ",
         "display_order": 0,
@@ -296,7 +307,7 @@ def test_response_round_trips_typed_bonus_rule_override() -> None:
     payload = _response_baseline_payload() | {
         "bonus_rule_override": {
             "apply_area_bonus": True,
-            "apply_subject_bonus": True,
+            "apply_object_bonus": True,
             "max_total_bonus": 2.75,
         },
     }

@@ -56,11 +56,49 @@ def _user(role: UserRole):
 def _make_service():
     """Service stub with mocked repo. Both ``create`` and ``update``
     echo their input back as the resulting path so we can inspect
-    the persisted column dict."""
+    the persisted column dict.
+
+    W11-T.2 fix (Q9 #07 PR1 bundle per memory test-fixture-drift-after-
+    policy-refactor): ``create_path`` Phase 2 PR-2B v2 now calls
+    ``self.db.get(OfferingAcademicInfo, ...)`` upfront to resolve
+    academic_year for the DOT_1 auto-resolution shim, AND calls
+    ``self.db.get(OfferingAdmissionRound, ...)`` when admission_round_id
+    is explicit. Both `db.get` calls must be AsyncMock or `await` raises
+    TypeError. Side-effect dispatches by model class so a single mock
+    handles both lookups.
+    """
     service = AdmissionPathService.__new__(AdmissionPathService)
     service.db = MagicMock()
+
+    async def _fake_db_get(model_cls, obj_id):
+        # Imported inline so the fixture stays independent of the
+        # service file's import order.
+        from app.models.offering_academic_info import OfferingAcademicInfo
+        from app.models.offering_admission_round import (
+            OfferingAdmissionRound,
+        )
+        if model_cls is OfferingAcademicInfo:
+            return SimpleNamespace(id=obj_id, academic_year=2026)
+        if model_cls is OfferingAdmissionRound:
+            return SimpleNamespace(id=obj_id, academic_year=2026)
+        return None
+
+    service.db.get = AsyncMock(side_effect=_fake_db_get)
+
+    # AdmissionRoundRepository.get_default_dot1 calls self.db.execute(...)
+    # then .scalar_one_or_none(). Mock returns a SimpleNamespace round so
+    # the auto-resolve branch in create_path doesn't BusinessRuleViolation.
+    _fake_round = SimpleNamespace(id=1, academic_year=2026, round_code="DOT_1")
+    _fake_result = MagicMock()
+    _fake_result.scalar_one_or_none = MagicMock(return_value=_fake_round)
+    service.db.execute = AsyncMock(return_value=_fake_result)
+
     service.repo = MagicMock()
     service.repo.get_path_by_offering_and_method = AsyncMock(return_value=None)
+    service.repo.get_path_by_round_offering_method = AsyncMock(return_value=None)
+    # Phase 2 PR-2C v2 duplicate check via 3-col UNIQUE — mock to return
+    # None (no existing path) so create proceeds past the duplicate guard.
+    service.repo.get_path_by_round_and_method = AsyncMock(return_value=None)
 
     persisted: dict = {}
 
@@ -97,7 +135,7 @@ def _admin_create_payload(**overrides) -> AdmissionPathCreate:
         "method_quota": 50,
         "bonus_rule_override": {
             "apply_area_bonus": True,
-            "apply_subject_bonus": False,
+            "apply_object_bonus": False,
             "max_total_bonus": 2.5,
         },
     }
@@ -131,7 +169,7 @@ class TestCreatePathAdminCanSetGovernance:
         # never sees a raw Pydantic instance on the model attribute.
         assert persisted["bonus_rule_override"] == {
             "apply_area_bonus": True,
-            "apply_subject_bonus": False,
+            "apply_object_bonus": False,
             "max_total_bonus": 2.5,
         }
         assert isinstance(path.bonus_rule_override, dict)
@@ -168,7 +206,7 @@ class TestCreatePathManagerGovernanceGuard:
                 {
                     "bonus_rule_override": {
                         "apply_area_bonus": True,
-                        "apply_subject_bonus": False,
+                        "apply_object_bonus": False,
                     }
                 }
             ),
@@ -245,7 +283,7 @@ class TestUpdatePathManagerGovernanceGuard:
                 {
                     "bonus_rule_override": {
                         "apply_area_bonus": True,
-                        "apply_subject_bonus": False,
+                        "apply_object_bonus": False,
                     }
                 }
             ),
@@ -307,7 +345,7 @@ class TestUpdatePathAdminPersistsPhase1_03Fields:
             {
                 "bonus_rule_override": {
                     "apply_area_bonus": False,
-                    "apply_subject_bonus": True,
+                    "apply_object_bonus": True,
                     "max_total_bonus": 1.0,
                 }
             }
@@ -315,7 +353,7 @@ class TestUpdatePathAdminPersistsPhase1_03Fields:
         await service.update_path(path, update, _user(UserRole.ADMIN))
         assert persisted["bonus_rule_override"] == {
             "apply_area_bonus": False,
-            "apply_subject_bonus": True,
+            "apply_object_bonus": True,
             "max_total_bonus": 1.0,
         }
 
@@ -328,7 +366,7 @@ class TestUpdatePathAdminPersistsPhase1_03Fields:
         path = _draft_path()
         path.bonus_rule_override = {
             "apply_area_bonus": True,
-            "apply_subject_bonus": True,
+            "apply_object_bonus": True,
             "max_total_bonus": None,
         }
         update = AdmissionPathUpdate.model_validate(

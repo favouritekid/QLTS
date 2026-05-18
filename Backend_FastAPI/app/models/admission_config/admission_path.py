@@ -197,10 +197,11 @@ class AdmissionPath(Base):
     # phase1_02 (#184 Wave 1) — path-level bonus rule override above
     # the method default. Same JSONB shape as
     # AdmissionMethod.default_bonus_rule. NULL = inherit from method.
+    # (apply_subject_bonus renamed -> apply_object_bonus in phase1_08a / Q9 #07 PR1.)
     # Resolution precedence (PLAN line 787-789):
     #   effective = path.bonus_rule_override
     #               ?? method.default_bonus_rule
-    #               ?? {"apply_area_bonus": false, "apply_subject_bonus": false}
+    #               ?? {"apply_area_bonus": false, "apply_object_bonus": false}
     bonus_rule_override = Column(
         JSONB,
         nullable=True,
