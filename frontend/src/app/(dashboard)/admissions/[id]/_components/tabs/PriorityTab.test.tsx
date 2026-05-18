@@ -96,12 +96,11 @@ describe("PriorityTab", () => {
     mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     const profile = buildProfile({
       status: "submitted" as any,
-      // @ts-expect-error JSONB dynamic
       priority_resolution_snapshot: {
         kv_resolved: "KV2",
         pathway: "thpt_multi_school",
         rule_applied: "longest_duration",
-      },
+      } as any,
     })
     render(<HarnessWrapper profile={profile} />)
     expect(screen.getByText(/Khu vực ưu tiên \(đã chốt\)/i)).toBeInTheDocument()
