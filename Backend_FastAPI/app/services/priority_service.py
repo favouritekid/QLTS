@@ -466,11 +466,24 @@ async def resolve_kv_for_profile(
         }
 
     # --- Rows 1, 2, 4: multi-school rule (THPT or TC) ---
+    # Level matching: basis "THPT" matches both standalone THPT + liên cấp
+    # THCS_THPT (candidate học liên cấp 2-3 + tốt nghiệp THPT). Basis "TC"
+    # matches canonical "TRUNG_HOC_NGHE" (vn_school enum) + legacy "TC"
+    # text. Memory note: vn_school.level enum = THCS/THPT/THCS_THPT/
+    # TRUNG_HOC_NGHE/OTHER per phase1_09 schema; AcademicRecordSchema
+    # validates same set per Phase D.1 (Q9 #07).
+    if basis == "THPT":
+        accepted_levels = {"THPT", "THCS_THPT"}
+    elif basis == "TC":
+        accepted_levels = {"TRUNG_HOC_NGHE", "TC"}
+    else:  # defensive (shouldn't reach here)
+        accepted_levels = {basis}
+
     history = getattr(profile, "academic_history", None) or []
     basis_entries = [
         e for e in history
         if isinstance(e, dict)
-        and e.get("level") == basis
+        and e.get("level") in accepted_levels
         and e.get("school_id")
     ]
 

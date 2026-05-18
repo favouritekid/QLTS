@@ -280,6 +280,85 @@ async def test_resolve_kv_no_qualifying_entries():
     assert meta["reason"] == "no_qualifying_entries"
 
 
+@pytest.mark.asyncio
+async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
+    """Row 1+ extension: graduated_thpt + level='THCS_THPT' (liên cấp 2-3) → KV resolve.
+
+    Bug fix (Q9 #07 Phase D.4 audit): engine filter previously hard-coded
+    level=='THPT' which excluded THCS_THPT liên cấp candidates. Both
+    standalone THPT + THCS_THPT now accepted for THPT basis.
+    """
+    profile = _mock_profile(
+        cultural_education_level="graduated_thpt",
+        academic_history=[
+            {
+                "school_id": 100,
+                "level": "THCS_THPT",  # ← liên cấp
+                "year_from": 2020,
+                "year_to": 2022,
+                "grade_to": 12,
+            },
+        ],
+    )
+    db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
+    kv, meta = await resolve_kv_for_profile(profile, db)
+    assert kv == "KV1"
+    assert meta["pathway"] == "thpt_multi_school"
+    assert meta["breakdown"]["winner_years"] == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_kv_tc_accepts_trung_hoc_nghe():
+    """Row 4 fix: graduated_thcs + trung_cap + level='TRUNG_HOC_NGHE' (canonical
+    vn_school enum value) → KV resolve.
+
+    Bug (Q9 #07 Phase D.4 audit): basis 'TC' filter previously expected
+    level=='TC' which never matches Phase D.1 schema enum
+    {THCS, THPT, THCS_THPT, TRUNG_HOC_NGHE, OTHER}. Fix accepts both
+    'TRUNG_HOC_NGHE' (canonical) and 'TC' (legacy text fallback).
+    """
+    profile = _mock_profile(
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="trung_cap",
+        academic_history=[
+            {
+                "school_id": 200,
+                "level": "TRUNG_HOC_NGHE",  # ← canonical vn_school enum
+                "year_from": 2022,
+                "year_to": 2024,
+                "grade_to": 12,
+            },
+        ],
+    )
+    db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
+    kv, meta = await resolve_kv_for_profile(profile, db)
+    assert kv == "KV1"
+    assert meta["pathway"] == "tc_multi_school"
+    assert meta["breakdown"]["target_level"] == "TC"
+
+
+@pytest.mark.asyncio
+async def test_resolve_kv_tc_accepts_legacy_tc_text():
+    """Backward compat: legacy academic_history with level='TC' text still works."""
+    profile = _mock_profile(
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="cao_dang",
+        academic_history=[
+            {
+                "school_id": 200,
+                "level": "TC",  # ← legacy
+                "year_from": 2022,
+                "year_to": 2024,
+                "grade_to": 12,
+            },
+        ],
+    )
+    db = _mock_db(school_kv_sequence=["KV2-NT", "KV2-NT", "KV2-NT"])
+    kv, meta = await resolve_kv_for_profile(profile, db)
+    assert kv == "KV2-NT"
+    assert meta["pathway"] == "tc_multi_school"
+
+
 # =============================================================================
 # C.4 — validate_eligibility()
 # =============================================================================
