@@ -196,6 +196,19 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH"},
+        # Q9 #07 Phase E — Priority bonus override + UT evidence verify/reject.
+        # Officer scope: must be assigned to profile (IDOR check trong service);
+        # manager + admin inherit via diamond. Accountant DENY block below.
+        # Service-layer additional gates: version guard (memory
+        # `version-guard-before-state-machine`) + status whitelist (officer mode).
+        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH"},
+        # Wave 1 read endpoints — KV preview + UT catalog. Used by candidate
+        # (BASIC_USER_TEMPLATE also has these) AND officer/manager/admin via
+        # this template. Accountant DENY block below.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/preview-priority-kv",           "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/priority-objects/catalog",        "action": "GET"},
         # PR #7 — officer can create the official fee record for their own
         # assigned profile. Casbin admits the route; _fee_calc_authorized +
         # _compute_permissions narrow the scope to the owning officer on a
@@ -360,6 +373,17 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH",  "eft": "deny"},
+        # Q9 #07 Phase E — Priority bonus mutations: accountant explicitly
+        # denied. Finance staff không quyết định KV ưu tiên / verify UT
+        # evidence. Mirror officer ALLOW block above so accountant via tree
+        # inheritance (role:accountant → role:officer) bounces off deny effect.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH", "eft": "deny"},
+        # Wave 1 read endpoints — accountant không cần xem priority data;
+        # separation-of-duties giữ kế toán khỏi admission scoring info.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/preview-priority-kv",           "action": "POST",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/priority-objects/catalog",        "action": "GET",   "eft": "deny"},
         # F8 + F9 fix 2026-05-16: accountant inherits Officer (g, role:accountant,
         # role:officer) which grants admission/lead list endpoints. Finance
         # workflows operate on profile_id passed from invoice/payment forms,
@@ -626,6 +650,13 @@ BASIC_USER_TEMPLATE: PolicyTemplate = {
         # Admission config (read-only lookup data for all users)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
+        # Q9 #07 Phase E Wave 1 — candidate-facing priority bonus reads.
+        # KV preview + UT catalog cho candidate self-fill priority data.
+        # Officer/manager/admin inherit through their templates (not via
+        # g-rule chain — those have explicit entries in OFFICER_TEMPLATE).
+        # Accountant DENY in ACCOUNTANT_TEMPLATE overrides any allow.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/preview-priority-kv",    "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/priority-objects/catalog", "action": "GET"},
         # NOTE: Admission confirmation is now PUBLIC via magic link
         # POST /api/admissions/confirm/{token} - no auth required (token + CCCD = auth)
     ]

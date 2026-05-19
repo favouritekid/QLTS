@@ -112,6 +112,12 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.ADMISSION_ENROLLED: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_WITHDRAWN: NotificationEventGroup.APPLICATION,
     SystemEvents.ADMISSION_ROLLED_BACK: NotificationEventGroup.APPLICATION,
+    # Q9 #07 Phase E (2026-05-19): officer write-path on candidate priority bonus
+    # data. Belongs to APPLICATION group because they affect candidate's
+    # admission profile (KV override + UT verify/reject).
+    SystemEvents.PRIORITY_KV_OVERRIDDEN: NotificationEventGroup.APPLICATION,
+    SystemEvents.PRIORITY_OBJECT_VERIFIED: NotificationEventGroup.APPLICATION,
+    SystemEvents.PRIORITY_OBJECT_REJECTED: NotificationEventGroup.APPLICATION,
 
     # Finance events
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,

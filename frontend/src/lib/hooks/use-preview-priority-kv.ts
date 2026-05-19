@@ -23,6 +23,7 @@ export const priorityKvQueryKeys = {
       body.area_resolution_basis ?? null,
       body.permanent_commune_code ?? null,
       JSON.stringify(body.academic_history ?? []),
+      JSON.stringify(body.priority_object_codes ?? []),
     ] as const,
 }
 

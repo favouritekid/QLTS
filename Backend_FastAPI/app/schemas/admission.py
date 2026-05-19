@@ -14,6 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Any, Dict, List, Literal, Optional
 import html
 
@@ -2042,13 +2043,14 @@ class AdmissionAdminRollbackResponse(BaseModel):
 
 
 class PreviewPriorityKvRequest(BaseModel):
-    """Optional form overrides for live KV preview. NULL fields fall back to profile current state.
+    """Optional form overrides for live KV+UT preview. NULL fields fall back to profile current state.
 
-    Used by candidate FE PriorityTab + AcademicHistoryTab to compute KV
-    real-time as user edits form, BEFORE submit (T1) freezes snapshot.
+    Used by candidate FE PriorityTab + AcademicHistoryTab + UtEvidenceCard
+    to compute both KV (khu vực) + UT (đối tượng) potential bonus real-time
+    as user edits form, BEFORE submit (T1) freezes snapshot.
 
     All fields optional — endpoint can be called with empty body to
-    resolve KV from profile state-as-is.
+    resolve from profile state-as-is.
     """
 
     cultural_education_level: Optional[str] = Field(None)
@@ -2056,25 +2058,85 @@ class PreviewPriorityKvRequest(BaseModel):
     area_resolution_basis: Optional[str] = Field(None)
     permanent_commune_code: Optional[str] = Field(None, max_length=20)
     academic_history: Optional[List[AcademicRecordSchema]] = Field(None)
+    # Phase E wireframe — UT live preview support
+    priority_object_codes: Optional[List[str]] = Field(
+        None,
+        description="UT sub_codes (vd ['04', '06']) overrided cho preview. Engine returns MAX bonus assuming all verified."
+    )
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
 
 class PreviewPriorityKvResponse(BaseModel):
-    """Engine resolve_kv_for_profile() result for FE preview.
+    """Engine resolve_kv_for_profile() + UT potential bonus result for FE preview.
 
-    Mirror of internal engine return tuple `(kv, meta)`. KV is None when
-    engine cannot resolve (e.g., missing cultural level, no qualifying
-    entries, manual override pending). `requires_manual_override=True`
-    signals officer/admin must intervene.
+    Mirror of internal engine return tuple `(kv, meta)` + extends với UT
+    potential bonus (Phase E wireframe). KV is None when engine cannot
+    resolve. `requires_manual_override=True` signals officer/admin must intervene.
+
+    UT semantics for preview:
+    - `object_bonus_potential` = MAX rate across submitted codes assuming ALL verified
+    - `object_bonus_verified`  = MAX rate restricted to codes có status='verified'
+      (= what engine T6 cascade actually counts). Pending evidence excluded.
+    - Candidate UI shows "potential" với badge ⏳ if pending; officer flow
+      verifies → moves to verified bucket. Mỗi diện hiển thị individual status.
     """
 
+    # --- KV (existing Phase D) ---
     kv_resolved: Optional[str] = Field(None, description="KV1 | KV2-NT | KV2 | KV3, or None")
-    pathway: Optional[str] = Field(None, description="thpt_multi_school | tc_multi_school | commune_fallback | commune_special | manual | not_resolved")
-    rule_applied: Optional[str] = Field(None, description="longest_duration | tiebreak_graduation_school | ambiguous_requires_manual | commune_lookup | manual_override")
+    pathway: Optional[str] = Field(None)
+    rule_applied: Optional[str] = Field(None)
     requires_manual_override: bool = Field(False)
-    reason: Optional[str] = Field(None, description="Why KV not resolved (e.g., cultural_not_set, no_qualifying_entries)")
-    breakdown: Optional[dict] = Field(None, description="Detailed per-year-per-school breakdown for audit")
+    reason: Optional[str] = Field(None)
+    breakdown: Optional[dict] = Field(None)
+    # Wire contract: Decimal → string by default trên Pydantic v2 json mode
+    # (jsonable_encoder).  FE expects number (Zod z.number() + .toFixed()).
+    # Schema field types là `float` để Pydantic auto-coerce Decimal → float
+    # serialize as JSON number. BE engine vẫn dùng Decimal internal — chỉ
+    # response shape thay đổi.
+    area_bonus: Optional[float] = Field(None, description="KV bonus điểm (rate * 1.0)")
+
+    # --- UT (Phase E wireframe extension) ---
+    object_bonus_potential: Optional[float] = Field(
+        None,
+        description="MAX UT bonus assuming all submitted codes verified — preview only"
+    )
+    object_bonus_verified: Optional[float] = Field(
+        None,
+        description="MAX UT bonus restricted to verified codes — engine T6 actual"
+    )
+    ut_breakdown: Optional[dict] = Field(
+        None,
+        description="{ codes_submitted: [...], applied_code_potential: '04', applied_rate_potential: 1.00, verified_codes: ['04'], applied_code_verified: '04', applied_rate_verified: 1.00 }"
+    )
+
+    # --- Combined total ---
+    total_bonus_potential: Optional[float] = Field(
+        None,
+        description="area_bonus + object_bonus_potential — candidate-facing total"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PriorityObjectCatalogItem(BaseModel):
+    """One UT (đối tượng ưu tiên) code from `priority_object_config` table.
+
+    Returned by `GET /api/v2/admissions/priority-objects/catalog?academic_year=`
+    — candidate-facing catalog cho UT picker trong PriorityTab.
+
+    Mirrors PriorityObjectConfigResponse shape (admin CRUD endpoint) but
+    excludes admin-only metadata (created_at/updated_at).
+    """
+
+    group_code: str = Field(..., description="UT1 | UT2 | UT3+")
+    sub_code: str = Field(..., description="2-digit numeric, vd '01'..'07'")
+    description: str = Field(..., description="VD 'Anh hùng LLVTND, Anh hùng lao động'")
+    # Wire contract: float (not Decimal) — Pydantic auto-coerce DB Decimal
+    # → float for JSON number output. FE Zod expects z.number(). See
+    # PreviewPriorityKvResponse note above for rationale.
+    bonus_points: float = Field(..., description="Bonus rate cho diện này (vd 2.00 cho UT01)")
+    evidence_doc_type: Optional[str] = Field(None, description="Gợi ý loại minh chứng (vd 'Quyết định phong tặng')")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2128,4 +2190,5 @@ __all__ = [
     # Q9 #07 Phase D — Live KV preview
     "PreviewPriorityKvRequest",
     "PreviewPriorityKvResponse",
+    "PriorityObjectCatalogItem",
 ]

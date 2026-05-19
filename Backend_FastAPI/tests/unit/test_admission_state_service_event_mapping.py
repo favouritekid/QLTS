@@ -120,11 +120,15 @@ def test_approved_and_overridden_share_admitted_event() -> None:
 
 
 def test_deferred_admission_events_locked_set() -> None:
-    """Phase 3 PR-3C Sub-3.5 shrunk 1 → 0: T17 ADMISSION_ROLLED_BACK wired
-    via TRANSITION_PAIR_TO_EVENT (11 pair entries — one per non-final
-    source state). ALL 12 catalog events now have a writer.
+    """Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events to
+    catalog seed; dispatch sites ship Wave 2 (override_kv) + Wave 3
+    (verify/reject evidence). Tracked here until those waves merge.
     """
-    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset()
+    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
+        "PRIORITY_KV_OVERRIDDEN",
+        "PRIORITY_OBJECT_VERIFIED",
+        "PRIORITY_OBJECT_REJECTED",
+    })
 
 
 def test_deferred_set_is_frozenset() -> None:
@@ -155,21 +159,25 @@ def test_mapping_and_deferred_are_disjoint() -> None:
     assert overlap == set(), f"Events both mapped and deferred: {overlap!r}"
 
 
-def test_total_admission_events_is_13() -> None:
-    """Catalog ships 13 ADMISSION_* milestone events post-Wave 5 2026-05-16:
+def test_total_admission_events_is_16() -> None:
+    """Catalog ships 16 admission-tracked events post-Q9 #07 Phase E Wave 1:
     - 10 distinct events via LEGACY_STATUS_TO_EVENT (target-keyed)
     - 2 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED + T11 WAITLIST_REJECTED)
     - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T17 ROLLED_BACK — 11 pair entries
       collapse to single event name)
+    - 3 Q9 #07 Phase E PRIORITY_* events deferred (dispatch ships Wave 2+3)
 
     Wave 5 added T11 ADMISSION_WAITLIST_REJECTED to distinguish manual
     waitlist rejection from generic engine cascade rejection.
+
+    Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events:
+    PRIORITY_KV_OVERRIDDEN / PRIORITY_OBJECT_VERIFIED / PRIORITY_OBJECT_REJECTED.
     """
     mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
     pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
     deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
     total = len(mapped | pair | deferred)
-    assert total == 13
+    assert total == 16
 
 
 # ---------------------------------------------------------------------------
