@@ -647,6 +647,7 @@ async def preview_priority_kv(
     payload: schemas.PreviewPriorityKvRequest = Body(default_factory=lambda: schemas.PreviewPriorityKvRequest()),
     db: AsyncSession = Depends(database.get_db),
     profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
 ):
     """Real-time KV resolution cho FE draft state (Q9 #07 Phase D.4).
 
@@ -700,7 +701,11 @@ async def preview_priority_kv(
     from sqlalchemy import select as _sel
     from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
 
-    # Best-effort academic_year — preview doesn't always have round loaded
+    # Best-effort academic_year — preview doesn't always have round loaded.
+    # Source order: admission_round (eager-loaded chain) → profile.academic_year
+    # snapshot column → DEFAULT_ADMISSION_YEAR (last resort, log warning).
+    # See `profile.academic_year` (models/admission.py:148) — always populated
+    # at profile creation per ADM-017.
     academic_year = None
     try:
         path = getattr(profile, "admission_path", None)
@@ -709,7 +714,13 @@ async def preview_priority_kv(
     except Exception:
         academic_year = None
     if academic_year is None:
-        # Preview fallback: use 2026 for default rate display (FE candidate flow)
+        academic_year = profile.academic_year
+    if academic_year is None:
+        log.warning(
+            "preview_priority_kv.no_academic_year",
+            profile_id=profile_id,
+            fallback=2026,
+        )
         academic_year = 2026
 
     area_bonus = None
@@ -831,7 +842,7 @@ async def preview_priority_kv(
 async def get_priority_object_catalog(
     academic_year: int = 2026,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: models.User = CasbinAuth,
 ):
     """Return list of UT codes admin có configure cho year nhất định.
 

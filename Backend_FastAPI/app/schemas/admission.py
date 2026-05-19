@@ -2089,14 +2089,19 @@ class PreviewPriorityKvResponse(BaseModel):
     requires_manual_override: bool = Field(False)
     reason: Optional[str] = Field(None)
     breakdown: Optional[dict] = Field(None)
-    area_bonus: Optional[Decimal] = Field(None, description="KV bonus điểm (rate * 1.0)")
+    # Wire contract: Decimal → string by default trên Pydantic v2 json mode
+    # (jsonable_encoder).  FE expects number (Zod z.number() + .toFixed()).
+    # Schema field types là `float` để Pydantic auto-coerce Decimal → float
+    # serialize as JSON number. BE engine vẫn dùng Decimal internal — chỉ
+    # response shape thay đổi.
+    area_bonus: Optional[float] = Field(None, description="KV bonus điểm (rate * 1.0)")
 
     # --- UT (Phase E wireframe extension) ---
-    object_bonus_potential: Optional[Decimal] = Field(
+    object_bonus_potential: Optional[float] = Field(
         None,
         description="MAX UT bonus assuming all submitted codes verified — preview only"
     )
-    object_bonus_verified: Optional[Decimal] = Field(
+    object_bonus_verified: Optional[float] = Field(
         None,
         description="MAX UT bonus restricted to verified codes — engine T6 actual"
     )
@@ -2106,7 +2111,7 @@ class PreviewPriorityKvResponse(BaseModel):
     )
 
     # --- Combined total ---
-    total_bonus_potential: Optional[Decimal] = Field(
+    total_bonus_potential: Optional[float] = Field(
         None,
         description="area_bonus + object_bonus_potential — candidate-facing total"
     )
@@ -2127,7 +2132,10 @@ class PriorityObjectCatalogItem(BaseModel):
     group_code: str = Field(..., description="UT1 | UT2 | UT3+")
     sub_code: str = Field(..., description="2-digit numeric, vd '01'..'07'")
     description: str = Field(..., description="VD 'Anh hùng LLVTND, Anh hùng lao động'")
-    bonus_points: Decimal = Field(..., description="Bonus rate cho diện này (vd 2.00 cho UT01)")
+    # Wire contract: float (not Decimal) — Pydantic auto-coerce DB Decimal
+    # → float for JSON number output. FE Zod expects z.number(). See
+    # PreviewPriorityKvResponse note above for rationale.
+    bonus_points: float = Field(..., description="Bonus rate cho diện này (vd 2.00 cho UT01)")
     evidence_doc_type: Optional[str] = Field(None, description="Gợi ý loại minh chứng (vd 'Quyết định phong tặng')")
 
     model_config = ConfigDict(from_attributes=True)

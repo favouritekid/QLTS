@@ -349,7 +349,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
       {/* ───────── 5. ĐỐI TƯỢNG ƯU TIÊN (UT) — Phase E wireframe ───────── */}
       <UtEvidenceCard
         form={form}
-        academicYear={2026}
+        academicYear={profile.academic_year ?? 2026}
         disabled={!isEditable}
       />
     </div>

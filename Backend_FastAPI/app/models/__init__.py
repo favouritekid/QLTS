@@ -120,6 +120,8 @@ from .vn_locality import VnCommuneAreaMap
 # Q9 #07 PR5 v1.3 (phase1_09) — VN school 3-table family + SCD
 # Replaces VnHighSchool (PR1 single-table placeholder, dropped phase1_09)
 from .vn_school import VnSchool, VnSchoolNameHistory, VnSchoolKvAssignment
+# Q9 #07 Phase E Foundation (q9_07_e0a) — priority bonus intervention audit log.
+from .priority_audit import PriorityAuditLog
 
 # Finance Module (Phase 0+1: Foundation)
 from .finance import (
@@ -243,6 +245,8 @@ __all__ = [
     "VnSchool",
     "VnSchoolNameHistory",
     "VnSchoolKvAssignment",
+    # Q9 #07 Phase E Foundation
+    "PriorityAuditLog",
     # Finance Module (Phase 0+1: Foundation)
     # Enums
     "FeeTypeEnum",
