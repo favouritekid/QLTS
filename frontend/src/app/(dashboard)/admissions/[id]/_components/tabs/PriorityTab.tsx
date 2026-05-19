@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ShieldCheck, Info, Lightbulb } from "lucide-react"
+import { ShieldCheck, Lightbulb } from "lucide-react"
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
@@ -75,7 +75,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
     !!cultural, // only fire when cultural set
   )
 
-  // BE-frozen snapshot (post T1 submit)
+  // BE-frozen snapshot (post T1 submit + E.2 manual override keys)
   const frozenSnapshot = profile.priority_resolution_snapshot as
     | {
         kv_resolved?: string
@@ -84,6 +84,14 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         breakdown?: Record<string, unknown>
         requires_manual_override?: boolean
         reason?: string
+        // Phase E.2 — manual override audit trail
+        manual_override_reason?: string
+        manual_override_by?: number | string
+        manual_override_at?: string
+        // Phase A — freeze metadata
+        frozen_at?: string
+        frozen_at_status?: string
+        resolved_by?: string
       }
     | null
     | undefined
@@ -151,6 +159,14 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         frozen={isFrozen}
         loading={previewLoading && !preview}
         emptyStateHint={emptyStateHint}
+        // Phase E.1 audit footer wire — only shown khi ruleApplied='manual_override'
+        manualOverrideReason={frozenSnapshot?.manual_override_reason ?? null}
+        manualOverrideBy={
+          frozenSnapshot?.manual_override_by != null
+            ? String(frozenSnapshot.manual_override_by)
+            : null
+        }
+        manualOverrideAt={frozenSnapshot?.manual_override_at ?? null}
       />
       {/* Phase E.2 (PriorityOverrideDialog) sẽ wire trigger button gated by
           profile.permissions.override_priority_kv here — chưa ship */}
@@ -305,18 +321,10 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             />
           )}
 
-          {/* Admin/manager-only manual override (advanced) */}
-          {areaBasis === "manual_override" && (
-            <div className="rounded-lg border p-3 bg-warning-50 border-warning-200 flex gap-2">
-              <AlertCircle className="h-4 w-4 mt-0.5 text-warning-700 shrink-0" />
-              <div className="text-sm space-y-1">
-                <p className="font-medium text-warning-800">Manual Override (cán bộ ấn định)</p>
-                <p className="text-xs text-warning-700">
-                  KV được cán bộ tuyển sinh chỉ định sau khi thí sinh nộp hồ sơ. Lý do thay đổi <strong>bắt buộc</strong> khai báo và lưu vào nhật ký kiểm toán.
-                </p>
-              </div>
-            </div>
-          )}
+          {/* Manual override admin path — handled trong KvBreakdownCard audit row
+              (Phase E.1) + PriorityOverrideDialog (Phase E.2). KHÔNG hiển thị
+              trong candidate special-case card vì đây là officer/admin action,
+              không phải candidate self-service. */}
         </CardContent>
       </Card>
     </div>
