@@ -390,7 +390,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
         had no business reading lead/admission lists or mutating profiles).
       - Wave 7 (2026-05-16) added 1 deny row on /api/admissions/{id}/
         send-magic-link (W2-1 generate-side endpoint).
-      - Total NOW: 33 deny rows.
+      - Q9 #07 Phase E Wave 1 (2026-05-19) added 5 deny rows for
+        priority bonus routes (preview/catalog + override/verify/reject).
+        Separation-of-duties — finance không touch priority scoring data.
+      - Total NOW: 38 deny rows.
     """
     db_url = os.environ["DATABASE_URL"]
     enforcer, engine = await _seed_test_db_and_load_enforcer(db_url)
@@ -450,6 +453,15 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/leads/import/template",            "GET"),
             # Wave 7 (2026-05-16) — W2-1 magic-link generate accountant deny
             ("/api/admissions/{id}/send-magic-link",  "POST"),
+            # Q9 #07 Phase E Wave 1 (2026-05-19) — priority bonus accountant
+            # deny (5 rows). Separation-of-duties: finance staff không
+            # quyết định KV ưu tiên / verify UT evidence / view priority
+            # data. Migration `q9_07_e0c` seeds these.
+            ("/api/v2/admissions/*/override-priority-kv",          "POST"),
+            ("/api/v2/admissions/*/preview-priority-kv",           "POST"),
+            ("/api/v2/admissions/*/priority-objects/*/verify",     "PATCH"),
+            ("/api/v2/admissions/*/priority-objects/*/reject",     "PATCH"),
+            ("/api/v2/admissions/priority-objects/catalog",        "GET"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "
