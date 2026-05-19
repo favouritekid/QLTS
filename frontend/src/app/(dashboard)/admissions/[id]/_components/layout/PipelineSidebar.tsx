@@ -23,8 +23,17 @@ interface PipelineSidebarProps {
     scores?: { category: string; errors: string[]; count: number }
   } | null
   completionPercent: number
+  /**
+   * Q9 #07 Phase E.3 — show "Duyệt UT" step (id=8) for officer/admin.
+   * Falsy → candidate view, step 8 filtered out (gap-skip per Decision D2).
+   */
+  canVerifyPriorityObject?: boolean
 }
 
+// Q9 #07 Phase E.3 Wave 3 (Decision D2): step 8 = "Duyệt UT" (NEW
+// officer-only); step 9 = Finalize (bumped from 8). Officer gate qua
+// filter — candidate sees `1-2-3-4-5-6-7-9` gap-skip (per plan v3 line
+// 88-90); officer/admin sees full 9 steps.
 const STEPS = [
     { id: 1, label: "Thông tin cá nhân", icon: User },
     { id: 2, label: "Gia đình / Giám hộ", icon: Users },
@@ -33,20 +42,28 @@ const STEPS = [
     { id: 5, label: "Điểm & Điều kiện", icon: Calculator },
     { id: 6, label: "Tài liệu pháp lý", icon: FileText },
     { id: 7, label: "Học phí", icon: Wallet },
-    { id: 8, label: "Hoàn tất & Nộp", icon: CheckSquare },
+    { id: 8, label: "Duyệt UT", icon: Award, officerOnly: true },
+    { id: 9, label: "Hoàn tất & Nộp", icon: CheckSquare },
 ]
 
-export function PipelineSidebar({ 
-  currentStep, 
-  onStepChange, 
-  stepsStatus, 
-  validationErrors = [], 
-  validationSummary, 
+export function PipelineSidebar({
+  currentStep,
+  onStepChange,
+  stepsStatus,
+  validationErrors = [],
+  validationSummary,
   groupedValidationErrors,
-  completionPercent 
+  completionPercent,
+  canVerifyPriorityObject = false,
 }: PipelineSidebarProps) {
   const [isIssuesOpen, setIsIssuesOpen] = useState(false)
-  
+
+  // Q9 #07 Phase E.3 — filter officer-only steps for candidate view.
+  const visibleSteps = useMemo(
+    () => STEPS.filter((s) => !s.officerOnly || canVerifyPriorityObject),
+    [canVerifyPriorityObject],
+  )
+
   // Phase 4 Fix: Progressive Disclosure - Focus current ±1 steps
   const completedSteps = Object.values(stepsStatus).filter(status => status === "success").length
   // Removed local calculation to sync with Backend weighted score
@@ -90,7 +107,7 @@ export function PipelineSidebar({
       <div className="px-1">
         <div className="flex justify-between text-xs text-muted-foreground mb-2">
           <span className="font-medium">Tiến độ</span>
-          <span>{completedSteps}/{STEPS.length} ({completionPercent}%)</span>
+          <span>{completedSteps}/{visibleSteps.length} ({completionPercent}%)</span>
         </div>
         <Progress value={completionPercent} className="h-2" />
       </div>
@@ -98,7 +115,7 @@ export function PipelineSidebar({
       {/* Steps Navigation */}
       <nav className="space-y-3">
       <TooltipProvider>
-        {STEPS.map((step) => {
+        {visibleSteps.map((step) => {
           const status = stepsStatus[step.id] || "locked"
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)

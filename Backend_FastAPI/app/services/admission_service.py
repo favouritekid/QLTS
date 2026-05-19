@@ -1503,6 +1503,16 @@ def _compute_frontend_fields(
                 and status in ["submitted", "reviewing", "revision_requested"]
             )
         ),
+        # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
+        # Used by FE UtEvidenceTab (Step 8 officer-only). Service-layer
+        # (priority_override_service._evidence_mutation_common_checks) refuses
+        # draft/withdrawn/dropped. Officer scope: assigned to profile;
+        # manager/admin via diamond/wildcard.
+        "verify_priority_object": (
+            is_admin
+            or is_manager
+            or (is_officer and is_owner)
+        ) and status not in ["draft", "withdrawn", "dropped"],
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),

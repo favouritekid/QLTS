@@ -171,6 +171,9 @@ from .admission import (
     PriorityObjectCatalogItem,
     # Q9 #07 Phase E.2 — Manual KV override
     OverridePriorityKvRequest,
+    # Q9 #07 Phase E.3 — UT evidence verify/reject
+    VerifyObjectEvidenceRequest,
+    RejectObjectEvidenceRequest,
     EnrollStudentResponse,
     # Bulk action schemas
     BulkApproveRequest,

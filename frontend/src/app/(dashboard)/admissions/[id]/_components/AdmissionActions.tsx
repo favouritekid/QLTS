@@ -146,15 +146,17 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Back Button - always available for steps 2-6, independent of save permission */}
-          {currentStep > 1 && currentStep < 8 && (
+          {/* Back Button - always available for steps 2-8 (Phase E.3 bump
+              from <8 to <9 — step 8 "Duyệt UT" officer also needs back). */}
+          {currentStep > 1 && currentStep < 9 && (
             <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Quay lại
             </Button>
           )}
 
-          {/* Save Changes - only when profile is editable */}
+          {/* Save Changes - only when profile is editable. Step 8 "Duyệt UT"
+              has individual verify/reject mutations — no form save needed. */}
           {currentStep < 8 && can('save') && (
             <Button variant="outline" onClick={onSave} disabled={isSaving}>
               {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
@@ -162,16 +164,17 @@ export function AdmissionActions({
             </Button>
           )}
 
-          {/* Next Step Button - always available for steps 1-6, independent of save permission */}
-          {currentStep < 8 && (
+          {/* Next Step Button - steps 1-8, advances to next (officer/admin
+              sees 1-8 incl. UT verify; candidate's step 8 filtered → 7→9). */}
+          {currentStep < 9 && (
             <Button onClick={() => onStepChange(currentStep + 1)}>
               Tiếp tục
               <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
           )}
 
-          {/* Step 7 Only: Submit Actions */}
-          {currentStep === 8 && can('submit') && (
+          {/* Phase E.3 bump: Finalize step 8 → 9 */}
+          {currentStep === 9 && can('submit') && (
             <>
               {/* Check Condition */}
               <Button variant="outline" onClick={onCheckCondition}>

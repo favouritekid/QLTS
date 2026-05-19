@@ -67,12 +67,10 @@ def test_deferred_set_canonical_source_is_state_service() -> None:
     same set of names enumerated in
     ``state_service.DEFERRED_ADMISSION_EVENTS``. Without this, the
     coverage flag and the runtime mapping could drift silently."""
-    # Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN; only the 2 UT
-    # evidence events remain deferred until Wave 3 ships verify/reject.
-    assert DEFERRED_ADMISSION_EVENTS == frozenset({
-        "PRIORITY_OBJECT_VERIFIED",
-        "PRIORITY_OBJECT_REJECTED",
-    })
+    # Wave 3 (2026-05-19) wired both PRIORITY_OBJECT_VERIFIED +
+    # PRIORITY_OBJECT_REJECTED via dispatch_event outbox. All 3 PRIORITY_*
+    # events now fully wired → deferred set back to empty.
+    assert DEFERRED_ADMISSION_EVENTS == frozenset()
 
 
 def test_deferred_events_disjoint_from_mapped_events() -> None:
@@ -99,28 +97,19 @@ def _capture_stderr(callable_):
 
 
 def test_summarize_passes_when_deferred_events_match(capsys) -> None:
-    """Wave 2 (2026-05-19) shrunk DEFERRED set 3 → 2 (wired
-    PRIORITY_KV_OVERRIDDEN); 2 UT evidence events remain deferred
-    until Wave 3.
+    """Wave 3 (2026-05-19): DEFERRED_ADMISSION_EVENTS shrunk to empty
+    (all 3 PRIORITY_* events wired via dispatch_event outbox path).
+    Empty allow-list + no statuses → rc=0 clean output.
     """
-    # Build stand-in statuses with ONLY the single no-dispatch-site gap
-    # (allow-list only excuses that exact single gap).
-    statuses = [_status(name) for name in DEFERRED_ADMISSION_EVENTS]
-    assert len(statuses) == 2
-    for st in statuses:
-        assert st.gaps == ["no-dispatch-site"]
+    assert DEFERRED_ADMISSION_EVENTS == frozenset()
 
     rc, output = _capture_stderr(
-        lambda: coverage._summarize(
-            statuses,
-            allow_deferred=set(DEFERRED_ADMISSION_EVENTS),
-        )
+        lambda: coverage._summarize([], allow_deferred=set(DEFERRED_ADMISSION_EVENTS))
     )
 
     assert rc == 0
-    # No "with gaps:" failure block — only "Deferred (allow-listed)".
+    # No "with gaps:" failure block.
     assert "event(s) with gaps:" not in output
-    assert "Deferred (allow-listed)" in output
 
 
 def test_summarize_fails_when_deferred_event_actually_wired(capsys) -> None:

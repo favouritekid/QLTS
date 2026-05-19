@@ -120,13 +120,11 @@ def test_approved_and_overridden_share_admitted_event() -> None:
 
 
 def test_deferred_admission_events_locked_set() -> None:
-    """Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN via outbox path;
-    2 UT evidence events remain deferred until Wave 3.
+    """Wave 3 (2026-05-19) wired both PRIORITY_OBJECT_VERIFIED +
+    PRIORITY_OBJECT_REJECTED via dispatch_event outbox. All 3 PRIORITY_*
+    events fully wired → deferred set back to empty.
     """
-    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
-        "PRIORITY_OBJECT_VERIFIED",
-        "PRIORITY_OBJECT_REJECTED",
-    })
+    assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset()
 
 
 def test_deferred_set_is_frozenset() -> None:
@@ -157,26 +155,24 @@ def test_mapping_and_deferred_are_disjoint() -> None:
     assert overlap == set(), f"Events both mapped and deferred: {overlap!r}"
 
 
-def test_total_admission_events_is_15() -> None:
-    """Catalog ships 15 admission-tracked events post-Wave 2 (2026-05-19):
+def test_total_admission_events_is_13() -> None:
+    """Catalog ships 13 admission-tracked events post-Wave 3 (2026-05-19):
     - 10 distinct events via LEGACY_STATUS_TO_EVENT (target-keyed)
     - 2 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED + T11 WAITLIST_REJECTED)
     - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T17 ROLLED_BACK)
-    - 2 deferred (PRIORITY_OBJECT_VERIFIED / _REJECTED, Wave 3 wire)
-
-    Wave 5 (Phase 3) added T11 ADMISSION_WAITLIST_REJECTED.
 
     Wave 1 (Q9 #07 Phase E) added 3 PRIORITY_* events to catalog seed.
-    Wave 2 wired PRIORITY_KV_OVERRIDDEN via outbox dispatch_event → moved
-    out of deferred set. PRIORITY_KV_OVERRIDDEN is not in
-    LEGACY_STATUS_TO_EVENT or TRANSITION_PAIR_TO_EVENT (event fires from
-    service layer, not state transition), so total is 15 events not 16.
+    Wave 2 wired PRIORITY_KV_OVERRIDDEN via outbox dispatch_event.
+    Wave 3 wired PRIORITY_OBJECT_VERIFIED + REJECTED via outbox dispatch_event.
+    None of the 3 PRIORITY events are in LEGACY_STATUS_TO_EVENT or
+    TRANSITION_PAIR_TO_EVENT (fire from service layer, not state transition),
+    so total = 10 mapped + 3 pair = 13.
     """
     mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
     pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
     deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
     total = len(mapped | pair | deferred)
-    assert total == 15
+    assert total == 13
 
 
 # ---------------------------------------------------------------------------

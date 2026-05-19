@@ -269,12 +269,11 @@ TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
 # (Foundation seed) but dispatch sites ship Wave 2 (override_kv) + Wave 3
 # (verify/reject evidence). Track here until those waves merge — coverage
 # gate stays green via ``--allow-deferred`` in CI workflows.
-DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset({
-    # Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN via dispatch_event
-    # outbox path → dropped from deferred set.
-    "PRIORITY_OBJECT_VERIFIED",   # Wave 3 (E.3 verify evidence)
-    "PRIORITY_OBJECT_REJECTED",   # Wave 3 (E.3 reject evidence)
-})
+# Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN via dispatch_event
+# outbox. Wave 3 (2026-05-19) wired PRIORITY_OBJECT_VERIFIED +
+# PRIORITY_OBJECT_REJECTED in verify_object_evidence + reject_object_evidence.
+# All 3 PRIORITY_* events fully wired → deferred set back to empty.
+DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
