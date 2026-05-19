@@ -1081,6 +1081,99 @@ _ADMISSION_EVENTS: tuple = (
         requires_outbox=True,
         bypass_consent_check=False,
     ),
+
+    # =========================================================================
+    # Q9 #07 Phase E — Priority bonus override events (3 events)
+    # =========================================================================
+
+    # 13. Officer/admin manually overrides KV (M1 ambiguous, lớp tạo nguồn, etc.)
+    EventDefinition(
+        event=SystemEvents.PRIORITY_KV_OVERRIDDEN,
+        category="application",
+        display_name="Khu vực ưu tiên đã được cập nhật thủ công",
+        description=(
+            "Officer/admin manually overrides candidate's KV via "
+            "POST /api/v2/admissions/{id}/override-priority-kv (Phase E.2). "
+            "Use cases: M1 ambiguous tiebreak, lớp tạo nguồn, quân nhân MAX "
+            "KV, admin post-T6 correction. Candidate sees update với rationale."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("actor_id", "integer", "ID officer/admin"),
+            _var("actor_name", "string", "Tên cán bộ"),
+            _var("kv_resolved", "string", "KV mới (KV1/KV2-NT/KV2/KV3)"),
+            _var("override_reason", "string", "Lý do override (≥20 ký tự)"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=70,
+        dedup_key_template="priority:${application_id}:kv_overridden:${kv_resolved}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
+    ),
+
+    # 14. Officer verifies UT đối tượng ưu tiên evidence.
+    EventDefinition(
+        event=SystemEvents.PRIORITY_OBJECT_VERIFIED,
+        category="application",
+        display_name="Đối tượng ưu tiên đã được xác minh",
+        description=(
+            "Officer verifies candidate's UT evidence via "
+            "PATCH /api/v2/admissions/{id}/priority-objects/{sub_code}/verify "
+            "(Phase E.3). Bonus will count in T6 engine cascade. Candidate "
+            "receives positive confirmation."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("actor_id", "integer", "ID officer"),
+            _var("actor_name", "string", "Tên cán bộ"),
+            _var("sub_code", "string", "Mã UT (vd '04', '06')"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email"),
+        priority=60,
+        dedup_key_template="priority:${application_id}:ut_verified:${sub_code}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
+    ),
+
+    # 15. Officer rejects UT evidence — candidate must re-upload.
+    EventDefinition(
+        event=SystemEvents.PRIORITY_OBJECT_REJECTED,
+        category="application",
+        display_name="Minh chứng đối tượng ưu tiên bị từ chối",
+        description=(
+            "Officer rejects UT evidence via PATCH /api/v2/admissions/{id}/"
+            "priority-objects/{sub_code}/reject (Phase E.3). Bonus removed "
+            "from T6 cascade. Candidate must re-upload with valid document. "
+            "Zalo channel included for urgency."
+        ),
+        variables=(
+            _var("application_id", "integer", "ID hồ sơ"),
+            _var("lead_id", "integer", "ID lead"),
+            _var("actor_id", "integer", "ID officer"),
+            _var("actor_name", "string", "Tên cán bộ"),
+            _var("sub_code", "string", "Mã UT bị từ chối"),
+            _var("reject_reason", "string", "Lý do từ chối (≥10 ký tự, hiển thị candidate)"),
+        ),
+        default_resolver="lead_owner",
+        allowed_resolvers=("lead_owner", "unit_managers", "all_admins", "specific_users"),
+        default_channels=("browser", "email", "zalo"),
+        priority=75,
+        dedup_key_template="priority:${application_id}:ut_rejected:${sub_code}",
+        link_strategy="/admissions/${application_id}",
+        privacy="sensitive",
+        requires_outbox=True,
+        bypass_consent_check=False,
+    ),
 )
 
 # -------------------------------------------------------------------

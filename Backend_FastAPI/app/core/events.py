@@ -1257,6 +1257,72 @@ class SystemEvents(str, Enum):
     """T17 admin override rollback. Audience: officer + candidate.
     requires_outbox=True, bypass_consent_check=False."""
 
+    # =========================================================================
+    # Q9 #07 PHASE E — PRIORITY BONUS OVERRIDE EVENTS (TT 05/2021/TT-BLĐTBXH)
+    # =========================================================================
+
+    PRIORITY_KV_OVERRIDDEN = "priority_kv_overridden"
+    """Officer/admin manually overrides candidate's KV (khu vực ưu tiên).
+
+    Triggered by `priority_override_service.override_kv()` (Phase E.2) when
+    candidate flows hit M1 ambiguous tiebreak, lớp tạo nguồn, quân nhân MAX KV,
+    hoặc admin post-T6 correction.
+
+    Payload Schema:
+        {
+            "application_id": int,      # Required: AdmissionProfile.id (legacy alias)
+            "lead_id": int,             # Required: profile.lead_id for routing
+            "actor_id": int,            # Required: user.id of officer/admin
+            "actor_name": str,          # Required: full_name for notification body
+            "kv_resolved": str,         # Required: 'KV1' | 'KV2-NT' | 'KV2' | 'KV3'
+            "override_reason": str,     # Required: min 20 chars rationale
+            "evidence_file_id": Optional[int]  # Document FK if attached
+        }
+
+    Recipients: lead_owner (candidate). bypass_consent_check=False
+    (legitimate state change notification, candidate đã consent khi nộp hồ sơ).
+    """
+
+    PRIORITY_OBJECT_VERIFIED = "priority_object_verified"
+    """Officer verifies a candidate's UT (đối tượng ưu tiên) evidence.
+
+    Triggered by `priority_override_service.verify_object_evidence()` (Phase E.3)
+    after officer reviews uploaded document for sub_code (vd UT04 DTTS, UT06 mồ côi).
+
+    Payload Schema:
+        {
+            "application_id": int,      # Required: AdmissionProfile.id
+            "lead_id": int,             # Required: profile.lead_id
+            "actor_id": int,            # Required: officer user.id
+            "actor_name": str,          # Required: officer full_name
+            "sub_code": str,            # Required: UT sub_code (vd '04', '06')
+            "document_id": Optional[int]  # Verified document FK
+        }
+
+    Recipients: lead_owner. Candidate sees positive confirmation that bonus
+    will count in T6 engine cascade.
+    """
+
+    PRIORITY_OBJECT_REJECTED = "priority_object_rejected"
+    """Officer rejects a candidate's UT evidence — candidate must resupply.
+
+    Triggered by `priority_override_service.reject_object_evidence()` (Phase E.3)
+    when uploaded document fails verification (wrong document, expired, etc.).
+
+    Payload Schema:
+        {
+            "application_id": int,      # Required: AdmissionProfile.id
+            "lead_id": int,             # Required: profile.lead_id
+            "actor_id": int,            # Required: officer user.id
+            "actor_name": str,          # Required: officer full_name
+            "sub_code": str,            # Required: UT sub_code
+            "reject_reason": str        # Required: min 10 chars (template displays to candidate)
+        }
+
+    Recipients: lead_owner. Zalo channel included for urgency (candidate must
+    re-upload). bypass_consent_check=False — consent inherited from submit flow.
+    """
+
 
 # =============================================================================
 # EVENT DISPATCHER PATTERN

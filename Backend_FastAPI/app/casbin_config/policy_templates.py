@@ -196,6 +196,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH"},
+        # Q9 #07 Phase E — Priority bonus override + UT evidence verify/reject.
+        # Officer scope: must be assigned to profile (IDOR check trong service);
+        # manager + admin inherit via diamond. Accountant DENY block below.
+        # Service-layer additional gates: version guard (memory
+        # `version-guard-before-state-machine`) + status whitelist (officer mode).
+        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH"},
         # PR #7 — officer can create the official fee record for their own
         # assigned profile. Casbin admits the route; _fee_calc_authorized +
         # _compute_permissions narrow the scope to the owning officer on a
@@ -360,6 +368,13 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH",  "eft": "deny"},
+        # Q9 #07 Phase E — Priority bonus mutations: accountant explicitly
+        # denied. Finance staff không quyết định KV ưu tiên / verify UT
+        # evidence. Mirror officer ALLOW block above so accountant via tree
+        # inheritance (role:accountant → role:officer) bounces off deny effect.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH", "eft": "deny"},
         # F8 + F9 fix 2026-05-16: accountant inherits Officer (g, role:accountant,
         # role:officer) which grants admission/lead list endpoints. Finance
         # workflows operate on profile_id passed from invoice/payment forms,
