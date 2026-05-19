@@ -972,6 +972,6 @@ async def override_priority_kv(
     from app.services import admission_service
 
     await admission_service._populate_response_fields(
-        reloaded, current_user=current_user
+        db, reloaded, current_user=current_user
     )
     return reloaded
