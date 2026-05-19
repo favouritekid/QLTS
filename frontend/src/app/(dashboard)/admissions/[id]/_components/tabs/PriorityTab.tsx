@@ -18,18 +18,21 @@
  *   3. Trình độ học vấn — 2 dropdowns cultural + vocational
  *   4. Trường hợp đặc biệt toggle (replaces dropdown — auto-detect basis)
  */
+import { useState } from "react"
 import { UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ShieldCheck, Lightbulb } from "lucide-react"
+import { ShieldCheck, Lightbulb, ShieldAlert } from "lucide-react"
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { PrioritySnapshotCard } from "@/components/admissions/PrioritySnapshotCard"
 import { UtEvidenceCard } from "@/components/admissions/UtEvidenceCard"
+import { PriorityOverrideDialog } from "../PriorityOverrideDialog"
 
 interface PriorityTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
@@ -56,6 +59,7 @@ const VOCATIONAL_OPTIONS = [
 // Reused by `KvBreakdownCard` + future `PriorityOverrideDialog` (E.2).
 
 export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
+  const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
   const cultural = form.watch("cultural_education_level")
   const vocational = form.watch("vocational_qualification")
   const areaBasis = form.watch("area_resolution_basis")
@@ -160,8 +164,36 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         }
         manualOverrideAt={frozenSnapshot?.manual_override_at ?? null}
       />
-      {/* Phase E.2 (PriorityOverrideDialog) sẽ wire trigger button gated by
-          profile.permissions.override_priority_kv here — chưa ship */}
+      {/* Phase E.2 — manual KV override (officer/admin write-path).
+          Button gated by profile.permissions.override_priority_kv;
+          dialog enforces version guard + reason validation + 409 handler. */}
+      {profile.permissions?.override_priority_kv && (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setOverrideDialogOpen(true)}
+            data-testid="priority-override-trigger"
+          >
+            <ShieldAlert className="h-4 w-4 mr-2" />
+            Cán bộ ấn định KV thủ công
+          </Button>
+        </div>
+      )}
+      <PriorityOverrideDialog
+        open={overrideDialogOpen}
+        onOpenChange={setOverrideDialogOpen}
+        profileId={profile.id}
+        profileVersion={profile.version ?? 0}
+        profileStatus={profile.status}
+        currentKv={
+          (frozenSnapshot?.kv_resolved as string | undefined) ??
+          preview?.kv_resolved ??
+          null
+        }
+        mode={profile.permissions?.override_priority_kv ? "admin" : "officer"}
+      />
 
       {/* ───────── 2. INTRO DISCLOSURE (1-line, collapsed by default) ───────── */}
       <details className="rounded-lg border border-info-200 bg-info-50/40 px-3 py-2 text-sm text-info-900/90">

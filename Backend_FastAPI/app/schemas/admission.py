@@ -2141,6 +2141,69 @@ class PriorityObjectCatalogItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# =============================================================================
+# Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path)
+# =============================================================================
+
+
+class OverridePriorityKvRequest(BaseModel):
+    """Officer/admin override KV manually trên profile.
+
+    Service-layer (priority_override_service.override_kv) enforces:
+    * Optimistic-lock via ``version`` body field (memory
+      `version-guard-before-state-machine` — version guard runs FIRST,
+      before status whitelist).
+    * Officer status whitelist {submitted, reviewing, revision_requested};
+      hard-deny {draft, withdrawn, dropped, rejected}; post-publish states
+      require admin role + ``acknowledge_post_publish=True``.
+    * Reason 20-500 char text (mandatory; persisted in
+      ``profile.priority_resolution_snapshot.manual_override_reason``
+      + ``priority_audit_log.new_value.reason``).
+    * INSERT ``priority_audit_log`` row (action_type='kv_manual_override').
+    * Bump ``profile.version`` after mutation.
+
+    Snapshot keys written (overwritten on each override per Decision D1):
+    * ``manual_override_by`` — actor.id
+    * ``manual_override_at`` — ISO timestamp
+    * ``manual_override_reason`` — user-supplied
+    * ``evidence_file_id`` — optional FK soft reference
+    * ``frozen_at`` / ``frozen_at_status='manual_override'`` /
+      ``resolved_by``  — refreshed each override.
+
+    Chain-of-override history queryable via composite index
+    ``idx_priority_audit_log_profile_action_time`` on
+    ``(profile_id, action_type, created_at DESC)``.
+    """
+
+    version: int = Field(
+        ...,
+        description="Client-known profile.version for optimistic lock. "
+        "409 ConflictError if mismatch with DB state.",
+        ge=0,
+    )
+    kv_resolved: Literal["KV1", "KV2-NT", "KV2", "KV3"] = Field(
+        ...,
+        description="New KV code to assign manually.",
+    )
+    reason: str = Field(
+        ...,
+        min_length=20,
+        max_length=500,
+        description="Justification 20-500 char. Persisted to snapshot + audit log.",
+    )
+    evidence_file_id: Optional[int] = Field(
+        None,
+        description="Optional FK to supporting document (soft reference, no FK constraint).",
+    )
+    acknowledge_post_publish: bool = Field(
+        False,
+        description="Admin-only escape hatch for post-publish profile (enrolled/approved/confirmed/...). "
+        "Officer always refused for those states.",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -2191,4 +2254,6 @@ __all__ = [
     "PreviewPriorityKvRequest",
     "PreviewPriorityKvResponse",
     "PriorityObjectCatalogItem",
+    # Q9 #07 Phase E.2 — Manual KV override
+    "OverridePriorityKvRequest",
 ]

@@ -877,3 +877,101 @@ async def get_priority_object_catalog(
     )
     rows = (await db.execute(stmt)).scalars().all()
     return [schemas.PriorityObjectCatalogItem.model_validate(r) for r in rows]
+
+
+# =============================================================================
+# Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/override-priority-kv",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Override KV thủ công (officer/admin write-path — Phase E.2)",
+)
+async def override_priority_kv(
+    profile_id: int,
+    payload: schemas.OverridePriorityKvRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Officer/admin manually override profile's KV (Phase E.2 write-path).
+
+    Service-layer ``priority_override_service.override_kv()`` enforces:
+    * Version guard FIRST (memory `version-guard-before-state-machine`)
+    * Status whitelist (officer: submitted/reviewing/revision_requested;
+      admin bypass với ``acknowledge_post_publish=true`` for post-publish)
+    * Reason 20-500 char validation
+    * Snapshot mutation + audit log INSERT + version bump
+
+    Snapshot keys overwritten on each override (Decision D1):
+    * ``manual_override_by/at/reason`` + ``evidence_file_id``
+    * ``frozen_at_status='manual_override'`` + ``resolved_by`` (officer/admin)
+
+    Audit log preserves full chain — query via composite index
+    ``(profile_id, action_type, created_at DESC)``.
+
+    Security:
+    * IDOR: ``get_admission_for_user`` (3-tier scope admin/manager/officer)
+    * Casbin: ``q9_07_e0c`` migration seeds policy
+      (officer/manager/admin ALLOW, accountant DENY).
+    * Service ``PermissionError`` (officer post-publish) → 403.
+
+    Dispatches ``PRIORITY_KV_OVERRIDDEN`` event post-commit (catalog seed
+    Wave 1; payload: application_id, lead_id, actor_id, actor_name,
+    kv_resolved, override_reason).
+    """
+    from app.services.priority_override_service import override_kv as _override_kv
+    from fastapi import HTTPException
+
+    try:
+        updated_profile, post_commit_cb = await _override_kv(
+            db,
+            profile,
+            kv_resolved=payload.kv_resolved,
+            reason=payload.reason,
+            evidence_file_id=payload.evidence_file_id,
+            actor=current_user,
+            expected_version=payload.version,
+            acknowledge_post_publish=payload.acknowledge_post_publish,
+        )
+    except PermissionError as exc:
+        # Officer attempted post-publish override; map to 403 per memory
+        # `version-guard-before-state-machine` adjacent pattern.
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    await db.commit()
+    await post_commit_cb()
+
+    log.info(
+        "admissions_v2.override_priority_kv",
+        profile_id=profile_id,
+        actor_id=current_user.id,
+        kv_resolved=payload.kv_resolved,
+    )
+
+    # Reload với eager-loaded relations for response (assigned_officer
+    # name + reviewer name + computed permissions).
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+    )
+    reloaded = (await db.execute(stmt)).scalar_one()
+    # Populate computed fields cho mutation response per Backend CLAUDE.md
+    # "Mutation response contract" — _populate_response_fields() must run
+    # post-mutation to set permissions/available_actions/etc.
+    from app.services import admission_service
+
+    await admission_service._populate_response_fields(
+        reloaded, current_user=current_user
+    )
+    return reloaded

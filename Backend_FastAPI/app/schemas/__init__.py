@@ -169,6 +169,8 @@ from .admission import (
     PreviewPriorityKvRequest,
     PreviewPriorityKvResponse,
     PriorityObjectCatalogItem,
+    # Q9 #07 Phase E.2 — Manual KV override
+    OverridePriorityKvRequest,
     EnrollStudentResponse,
     # Bulk action schemas
     BulkApproveRequest,
