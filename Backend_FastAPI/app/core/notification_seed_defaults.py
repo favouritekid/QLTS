@@ -656,6 +656,41 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
             ]},
         },
     },
+    # =========================================================================
+    # Q9 #07 Phase E — Priority bonus override events (3 events)
+    # Defense-in-depth: migration `q9_07_e0b_seed_priority_events` seeds DB
+    # rows; this dict is source-of-truth cho startup `sync_notification_rules`
+    # task to re-seed if rules deleted manually post-deploy.
+    # Mirror title/message text in template body (q9_07_e0b PRIORITY_EVENTS
+    # tuple) — both must stay in sync.
+    # =========================================================================
+    SystemEvents.PRIORITY_KV_OVERRIDDEN: {
+        "title_template": "Khu vực ưu tiên đã được cập nhật thủ công",
+        "message_template": "Hồ sơ #${application_id}: cán bộ ${actor_name} đã ấn định KV thành ${kv_resolved}. Lý do: ${override_reason}.",
+        "notification_type": "info",
+        "recipient_config": {
+            "resolver_type": "lead_owner",
+            "params": {},
+        },
+    },
+    SystemEvents.PRIORITY_OBJECT_VERIFIED: {
+        "title_template": "Đối tượng ưu tiên đã được xác minh",
+        "message_template": "Hồ sơ #${application_id}: minh chứng đối tượng ưu tiên ${sub_code} đã được xác minh bởi ${actor_name}.",
+        "notification_type": "info",
+        "recipient_config": {
+            "resolver_type": "lead_owner",
+            "params": {},
+        },
+    },
+    SystemEvents.PRIORITY_OBJECT_REJECTED: {
+        "title_template": "Minh chứng đối tượng ưu tiên bị từ chối",
+        "message_template": "Hồ sơ #${application_id}: minh chứng đối tượng ưu tiên ${sub_code} bị từ chối. Lý do: ${reject_reason}. Vui lòng bổ sung minh chứng đầy đủ.",
+        "notification_type": "warning",
+        "recipient_config": {
+            "resolver_type": "lead_owner",
+            "params": {},
+        },
+    },
 }
 
 
