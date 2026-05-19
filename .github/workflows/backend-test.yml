@@ -201,7 +201,7 @@ jobs:
         # `ci-workflow-flag-cross-file-sync`.
         run: |
           python -m app.scripts.check_notification_event_coverage \
-            --allow-deferred=PRIORITY_KV_OVERRIDDEN,PRIORITY_OBJECT_VERIFIED,PRIORITY_OBJECT_REJECTED
+            --allow-deferred=PRIORITY_OBJECT_VERIFIED,PRIORITY_OBJECT_REJECTED
 
       # =====================================================================
       # Tier 4: Admission + lead workflow contract (legacy deploy.yml subset)

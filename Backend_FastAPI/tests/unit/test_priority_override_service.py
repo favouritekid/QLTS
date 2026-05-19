@@ -78,6 +78,22 @@ def _make_db():
     return db
 
 
+def _find_audit_rows(db):
+    """Filter db.add() calls down to PriorityAuditLog instances only.
+
+    Wave 2 dispatch_event() also adds a NotificationOutbox row inside
+    the caller's transaction (per B2.3 wrapper). Tests inspecting the
+    audit row must filter by type to skip the outbox sibling.
+    """
+    from app import models
+    rows = []
+    for call in db.add.call_args_list:
+        instance = call[0][0]
+        if isinstance(instance, models.PriorityAuditLog):
+            rows.append(instance)
+    return rows
+
+
 REASON_VALID = "Lý do override 20+ ký tự cho test smoke happy path"
 
 
@@ -303,9 +319,11 @@ async def test_officer_happy_path_mutates_snapshot_and_audit_log() -> None:
     # Version bumped
     assert profile.version == 6
 
-    # Audit log row queued for INSERT
-    assert db.add.call_count == 1
-    audit_row = db.add.call_args[0][0]
+    # Audit log row queued for INSERT (also NotificationOutbox row from
+    # dispatch_event — filter by type to avoid coupling).
+    audit_rows = _find_audit_rows(db)
+    assert len(audit_rows) == 1
+    audit_row = audit_rows[0]
     assert audit_row.profile_id == 42
     assert audit_row.action_type == "kv_manual_override"
     assert audit_row.actor_id == 7
@@ -347,8 +365,9 @@ async def test_admin_post_publish_with_ack_succeeds() -> None:
     assert updated.priority_resolution_snapshot["resolved_by"] == "admin"
     assert updated.version == 11
 
-    audit_row = db.add.call_args[0][0]
-    assert audit_row.audit_metadata["acknowledged_post_publish"] is True
+    audit_rows = _find_audit_rows(db)
+    assert len(audit_rows) == 1
+    assert audit_rows[0].audit_metadata["acknowledged_post_publish"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +420,8 @@ async def test_second_override_overwrites_manual_keys() -> None:
     assert snap["resolved_by"] == "admin"
 
     # Audit log captures OLD = officer's last state, NEW = admin's
-    audit_row = db.add.call_args[0][0]
+    audit_rows = _find_audit_rows(db)
+    assert len(audit_rows) == 1
+    audit_row = audit_rows[0]
     assert audit_row.old_value["kv_resolved"] == "KV1"
     assert audit_row.new_value["kv_resolved"] == "KV2-NT"

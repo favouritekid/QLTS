@@ -288,6 +288,33 @@ async def override_kv(
     # ---- Step 7: Bump optimistic-lock version
     profile.version += 1
 
+    # ---- Step 8: Dispatch via outbox (catalog requires_outbox=True for
+    # PRIORITY_KV_OVERRIDDEN). dispatch_event INSERTs notification_outbox
+    # row inside caller's transaction; worker drains post-commit. Per
+    # B2.3 wrapper contract: this is the right primitive for outbox events
+    # — raw safe_dispatch() would trip the
+    # `raw-dispatch-of-outbox-event` coverage script gate.
+    from app.services.notification_dispatcher import dispatch_event
+
+    _payload = {
+        "application_id": profile.id,
+        "lead_id": profile.lead_id,
+        "actor_id": actor.id,
+        "actor_name": actor.full_name or actor.email,
+        "kv_resolved": kv_resolved,
+        "override_reason": reason_clean,
+    }
+    _dedupe_key = (
+        f"priority:{profile.id}:kv_overridden:{kv_resolved}:{actor.id}:"
+        f"{int(datetime.now(timezone.utc).timestamp())}"
+    )
+    post_commit = await dispatch_event(
+        db,
+        event=SystemEvents.PRIORITY_KV_OVERRIDDEN,
+        payload=_payload,
+        dedupe_key=_dedupe_key,
+    )
+
     await db.flush()
 
     log.info(
@@ -299,36 +326,15 @@ async def override_kv(
         new_kv=kv_resolved,
         version_after=profile.version,
         reason_len=len(reason_clean),
+        outbox_dispatched=True,
     )
 
-    # ---- Step 8: Build post_commit callback (safe_dispatch fires post-DB)
-    _profile_id = profile.id
-    _lead_id = profile.lead_id
-    _actor_id = actor.id
-    _actor_name = actor.full_name or actor.email
-    _kv = kv_resolved
-    _reason = reason_clean
+    # dispatch_event returns None for outbox events (router commits, worker
+    # processes async). Wrap None into noop callback for router uniformity.
+    async def _noop_callback() -> None:
+        return None
 
-    async def post_commit() -> None:
-        from app.services.notification_dispatcher import (
-            _rooms_for_admission,
-            safe_dispatch,
-        )
-
-        rooms = _rooms_for_admission(profile)
-
-        await safe_dispatch(
-            db=db,
-            event=SystemEvents.PRIORITY_KV_OVERRIDDEN,
-            payload={
-                "application_id": _profile_id,
-                "lead_id": _lead_id,
-                "actor_id": _actor_id,
-                "actor_name": _actor_name,
-                "kv_resolved": _kv,
-                "override_reason": _reason,
-            },
-            rooms=rooms,
-        )
+    if post_commit is None:
+        post_commit = _noop_callback
 
     return profile, post_commit

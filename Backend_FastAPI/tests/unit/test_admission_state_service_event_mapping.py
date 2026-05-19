@@ -120,12 +120,10 @@ def test_approved_and_overridden_share_admitted_event() -> None:
 
 
 def test_deferred_admission_events_locked_set() -> None:
-    """Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events to
-    catalog seed; dispatch sites ship Wave 2 (override_kv) + Wave 3
-    (verify/reject evidence). Tracked here until those waves merge.
+    """Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN via outbox path;
+    2 UT evidence events remain deferred until Wave 3.
     """
     assert state_service.DEFERRED_ADMISSION_EVENTS == frozenset({
-        "PRIORITY_KV_OVERRIDDEN",
         "PRIORITY_OBJECT_VERIFIED",
         "PRIORITY_OBJECT_REJECTED",
     })
@@ -159,25 +157,26 @@ def test_mapping_and_deferred_are_disjoint() -> None:
     assert overlap == set(), f"Events both mapped and deferred: {overlap!r}"
 
 
-def test_total_admission_events_is_16() -> None:
-    """Catalog ships 16 admission-tracked events post-Q9 #07 Phase E Wave 1:
+def test_total_admission_events_is_15() -> None:
+    """Catalog ships 15 admission-tracked events post-Wave 2 (2026-05-19):
     - 10 distinct events via LEGACY_STATUS_TO_EVENT (target-keyed)
     - 2 source-aware via TRANSITION_PAIR_TO_EVENT (T10 PROMOTED + T11 WAITLIST_REJECTED)
-    - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T17 ROLLED_BACK — 11 pair entries
-      collapse to single event name)
-    - 3 Q9 #07 Phase E PRIORITY_* events deferred (dispatch ships Wave 2+3)
+    - 1 source-aware via TRANSITION_PAIR_TO_EVENT (T17 ROLLED_BACK)
+    - 2 deferred (PRIORITY_OBJECT_VERIFIED / _REJECTED, Wave 3 wire)
 
-    Wave 5 added T11 ADMISSION_WAITLIST_REJECTED to distinguish manual
-    waitlist rejection from generic engine cascade rejection.
+    Wave 5 (Phase 3) added T11 ADMISSION_WAITLIST_REJECTED.
 
-    Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events:
-    PRIORITY_KV_OVERRIDDEN / PRIORITY_OBJECT_VERIFIED / PRIORITY_OBJECT_REJECTED.
+    Wave 1 (Q9 #07 Phase E) added 3 PRIORITY_* events to catalog seed.
+    Wave 2 wired PRIORITY_KV_OVERRIDDEN via outbox dispatch_event → moved
+    out of deferred set. PRIORITY_KV_OVERRIDDEN is not in
+    LEGACY_STATUS_TO_EVENT or TRANSITION_PAIR_TO_EVENT (event fires from
+    service layer, not state transition), so total is 15 events not 16.
     """
     mapped = {ev.name for ev in state_service.LEGACY_STATUS_TO_EVENT.values()}
     pair = {ev.name for ev in state_service.TRANSITION_PAIR_TO_EVENT.values()}
     deferred = set(state_service.DEFERRED_ADMISSION_EVENTS)
     total = len(mapped | pair | deferred)
-    assert total == 16
+    assert total == 15
 
 
 # ---------------------------------------------------------------------------

@@ -28,7 +28,7 @@
  * * Snapshot mutation overwrites manual_override_* keys (Decision D1);
  *   audit log preserves chain.
  */
-import { useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import { AlertTriangle, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
@@ -102,15 +102,21 @@ export function PriorityOverrideDialog({
 
   const mutation = useOverridePriorityKv(profileId)
 
-  // Reset state khi dialog mở/đóng
-  useEffect(() => {
-    if (!open) {
-      setKvResolved("")
-      setReason("")
-      setAcknowledgePostPublish(false)
-      setError(null)
-    }
-  }, [open])
+  // Reset state khi dialog đóng — handled trong onOpenChange wrapper
+  // thay vì useEffect (avoids React 19 cascading setState rule + eliminates
+  // race when parent re-opens dialog ngay sau khi close).
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setKvResolved("")
+        setReason("")
+        setAcknowledgePostPublish(false)
+        setError(null)
+      }
+      onOpenChange(next)
+    },
+    [onOpenChange],
+  )
 
   const isPostPublish = POST_PUBLISH_STATUS.has(profileStatus)
   const requiresAck = isPostPublish && mode === "admin"
@@ -135,7 +141,7 @@ export function PriorityOverrideDialog({
         acknowledge_post_publish: acknowledgePostPublish,
       })
       toast.success("Đã override KV thành công")
-      onOpenChange(false)
+      handleOpenChange(false)
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status
       if (status === 409) {
@@ -168,7 +174,7 @@ export function PriorityOverrideDialog({
   const afterLabel = kvResolved ? KV_BADGE[kvResolved]?.label ?? kvResolved : "—"
 
   return (
-    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+    <ResponsiveDialog open={open} onOpenChange={handleOpenChange}>
       <ResponsiveDialogContent className="sm:max-w-[480px]">
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle className="flex items-center gap-2">
