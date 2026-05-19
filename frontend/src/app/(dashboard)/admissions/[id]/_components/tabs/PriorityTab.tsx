@@ -24,10 +24,11 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Award, ShieldCheck, AlertCircle, Info, Lightbulb, Loader2, Lock, CheckCircle2 } from "lucide-react"
+import { ShieldCheck, Info, Lightbulb } from "lucide-react"
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import { KvBreakdownCard } from "@/components/admissions/KvBreakdownCard"
 
 interface PriorityTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
@@ -50,39 +51,8 @@ const VOCATIONAL_OPTIONS = [
   { value: "cao_dang", label: "Cao đẳng" },
 ]
 
-const KV_BADGE: Record<string, { color: string; label: string }> = {
-  KV1: { color: "bg-emerald-100 text-emerald-800 border-emerald-300", label: "KV1 (+0,75đ)" },
-  "KV2-NT": { color: "bg-blue-100 text-blue-800 border-blue-300", label: "KV2-NT (+0,50đ)" },
-  KV2: { color: "bg-amber-100 text-amber-800 border-amber-300", label: "KV2 (+0,25đ)" },
-  KV3: { color: "bg-gray-100 text-gray-800 border-gray-300", label: "KV3 (không cộng)" },
-}
-
-const PATHWAY_LABEL_VI: Record<string, string> = {
-  thpt_multi_school: "Theo lịch sử học các trường THPT (3 năm cấp 3)",
-  commune_fallback: "Theo nơi thường trú",
-  commune_special: "Theo nơi thường trú (trường hợp đặc biệt)",
-  manual: "Cán bộ ấn định thủ công",
-  not_resolved: "Chưa xác định được",
-}
-
-const RULE_LABEL_VI: Record<string, string> = {
-  longest_duration: "Trường học lâu nhất",
-  tiebreak_graduation_school: "Trường tốt nghiệp (khi thời gian học bằng nhau)",
-  ambiguous_requires_manual: "Cần cán bộ xem xét (2 lựa chọn ngang nhau)",
-  commune_lookup: "Tra cứu theo mã xã/phường nơi thường trú",
-  manual_override: "Cán bộ ấn định thủ công",
-}
-
-const REASON_VI: Record<string, string> = {
-  cultural_not_set: "Chưa khai trình độ văn hóa",
-  no_qualifying_entries: "Lịch sử học chưa đủ trường phù hợp với trình độ",
-  tied_graduation_year_and_grade: "Có 2 trường ngang nhau về thời gian + lớp tốt nghiệp — cần cán bộ xem xét",
-}
-
-function localizeReason(reason: string | null | undefined): string | null {
-  if (!reason) return null
-  return REASON_VI[reason] ?? reason
-}
+// KV constants + labels extracted to `@/components/admissions/kv-labels` (Phase E.1).
+// Reused by `KvBreakdownCard` + future `PriorityOverrideDialog` (E.2).
 
 export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const cultural = form.watch("cultural_education_level")
@@ -128,8 +98,17 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const displayBreakdown = isFrozen ? frozenSnapshot?.breakdown : preview?.breakdown
   const displayRequiresManual = isFrozen ? frozenSnapshot?.requires_manual_override : preview?.requires_manual_override
 
-  const kvBadge = displayKv ? KV_BADGE[displayKv] : null
   const isSpecialCase = areaBasis === "permanent_address_special"
+
+  // Empty-state hint depends on what's missing — parent supplies context.
+  const emptyStateHint = (
+    <>
+      {!cultural && <p>Vui lòng khai trình độ văn hóa ở phần dưới.</p>}
+      {cultural && !academicHistory?.length && !isSpecialCase && (
+        <p>Vui lòng khai lịch sử học ở tab <em>Học tập</em>.</p>
+      )}
+    </>
+  )
 
   return (
     <div className="space-y-6">
@@ -161,103 +140,20 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         </CardContent>
       </Card>
 
-      {/* ───────── 2. LIVE / FROZEN SNAPSHOT (prominent, top) ───────── */}
-      <Card className={`border-2 shadow-sm ${isFrozen ? "border-primary/40 bg-primary/5" : kvBadge ? "border-emerald-200" : "border-muted"}`}>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-            {isFrozen ? <Lock className="h-5 w-5 text-primary" /> : <Award className="h-5 w-5 text-emerald-600" />}
-            {isFrozen ? "Khu vực ưu tiên (đã chốt)" : "Khu vực ưu tiên (tạm tính)"}
-          </CardTitle>
-          <CardDescription className="text-sm">
-            {isFrozen
-              ? "Đã khóa khi nộp hồ sơ — không thể thay đổi (chỉ admin override được)."
-              : "Hệ thống tính theo thời gian thực dựa vào thông tin bạn khai. KV chính thức sẽ được chốt khi nộp hồ sơ."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="pt-2 space-y-3">
-          {/* Loading state */}
-          {previewLoading && !preview && !isFrozen && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Đang tính...
-            </div>
-          )}
-
-          {/* Has KV resolved */}
-          {kvBadge && (
-            <div className="flex items-center gap-3">
-              <span className={`inline-flex items-center px-4 py-2 rounded-md text-base font-bold border ${kvBadge.color}`}>
-                {kvBadge.label}
-              </span>
-              {!isFrozen && <span className="text-xs text-muted-foreground">(sẽ chốt khi nộp hồ sơ)</span>}
-              {isFrozen && (
-                <span className="text-xs text-primary flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" /> Đã chốt
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* No KV yet — explain why */}
-          {!previewLoading && !kvBadge && (
-            <div className="rounded-lg border border-dashed p-3 bg-muted/30 text-sm flex gap-2">
-              <AlertCircle className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-              <div>
-                <p className="font-medium text-muted-foreground">Chưa đủ thông tin để tính KV</p>
-                {displayReason && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Lý do: {localizeReason(displayReason)}
-                  </p>
-                )}
-                {!cultural && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Vui lòng khai trình độ văn hóa ở phần dưới.
-                  </p>
-                )}
-                {cultural && !academicHistory?.length && !isSpecialCase && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Vui lòng khai lịch sử học ở tab <em>Học tập</em>.
-                  </p>
-                )}
-                {displayRequiresManual && (
-                  <p className="text-xs text-warning-700 mt-1">
-                    → Cần cán bộ xem xét/ấn định thủ công.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Details: pathway + rule */}
-          {(displayPathway || displayRule) && kvBadge && (
-            <div className="grid grid-cols-2 gap-3 text-sm pt-2 border-t">
-              {displayPathway && (
-                <div>
-                  <span className="text-xs text-muted-foreground block">Cách tính</span>
-                  <span className="text-sm">{PATHWAY_LABEL_VI[displayPathway] ?? displayPathway}</span>
-                </div>
-              )}
-              {displayRule && (
-                <div>
-                  <span className="text-xs text-muted-foreground block">Quy tắc</span>
-                  <span className="text-sm">{RULE_LABEL_VI[displayRule] ?? displayRule}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {displayBreakdown && kvBadge && (
-            <details className="text-xs border rounded p-2 bg-muted/30">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                Xem chi tiết tính toán (cán bộ kiểm tra)
-              </summary>
-              <pre className="mt-2 overflow-auto text-[10px]">
-                {JSON.stringify(displayBreakdown, null, 2)}
-              </pre>
-            </details>
-          )}
-        </CardContent>
-      </Card>
+      {/* ───────── 2. LIVE / FROZEN SNAPSHOT (extracted Phase E.1) ───────── */}
+      <KvBreakdownCard
+        kv={displayKv}
+        pathway={displayPathway}
+        ruleApplied={displayRule}
+        reason={displayReason}
+        breakdown={displayBreakdown}
+        requiresManual={displayRequiresManual}
+        frozen={isFrozen}
+        loading={previewLoading && !preview}
+        emptyStateHint={emptyStateHint}
+      />
+      {/* Phase E.2 (PriorityOverrideDialog) sẽ wire trigger button gated by
+          profile.permissions.override_priority_kv here — chưa ship */}
 
       {/* ───────── 3. TRÌNH ĐỘ HỌC VẤN ───────── */}
       <Card className="shadow-sm border-border">
