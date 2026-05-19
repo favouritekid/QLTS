@@ -2204,6 +2204,58 @@ class OverridePriorityKvRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
+# =============================================================================
+# Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path)
+# =============================================================================
+
+
+class VerifyObjectEvidenceRequest(BaseModel):
+    """Officer verifies one UT evidence (Phase E.3).
+
+    Marks ``priority_object_evidence[sub_code]`` as ``status='verified'``
+    + optional ``document_id`` reference. Per Decision D3 — candidate
+    uploads via DocumentsTab; officer picks document tại verify time.
+
+    Snapshot ``ut_verified_bucket`` recomputes after each verify (engine
+    T6 actual rate freeze: MAX bonus_points across verified codes).
+    """
+
+    version: int = Field(
+        ...,
+        description="Client-known profile.version for optimistic lock.",
+        ge=0,
+    )
+    document_id: Optional[int] = Field(
+        None,
+        description="Optional FK soft reference to supporting document.",
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RejectObjectEvidenceRequest(BaseModel):
+    """Officer rejects one UT evidence với reason (Phase E.3).
+
+    Marks ``priority_object_evidence[sub_code]`` as ``status='rejected'``
+    + ``reject_reason``. If rejected code was the applied verified code,
+    ``ut_verified_bucket`` recomputes to next-highest verified or null.
+    """
+
+    version: int = Field(
+        ...,
+        description="Client-known profile.version for optimistic lock.",
+        ge=0,
+    )
+    reject_reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=500,
+        description="Reason for rejection (10-500 chars).",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -2256,4 +2308,7 @@ __all__ = [
     "PriorityObjectCatalogItem",
     # Q9 #07 Phase E.2 — Manual KV override
     "OverridePriorityKvRequest",
+    # Q9 #07 Phase E.3 — UT evidence verify/reject
+    "VerifyObjectEvidenceRequest",
+    "RejectObjectEvidenceRequest",
 ]

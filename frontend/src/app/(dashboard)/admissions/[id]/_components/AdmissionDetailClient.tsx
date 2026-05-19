@@ -68,6 +68,7 @@ import { PriorityTab } from "./tabs/PriorityTab"
 import { ScoresTab } from "./tabs/ScoresTab"
 import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
+import { UtEvidenceTab } from "./tabs/UtEvidenceTab"
 import { FinalizeTab } from "./tabs/FinalizeTab"
 
 interface AdmissionDetailClientProps {
@@ -484,7 +485,12 @@ export function AdmissionDetailClient({
           {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 6 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 7 && <TuitionTab profile={profile} />}
-          {currentStep === 8 && (
+          {/* Q9 #07 Phase E.3 — Step 8 officer-only "Duyệt UT" (Decision D2).
+              Candidate sees gap-skip 7→9 trong sidebar (filtered out). */}
+          {currentStep === 8 && profile.permissions?.verify_priority_object && (
+            <UtEvidenceTab profile={profile} />
+          )}
+          {currentStep === 9 && (
             <FinalizeTab
               profile={profile}
               isEligible={isEligible}

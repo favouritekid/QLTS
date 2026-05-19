@@ -975,3 +975,129 @@ async def override_priority_kv(
         db, reloaded, current_user=current_user
     )
     return reloaded
+
+
+# =============================================================================
+# Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path)
+# =============================================================================
+
+
+async def _evidence_response(
+    db: AsyncSession,
+    profile_id: int,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """Shared reload + _populate_response_fields cho verify/reject responses."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.services import admission_service
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+    )
+    reloaded = (await db.execute(stmt)).scalar_one()
+    await admission_service._populate_response_fields(
+        db, reloaded, current_user=current_user
+    )
+    return reloaded
+
+
+@router.patch(
+    "/{profile_id}/priority-objects/{sub_code}/verify",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Duyệt UT evidence (officer write-path — Phase E.3)",
+)
+async def verify_priority_object_evidence(
+    profile_id: int,
+    sub_code: str,
+    payload: schemas.VerifyObjectEvidenceRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Officer marks ``priority_object_evidence[sub_code]`` as verified.
+
+    Bumps version + INSERTs audit log + recomputes
+    ``priority_resolution_snapshot.ut_verified_bucket`` (engine T6 actual
+    rate freeze). Dispatches PRIORITY_OBJECT_VERIFIED via outbox.
+
+    Security:
+    * IDOR: ``get_admission_for_user`` (3-tier scope)
+    * Casbin: ``q9_07_e0c`` seed (officer/manager/admin ALLOW, accountant DENY)
+
+    Per Decision D3 (plan v3): candidate uploads minh chứng qua existing
+    DocumentsTab (step 6); officer picks ``document_id`` từ
+    ``profile.documents`` tại verify time.
+    """
+    from app.services.priority_override_service import verify_object_evidence
+
+    _, post_commit_cb = await verify_object_evidence(
+        db,
+        profile,
+        sub_code=sub_code,
+        document_id=payload.document_id,
+        actor=current_user,
+        expected_version=payload.version,
+    )
+
+    await db.commit()
+    await post_commit_cb()
+
+    log.info(
+        "admissions_v2.verify_priority_object_evidence",
+        profile_id=profile_id,
+        sub_code=sub_code,
+        actor_id=current_user.id,
+    )
+    return await _evidence_response(db, profile_id, current_user)
+
+
+@router.patch(
+    "/{profile_id}/priority-objects/{sub_code}/reject",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Từ chối UT evidence (officer write-path — Phase E.3)",
+)
+async def reject_priority_object_evidence(
+    profile_id: int,
+    sub_code: str,
+    payload: schemas.RejectObjectEvidenceRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Officer marks ``priority_object_evidence[sub_code]`` as rejected.
+
+    Reject reason 10-500 char mandatory. Recomputes ``ut_verified_bucket``
+    — if rejected code was the applied verified code, bucket falls back
+    to next-highest verified (or null if none remain).
+
+    Dispatches PRIORITY_OBJECT_REJECTED via outbox với reject_reason
+    trong payload.
+    """
+    from app.services.priority_override_service import reject_object_evidence
+
+    _, post_commit_cb = await reject_object_evidence(
+        db,
+        profile,
+        sub_code=sub_code,
+        reject_reason=payload.reject_reason,
+        actor=current_user,
+        expected_version=payload.version,
+    )
+
+    await db.commit()
+    await post_commit_cb()
+
+    log.info(
+        "admissions_v2.reject_priority_object_evidence",
+        profile_id=profile_id,
+        sub_code=sub_code,
+        actor_id=current_user.id,
+    )
+    return await _evidence_response(db, profile_id, current_user)

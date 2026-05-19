@@ -182,16 +182,16 @@ describe("AdmissionActions", () => {
     });
   });
 
-  // ===== STEP 8: SUBMIT (was step 7 before Phase D.2 priority tab insert) =====
+  // ===== STEP 9: SUBMIT (Wave 3 bump from 8 → 9 — step 8 now "Duyệt UT" officer) =====
 
-  describe("Step 8: Submit", () => {
+  describe("Step 9: Submit", () => {
     it("shows Check + Submit when submit=true and eligible", () => {
       const profile = buildProfile({
         status: "draft",
         permissions: { submit: true },
         eligibility_status: "eligible",
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Kiểm tra toàn bộ")).toBeInTheDocument();
       expect(screen.getByText("Nộp hồ sơ")).toBeInTheDocument();
@@ -206,7 +206,7 @@ describe("AdmissionActions", () => {
         permissions: { submit: true },
         eligibility_status: "ineligible",
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       const submitBtn = screen.getByText("Nộp hồ sơ").closest("button");
       expect(submitBtn).toBeDisabled();
@@ -218,15 +218,15 @@ describe("AdmissionActions", () => {
         permissions: { submit: true },
         eligibility_status: "eligible",
       });
-      const spies = renderActions(profile, 8);
+      const spies = renderActions(profile, 9);
 
       fireEvent.click(screen.getByText("Nộp hồ sơ"));
       expect(spies.onSubmit).toHaveBeenCalled();
     });
 
-    it("hides step nav on step 8", () => {
+    it("hides step nav on step 9 (Finalize/Submit)", () => {
       const profile = buildProfile({ status: "draft", permissions: { submit: true } });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.queryByText("Tiếp tục")).not.toBeInTheDocument();
       expect(screen.queryByText("Quay lại")).not.toBeInTheDocument();
@@ -242,7 +242,7 @@ describe("AdmissionActions", () => {
         status: "rejected",
         permissions: { resubmit: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("rejected").label)).toBeInTheDocument();
@@ -253,7 +253,7 @@ describe("AdmissionActions", () => {
         status: "revision_requested",
         permissions: { resubmit: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("revision_requested").label)).toBeInTheDocument();
@@ -264,7 +264,7 @@ describe("AdmissionActions", () => {
         status: "rejected",
         permissions: { resubmit: true },
       });
-      const spies = renderActions(profile, 8);
+      const spies = renderActions(profile, 9);
 
       // With mocked AlertDialog, trigger + action both render.
       // "Nộp lại" is the dialog action text (AlertDialogAction).
@@ -282,7 +282,7 @@ describe("AdmissionActions", () => {
         status: "submitted",
         permissions: { approve: true, reject: true, claim: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
       // "Từ chối" appears as both reject button text AND may appear in dialog
@@ -297,7 +297,7 @@ describe("AdmissionActions", () => {
         status: "resubmitted",
         permissions: { approve: true, reject: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("resubmitted").label)).toBeInTheDocument();
@@ -308,7 +308,7 @@ describe("AdmissionActions", () => {
         status: "submitted",
         permissions: { unclaim: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       // Trigger + dialog action both show "Bỏ nhận"
       expect(screen.getAllByText("Bỏ nhận").length).toBeGreaterThanOrEqual(1);
@@ -319,7 +319,7 @@ describe("AdmissionActions", () => {
         status: "submitted",
         permissions: { claim: true },
       });
-      const spies = renderActions(profile, 8);
+      const spies = renderActions(profile, 9);
 
       // Mocked AlertDialog renders trigger + action with same text "Nhận duyệt"
       const buttons = screen.getAllByText("Nhận duyệt");
@@ -332,7 +332,7 @@ describe("AdmissionActions", () => {
         status: "submitted",
         permissions: { unclaim: true },
       });
-      const spies = renderActions(profile, 8);
+      const spies = renderActions(profile, 9);
 
       const buttons = screen.getAllByText("Bỏ nhận");
       fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
@@ -387,7 +387,7 @@ describe("AdmissionActions", () => {
         status: "confirmed",
         permissions: { enroll: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Ghi danh")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("confirmed").label)).toBeInTheDocument();
@@ -398,7 +398,7 @@ describe("AdmissionActions", () => {
         status: "overridden",
         permissions: { enroll: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.getByText("Ghi danh")).toBeInTheDocument();
       expect(screen.getByText(getStatusConfig("overridden").label)).toBeInTheDocument();
@@ -409,7 +409,7 @@ describe("AdmissionActions", () => {
         status: "confirmed",
         permissions: { enroll: true },
       });
-      const spies = renderActions(profile, 8);
+      const spies = renderActions(profile, 9);
 
       fireEvent.click(screen.getByText("Ghi danh"));
       expect(spies.onEnroll).toHaveBeenCalled();
@@ -423,7 +423,7 @@ describe("AdmissionActions", () => {
         status: "approved",
         permissions: { enroll: false, send_confirmation: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
     });
@@ -437,7 +437,7 @@ describe("AdmissionActions", () => {
         status: "approved",
         permissions: { send_confirmation: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       // Mocked child renders a stub button — see vi.mock at top of file.
       expect(screen.getByTestId("send-confirmation-button")).toBeInTheDocument();
@@ -449,7 +449,7 @@ describe("AdmissionActions", () => {
         status: "approved",
         permissions: { send_confirmation: false },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
     });
@@ -459,7 +459,7 @@ describe("AdmissionActions", () => {
         status: "confirmed",
         permissions: { send_confirmation: false, enroll: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
       // Sanity: Ghi danh DOES show at confirmed.
@@ -471,7 +471,7 @@ describe("AdmissionActions", () => {
         status: "submitted",
         permissions: { send_confirmation: false, approve: true },
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
     });
@@ -485,7 +485,7 @@ describe("AdmissionActions", () => {
         status: "enrolled",
         permissions: {},
       });
-      renderActions(profile, 8);
+      renderActions(profile, 9);
 
       // Badge — from real getStatusConfig, not hardcoded
       expect(screen.getByText(getStatusConfig("enrolled").label)).toBeInTheDocument();

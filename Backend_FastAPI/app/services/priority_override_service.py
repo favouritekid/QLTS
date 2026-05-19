@@ -106,6 +106,19 @@ _HARD_DENIED_STATUS: frozenset[str] = frozenset({
 _MIN_REASON_LEN = 20
 _MAX_REASON_LEN = 500
 
+# UT evidence states & reject reason validation (Phase E.3)
+_EVIDENCE_STATUSES: frozenset[str] = frozenset({"pending", "verified", "rejected"})
+_MIN_REJECT_REASON_LEN = 10
+_MAX_REJECT_REASON_LEN = 500
+
+# Officer can verify/reject UT evidence in any status except hard-denied
+# (draft means candidate still editing — verify makes no sense).
+_EVIDENCE_DENIED_STATUS: frozenset[str] = frozenset({
+    "draft",
+    "withdrawn",
+    "dropped",
+})
+
 
 # ---------------------------------------------------------------------------
 # Public service entrypoint
@@ -338,3 +351,322 @@ async def override_kv(
         post_commit = _noop_callback
 
     return profile, post_commit
+
+
+# ---------------------------------------------------------------------------
+# UT evidence — verify + reject (Phase E.3)
+# ---------------------------------------------------------------------------
+
+
+async def _recompute_ut_verified_bucket(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> dict[str, Any]:
+    """Recompute ``ut_verified_bucket`` snapshot field after verify/reject.
+
+    Engine T6 actual rate freeze (Phase E wireframe ut_verified_bucket key):
+    MAX bonus_points across codes với ``priority_object_evidence[code].status
+    == 'verified'``. If no verified codes, returns ``{applied_code: None,
+    applied_rate: 0}``.
+
+    Catalog rate lookup honors ``effective_from``/``effective_to`` window —
+    same query shape as ``admissions_v2.preview_priority_kv``.
+    """
+    from datetime import date as _date
+    from sqlalchemy import select as _sel
+    from app.models.priority_config import PriorityObjectConfig
+
+    evidence = profile.priority_object_evidence or {}
+    submitted_codes = list(profile.priority_object_codes or [])
+    verified_codes = [
+        c
+        for c in submitted_codes
+        if isinstance(evidence.get(c), dict)
+        and evidence[c].get("status") == "verified"
+    ]
+
+    if not verified_codes:
+        return {"applied_code": None, "applied_rate": 0}
+
+    # Academic year: fall back chain mirrors preview endpoint.
+    academic_year = profile.academic_year or 2026
+    today = _date.today()
+    stmt = (
+        _sel(PriorityObjectConfig.sub_code, PriorityObjectConfig.bonus_points)
+        .where(
+            PriorityObjectConfig.academic_year == academic_year,
+            PriorityObjectConfig.sub_code.in_(verified_codes),
+            PriorityObjectConfig.effective_from <= today,
+        )
+        .where(
+            (PriorityObjectConfig.effective_to.is_(None))
+            | (PriorityObjectConfig.effective_to > today)
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    if not rows:
+        return {"applied_code": None, "applied_rate": 0}
+
+    top = max(rows, key=lambda r: r[1])
+    return {"applied_code": top[0], "applied_rate": float(top[1])}
+
+
+async def _evidence_mutation_common_checks(
+    profile: models.AdmissionProfile,
+    sub_code: str,
+    actor: models.User,
+    expected_version: int,
+) -> None:
+    """Shared pre-mutation guard for verify + reject.
+
+    Raises ConflictError on version mismatch (FIRST per memory
+    `version-guard-before-state-machine`); BusinessRuleViolation on
+    hard-denied status, invalid sub_code, or sub_code not in profile's
+    submitted codes list.
+    """
+    if expected_version != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {expected_version}, "
+            f"but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    if profile.status in _EVIDENCE_DENIED_STATUS:
+        raise BusinessRuleViolation(
+            f"Cannot verify/reject UT evidence in '{profile.status}' state."
+        )
+
+    if not sub_code or not isinstance(sub_code, str):
+        raise BusinessRuleViolation("sub_code is required and must be a string")
+
+    submitted = list(profile.priority_object_codes or [])
+    if sub_code not in submitted:
+        raise BusinessRuleViolation(
+            f"sub_code '{sub_code}' is not in profile's submitted codes "
+            f"({submitted}); candidate must select diện first."
+        )
+
+
+async def verify_object_evidence(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    *,
+    sub_code: str,
+    document_id: Optional[int],
+    actor: models.User,
+    expected_version: int,
+) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
+    """Officer verifies UT evidence cho 1 sub_code (Phase E.3).
+
+    Marks ``priority_object_evidence[sub_code]`` as ``status='verified'``
+    with verifier metadata + optional ``document_id`` reference (per
+    Decision D3 — candidate uploads via DocumentsTab, officer picks
+    document từ existing profile.documents).
+
+    Recomputes ``priority_resolution_snapshot.ut_verified_bucket`` (engine
+    T6 actual rate freeze). Bumps version + INSERTs audit log + dispatches
+    PRIORITY_OBJECT_VERIFIED event via outbox.
+
+    Raises:
+        ConflictError: version mismatch.
+        BusinessRuleViolation: sub_code not submitted / hard-denied status.
+    """
+    await _evidence_mutation_common_checks(
+        profile, sub_code, actor, expected_version
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    evidence = dict(profile.priority_object_evidence or {})
+    prev_entry = dict(evidence.get(sub_code) or {})
+
+    evidence[sub_code] = {
+        **prev_entry,
+        "status": "verified",
+        "verified_by": actor.id,
+        "verified_at": now_iso,
+        "document_id": document_id,
+        # Drop any stale reject_reason from prior reject cycle.
+        "reject_reason": None,
+    }
+    profile.priority_object_evidence = evidence
+
+    # Recompute UT verified bucket (engine T6 actual rate)
+    new_bucket = await _recompute_ut_verified_bucket(db, profile)
+    snapshot = dict(profile.priority_resolution_snapshot or {})
+    snapshot["ut_verified_bucket"] = new_bucket
+    profile.priority_resolution_snapshot = snapshot
+
+    audit_row = models.PriorityAuditLog(
+        profile_id=profile.id,
+        action_type="ut_evidence_verified",
+        actor_id=actor.id,
+        old_value={"sub_code": sub_code, "status": prev_entry.get("status")},
+        new_value={
+            "sub_code": sub_code,
+            "status": "verified",
+            "document_id": document_id,
+        },
+        audit_metadata={
+            "actor_role": actor.role,
+            "ut_verified_bucket": new_bucket,
+        },
+    )
+    db.add(audit_row)
+    profile.version += 1
+
+    from app.services.notification_dispatcher import dispatch_event
+
+    _payload = {
+        "application_id": profile.id,
+        "lead_id": profile.lead_id,
+        "actor_id": actor.id,
+        "actor_name": actor.full_name or actor.email,
+        "sub_code": sub_code,
+    }
+    _dedupe_key = (
+        f"priority:{profile.id}:ut_verified:{sub_code}:{actor.id}:"
+        f"{int(datetime.now(timezone.utc).timestamp())}"
+    )
+    post_commit = await dispatch_event(
+        db,
+        event=SystemEvents.PRIORITY_OBJECT_VERIFIED,
+        payload=_payload,
+        dedupe_key=_dedupe_key,
+    )
+
+    await db.flush()
+
+    log.info(
+        "priority_override_service.verify_object_evidence_success",
+        profile_id=profile.id,
+        actor_id=actor.id,
+        sub_code=sub_code,
+        applied_code=new_bucket.get("applied_code"),
+        applied_rate=new_bucket.get("applied_rate"),
+        version_after=profile.version,
+    )
+
+    async def _noop_callback() -> None:
+        return None
+
+    return profile, (post_commit or _noop_callback)
+
+
+async def reject_object_evidence(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    *,
+    sub_code: str,
+    reject_reason: str,
+    actor: models.User,
+    expected_version: int,
+) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
+    """Officer rejects UT evidence cho 1 sub_code (Phase E.3).
+
+    Marks ``priority_object_evidence[sub_code]`` as ``status='rejected'``
+    with ``reject_reason`` (min 10 / max 500 chars). Recomputes
+    ``ut_verified_bucket`` — if the rejected code was the current applied
+    verified code, the bucket recomputes to the next-highest verified
+    code (or null if none remain).
+
+    Per plan v3 Wave 3 spec line 245-247.
+
+    Raises:
+        ConflictError: version mismatch.
+        BusinessRuleViolation: sub_code not submitted / reason length /
+            hard-denied status.
+    """
+    await _evidence_mutation_common_checks(
+        profile, sub_code, actor, expected_version
+    )
+
+    reason_clean = (reject_reason or "").strip()
+    if len(reason_clean) < _MIN_REJECT_REASON_LEN:
+        raise BusinessRuleViolation(
+            f"Reject reason must be at least {_MIN_REJECT_REASON_LEN} "
+            f"characters (got {len(reason_clean)})"
+        )
+    if len(reason_clean) > _MAX_REJECT_REASON_LEN:
+        raise BusinessRuleViolation(
+            f"Reject reason must not exceed {_MAX_REJECT_REASON_LEN} "
+            f"characters (got {len(reason_clean)})"
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    evidence = dict(profile.priority_object_evidence or {})
+    prev_entry = dict(evidence.get(sub_code) or {})
+
+    evidence[sub_code] = {
+        **prev_entry,
+        "status": "rejected",
+        "verified_by": None,
+        "verified_at": None,
+        "reject_reason": reason_clean,
+        "rejected_by": actor.id,
+        "rejected_at": now_iso,
+    }
+    profile.priority_object_evidence = evidence
+
+    # Recompute UT verified bucket — if rejected code was applied verified,
+    # bucket falls back to next-highest verified (or null if no verified left).
+    new_bucket = await _recompute_ut_verified_bucket(db, profile)
+    snapshot = dict(profile.priority_resolution_snapshot or {})
+    snapshot["ut_verified_bucket"] = new_bucket
+    profile.priority_resolution_snapshot = snapshot
+
+    audit_row = models.PriorityAuditLog(
+        profile_id=profile.id,
+        action_type="ut_evidence_rejected",
+        actor_id=actor.id,
+        old_value={"sub_code": sub_code, "status": prev_entry.get("status")},
+        new_value={
+            "sub_code": sub_code,
+            "status": "rejected",
+            "reject_reason": reason_clean,
+        },
+        audit_metadata={
+            "actor_role": actor.role,
+            "ut_verified_bucket": new_bucket,
+        },
+    )
+    db.add(audit_row)
+    profile.version += 1
+
+    from app.services.notification_dispatcher import dispatch_event
+
+    _payload = {
+        "application_id": profile.id,
+        "lead_id": profile.lead_id,
+        "actor_id": actor.id,
+        "actor_name": actor.full_name or actor.email,
+        "sub_code": sub_code,
+        "reject_reason": reason_clean,
+    }
+    _dedupe_key = (
+        f"priority:{profile.id}:ut_rejected:{sub_code}:{actor.id}:"
+        f"{int(datetime.now(timezone.utc).timestamp())}"
+    )
+    post_commit = await dispatch_event(
+        db,
+        event=SystemEvents.PRIORITY_OBJECT_REJECTED,
+        payload=_payload,
+        dedupe_key=_dedupe_key,
+    )
+
+    await db.flush()
+
+    log.info(
+        "priority_override_service.reject_object_evidence_success",
+        profile_id=profile.id,
+        actor_id=actor.id,
+        sub_code=sub_code,
+        applied_code_after=new_bucket.get("applied_code"),
+        version_after=profile.version,
+        reason_len=len(reason_clean),
+    )
+
+    async def _noop_callback() -> None:
+        return None
+
+    return profile, (post_commit or _noop_callback)

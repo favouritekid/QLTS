@@ -52,6 +52,9 @@ export function AdmissionLayout({
                 validationSummary={validationSummary}
                 groupedValidationErrors={groupedValidationErrors}
                 completionPercent={profile?.completion_percent ?? 0}
+                canVerifyPriorityObject={
+                  !!profile?.permissions?.verify_priority_object
+                }
              />
           </aside>
 
