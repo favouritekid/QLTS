@@ -30,6 +30,7 @@ from app.core.deps import (
     get_admission_for_manager,
     get_admission_for_user,
     get_choice_for_user,
+    get_current_active_user,
     require_admin,
 )
 from app.services import admission_choice_engine_service as choice_engine
@@ -686,13 +687,120 @@ async def preview_priority_kv(
             r.model_dump(exclude_none=False) for r in payload.academic_history
         ]
 
+    # Apply UT codes override for preview (Phase E wireframe — UT live preview)
+    if payload.priority_object_codes is not None:
+        preview_profile.priority_object_codes = payload.priority_object_codes
+
     kv, meta = await resolve_kv_for_profile(preview_profile, db)
+
+    # Look up bonus rates — KV area_bonus + UT object_bonus (potential + verified)
+    # academic_year derived từ profile.admission_path.admission_round nếu có
+    # (canonical pattern from evaluate_cascade); fallback current year.
+    from decimal import Decimal
+    from sqlalchemy import select as _sel
+    from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
+
+    # Best-effort academic_year — preview doesn't always have round loaded
+    academic_year = None
+    try:
+        path = getattr(profile, "admission_path", None)
+        round_obj = path.__dict__.get("admission_round") if path else None
+        academic_year = round_obj.__dict__.get("academic_year") if round_obj else None
+    except Exception:
+        academic_year = None
+    if academic_year is None:
+        # Preview fallback: use 2026 for default rate display (FE candidate flow)
+        academic_year = 2026
+
+    area_bonus = None
+    if kv:
+        from datetime import date as _date
+        today = _date.today()
+        rate_stmt = (
+            _sel(PriorityAreaConfig.bonus_points)
+            .where(
+                PriorityAreaConfig.academic_year == academic_year,
+                PriorityAreaConfig.area_code == kv,
+                PriorityAreaConfig.effective_from <= today,
+            )
+            .where(
+                (PriorityAreaConfig.effective_to.is_(None))
+                | (PriorityAreaConfig.effective_to > today)
+            )
+            .limit(1)
+        )
+        rate_res = await db.execute(rate_stmt)
+        area_bonus = rate_res.scalar_one_or_none()
+
+    # UT preview — MAX rate logic per TT 05/2021 "chỉ hưởng một diện cao nhất".
+    # Compute 2 buckets:
+    #   potential = MAX across ALL submitted codes (assume all verified)
+    #   verified  = MAX across codes status='verified' (engine T6 actual)
+    object_bonus_potential = None
+    object_bonus_verified = None
+    ut_breakdown_data = {
+        "codes_submitted": preview_profile.priority_object_codes or [],
+        "applied_code_potential": None,
+        "applied_rate_potential": None,
+        "verified_codes": [],
+        "applied_code_verified": None,
+        "applied_rate_verified": None,
+    }
+
+    submitted_codes = list(preview_profile.priority_object_codes or [])
+    if submitted_codes:
+        from datetime import date as _date
+        today = _date.today()
+        ut_stmt = (
+            _sel(
+                PriorityObjectConfig.sub_code,
+                PriorityObjectConfig.bonus_points,
+            )
+            .where(
+                PriorityObjectConfig.academic_year == academic_year,
+                PriorityObjectConfig.sub_code.in_(submitted_codes),
+                PriorityObjectConfig.effective_from <= today,
+            )
+            .where(
+                (PriorityObjectConfig.effective_to.is_(None))
+                | (PriorityObjectConfig.effective_to > today)
+            )
+        )
+        ut_rows = (await db.execute(ut_stmt)).all()
+        if ut_rows:
+            # Potential MAX (assume all verified)
+            top_pot = max(ut_rows, key=lambda r: r[1])
+            object_bonus_potential = top_pot[1]
+            ut_breakdown_data["applied_code_potential"] = top_pot[0]
+            ut_breakdown_data["applied_rate_potential"] = str(top_pot[1])
+
+        # Verified MAX (engine T6 actual)
+        evidence = profile.priority_object_evidence or {}
+        verified_codes = [
+            c for c in submitted_codes
+            if isinstance(evidence.get(c), dict)
+            and evidence[c].get("status") == "verified"
+        ]
+        ut_breakdown_data["verified_codes"] = verified_codes
+        if verified_codes and ut_rows:
+            verified_rows = [r for r in ut_rows if r[0] in verified_codes]
+            if verified_rows:
+                top_ver = max(verified_rows, key=lambda r: r[1])
+                object_bonus_verified = top_ver[1]
+                ut_breakdown_data["applied_code_verified"] = top_ver[0]
+                ut_breakdown_data["applied_rate_verified"] = str(top_ver[1])
+
+    total_bonus_potential = None
+    if area_bonus is not None or object_bonus_potential is not None:
+        total_bonus_potential = (area_bonus or Decimal("0")) + (object_bonus_potential or Decimal("0"))
 
     log.info(
         "admissions_v2.preview_priority_kv",
         profile_id=profile_id,
         kv_resolved=kv,
         pathway=meta.get("pathway"),
+        ut_codes_submitted=len(submitted_codes),
+        ut_codes_verified=len(ut_breakdown_data["verified_codes"]),
     )
 
     return schemas.PreviewPriorityKvResponse(
@@ -702,4 +810,59 @@ async def preview_priority_kv(
         requires_manual_override=meta.get("requires_manual_override", False),
         reason=meta.get("reason"),
         breakdown=meta.get("breakdown"),
+        area_bonus=area_bonus,
+        object_bonus_potential=object_bonus_potential,
+        object_bonus_verified=object_bonus_verified,
+        ut_breakdown=ut_breakdown_data,
+        total_bonus_potential=total_bonus_potential,
     )
+
+
+# =============================================================================
+# Q9 #07 Phase E wireframe — UT catalog for candidate picker
+# =============================================================================
+
+
+@router.get(
+    "/priority-objects/catalog",
+    response_model=list[schemas.PriorityObjectCatalogItem],
+    summary="Get UT (đối tượng ưu tiên) catalog for candidate picker",
+)
+async def get_priority_object_catalog(
+    academic_year: int = 2026,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Return list of UT codes admin có configure cho year nhất định.
+
+    Used by candidate FE PriorityTab (Phase E wireframe) for the
+    UT multi-select picker. Returns active rows only (effective window
+    includes today).
+
+    Auth: any authenticated user (candidate/officer/admin/manager).
+    Catalog is org-wide public info, not IDOR-scoped.
+
+    Defaults `academic_year=2026` per current mùa tuyển sinh.
+    """
+    from datetime import date as _date
+    from sqlalchemy import select as _sel
+    from app.models.priority_config import PriorityObjectConfig
+
+    today = _date.today()
+    stmt = (
+        _sel(PriorityObjectConfig)
+        .where(
+            PriorityObjectConfig.academic_year == academic_year,
+            PriorityObjectConfig.effective_from <= today,
+        )
+        .where(
+            (PriorityObjectConfig.effective_to.is_(None))
+            | (PriorityObjectConfig.effective_to > today)
+        )
+        .order_by(
+            PriorityObjectConfig.bonus_points.desc(),
+            PriorityObjectConfig.sub_code,
+        )
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [schemas.PriorityObjectCatalogItem.model_validate(r) for r in rows]
