@@ -1487,6 +1487,22 @@ def _compute_frontend_fields(
             )
             and (is_owner or is_manager or is_admin)
         ),
+        # Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path).
+        # Service-layer (priority_override_service) enforces full whitelist
+        # + post-publish admin-only gate. UI uses this flag only to gate
+        # visibility of "Cán bộ ấn định thủ công" button trong PriorityTab.
+        # Officer must be assigned to profile via lead.assigned_officer_id;
+        # manager/admin scope handled by route's IDOR dep. Status whitelist
+        # here matches service-layer ``_OFFICER_ALLOWED_STATUS`` for officer
+        # path; admin bypasses (UI shows button regardless of status, dialog
+        # secondary checkbox for post-publish profiles).
+        "override_priority_kv": (
+            is_admin
+            or (
+                (is_manager or (is_officer and is_owner))
+                and status in ["submitted", "reviewing", "revision_requested"]
+            )
+        ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),

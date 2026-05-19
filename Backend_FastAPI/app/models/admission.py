@@ -273,8 +273,14 @@ class AdmissionProfile(Base):
         server_default=text("'{}'::jsonb"),
         comment=(
             "Frozen KV resolution at submit T1 + re-frozen at engine T6. "
-            "Shape: {kv_resolved, rule_applied, pathway, breakdown, "
-            "frozen_at, frozen_at_status, manual_override_reason}. "
+            "Engine-set keys: {kv_resolved, rule_applied, pathway, breakdown, "
+            "frozen_at, frozen_at_status, resolved_by, requires_manual_override, "
+            "reason}. "
+            "Phase E.2 manual override extends với: {manual_override_by, "
+            "manual_override_at, manual_override_reason, evidence_file_id} — "
+            "OVERWRITTEN with LAST override per chain-of-override semantics "
+            "(Decision D1). Audit log preserves full chain history via "
+            "priority_audit_log table. "
             "Empty {} = draft state (service computes real-time preview)."
         )
     )

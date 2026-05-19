@@ -67,11 +67,9 @@ def test_deferred_set_canonical_source_is_state_service() -> None:
     same set of names enumerated in
     ``state_service.DEFERRED_ADMISSION_EVENTS``. Without this, the
     coverage flag and the runtime mapping could drift silently."""
-    # Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events to
-    # catalog seed; dispatch sites ship Wave 2 (override_kv) + Wave 3
-    # (verify/reject evidence). Tracked here until those waves merge.
+    # Wave 2 (2026-05-19) wired PRIORITY_KV_OVERRIDDEN; only the 2 UT
+    # evidence events remain deferred until Wave 3 ships verify/reject.
     assert DEFERRED_ADMISSION_EVENTS == frozenset({
-        "PRIORITY_KV_OVERRIDDEN",
         "PRIORITY_OBJECT_VERIFIED",
         "PRIORITY_OBJECT_REJECTED",
     })
@@ -101,14 +99,14 @@ def _capture_stderr(callable_):
 
 
 def test_summarize_passes_when_deferred_events_match(capsys) -> None:
-    """Q9 #07 Phase E Wave 1 (2026-05-19): DEFERRED set has 3 PRIORITY_*
-    events; verify passing the matching --allow-deferred list yields
-    rc=0 + "Deferred (allow-listed)" block.
+    """Wave 2 (2026-05-19) shrunk DEFERRED set 3 → 2 (wired
+    PRIORITY_KV_OVERRIDDEN); 2 UT evidence events remain deferred
+    until Wave 3.
     """
     # Build stand-in statuses with ONLY the single no-dispatch-site gap
     # (allow-list only excuses that exact single gap).
     statuses = [_status(name) for name in DEFERRED_ADMISSION_EVENTS]
-    assert len(statuses) == 3
+    assert len(statuses) == 2
     for st in statuses:
         assert st.gaps == ["no-dispatch-site"]
 

@@ -105,6 +105,55 @@ export type PriorityObjectEvidenceEntry = z.infer<
 >
 
 /**
+ * Priority Resolution Snapshot Schema
+ *
+ * BE column: ``admission_profile.priority_resolution_snapshot`` (JSONB).
+ * Set by ``priority_service.freeze_priority_snapshot()`` at T1/T6 +
+ * extended by ``priority_override_service.override_kv()`` (Phase E.2)
+ * với 4 manual override keys.
+ *
+ * All fields optional + ``passthrough()`` for forward-compat (engine
+ * may extend breakdown shape; nullable to handle pre-Phase-A profiles).
+ *
+ * Q9 #07 Phase E.2 (2026-05-19) adds 4 keys for chain-of-override
+ * semantics (Decision D1):
+ * * ``manual_override_by`` — actor user.id (overwritten on each override)
+ * * ``manual_override_at`` — ISO timestamp (refreshed each override)
+ * * ``manual_override_reason`` — 20-500 char user-supplied justification
+ * * ``evidence_file_id`` — optional FK soft reference to supporting doc
+ *
+ * Audit log preserves full chain via ``priority_audit_log`` table.
+ */
+export const prioritySnapshotSchema = z
+  .object({
+    // Engine-set keys (Phase C/D)
+    kv_resolved: z.string().nullable().optional(),
+    rule_applied: z.string().nullable().optional(),
+    pathway: z.string().nullable().optional(),
+    breakdown: z.record(z.string(), z.unknown()).nullable().optional(),
+    frozen_at: z.string().datetime({ offset: true }).nullable().optional(),
+    frozen_at_status: z.string().nullable().optional(),
+    resolved_by: z.string().nullable().optional(),
+    requires_manual_override: z.boolean().nullable().optional(),
+    reason: z.string().nullable().optional(),
+    // Phase E.2 manual override keys
+    manual_override_by: z
+      .union([z.number().int(), z.string()])
+      .nullable()
+      .optional(),
+    manual_override_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional(),
+    manual_override_reason: z.string().nullable().optional(),
+    evidence_file_id: z.number().int().nullable().optional(),
+  })
+  .passthrough()
+
+export type PriorityResolutionSnapshot = z.infer<typeof prioritySnapshotSchema>
+
+/**
  * Academic Record Schema
  * Stored in admission_profile.academic_history JSONB array
  *
@@ -602,7 +651,7 @@ export const admissionProfileResponseSchema = z.object({
   priority_object_evidence: z
     .record(z.string(), priorityObjectEvidenceEntrySchema)
     .default({}),
-  priority_resolution_snapshot: z.record(z.string(), z.unknown()).default({}),
+  priority_resolution_snapshot: prioritySnapshotSchema.nullable().default(null),
 
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
