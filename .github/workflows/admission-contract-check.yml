@@ -101,16 +101,11 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run check_notification_event_coverage
-        # ``--allow-deferred`` permits ADMISSION_* + PRIORITY_* events
-        # whose dispatch sites haven't shipped yet. Locked by
-        # ``state_service.DEFERRED_ADMISSION_EVENTS`` + the lock test
-        # ``test_check_notification_event_coverage_deferred.py``.
-        #
-        # Q9 #07 Phase E Wave 1 (2026-05-19): 3 PRIORITY_* events seeded
-        # to catalog/seed_defaults; dispatch ships Wave 2 (override_kv)
-        # + Wave 3 (verify/reject evidence). Sync this flag with
-        # deploy.yml + backend-test.yml per memory
+        # Q9 #07 Phase E Wave 3 (2026-05-19): all 3 PRIORITY_* events
+        # fully wired via dispatch_event outbox (Wave 2 KV_OVERRIDDEN +
+        # Wave 3 OBJECT_VERIFIED/REJECTED). DEFERRED set back to empty;
+        # --allow-deferred flag no longer needed.
+        # Sync with backend-test.yml per memory
         # `ci-workflow-flag-cross-file-sync`.
         run: |
-          python -m app.scripts.check_notification_event_coverage \
-            --allow-deferred=PRIORITY_OBJECT_VERIFIED,PRIORITY_OBJECT_REJECTED
+          python -m app.scripts.check_notification_event_coverage
