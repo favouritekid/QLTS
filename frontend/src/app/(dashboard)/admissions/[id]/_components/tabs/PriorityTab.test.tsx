@@ -24,6 +24,16 @@ beforeAll(() => {
   }
 })
 
+// PriorityTab now embeds PriorityOverrideDialog → ResponsiveDialog →
+// useMediaQuery (useSyncExternalStore + matchMedia). Stub to desktop
+// trong JSDOM tests.
+vi.mock("@/hooks/useMediaQuery", () => ({
+  useMediaQuery: () => false,
+  useIsMobile: () => false,
+  useIsTablet: () => false,
+  useIsDesktop: () => true,
+}))
+
 // Mock live preview hook — control returned data per test
 const mockPreview = vi.fn()
 vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
