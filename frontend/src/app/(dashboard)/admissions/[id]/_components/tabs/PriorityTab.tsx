@@ -28,7 +28,8 @@ import { ShieldCheck, Lightbulb } from "lucide-react"
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
-import { KvBreakdownCard } from "@/components/admissions/KvBreakdownCard"
+import { PrioritySnapshotCard } from "@/components/admissions/PrioritySnapshotCard"
+import { UtEvidenceCard } from "@/components/admissions/UtEvidenceCard"
 
 interface PriorityTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
@@ -60,6 +61,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const areaBasis = form.watch("area_resolution_basis")
   const communeCode = form.watch("permanent_commune_code")
   const academicHistory = form.watch("academic_history")
+  const utCodes = form.watch("priority_object_codes")
 
   // Live preview hook — debounced 500ms
   const { data: preview, isLoading: previewLoading } = usePreviewPriorityKv(
@@ -71,6 +73,7 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
       permanent_commune_code: communeCode ?? null,
       academic_history:
         (academicHistory as PreviewPriorityKvRequest["academic_history"]) ?? null,
+      priority_object_codes: utCodes ?? null,
     },
     !!cultural, // only fire when cultural set
   )
@@ -105,6 +108,15 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const displayReason = isFrozen ? frozenSnapshot?.reason : preview?.reason
   const displayBreakdown = isFrozen ? frozenSnapshot?.breakdown : preview?.breakdown
   const displayRequiresManual = isFrozen ? frozenSnapshot?.requires_manual_override : preview?.requires_manual_override
+  // Phase E wireframe — UT + total bonus (frozen snapshot doesn't carry these yet;
+  // live preview only. Frozen UT data lives trong profile.priority_object_evidence
+  // → engine recompute on demand). For now show live preview values cho cả 2 states;
+  // when E.3 wires evidence verification, snapshot JSONB sẽ extend.
+  const displayAreaBonus = preview?.area_bonus ?? null
+  const displayObjectPotential = preview?.object_bonus_potential ?? null
+  const displayObjectVerified = preview?.object_bonus_verified ?? null
+  const displayUtBreakdown = preview?.ut_breakdown ?? null
+  const displayTotalPotential = preview?.total_bonus_potential ?? null
 
   const isSpecialCase = areaBasis === "permanent_address_special"
 
@@ -120,15 +132,44 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
 
   return (
     <div className="space-y-6">
-      {/* ───────── 1. INTRO CARD ───────── */}
-      <Card className="border-info-200 bg-info-50/40">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base font-semibold flex items-center gap-2 text-info-800">
-            <Lightbulb className="h-5 w-5" />
-            Về phần này
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm text-info-900/80">
+      {/* ───────── 1. COMBINED KV+UT+TOTAL SNAPSHOT (Phase E wireframe — top) ───────── */}
+      <PrioritySnapshotCard
+        kv={displayKv}
+        pathway={displayPathway}
+        ruleApplied={displayRule}
+        reason={displayReason}
+        breakdown={displayBreakdown}
+        requiresManual={displayRequiresManual}
+        areaBonus={displayAreaBonus}
+        objectBonusPotential={displayObjectPotential}
+        objectBonusVerified={displayObjectVerified}
+        utBreakdown={displayUtBreakdown}
+        totalBonusPotential={displayTotalPotential}
+        frozen={isFrozen}
+        loading={previewLoading && !preview}
+        emptyStateHint={emptyStateHint}
+        // Universal frozen audit footer (Phase E wireframe expansion)
+        frozenAt={frozenSnapshot?.frozen_at ?? null}
+        resolvedBy={frozenSnapshot?.resolved_by ?? null}
+        // Manual override audit (E.2 — populated khi rule_applied='manual_override')
+        manualOverrideReason={frozenSnapshot?.manual_override_reason ?? null}
+        manualOverrideBy={
+          frozenSnapshot?.manual_override_by != null
+            ? String(frozenSnapshot.manual_override_by)
+            : null
+        }
+        manualOverrideAt={frozenSnapshot?.manual_override_at ?? null}
+      />
+      {/* Phase E.2 (PriorityOverrideDialog) sẽ wire trigger button gated by
+          profile.permissions.override_priority_kv here — chưa ship */}
+
+      {/* ───────── 2. INTRO DISCLOSURE (1-line, collapsed by default) ───────── */}
+      <details className="rounded-lg border border-info-200 bg-info-50/40 px-3 py-2 text-sm text-info-900/90">
+        <summary className="cursor-pointer flex items-center gap-2 font-medium">
+          <Lightbulb className="h-4 w-4 text-info-700" />
+          Giải thích cách tính ưu tiên theo TT 05/2021 (bấm để xem)
+        </summary>
+        <div className="mt-2 space-y-2 text-info-900/80">
           <p>
             Xác định <strong>Khu vực ưu tiên (KV)</strong> để cộng điểm tuyển sinh theo
             Thông tư <strong>05/2021/TT-BLĐTBXH</strong> Phụ lục 01 + Thông tư <strong>27/2017/TT-BLĐTBXH</strong> về liên thông
@@ -140,36 +181,13 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             <li><strong>KV2</strong>: +<strong>0,25đ</strong> — thành phố thuộc tỉnh, phường ngoại thành TP trực thuộc TƯ</li>
             <li><strong>KV3</strong>: <strong>không cộng</strong> — nội thành TP trực thuộc TƯ (Hà Nội, HCM, ...)</li>
           </ul>
-          <p className="text-xs pt-1">
+          <p className="text-xs">
             <strong>Hệ thống tự động tính</strong> ngay khi khai đủ trình độ + trường đã học (tab <em>Học tập</em>).
             Bật <strong>Trường hợp đặc biệt</strong> nếu là <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, lớp tạo nguồn, quân nhân/công an tại ngũ hoặc xuất ngũ</em>
             {" "}— KV theo nơi thường trú (riêng quân nhân: theo nơi đóng quân ≥18 tháng nếu cao hơn — cần cán bộ xác nhận).
           </p>
-        </CardContent>
-      </Card>
-
-      {/* ───────── 2. LIVE / FROZEN SNAPSHOT (extracted Phase E.1) ───────── */}
-      <KvBreakdownCard
-        kv={displayKv}
-        pathway={displayPathway}
-        ruleApplied={displayRule}
-        reason={displayReason}
-        breakdown={displayBreakdown}
-        requiresManual={displayRequiresManual}
-        frozen={isFrozen}
-        loading={previewLoading && !preview}
-        emptyStateHint={emptyStateHint}
-        // Phase E.1 audit footer wire — only shown khi ruleApplied='manual_override'
-        manualOverrideReason={frozenSnapshot?.manual_override_reason ?? null}
-        manualOverrideBy={
-          frozenSnapshot?.manual_override_by != null
-            ? String(frozenSnapshot.manual_override_by)
-            : null
-        }
-        manualOverrideAt={frozenSnapshot?.manual_override_at ?? null}
-      />
-      {/* Phase E.2 (PriorityOverrideDialog) sẽ wire trigger button gated by
-          profile.permissions.override_priority_kv here — chưa ship */}
+        </div>
+      </details>
 
       {/* ───────── 3. TRÌNH ĐỘ HỌC VẤN ───────── */}
       <Card className="shadow-sm border-border">
@@ -321,12 +339,19 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
             />
           )}
 
-          {/* Manual override admin path — handled trong KvBreakdownCard audit row
-              (Phase E.1) + PriorityOverrideDialog (Phase E.2). KHÔNG hiển thị
-              trong candidate special-case card vì đây là officer/admin action,
-              không phải candidate self-service. */}
+          {/* Manual override admin path — handled trong PrioritySnapshotCard audit
+              footer (Phase E wireframe) + PriorityOverrideDialog (Phase E.2). KHÔNG
+              hiển thị trong candidate special-case card vì đây là officer/admin
+              action, không phải candidate self-service. */}
         </CardContent>
       </Card>
+
+      {/* ───────── 5. ĐỐI TƯỢNG ƯU TIÊN (UT) — Phase E wireframe ───────── */}
+      <UtEvidenceCard
+        form={form}
+        academicYear={2026}
+        disabled={!isEditable}
+      />
     </div>
   )
 }

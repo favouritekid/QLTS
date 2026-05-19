@@ -1,8 +1,10 @@
 /**
- * Priority KV preview API client (Q9 #07 Phase D.4)
+ * Priority KV+UT preview API client (Q9 #07 Phase D.4 + Phase E wireframe)
  *
- * Wraps POST /api/v2/admissions/{id}/preview-priority-kv — real-time KV
- * resolution cho candidate FE PriorityTab draft state.
+ * Wraps POST /api/v2/admissions/{id}/preview-priority-kv — real-time KV+UT
+ * resolution cho candidate FE PriorityTab + UtEvidenceCard draft state.
+ *
+ * Mirrors `app/schemas/admission.py::PreviewPriorityKvRequest/Response`.
  */
 import { api } from "@/lib/api/client"
 
@@ -21,15 +23,33 @@ export interface PreviewPriorityKvRequest {
     gpa?: number | null
     graduation_type?: string | null
   }> | null
+  // Phase E wireframe — UT live preview override
+  priority_object_codes?: string[] | null
+}
+
+export interface UtBreakdown {
+  codes_submitted: string[]
+  applied_code_potential: string | null
+  applied_rate_potential: string | null
+  verified_codes: string[]
+  applied_code_verified: string | null
+  applied_rate_verified: string | null
 }
 
 export interface PreviewPriorityKvResponse {
+  // KV (existing Phase D)
   kv_resolved: string | null
   pathway: string | null
   rule_applied: string | null
   requires_manual_override: boolean
   reason: string | null
   breakdown: Record<string, unknown> | null
+  // Phase E wireframe — bonus points + UT
+  area_bonus: number | null
+  object_bonus_potential: number | null
+  object_bonus_verified: number | null
+  ut_breakdown: UtBreakdown | null
+  total_bonus_potential: number | null
 }
 
 export const priorityKvApi = {
