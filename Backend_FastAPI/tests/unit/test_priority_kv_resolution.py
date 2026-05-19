@@ -44,10 +44,12 @@ from app.services.priority_service import (
         # Row 3: completed_thpt + (so_cap | none) → COMMUNE_FALLBACK
         ("completed_thpt", "so_cap", None, "COMMUNE_FALLBACK"),
         ("completed_thpt", "none", None, "COMMUNE_FALLBACK"),
-        # Row 4: graduated_thcs + (trung_cap | cao_dang) → TC
-        ("graduated_thcs", "trung_cap", None, "TC"),
-        ("graduated_thcs", "cao_dang", None, "TC"),
-        # Row 5: graduated_thcs + (so_cap | none) → COMMUNE_FALLBACK
+        # Rows 4+5 merged (per nghiệp vụ user 2026-05-18): graduated_thcs →
+        # COMMUNE_FALLBACK regardless of vocational. Original v1.3 design had
+        # Row 4 → TC basis cho liên thông TC pathway, NHƯNG user clarified:
+        # TN THCS bất kể có TC nghề → KV theo hộ khẩu (case 1 generic).
+        ("graduated_thcs", "trung_cap", None, "COMMUNE_FALLBACK"),
+        ("graduated_thcs", "cao_dang", None, "COMMUNE_FALLBACK"),
         ("graduated_thcs", "so_cap", None, "COMMUNE_FALLBACK"),
         ("graduated_thcs", "none", None, "COMMUNE_FALLBACK"),
         # Row 6: completed_thcs + any → COMMUNE_FALLBACK
@@ -278,6 +280,62 @@ async def test_resolve_kv_no_qualifying_entries():
     assert kv is None
     assert meta["requires_manual_override"] is True
     assert meta["reason"] == "no_qualifying_entries"
+
+
+@pytest.mark.asyncio
+async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
+    """Row 1+ extension: graduated_thpt + level='THCS_THPT' (liên cấp 2-3) → KV resolve.
+
+    Bug fix (Q9 #07 Phase D.4 audit): engine filter previously hard-coded
+    level=='THPT' which excluded THCS_THPT liên cấp candidates. Both
+    standalone THPT + THCS_THPT now accepted for THPT basis.
+    """
+    profile = _mock_profile(
+        cultural_education_level="graduated_thpt",
+        academic_history=[
+            {
+                "school_id": 100,
+                "level": "THCS_THPT",  # ← liên cấp
+                "year_from": 2020,
+                "year_to": 2022,
+                "grade_to": 12,
+            },
+        ],
+    )
+    db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
+    kv, meta = await resolve_kv_for_profile(profile, db)
+    assert kv == "KV1"
+    assert meta["pathway"] == "thpt_multi_school"
+    assert meta["breakdown"]["winner_years"] == 3
+
+
+@pytest.mark.asyncio
+async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
+    """Nghiệp vụ user 2026-05-18: TN THCS bất kể có bằng TC → KV theo hộ khẩu.
+
+    Original v1.3 design Row 4 (TC basis cho liên thông TC pathway) overridden
+    by trường nghiệp vụ. Engine should fallback to commune_lookup even when
+    candidate khai TC school history.
+    """
+    profile = _mock_profile(
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="trung_cap",
+        permanent_commune_code="40_03139",
+        academic_history=[
+            {
+                "school_id": 200,
+                "level": "TRUNG_HOC_NGHE",  # candidate khai TC nhưng engine ignore
+                "year_from": 2022,
+                "year_to": 2024,
+                "grade_to": 12,
+            },
+        ],
+    )
+    db = _mock_db(commune_kv="KV1")
+    kv, meta = await resolve_kv_for_profile(profile, db)
+    assert kv == "KV1"
+    assert meta["pathway"] == "commune_fallback"
+    assert meta["rule_applied"] == "commune_lookup"
 
 
 # =============================================================================

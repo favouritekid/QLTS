@@ -165,6 +165,9 @@ from .admission import (
     AdmissionWaitlistRejectResponse,
     AdmissionAdminRollbackRequest,
     AdmissionAdminRollbackResponse,
+    # Q9 #07 Phase D — Live KV preview
+    PreviewPriorityKvRequest,
+    PreviewPriorityKvResponse,
     EnrollStudentResponse,
     # Bulk action schemas
     BulkApproveRequest,

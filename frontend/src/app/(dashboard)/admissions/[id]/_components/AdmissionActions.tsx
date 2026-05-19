@@ -147,7 +147,7 @@ export function AdmissionActions({
           )}
 
           {/* Back Button - always available for steps 2-6, independent of save permission */}
-          {currentStep > 1 && currentStep < 7 && (
+          {currentStep > 1 && currentStep < 8 && (
             <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Quay lại
@@ -155,7 +155,7 @@ export function AdmissionActions({
           )}
 
           {/* Save Changes - only when profile is editable */}
-          {currentStep < 7 && can('save') && (
+          {currentStep < 8 && can('save') && (
             <Button variant="outline" onClick={onSave} disabled={isSaving}>
               {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
               Lưu thay đổi
@@ -163,7 +163,7 @@ export function AdmissionActions({
           )}
 
           {/* Next Step Button - always available for steps 1-6, independent of save permission */}
-          {currentStep < 7 && (
+          {currentStep < 8 && (
             <Button onClick={() => onStepChange(currentStep + 1)}>
               Tiếp tục
               <ArrowRight className="w-4 h-4 ml-2" />
@@ -171,7 +171,7 @@ export function AdmissionActions({
           )}
 
           {/* Step 7 Only: Submit Actions */}
-          {currentStep === 7 && can('submit') && (
+          {currentStep === 8 && can('submit') && (
             <>
               {/* Check Condition */}
               <Button variant="outline" onClick={onCheckCondition}>
