@@ -265,9 +265,15 @@ TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
 # via TRANSITION_PAIR_TO_EVENT 11 pair entries (one per non-final source
 # state). All 12 catalog events have a writer reachable from `transition()`.
 #
-# Empty frozenset = no deferred events. CI gate `--allow-deferred` flag
-# in both deploy.yml + admission-contract-check.yml synced empty.
-DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset()
+# Q9 #07 Phase E Wave 1 (2026-05-19) added 3 PRIORITY_* events to catalog
+# (Foundation seed) but dispatch sites ship Wave 2 (override_kv) + Wave 3
+# (verify/reject evidence). Track here until those waves merge — coverage
+# gate stays green via ``--allow-deferred`` in CI workflows.
+DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset({
+    "PRIORITY_KV_OVERRIDDEN",     # Wave 2 (E.2 override_kv)
+    "PRIORITY_OBJECT_VERIFIED",   # Wave 3 (E.3 verify evidence)
+    "PRIORITY_OBJECT_REJECTED",   # Wave 3 (E.3 reject evidence)
+})
 
 
 # ---------------------------------------------------------------------------

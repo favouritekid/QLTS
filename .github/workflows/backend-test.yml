@@ -195,7 +195,13 @@ jobs:
 
       - name: pytest — Notification event coverage script
         working-directory: Backend_FastAPI
-        run: python -m app.scripts.check_notification_event_coverage
+        # Q9 #07 Phase E Wave 1 — 3 PRIORITY_* events seeded to catalog
+        # but dispatch ships Wave 2+3. Sync flag with
+        # admission-contract-check.yml + deploy.yml per memory
+        # `ci-workflow-flag-cross-file-sync`.
+        run: |
+          python -m app.scripts.check_notification_event_coverage \
+            --allow-deferred=PRIORITY_KV_OVERRIDDEN,PRIORITY_OBJECT_VERIFIED,PRIORITY_OBJECT_REJECTED
 
       # =====================================================================
       # Tier 4: Admission + lead workflow contract (legacy deploy.yml subset)

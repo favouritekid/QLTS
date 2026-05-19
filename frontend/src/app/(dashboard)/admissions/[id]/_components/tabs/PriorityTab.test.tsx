@@ -76,10 +76,15 @@ describe("PriorityTab", () => {
     mockPreview.mockReset?.()
   })
 
-  it("renders intro card + KV rates table", () => {
+  it("renders intro disclosure + KV rates listed", () => {
     mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Về phần này/i)).toBeInTheDocument()
+    // Phase E wireframe: intro card collapsed into <details> disclosure
+    // (PriorityTab.tsx:167). Trigger text + 4 KV bonus tiers still
+    // discoverable in the DOM (hidden until expanded but rendered).
+    expect(
+      screen.getByText(/Giải thích cách tính ưu tiên theo TT 05\/2021/i)
+    ).toBeInTheDocument()
     expect(screen.getByText(/0,75đ/)).toBeInTheDocument()
     expect(screen.getByText(/0,50đ/)).toBeInTheDocument()
     expect(screen.getByText(/0,25đ/)).toBeInTheDocument()
@@ -89,7 +94,9 @@ describe("PriorityTab", () => {
   it("snapshot card shows 'tạm tính' header in draft state", () => {
     mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Khu vực ưu tiên \(tạm tính\)/i)).toBeInTheDocument()
+    // Phase E wireframe (d599d16f) renamed header "Khu vực ưu tiên" →
+    // "Điểm cộng ưu tiên" to reflect combined KV+UT scoring.
+    expect(screen.getByText(/Điểm cộng ưu tiên \(tạm tính\)/i)).toBeInTheDocument()
   })
 
   it("snapshot card shows 'đã chốt' header when frozen + non-draft status", () => {
@@ -103,7 +110,7 @@ describe("PriorityTab", () => {
       } as any,
     })
     render(<HarnessWrapper profile={profile} />)
-    expect(screen.getByText(/Khu vực ưu tiên \(đã chốt\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Điểm cộng ưu tiên \(đã chốt\)/i)).toBeInTheDocument()
     expect(screen.getByText(/KV2 \(\+0,25đ\)/)).toBeInTheDocument()
   })
 
@@ -116,6 +123,11 @@ describe("PriorityTab", () => {
         requires_manual_override: false,
         reason: null,
         breakdown: { kv_totals: { KV1: 3 }, winner_years: 3 },
+        area_bonus: 0.75,
+        object_bonus_potential: null,
+        object_bonus_verified: null,
+        ut_breakdown: null,
+        total_bonus_potential: 0.75,
       },
       isLoading: false,
     })
@@ -126,7 +138,9 @@ describe("PriorityTab", () => {
       />
     )
     expect(screen.getByText(/KV1 \(\+0,75đ\)/)).toBeInTheDocument()
-    expect(screen.getByText(/sẽ chốt khi nộp hồ sơ/i)).toBeInTheDocument()
+    // "sẽ chốt khi nộp hồ sơ" appears twice (CardDescription + inline
+    // pill); use getAllByText for non-unique match.
+    expect(screen.getAllByText(/sẽ chốt khi nộp hồ sơ/i).length).toBeGreaterThan(0)
     expect(
       screen.getByText(/Theo lịch sử học các trường THPT/i)
     ).toBeInTheDocument()
@@ -146,7 +160,11 @@ describe("PriorityTab", () => {
   it("'Chưa đủ thông tin' message when cultural not set", () => {
     mockPreview.mockReturnValue({ data: undefined, isLoading: false })
     render(<HarnessWrapper profile={buildProfile()} />)
-    expect(screen.getByText(/Chưa đủ thông tin để tính KV/i)).toBeInTheDocument()
+    // Phase E wireframe (d599d16f) renamed empty-state copy "tính KV"
+    // → "tính điểm ưu tiên" (combined KV+UT scoring).
+    expect(
+      screen.getByText(/Chưa đủ thông tin để tính điểm ưu tiên/i)
+    ).toBeInTheDocument()
     expect(
       screen.getByText(/Vui lòng khai trình độ văn hóa/i)
     ).toBeInTheDocument()
@@ -217,17 +235,11 @@ describe("PriorityTab", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("manual_override basis shows admin warning callout", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ area_resolution_basis: "manual_override" }}
-      />
-    )
-    expect(screen.getByText(/Manual Override/i)).toBeInTheDocument()
-    expect(
-      screen.getByText(/Lý do thay đổi/i)
-    ).toBeInTheDocument()
-  })
+  // Test "manual_override basis shows admin warning callout" REMOVED in
+  // commit 0c41c2fb (post-E.1 review): dead manual_override branch
+  // removed from PriorityTab. Admin override UX moved to
+  // PriorityOverrideDialog (Phase E.2, separate component with own
+  // tests). Candidate-side area_basis no longer surfaces
+  // "Manual Override" inline warning — replaced by PrioritySnapshotCard
+  // audit footer when frozenSnapshot.manual_override_reason is set.
 })

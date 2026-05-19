@@ -101,21 +101,16 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run check_notification_event_coverage
-        # ``--allow-deferred`` permits ADMISSION_* events whose legacy
-        # writers haven't shipped yet. Locked by
+        # ``--allow-deferred`` permits ADMISSION_* + PRIORITY_* events
+        # whose dispatch sites haven't shipped yet. Locked by
         # ``state_service.DEFERRED_ADMISSION_EVENTS`` + the lock test
         # ``test_check_notification_event_coverage_deferred.py``.
         #
-        # Phase 3 PR-3B Sub-2 (e2fa371f, merged 2026-05-12 via PR #264)
-        # wired T6/T8/T10 (RESULT_PUBLISHED / DECISION_WAITLISTED /
-        # WAITLIST_PROMOTED) via LEGACY_STATUS_TO_EVENT extension +
-        # TRANSITION_PAIR_TO_EVENT source-aware map → DEFERRED shrunk
-        # 4 → 1 (only T17 ADMISSION_ROLLED_BACK awaits PR-3C router).
-        # This file MUST stay in sync with deploy.yml + the lock test
-        # set. PR-3B Sub-2 missed this workflow file initially — this
-        # hotfix closes the gap (cross-file CI flag sync per memory
-        # `ci-workflow-flag-cross-file-sync`).
-        # PR-3C Sub-3.5: T17 ADMISSION_ROLLED_BACK wired via
-        # TRANSITION_PAIR_TO_EVENT — DEFERRED set now empty.
+        # Q9 #07 Phase E Wave 1 (2026-05-19): 3 PRIORITY_* events seeded
+        # to catalog/seed_defaults; dispatch ships Wave 2 (override_kv)
+        # + Wave 3 (verify/reject evidence). Sync this flag with
+        # deploy.yml + backend-test.yml per memory
+        # `ci-workflow-flag-cross-file-sync`.
         run: |
-          python -m app.scripts.check_notification_event_coverage
+          python -m app.scripts.check_notification_event_coverage \
+            --allow-deferred=PRIORITY_KV_OVERRIDDEN,PRIORITY_OBJECT_VERIFIED,PRIORITY_OBJECT_REJECTED
