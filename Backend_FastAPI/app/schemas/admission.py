@@ -507,6 +507,19 @@ class PriorityObjectEvidenceEntry(BaseModel):
         max_length=500,
         description="Required if status='rejected'"
     )
+    # Phase E.4 fix (smoke 2026-05-20): reject service persists rejected_by
+    # + rejected_at into the evidence JSONB entry, but the read schema had
+    # only verified_by/verified_at. After PATCH reject, every subsequent GET
+    # raised ResponseValidationError extra_forbidden — cascading 500 on the
+    # whole profile detail page until the reject was undone.
+    rejected_by: Optional[int] = Field(
+        default=None,
+        description="user.id who flipped status to rejected (parity với verified_by)",
+    )
+    rejected_at: Optional[datetime] = Field(
+        default=None,
+        description="When officer recorded reject decision",
+    )
     requested_at: Optional[datetime] = Field(
         default=None,
         description="When candidate submitted the UT claim"
