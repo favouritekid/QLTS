@@ -23,6 +23,13 @@ interface PipelineSidebarProps {
     scores?: { category: string; errors: string[]; count: number }
   } | null
   completionPercent: number
+  /**
+   * Phase E.4 (PR-1) — prop kept for backward-compat với AdmissionLayout
+   * callsite. Phase E.3 "Duyệt UT" Step 8 ĐÃ gộp vào Step 4 (Priority
+   * workbench) per Phase E.4 wireframe — flag không còn ảnh hưởng UI ở đây.
+   * Removal of callsite + interface defer to PR-3 (FE workbench compose).
+   */
+  canVerifyPriorityObject?: boolean
 }
 
 // Q9 #07 Phase E.4 workbench refactor: UT verify gộp vào step 4 (Trình độ &
@@ -46,6 +53,8 @@ export function PipelineSidebar({
   validationSummary,
   groupedValidationErrors,
   completionPercent,
+  // Phase E.4 (PR-1) — accept-and-ignore (see interface comment above)
+  canVerifyPriorityObject: _canVerifyPriorityObject = false,
 }: PipelineSidebarProps) {
   const [isIssuesOpen, setIsIssuesOpen] = useState(false)
 
