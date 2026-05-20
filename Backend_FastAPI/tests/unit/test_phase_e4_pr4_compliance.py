@@ -257,3 +257,152 @@ def test_strip_display_fields_preserves_paper_only_verification() -> None:
     assert cleaned["04"]["paper_only_verification"] is True
     assert "verified_by_name" not in cleaned["04"]
     assert "document_file_path" not in cleaned["04"]
+
+
+# ---------------------------------------------------------------------------
+# Decision #2 audit row regression — P1 contract pinning
+# ---------------------------------------------------------------------------
+
+
+def _make_audit_db(uploaded_sub_codes: list[str]):
+    """Mock DB cho audit helper test — db.execute returns mapping rows với
+    .priority_sub_code attribute, simulating ProfileDocument query result."""
+    docs_result = MagicMock()
+
+    # Each row mimics ORM row attribute access (.priority_sub_code)
+    docs_result.__iter__ = lambda self: iter(
+        [SimpleNamespace(priority_sub_code=c) for c in uploaded_sub_codes]
+    )
+
+    async def _execute(stmt, *args, **kwargs):
+        return docs_result
+
+    db = MagicMock()
+    db.add = MagicMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    return db
+
+
+def _find_warning_audit_rows(db):
+    """Filter db.add() calls to PriorityAuditLog với action_type warning_dismissed."""
+    from app import models
+    return [
+        c[0][0]
+        for c in db.add.call_args_list
+        if isinstance(c[0][0], models.PriorityAuditLog)
+        and c[0][0].action_type == "ut_evidence_warning_dismissed"
+    ]
+
+
+async def test_audit_warning_dismissed_inserts_row_when_missing_codes() -> None:
+    """P1 Decision #2 contract: profile có UT codes ghi nhận nhưng chưa
+    upload minh chứng → INSERT priority_audit_log row với
+    action_type='ut_evidence_warning_dismissed' + new_value chứa
+    missing_codes + audit_metadata chứa missing_count + actor_role.
+    """
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    actor = SimpleNamespace(id=7, role="officer")
+    profile = _make_profile(
+        codes=["04", "07", "08"],
+    )
+    # Only UT04 has uploaded doc → UT07 + UT08 missing
+    db = _make_audit_db(uploaded_sub_codes=["04"])
+
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, actor)
+
+    audit_rows = _find_warning_audit_rows(db)
+    assert len(audit_rows) == 1, "Exactly 1 warning_dismissed audit row expected"
+
+    row = audit_rows[0]
+    assert row.profile_id == profile.id
+    assert row.action_type == "ut_evidence_warning_dismissed"
+    assert row.actor_id == 7
+    assert row.new_value == {"missing_codes": ["07", "08"]}  # sorted
+    assert row.audit_metadata["submit_status"] == "submitted"
+    assert row.audit_metadata["missing_count"] == 2
+    assert row.audit_metadata["actor_role"] == "officer"
+
+
+async def test_audit_warning_dismissed_no_row_when_all_uploaded() -> None:
+    """All codes have uploaded files → NO audit row (officer hoàn thành
+    workflow trước submit, không trigger Decision #2 warning)."""
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    actor = SimpleNamespace(id=7, role="officer")
+    profile = _make_profile(codes=["04", "07"])
+    db = _make_audit_db(uploaded_sub_codes=["04", "07"])
+
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, actor)
+
+    assert _find_warning_audit_rows(db) == []
+
+
+async def test_audit_warning_dismissed_no_row_when_no_priority_codes() -> None:
+    """Profile không có UT codes (e.g., candidate không thuộc diện ưu tiên)
+    → NO audit row, NO DB query needed."""
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    actor = SimpleNamespace(id=7, role="officer")
+    profile = _make_profile(codes=[])
+    db = _make_audit_db(uploaded_sub_codes=[])
+
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, actor)
+
+    assert _find_warning_audit_rows(db) == []
+
+
+async def test_audit_warning_dismissed_magic_link_path_no_actor() -> None:
+    """Magic-link self-service path (current_user=None) → actor_id=None +
+    audit_metadata.actor_role='magic_link' (Decision #2 captures source
+    for thanh tra distinguishing officer vs candidate self-submit)."""
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    profile = _make_profile(codes=["04"])
+    db = _make_audit_db(uploaded_sub_codes=[])
+
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, None)
+
+    rows = _find_warning_audit_rows(db)
+    assert len(rows) == 1
+    assert rows[0].actor_id is None
+    assert rows[0].audit_metadata["actor_role"] == "magic_link"
+
+
+async def test_audit_warning_dismissed_defensive_on_db_error() -> None:
+    """Decision #2 contract: audit insert failure MUST NOT block submit.
+    DB exception → swallow + warning log; no raise."""
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    actor = SimpleNamespace(id=7, role="officer")
+    profile = _make_profile(codes=["04"])
+
+    # DB raises on execute
+    db = MagicMock()
+    db.add = MagicMock()
+    db.execute = AsyncMock(side_effect=Exception("simulated DB error"))
+
+    # MUST NOT raise — defensive try/except wraps entire audit block
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, actor)
+
+    # No audit row inserted (compute failed before db.add reached)
+    assert _find_warning_audit_rows(db) == []
+
+
+async def test_audit_warning_dismissed_missing_codes_sorted_in_audit() -> None:
+    """missing_codes trong audit.new_value MUST be sorted ascending
+    (consistent ordering cho thanh tra grep + comparison)."""
+    from app.services.admission_service import _audit_warning_dismissed_if_missing
+
+    actor = SimpleNamespace(id=7, role="admin")
+    # Profile codes in reverse order to verify sort happens
+    profile = _make_profile(codes=["08", "04", "07", "01"])
+    db = _make_audit_db(uploaded_sub_codes=[])  # all missing
+
+    await _audit_warning_dismissed_if_missing(db, profile.id, profile, actor)
+
+    rows = _find_warning_audit_rows(db)
+    assert len(rows) == 1
+    # Sorted ascending in audit row
+    assert rows[0].new_value["missing_codes"] == ["01", "04", "07", "08"]
+    assert rows[0].audit_metadata["actor_role"] == "admin"
