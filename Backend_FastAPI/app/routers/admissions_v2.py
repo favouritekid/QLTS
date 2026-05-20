@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
@@ -35,7 +35,13 @@ from app.core.deps import (
 )
 from app.services import admission_choice_engine_service as choice_engine
 from app.services.admission_choice_service import AdmissionChoiceService
-from app.utils.exceptions import ResourceNotFoundError
+from app.utils.exceptions import (
+    BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
+    PermissionDeniedError,
+    ResourceNotFoundError,
+)
 
 
 log = structlog.get_logger(__name__)
@@ -1107,3 +1113,143 @@ async def reject_priority_object_evidence(
         actor_id=current_user.id,
     )
     return await _evidence_response(db, profile_id, current_user)
+
+
+# =============================================================================
+# Q9 #07 Phase E.4 — Priority evidence upload + untick (PR-2)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/priority-evidence/{sub_code}/upload",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Upload UT evidence document (Phase E.4 PR-2)",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_priority_evidence(
+    profile_id: int,
+    sub_code: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Upload minh chứng UT cho 1 sub_code.
+
+    File constraints: PDF/JPG/PNG ≤10MB + magic-byte sniff. Profile MUST
+    be trong APPLICANT_DOC_MUTATION_STATES + sub_code MUST be in
+    ``profile.priority_object_codes`` + catalog year MUST có sub_code.
+
+    ADM-007 staging/finalize: file staged trước commit, promote post-commit.
+    Re-upload thay file cũ; doc_row status reset to 'uploaded' (officer
+    phải verify lại sau re-upload).
+
+    Security:
+    * IDOR: ``upload_priority_evidence_document`` calls ``get_profile``.
+    * Casbin: q9_07_e4 seed (officer/manager/admin ALLOW, accountant DENY).
+    """
+    from app.services import admission_service
+
+    try:
+        profile, finalize = await admission_service.upload_priority_evidence_document(
+            db=db,
+            profile_id=profile_id,
+            sub_code=sub_code,
+            file=file,
+            current_user=current_user,
+        )
+        try:
+            await db.commit()
+        except Exception:
+            await finalize(False)
+            raise
+        await finalize(True)
+        await db.refresh(profile)
+
+        log.info(
+            "admissions_v2.upload_priority_evidence",
+            profile_id=profile_id,
+            sub_code=sub_code,
+            actor_id=current_user.id,
+        )
+        return await _evidence_response(db, profile_id, current_user)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR: 404 to prevent enumeration
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.delete(
+    "/{profile_id}/priority-evidence/{sub_code}",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Untick UT code + cascade delete evidence (Phase E.4 G1)",
+)
+async def untick_priority_object_evidence(
+    profile_id: int,
+    sub_code: str,
+    payload: schemas.UntickPriorityEvidenceRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Officer unticks UT code → cascade hard delete file + JSONB cleanup.
+
+    Atomic 4-mutation contract (G1):
+    1. Remove sub_code từ priority_object_codes JSONB.
+    2. Remove sub_code entry từ priority_object_evidence JSONB.
+    3. DELETE profile_document row (category='priority_evidence',
+       priority_sub_code=sub_code).
+    4. INSERT priority_audit_log (action='ut_evidence_untick').
+    Plus recompute ut_verified_bucket if unticked code was applied verified.
+
+    File unlink via ADM-007 finalize callback (post-commit best-effort).
+
+    Decision #4 UI safety: FE shows confirm dialog BEFORE call. Service
+    assumes caller confirmed (no double-prompt). Soft delete defer Phase E.5.
+
+    Security:
+    * IDOR: ``get_admission_for_user`` (3-tier scope).
+    * Casbin: q9_07_e4 seed (officer/manager/admin ALLOW, accountant DENY).
+    """
+    from app.services.priority_override_service import untick_priority_evidence
+
+    try:
+        _, finalize_cb = await untick_priority_evidence(
+            db,
+            profile,
+            sub_code=sub_code,
+            actor=current_user,
+            expected_version=payload.version,
+        )
+        try:
+            await db.commit()
+        except Exception:
+            await finalize_cb(False)
+            raise
+        await finalize_cb(True)
+
+        log.info(
+            "admissions_v2.untick_priority_object_evidence",
+            profile_id=profile_id,
+            sub_code=sub_code,
+            actor_id=current_user.id,
+        )
+        return await _evidence_response(db, profile_id, current_user)
+
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )

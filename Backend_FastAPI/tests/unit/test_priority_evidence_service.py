@@ -58,12 +58,35 @@ def _make_actor(role: str = "officer", user_id: int = 7):
     )
 
 
-def _make_db(catalog_rows=None):
-    """Mock DB session — execute() returns catalog rows for UT bucket recompute."""
+def _make_db(catalog_rows=None, doc_row=None):
+    """Mock DB session.
+
+    Phase E.4 PR-2 P1 fix: verify_object_evidence now does server-side
+    ProfileDocument lookup. Mock dispatches by statement target — queries
+    selecting ProfileDocument return ``doc_row``, others return catalog
+    rows (bucket recompute path). Reject path doesn't do doc lookup so
+    only catalog is hit.
+
+    Args:
+        catalog_rows: list of (sub_code, bonus_points) tuples for UT bucket
+            recompute (engine T6 actual rate freeze).
+        doc_row: SimpleNamespace or None — ProfileDocument lookup result
+            for the (profile_id, category='priority_evidence', sub_code)
+            query. None means "no file uploaded for this UT" → paper-only
+            verify path.
+    """
     catalog_result = MagicMock()
     catalog_result.all = MagicMock(return_value=catalog_rows or [])
 
+    doc_result = MagicMock()
+    doc_result.scalar_one_or_none = MagicMock(return_value=doc_row)
+
     async def _execute(stmt, *args, **kwargs):
+        # Inspect statement target. SELECT ProfileDocument → doc_result;
+        # everything else → catalog_result (bucket recompute path).
+        stmt_str = str(stmt).lower()
+        if "profile_document" in stmt_str:
+            return doc_result
         return catalog_result
 
     db = MagicMock()
@@ -200,8 +223,15 @@ async def test_reject_reason_too_long_raises() -> None:
 async def test_verify_happy_path_mutates_evidence_and_audit() -> None:
     profile = _make_profile()
     actor = _make_actor("officer", user_id=7)
-    # Catalog returns UT04 bonus_points=1.00, UT07=0.50
-    db = _make_db(catalog_rows=[("04", Decimal("1.00"))])
+    # Phase E.4 PR-2 P1 fix: verify now does server-side ProfileDocument
+    # lookup. Mock returns doc_row matching document_id=42 → client ↔ server
+    # ownership match → bind successful.
+    from types import SimpleNamespace
+    doc_row = SimpleNamespace(
+        id=42, category="priority_evidence", priority_sub_code="04",
+        file_path="uploads/admissions/42/priority_04_xyz.pdf",
+    )
+    db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
     updated, post_commit = await verify_object_evidence(
         db, profile, sub_code="04", document_id=42,

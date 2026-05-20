@@ -57,11 +57,20 @@ def _make_actor(role: str = "officer", user_id: int = 7):
     )
 
 
-def _make_db(catalog_rows=None):
+def _make_db(catalog_rows=None, doc_row=None):
+    """Mock DB. Phase E.4 PR-2 P1: verify_object_evidence now does server-side
+    ProfileDocument lookup. Smart dispatch by SQL target — ProfileDocument
+    select → doc_row, others → catalog (bucket recompute)."""
     catalog_result = MagicMock()
     catalog_result.all = MagicMock(return_value=catalog_rows or [])
 
+    doc_result = MagicMock()
+    doc_result.scalar_one_or_none = MagicMock(return_value=doc_row)
+
     async def _execute(stmt, *args, **kwargs):
+        stmt_str = str(stmt).lower()
+        if "profile_document" in stmt_str:
+            return doc_result
         return catalog_result
 
     db = MagicMock()
@@ -122,12 +131,20 @@ async def test_verify_paper_only_false_when_document_id_provided() -> None:
 
     Audit log ghi flag=False để analytics post-launch quantify ratio
     paper-only vs file-backed verify.
+
+    Phase E.4 PR-2 P1: server-side doc lookup — client document_id=42
+    matches doc_row.id=42 → bind successful, paper_only=False.
     """
     from app.services.priority_override_service import verify_object_evidence
+    from types import SimpleNamespace
 
     profile = _make_profile()
     actor = _make_actor("officer", user_id=7)
-    db = _make_db(catalog_rows=[("04", Decimal("1.00"))])
+    doc_row = SimpleNamespace(
+        id=42, category="priority_evidence", priority_sub_code="04",
+        file_path="uploads/admissions/42/priority_04_xyz.pdf",
+    )
+    db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
 
     updated, _ = await verify_object_evidence(
         db, profile, sub_code="04", document_id=42,
@@ -141,6 +158,101 @@ async def test_verify_paper_only_false_when_document_id_provided() -> None:
     audit = _find_audit_rows(db)[0]
     assert audit.new_value["paper_only_verification"] is False
     assert audit.audit_metadata["paper_only_verification"] is False
+
+
+# ---------------------------------------------------------------------------
+# Test P1 fix audit cycle: verify server-side document binding
+# ---------------------------------------------------------------------------
+
+
+async def test_verify_auto_binds_doc_when_payload_null_and_row_exists() -> None:
+    """P1 fix contract: FE hardcodes document_id=null trong verify request.
+    Nếu profile has uploaded priority_evidence file → server auto-bind doc.id
+    + paper_only_verification=False (NOT paper-only, file IS attached).
+
+    Without server-side lookup: FE null → paper_only=True dù file đã scan.
+    Officer workflow đúng nhưng audit log sai → thanh tra không truy được file.
+    """
+    from app.services.priority_override_service import verify_object_evidence
+    from types import SimpleNamespace
+
+    profile = _make_profile()
+    actor = _make_actor("officer", user_id=7)
+    # Server-side row exists từ prior upload
+    doc_row = SimpleNamespace(
+        id=99, category="priority_evidence", priority_sub_code="04",
+        file_path="uploads/admissions/42/priority_04_uploaded.pdf",
+    )
+    db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
+
+    # Client gửi null (FE chưa kịp re-fetch profile after upload)
+    updated, _ = await verify_object_evidence(
+        db, profile, sub_code="04", document_id=None,
+        actor=actor, expected_version=5,
+    )
+
+    entry = updated.priority_object_evidence["04"]
+    # Auto-bound to server doc row
+    assert entry["document_id"] == 99, (
+        "P1 server-side bind: client null + row exists → auto-bind doc.id"
+    )
+    # NOT paper-only — file actually attached
+    assert entry["paper_only_verification"] is False, (
+        "P1 contract: row exists → paper_only=False dù client gửi null"
+    )
+
+    # Audit reflects server truth, not client claim
+    audit = _find_audit_rows(db)[0]
+    assert audit.new_value["document_id"] == 99
+    assert audit.new_value["paper_only_verification"] is False
+
+
+async def test_verify_rejects_mismatched_document_id() -> None:
+    """P1 fix contract: client gửi document_id KHÔNG match server row → refuse.
+
+    Defense vs (a) client stale state sending old doc_id; (b) malicious client
+    trying to bind cross-profile document_id; (c) FE bug sending wrong id.
+    Server-side ownership truth wins.
+    """
+    from app.services.priority_override_service import verify_object_evidence
+    from app.utils.exceptions import BusinessRuleViolation
+    from types import SimpleNamespace
+
+    profile = _make_profile()
+    actor = _make_actor("officer", user_id=7)
+    # Server has row id=99 for UT04
+    doc_row = SimpleNamespace(
+        id=99, category="priority_evidence", priority_sub_code="04",
+        file_path="uploads/admissions/42/priority_04.pdf",
+    )
+    db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=doc_row)
+
+    # Client gửi id=999 (lie / stale / cross-profile)
+    with pytest.raises(BusinessRuleViolation, match="không match"):
+        await verify_object_evidence(
+            db, profile, sub_code="04", document_id=999,
+            actor=actor, expected_version=5,
+        )
+
+
+async def test_verify_rejects_client_doc_id_when_no_server_row() -> None:
+    """P1 edge case: client gửi document_id nhưng server có NO row →
+    refuse (case 4 — mismatch, no doc row to bind).
+
+    Officer phải verify với null nếu muốn paper-only, hoặc upload file trước.
+    """
+    from app.services.priority_override_service import verify_object_evidence
+    from app.utils.exceptions import BusinessRuleViolation
+
+    profile = _make_profile()
+    actor = _make_actor("officer", user_id=7)
+    db = _make_db(catalog_rows=[("04", Decimal("1.00"))], doc_row=None)
+
+    with pytest.raises(BusinessRuleViolation, match="không match"):
+        await verify_object_evidence(
+            db, profile, sub_code="04", document_id=42,
+            actor=actor, expected_version=5,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -174,6 +174,10 @@ from .admission import (
     # Q9 #07 Phase E.3 — UT evidence verify/reject
     VerifyObjectEvidenceRequest,
     RejectObjectEvidenceRequest,
+    # Q9 #07 Phase E.4 — Priority evidence schemas (PR-1 + PR-2)
+    PriorityObjectEvidenceDisplayEntry,
+    PriorityEvidenceDocumentItem,
+    UntickPriorityEvidenceRequest,
     EnrollStudentResponse,
     # Bulk action schemas
     BulkApproveRequest,

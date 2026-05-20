@@ -5041,6 +5041,353 @@ async def upload_document(
     return profile, finalize
 
 
+# =============================================================================
+# Q9 #07 Phase E.4 — Priority evidence document upload (PR-2 Item #1)
+# =============================================================================
+
+
+async def upload_priority_evidence_document(
+    db: AsyncSession,
+    profile_id: int,
+    sub_code: str,
+    file: Any,  # UploadFile
+    current_user: models.User,
+) -> tuple[models.AdmissionProfile, Callable]:
+    """Upload UT evidence document cho 1 sub_code (Phase E.4 PR-2).
+
+    Sibling function của upload_document (path docs). Reason for sibling
+    instead of extending: ADM-007 staging/finalize semantics + DocumentAction
+    Policy guards trên path docs khác với priority evidence (catalog-driven
+    không phải FK ConfigDocumentType).
+
+    Workflow:
+    1. Profile authz qua get_profile() (IDOR).
+    2. Profile status guard via APPLICANT_DOC_MUTATION_STATES.
+    3. sub_code MUST be in profile.priority_object_codes (officer ghi nhận
+       diện UT TRƯỚC khi scan giấy).
+    4. sub_code MUST exist trong PriorityObjectConfig catalog year.
+    5. File validation: PDF/JPG/PNG + ≤10MB + magic-byte sniff (mirror
+       upload_document).
+    6. Stage file to ``.staging.{uuid}.{ext}`` (ADM-007 — promote post-commit).
+    7. Find-or-create ProfileDocument row (category='priority_evidence',
+       priority_sub_code=sub_code, document_type_id=NULL).
+    8. Return (profile, finalize_callback) tuple. Router commits THEN calls
+       finalize(committed=True) to promote staging → final. Commit fail →
+       finalize(False) cleans staging.
+
+    Returns:
+        (AdmissionProfile, async finalize callback). See upload_document
+        docstring for finalize contract details.
+
+    Raises:
+        ResourceNotFoundError: profile IDOR fail.
+        BusinessRuleViolation: status guard / sub_code not in codes /
+            sub_code not in catalog.
+        BadRequest: file type / size / magic byte mismatch.
+    """
+    from app.repositories import AdmissionRepository
+    from .admission_document_policy import APPLICANT_DOC_MUTATION_STATES
+
+    admission_repo = AdmissionRepository(db)
+
+    profile = await get_profile(db, profile_id, current_user)
+
+    # Guard 1: profile must be in writeable state
+    if profile.status not in APPLICANT_DOC_MUTATION_STATES:
+        raise BusinessRuleViolation(
+            f"Cannot upload priority evidence trong status '{profile.status}'. "
+            f"Allowed: {sorted(APPLICANT_DOC_MUTATION_STATES)}."
+        )
+
+    # Guard 2: sub_code MUST be in profile.priority_object_codes
+    # Officer ghi nhận diện UT TRƯỚC qua AdmissionProfileUpdate, mới scan giấy.
+    priority_codes = list(profile.priority_object_codes or [])
+    if sub_code not in priority_codes:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong profile.priority_object_codes "
+            f"{priority_codes}. Officer phải ghi nhận diện UT trước khi upload "
+            f"minh chứng."
+        )
+
+    # Guard 3: sub_code MUST exist trong catalog year
+    catalog_check = await db.execute(
+        select(models.PriorityObjectConfig.id)
+        .where(
+            models.PriorityObjectConfig.academic_year == profile.academic_year,
+            models.PriorityObjectConfig.sub_code == sub_code,
+        )
+    )
+    if catalog_check.scalar_one_or_none() is None:
+        raise BusinessRuleViolation(
+            f"Sub-code '{sub_code}' không có trong PriorityObjectConfig "
+            f"catalog year {profile.academic_year}. Admin cần seed config."
+        )
+
+    # File validation (mirror upload_document)
+    ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise BadRequest(
+            f"Invalid file type '{file.content_type}'. Allowed: PDF, JPG, PNG"
+        )
+
+    file.file.seek(0, 2)
+    file_size = file.file.tell()
+    file.file.seek(0)
+
+    if file_size > MAX_FILE_SIZE:
+        size_mb_exact = file_size / (1024 * 1024)
+        max_mb_exact = MAX_FILE_SIZE / (1024 * 1024)
+        raise BadRequest(
+            f"File too large: {file_size:,} bytes ({size_mb_exact:.3f}MB). "
+            f"Maximum allowed: {MAX_FILE_SIZE:,} bytes ({max_mb_exact:.0f}MB)."
+        )
+
+    sniffed_kind = _sniff_document_signature(file.file)
+    if sniffed_kind is None:
+        raise BadRequest(
+            "Tệp tải lên không phải PDF, JPG hoặc PNG hợp lệ (magic bytes không khớp)."
+        )
+    expected_content_type = {
+        "pdf": "application/pdf",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }[sniffed_kind]
+    if file.content_type != expected_content_type:
+        raise BadRequest(
+            f"Content-Type '{file.content_type}' không khớp nội dung thực tế "
+            f"({expected_content_type})."
+        )
+
+    # Find existing priority_evidence row (for re-upload scenario)
+    existing_doc_q = await db.execute(
+        select(models.ProfileDocument).where(
+            models.ProfileDocument.profile_id == profile_id,
+            models.ProfileDocument.category == "priority_evidence",
+            models.ProfileDocument.priority_sub_code == sub_code,
+        )
+    )
+    doc_row = existing_doc_q.scalar_one_or_none()
+
+    # File path setup (mirror upload_document ADM-007 staging pattern)
+    import os
+    import shutil
+    import uuid
+
+    upload_dir = f"uploads/admissions/{profile_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+
+    old_file_path = doc_row.file_path if doc_row else None
+
+    extension_for_kind = {"pdf": ".pdf", "jpeg": ".jpg", "png": ".png"}
+    file_extension = extension_for_kind[sniffed_kind]
+
+    unique_id = uuid.uuid4().hex[:12]
+    unique_filename = f"priority_{sub_code}_{unique_id}{file_extension}"
+    final_path = f"{upload_dir}/{unique_filename}"
+    staging_path = f"{upload_dir}/.staging.{unique_id}{file_extension}"
+
+    # Stage file
+    try:
+        with open(staging_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        log.error(
+            "Priority evidence file staging failed",
+            error=str(e),
+            profile_id=profile_id,
+            sub_code=sub_code,
+            staging_path=staging_path,
+        )
+        if os.path.exists(staging_path):
+            try:
+                os.remove(staging_path)
+            except OSError:
+                pass
+        raise BadRequest("Failed to save file")
+
+    # Post-staging: DB mutations wrapped in cleanup guard (mirror upload_document)
+    try:
+        uploaded_at_dt = datetime.now(timezone.utc)
+
+        if doc_row is None:
+            # Create new priority_evidence ProfileDocument row.
+            # document_type_id=NULL acceptable per Phase E.4 q9_07_e4a migration
+            # (ck_path_requires_doc_type fires only khi category='path').
+            doc_row = models.ProfileDocument(
+                profile_id=profile_id,
+                document_type_id=None,
+                category="priority_evidence",
+                priority_sub_code=sub_code,
+                status="uploaded",
+                file_path=final_path,
+                uploaded_at=uploaded_at_dt,
+            )
+            db.add(doc_row)
+        else:
+            # Re-upload: replace file. Reset status to 'uploaded' nếu was
+            # rejected/verified (officer phải verify lại sau re-upload).
+            doc_row.file_path = final_path
+            doc_row.status = "uploaded"
+            doc_row.uploaded_at = uploaded_at_dt
+            doc_row.verified_at = None
+            doc_row.verified_by = None
+            doc_row.rejected_at = None
+            doc_row.rejected_by = None
+            doc_row.rejection_reason = None
+
+            # P1 fix (audit cycle PR-2): re-upload MUST also reset evidence
+            # JSONB status. Engine reads bonus eligibility từ
+            # ``priority_object_evidence[code].status == 'verified'``
+            # (priority_override_service._recompute_ut_verified_bucket line 380
+            # + admissions_v2.preview_priority_kv line 795). Nếu chỉ reset
+            # document_row mà KHÔNG touch JSONB → file mới uploaded nhưng
+            # engine vẫn tính bonus theo verify cũ → stale bonus contract
+            # violation.
+            #
+            # Re-upload semantics: file changed → officer phải re-verify.
+            # Reset evidence entry về pending + clear verifier/rejecter
+            # metadata + clear paper_only_verification flag. Preserve
+            # requested_at (candidate claim timestamp unchanged).
+            evidence_dict = dict(profile.priority_object_evidence or {})
+            prev_entry = dict(evidence_dict.get(sub_code) or {})
+            prev_status = prev_entry.get("status")
+            if prev_status in ("verified", "rejected"):
+                evidence_dict[sub_code] = {
+                    "status": "pending",
+                    "document_id": None,
+                    "requested_at": prev_entry.get("requested_at"),
+                    "verified_by": None,
+                    "verified_at": None,
+                    "reject_reason": None,
+                    "paper_only_verification": False,
+                }
+                profile.priority_object_evidence = _strip_display_fields_from_evidence(
+                    evidence_dict
+                )
+
+                # Recompute ut_verified_bucket — if reset code was the applied
+                # verified, bucket falls back to next-highest verified (or null).
+                # Lazy import to avoid circular (priority_override_service
+                # imports from admission_service at top).
+                from app.services.priority_override_service import (
+                    _recompute_ut_verified_bucket,
+                )
+                new_bucket = await _recompute_ut_verified_bucket(db, profile)
+                snapshot = dict(profile.priority_resolution_snapshot or {})
+                snapshot["ut_verified_bucket"] = new_bucket
+                profile.priority_resolution_snapshot = snapshot
+
+                # Version bump — JSONB mutation requires optimistic lock advance
+                # so concurrent verify/reject sees stale token + retries.
+                profile.version += 1
+
+                log.info(
+                    "Priority evidence re-upload reset JSONB status",
+                    profile_id=profile_id,
+                    sub_code=sub_code,
+                    prev_status=prev_status,
+                    bucket_after=new_bucket.get("applied_code"),
+                    version_after=profile.version,
+                )
+
+        profile.updated_at = uploaded_at_dt
+        await db.flush()
+
+        # Populate response fields (transient projections)
+        documents = await admission_repo.get_all_documents(profile_id)
+        await _populate_response_fields(
+            db, profile, current_user, documents=documents
+        )
+    except Exception as exc:
+        log.error(
+            "Priority evidence upload service failed after staging write; "
+            "cleaning staging file before re-raising",
+            error=str(exc),
+            profile_id=profile_id,
+            sub_code=sub_code,
+            staging_path=staging_path,
+        )
+        if os.path.exists(staging_path):
+            try:
+                os.remove(staging_path)
+            except OSError as cleanup_error:
+                log.warning(
+                    "Failed to clean staging file after service error",
+                    staging_path=staging_path,
+                    cleanup_error=str(cleanup_error),
+                )
+        raise
+
+    log.info(
+        "Priority evidence staged (awaiting commit)",
+        profile_id=profile_id,
+        sub_code=sub_code,
+        staging_path=staging_path,
+        final_path=final_path,
+        user_id=current_user.id,
+    )
+
+    async def finalize(committed: bool) -> None:
+        """ADM-007 file-ops finalize callback for priority evidence upload."""
+        if not committed:
+            if os.path.exists(staging_path):
+                try:
+                    os.remove(staging_path)
+                    log.info(
+                        "Priority evidence staging file cleaned up after rollback",
+                        staging_path=staging_path,
+                    )
+                except OSError as e:
+                    log.warning(
+                        "Failed to clean priority evidence staging file after rollback",
+                        staging_path=staging_path,
+                        error=str(e),
+                    )
+            return
+
+        # committed=True: promote staging → final.
+        try:
+            if os.path.exists(staging_path):
+                os.replace(staging_path, final_path)
+                log.info(
+                    "Priority evidence file promoted from staging post-commit",
+                    final_path=final_path,
+                )
+            elif not os.path.exists(final_path):
+                raise OSError(
+                    f"ADM-007 finalize: neither staging nor final file "
+                    f"exists for profile={profile_id} sub_code={sub_code}"
+                )
+        except OSError as e:
+            log.error(
+                "Priority evidence finalize promote failed; old file kept intact",
+                staging_path=staging_path,
+                final_path=final_path,
+                old_file_path=old_file_path,
+                error=str(e),
+            )
+            raise
+
+        # Best-effort old file cleanup post-commit
+        if old_file_path and old_file_path != final_path and os.path.exists(old_file_path):
+            try:
+                os.remove(old_file_path)
+                log.info(
+                    "Old priority evidence file deleted post-commit",
+                    old_path=old_file_path,
+                )
+            except OSError as e:
+                log.warning(
+                    "Failed to delete old priority evidence file post-commit",
+                    old_path=old_file_path,
+                    error=str(e),
+                )
+
+    return profile, finalize
+
+
 async def confirm_document_format(
     db: AsyncSession,
     profile_id: int,
