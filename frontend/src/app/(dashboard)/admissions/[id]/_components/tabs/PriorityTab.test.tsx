@@ -111,13 +111,25 @@ vi.mock("../PriorityOverrideDialog", () => ({
 
 // usePreviewPriorityKv — keep the hook stable + returnable nullable so the
 // fire-gate (status==='draft' && cultural) does not actually hit the network.
-const previewHookSpy = vi.fn(() => ({
-  data: null,
-  isLoading: false,
-  isFetching: false,
-}))
+//
+// Type spy args explicitly so `.mock.calls[N][2]` resolves to ``boolean``
+// instead of TS inferring zero-length tuple from the zero-arg factory
+// signature (TS2493 in strict CI).
+type PreviewHookArgs = [number, Record<string, unknown>, boolean]
+type PreviewHookReturn = {
+  data: null
+  isLoading: boolean
+  isFetching: boolean
+}
+const previewHookSpy = vi.fn<(...args: PreviewHookArgs) => PreviewHookReturn>(
+  () => ({
+    data: null,
+    isLoading: false,
+    isFetching: false,
+  }),
+)
 vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
-  usePreviewPriorityKv: (...args: unknown[]) => previewHookSpy(...(args as [])),
+  usePreviewPriorityKv: (...args: PreviewHookArgs) => previewHookSpy(...args),
 }))
 
 // auth.store — userRole drives override dialog mode = admin vs officer.
