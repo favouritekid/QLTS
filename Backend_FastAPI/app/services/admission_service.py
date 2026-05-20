@@ -1116,6 +1116,13 @@ def _compute_completion_percent(
     has_academic = profile.academic_history and len(profile.academic_history) > 0
     has_any_scores = bool(profile.subject_scores) if hasattr(profile, "subject_scores") else False
 
+    # Phase E.4 — Step 4 Priority compute (KV resolved + cultural input)
+    has_priority_input = bool(
+        getattr(profile, "cultural_education_level", None)
+    )
+    snapshot = getattr(profile, "priority_resolution_snapshot", None) or {}
+    kv_resolved = bool(snapshot.get("kv_resolved")) if isinstance(snapshot, dict) else False
+
     docs_format_confirmed = True
     if documents is not None:
         for doc in documents:
@@ -1123,17 +1130,29 @@ def _compute_completion_percent(
                 docs_format_confirmed = False
                 break
 
+    # Phase E.4 (G0) — 8-step model. Step 4 = Priority (new gộp KV+UT).
+    # Previous Step 4 (Scores) renumbered → Step 5. Step 5 (Documents) → 6.
+    # Step 6 (Tuition) → 7. Step 7 (Finalize) → 8. FE PipelineSidebar đã 8 steps.
     step_status = {
         1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
         2: "success" if has_family else "warning",
         3: "success" if has_academic else "warning",
-        4: "error" if gpa_error else ("success" if has_any_scores else "warning"),
-        5: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
-        6: "success",
-        7: "locked" if is_ineligible else "success",
+        4: (
+            "error" if not has_priority_input
+            else "warning" if not kv_resolved
+            else "success"
+        ),
+        5: "error" if gpa_error else ("success" if has_any_scores else "warning"),
+        6: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
+        7: "success",
+        8: "locked" if is_ineligible else "success",
     }
 
-    step_weights = {1: 14, 2: 14, 3: 14, 4: 15, 5: 15, 6: 14, 7: 14}
+    # Phase E.4 (G0) — rebalance weights 7→8 entries, total=100.
+    # Pattern 13×4 + 12×4 → 52+48=100. Prioritize "input" steps (Personal,
+    # Family, Academic, Documents) slightly over "output" steps (Priority,
+    # Scores, Tuition, Finalize) — equal weight per pair for simplicity.
+    step_weights = {1: 13, 2: 13, 3: 13, 4: 12, 5: 12, 6: 13, 7: 12, 8: 12}
     completion = 0
     for step_num, weight in step_weights.items():
         state = step_status.get(step_num, "locked")
@@ -1755,6 +1774,11 @@ def _compute_frontend_fields(
     
     has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
 
+    # Phase E.4 — Step 4 Priority compute (KV resolved + cultural input)
+    has_priority_input = bool(getattr(profile, "cultural_education_level", None))
+    snapshot = getattr(profile, "priority_resolution_snapshot", None) or {}
+    kv_resolved = bool(snapshot.get("kv_resolved")) if isinstance(snapshot, dict) else False
+
     # ✅ FIX: Documents format confirmation check
     # Check if all uploaded documents have been verified by manager or confirmed as paper submitted
     docs_format_confirmed = True
@@ -1765,6 +1789,9 @@ def _compute_frontend_fields(
                 docs_format_confirmed = False
                 break
 
+    # Phase E.4 (G0) — 8-step model. Step 4 = Priority (new gộp KV+UT).
+    # Previous Step 4 (Scores) renumbered → Step 5. Step 5 (Documents) → 6.
+    # Step 6 (Tuition) → 7. Step 7 (Finalize) → 8. FE PipelineSidebar đã 8 steps.
     step_status = {
         # Step 1: Personal Info
         1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
@@ -1772,14 +1799,20 @@ def _compute_frontend_fields(
         2: "success" if has_family else "warning",
         # Step 3: Academic History
         3: "success" if has_academic else "warning",
-        # Step 4: Scores
-        4: "error" if gpa_error else ("success" if has_any_scores else "warning"),
-        # Step 5: Documents
-        5: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
-        # Step 6: Tuition (display only)
-        6: "success",
-        # Step 7: Finalize
-        7: "locked" if profile.eligibility_status == "ineligible" else "success",
+        # Step 4: Priority (NEW — Phase E.4 gộp KV+UT)
+        4: (
+            "error" if not has_priority_input
+            else "warning" if not kv_resolved
+            else "success"
+        ),
+        # Step 5: Scores (renumbered từ Step 4)
+        5: "error" if gpa_error else ("success" if has_any_scores else "warning"),
+        # Step 6: Documents (renumbered từ Step 5)
+        6: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
+        # Step 7: Tuition (renumbered từ Step 6, display only)
+        7: "success",
+        # Step 8: Finalize (renumbered từ Step 7)
+        8: "locked" if profile.eligibility_status == "ineligible" else "success",
     }
     profile.step_status = step_status
 
@@ -2083,12 +2116,14 @@ def _compute_frontend_fields(
     if not docs_format_confirmed:
         warning_messages.append("Một số tài liệu chưa được xác nhận định dạng")
 
-    # Suggest next action
+    # Suggest next action (Phase E.4 — 8-step model: Step 4=Priority, 5=Scores, 6=Documents)
     if step_status[1] == "error":
         next_action = "Hoàn thiện thông tin cá nhân bắt buộc"
     elif step_status[4] == "error":
-        next_action = "Nhập điểm số đạt yêu cầu"
+        next_action = "Cần ghi nhận trình độ văn hóa cho ưu tiên KV"
     elif step_status[5] == "error":
+        next_action = "Nhập điểm số đạt yêu cầu"
+    elif step_status[6] == "error":
         next_action = "Tải lên tài liệu bắt buộc"
     elif has_warnings:
         next_action = "Hoàn thiện thông tin còn thiếu (không bắt buộc)"
@@ -2116,6 +2151,236 @@ def _compute_frontend_fields(
     # Mask CCCD for display purposes - show only last 4 digits
     # Full citizen_id is still available for form editing
     profile.citizen_id_masked = mask_citizen_id(profile.citizen_id)
+
+
+# =============================================================================
+# Q9 #07 Phase E.4 — Priority evidence transient projection helpers
+# =============================================================================
+
+# Display-only fields trên enriched evidence dict — KHÔNG persist xuống JSONB.
+# Spec G3 (audit cycle 4): nếu code path nào mutate raw evidence rồi assign back
+# vào JSONB column, các field này có thể leak. Helper _strip_display_fields_from_
+# evidence() strip trước assignment để defensive guard.
+_EVIDENCE_DISPLAY_ONLY_FIELDS = frozenset({
+    "verified_by_name",
+    "document_file_path",
+})
+
+
+def _strip_display_fields_from_evidence(
+    evidence: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Sanitize evidence dict before writing back to JSONB column.
+
+    Display fields chỉ valid trên transient `_display` projection. Persisting
+    chúng vào raw JSONB column sẽ cause schema drift on re-read (next
+    denormalize pass thêm fields, growing nested dict mỗi request).
+
+    `paper_only_verification` IS persisted (set during verify), NOT stripped.
+
+    Use sites: any function mutating ``profile.priority_object_evidence`` MUST
+    call helper trước assign — verify_object_evidence, reject_object_evidence,
+    untick_priority_evidence, manual_override_kv nếu touches evidence.
+    """
+    cleaned: Dict[str, Dict[str, Any]] = {}
+    for code, entry in evidence.items():
+        if not isinstance(entry, dict):
+            cleaned[code] = entry
+            continue
+        cleaned[code] = {
+            k: v for k, v in entry.items()
+            if k not in _EVIDENCE_DISPLAY_ONLY_FIELDS
+        }
+    return cleaned
+
+
+async def _enrich_priority_evidence_display(
+    db: AsyncSession,
+    evidence: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Build denormalized display projection of priority_object_evidence.
+
+    Adds 2 display fields per entry:
+    - ``verified_by_name``: user.full_name lookup từ verified_by id.
+    - ``document_file_path``: ProfileDocument.file_path lookup từ document_id.
+
+    Returns NEW dict — does NOT mutate input. Caller assigns kết quả vào
+    TRANSIENT attribute ``profile.priority_object_evidence_display`` (Pydantic
+    schema field), NOT vào raw ORM column ``priority_object_evidence`` (sẽ
+    trigger SQLAlchemy dirty flag + persist denormalized data xuống DB).
+    """
+    if not evidence:
+        return {}
+
+    user_ids = {
+        e.get("verified_by")
+        for e in evidence.values()
+        if isinstance(e, dict) and e.get("verified_by")
+    }
+    doc_ids = {
+        e.get("document_id")
+        for e in evidence.values()
+        if isinstance(e, dict) and e.get("document_id")
+    }
+
+    user_names: Dict[int, str] = {}
+    if user_ids:
+        rows = await db.execute(
+            select(models.User.id, models.User.full_name)
+            .where(models.User.id.in_(user_ids))
+        )
+        user_names = {row.id: row.full_name for row in rows}
+
+    doc_paths: Dict[int, str] = {}
+    if doc_ids:
+        # ProfileDocument has only ``file_path`` (S3 path String 500) — NO
+        # ``filename`` column exists. FE derives display filename via
+        # path.split('/').pop() (basename extract). See spec V3 Section VI
+        # "Schema verification" for optional fidelity upgrade path.
+        rows = await db.execute(
+            select(
+                models.ProfileDocument.id,
+                models.ProfileDocument.file_path,
+            )
+            .where(models.ProfileDocument.id.in_(doc_ids))
+        )
+        doc_paths = {row.id: row.file_path for row in rows if row.file_path}
+
+    enriched: Dict[str, Dict[str, Any]] = {}
+    for code, entry in evidence.items():
+        if not isinstance(entry, dict):
+            enriched[code] = entry
+            continue
+        e = dict(entry)
+        if e.get("verified_by") and e["verified_by"] in user_names:
+            e["verified_by_name"] = user_names[e["verified_by"]]
+        if e.get("document_id") and e["document_id"] in doc_paths:
+            # Pass full S3 path; FE extracts basename for display
+            e["document_file_path"] = doc_paths[e["document_id"]]
+        enriched[code] = e
+    return enriched
+
+
+async def _populate_priority_evidence_projections(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    documents: List[models.ProfileDocument],
+) -> None:
+    """Phase E.4 — populate 3 TRANSIENT priority evidence projections.
+
+    Sets 3 transient attributes (NOT tracked by SQLAlchemy, KHÔNG persist):
+    - ``priority_object_evidence_display``: enriched evidence dict với
+      verified_by_name + document_file_path (per G3a write/display split).
+    - ``missing_priority_evidence_codes``: UT codes ghi nhận nhưng chưa
+      có file đính kèm (Decision #2 inline warning).
+    - ``priority_evidence_documents``: per-UT document items cho DocumentsTab
+      Priority section (G0a response contract clarification).
+
+    G2 defensive: wrapped in try/except — bất kỳ lỗi nào (vd MissingGreenlet
+    nếu caller chưa eager-load profile.documents) sẽ silent fallback empty
+    defaults thay vì crash entire response. Log warning để monitor.
+
+    Reads ``profile.priority_object_evidence`` raw JSONB (loose Dict[str, Dict])
+    + ``profile.priority_object_codes`` list + ``documents`` filtered list +
+    PriorityObjectConfig catalog lookup by academic_year.
+    """
+    evidence_raw = profile.priority_object_evidence or {}
+
+    # 1. Enriched display projection (verified_by_name + document_file_path)
+    try:
+        enriched = await _enrich_priority_evidence_display(db, evidence_raw)
+        # TRANSIENT attribute — read by Pydantic from_attributes via the
+        # ``priority_object_evidence_display`` field on AdmissionProfileResponse.
+        # Assigning to this Python attribute does NOT trigger SQLAlchemy dirty
+        # flag (no column tracker), so router db.commit() does NOT persist.
+        profile.priority_object_evidence_display = enriched
+    except Exception as exc:  # noqa: BLE001 — defensive
+        log.warning(
+            "priority_object_evidence_display enrichment failed",
+            profile_id=profile.id,
+            error=str(exc),
+        )
+        profile.priority_object_evidence_display = None
+
+    # 2. Missing priority evidence codes (Decision #2 inline warning)
+    try:
+        priority_codes = list(profile.priority_object_codes or [])
+        if priority_codes:
+            uploaded_codes = {
+                doc.priority_sub_code
+                for doc in documents
+                if getattr(doc, "category", None) == "priority_evidence"
+                and getattr(doc, "priority_sub_code", None)
+            }
+            profile.missing_priority_evidence_codes = sorted(
+                set(priority_codes) - uploaded_codes
+            )
+        else:
+            profile.missing_priority_evidence_codes = []
+    except Exception as exc:  # noqa: BLE001 — defensive
+        log.warning(
+            "missing_priority_evidence_codes compute failed",
+            profile_id=profile.id,
+            error=str(exc),
+        )
+        profile.missing_priority_evidence_codes = []
+
+    # 3. Priority evidence documents (G0a — DocumentsTab Priority section)
+    try:
+        priority_codes = list(profile.priority_object_codes or [])
+        if priority_codes:
+            # Load catalog cho academic_year — PriorityObjectConfig.evidence_doc_type
+            # là text Việt sẵn (KHÔNG phải FK đến ConfigDocumentType).
+            catalog_rows = await db.execute(
+                select(
+                    models.PriorityObjectConfig.sub_code,
+                    models.PriorityObjectConfig.bonus_points,
+                    models.PriorityObjectConfig.evidence_doc_type,
+                )
+                .where(
+                    models.PriorityObjectConfig.academic_year == profile.academic_year,
+                    models.PriorityObjectConfig.sub_code.in_(priority_codes),
+                )
+            )
+            catalog_by_code = {
+                row.sub_code: {
+                    "bonus_points": float(row.bonus_points) if row.bonus_points else 0.0,
+                    "evidence_doc_type": row.evidence_doc_type or "(Chưa có catalog)",
+                }
+                for row in catalog_rows
+            }
+            docs_by_code = {
+                doc.priority_sub_code: doc
+                for doc in documents
+                if getattr(doc, "category", None) == "priority_evidence"
+                and getattr(doc, "priority_sub_code", None)
+            }
+            items: List[Dict[str, Any]] = []
+            for code in priority_codes:
+                cat = catalog_by_code.get(code, {})
+                doc = docs_by_code.get(code)
+                evidence_entry = evidence_raw.get(code, {}) if isinstance(
+                    evidence_raw.get(code), dict
+                ) else {}
+                items.append({
+                    "sub_code": code,
+                    "bonus_points": cat.get("bonus_points", 0.0),
+                    "label": cat.get("evidence_doc_type", "(Chưa có catalog)"),
+                    "document_id": doc.id if doc else None,
+                    "document_file_path": doc.file_path if doc else None,
+                    "status": "uploaded" if doc else "missing",
+                    "verification_status": evidence_entry.get("status"),
+                })
+            profile.priority_evidence_documents = items
+        else:
+            profile.priority_evidence_documents = []
+    except Exception as exc:  # noqa: BLE001 — defensive
+        log.warning(
+            "priority_evidence_documents compute failed",
+            profile_id=profile.id,
+            error=str(exc),
+        )
+        profile.priority_evidence_documents = []
 
 
 async def _populate_response_fields(
@@ -2184,6 +2449,57 @@ async def _populate_response_fields(
     # live AdmissionPath allowlist. Must run AFTER _compute_frontend_fields
     # since it reads profile.permissions and writes available_actions.
     await _resolve_minor_correction_state(db, profile, current_user)
+
+    # Q9 #07 Phase E.4 — workbench audit timeline.
+    # Last 20 priority_audit_log rows DESC, JOIN user để denormalize
+    # actor_name. Empty list khi profile chưa có intervention nào.
+    profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
+
+    # Q9 #07 Phase E.4 — 3 priority evidence transient projections:
+    # priority_object_evidence_display (enriched), missing_priority_evidence_codes
+    # (Decision #2 inline warning), priority_evidence_documents (G0a DocumentsTab).
+    # G2 defensive: helper wraps each compute in try/except → no crash if
+    # documents lazy-load fails.
+    await _populate_priority_evidence_projections(db, profile, documents)
+
+
+async def _load_priority_audit_log(
+    db: AsyncSession,
+    profile_id: int,
+    limit: int = 20,
+) -> list[Dict[str, Any]]:
+    """Load most recent priority_audit_log rows for the workbench timeline.
+
+    LEFT JOIN with `user` so SET NULL on actor (account deleted) still keeps
+    the audit row visible — actor_name resolves to None instead of dropping
+    the row.
+
+    Returns a list of dicts matching the `PriorityAuditEntry` schema shape so
+    Pydantic's `from_attributes` can serialize directly from a transient
+    attribute without persisting another ORM hop.
+    """
+    stmt = (
+        select(
+            models.PriorityAuditLog.id,
+            models.PriorityAuditLog.action_type,
+            models.PriorityAuditLog.actor_id,
+            models.User.full_name.label("actor_name"),
+            models.PriorityAuditLog.old_value,
+            models.PriorityAuditLog.new_value,
+            models.PriorityAuditLog.audit_metadata,
+            models.PriorityAuditLog.created_at,
+        )
+        .select_from(models.PriorityAuditLog)
+        .outerjoin(
+            models.User,
+            models.User.id == models.PriorityAuditLog.actor_id,
+        )
+        .where(models.PriorityAuditLog.profile_id == profile_id)
+        .order_by(models.PriorityAuditLog.created_at.desc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    return [dict(row._mapping) for row in result.all()]
 
 
 async def _create_admission_milestone_consultation(
@@ -3636,7 +3952,14 @@ async def update_profile(
         profile.priority_object_codes = data["priority_object_codes"]
         flag_modified(profile, "priority_object_codes")
     if "priority_object_evidence" in data and data["priority_object_evidence"] is not None:
-        profile.priority_object_evidence = data["priority_object_evidence"]
+        # Phase E.4 G3 — strip display-only fields (verified_by_name +
+        # document_file_path) trước khi persist vào JSONB column. Defensive
+        # guard nếu FE PATCH lỡ gửi display fields (write schema extra=forbid
+        # đã block tại Pydantic boundary, nhưng raw dict path qua model_dump
+        # có thể bypass). Persist display fields gây schema drift on re-read.
+        profile.priority_object_evidence = _strip_display_fields_from_evidence(
+            data["priority_object_evidence"]
+        )
         flag_modified(profile, "priority_object_evidence")
     # Note: priority_resolution_snapshot KHÔNG set qua candidate payload —
     # frozen at submit T1 + re-frozen at engine T6 (service-layer only).

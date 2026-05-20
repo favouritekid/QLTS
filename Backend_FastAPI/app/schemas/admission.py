@@ -452,6 +452,31 @@ PrioritySubCode = Annotated[
 ]
 
 
+class PriorityAuditEntry(BaseModel):
+    """Q9 #07 Phase E.4 — read-only projection of a priority_audit_log row.
+
+    Mirrors FE `priorityAuditEntrySchema` in zod/admissions.ts. Returned via
+    `AdmissionProfileResponse.priority_audit_log` (last 20 entries DESC) so
+    the workbench can render the audit timeline without an extra round-trip.
+    """
+    id: int
+    action_type: str = Field(
+        ...,
+        description=(
+            "Whitelist: kv_manual_override | ut_evidence_verified | "
+            "ut_evidence_rejected | admin_bulk_fill"
+        ),
+    )
+    actor_id: Optional[int] = None
+    actor_name: Optional[str] = None
+    old_value: Optional[Dict[str, Any]] = None
+    new_value: Optional[Dict[str, Any]] = None
+    audit_metadata: Optional[Dict[str, Any]] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class PriorityObjectEvidenceEntry(BaseModel):
     """M2: enforce shape of each evidence dict value.
 
@@ -486,6 +511,15 @@ class PriorityObjectEvidenceEntry(BaseModel):
         default=None,
         description="When candidate submitted the UT claim"
     )
+    # Phase E.4 — paper_only verify flag (PERSISTED, set by verify service)
+    paper_only_verification: bool = Field(
+        default=False,
+        description=(
+            "Officer verify UT cho hồ sơ giấy (chưa scan file vào hệ thống). "
+            "Default case trong nghiệp vụ VN — KHÔNG phải bypass. Audit log "
+            "ghi flag để thanh tra truy được khi không có document_id."
+        )
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -517,6 +551,70 @@ class PriorityObjectEvidenceEntry(BaseModel):
                     "của officer xác minh)."
                 )
         return self
+
+
+class PriorityObjectEvidenceDisplayEntry(PriorityObjectEvidenceEntry):
+    """Phase E.4 — READ-only display projection schema.
+
+    Extends write schema (PriorityObjectEvidenceEntry) với 2 denormalized
+    display fields (verified_by_name + document_file_path). CHỈ dùng cho
+    AdmissionProfileResponse.priority_object_evidence_display transient
+    attribute — KHÔNG persist vào JSONB column.
+
+    Why separate schema (G3a fix cycle 5):
+    - PriorityObjectEvidenceEntry reuse trong AdmissionProfileUpdate.priority_
+      object_evidence (PATCH body). Thêm display fields vào WRITE schema sẽ
+      cho phép FE PATCH leak qua update_profile path → display data persist
+      xuống DB → schema drift.
+    - Tách READ-only DisplayEntry ngăn FE PATCH gửi display fields (extra=
+      "forbid" trên cả 2 schemas).
+    """
+    verified_by_name: Optional[str] = Field(
+        default=None,
+        description="Full name của officer verified (denormalized từ user.full_name)"
+    )
+    document_file_path: Optional[str] = Field(
+        default=None,
+        description="S3 file_path của evidence document (FE basename extract)"
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PriorityEvidenceDocumentItem(BaseModel):
+    """Phase E.4 — Per-priority-UT document item for DocumentsTab Priority section.
+
+    Server-computed pre-projection trong _populate_response_fields. FE
+    DocumentsTab consume directly thay vì raw query profile_documents.
+
+    Spec G0a (audit cycle 5): response contract clarification — without this
+    field, FE phải tự join priority_object_codes + catalog + documents from
+    raw response shape (3 sources). G0a centralizes BE compute.
+    """
+    sub_code: str = Field(..., description="UT sub_code (vd '04','07')")
+    bonus_points: float = Field(..., description="Bonus rate từ PriorityObjectConfig")
+    label: str = Field(
+        ...,
+        description="Evidence doc label từ PriorityObjectConfig.evidence_doc_type"
+    )
+    document_id: Optional[int] = Field(
+        default=None,
+        description="ProfileDocument.id nếu uploaded, None nếu missing"
+    )
+    document_file_path: Optional[str] = Field(
+        default=None,
+        description="S3 file_path nếu uploaded (FE basename extract)"
+    )
+    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+        ...,
+        description="Document upload status"
+    )
+    verification_status: Optional[str] = Field(
+        default=None,
+        description="priority_object_evidence[sub_code].status (pending/verified/rejected)"
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class AdmissionProfileUpdate(BaseModel):
@@ -919,7 +1017,31 @@ class AdmissionProfileResponse(BaseModel):
     area_resolution_basis: Optional[str] = None
     priority_object_codes: list[str] = Field(default_factory=list)
     priority_object_evidence: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    # Q9 #07 Phase E.4 (Option A) — denormalized projection for workbench UI.
+    # Populated by admission_service._populate_response_fields as a TRANSIENT
+    # attribute on the ORM instance. JSONB column `priority_object_evidence`
+    # NEVER receives denormalized data — avoids SQLAlchemy dirty-flag persist
+    # cascade.
+    # FE pattern: prefer `priority_object_evidence_display ?? priority_object_evidence`.
+    priority_object_evidence_display: Optional[
+        Dict[str, PriorityObjectEvidenceDisplayEntry]
+    ] = Field(default=None)
+    # Q9 #07 Phase E.4 — codes có UT ghi nhận nhưng officer chưa scan file.
+    # FE dùng để render inline warning ở §3 UT card. KHÔNG ảnh hưởng
+    # eligibility_status — officer có quyền verify "Hồ sơ giấy" và submit.
+    # Decision #2: warning UX only, NOT eligibility gate.
+    missing_priority_evidence_codes: list[str] = Field(default_factory=list)
+    # Q9 #07 Phase E.4 G0a — Server-computed Priority section rows for
+    # DocumentsTab. FE DocumentsTab consume directly thay vì raw query.
+    priority_evidence_documents: list[PriorityEvidenceDocumentItem] = Field(
+        default_factory=list
+    )
     priority_resolution_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    # Q9 #07 Phase E.4 — workbench audit timeline.
+    # Last 20 priority_audit_log entries DESC (KV override + UT verify/reject
+    # + admin bulk-fill). Empty list khi profile chưa có intervention nào.
+    # Populated by admission_service._populate_response_fields.
+    priority_audit_log: list[PriorityAuditEntry] = Field(default_factory=list)
 
     # Scores (Dynamic Calculation)
     admission_scores: Optional[AdmissionScoreSchema] = None
@@ -2114,6 +2236,17 @@ class PreviewPriorityKvResponse(BaseModel):
     total_bonus_potential: Optional[float] = Field(
         None,
         description="area_bonus + object_bonus_potential — candidate-facing total"
+    )
+
+    # Q9 #07 Phase E.4 — law citation cho FE hiển thị trong EngineResultCard.
+    # Resolve qua services.priority_service.resolve_law_citation(rule_applied).
+    # None khi rule_applied không match map (vd ambiguous_requires_manual).
+    rule_law_citation: Optional[str] = Field(
+        None,
+        description=(
+            "Citation pháp lý (vd 'TT 05/2021 Phụ lục 01 Mục 5.b') resolved "
+            "từ rule_applied. FE EngineResultCard hiển thị để officer scan/trust."
+        )
     )
 
     model_config = ConfigDict(from_attributes=True)

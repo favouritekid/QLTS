@@ -690,3 +690,55 @@ def validate_eligibility(
 
     # Unknown target_level — defensive pass-through (caller validates)
     return True, None
+
+
+# =============================================================================
+# Q9 #07 Phase E.4 — Law citation resolver for FE EngineResultCard
+# =============================================================================
+
+# Map rule_applied (returned by resolve_kv_for_profile) → citation pháp lý.
+# FE EngineResultCard hiển thị "Căn cứ: <citation>" để officer scan/trust.
+#
+# Keys MUST match the rule_applied values emitted by resolve_kv_for_profile
+# (longest_duration, tiebreak_graduation_school, commune_lookup,
+# manual_override, ambiguous_requires_manual). New rule_applied values
+# added in tương lai PHẢI có entry tương ứng tại đây — nếu không,
+# resolve_law_citation() returns None silently.
+RULE_LAW_CITATION: dict[str, Optional[str]] = {
+    # Rows 1, 2: THPT multi-school, một KV winner by duration (3+ năm)
+    "longest_duration": "TT 05/2021 Phụ lục 01 Mục 5.b",
+    # Rows 1, 2: THPT multi-school, tied by duration → resolve by graduation school
+    "tiebreak_graduation_school": "TT 05/2021 Phụ lục 01 Mục 5.a",
+    # Rows 3, 5, 6 (fallback) + Row 8 (PT DTNT / dự bị / quân nhân / xuất ngũ)
+    "commune_lookup": "TT 05/2021 Phụ lục 01 Mục 4",
+    # Row 9: admin/officer ấn định KV thủ công
+    "manual_override": "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
+    # Edge cases: cultural not set, no qualifying entries, no KV lookup, tied
+    # graduation year+grade — engine không quyết định được, không có citation.
+    "ambiguous_requires_manual": None,
+}
+
+
+def resolve_law_citation(rule_applied: Optional[str]) -> Optional[str]:
+    """Resolve citation pháp lý cho rule_applied value.
+
+    Args:
+        rule_applied: Engine return value từ resolve_kv_for_profile() meta.
+                      Acceptable: longest_duration | tiebreak_graduation_school
+                      | commune_lookup | manual_override | ambiguous_requires_manual.
+
+    Returns:
+        Citation string (vd "TT 05/2021 Phụ lục 01 Mục 5.b") nếu rule_applied
+        match RULE_LAW_CITATION map.
+        None nếu rule_applied=None, hoặc rule_applied không nằm trong map
+        (defensive — không crash khi engine emit rule_applied mới chưa có entry).
+
+    Called by:
+        - PreviewPriorityKvResponse builder trong /preview-priority-kv endpoint
+          (priority_kv_preview router) — set response.rule_law_citation.
+        - _populate_response_fields for frozen priority_resolution_snapshot —
+          resolve citation cho snapshot.rule_applied (optional, defer post-launch).
+    """
+    if not rule_applied:
+        return None
+    return RULE_LAW_CITATION.get(rule_applied)

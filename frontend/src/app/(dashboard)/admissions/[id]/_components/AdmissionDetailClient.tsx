@@ -68,7 +68,6 @@ import { PriorityTab } from "./tabs/PriorityTab"
 import { ScoresTab } from "./tabs/ScoresTab"
 import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
-import { UtEvidenceTab } from "./tabs/UtEvidenceTab"
 import { FinalizeTab } from "./tabs/FinalizeTab"
 
 interface AdmissionDetailClientProps {
@@ -429,10 +428,13 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-    // Navigate to first error step using backend-computed status
+    // Navigate to first error step using backend-computed status.
+    // Phase E.4 (G0) — 8-step: Step 4=Priority (new), Step 5=Scores (was 4),
+    // Step 6=Documents (was 5).
     if (stepsStatusRecord[1] === "error") handleStepChange(1)
     else if (stepsStatusRecord[4] === "error") handleStepChange(4)
     else if (stepsStatusRecord[5] === "error") handleStepChange(5)
+    else if (stepsStatusRecord[6] === "error") handleStepChange(6)
   }
 
   if (!profile) return null
@@ -485,12 +487,8 @@ export function AdmissionDetailClient({
           {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 6 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 7 && <TuitionTab profile={profile} />}
-          {/* Q9 #07 Phase E.3 — Step 8 officer-only "Duyệt UT" (Decision D2).
-              Candidate sees gap-skip 7→9 trong sidebar (filtered out). */}
-          {currentStep === 8 && profile.permissions?.verify_priority_object && (
-            <UtEvidenceTab profile={profile} />
-          )}
-          {currentStep === 9 && (
+          {/* Q9 #07 Phase E.4 workbench — UT verify gộp vào Step 4 PriorityTab. */}
+          {currentStep === 8 && (
             <FinalizeTab
               profile={profile}
               isEligible={isEligible}

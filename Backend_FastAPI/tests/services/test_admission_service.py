@@ -1232,7 +1232,9 @@ def _assert_computed_fields_populated(body: dict, context: str = "") -> None:
 
     These three checks prove `_compute_frontend_fields` ran:
     - permissions: dict, default={}, populated should have ≥1 key
-    - step_status: dict, default={}, populated should have keys "1".."7"
+    - step_status: dict, default={}, populated should have keys "1".."8"
+      (Phase E.4 G0 renumber 7→8: Step 4=Priority new, 5=Scores, 6=Documents,
+      7=Tuition, 8=Finalize)
     - eligibility_status: default="pending", populated should be "eligible"/"ineligible"
     """
     msg_prefix = f"[{context}] " if context else ""

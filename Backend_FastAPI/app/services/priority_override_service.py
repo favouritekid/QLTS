@@ -58,6 +58,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.events import SystemEvents
+from app.services.admission_service import _strip_display_fields_from_evidence
 from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
@@ -480,16 +481,26 @@ async def verify_object_evidence(
     evidence = dict(profile.priority_object_evidence or {})
     prev_entry = dict(evidence.get(sub_code) or {})
 
+    # Phase E.4 Decision #3 — paper_only_verification flag. Officer verify
+    # UT cho hồ sơ giấy (document_id=None) là DEFAULT case trong nghiệp vụ
+    # VN, KHÔNG phải bypass. Persist flag để thanh tra truy được khi
+    # không có file scan. Tone neutral — UI badge "Hồ sơ giấy".
+    paper_only = document_id is None
+
     evidence[sub_code] = {
         **prev_entry,
         "status": "verified",
         "verified_by": actor.id,
         "verified_at": now_iso,
         "document_id": document_id,
+        "paper_only_verification": paper_only,
         # Drop any stale reject_reason from prior reject cycle.
         "reject_reason": None,
     }
-    profile.priority_object_evidence = evidence
+    # Phase E.4 G3 — strip display-only fields trước khi assign back vào
+    # JSONB column. Defensive guard nếu prev_entry mang display fields leak
+    # từ enriched projection.
+    profile.priority_object_evidence = _strip_display_fields_from_evidence(evidence)
 
     # Recompute UT verified bucket (engine T6 actual rate)
     new_bucket = await _recompute_ut_verified_bucket(db, profile)
@@ -506,10 +517,12 @@ async def verify_object_evidence(
             "sub_code": sub_code,
             "status": "verified",
             "document_id": document_id,
+            "paper_only_verification": paper_only,
         },
         audit_metadata={
             "actor_role": actor.role,
             "ut_verified_bucket": new_bucket,
+            "paper_only_verification": paper_only,
         },
     )
     db.add(audit_row)
@@ -605,8 +618,13 @@ async def reject_object_evidence(
         "reject_reason": reason_clean,
         "rejected_by": actor.id,
         "rejected_at": now_iso,
+        # Phase E.4 — reject clears paper_only_verification (was relevant
+        # only to verified status; rejection invalidates that flag).
+        "paper_only_verification": False,
     }
-    profile.priority_object_evidence = evidence
+    # Phase E.4 G3 — strip display-only fields trước khi assign back vào
+    # JSONB column. Defensive guard nếu prev_entry mang display fields leak.
+    profile.priority_object_evidence = _strip_display_fields_from_evidence(evidence)
 
     # Recompute UT verified bucket — if rejected code was applied verified,
     # bucket falls back to next-highest verified (or null if no verified left).

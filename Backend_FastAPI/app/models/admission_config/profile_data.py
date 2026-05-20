@@ -7,7 +7,7 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import CheckConstraint, Column, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger
+from sqlalchemy import CheckConstraint, Column, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
 from sqlalchemy.orm import backref, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
@@ -102,8 +102,23 @@ class ProfileDocument(Base):
     document_type_id = Column(
         Integer,
         ForeignKey("config_document_type.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment="FK ConfigDocumentType — required cho category='path', NULL cho category='priority_evidence'"
+    )
+    # Phase E.4 — phân biệt path documents vs priority_evidence (UT) documents
+    category = Column(
+        String(40),
         nullable=False,
-        index=True
+        default="path",
+        server_default="path",
+        comment="path | priority_evidence"
+    )
+    # Phase E.4 — UT sub_code khi category='priority_evidence', NULL otherwise
+    priority_sub_code = Column(
+        String(2),
+        nullable=True,
+        comment="UT sub_code (e.g. '04','07') — chỉ set khi category='priority_evidence'"
     )
     status = Column(
         String(20),
@@ -194,13 +209,42 @@ class ProfileDocument(Base):
     document_type = relationship("ConfigDocumentType", back_populates="profile_documents")
 
     __table_args__ = (
-        UniqueConstraint(
-            "profile_id", "document_type_id",
-            name="uq_profile_document"
+        # Phase E.4 — partial unique indexes thay thế full uq_profile_document
+        # vì priority_evidence rows có document_type_id=NULL (không apply unique
+        # cho (profile_id, document_type_id) full table)
+        Index(
+            "uq_profile_document_path",
+            "profile_id",
+            "document_type_id",
+            unique=True,
+            postgresql_where=text("category = 'path'"),
+        ),
+        Index(
+            "uq_profile_document_priority",
+            "profile_id",
+            "priority_sub_code",
+            unique=True,
+            postgresql_where=text("category = 'priority_evidence'"),
         ),
         CheckConstraint(
             "status IN ('missing','uploaded','verified','rejected','paper_submitted')",
             name="ck_profile_document_status"
+        ),
+        CheckConstraint(
+            "category IN ('path','priority_evidence')",
+            name="ck_profile_document_category"
+        ),
+        CheckConstraint(
+            "(category = 'priority_evidence' AND priority_sub_code IS NOT NULL) "
+            "OR (category <> 'priority_evidence' AND priority_sub_code IS NULL)",
+            name="ck_priority_evidence_sub_code"
+        ),
+        # Phase E.4 q9_07_e4c — enforce legacy invariant cho path documents
+        # post-relax document_type_id NOT NULL. priority_evidence rows
+        # acceptable với document_type_id=NULL (no FK target).
+        CheckConstraint(
+            "category <> 'path' OR document_type_id IS NOT NULL",
+            name="ck_path_requires_doc_type"
         ),
     )
 
