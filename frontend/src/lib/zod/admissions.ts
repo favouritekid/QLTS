@@ -105,6 +105,28 @@ export type PriorityObjectEvidenceEntry = z.infer<
 >
 
 /**
+ * Priority Audit Log Entry — append-only audit trail entry.
+ *
+ * Q9 #07 Phase E.4 — exposed in AdmissionProfileResponse cho workbench
+ * audit timeline display. Mirror of BE `PriorityAuditEntry` schema.
+ *
+ * `action_type` whitelist matches DB CHECK constraint:
+ * kv_manual_override | ut_evidence_verified | ut_evidence_rejected | admin_bulk_fill
+ */
+export const priorityAuditEntrySchema = z.object({
+  id: z.number().int(),
+  action_type: z.string(),
+  actor_id: z.number().int().nullable().optional(),
+  actor_name: z.string().nullable().optional(),
+  old_value: z.record(z.string(), z.unknown()).nullable().optional(),
+  new_value: z.record(z.string(), z.unknown()).nullable().optional(),
+  audit_metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  created_at: z.string().datetime({ offset: true }),
+})
+
+export type PriorityAuditEntry = z.infer<typeof priorityAuditEntrySchema>
+
+/**
  * Priority Resolution Snapshot Schema
  *
  * BE column: ``admission_profile.priority_resolution_snapshot`` (JSONB).
@@ -652,6 +674,10 @@ export const admissionProfileResponseSchema = z.object({
     .record(z.string(), priorityObjectEvidenceEntrySchema)
     .default({}),
   priority_resolution_snapshot: prioritySnapshotSchema.nullable().default(null),
+  // Q9 #07 Phase E.4 — audit timeline (last N entries DESC) — BE populates
+  // via service _populate_response_fields. Empty array khi profile chưa có
+  // intervention nào.
+  priority_audit_log: z.array(priorityAuditEntrySchema).nullable().default(null),
 
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),

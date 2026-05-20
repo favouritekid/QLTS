@@ -814,6 +814,11 @@ async def preview_priority_kv(
         ut_codes_verified=len(ut_breakdown_data["verified_codes"]),
     )
 
+    # Phase E.4 — resolve citation pháp lý cho FE EngineResultCard hiển thị
+    # "Căn cứ: <citation>". None nếu rule_applied=ambiguous_requires_manual.
+    from app.services.priority_service import resolve_law_citation
+    rule_law_citation = resolve_law_citation(meta.get("rule_applied"))
+
     return schemas.PreviewPriorityKvResponse(
         kv_resolved=kv,
         pathway=meta.get("pathway"),
@@ -826,6 +831,7 @@ async def preview_priority_kv(
         object_bonus_verified=object_bonus_verified,
         ut_breakdown=ut_breakdown_data,
         total_bonus_potential=total_bonus_potential,
+        rule_law_citation=rule_law_citation,
     )
 
 

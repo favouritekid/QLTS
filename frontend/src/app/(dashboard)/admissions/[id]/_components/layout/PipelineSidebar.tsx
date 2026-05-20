@@ -24,16 +24,16 @@ interface PipelineSidebarProps {
   } | null
   completionPercent: number
   /**
-   * Q9 #07 Phase E.3 — show "Duyệt UT" step (id=8) for officer/admin.
-   * Falsy → candidate view, step 8 filtered out (gap-skip per Decision D2).
+   * Phase E.4 (PR-1) — prop kept for backward-compat với AdmissionLayout
+   * callsite. Phase E.3 "Duyệt UT" Step 8 ĐÃ gộp vào Step 4 (Priority
+   * workbench) per Phase E.4 wireframe — flag không còn ảnh hưởng UI ở đây.
+   * Removal of callsite + interface defer to PR-3 (FE workbench compose).
    */
   canVerifyPriorityObject?: boolean
 }
 
-// Q9 #07 Phase E.3 Wave 3 (Decision D2): step 8 = "Duyệt UT" (NEW
-// officer-only); step 9 = Finalize (bumped from 8). Officer gate qua
-// filter — candidate sees `1-2-3-4-5-6-7-9` gap-skip (per plan v3 line
-// 88-90); officer/admin sees full 9 steps.
+// Q9 #07 Phase E.4 workbench refactor: UT verify gộp vào step 4 (Trình độ &
+// Ưu tiên) → bỏ "Duyệt UT" step riêng. Step 8 = Hoàn tất & Nộp (revert).
 const STEPS = [
     { id: 1, label: "Thông tin cá nhân", icon: User },
     { id: 2, label: "Gia đình / Giám hộ", icon: Users },
@@ -42,8 +42,7 @@ const STEPS = [
     { id: 5, label: "Điểm & Điều kiện", icon: Calculator },
     { id: 6, label: "Tài liệu pháp lý", icon: FileText },
     { id: 7, label: "Học phí", icon: Wallet },
-    { id: 8, label: "Duyệt UT", icon: Award, officerOnly: true },
-    { id: 9, label: "Hoàn tất & Nộp", icon: CheckSquare },
+    { id: 8, label: "Hoàn tất & Nộp", icon: CheckSquare },
 ]
 
 export function PipelineSidebar({
@@ -54,15 +53,12 @@ export function PipelineSidebar({
   validationSummary,
   groupedValidationErrors,
   completionPercent,
-  canVerifyPriorityObject = false,
+  // Phase E.4 (PR-1) — accept-and-ignore (see interface comment above)
+  canVerifyPriorityObject: _canVerifyPriorityObject = false,
 }: PipelineSidebarProps) {
   const [isIssuesOpen, setIsIssuesOpen] = useState(false)
 
-  // Q9 #07 Phase E.3 — filter officer-only steps for candidate view.
-  const visibleSteps = useMemo(
-    () => STEPS.filter((s) => !s.officerOnly || canVerifyPriorityObject),
-    [canVerifyPriorityObject],
-  )
+  const visibleSteps = STEPS
 
   // Phase 4 Fix: Progressive Disclosure - Focus current ±1 steps
   const completedSteps = Object.values(stepsStatus).filter(status => status === "success").length
@@ -78,8 +74,12 @@ export function PipelineSidebar({
 
   // Phase 4 Fix: Trust backend validation_summary instead of parsing strings
   // Map backend validation_summary to step numbers
+  // Phase E.4 (G0) — 8-step model: Step 4=Priority (new), Step 5=Scores (was 4),
+  // Step 6=Documents (was 5). validation_summary keys (personal/gpa/documents)
+  // không có "priority" key — Step 4 error count chỉ derive từ step_status
+  // (BE not surface count cho priority — defer post-launch nếu cần).
   const stepErrorCount = useMemo(() => {
-    const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 }
+    const counts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0 }
 
     if (validationSummary) {
       // Step 1: Personal Info
@@ -87,14 +87,14 @@ export function PipelineSidebar({
         counts[1] = validationSummary.personal.count
       }
 
-      // Step 4: GPA/Scores
+      // Step 5: GPA/Scores (renumbered từ Step 4)
       if (validationSummary.gpa?.has_error) {
-        counts[4] = validationSummary.gpa.count
+        counts[5] = validationSummary.gpa.count
       }
 
-      // Step 5: Documents
+      // Step 6: Documents (renumbered từ Step 5)
       if (validationSummary.documents?.has_error) {
-        counts[5] = validationSummary.documents.count
+        counts[6] = validationSummary.documents.count
       }
     }
 

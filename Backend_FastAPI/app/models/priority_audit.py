@@ -48,13 +48,23 @@ class PriorityAuditLog(Base):
     * ``ut_evidence_verified`` — Officer verifies UT document (Phase E.3)
     * ``ut_evidence_rejected`` — Officer rejects UT document (Phase E.3)
     * ``admin_bulk_fill`` — Admin bulk-fill on behalf (Phase F.2)
+    * ``ut_evidence_untick`` — Officer unticks UT code, cascade hard delete
+      file (Phase E.4 G1)
+    * ``ut_evidence_warning_dismissed`` — Officer submits hồ sơ với
+      missing_priority_evidence_codes non-empty (Phase E.4 Decision #2)
     """
 
     __tablename__ = "priority_audit_log"
     __table_args__ = (
         CheckConstraint(
-            "action_type IN ('kv_manual_override','ut_evidence_verified',"
-            "'ut_evidence_rejected','admin_bulk_fill')",
+            "action_type IN ("
+            "'kv_manual_override',"
+            "'ut_evidence_verified',"
+            "'ut_evidence_rejected',"
+            "'admin_bulk_fill',"
+            "'ut_evidence_untick',"
+            "'ut_evidence_warning_dismissed'"
+            ")",
             name="ck_priority_audit_log_action_type",
         ),
     )
