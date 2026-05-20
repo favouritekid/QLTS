@@ -4195,6 +4195,82 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     profile.snapshot_score = snapshot_score
 
 
+async def _audit_warning_dismissed_if_missing(
+    db: AsyncSession,
+    profile_id: int,
+    profile: models.AdmissionProfile,
+    current_user: Optional[models.User],
+) -> None:
+    """Q9 #07 Phase E.4 Decision #2 — audit row khi officer submit với UT
+    codes ghi nhận nhưng chưa upload minh chứng.
+
+    Computes missing_priority_evidence_codes inline (query ProfileDocument
+    cho category='priority_evidence' rows), then INSERTs PriorityAuditLog
+    với action_type='ut_evidence_warning_dismissed' nếu non-empty.
+
+    NOT eligibility gate (Decision #2): officer có quyền verify "Hồ sơ
+    giấy"; just track cho post-hoc thanh tra audit trail. CHECK constraint
+    ck_priority_audit_log_action_type extended in migration q9_07_e4b
+    accepts this action type.
+
+    Defensive try/except: failure không block submit (audit gap acceptable
+    vs profile submit blocked). Structlog warning cho ops monitoring.
+
+    Extracted from submit_and_evaluate cho unit test isolation (PR-4
+    audit cycle 2026-05-20).
+    """
+    try:
+        from sqlalchemy import select as _sel
+        priority_codes = list(profile.priority_object_codes or [])
+        missing_codes: list[str] = []
+        if priority_codes:
+            docs_q = await db.execute(
+                _sel(
+                    models.ProfileDocument.priority_sub_code,
+                ).where(
+                    models.ProfileDocument.profile_id == profile_id,
+                    models.ProfileDocument.category == "priority_evidence",
+                    models.ProfileDocument.priority_sub_code.is_not(None),
+                )
+            )
+            uploaded_codes = {row.priority_sub_code for row in docs_q}
+            missing_codes = sorted(set(priority_codes) - uploaded_codes)
+
+        if missing_codes:
+            db.add(
+                models.PriorityAuditLog(
+                    profile_id=profile_id,
+                    action_type="ut_evidence_warning_dismissed",
+                    actor_id=current_user.id if current_user else None,
+                    old_value=None,
+                    new_value={"missing_codes": missing_codes},
+                    audit_metadata={
+                        "submit_status": "submitted",
+                        "missing_count": len(missing_codes),
+                        "actor_role": (
+                            current_user.role if current_user else "magic_link"
+                        ),
+                    },
+                )
+            )
+            log.info(
+                "submit_audit_warning_dismissed",
+                profile_id=profile_id,
+                missing_codes=missing_codes,
+                actor_id=current_user.id if current_user else None,
+            )
+    except Exception as audit_exc:  # noqa: BLE001 — defensive: never block submit
+        log.warning(
+            "ut_evidence_warning_dismissed_audit_failed",
+            profile_id=profile_id,
+            error=str(audit_exc),
+            reason=(
+                "Decision #2 audit row insert failed during submit; "
+                "profile still submits but post-hoc audit gap exists."
+            ),
+        )
+
+
 async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
@@ -4611,6 +4687,11 @@ async def submit_and_evaluate(
                 actor=current_user,
                 profile_id=profile_id,
             )
+
+        # Q9 #07 Phase E.4 Decision #2 — audit row khi officer submit với
+        # UT codes ghi nhận nhưng chưa upload minh chứng. Extracted helper
+        # (audit_warning_dismissed_if_missing) cho unit test isolation.
+        await _audit_warning_dismissed_if_missing(db, profile_id, profile, current_user)
 
         await db.flush()
 
