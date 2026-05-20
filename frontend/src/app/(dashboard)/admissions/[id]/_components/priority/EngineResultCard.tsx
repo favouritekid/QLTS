@@ -235,7 +235,7 @@ export function EngineResultCard({
       {state === "missing" && (
         <p className="text-sm text-muted-foreground">
           Cần ghi nhận trình độ văn hóa + lịch sử học THPT trước. Vui lòng fill §1 ở
-          trên và tab "Học tập".
+          trên và tab &quot;Học tập&quot;.
         </p>
       )}
 
