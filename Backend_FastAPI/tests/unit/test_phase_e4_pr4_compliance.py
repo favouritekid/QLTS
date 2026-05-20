@@ -406,3 +406,273 @@ async def test_audit_warning_dismissed_missing_codes_sorted_in_audit() -> None:
     # Sorted ascending in audit row
     assert rows[0].new_value["missing_codes"] == ["01", "04", "07", "08"]
     assert rows[0].audit_metadata["actor_role"] == "admin"
+
+
+# ===========================================================================
+# Smoke 2026-05-20 — GET path projection wiring (P1 read-side bug)
+# ===========================================================================
+# Smoke discovered that ``get_profile()`` skipped
+# ``_populate_priority_evidence_projections``, so the G0a contract
+# (DocumentsTab Priority section + § 3 UT cards) was dark on every GET.
+# Mutation endpoints wired through ``_populate_response_fields`` did populate
+# the projection, hiding the bug from frontend integration tests. Fix added
+# the call to ``get_profile`` directly. These tests pin both the projection
+# call site and the empty-fallback semantic so the bug doesn't drift back.
+
+
+async def test_get_profile_populates_priority_evidence_documents_when_codes_set(
+    monkeypatch,
+) -> None:
+    """GET path: codes=['07'] + no doc → projection row with status='missing'.
+
+    Mirrors the Chrome MCP smoke finding 2026-05-20: officer set
+    priority_object_codes=['07'] via PUT, response showed
+    priority_evidence_documents=[] (BUG). After fix, GET path itself populates
+    the projection.
+    """
+    from sqlalchemy import select as _sel
+    import app.services.admission_service as svc
+
+    captured_projection_calls: list = []
+
+    async def fake_populate_projection(db, profile, documents):
+        captured_projection_calls.append({
+            "profile_id": profile.id,
+            "codes": list(profile.priority_object_codes or []),
+            "doc_count": len(documents),
+        })
+        profile.priority_evidence_documents = [
+            {
+                "sub_code": "07",
+                "bonus_points": 0.5,
+                "label": "Quyết định cấp sổ hộ nghèo",
+                "document_id": None,
+                "document_file_path": None,
+                "status": "missing",
+                "verification_status": None,
+            }
+        ]
+        profile.priority_object_evidence_display = {}
+        profile.missing_priority_evidence_codes = ["07"]
+
+    async def fake_audit_log(db, profile_id):
+        return []
+
+    async def fake_repo_documents(profile_id):
+        return []
+
+    async def fake_resolver(db, docs):
+        return {}
+
+    async def fake_minor(db, profile, user):
+        return None
+
+    # Stub repository layer + helper functions
+    monkeypatch.setattr(svc, "_populate_priority_evidence_projections", fake_populate_projection)
+    monkeypatch.setattr(svc, "_load_priority_audit_log", fake_audit_log)
+    monkeypatch.setattr(svc, "_resolve_verifier_names", fake_resolver)
+    monkeypatch.setattr(svc, "_resolve_minor_correction_state", fake_minor)
+    monkeypatch.setattr(svc, "_compute_frontend_fields", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_calculate_and_update_totals", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_check_idor_access", lambda profile, user: None)
+
+    # Stub repository class — return a profile with codes=['07'], no docs
+    profile_stub = SimpleNamespace(
+        id=99,
+        status="draft",
+        academic_year=2026,
+        priority_object_codes=["07"],
+        priority_object_evidence={},
+        lead=SimpleNamespace(unit_id=1, assigned_officer=None),
+        assigned_reviewer=None,
+        priority_evidence_documents=None,
+        priority_object_evidence_display=None,
+        missing_priority_evidence_codes=None,
+        priority_audit_log=None,
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            pass
+
+        async def get_profile_by_id_with_lead(self, profile_id):
+            return profile_stub
+
+        async def get_all_documents(self, profile_id):
+            return []
+
+        async def get_profile_scores(self, profile_id):
+            return []
+
+    monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
+
+    db = MagicMock()
+    user = SimpleNamespace(id=7, role="officer", unit_id=1)
+
+    result = await svc.get_profile(db, 99, user)
+
+    # Pin contract: projection helper was called from GET path
+    assert len(captured_projection_calls) == 1
+    assert captured_projection_calls[0]["codes"] == ["07"]
+
+    # Pin contract: projection populated transient attrs visible to response
+    assert result.priority_evidence_documents == [
+        {
+            "sub_code": "07",
+            "bonus_points": 0.5,
+            "label": "Quyết định cấp sổ hộ nghèo",
+            "document_id": None,
+            "document_file_path": None,
+            "status": "missing",
+            "verification_status": None,
+        }
+    ]
+    assert result.missing_priority_evidence_codes == ["07"]
+
+
+async def test_get_profile_populates_audit_log_alongside_projection(
+    monkeypatch,
+) -> None:
+    """GET path also loads priority_audit_log — paired Phase E.4 contract.
+
+    These two attrs (audit log + projection) ship together via
+    ``_populate_response_fields`` for mutation endpoints; the GET fix mirrors
+    that pairing so workbench audit timeline does NOT regress.
+    """
+    import app.services.admission_service as svc
+
+    audit_call_recorded: dict = {}
+
+    async def fake_audit_log(db, profile_id):
+        audit_call_recorded["profile_id"] = profile_id
+        return [
+            SimpleNamespace(
+                id=1,
+                action_type="ut_evidence_verified",
+                actor_id=2,
+                timestamp=None,
+                old_value=None,
+                new_value={"sub_code": "07"},
+                audit_metadata={},
+            )
+        ]
+
+    async def fake_projection(db, profile, documents):
+        profile.priority_evidence_documents = []
+        profile.priority_object_evidence_display = {}
+        profile.missing_priority_evidence_codes = []
+
+    monkeypatch.setattr(svc, "_populate_priority_evidence_projections", fake_projection)
+    monkeypatch.setattr(svc, "_load_priority_audit_log", fake_audit_log)
+    monkeypatch.setattr(svc, "_resolve_verifier_names", AsyncMock(return_value={}))
+    monkeypatch.setattr(svc, "_resolve_minor_correction_state", AsyncMock(return_value=None))
+    monkeypatch.setattr(svc, "_compute_frontend_fields", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_calculate_and_update_totals", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_check_idor_access", lambda profile, user: None)
+
+    profile_stub = SimpleNamespace(
+        id=99,
+        status="draft",
+        academic_year=2026,
+        priority_object_codes=[],
+        priority_object_evidence={},
+        lead=SimpleNamespace(unit_id=1, assigned_officer=None),
+        assigned_reviewer=None,
+        priority_audit_log=None,
+        priority_evidence_documents=None,
+        priority_object_evidence_display=None,
+        missing_priority_evidence_codes=None,
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            pass
+
+        async def get_profile_by_id_with_lead(self, profile_id):
+            return profile_stub
+
+        async def get_all_documents(self, profile_id):
+            return []
+
+        async def get_profile_scores(self, profile_id):
+            return []
+
+    monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
+
+    db = MagicMock()
+    user = SimpleNamespace(id=7, role="officer", unit_id=1)
+
+    result = await svc.get_profile(db, 99, user)
+
+    # Pin contract: audit log loaded on GET path
+    assert audit_call_recorded["profile_id"] == 99
+    assert len(result.priority_audit_log) == 1
+    assert result.priority_audit_log[0].action_type == "ut_evidence_verified"
+
+
+async def test_get_profile_projection_empty_codes_still_populates_empty_list(
+    monkeypatch,
+) -> None:
+    """GET with empty codes: projection still sets [] (not None default).
+
+    Pydantic schema defaults priority_evidence_documents=[]. If the projection
+    helper is skipped entirely, the attribute stays at whatever __init__ set
+    (usually unset → schema default kicks in). The fix MUST call the helper
+    unconditionally so transient attrs are consistent — even empty.
+    """
+    import app.services.admission_service as svc
+
+    helper_called = {"count": 0}
+
+    async def fake_projection(db, profile, documents):
+        helper_called["count"] += 1
+        profile.priority_evidence_documents = []
+        profile.priority_object_evidence_display = {}
+        profile.missing_priority_evidence_codes = []
+
+    monkeypatch.setattr(svc, "_populate_priority_evidence_projections", fake_projection)
+    monkeypatch.setattr(svc, "_load_priority_audit_log", AsyncMock(return_value=[]))
+    monkeypatch.setattr(svc, "_resolve_verifier_names", AsyncMock(return_value={}))
+    monkeypatch.setattr(svc, "_resolve_minor_correction_state", AsyncMock(return_value=None))
+    monkeypatch.setattr(svc, "_compute_frontend_fields", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_calculate_and_update_totals", lambda *a, **kw: None)
+    monkeypatch.setattr(svc, "_check_idor_access", lambda profile, user: None)
+
+    profile_stub = SimpleNamespace(
+        id=99,
+        status="draft",
+        academic_year=2026,
+        priority_object_codes=None,  # not set
+        priority_object_evidence={},
+        lead=SimpleNamespace(unit_id=1, assigned_officer=None),
+        assigned_reviewer=None,
+        priority_evidence_documents=None,
+        priority_object_evidence_display=None,
+        missing_priority_evidence_codes=None,
+        priority_audit_log=None,
+    )
+
+    class FakeRepo:
+        def __init__(self, db):
+            pass
+
+        async def get_profile_by_id_with_lead(self, profile_id):
+            return profile_stub
+
+        async def get_all_documents(self, profile_id):
+            return []
+
+        async def get_profile_scores(self, profile_id):
+            return []
+
+    monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
+
+    db = MagicMock()
+    user = SimpleNamespace(id=7, role="officer", unit_id=1)
+
+    result = await svc.get_profile(db, 99, user)
+
+    # Pin contract: helper called even when no codes — keeps transient attrs
+    # consistent so response schema doesn't fall back to None defaults.
+    assert helper_called["count"] == 1
+    assert result.priority_evidence_documents == []

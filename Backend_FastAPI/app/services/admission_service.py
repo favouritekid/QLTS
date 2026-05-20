@@ -996,25 +996,37 @@ def _validate_documents(
         allow_unverified = bool(applied_rules["allow_unverified_submission"])
 
     if documents is not None:
+        # Phase E.4 fix (smoke 2026-05-20): priority_evidence docs do NOT have
+        # a ``document_type_id`` FK (they map 1:1 with priority_object_codes
+        # via the ``priority_sub_code`` column, not the path's mandatory_docs
+        # ConfigDocumentType catalog). They MUST be filtered out before
+        # accessing ``doc.document_type.code`` or the validator crashes with
+        # ``AttributeError: 'NoneType' object has no attribute 'code'`` on
+        # the first priority evidence row.
+        path_docs = [
+            doc for doc in documents
+            if doc.document_type is not None
+            and getattr(doc, "category", None) != "priority_evidence"
+        ]
         if allow_unverified:
             # Legacy behaviour: uploaded (with file) / verified / paper-submitted
             # all count toward submission.
             uploaded_doc_codes = {
-                doc.document_type.code for doc in documents
+                doc.document_type.code for doc in path_docs
                 if doc.status in ("verified", "paper_submitted")
                 or (doc.file_path and doc.status == "uploaded")
             }
         else:
             # Strict mode: only verified or paper_submitted count.
             uploaded_doc_codes = {
-                doc.document_type.code for doc in documents
+                doc.document_type.code for doc in path_docs
                 if doc.status in ("verified", "paper_submitted")
             }
             # Track uploaded-with-file rows that strict mode rejected so
             # the UI can label them as "pending verify" rather than
             # "missing".
             pending_verify_codes = {
-                doc.document_type.code for doc in documents
+                doc.document_type.code for doc in path_docs
                 if doc.file_path and doc.status == "uploaded"
             }
 
@@ -3713,6 +3725,16 @@ async def get_profile(
     # (governance setting, not snapshotted) — keeps detail in lockstep
     # with list endpoint resolver above.
     await _resolve_minor_correction_state(db, profile, current_user)
+
+    # Q9 #07 Phase E.4 — projections on GET path (parity with mutation
+    # endpoints via ``_populate_response_fields``). Without these calls
+    # ``priority_evidence_documents`` returns [] even when the profile has
+    # ``priority_object_codes`` set, breaking DocumentsTab Priority section +
+    # PriorityWorkbench § 3 UT cards on every GET. Smoke 2026-05-20 caught
+    # this gap — projection logic existed (line 2264) but only fired from
+    # ``_populate_response_fields`` callers, leaving the read-side dark.
+    profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
+    await _populate_priority_evidence_projections(db, profile, documents)
 
     return profile
 
