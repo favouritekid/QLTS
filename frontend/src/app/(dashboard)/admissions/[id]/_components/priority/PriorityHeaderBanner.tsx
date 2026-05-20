@@ -29,11 +29,11 @@ export type PriorityBannerState =
   | "override"
 
 const STATE_BADGES: Record<PriorityBannerState, { icon: string; label: string; tone: string }> = {
-  happy:     { icon: "🟢", label: "Engine OK",            tone: "text-emerald-700 bg-emerald-50 border-emerald-200" },
+  happy:     { icon: "🟢", label: "KV đã xác định",        tone: "text-emerald-700 bg-emerald-50 border-emerald-200" },
   ambiguous: { icon: "🟠", label: "Cần xác minh thủ công", tone: "text-orange-700 bg-orange-50 border-orange-200" },
-  missing:   { icon: "⚠", label: "Thiếu dữ liệu",         tone: "text-amber-700 bg-amber-50 border-amber-200" },
-  frozen:    { icon: "🔒", label: "Đã chốt",              tone: "text-slate-700 bg-slate-50 border-slate-200" },
-  override:  { icon: "🔧", label: "Cán bộ ấn định",       tone: "text-purple-700 bg-purple-50 border-purple-200" },
+  missing:   { icon: "⚠", label: "Thiếu thông tin",        tone: "text-amber-700 bg-amber-50 border-amber-200" },
+  frozen:    { icon: "🔒", label: "Đã chốt",               tone: "text-slate-700 bg-slate-50 border-slate-200" },
+  override:  { icon: "🔧", label: "Cán bộ ấn định",        tone: "text-purple-700 bg-purple-50 border-purple-200" },
 }
 
 /** Pure helper — derive banner state from profile + live preview.

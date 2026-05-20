@@ -1,17 +1,28 @@
 /**
- * Q9 #07 Phase E.4 — § 1 Inputs section (cultural + vocational + special-case).
+ * Q9 #07 Phase E.4 — § 1 Inputs section (officer-friendly UX refactor).
  *
- * Linear 1-column layout per spec Section II:
+ * Linear 1-column layout:
  *   Trình độ:
  *     Văn hóa:  [select]      ← Tab 1
  *     Nghề:     [select]      ← Tab 2
- *   Trường hợp đặc biệt:
- *     ☐ Bật trường hợp đặc biệt  ← Tab 3
- *        ↳ Mã xã/phường: [input]  ← Tab 4 (conditional reveal)
+ *   Cách xác định khu vực:
+ *     ( ) Theo trường học           area_resolution_basis = null
+ *     ( ) Theo nơi thường trú        area_resolution_basis = "permanent_address_special"
+ *       ↳ Xã/phường thường trú: [input]  (conditional reveal)
  *
- * Special-case label per spec: "PTDT nội trú, dự bị ĐH, lớp tạo nguồn,
- * quân nhân/CAND" — same paradigm as KvDecisionPanel.tsx (which this
- * component supersedes per PR-3 cleanup).
+ * UX rationale: replaces the previous "Bật trường hợp đặc biệt" switch +
+ * raw commune-code input which read as bypass-control + jargon-heavy
+ * helper text. The new radio framing surfaces the OFFICER DECISION
+ * ("which basis are we using") instead of a binary edge-case toggle,
+ * and the helper text on the commune field stays short — officers
+ * tra cứu mã hành chính separately, không tự đoán.
+ *
+ * Mapping to BE contract is UNCHANGED:
+ *   - Theo trường học           → area_resolution_basis = null
+ *   - Theo nơi thường trú        → area_resolution_basis = "permanent_address_special"
+ *   - permanent_commune_code field shape unchanged
+ *
+ * No business logic on FE — area resolution still computed by BE engine.
  */
 "use client"
 
@@ -26,17 +37,19 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group"
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
-// Mirror BE app/services/priority_service.py _derive_kv_basis_level enum +
-// existing KvDecisionPanel constants (kept verbatim cho consistency).
+// Mirror BE app/services/priority_service.py _derive_kv_basis_level enum.
 const CULTURAL_OPTIONS = [
   { value: "completed_thcs",  label: "Hoàn thành chương trình THCS (chưa tốt nghiệp)" },
   { value: "graduated_thcs",  label: "Tốt nghiệp THCS" },
@@ -52,6 +65,12 @@ const VOCATIONAL_OPTIONS = [
   { value: "cao_dang",   label: "Cao đẳng" },
 ]
 
+// Internal radio values — distinct from BE enum to avoid colliding với
+// the optional/nullable shape. ``null`` (school basis) is not a valid
+// HTML radio value, so we map UI strings ↔ BE field locally.
+const BASIS_BY_SCHOOL = "by_school"
+const BASIS_BY_PERMANENT_ADDRESS = "permanent_address_special"
+
 export interface PriorityInputsSectionProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
@@ -62,14 +81,14 @@ export function PriorityInputsSection({
   isEditable,
 }: PriorityInputsSectionProps) {
   const areaBasis = form.watch("area_resolution_basis")
-  const isSpecialCase = areaBasis === "permanent_address_special"
+  const isPermanentAddress = areaBasis === BASIS_BY_PERMANENT_ADDRESS
 
   return (
     <section
       data-testid="priority-inputs-section"
       className="space-y-4 rounded-lg border border-border bg-card p-4"
     >
-      <h3 className="text-base font-semibold">§ 1. Trình độ + Trường hợp đặc biệt</h3>
+      <h3 className="text-base font-semibold">Trình độ &amp; Khu vực</h3>
 
       {/* Trình độ — văn hóa + nghề */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -138,48 +157,79 @@ export function PriorityInputsSection({
         />
       </div>
 
-      {/* Trường hợp đặc biệt — switch + commune conditional */}
+      {/* Cách xác định khu vực — replaces the prior "Bật trường hợp đặc biệt"
+          switch. Officer chooses the resolution basis explicitly. */}
       <FormField
         control={form.control}
         name="area_resolution_basis"
-        render={({ field }) => (
-          <FormItem className="space-y-2 rounded-md border border-dashed border-border p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <FormLabel htmlFor="special-case-switch" className="text-sm font-medium">
-                  Bật trường hợp đặc biệt
-                </FormLabel>
-                <FormDescription className="text-xs">
-                  PTDT nội trú, dự bị ĐH, lớp tạo nguồn, quân nhân/CAND — KV theo
-                  thường trú thay vì trường.
-                </FormDescription>
-              </div>
+        render={({ field }) => {
+          const radioValue = isPermanentAddress
+            ? BASIS_BY_PERMANENT_ADDRESS
+            : BASIS_BY_SCHOOL
+          return (
+            <FormItem className="space-y-2 rounded-md border border-dashed border-border p-3">
+              <FormLabel className="text-sm font-medium">
+                Cách xác định khu vực
+              </FormLabel>
               <FormControl>
-                <Switch
-                  id="special-case-switch"
-                  data-testid="special-case-switch"
-                  checked={isSpecialCase}
-                  onCheckedChange={(checked) =>
-                    field.onChange(checked ? "permanent_address_special" : null)
-                  }
+                <RadioGroup
+                  value={radioValue}
+                  onValueChange={(v) => {
+                    // Map UI → BE field: school basis writes null.
+                    field.onChange(
+                      v === BASIS_BY_PERMANENT_ADDRESS
+                        ? BASIS_BY_PERMANENT_ADDRESS
+                        : null,
+                    )
+                  }}
                   disabled={!isEditable}
-                />
+                  className="gap-2"
+                  data-testid="area-resolution-basis-radio"
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem
+                      value={BASIS_BY_SCHOOL}
+                      id="area-basis-by-school"
+                      data-testid="area-basis-by-school"
+                    />
+                    <label
+                      htmlFor="area-basis-by-school"
+                      className="text-sm cursor-pointer"
+                    >
+                      Theo trường học
+                    </label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem
+                      value={BASIS_BY_PERMANENT_ADDRESS}
+                      id="area-basis-by-permanent-address"
+                      data-testid="area-basis-by-permanent-address"
+                    />
+                    <label
+                      htmlFor="area-basis-by-permanent-address"
+                      className="text-sm cursor-pointer"
+                    >
+                      Theo nơi thường trú
+                    </label>
+                  </div>
+                </RadioGroup>
               </FormControl>
-            </div>
-            <FormMessage />
-          </FormItem>
-        )}
+              <FormMessage />
+            </FormItem>
+          )
+        }}
       />
 
-      {/* Commune code (conditional reveal) */}
-      {isSpecialCase && (
+      {/* Commune code (conditional reveal). Short helper text — no
+          MOET cardinality copy, no "trường hợp đặc biệt" wording. */}
+      {isPermanentAddress && (
         <FormField
           control={form.control}
           name="permanent_commune_code"
           render={({ field }) => (
             <FormItem data-testid="commune-code-field">
               <FormLabel htmlFor="permanent_commune_code">
-                Mã xã/phường thường trú
+                Xã/phường thường trú
               </FormLabel>
               <FormControl>
                 <Input
@@ -192,7 +242,8 @@ export function PriorityInputsSection({
                 />
               </FormControl>
               <FormDescription className="text-xs">
-                Tra cứu trên danh bạ MOET 2025 (893 quận/huyện × 7,453 xã/phường).
+                Nhập mã xã/phường nếu hồ sơ thuộc diện tính khu vực theo
+                thường trú.
               </FormDescription>
               <FormMessage />
             </FormItem>

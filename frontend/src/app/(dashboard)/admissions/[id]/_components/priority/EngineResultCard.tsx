@@ -1,22 +1,26 @@
 /**
- * Q9 #07 Phase E.4 — § 2 Engine result card with 5 KV states.
+ * Q9 #07 Phase E.4 — § 2 Khu vực ưu tiên (KV) card with 5 states.
  *
- * Renders engine resolution + law citation theo TT 05/2021. 5 states
- * (per spec Section II wireframe):
+ * Officer-friendly UX refactor: keeps the engine result + reason on
+ * the main surface, but pushes the law citation and admin-override
+ * affordance into disclosures so the main flow stays focused on
+ * "what KV applies right now" instead of legal references.
  *
- *   🟢 happy        — engine OK, KV resolved + law citation
+ * 5 states (per spec Section II wireframe):
+ *
+ *   🟢 happy        — engine OK, KV resolved
  *   🟠 ambiguous    — requires_manual_override; primary CTA "Chọn KV thủ công"
  *   ⚠ missing      — cultural/vocational chưa fill; redirect to §1
  *   🔒 frozen       — post-submit, read-only; show frozen snapshot
  *   🔧 override     — manual_override_reason non-null; show overrider + reason
  *
- * Admin/officer override CTA via disclosure (collapsed default for happy/
- * frozen; expanded primary for ambiguous). Dialog state lifted to caller
+ * Override CTA via disclosure (collapsed default for happy/frozen;
+ * expanded primary for ambiguous). Dialog state lifted to caller
  * (PriorityTab) — this component dispatches `onOpenOverride` callback.
  */
 "use client"
 
-import { ChevronDown, ShieldAlert, ShieldCheck } from "lucide-react"
+import { ChevronDown, FileText, ShieldAlert, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -37,11 +41,11 @@ const STATE_HEADERS: Record<
   EngineResultState,
   { icon: string; title: string; tone: string }
 > = {
-  happy:     { icon: "🟢", title: "Engine kết quả",            tone: "border-emerald-200 bg-emerald-50/40" },
-  ambiguous: { icon: "🟠", title: "Cần xác minh thủ công",     tone: "border-orange-300 bg-orange-50/60" },
-  missing:   { icon: "⚠", title: "Engine chưa đủ dữ liệu",    tone: "border-amber-300 bg-amber-50/40" },
-  frozen:    { icon: "🔒", title: "Engine kết quả (đã chốt)", tone: "border-slate-300 bg-slate-50/60" },
-  override:  { icon: "🔧", title: "Cán bộ ấn định",            tone: "border-purple-300 bg-purple-50/40" },
+  happy:     { icon: "🟢", title: "Khu vực ưu tiên (KV)",        tone: "border-emerald-200 bg-emerald-50/40" },
+  ambiguous: { icon: "🟠", title: "Cần xác minh thủ công",       tone: "border-orange-300 bg-orange-50/60" },
+  missing:   { icon: "⚠", title: "Thiếu thông tin trình độ",    tone: "border-amber-300 bg-amber-50/40" },
+  frozen:    { icon: "🔒", title: "Khu vực ưu tiên (đã chốt)",  tone: "border-slate-300 bg-slate-50/60" },
+  override:  { icon: "🔧", title: "Cán bộ đã ấn định KV",        tone: "border-purple-300 bg-purple-50/40" },
 }
 
 /**
@@ -158,7 +162,8 @@ export function EngineResultCard({
         <span>{header.title}</span>
       </div>
 
-      {/* Happy / frozen / override → KV + bonus + reason + citation */}
+      {/* Happy / frozen / override → KV + bonus + reason. Law citation
+          MOVED into the disclosure below to keep main flow focused. */}
       {(state === "happy" || state === "frozen" || state === "override") && (
         <div className="space-y-2 text-sm">
           {kv ? (
@@ -183,16 +188,10 @@ export function EngineResultCard({
             </p>
           )}
 
-          {lawCitation && (
-            <p className="text-sm">
-              <span className="font-medium">Căn cứ:</span> {lawCitation}
-            </p>
-          )}
-
           {state === "override" && snapshot.manual_override_reason && (
             <div className="mt-2 rounded-md border border-purple-200 bg-purple-50/60 p-2 text-xs">
               <p>
-                <strong>Override bởi:</strong>{" "}
+                <span className="font-medium">Ấn định bởi:</span>{" "}
                 {(snapshot.manual_override_by as string | number | null) ?? "—"}
                 {snapshot.manual_override_at && (
                   <span className="ml-2 opacity-70">
@@ -201,7 +200,8 @@ export function EngineResultCard({
                 )}
               </p>
               <p className="mt-1">
-                <strong>Lý do override:</strong> {String(snapshot.manual_override_reason)}
+                <span className="font-medium">Lý do ấn định:</span>{" "}
+                {String(snapshot.manual_override_reason)}
               </p>
             </div>
           )}
@@ -234,12 +234,39 @@ export function EngineResultCard({
       {/* Missing — instructional, no primary CTA */}
       {state === "missing" && (
         <p className="text-sm text-muted-foreground">
-          Cần ghi nhận trình độ văn hóa + lịch sử học THPT trước. Vui lòng fill §1 ở
-          trên và tab &quot;Học tập&quot;.
+          Vui lòng khai trình độ văn hóa ở phần trên + lịch sử học THPT ở tab
+          &quot;Học tập&quot; để hệ thống xác định KV.
         </p>
       )}
 
-      {/* Override disclosure — admin only, collapsed default cho happy/frozen */}
+      {/* Căn cứ chi tiết disclosure — collapsed default, expands to show
+          the law citation. Kept out of main flow per PR-3 audit P1 UX. */}
+      {lawCitation && (
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              data-testid="engine-result-citation-disclosure"
+              className="gap-2 text-muted-foreground hover:text-foreground"
+            >
+              <FileText className="h-4 w-4" />
+              Căn cứ chi tiết
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent
+            className="pt-2 text-xs text-muted-foreground"
+            data-testid="engine-result-citation-content"
+          >
+            {lawCitation}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
+      {/* Override admin affordance — collapsed default cho happy/frozen.
+          Wording avoids "dialog" / "override" English jargon. */}
       {canOverride &&
         (state === "happy" || state === "frozen" || state === "override") && (
           <Collapsible>
@@ -252,7 +279,9 @@ export function EngineResultCard({
                 className="gap-2"
               >
                 <ChevronDown className="h-4 w-4" />
-                Cán bộ ấn định{state === "override" ? " lại" : ""} (admin only)
+                {state === "override"
+                  ? "Ấn định lại KV"
+                  : "Ấn định KV thủ công"}
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent className="pt-2">
@@ -264,7 +293,7 @@ export function EngineResultCard({
                 data-testid="engine-result-override-trigger"
               >
                 <ShieldCheck className="h-4 w-4 mr-2" />
-                Mở dialog override
+                Mở hộp thoại ấn định KV
               </Button>
             </CollapsibleContent>
           </Collapsible>

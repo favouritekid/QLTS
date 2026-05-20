@@ -136,7 +136,7 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
       data-testid="priority-summary-panel"
       className="space-y-3 rounded-lg border border-border bg-card p-4"
     >
-      <h3 className="text-base font-semibold">§ 4. Tóm tắt</h3>
+      <h3 className="text-base font-semibold">Tóm tắt điểm ưu tiên</h3>
 
       {/* Tổng tạm tính */}
       <div className="space-y-1 text-sm" data-testid="priority-summary-total">
@@ -207,7 +207,7 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
         >
           <span className="flex items-center gap-2">
             <FileText className="h-4 w-4" />
-            Căn cứ pháp lý (TT 05/2021)
+            Căn cứ pháp lý
           </span>
           {lawOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
         </Button>
