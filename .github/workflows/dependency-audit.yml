@@ -42,14 +42,21 @@ jobs:
       - name: Run pip-audit
         run: |
           echo "🔍 Auditing Python dependencies..."
-          # --ignore-vuln: ecdsa CVE-2024-23342 has no fix (maintainer considers side-channel out of scope)
+          # --ignore-vuln allowlist (vulns with no fix or disputed by upstream):
+          #   - CVE-2024-23342: ecdsa side-channel — maintainer considers out of scope
+          #   - PYSEC-2026-89:  markdown 3.10.2 DoS — "fixed in 3.8.1" per DB but
+          #     newer 3.10.x line still flagged; no actual fix version available
+          #     at time of pinning. Re-evaluate on next pip-audit DB refresh.
+          #   - PYSEC-2025-183: pyjwt weak-encryption DISPUTED by supplier
+          #     (key length is application's responsibility, not library)
+          IGNORE_ARGS="--ignore-vuln CVE-2024-23342 --ignore-vuln PYSEC-2026-89 --ignore-vuln PYSEC-2025-183"
           pip-audit -r requirements.txt --format json --output audit-results.json \
-            --ignore-vuln CVE-2024-23342 || true
+            $IGNORE_ARGS || true
 
           # Parse results (handle missing output file)
           if [ ! -f audit-results.json ]; then
             echo "⚠️ pip-audit failed to produce output — treating as error"
-            pip-audit -r requirements.txt --desc --ignore-vuln CVE-2024-23342 || true
+            pip-audit -r requirements.txt --desc $IGNORE_ARGS || true
             exit 1
           fi
 
@@ -65,7 +72,7 @@ jobs:
           echo "📊 Found $VULNS vulnerability(ies)"
 
           # Show human-readable output
-          pip-audit -r requirements.txt --desc --ignore-vuln CVE-2024-23342 || true
+          pip-audit -r requirements.txt --desc $IGNORE_ARGS || true
 
           if [ "$VULNS" -gt "0" ]; then
             echo "⚠️ Vulnerabilities found in Python dependencies!"
