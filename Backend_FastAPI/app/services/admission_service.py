@@ -4529,11 +4529,22 @@ async def submit_and_evaluate(
             )
         allow_unverified = bool(applied_rules["allow_unverified_submission"])
 
+    # Phase E.4 fix (smoke 2026-05-20, sibling to _validate_documents fix):
+    # priority_evidence docs do NOT have a document_type_id FK (they map 1:1
+    # với priority_object_codes via priority_sub_code, NOT via path's
+    # mandatory_docs ConfigDocumentType catalog). Skip them before reading
+    # doc.document_type.code or submit_and_evaluate crashes with
+    # AttributeError on first priority evidence row.
+    path_uploaded_docs = [
+        doc for doc in uploaded_docs
+        if doc.document_type is not None
+        and getattr(doc, "category", None) != "priority_evidence"
+    ]
     if allow_unverified:
-        uploaded_doc_codes = {doc.document_type.code for doc in uploaded_docs}
+        uploaded_doc_codes = {doc.document_type.code for doc in path_uploaded_docs}
     else:
         uploaded_doc_codes = {
-            doc.document_type.code for doc in uploaded_docs
+            doc.document_type.code for doc in path_uploaded_docs
             if doc.status in ("verified", "paper_submitted")
         }
 
