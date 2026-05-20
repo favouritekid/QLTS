@@ -1053,3 +1053,247 @@ describe("DocumentsTab — ADM-031 round 10 verifier identity", () => {
     expect(container.textContent).not.toMatch(/Nguyễn Văn A/);
   });
 });
+
+// =============================================================================
+// Q9 #07 PHASE E.4 PR-3 — ELIGIBILITY SUMMARY FOOTER (spec V3 §III)
+// =============================================================================
+
+function buildProfileWithPriority(
+  docs: DocRow[],
+  priorityDocs: Array<{
+    sub_code: string;
+    label: string;
+    bonus_points: number;
+    document_id: number | null;
+    document_file_path: string | null;
+    status: "missing" | "uploaded" | "verified" | "rejected";
+    verification_status: "pending" | "verified" | "rejected" | null;
+  }>,
+) {
+  const base = buildProfile(docs) as Record<string, unknown>;
+  base.priority_evidence_documents = priorityDocs;
+  return base;
+}
+
+describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
+  it("hides footer entirely when no mandatory docs and no priority docs", () => {
+    const profile = buildProfileWithPriority(
+      [
+        {
+          code: "OPT_ONE",
+          label: "Tài liệu tuỳ chọn",
+          status: "missing",
+          is_mandatory: false,
+          requires_upload: true,
+        },
+      ],
+      [],
+    );
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(
+      screen.queryByTestId("documents-tab-eligibility-summary"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Bắt buộc line with 'cần X nữa' remainder when some mandatory docs unverified", () => {
+    const profile = buildProfileWithPriority(
+      [
+        {
+          code: "HOC_BA",
+          label: "Học bạ THPT",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "CCCD",
+          label: "CCCD",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "BANG_TN",
+          label: "Bằng tốt nghiệp",
+          status: "uploaded",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "ANH_3X4",
+          label: "Ảnh 3x4",
+          status: "missing",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "KHAM_SK",
+          label: "Khám sức khoẻ",
+          status: "missing",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      [],
+    );
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const summary = screen.getByTestId("eligibility-summary-mandatory");
+    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/5 verified/);
+    expect(summary).toHaveTextContent(/cần 3 nữa/);
+  });
+
+  it("Bắt buộc line drops 'cần X nữa' when all mandatory docs verified", () => {
+    const profile = buildProfileWithPriority(
+      [
+        {
+          code: "HOC_BA",
+          label: "Học bạ THPT",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "CCCD",
+          label: "CCCD",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      [],
+    );
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const summary = screen.getByTestId("eligibility-summary-mandatory");
+    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/2 verified/);
+    expect(summary.textContent).not.toMatch(/cần/);
+  });
+
+  it("paper_submitted does NOT count toward verified (strict semantic per spec)", () => {
+    const profile = buildProfileWithPriority(
+      [
+        {
+          code: "BANG_TN",
+          label: "Bằng tốt nghiệp",
+          status: "paper_submitted",
+          is_mandatory: true,
+          requires_upload: false,
+        },
+        {
+          code: "HOC_BA",
+          label: "Học bạ",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      [],
+    );
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const summary = screen.getByTestId("eligibility-summary-mandatory");
+    // paper_submitted is "satisfied" but NOT "verified" — spec text is strict.
+    expect(summary).toHaveTextContent(/1\/2 verified/);
+    expect(summary).toHaveTextContent(/cần 1 nữa/);
+  });
+
+  it("Ưu tiên line shows missing UT codes for priority docs without file", () => {
+    const profile = buildProfileWithPriority([], [
+      {
+        sub_code: "04",
+        label: "Giấy chứng nhận con thương binh",
+        bonus_points: 1.0,
+        document_id: 99,
+        document_file_path: "uploads/profile_1/ut04.pdf",
+        status: "verified",
+        verification_status: "verified",
+      },
+      {
+        sub_code: "07",
+        label: "Giấy chứng nhận hộ nghèo",
+        bonus_points: 0.5,
+        document_id: null,
+        document_file_path: null,
+        status: "missing",
+        verification_status: null,
+      },
+      {
+        sub_code: "08",
+        label: "Giấy xác nhận chất độc",
+        bonus_points: 0.5,
+        document_id: null,
+        document_file_path: null,
+        status: "missing",
+        verification_status: null,
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const summary = screen.getByTestId("eligibility-summary-priority");
+    expect(summary).toHaveTextContent(/Ưu tiên:\s*1\/3 docs uploaded/);
+    expect(summary).toHaveTextContent(/UT07, UT08 thiếu minh chứng/);
+  });
+
+  it("Ưu tiên line drops missing-codes suffix when all priority docs uploaded", () => {
+    const profile = buildProfileWithPriority([], [
+      {
+        sub_code: "04",
+        label: "Giấy chứng nhận con thương binh",
+        bonus_points: 1.0,
+        document_id: 99,
+        document_file_path: "uploads/profile_1/ut04.pdf",
+        status: "verified",
+        verification_status: "verified",
+      },
+      {
+        sub_code: "07",
+        label: "Giấy chứng nhận hộ nghèo",
+        bonus_points: 0.5,
+        document_id: 100,
+        document_file_path: "uploads/profile_1/ut07.pdf",
+        status: "uploaded",
+        verification_status: "pending",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const summary = screen.getByTestId("eligibility-summary-priority");
+    expect(summary).toHaveTextContent(/Ưu tiên:\s*2\/2 docs uploaded/);
+    expect(summary.textContent).not.toMatch(/thiếu minh chứng/);
+  });
+
+  it("renders both lines together when profile has both mandatory + priority docs", () => {
+    const profile = buildProfileWithPriority(
+      [
+        {
+          code: "HOC_BA",
+          label: "Học bạ",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "CCCD",
+          label: "CCCD",
+          status: "uploaded",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      [
+        {
+          sub_code: "08",
+          label: "Giấy xác nhận chất độc",
+          bonus_points: 0.5,
+          document_id: null,
+          document_file_path: null,
+          status: "missing",
+          verification_status: null,
+        },
+      ],
+    );
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(
+      screen.getByTestId("eligibility-summary-mandatory"),
+    ).toHaveTextContent(/1\/2 verified.*cần 1 nữa/);
+    expect(
+      screen.getByTestId("eligibility-summary-priority"),
+    ).toHaveTextContent(/0\/1 docs uploaded.*UT08 thiếu/);
+  });
+});

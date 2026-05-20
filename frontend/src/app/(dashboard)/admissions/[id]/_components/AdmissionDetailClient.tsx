@@ -168,6 +168,16 @@ export function AdmissionDetailClient({
       academic_history: vm?.academic_history || [],
       admission_scores: vm?.admission_scores || {},
       documents_checklist: vm?.documents_checklist || [],
+      // Q9 #07 Phase E.4 PR-3 — Priority workbench form fields (P1 hydrate fix).
+      // PriorityTab watches these 5 fields cho live preview + officer edit.
+      // KHÔNG hydrate priority_object_evidence — dedicated mutation endpoints
+      // (verify/reject/upload/untick) là canonical write path; form save không
+      // mutate evidence để tránh race với optimistic lock.
+      cultural_education_level: ((profile as AdmissionProfileResponse)?.cultural_education_level || null) as AdmissionProfileUpdateInput["cultural_education_level"],
+      vocational_qualification: ((profile as AdmissionProfileResponse)?.vocational_qualification || null) as AdmissionProfileUpdateInput["vocational_qualification"],
+      area_resolution_basis: ((profile as AdmissionProfileResponse)?.area_resolution_basis || null) as AdmissionProfileUpdateInput["area_resolution_basis"],
+      permanent_commune_code: (profile as AdmissionProfileResponse)?.permanent_commune_code || null,
+      priority_object_codes: (profile as AdmissionProfileResponse)?.priority_object_codes || [],
       version: vm?.version ?? 1,
     },
   })
@@ -204,6 +214,12 @@ export function AdmissionDetailClient({
         academic_history: vm.academic_history || [],
         admission_scores: vm.admission_scores || {},
         documents_checklist: vm.documents_checklist || [],
+        // Q9 #07 Phase E.4 PR-3 — Priority workbench fields (mirror defaultValues).
+        cultural_education_level: (p.cultural_education_level || null) as AdmissionProfileUpdateInput["cultural_education_level"],
+        vocational_qualification: (p.vocational_qualification || null) as AdmissionProfileUpdateInput["vocational_qualification"],
+        area_resolution_basis: (p.area_resolution_basis || null) as AdmissionProfileUpdateInput["area_resolution_basis"],
+        permanent_commune_code: p.permanent_commune_code || null,
+        priority_object_codes: p.priority_object_codes || [],
         version: vm.version ?? 1,
       })
     }
@@ -483,7 +499,14 @@ export function AdmissionDetailClient({
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}
-          {currentStep === 4 && <PriorityTab form={form} profile={profile} isEditable={can('edit')} />}
+          {currentStep === 4 && (
+            <PriorityTab
+              form={form}
+              profile={profile}
+              isEditable={can('edit')}
+              onNavigateToDocuments={() => handleStepChange(6)}
+            />
+          )}
           {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 6 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 7 && <TuitionTab profile={profile} />}

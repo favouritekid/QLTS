@@ -1,255 +1,413 @@
 /**
- * PriorityTab — Vitest unit tests (Q9 #07 Phase D.2+D.4 redesign)
+ * PriorityTab composition test (Q9 #07 Phase E.4 PR-3 audit P2).
  *
- * Tests the live-preview UX with BE auto-resolve.
- * - Intro card with KV rates
- * - Snapshot card: "tạm tính" vs "đã chốt" header
- * - KV badge color-coded by KV1/KV2/KV2-NT/KV3
- * - Switch toggle for special case (replaces old "Cách tính KV" dropdown)
- * - commune_code input conditional on switch ON
+ * Spec V3 §II ("Wireframe Step 4 — workbench") locks PriorityTab as a 5-child
+ * compose: PriorityHeaderBanner + PriorityInputsSection + EngineResultCard +
+ * UtEvidenceCards + PrioritySummaryPanel + (mounted) PriorityOverrideDialog.
  *
- * Mocks usePreviewPriorityKv hook to avoid network.
+ * This file pins 8 composition cases — the matrix of profile states the
+ * workbench is expected to render correctly. Each case asserts:
+ *   (a) all 5 sections mount
+ *   (b) the wrapper data-testid is present
+ *   (c) the override dialog is mounted (open=false except when triggered)
+ *   (d) the right children receive the right state-derived props
+ *
+ * Sub-components have their own unit tests covering inner behavior (banner
+ * state derivation, engine card 5 KV states, UT card per-code render,
+ * summary frozen contract precedence). The job of THIS test is only to
+ * verify the COMPOSITION is correct across profile states — drift in the
+ * tab's section list or prop-wiring fails here before reaching production.
  */
-import { describe, it, expect, vi, beforeAll } from "vitest"
-import { useForm } from "react-hook-form"
-import { Form } from "@/components/ui/form"
-import { render, screen } from "@/test/utils/test-utils"
+import { describe, it, expect, vi, beforeEach } from "vitest"
+import { render, screen } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { useForm, type UseFormReturn } from "react-hook-form"
+import { useEffect } from "react"
+import * as React from "react"
+
 import { PriorityTab } from "./PriorityTab"
-import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type {
+  AdmissionProfileResponse,
+  AdmissionProfileUpdateInput,
+} from "@/lib/zod/admissions"
 
-beforeAll(() => {
-  Element.prototype.scrollIntoView = vi.fn()
-  if (!Element.prototype.hasPointerCapture) {
-    Element.prototype.hasPointerCapture = vi.fn(() => false)
-  }
-})
+// ---------------------------------------------------------------------------
+// Mock sub-components — capture props for assertion. Each mock renders a
+// minimal probe with the props serialized into a data-* attribute so the
+// test reads exactly what PriorityTab handed down.
+// ---------------------------------------------------------------------------
 
-// PriorityTab now embeds PriorityOverrideDialog → ResponsiveDialog →
-// useMediaQuery (useSyncExternalStore + matchMedia). Stub to desktop
-// trong JSDOM tests.
-vi.mock("@/hooks/useMediaQuery", () => ({
-  useMediaQuery: () => false,
-  useIsMobile: () => false,
-  useIsTablet: () => false,
-  useIsDesktop: () => true,
+const bannerSpy = vi.fn()
+const inputsSpy = vi.fn()
+const engineSpy = vi.fn()
+const utCardsSpy = vi.fn()
+const summarySpy = vi.fn()
+const overrideDialogSpy = vi.fn()
+
+vi.mock("../priority/PriorityHeaderBanner", () => ({
+  PriorityHeaderBanner: (props: Record<string, unknown>) => {
+    bannerSpy(props)
+    return <div data-testid="probe-banner" />
+  },
 }))
 
-// Mock live preview hook — control returned data per test
-const mockPreview = vi.fn()
-vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
-  usePreviewPriorityKv: (...args: unknown[]) => mockPreview(...args),
+vi.mock("../priority/PriorityInputsSection", () => ({
+  PriorityInputsSection: (props: Record<string, unknown>) => {
+    inputsSpy(props)
+    return (
+      <div
+        data-testid="probe-inputs"
+        data-editable={String(props.isEditable ?? false)}
+      />
+    )
+  },
 }))
 
-function buildProfile(overrides?: Partial<AdmissionProfileResponse>) {
-  return {
-    id: 42,
-    status: "draft",
-    permissions: { edit: true },
-    cultural_education_level: null,
-    vocational_qualification: "none",
-    area_resolution_basis: null,
-    permanent_commune_code: null,
-    priority_object_codes: [],
-    priority_resolution_snapshot: null,
-    ...overrides,
-  } as unknown as AdmissionProfileResponse
+vi.mock("../priority/EngineResultCard", () => ({
+  EngineResultCard: (props: Record<string, unknown>) => {
+    engineSpy(props)
+    return (
+      <div
+        data-testid="probe-engine"
+        data-can-override={String(props.canOverride ?? false)}
+      />
+    )
+  },
+}))
+
+vi.mock("../priority/UtEvidenceCards", () => ({
+  UtEvidenceCards: (props: Record<string, unknown>) => {
+    utCardsSpy(props)
+    return (
+      <div
+        data-testid="probe-ut"
+        data-can-verify={String(props.canVerify ?? false)}
+        data-is-editable={String(props.isEditable ?? false)}
+      />
+    )
+  },
+}))
+
+vi.mock("../priority/PrioritySummaryPanel", () => ({
+  PrioritySummaryPanel: (props: Record<string, unknown>) => {
+    summarySpy(props)
+    return <div data-testid="probe-summary" />
+  },
+}))
+
+vi.mock("../PriorityOverrideDialog", () => ({
+  PriorityOverrideDialog: (props: Record<string, unknown>) => {
+    overrideDialogSpy(props)
+    return (
+      <div
+        data-testid="probe-override-dialog"
+        data-open={String(props.open ?? false)}
+        data-mode={String(props.mode ?? "")}
+        data-current-kv={String(props.currentKv ?? "")}
+      />
+    )
+  },
+}))
+
+// usePreviewPriorityKv — keep the hook stable + returnable nullable so the
+// fire-gate (status==='draft' && cultural) does not actually hit the network.
+//
+// Type spy args explicitly so `.mock.calls[N][2]` resolves to ``boolean``
+// instead of TS inferring zero-length tuple from the zero-arg factory
+// signature (TS2493 in strict CI).
+type PreviewHookArgs = [number, Record<string, unknown>, boolean]
+type PreviewHookReturn = {
+  data: null
+  isLoading: boolean
+  isFetching: boolean
 }
+const previewHookSpy = vi.fn<(...args: PreviewHookArgs) => PreviewHookReturn>(
+  () => ({
+    data: null,
+    isLoading: false,
+    isFetching: false,
+  }),
+)
+vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
+  usePreviewPriorityKv: (...args: PreviewHookArgs) => previewHookSpy(...args),
+}))
 
-function HarnessWrapper({
+// auth.store — userRole drives override dialog mode = admin vs officer.
+const authUserState: { role: string | null } = { role: "officer" }
+vi.mock("@/lib/stores/auth.store", () => ({
+  useAuthStore: <T,>(
+    selector: (s: { user: { role: string } | null }) => T,
+  ): T =>
+    selector({
+      user: authUserState.role ? { role: authUserState.role } : null,
+    }),
+}))
+
+// ---------------------------------------------------------------------------
+// Test harness: wraps PriorityTab with a real react-hook-form so form.watch
+// returns real values for the preview hook gate (per PR-3 P1 design — gate
+// is profile.status==='draft' && !!cultural). The form's defaultValues
+// mirror the case's profile to keep watches in sync.
+// ---------------------------------------------------------------------------
+
+function Harness({
   profile,
-  isEditable = true,
+  isEditable,
   defaults,
 }: {
+  profile: AdmissionProfileResponse
+  isEditable: boolean
+  defaults: Partial<AdmissionProfileUpdateInput>
+}) {
+  const form = useForm<AdmissionProfileUpdateInput>({
+    defaultValues: defaults as AdmissionProfileUpdateInput,
+  })
+  return (
+    <PriorityTab
+      form={form as unknown as UseFormReturn<AdmissionProfileUpdateInput>}
+      profile={profile}
+      isEditable={isEditable}
+      onNavigateToDocuments={() => {}}
+    />
+  )
+}
+
+function renderTab(opts: {
   profile: AdmissionProfileResponse
   isEditable?: boolean
   defaults?: Partial<AdmissionProfileUpdateInput>
 }) {
-  const form = useForm<AdmissionProfileUpdateInput>({
-    defaultValues: {
-      version: 1,
-      cultural_education_level: defaults?.cultural_education_level ?? null,
-      vocational_qualification: defaults?.vocational_qualification ?? "none",
-      area_resolution_basis: defaults?.area_resolution_basis ?? null,
-      permanent_commune_code: defaults?.permanent_commune_code ?? null,
-      academic_history: defaults?.academic_history ?? null,
-    } as any,
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
   })
-  return (
-    <Form {...form}>
-      <PriorityTab form={form} profile={profile} isEditable={isEditable} />
-    </Form>
+  return render(
+    <QueryClientProvider client={qc}>
+      <Harness
+        profile={opts.profile}
+        isEditable={opts.isEditable ?? true}
+        defaults={opts.defaults ?? {}}
+      />
+    </QueryClientProvider>,
   )
 }
 
-describe("PriorityTab", () => {
-  beforeAll(() => {
-    mockPreview.mockReset?.()
-  })
+// ---------------------------------------------------------------------------
+// Profile builders — minimal shape; only fields PriorityTab reads.
+// ---------------------------------------------------------------------------
 
-  it("renders intro disclosure + KV rates listed", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<HarnessWrapper profile={buildProfile()} />)
-    // Phase E wireframe: intro card collapsed into <details> disclosure
-    // (PriorityTab.tsx:167). Trigger text + 4 KV bonus tiers still
-    // discoverable in the DOM (hidden until expanded but rendered).
-    expect(
-      screen.getByText(/Giải thích cách tính ưu tiên theo TT 05\/2021/i)
-    ).toBeInTheDocument()
-    expect(screen.getByText(/0,75đ/)).toBeInTheDocument()
-    expect(screen.getByText(/0,50đ/)).toBeInTheDocument()
-    expect(screen.getByText(/0,25đ/)).toBeInTheDocument()
-    expect(screen.getByText(/không cộng/i)).toBeInTheDocument()
-  })
+type Permissions = NonNullable<AdmissionProfileResponse["permissions"]>
+type Snapshot = NonNullable<AdmissionProfileResponse["priority_resolution_snapshot"]>
 
-  it("snapshot card shows 'tạm tính' header in draft state", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<HarnessWrapper profile={buildProfile()} />)
-    // Phase E wireframe (d599d16f) renamed header "Khu vực ưu tiên" →
-    // "Điểm cộng ưu tiên" to reflect combined KV+UT scoring.
-    expect(screen.getByText(/Điểm cộng ưu tiên \(tạm tính\)/i)).toBeInTheDocument()
-  })
+function makeProfile(over: {
+  status: AdmissionProfileResponse["status"]
+  version?: number
+  permissions?: Partial<Permissions>
+  priority_resolution_snapshot?: Snapshot | null
+  priority_object_codes?: string[] | null
+  priority_object_evidence?: Record<string, unknown> | null
+}): AdmissionProfileResponse {
+  // Minimal partial — cast at the call site. PriorityTab only reads ~6 fields.
+  return {
+    id: 42,
+    status: over.status,
+    version: over.version ?? 1,
+    permissions: (over.permissions ?? {}) as Permissions,
+    priority_resolution_snapshot: over.priority_resolution_snapshot ?? null,
+    priority_object_codes: over.priority_object_codes ?? null,
+    priority_object_evidence: over.priority_object_evidence ?? null,
+  } as unknown as AdmissionProfileResponse
+}
 
-  it("snapshot card shows 'đã chốt' header when frozen + non-draft status", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    const profile = buildProfile({
-      status: "submitted" as any,
-      priority_resolution_snapshot: {
-        kv_resolved: "KV2",
-        pathway: "thpt_multi_school",
-        rule_applied: "longest_duration",
-      } as any,
-    })
-    render(<HarnessWrapper profile={profile} />)
-    expect(screen.getByText(/Điểm cộng ưu tiên \(đã chốt\)/i)).toBeInTheDocument()
-    expect(screen.getByText(/KV2 \(\+0,25đ\)/)).toBeInTheDocument()
-  })
+// ---------------------------------------------------------------------------
+// Cases
+// ---------------------------------------------------------------------------
 
-  it("live preview KV1 badge shows when preview returns KV1", () => {
-    mockPreview.mockReturnValue({
-      data: {
-        kv_resolved: "KV1",
-        pathway: "thpt_multi_school",
-        rule_applied: "longest_duration",
-        requires_manual_override: false,
-        reason: null,
-        breakdown: { kv_totals: { KV1: 3 }, winner_years: 3 },
-        area_bonus: 0.75,
-        object_bonus_potential: null,
-        object_bonus_verified: null,
-        ut_breakdown: null,
-        total_bonus_potential: 0.75,
-      },
-      isLoading: false,
-    })
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ cultural_education_level: "graduated_thpt" }}
-      />
-    )
-    expect(screen.getByText(/KV1 \(\+0,75đ\)/)).toBeInTheDocument()
-    // "sẽ chốt khi nộp hồ sơ" appears twice (CardDescription + inline
-    // pill); use getAllByText for non-unique match.
-    expect(screen.getAllByText(/sẽ chốt khi nộp hồ sơ/i).length).toBeGreaterThan(0)
-    expect(
-      screen.getByText(/Theo lịch sử học các trường THPT/i)
-    ).toBeInTheDocument()
-  })
-
-  it("live preview loading state shows spinner text", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: true })
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ cultural_education_level: "graduated_thpt" }}
-      />
-    )
-    expect(screen.getByText(/Đang tính/i)).toBeInTheDocument()
-  })
-
-  it("'Chưa đủ thông tin' message when cultural not set", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<HarnessWrapper profile={buildProfile()} />)
-    // Phase E wireframe (d599d16f) renamed empty-state copy "tính KV"
-    // → "tính điểm ưu tiên" (combined KV+UT scoring).
-    expect(
-      screen.getByText(/Chưa đủ thông tin để tính điểm ưu tiên/i)
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/Vui lòng khai trình độ văn hóa/i)
-    ).toBeInTheDocument()
-  })
-
-  it("preview returns null KV with manual override flag → shows 'Cần cán bộ xem xét'", () => {
-    mockPreview.mockReturnValue({
-      data: {
-        kv_resolved: null,
-        pathway: null,
-        rule_applied: "ambiguous_requires_manual",
-        requires_manual_override: true,
-        reason: "tied_graduation_year_and_grade",
-        breakdown: null,
-      },
-      isLoading: false,
-    })
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ cultural_education_level: "graduated_thpt" }}
-      />
-    )
-    expect(
-      screen.getByText(/Cần cán bộ xem xét\/ấn định thủ công/i)
-    ).toBeInTheDocument()
-    expect(
-      screen.getByText(/Có 2 trường ngang nhau/i)
-    ).toBeInTheDocument()
-  })
-
-  it("special case toggle (switch) renders + reveals commune_code input when ON", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(
-      <HarnessWrapper
-        profile={buildProfile()}
-        defaults={{ area_resolution_basis: "permanent_address_special" }}
-      />
-    )
-    expect(
-      screen.getByText(/Thí sinh thuộc nhóm đặc biệt/i)
-    ).toBeInTheDocument()
-    expect(
-      screen.getByLabelText(/Mã xã\/phường nơi thường trú/i)
-    ).toBeInTheDocument()
-    expect(
-      screen.getByPlaceholderText(/01_00025.*Phường Giảng Võ/i)
-    ).toBeInTheDocument()
-  })
-
-  it("special case toggle OFF hides commune_code input", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<HarnessWrapper profile={buildProfile()} />)
-    expect(
-      screen.queryByLabelText(/Mã xã\/phường nơi thường trú/i)
-    ).not.toBeInTheDocument()
-  })
-
-  it("does NOT render old 'Cách tính KV' dropdown (replaced by switch)", () => {
-    mockPreview.mockReturnValue({ data: undefined, isLoading: false })
-    render(<HarnessWrapper profile={buildProfile()} />)
-    // Old dropdown labels — should NOT exist
-    expect(
-      screen.queryByText(/Bình thường \(mặc định\)/i)
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByText(/Override thủ công \(cần officer phê duyệt\)/i)
-    ).not.toBeInTheDocument()
-  })
-
-  // Test "manual_override basis shows admin warning callout" REMOVED in
-  // commit 0c41c2fb (post-E.1 review): dead manual_override branch
-  // removed from PriorityTab. Admin override UX moved to
-  // PriorityOverrideDialog (Phase E.2, separate component with own
-  // tests). Candidate-side area_basis no longer surfaces
-  // "Manual Override" inline warning — replaced by PrioritySnapshotCard
-  // audit footer when frozenSnapshot.manual_override_reason is set.
+beforeEach(() => {
+  bannerSpy.mockClear()
+  inputsSpy.mockClear()
+  engineSpy.mockClear()
+  utCardsSpy.mockClear()
+  summarySpy.mockClear()
+  overrideDialogSpy.mockClear()
+  previewHookSpy.mockClear()
+  authUserState.role = "officer"
 })
+
+describe("PriorityTab composition — Phase E.4 PR-3", () => {
+  it("Case 1 — draft empty (no inputs, no UT codes): all 5 sections mount, preview NOT enabled", () => {
+    const profile = makeProfile({ status: "draft" })
+    renderTab({ profile, isEditable: true, defaults: {} })
+
+    expect(screen.getByTestId("priority-tab-workbench")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-banner")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-inputs")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-engine")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-ut")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-summary")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-override-dialog")).toBeInTheDocument()
+
+    // preview gate: cultural is null → 4th arg `enabled` MUST be false.
+    expect(previewHookSpy).toHaveBeenCalled()
+    const lastCall = previewHookSpy.mock.calls.at(-1)!
+    expect(lastCall[2]).toBe(false) // !!cultural && isDraft = false
+  })
+
+  it("Case 2 — draft partial (cultural set, no UT codes): preview gate fires", () => {
+    const profile = makeProfile({ status: "draft" })
+    renderTab({
+      profile,
+      isEditable: true,
+      defaults: { cultural_education_level: "graduated_thpt" },
+    })
+
+    expect(screen.getByTestId("probe-banner")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-inputs")).toHaveAttribute(
+      "data-editable",
+      "true",
+    )
+    // preview enabled because draft + cultural set
+    const lastCall = previewHookSpy.mock.calls.at(-1)!
+    expect(lastCall[2]).toBe(true)
+  })
+
+  it("Case 3 — draft full (cultural + UT codes claimed): UtEvidenceCards receives canVerify=false (officer w/o flag)", () => {
+    const profile = makeProfile({
+      status: "draft",
+      priority_object_codes: ["04", "07"],
+    })
+    renderTab({
+      profile,
+      isEditable: true,
+      defaults: {
+        cultural_education_level: "graduated_thpt",
+        priority_object_codes: ["04", "07"],
+      },
+    })
+
+    const utProbe = screen.getByTestId("probe-ut")
+    expect(utProbe).toHaveAttribute("data-can-verify", "false")
+    expect(utProbe).toHaveAttribute("data-is-editable", "true")
+  })
+
+  it("Case 4 — submitted, UT pending: inputs disabled (not draft), preview NOT enabled", () => {
+    const profile = makeProfile({
+      status: "submitted",
+      priority_object_codes: ["04"],
+      priority_object_evidence: { "04": { status: "pending" } },
+      permissions: { verify_priority_object: true },
+    })
+    renderTab({
+      profile,
+      isEditable: false,
+      defaults: {
+        cultural_education_level: "graduated_thpt", // set, but post-draft
+        priority_object_codes: ["04"],
+      },
+    })
+
+    expect(screen.getByTestId("probe-inputs")).toHaveAttribute(
+      "data-editable",
+      "false",
+    )
+    expect(screen.getByTestId("probe-ut")).toHaveAttribute(
+      "data-can-verify",
+      "true",
+    )
+
+    // Post-submit: preview MUST be disabled regardless of cultural — frozen
+    // contract precedence (P1 fix from PR-3 Step D audit).
+    const lastCall = previewHookSpy.mock.calls.at(-1)!
+    expect(lastCall[2]).toBe(false)
+  })
+
+  it("Case 5 — submitted, UT verified: UtEvidenceCards still mounts w/ canVerify, summary receives profile", () => {
+    const profile = makeProfile({
+      status: "submitted",
+      priority_object_codes: ["04"],
+      priority_object_evidence: {
+        "04": { status: "verified", verified_by: 1 },
+      },
+      permissions: { verify_priority_object: true },
+    })
+    renderTab({ profile, isEditable: false })
+
+    expect(screen.getByTestId("probe-ut")).toBeInTheDocument()
+    // summary panel must receive the profile (no derivation in tab)
+    const lastSummaryCall = summarySpy.mock.calls.at(-1)![0]
+    expect(lastSummaryCall.profile).toBe(profile)
+  })
+
+  it("Case 6 — submitted, UT rejected: composition unchanged (rejection lives in UtEvidenceCards inner)", () => {
+    const profile = makeProfile({
+      status: "submitted",
+      priority_object_codes: ["04"],
+      priority_object_evidence: {
+        "04": { status: "rejected", rejection_reason: "ảnh mờ" },
+      },
+      permissions: { verify_priority_object: true },
+    })
+    renderTab({ profile, isEditable: false })
+
+    // All 5 sections still mount — composition is state-orthogonal.
+    expect(screen.getByTestId("probe-banner")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-inputs")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-engine")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-ut")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-summary")).toBeInTheDocument()
+  })
+
+  it("Case 7 — submitted + frozen + manual KV override: OverrideDialog receives currentKv from snapshot, mode=admin when role=admin", () => {
+    authUserState.role = "admin"
+    const profile = makeProfile({
+      status: "submitted",
+      version: 7,
+      permissions: { override_priority_kv: true },
+      priority_resolution_snapshot: {
+        kv_resolved: "KV2-NT",
+        rule_applied: "manual_override",
+        manual_override_reason: "ad-hoc adjustment",
+      } as Snapshot,
+    })
+    renderTab({ profile, isEditable: false })
+
+    const dialog = screen.getByTestId("probe-override-dialog")
+    expect(dialog).toHaveAttribute("data-open", "false") // mounted closed
+    expect(dialog).toHaveAttribute("data-mode", "admin")
+    expect(dialog).toHaveAttribute("data-current-kv", "KV2-NT")
+
+    expect(screen.getByTestId("probe-engine")).toHaveAttribute(
+      "data-can-override",
+      "true",
+    )
+  })
+
+  it("Case 8 — rejected status: composition unchanged + inputs disabled + preview NOT enabled", () => {
+    const profile = makeProfile({
+      status: "rejected",
+      priority_object_codes: ["04"],
+    })
+    renderTab({
+      profile,
+      isEditable: false,
+      defaults: { cultural_education_level: "graduated_thpt" },
+    })
+
+    // Still all 5 sections — rejected is just another non-draft status.
+    expect(screen.getByTestId("probe-banner")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-inputs")).toHaveAttribute(
+      "data-editable",
+      "false",
+    )
+    expect(screen.getByTestId("probe-engine")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-ut")).toBeInTheDocument()
+    expect(screen.getByTestId("probe-summary")).toBeInTheDocument()
+
+    // Preview disabled because not draft (frozen contract precedence).
+    const lastCall = previewHookSpy.mock.calls.at(-1)!
+    expect(lastCall[2]).toBe(false)
+  })
+})
+
+// Avoid unused-import warning for React when running with new JSX transform.
+void React
+void useEffect

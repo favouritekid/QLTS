@@ -73,6 +73,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react"
+import { PriorityEvidenceUploadCell } from "@/components/documents/PriorityEvidenceUploadCell"
 import type {
   AdmissionProfileResponse,
   DocumentItem,
@@ -730,6 +731,39 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     () => documents.filter((d) => d.is_extra),
     [documents],
   )
+
+  // Q9 #07 Phase E.4 PR-3 — Eligibility summary footer (spec V3 §III).
+  // Strict ``verified`` count (NOT isDocumentRequirementSatisfied which
+  // also counts paper_submitted). Spec text: "Bắt buộc: 2/5 verified ·
+  // cần 3 nữa" — semantic is "manager already cleared file" not
+  // "officer recorded paper at counter", so paper_submitted excluded.
+  const priorityEvidenceDocs = profile.priority_evidence_documents ?? []
+  const eligibilitySummary = useMemo(() => {
+    const mandatoryAll = activeDocs.filter((d) => d.is_mandatory)
+    const mandatoryVerified = mandatoryAll.filter(
+      (d) => d.status === "verified",
+    ).length
+    const mandatoryTotal = mandatoryAll.length
+    const mandatoryRemaining = Math.max(0, mandatoryTotal - mandatoryVerified)
+
+    const priorityUploaded = priorityEvidenceDocs.filter(
+      (d) => d.document_file_path != null,
+    ).length
+    const priorityTotal = priorityEvidenceDocs.length
+    const priorityMissingCodes = priorityEvidenceDocs
+      .filter((d) => d.document_file_path == null)
+      .map((d) => `UT${d.sub_code}`)
+
+    return {
+      mandatoryVerified,
+      mandatoryTotal,
+      mandatoryRemaining,
+      priorityUploaded,
+      priorityTotal,
+      priorityMissingCodes,
+      visible: mandatoryTotal > 0 || priorityTotal > 0,
+    }
+  }, [activeDocs, priorityEvidenceDocs])
 
   // Sort docs by work-queue priority — only resort when documents change.
   const sortedDocs = useMemo(() => sortByWorkQueue(activeDocs), [activeDocs])
@@ -1435,6 +1469,108 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
         suppressed via backend can_* = false). A future explicit
         "Đồng bộ yêu cầu tài liệu" action will own cleanup.
       */}
+      {/* Q9 #07 Phase E.4 PR-3 — Priority evidence section. Per spec V3
+          Section III: DocumentsTab quản lý cả path documents (above)
+          + priority evidence documents (this section, Option A
+          centralization). Rows derive từ profile.priority_evidence_documents
+          server projection (G0a), 1:1 với priority_object_codes. */}
+      {(profile.priority_evidence_documents ?? []).length > 0 && (
+        <Card className="mt-4" data-testid="documents-tab-priority-section">
+          <CardHeader>
+            <CardTitle className="text-base">
+              Giấy tờ minh chứng ưu tiên (UT)
+            </CardTitle>
+            <CardDescription>
+              Minh chứng cho diện ưu tiên đã ghi nhận trong{" "}
+              <em>tab Ưu tiên tuyển sinh</em>. Trạng thái duyệt thuộc về
+              tab đó; ở đây chỉ quản lý file upload/xem/tải lại.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(profile.priority_evidence_documents ?? []).map((item) => (
+              <div
+                key={item.sub_code}
+                data-testid={`documents-tab-priority-row-${item.sub_code}`}
+                className="space-y-2 rounded-md border border-border p-3"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">
+                      UT{item.sub_code} — {item.label}
+                    </p>
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      +{item.bonus_points.toFixed(2)}đ
+                      {item.verification_status && (
+                        <span className="ml-2">
+                          · Duyệt:{" "}
+                          {item.verification_status === "verified"
+                            ? "✅ đã duyệt"
+                            : item.verification_status === "rejected"
+                              ? "✗ từ chối"
+                              : "⏳ chờ duyệt"}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <PriorityEvidenceUploadCell
+                  profile={profile}
+                  subCode={item.sub_code}
+                />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Q9 #07 Phase E.4 PR-3 — Eligibility summary footer (spec V3 §III).
+          Surface "Bắt buộc verified" + "Ưu tiên uploaded" + missing UT codes
+          at the bottom so officer sees gate-state at a glance without
+          re-scanning the table above. Lines hide individually when their
+          domain is empty (no mandatory docs / no priority codes). */}
+      {eligibilitySummary.visible && (
+        <Card className="mt-4" data-testid="documents-tab-eligibility-summary">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Eligibility summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5 text-sm">
+            {eligibilitySummary.mandatoryTotal > 0 && (
+              <p
+                data-testid="eligibility-summary-mandatory"
+                className="tabular-nums"
+              >
+                <span className="font-medium">Bắt buộc:</span>{" "}
+                {eligibilitySummary.mandatoryVerified}/
+                {eligibilitySummary.mandatoryTotal} verified
+                {eligibilitySummary.mandatoryRemaining > 0 && (
+                  <span className="text-muted-foreground">
+                    {" · cần "}
+                    {eligibilitySummary.mandatoryRemaining} nữa
+                  </span>
+                )}
+              </p>
+            )}
+            {eligibilitySummary.priorityTotal > 0 && (
+              <p
+                data-testid="eligibility-summary-priority"
+                className="tabular-nums"
+              >
+                <span className="font-medium">Ưu tiên:</span>{" "}
+                {eligibilitySummary.priorityUploaded}/
+                {eligibilitySummary.priorityTotal} docs uploaded
+                {eligibilitySummary.priorityMissingCodes.length > 0 && (
+                  <span className="text-muted-foreground">
+                    {" · "}
+                    {eligibilitySummary.priorityMissingCodes.join(", ")} thiếu
+                    minh chứng
+                  </span>
+                )}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {extraDocs.length > 0 && (
         <Card className="mt-4">
           <CardHeader>
