@@ -462,6 +462,11 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/v2/admissions/*/priority-objects/*/verify",     "PATCH"),
             ("/api/v2/admissions/*/priority-objects/*/reject",     "PATCH"),
             ("/api/v2/admissions/priority-objects/catalog",        "GET"),
+            # Q9 #07 Phase E.4 PR-2 — accountant DENY priority evidence
+            # mutations. Migration `q9_07_e4d` seeds these. Finance staff
+            # KHÔNG scan/manage UT minh chứng (separation-of-duties).
+            ("/api/v2/admissions/*/priority-evidence/*/upload",    "POST"),
+            ("/api/v2/admissions/*/priority-evidence/*",           "DELETE"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "
