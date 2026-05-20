@@ -332,10 +332,10 @@ profile.priority_evidence_documents = [...]  # see G0a snippet
 | `schemas/admission.py` `PreviewPriorityKvResponse` | Add `rule_law_citation: Optional[str] = None` | +5 |
 | `services/priority_service.py` (engine — actual file name, KHÔNG phải `priority_resolution.py`) | Add `RULE_LAW_CITATION` map + `resolve_law_citation()` | +40 |
 | `services/admission_service.py` `_populate_response_fields` | **Set TRANSIENT attr** `profile.priority_object_evidence_display = enriched_dict` + `profile.missing_priority_evidence_codes = [...]` (NOT mutate columns). **Eager-load audit (G2 below):** add `selectinload(AdmissionProfile.documents)` vào các call sites chưa có | +60 |
-| `services/admission_service.py::upload_document` (existing line 4413) | **EXTEND existing function** — KHÔNG có file `services/document_service.py`. Add 2 optional params `category='path'` (default) + `priority_sub_code: Optional[str]=None`. Preserve **ADM-007 staging/finalize pattern**: tuple return `(profile, finalize(committed: bool))`. Khi `category='priority_evidence'`: validate sub_code ∈ catalog year + persist columns | +60 |
+| `services/admission_service.py::upload_priority_evidence_document` (NEW sibling, PR-2 decision drift) | **PR-2 audit cycle decision (2026-05-20):** thay vì EXTEND `upload_document` (line 4685, ~350 LOC complex với DocumentActionPolicy guards tied đến `mandatory_docs` + ConfigDocumentType FK), ship **NEW sibling function** `upload_priority_evidence_document`. Reason: (a) priority_evidence guards khác fundamental — sub_code in `priority_object_codes` + catalog lookup, NOT mandatory_docs; (b) ADM-007 staging/finalize tuple preserved identically; (c) lower regression risk vs threading new branch through path-doc flow. Casbin enforces route-level; service guards profile state + sub_code/catalog. **P1 contract (audit cycle 2):** re-upload trên evidence verified/rejected status PHẢI reset JSONB về 'pending' + recompute `ut_verified_bucket` + bump version — engine reads bonus từ JSONB, không phải document row. | +280 sibling |
 | `services/admission_service.py` `verify_object_evidence` (existing priority_override) | Lookup doc qua `(profile_id, category='priority_evidence', priority_sub_code=code)`; allow null doc + audit flag `paper_only_verification` (default case phần lớn hồ sơ) | +30 |
 | `services/admission_service.py` untick UT cascade | **NEW dedicated endpoint** — see Section VI G1 atomicity contract. Endpoint orchestrates JSONB update + DELETE doc + finalize callback trong 1 transaction | +50 |
-| **`routers/admissions_v2.py`** priority-evidence endpoints | **Canonical route group** — existing v2 router đã host priority-related endpoints (verify_priority_object_evidence line 1016, reject_priority_object_evidence line 1066). Add 2 NEW endpoints cùng nhóm cho consistency: `POST /api/v2/admissions/{id}/priority-evidence/{sub_code}/upload` + `DELETE /api/v2/admissions/{id}/priority-evidence/{sub_code}`. Cả 2 endpoint delegate vào `admission_service.upload_document` (extend) + `untick_priority_evidence` (new) | +70 |
+| **`routers/admissions_v2.py`** priority-evidence endpoints | **Canonical route group** — existing v2 router đã host priority-related endpoints (verify_priority_object_evidence line 1016, reject_priority_object_evidence line 1066). Add 2 NEW endpoints cùng nhóm cho consistency: `POST /api/v2/admissions/{id}/priority-evidence/{sub_code}/upload` + `DELETE /api/v2/admissions/{id}/priority-evidence/{sub_code}`. Cả 2 endpoint delegate vào `admission_service.upload_priority_evidence_document` (PR-2 sibling) + `priority_override_service.untick_priority_evidence` (new) | +70 |
 | `routers/admissions.py` upload endpoint (line 824) | Existing endpoint `POST /api/admissions/{id}/documents/{doc_code}/upload` — KHÔNG mở thêm path. Path docs route hiện hữu giữ nguyên. Priority evidence route hoàn toàn tách qua v2 group. | unchanged |
 | **`casbin_config/policy_templates.py`** | Add 2 new policy entries (mirror pattern verify/reject existing): `POST /api/v2/admissions/*/priority-evidence/*/upload` (officer/admin allow + accountant deny) + `DELETE /api/v2/admissions/*/priority-evidence/*` (officer/admin allow + accountant deny). Plus rerun `sync_notification_rules` không cần (đây là Casbin not notifications) | +20 |
 | **`services/admission_service.py`** step_status inline dicts (line 1126 trong `_compute_completion_percent` line 1082 + line 1768 trong `_compute_frontend_fields` line 1404) + step_weights inline (line 1136) | **CRITICAL renumber:** BE hiện compute 7-step inline model với Step 4=Scores, Step 5=Documents. Phase E.4 FE 8-step model với Step 4=Priority (new gộp KV+UT), Step 5=Scores, Step 6=Documents, Step 7=Tuition, Step 8=Finalize. Phải update inline step_status dict ở cả 2 chỗ + step_weights dict (rebalance 7→8 entries, total=100) + validation_summary mapping. Plus update PipelineSidebar `stepErrorCount` mapping line 82 (currently personal→1, gpa→4, documents→5 — sai sau renumber). KHÔNG có function `_calculate_step_status` riêng. | +60 |
@@ -1100,13 +1100,21 @@ Hour 0-3: BE foundation + schema
     + defensive try/except cho documents lazy-load (G2)
 
 Hour 3-5: BE upload extension + G2 eager-load audit
-  • admission_service.upload_document EXTEND với category + priority_sub_code
-    params, preserve ADM-007 staging/finalize tuple return (B2+B3)
+  • admission_service.upload_priority_evidence_document NEW SIBLING (PR-2
+    audit cycle decision 2026-05-20) — KHÔNG extend upload_document vì:
+    (a) priority_evidence guards khác fundamental (sub_code in
+    priority_object_codes + catalog lookup, NOT mandatory_docs);
+    (b) ADM-007 staging/finalize tuple preserved identically (sibling
+    reuses pattern); (c) lower regression risk vs threading new branch
+    through 350-LOC path-doc upload flow. P1 contract: re-upload trên
+    verified/rejected status PHẢI reset JSONB về 'pending' + recompute
+    ut_verified_bucket + bump version (engine reads bonus từ JSONB).
   • G2 audit: visit 15+ _populate_response_fields call sites (skip 7147 + 7716),
     add selectinload(AdmissionProfile.documents) hoặc documents= param
-  • Router POST /{id}/documents/{doc_code}/upload accept new params (B1)
-  • Router POST /{id}/priority-evidence/{sub_code}/upload shortcut
+  • Router POST /{id}/priority-evidence/{sub_code}/upload (NEW endpoint)
   • Router DELETE /{id}/priority-evidence/{sub_code} (G1 atomic endpoint)
+  • Path doc routes /{id}/documents/{doc_code}/upload giữ NGUYÊN — không
+    accept new params (sibling approach decouples 2 categories).
   • verify_object_evidence: lookup category + paper_only_verification flag
   • untick_priority_evidence: new service function với ADM-007 finalize callback
 

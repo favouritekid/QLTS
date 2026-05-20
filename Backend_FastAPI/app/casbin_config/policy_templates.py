@@ -204,6 +204,12 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH"},
+        # Q9 #07 Phase E.4 PR-2 — Priority evidence upload + untick (officer
+        # ALLOW). Mirror verify/reject above; Casbin admits the route, service
+        # layer enforces version guard + sub_code-in-codes + status whitelist.
+        # Accountant DENY block đối ứng dưới.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*/upload",    "action": "POST"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*",           "action": "DELETE"},
         # Wave 1 read endpoints — KV preview + UT catalog. Used by candidate
         # (BASIC_USER_TEMPLATE also has these) AND officer/manager/admin via
         # this template. Accountant DENY block below.
@@ -380,6 +386,12 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH", "eft": "deny"},
+        # Q9 #07 Phase E.4 PR-2 — Priority evidence upload + untick (accountant
+        # DENY). Finance staff không scan/quản lý minh chứng UT; mirror officer
+        # ALLOW block above so accountant via inheritance (role:accountant →
+        # role:officer) bounces off deny effect.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*/upload",    "action": "POST",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/v2/admissions/*/priority-evidence/*",           "action": "DELETE", "eft": "deny"},
         # Wave 1 read endpoints — accountant không cần xem priority data;
         # separation-of-duties giữ kế toán khỏi admission scoring info.
         {"subject": "{role}", "object": "/api/v2/admissions/*/preview-priority-kv",           "action": "POST",  "eft": "deny"},

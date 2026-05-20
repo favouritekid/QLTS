@@ -2389,6 +2389,26 @@ class RejectObjectEvidenceRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
 
+class UntickPriorityEvidenceRequest(BaseModel):
+    """Officer unticks UT code + cascade hard delete evidence (Phase E.4 G1).
+
+    Decision #4 UI guard: FE shows confirm dialog BEFORE call. Service-layer
+    assumes caller already confirmed (no double-prompt). Hard delete cascades:
+    JSONB cleanup + DELETE profile_document row + INSERT priority_audit_log
+    + S3 file unlink post-commit (ADM-007 finalize callback).
+
+    Soft delete (30d retention) defer Phase E.5 nếu officer report mất giấy.
+    """
+
+    version: int = Field(
+        ...,
+        description="Client-known profile.version for optimistic lock.",
+        ge=0,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -2444,4 +2464,8 @@ __all__ = [
     # Q9 #07 Phase E.3 — UT evidence verify/reject
     "VerifyObjectEvidenceRequest",
     "RejectObjectEvidenceRequest",
+    # Q9 #07 Phase E.4 — Priority evidence schemas (PR-1 + PR-2)
+    "PriorityObjectEvidenceDisplayEntry",
+    "PriorityEvidenceDocumentItem",
+    "UntickPriorityEvidenceRequest",
 ]

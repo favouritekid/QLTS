@@ -477,22 +477,69 @@ async def verify_object_evidence(
         profile, sub_code, actor, expected_version
     )
 
+    # Phase E.4 PR-2 P1 fix (audit cycle 2026-05-20) — server-side document
+    # binding. Spec: lookup ProfileDocument by (profile_id, category=
+    # 'priority_evidence', priority_sub_code=sub_code) INSTEAD of trusting
+    # client-supplied document_id blindly.
+    #
+    # Risk if KHÔNG fix: client gửi arbitrary document_id → audit ghi sai
+    # paper_only_verification; cross-profile reference (vd document_id của
+    # profile khác) → IDOR leak path metadata. FE currently hardcode
+    # document_id=null sau upload → mọi verify rơi vào "Hồ sơ giấy" path
+    # dù file đã scan vào hệ thống.
+    #
+    # 4 cases:
+    # 1. Client null + no row → paper_only=True, doc_id=None (true paper-only)
+    # 2. Client null + row exists → auto-bind doc_id=row.id, paper_only=False
+    # 3. Client int + row.id match → bind doc_id=row.id, paper_only=False
+    # 4. Client int + row.id mismatch (or no row) → BusinessRuleViolation
+    from sqlalchemy import select as _sel
+    doc_q = await db.execute(
+        _sel(models.ProfileDocument).where(
+            models.ProfileDocument.profile_id == profile.id,
+            models.ProfileDocument.category == "priority_evidence",
+            models.ProfileDocument.priority_sub_code == sub_code,
+        )
+    )
+    doc_row = doc_q.scalar_one_or_none()
+
+    if document_id is None:
+        if doc_row is not None:
+            # Case 2: auto-bind. FE chưa kịp re-fetch sau upload → server tự
+            # link evidence với file đã upload. Tone neutral cho officer
+            # workflow (không buộc client phải pass document_id explicit).
+            actual_document_id = doc_row.id
+            paper_only = False
+        else:
+            # Case 1: true paper-only — no file scanned yet. Officer verify
+            # dựa hồ sơ giấy candidate đem đến. Decision #3 default case.
+            actual_document_id = None
+            paper_only = True
+    else:
+        if doc_row is None or doc_row.id != document_id:
+            # Case 4: client lied or stale FE state. Refuse — server-side
+            # truth wins.
+            raise BusinessRuleViolation(
+                f"document_id {document_id} không match priority evidence "
+                f"row cho profile={profile.id} sub_code={sub_code} "
+                f"(server row id={getattr(doc_row, 'id', None)}). Officer "
+                f"phải verify đúng file đính kèm hoặc gửi null để verify "
+                f"hồ sơ giấy."
+            )
+        # Case 3: client + server match. Bind explicit.
+        actual_document_id = doc_row.id
+        paper_only = False
+
     now_iso = datetime.now(timezone.utc).isoformat()
     evidence = dict(profile.priority_object_evidence or {})
     prev_entry = dict(evidence.get(sub_code) or {})
-
-    # Phase E.4 Decision #3 — paper_only_verification flag. Officer verify
-    # UT cho hồ sơ giấy (document_id=None) là DEFAULT case trong nghiệp vụ
-    # VN, KHÔNG phải bypass. Persist flag để thanh tra truy được khi
-    # không có file scan. Tone neutral — UI badge "Hồ sơ giấy".
-    paper_only = document_id is None
 
     evidence[sub_code] = {
         **prev_entry,
         "status": "verified",
         "verified_by": actor.id,
         "verified_at": now_iso,
-        "document_id": document_id,
+        "document_id": actual_document_id,
         "paper_only_verification": paper_only,
         # Drop any stale reject_reason from prior reject cycle.
         "reject_reason": None,
@@ -516,7 +563,7 @@ async def verify_object_evidence(
         new_value={
             "sub_code": sub_code,
             "status": "verified",
-            "document_id": document_id,
+            "document_id": actual_document_id,
             "paper_only_verification": paper_only,
         },
         audit_metadata={
@@ -688,3 +735,161 @@ async def reject_object_evidence(
         return None
 
     return profile, (post_commit or _noop_callback)
+
+
+# =============================================================================
+# Q9 #07 Phase E.4 — Untick UT cascade (G1 atomic, PR-2 Item #2)
+# =============================================================================
+
+
+async def untick_priority_evidence(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    *,
+    sub_code: str,
+    actor: models.User,
+    expected_version: int,
+) -> Tuple[models.AdmissionProfile, Callable[[bool], Awaitable[None]]]:
+    """Untick UT code + cascade hard delete evidence file (Phase E.4 G1).
+
+    Atomic 4-mutation contract (all within single DB transaction):
+    1. JSONB update ``priority_object_codes`` — remove sub_code.
+    2. JSONB update ``priority_object_evidence`` — remove sub_code entry.
+       Uses ``_strip_display_fields_from_evidence`` defensive cleaner (G3).
+    3. DELETE ``profile_document`` row (category='priority_evidence',
+       priority_sub_code=sub_code) — if exists.
+    4. INSERT ``priority_audit_log`` row (action_type='ut_evidence_untick').
+    Plus: recompute ``ut_verified_bucket`` (bucket recompute matches reject
+    semantics — if unticked code was applied verified, bucket falls back).
+
+    S3 file cleanup is best-effort POST-commit via finalize callback (per
+    ADM-007 staging/finalize pattern). Commit fail → finalize(False) skips
+    delete → DB rollback restores doc row → S3 file still referenced.
+
+    Args:
+        db: AsyncSession.
+        profile: Pre-loaded AdmissionProfile (caller resolves IDOR).
+        sub_code: UT code to untick (must be in profile.priority_object_codes).
+        actor: Officer/admin performing untick.
+        expected_version: Optimistic-lock version (per memory
+            `version-guard-before-state-machine` — runs FIRST).
+
+    Returns:
+        (profile, finalize(committed: bool) async callback). Caller MUST
+        ``db.commit()`` then ``await finalize(True)`` to actually unlink S3
+        file. On commit fail call ``await finalize(False)`` — best-effort
+        cleanup with file still referenced (DB rollback safe).
+
+    Raises:
+        ConflictError: version mismatch.
+        BusinessRuleViolation: sub_code not submitted / hard-denied status.
+
+    Note: UI confirm dialog (Decision #4) is FE-side safety guard. Service
+    layer assumes caller already confirmed — no double-prompt.
+    """
+    import os
+    from sqlalchemy import select as _sel
+
+    # Version + status + sub_code guards (reuse common helper)
+    await _evidence_mutation_common_checks(
+        profile, sub_code, actor, expected_version
+    )
+
+    # Find ProfileDocument row to delete (if exists)
+    doc_q = await db.execute(
+        _sel(models.ProfileDocument).where(
+            models.ProfileDocument.profile_id == profile.id,
+            models.ProfileDocument.category == "priority_evidence",
+            models.ProfileDocument.priority_sub_code == sub_code,
+        )
+    )
+    doc_row = doc_q.scalar_one_or_none()
+    file_path_to_unlink: Optional[str] = doc_row.file_path if doc_row else None
+
+    # Capture old evidence entry for audit
+    prev_evidence = profile.priority_object_evidence or {}
+    prev_entry = dict(prev_evidence.get(sub_code) or {})
+    had_document_id = prev_entry.get("document_id")
+
+    # 1. Remove from priority_object_codes
+    codes = list(profile.priority_object_codes or [])
+    if sub_code in codes:
+        codes.remove(sub_code)
+    profile.priority_object_codes = codes
+
+    # 2. Remove from priority_object_evidence — strip display fields trước assign
+    evidence = dict(prev_evidence)
+    evidence.pop(sub_code, None)
+    profile.priority_object_evidence = _strip_display_fields_from_evidence(evidence)
+
+    # 3. DELETE profile_document row (if exists)
+    if doc_row is not None:
+        await db.delete(doc_row)
+
+    # Recompute UT verified bucket — if unticked was applied verified,
+    # bucket recomputes to next-highest (mirror reject semantics).
+    new_bucket = await _recompute_ut_verified_bucket(db, profile)
+    snapshot = dict(profile.priority_resolution_snapshot or {})
+    snapshot["ut_verified_bucket"] = new_bucket
+    profile.priority_resolution_snapshot = snapshot
+
+    # 4. INSERT priority_audit_log row
+    audit_row = models.PriorityAuditLog(
+        profile_id=profile.id,
+        action_type="ut_evidence_untick",
+        actor_id=actor.id,
+        old_value={
+            "sub_code": sub_code,
+            "status": prev_entry.get("status"),
+            "had_document": had_document_id is not None,
+        },
+        new_value={"sub_code": sub_code, "untick": True},
+        audit_metadata={
+            "actor_role": actor.role,
+            "file_unlinked": file_path_to_unlink is not None,
+            "ut_verified_bucket": new_bucket,
+        },
+    )
+    db.add(audit_row)
+    profile.version += 1
+
+    await db.flush()
+
+    log.info(
+        "priority_override_service.untick_priority_evidence_success",
+        profile_id=profile.id,
+        actor_id=actor.id,
+        sub_code=sub_code,
+        had_document=had_document_id is not None,
+        applied_code_after=new_bucket.get("applied_code"),
+        version_after=profile.version,
+    )
+
+    async def finalize(committed: bool) -> None:
+        """ADM-007 finalize callback — unlink S3 file post-commit.
+
+        - committed=True: best-effort unlink file_path_to_unlink. File
+          missing or unlink fail → log warning, không raise (the DB delete
+          already settled; orphan file = storage waste, not correctness).
+        - committed=False: skip. DB rollback restores doc_row → file still
+          referenced → leave file alone.
+        """
+        if not committed:
+            return
+        if not file_path_to_unlink:
+            return
+        if os.path.exists(file_path_to_unlink):
+            try:
+                os.remove(file_path_to_unlink)
+                log.info(
+                    "Priority evidence file deleted post-commit (untick cascade)",
+                    file_path=file_path_to_unlink,
+                )
+            except OSError as e:
+                log.warning(
+                    "Failed to unlink priority evidence file post-commit",
+                    file_path=file_path_to_unlink,
+                    error=str(e),
+                )
+
+    return profile, finalize
