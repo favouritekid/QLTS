@@ -73,6 +73,7 @@ import {
   Upload,
   XCircle,
 } from "lucide-react"
+import { PriorityEvidenceUploadCell } from "@/components/documents/PriorityEvidenceUploadCell"
 import type {
   AdmissionProfileResponse,
   DocumentItem,
@@ -1435,6 +1436,60 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
         suppressed via backend can_* = false). A future explicit
         "Đồng bộ yêu cầu tài liệu" action will own cleanup.
       */}
+      {/* Q9 #07 Phase E.4 PR-3 — Priority evidence section. Per spec V3
+          Section III: DocumentsTab quản lý cả path documents (above)
+          + priority evidence documents (this section, Option A
+          centralization). Rows derive từ profile.priority_evidence_documents
+          server projection (G0a), 1:1 với priority_object_codes. */}
+      {(profile.priority_evidence_documents ?? []).length > 0 && (
+        <Card className="mt-4" data-testid="documents-tab-priority-section">
+          <CardHeader>
+            <CardTitle className="text-base">
+              Giấy tờ minh chứng ưu tiên (UT)
+            </CardTitle>
+            <CardDescription>
+              Minh chứng cho diện ưu tiên đã ghi nhận trong{" "}
+              <em>tab Ưu tiên tuyển sinh</em>. Trạng thái duyệt thuộc về
+              tab đó; ở đây chỉ quản lý file upload/xem/tải lại.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(profile.priority_evidence_documents ?? []).map((item) => (
+              <div
+                key={item.sub_code}
+                data-testid={`documents-tab-priority-row-${item.sub_code}`}
+                className="space-y-2 rounded-md border border-border p-3"
+              >
+                <div className="flex items-baseline justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">
+                      UT{item.sub_code} — {item.label}
+                    </p>
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      +{item.bonus_points.toFixed(2)}đ
+                      {item.verification_status && (
+                        <span className="ml-2">
+                          · Duyệt:{" "}
+                          {item.verification_status === "verified"
+                            ? "✅ đã duyệt"
+                            : item.verification_status === "rejected"
+                              ? "✗ từ chối"
+                              : "⏳ chờ duyệt"}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <PriorityEvidenceUploadCell
+                  profile={profile}
+                  subCode={item.sub_code}
+                />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {extraDocs.length > 0 && (
         <Card className="mt-4">
           <CardHeader>

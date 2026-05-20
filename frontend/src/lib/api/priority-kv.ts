@@ -2,7 +2,7 @@
  * Priority KV+UT preview API client (Q9 #07 Phase D.4 + Phase E wireframe)
  *
  * Wraps POST /api/v2/admissions/{id}/preview-priority-kv — real-time KV+UT
- * resolution cho candidate FE PriorityTab + UtEvidenceCard draft state.
+ * resolution cho FE PriorityTab + UtPolicyPanel (workbench).
  *
  * Mirrors `app/schemas/admission.py::PreviewPriorityKvRequest/Response`.
  */
@@ -50,6 +50,10 @@ export interface PreviewPriorityKvResponse {
   object_bonus_verified: number | null
   ut_breakdown: UtBreakdown | null
   total_bonus_potential: number | null
+  // Q9 #07 Phase E.4 — law citation resolved from rule_applied. FE
+  // EngineResultCard hiển thị "Căn cứ: <citation>" để officer scan/trust.
+  // Null khi rule_applied không match map (vd ambiguous_requires_manual).
+  rule_law_citation: string | null
 }
 
 export const priorityKvApi = {

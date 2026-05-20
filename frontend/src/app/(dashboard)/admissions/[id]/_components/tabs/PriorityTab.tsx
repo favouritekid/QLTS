@@ -1,65 +1,67 @@
 "use client"
 
 /**
- * Priority Tab (Q9 #07 Phase D.2 + UX polish + D.4 live preview)
+ * Priority Tab (Q9 #07 Phase E.4 workbench compose — PR-3).
  *
- * Xác định Khu vực ưu tiên (KV) tuyển sinh per TT 05/2021/TT-BLĐTBXH
- * Phụ lục 01 + Luật GDNN 2014/2025.
+ * Officer-driven workbench layout per spec V3 Section II. Replaces pre-E.4
+ * 2-col KvDecisionPanel + UtPolicyPanel + PrioritySnapshotCard với 1-cột
+ * linear flow:
  *
- * Smart auto-resolve:
- * - Live preview via POST /api/v2/admissions/{id}/preview-priority-kv
- * - Debounced 500ms khi cultural/vocational/history thay đổi
- * - Hiển thị "Tạm tính: KV1 (+0,75đ)" trước T1 submit
- * - "Đã chốt: KV1" khi profile.priority_resolution_snapshot exists
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │ PriorityHeaderBanner — 1-dòng "Tạm tính KV + UT = +1,75đ" │
+ *   │ § 1. PriorityInputsSection — cultural + vocational + comm. │
+ *   │ § 2. EngineResultCard — 5 KV states + law citation         │
+ *   │ § 3. UtEvidenceCards — verify + reject + untick + warning  │
+ *   │ § 4. PrioritySummaryPanel — tổng + audit + law disclosure  │
+ *   └────────────────────────────────────────────────────────────┘
  *
- * Layout:
- *   1. Intro card — mục đích + KV rates + 4 trường hợp đặc biệt
- *   2. Snapshot card — KV live preview hoặc frozen result (BE authoritative)
- *   3. Trình độ học vấn — 2 dropdowns cultural + vocational
- *   4. Trường hợp đặc biệt toggle (replaces dropdown — auto-detect basis)
+ * Global [Lưu thay đổi] / [Tiếp tục →] buttons render via parent
+ * AdmissionActions (per PR-3 adjustment #5, no duplicate action bar).
+ *
+ * Override dialog state lives here (not in EngineResultCard) cho version
+ * guard + currentKv ownership.
  */
 import { useState } from "react"
 import { UseFormReturn } from "react-hook-form"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
-import { Button } from "@/components/ui/button"
-import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ShieldCheck, Lightbulb, ShieldAlert } from "lucide-react"
+
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
-import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
-import { PrioritySnapshotCard } from "@/components/admissions/PrioritySnapshotCard"
-import { UtEvidenceCard } from "@/components/admissions/UtEvidenceCard"
+import { useAuthStore } from "@/lib/stores/auth.store"
+import type {
+  AdmissionProfileResponse,
+  AdmissionProfileUpdateInput,
+} from "@/lib/zod/admissions"
+
+import { EngineResultCard } from "../priority/EngineResultCard"
+import { PriorityHeaderBanner } from "../priority/PriorityHeaderBanner"
+import { PriorityInputsSection } from "../priority/PriorityInputsSection"
+import { PrioritySummaryPanel } from "../priority/PrioritySummaryPanel"
+import { UtEvidenceCards } from "../priority/UtEvidenceCards"
 import { PriorityOverrideDialog } from "../PriorityOverrideDialog"
 
 interface PriorityTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
   profile: AdmissionProfileResponse
   isEditable: boolean
+  /**
+   * Adjustment #3 (PR-3 audit cycle): parent (AdmissionDetailClient) wires
+   * setCurrentStep(6) callback. UtEvidenceCards "Mở tab Giấy tờ để upload"
+   * navigation invokes this. Required prop — no default to surface gaps.
+   */
+  onNavigateToDocuments: () => void
 }
 
-const CULTURAL_OPTIONS = [
-  { value: "completed_thcs", label: "Hoàn thành chương trình THCS (chưa tốt nghiệp)" },
-  { value: "graduated_thcs", label: "Tốt nghiệp THCS" },
-  { value: "completed_thpt", label: "Hoàn thành chương trình THPT (chưa tốt nghiệp)" },
-  { value: "graduated_thpt", label: "Tốt nghiệp THPT" },
-  { value: "graduated_gdtx", label: "Tốt nghiệp GDTX (Giáo dục thường xuyên cấp 3)" },
-]
-
-const VOCATIONAL_OPTIONS = [
-  { value: "none", label: "Chưa có bằng nghề" },
-  { value: "so_cap", label: "Sơ cấp nghề" },
-  { value: "trung_cap", label: "Trung cấp" },
-  { value: "cao_dang", label: "Cao đẳng" },
-]
-
-// KV constants + labels extracted to `@/components/admissions/kv-labels` (Phase E.1).
-// Reused by `KvBreakdownCard` + future `PriorityOverrideDialog` (E.2).
-
-export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
+export function PriorityTab({
+  form,
+  profile,
+  isEditable,
+  onNavigateToDocuments,
+}: PriorityTabProps) {
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
+  const userRole = useAuthStore((s) => s.user?.role)
+
+  // Form watches drive live preview query. Same fields as Phase E.3 PriorityTab —
+  // unchanged contract với usePreviewPriorityKv hook.
   const cultural = form.watch("cultural_education_level")
   const vocational = form.watch("vocational_qualification")
   const areaBasis = form.watch("area_resolution_basis")
@@ -67,8 +69,12 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
   const academicHistory = form.watch("academic_history")
   const utCodes = form.watch("priority_object_codes")
 
-  // Live preview hook — debounced 500ms
-  const { data: preview, isLoading: previewLoading } = usePreviewPriorityKv(
+  // Live preview (debounced 500ms internally). P1 fix (PR-3 Step D audit):
+  // gate enabled by status==='draft' — preview is a DRAFT-only feature.
+  // Post-submit profiles → snapshot is frozen contract authoritative;
+  // preview query không fire để tránh race với snapshot semantics.
+  const isDraft = profile.status === "draft"
+  const { data: preview } = usePreviewPriorityKv(
     profile.id,
     {
       cultural_education_level: cultural ?? null,
@@ -79,310 +85,64 @@ export function PriorityTab({ form, profile, isEditable }: PriorityTabProps) {
         (academicHistory as PreviewPriorityKvRequest["academic_history"]) ?? null,
       priority_object_codes: utCodes ?? null,
     },
-    !!cultural, // only fire when cultural set
+    !!cultural && isDraft,
   )
 
-  // BE-frozen snapshot (post T1 submit + E.2 manual override keys)
-  const frozenSnapshot = profile.priority_resolution_snapshot as
-    | {
-        kv_resolved?: string
-        rule_applied?: string
-        pathway?: string
-        breakdown?: Record<string, unknown>
-        requires_manual_override?: boolean
-        reason?: string
-        // Phase E.2 — manual override audit trail
-        manual_override_reason?: string
-        manual_override_by?: number | string
-        manual_override_at?: string
-        // Phase A — freeze metadata
-        frozen_at?: string
-        frozen_at_status?: string
-        resolved_by?: string
-      }
-    | null
-    | undefined
-  const hasFrozen = !!frozenSnapshot?.kv_resolved
-  const isFrozen = hasFrozen && profile.status !== "draft"
+  const canOverride = Boolean(profile.permissions?.override_priority_kv)
+  const canVerify = Boolean(profile.permissions?.verify_priority_object)
 
-  // Pick which result to display: frozen wins if exists, else live preview
-  const displayKv = isFrozen ? frozenSnapshot?.kv_resolved : preview?.kv_resolved
-  const displayPathway = isFrozen ? frozenSnapshot?.pathway : preview?.pathway
-  const displayRule = isFrozen ? frozenSnapshot?.rule_applied : preview?.rule_applied
-  const displayReason = isFrozen ? frozenSnapshot?.reason : preview?.reason
-  const displayBreakdown = isFrozen ? frozenSnapshot?.breakdown : preview?.breakdown
-  const displayRequiresManual = isFrozen ? frozenSnapshot?.requires_manual_override : preview?.requires_manual_override
-  // Phase E wireframe — UT + total bonus (frozen snapshot doesn't carry these yet;
-  // live preview only. Frozen UT data lives trong profile.priority_object_evidence
-  // → engine recompute on demand). For now show live preview values cho cả 2 states;
-  // when E.3 wires evidence verification, snapshot JSONB sẽ extend.
-  const displayAreaBonus = preview?.area_bonus ?? null
-  const displayObjectPotential = preview?.object_bonus_potential ?? null
-  const displayObjectVerified = preview?.object_bonus_verified ?? null
-  const displayUtBreakdown = preview?.ut_breakdown ?? null
-  const displayTotalPotential = preview?.total_bonus_potential ?? null
+  const handleCodesChange = (newCodes: string[]) => {
+    form.setValue("priority_object_codes", newCodes, {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }
 
-  const isSpecialCase = areaBasis === "permanent_address_special"
-
-  // Empty-state hint depends on what's missing — parent supplies context.
-  const emptyStateHint = (
-    <>
-      {!cultural && <p>Vui lòng khai trình độ văn hóa ở phần dưới.</p>}
-      {cultural && !academicHistory?.length && !isSpecialCase && (
-        <p>Vui lòng khai lịch sử học ở tab <em>Học tập</em>.</p>
-      )}
-    </>
-  )
+  // Frozen snapshot KV cho PriorityOverrideDialog version guard (per
+  // existing E.2 contract — dialog reads currentKv to compute diff).
+  const frozenSnapshot = profile.priority_resolution_snapshot ?? {}
+  const currentKv =
+    (frozenSnapshot.kv_resolved as string | null | undefined) ??
+    preview?.kv_resolved ??
+    null
 
   return (
-    <div className="space-y-6">
-      {/* ───────── 1. COMBINED KV+UT+TOTAL SNAPSHOT (Phase E wireframe — top) ───────── */}
-      <PrioritySnapshotCard
-        kv={displayKv}
-        pathway={displayPathway}
-        ruleApplied={displayRule}
-        reason={displayReason}
-        breakdown={displayBreakdown}
-        requiresManual={displayRequiresManual}
-        areaBonus={displayAreaBonus}
-        objectBonusPotential={displayObjectPotential}
-        objectBonusVerified={displayObjectVerified}
-        utBreakdown={displayUtBreakdown}
-        totalBonusPotential={displayTotalPotential}
-        frozen={isFrozen}
-        loading={previewLoading && !preview}
-        emptyStateHint={emptyStateHint}
-        // Universal frozen audit footer (Phase E wireframe expansion)
-        frozenAt={frozenSnapshot?.frozen_at ?? null}
-        resolvedBy={frozenSnapshot?.resolved_by ?? null}
-        // Manual override audit (E.2 — populated khi rule_applied='manual_override')
-        manualOverrideReason={frozenSnapshot?.manual_override_reason ?? null}
-        manualOverrideBy={
-          frozenSnapshot?.manual_override_by != null
-            ? String(frozenSnapshot.manual_override_by)
-            : null
-        }
-        manualOverrideAt={frozenSnapshot?.manual_override_at ?? null}
+    <div className="space-y-4" data-testid="priority-tab-workbench">
+      {/* Compact header — 1-dòng "Tạm tính KV + UT = +X,XXđ" with state badge */}
+      <PriorityHeaderBanner profile={profile} preview={preview ?? null} />
+
+      {/* § 1 Inputs — cultural + vocational + special-case + commune */}
+      <PriorityInputsSection form={form} isEditable={isEditable} />
+
+      {/* § 2 Engine result — 5 KV states + law citation + override disclosure */}
+      <EngineResultCard
+        profile={profile}
+        preview={preview ?? null}
+        canOverride={canOverride}
+        onOpenOverride={() => setOverrideDialogOpen(true)}
       />
-      {/* Phase E.2 — manual KV override (officer/admin write-path).
-          Button gated by profile.permissions.override_priority_kv;
-          dialog enforces version guard + reason validation + 409 handler. */}
-      {profile.permissions?.override_priority_kv && (
-        <div className="flex justify-end">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setOverrideDialogOpen(true)}
-            data-testid="priority-override-trigger"
-          >
-            <ShieldAlert className="h-4 w-4 mr-2" />
-            Cán bộ ấn định KV thủ công
-          </Button>
-        </div>
-      )}
+
+      {/* § 3 UT evidence — verify/reject/untick per code + missing warning */}
+      <UtEvidenceCards
+        profile={profile}
+        canVerify={canVerify}
+        isEditable={isEditable}
+        onNavigateToDocuments={onNavigateToDocuments}
+        onCodesChange={handleCodesChange}
+      />
+
+      {/* § 4 Summary — tổng + audit disclosure + law disclosure (no actions) */}
+      <PrioritySummaryPanel profile={profile} preview={preview ?? null} />
+
+      {/* Override dialog — version guard + currentKv state lives here */}
       <PriorityOverrideDialog
         open={overrideDialogOpen}
         onOpenChange={setOverrideDialogOpen}
         profileId={profile.id}
         profileVersion={profile.version ?? 0}
         profileStatus={profile.status}
-        currentKv={
-          (frozenSnapshot?.kv_resolved as string | undefined) ??
-          preview?.kv_resolved ??
-          null
-        }
-        mode={profile.permissions?.override_priority_kv ? "admin" : "officer"}
-      />
-
-      {/* ───────── 2. INTRO DISCLOSURE (1-line, collapsed by default) ───────── */}
-      <details className="rounded-lg border border-info-200 bg-info-50/40 px-3 py-2 text-sm text-info-900/90">
-        <summary className="cursor-pointer flex items-center gap-2 font-medium">
-          <Lightbulb className="h-4 w-4 text-info-700" />
-          Giải thích cách tính ưu tiên theo TT 05/2021 (bấm để xem)
-        </summary>
-        <div className="mt-2 space-y-2 text-info-900/80">
-          <p>
-            Xác định <strong>Khu vực ưu tiên (KV)</strong> để cộng điểm tuyển sinh theo
-            Thông tư <strong>05/2021/TT-BLĐTBXH</strong> Phụ lục 01 + Thông tư <strong>27/2017/TT-BLĐTBXH</strong> về liên thông
-            (vẫn còn hiệu lực trong giai đoạn chuyển tiếp Luật GDNN 2025).
-          </p>
-          <ul className="text-xs space-y-1 list-disc pl-5">
-            <li><strong>KV1</strong>: +<strong>0,75đ</strong> — vùng miền núi, dân tộc thiểu số, biên giới, hải đảo</li>
-            <li><strong>KV2-NT</strong>: +<strong>0,50đ</strong> — nông thôn không thuộc KV1</li>
-            <li><strong>KV2</strong>: +<strong>0,25đ</strong> — thành phố thuộc tỉnh, phường ngoại thành TP trực thuộc TƯ</li>
-            <li><strong>KV3</strong>: <strong>không cộng</strong> — nội thành TP trực thuộc TƯ (Hà Nội, HCM, ...)</li>
-          </ul>
-          <p className="text-xs">
-            <strong>Hệ thống tự động tính</strong> ngay khi khai đủ trình độ + trường đã học (tab <em>Học tập</em>).
-            Bật <strong>Trường hợp đặc biệt</strong> nếu là <em>Phổ thông Dân tộc Nội trú, lớp dự bị đại học, lớp tạo nguồn, quân nhân/công an tại ngũ hoặc xuất ngũ</em>
-            {" "}— KV theo nơi thường trú (riêng quân nhân: theo nơi đóng quân ≥18 tháng nếu cao hơn — cần cán bộ xác nhận).
-          </p>
-        </div>
-      </details>
-
-      {/* ───────── 3. TRÌNH ĐỘ HỌC VẤN ───────── */}
-      <Card className="shadow-sm border-border">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-            <ShieldCheck className="h-5 w-5" />
-            Trình độ học vấn
-          </CardTitle>
-          <CardDescription className="text-sm">
-            Khai 2 trình độ song song — hệ thống dựa vào đây để tự xác định cách tính KV.
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-6 pt-4">
-          <div className="grid gap-6 md:grid-cols-2">
-            <FormField
-              control={form.control}
-              name="cultural_education_level"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel className="text-sm">Trình độ văn hóa</FormLabel>
-                  <Select
-                    onValueChange={(v) => field.onChange(v === "_none" ? null : v)}
-                    value={field.value ?? "_none"}
-                    disabled={!isEditable}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="bg-background">
-                        <SelectValue placeholder="Chọn trình độ văn hóa..." />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      <SelectItem value="_none">— Chưa khai —</SelectItem>
-                      {CULTURAL_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormDescription className="text-xs">
-                    Bằng cấp giáo dục phổ thông cao nhất hiện có
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="vocational_qualification"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel className="text-sm">Trình độ chuyên môn nghề</FormLabel>
-                  <Select
-                    onValueChange={(v) => field.onChange(v)}
-                    value={field.value ?? "none"}
-                    disabled={!isEditable}
-                  >
-                    <FormControl>
-                      <SelectTrigger className="bg-background">
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {VOCATIONAL_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormDescription className="text-xs">
-                    Bằng nghề/Trung cấp/Cao đẳng đã có (nếu chưa thì chọn &ldquo;Chưa có bằng nghề&rdquo;)
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ───────── 4. TRƯỜNG HỢP ĐẶC BIỆT (toggle, replaces dropdown) ───────── */}
-      <Card className="shadow-sm border-border">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-            <ShieldCheck className="h-5 w-5" />
-            Trường hợp đặc biệt
-          </CardTitle>
-          <CardDescription className="text-sm">
-            Chỉ bật nếu thí sinh thuộc 1 trong 5 nhóm dùng nơi thường trú để xác định KV thay vì trường học (per TT 05/2021 Phụ lục 01 Mục 4+6).
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="space-y-4 pt-4">
-          <FormField
-            control={form.control}
-            name="area_resolution_basis"
-            render={({ field }) => (
-              <FormItem className="flex items-start gap-3 space-y-0">
-                <FormControl>
-                  <Switch
-                    checked={field.value === "permanent_address_special"}
-                    onCheckedChange={(checked) => {
-                      field.onChange(checked ? "permanent_address_special" : null)
-                    }}
-                    disabled={!isEditable}
-                    aria-label="Bật trường hợp đặc biệt"
-                  />
-                </FormControl>
-                <div className="space-y-1 leading-none">
-                  <FormLabel className="text-sm font-medium">
-                    Thí sinh thuộc nhóm đặc biệt
-                  </FormLabel>
-                  <FormDescription className="text-xs leading-relaxed">
-                    Bao gồm: học sinh <strong>Phổ thông Dân tộc Nội trú</strong>, <strong>lớp dự bị đại học</strong>, <strong>lớp tạo nguồn</strong> (theo QĐ Bộ/UBND tỉnh), <strong>quân nhân/CAND tại ngũ</strong> hoặc <strong>xuất ngũ</strong> (đóng quân ≥18 tháng). Khi bật, KV theo mã xã/phường nơi thường trú thay vì trường học. <em>Riêng quân nhân: pháp lý cho phép MAX(KV đóng quân, KV nơi thường trú trước nhập ngũ) — cần cán bộ xác nhận thủ công.</em>
-                  </FormDescription>
-                </div>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-
-          {isSpecialCase && (
-            <FormField
-              control={form.control}
-              name="permanent_commune_code"
-              render={({ field }) => (
-                <FormItem className="pl-12">
-                  <FormLabel className="text-sm">Mã xã/phường nơi thường trú</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      value={field.value ?? ""}
-                      placeholder="VD: 01_00025 (= Phường Giảng Võ, Hà Nội)"
-                      maxLength={20}
-                      disabled={!isEditable}
-                      className="bg-background font-mono"
-                    />
-                  </FormControl>
-                  <FormDescription className="text-xs">
-                    Định dạng: <code>{`{mã tỉnh 2 số}_{mã phường 5 số BNV}`}</code>.
-                    Lấy từ CCCD chip / VNeID / xác nhận cư trú (theo Luật Cư trú 2020 — sổ hộ khẩu giấy đã bỏ từ 01/01/2023).
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          )}
-
-          {/* Manual override admin path — handled trong PrioritySnapshotCard audit
-              footer (Phase E wireframe) + PriorityOverrideDialog (Phase E.2). KHÔNG
-              hiển thị trong candidate special-case card vì đây là officer/admin
-              action, không phải candidate self-service. */}
-        </CardContent>
-      </Card>
-
-      {/* ───────── 5. ĐỐI TƯỢNG ƯU TIÊN (UT) — Phase E wireframe ───────── */}
-      <UtEvidenceCard
-        form={form}
-        academicYear={profile.academic_year ?? 2026}
-        disabled={!isEditable}
+        currentKv={currentKv}
+        mode={userRole === "admin" ? "admin" : "officer"}
       />
     </div>
   )

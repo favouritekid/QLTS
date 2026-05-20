@@ -216,11 +216,15 @@ def test_v1_3_fields_in_update_schema(added_field: str) -> None:
         "cultural_education_level",
         "vocational_qualification",
         "priority_resolution_snapshot",
+        # Q9 #07 Phase E.4 — workbench audit timeline. Populated by
+        # _populate_response_fields → _load_priority_audit_log.
+        "priority_audit_log",
     ],
 )
 def test_v1_3_fields_in_response_schema(added_field: str) -> None:
     """phase1_09 added these to Response schema.
-    Note: priority_resolution_snapshot in Response only (not Update — server-frozen)."""
+    Note: priority_resolution_snapshot in Response only (not Update — server-frozen).
+    priority_audit_log (Phase E.4) is read-only — populated from priority_audit_log table."""
     from app.schemas.admission import AdmissionProfileResponse
 
     assert added_field in AdmissionProfileResponse.model_fields
@@ -231,6 +235,14 @@ def test_priority_resolution_snapshot_NOT_in_update_schema() -> None:
     from app.schemas.admission import AdmissionProfileUpdate
 
     assert "priority_resolution_snapshot" not in AdmissionProfileUpdate.model_fields
+
+
+def test_priority_audit_log_NOT_in_update_schema() -> None:
+    """Phase E.4: audit log read-only — populated from priority_audit_log table,
+    never accepted from candidate/officer payload."""
+    from app.schemas.admission import AdmissionProfileUpdate
+
+    assert "priority_audit_log" not in AdmissionProfileUpdate.model_fields
 
 
 # ---------------------------------------------------------------------------

@@ -98,10 +98,84 @@ export const priorityObjectEvidenceEntrySchema = z.object({
   verified_at: z.string().datetime({ offset: true }).nullable().optional(),
   reject_reason: z.string().max(500).nullable().optional(),
   requested_at: z.string().datetime({ offset: true }).nullable().optional(),
+  // Q9 #07 Phase E.4 Decision #3 — PERSISTED paper_only_verification flag.
+  // Officer verify UT cho hồ sơ giấy (file chưa scan) là default case, KHÔNG
+  // phải bypass. Tone neutral UI badge "Hồ sơ giấy".
+  paper_only_verification: z.boolean().optional(),
 }).strict()
 
 export type PriorityObjectEvidenceEntry = z.infer<
   typeof priorityObjectEvidenceEntrySchema
+>
+
+/**
+ * Q9 #07 Phase E.4 — READ-only display projection schema.
+ *
+ * Extends write schema với 2 denormalized display fields (verified_by_name +
+ * document_file_path). FE consume từ `priority_object_evidence_display`
+ * transient projection trên AdmissionProfileResponse — KHÔNG persist xuống
+ * JSONB column (BE side enforces via G3 strip helper).
+ *
+ * Use pattern (FE):
+ *   const evidence = profile.priority_object_evidence_display
+ *                    ?? profile.priority_object_evidence
+ */
+export const priorityObjectEvidenceDisplayEntrySchema =
+  priorityObjectEvidenceEntrySchema.extend({
+    verified_by_name: z.string().nullable().optional(),
+    // S3 file_path full — FE basename extract via getDisplayFilename helper.
+    document_file_path: z.string().nullable().optional(),
+  }).strict()
+
+export type PriorityObjectEvidenceDisplayEntry = z.infer<
+  typeof priorityObjectEvidenceDisplayEntrySchema
+>
+
+/**
+ * Q9 #07 Phase E.4 G0a — Per-UT priority evidence document item.
+ *
+ * Server-computed pre-projection cho DocumentsTab Priority section. FE
+ * consume directly thay vì raw query profile_documents. Each entry maps
+ * 1:1 với priority_object_codes của profile.
+ *
+ * `status` semantics:
+ *   - missing: chưa upload file
+ *   - uploaded: file đã upload, chưa verify
+ *   - verified: officer đã duyệt
+ *   - rejected: officer đã từ chối
+ *
+ * `verification_status` mirrors evidence dict status (nullable nếu code
+ * chưa có entry trong priority_object_evidence).
+ */
+export const priorityEvidenceDocumentItemSchema = z.object({
+  // P2 (PR-3 audit): use shared 2-digit regex schema thay vì plain z.string()
+  sub_code: prioritySubCodeSchema,
+  bonus_points: z.number(),
+  label: z.string(),
+  document_id: z.number().int().nullable(),
+  document_file_path: z.string().nullable(),
+  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
+  // P2 (PR-3 audit): tighten to enum thay vì free string. Mirror BE evidence
+  // dict status whitelist (nullable nếu code chưa có entry trong evidence).
+  verification_status: z.enum(["pending", "verified", "rejected"]).nullable(),
+}).strict()
+
+export type PriorityEvidenceDocumentItem = z.infer<
+  typeof priorityEvidenceDocumentItemSchema
+>
+
+/**
+ * Q9 #07 Phase E.4 PR-2 — Untick UT request body schema.
+ *
+ * Mirror BE `UntickPriorityEvidenceRequest` (schemas/admission.py). FE
+ * confirm dialog BEFORE invoking (Decision #4 safety guard).
+ */
+export const untickPriorityEvidenceRequestSchema = z.object({
+  version: z.number().int().min(0, "Version phải ≥ 0"),
+}).strict()
+
+export type UntickPriorityEvidenceRequest = z.infer<
+  typeof untickPriorityEvidenceRequestSchema
 >
 
 /**
@@ -673,6 +747,20 @@ export const admissionProfileResponseSchema = z.object({
   priority_object_evidence: z
     .record(z.string(), priorityObjectEvidenceEntrySchema)
     .default({}),
+  // Q9 #07 Phase E.4 (Option A) — denormalized display projection (TRANSIENT
+  // server-side). FE pattern: prefer this over raw `priority_object_evidence`
+  // via getEvidence(profile) helper fallback. Null when BE chưa populate.
+  priority_object_evidence_display: z
+    .record(z.string(), priorityObjectEvidenceDisplayEntrySchema)
+    .nullable().default(null),
+  // Q9 #07 Phase E.4 Decision #2 — codes có UT ghi nhận nhưng officer chưa
+  // upload file. FE render inline warning ở §3 UT card. KHÔNG ảnh hưởng
+  // eligibility_status (warning UX only, không phải gate).
+  missing_priority_evidence_codes: z.array(z.string()).default([]),
+  // Q9 #07 Phase E.4 G0a — server-computed Priority section rows cho
+  // DocumentsTab. Per-UT item với label, bonus, doc reference, status.
+  priority_evidence_documents: z
+    .array(priorityEvidenceDocumentItemSchema).default([]),
   priority_resolution_snapshot: prioritySnapshotSchema.nullable().default(null),
   // Q9 #07 Phase E.4 — audit timeline (last N entries DESC) — BE populates
   // via service _populate_response_fields. Empty array khi profile chưa có
