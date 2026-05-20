@@ -5,7 +5,7 @@
 
 import '@testing-library/jest-dom'
 import { cleanup } from '@testing-library/react'
-import { afterEach, beforeAll, afterAll, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import { server } from './mocks/server'
 
 // Establish API mocking before all tests
@@ -24,19 +24,29 @@ afterAll(() => {
   server.close()
 })
 
-// Mock window.matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query) => ({
+// window.matchMedia polyfill for jsdom.
+// MUST use a plain function (not vi.fn) because vitest config has
+// `mockReset: true` + `restoreMocks: true`, which wipes any
+// `vi.fn().mockImplementation(...)` body between tests — leaving
+// `window.matchMedia(query)` returning undefined → `useSyncExternalStore`
+// crashes when `useMediaQuery` reads `.matches`. A plain function is
+// untouched by mock-reset.
+function installMatchMediaStub() {
+  ;(window as Window & typeof globalThis).matchMedia = ((query: string) => ({
     matches: false,
     media: query,
     onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
+    addListener: () => undefined,
+    removeListener: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false,
+  })) as Window['matchMedia']
+}
+
+installMatchMediaStub()
+beforeEach(() => {
+  installMatchMediaStub()
 })
 
 // Mock IntersectionObserver
