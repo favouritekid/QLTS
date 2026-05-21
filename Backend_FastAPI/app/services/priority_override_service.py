@@ -96,9 +96,19 @@ _POST_PUBLISH_STATUS: frozenset[str] = frozenset({
     "waitlisted",
 })
 
-# Officer + admin BOTH refuse to override these (data inconsistency risk).
+# Phase E.4 commit 5 fix-up — KV override hard-deny matrix:
+# Pre-fix: ``draft`` đứng cùng withdrawn/dropped/rejected → block toàn bộ
+# override. Hậu quả: submit guard fail-closed (yêu cầu nghiệp vụ #7) raise
+# KV_UNRESOLVED + message "yêu cầu quản lý ấn định KV thủ công trước khi
+# nộp" → manager/admin KHÔNG có đường để fulfill yêu cầu đó vì profile
+# vẫn draft. Deadlock.
+#
+# Fix: tách ``draft`` khỏi hard-deny generic. Override trên draft được
+# allow CHỈ cho admin/manager + CHỈ khi engine đã emit signal unresolved
+# (snapshot.requires_manual_override=True). Officer giữ refused toàn diện
+# cho draft (kể cả engine signal) — hardening đầy đủ ở commit 7 (Casbin
+# + service guard).
 _HARD_DENIED_STATUS: frozenset[str] = frozenset({
-    "draft",
     "withdrawn",
     "dropped",
     "rejected",
@@ -253,14 +263,36 @@ async def override_kv(
 
     # ---- Step 3: Status whitelist (role-aware)
     is_admin = actor.role == "admin"
+    is_manager = actor.role == "manager"
     is_officer_path = actor.role in ("officer", "manager")  # both treated as officer path
 
     if profile.status in _HARD_DENIED_STATUS:
         raise BusinessRuleViolation(
             f"Cannot override KV in '{profile.status}' state — profile "
-            "is in draft/withdrawn/dropped/rejected and not eligible for "
+            "is in withdrawn/dropped/rejected and not eligible for "
             "manual KV intervention."
         )
+
+    # Phase E.4 commit 5 fix-up — draft gate riêng (gỡ deadlock với submit
+    # guard fail-closed). Cho admin/manager override draft CHỈ khi engine
+    # đã emit signal unresolved; officer giữ refused draft (hardening đầy
+    # đủ ở commit 7).
+    if profile.status == "draft":
+        if not (is_admin or is_manager):
+            raise BusinessRuleViolation(
+                "Officer không được override KV ở trạng thái draft. "
+                "Vui lòng đề nghị quản lý / admin xử lý hồ sơ này."
+            )
+        snapshot_now = profile.priority_resolution_snapshot or {}
+        if not snapshot_now.get("requires_manual_override"):
+            raise BusinessRuleViolation(
+                "Hồ sơ draft chỉ được override KV khi engine không xác "
+                "định được (snapshot.requires_manual_override=True). "
+                "Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú "
+                "và lịch sử học để engine resolve tự động trước, hoặc "
+                "submit để chuyển sang trạng thái cho phép override "
+                "thường lệ (submitted/reviewing/revision_requested)."
+            )
 
     if profile.status in _POST_PUBLISH_STATUS:
         if not is_admin:
@@ -283,6 +315,7 @@ async def override_kv(
         and is_officer_path
         and profile.status not in _OFFICER_ALLOWED_STATUS
         and profile.status not in _POST_PUBLISH_STATUS
+        and profile.status != "draft"  # draft handled by dedicated gate above
     ):
         # Catch-all guard for unexpected statuses (vd new state machine
         # state not in either whitelist). Fail-closed for officer path.

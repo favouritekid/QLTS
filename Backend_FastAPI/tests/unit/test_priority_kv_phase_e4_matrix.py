@@ -115,7 +115,10 @@ def test_has_thpt_history_thpt_missing_year_returns_false() -> None:
         ("completed_thcs", "none", "trung_cap", "chinh_quy", "INSUFFICIENT_DATA", "tc_chinh_quy_cultural_insufficient"),
         # SC chính quy → THUONG_TRU
         ("graduated_thcs", "none", "so_cap", "chinh_quy", "THUONG_TRU", "sc_uses_commune"),
-        (None, "none", "so_cap", "chinh_quy", "NOT_RESOLVED", "cultural_not_set"),
+        # SC chính quy + cultural=None — yêu cầu nghiệp vụ #5: SC KHÔNG yêu
+        # cầu văn hóa. Engine phải vẫn THUONG_TRU (commune lookup), KHÔNG kẹt
+        # ở NOT_RESOLVED (reviewer fix-up 2026-05-21).
+        (None, "none", "so_cap", "chinh_quy", "THUONG_TRU", "sc_no_cultural_uses_commune"),
     ],
 )
 def test_phase_e4_matrix_basis_resolution(

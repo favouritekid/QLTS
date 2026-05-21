@@ -4221,25 +4221,22 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
 # Q9 #07 Phase E.4 commit 5 fix-up — submit-time guard cho KV unresolved
 # =============================================================================
 
-# Engine fail-closed rule_applied values khi KV không xác định được:
-#   - address_not_normalized      : profile thiếu permanent_commune_code
-#   - catalog_gap_commune         : commune không có trong vn_commune_area_map
-#   - catalog_gap_school          : tất cả vn_school_kv_assignment lookup miss
-#   - insufficient_data           : combo cultural/voc không match matrix
-#   - ambiguous_requires_manual   : tied graduation year + grade
-#   - not_resolved                : cultural NULL (eligibility cũng chặn)
+# Phase E.4 commit 5 fix-up — submit guard FLIP từ blacklist sang whitelist
+# success (reviewer P1: "nếu requires_manual_override is True thì block
+# mặc định, chỉ pass các rule thành công rõ ràng").
 #
-# Submit pass-through CHỈ khi:
-#   - rule_applied = "manual_override" (manager/admin đã set KV trước submit)
-#   - rule_applied ∈ {longest_duration, tiebreak_graduation_school, commune_lookup}
-#     (engine resolve thành công, kv_resolved != None)
-_KV_UNRESOLVED_RULE_APPLIED = frozenset({
-    "address_not_normalized",
-    "catalog_gap_commune",
-    "catalog_gap_school",
-    "insufficient_data",
-    "ambiguous_requires_manual",
-    "not_resolved",
+# Pass-through CHỈ khi:
+#   - rule_applied ∈ _KV_SUCCESS_RULE_APPLIED (engine resolve thành công)
+#   - VÀ kv_resolved != None (snapshot có giá trị KV thực)
+#
+# Empty/None snapshot → pass defensive (engine T1 freeze fail infra; warning
+# đã log ở freeze try/except). Mọi rule_applied khác / kv_resolved None →
+# block với BadRequest tiếng Việt + guidance.
+_KV_SUCCESS_RULE_APPLIED = frozenset({
+    "longest_duration",
+    "tiebreak_graduation_school",
+    "commune_lookup",
+    "manual_override",
 })
 
 
@@ -4247,12 +4244,25 @@ def _assert_kv_resolved_for_submit(
     snapshot: Optional[dict],
     profile_id: int,
 ) -> None:
-    """Raise BadRequest nếu snapshot báo KV unresolved (engine fail-closed signal).
+    """Raise BadRequest nếu snapshot không emit engine success signal.
 
-    Yêu cầu nghiệp vụ #7 — engine fail-closed: KHÔNG cho submit khi KV mơ hồ.
-    Manager/admin có thể override KV trước submit qua POST override-priority-kv;
-    snapshot sau override mang rule_applied="manual_override" + kv_resolved
-    đã set → pass gate.
+    Yêu cầu nghiệp vụ #7 + reviewer P1 2026-05-21 — engine fail-closed
+    DEFAULT-BLOCK pattern: chỉ pass khi rule_applied trong whitelist success
+    + kv_resolved có giá trị thực.
+
+    Pass paths:
+      - longest_duration / tiebreak_graduation_school / commune_lookup
+        (engine resolve qua LICH_SU_THPT hoặc THUONG_TRU/COMMUNE_SPECIAL)
+      - manual_override (admin/manager đã set KV thủ công pre-submit)
+
+    Block paths (fail-closed mọi case khác):
+      - address_not_normalized / catalog_gap_* / insufficient_data /
+        ambiguous_requires_manual / not_resolved / unknown future rules
+      - kv_resolved is None mà không phải success rule
+
+    Defensive escape:
+      - Empty/None snapshot → pass (freeze fail infra; warning đã log).
+        Không double-block lại vì failure mode khác.
 
     Args:
         snapshot: profile.priority_resolution_snapshot (dict | None).
@@ -4261,26 +4271,37 @@ def _assert_kv_resolved_for_submit(
     Raises:
         BadRequest: KV unresolved, message tiếng Việt + rule_applied + reason.
     """
-    snapshot = snapshot or {}
+    if not snapshot:
+        return  # Empty/None — freeze fail infra (đã log warning ở freeze).
+
     rule_applied = snapshot.get("rule_applied")
-    if (
-        snapshot.get("requires_manual_override")
-        and rule_applied in _KV_UNRESOLVED_RULE_APPLIED
-    ):
-        reason = snapshot.get("reason") or snapshot.get("basis_reason")
-        log.info(
-            "submit_blocked_kv_unresolved",
-            profile_id=profile_id,
-            rule_applied=rule_applied,
-            reason=reason,
-        )
-        raise BadRequest(
-            f"KV_UNRESOLVED ({rule_applied}): engine không xác định được khu "
-            f"vực ưu tiên cho hồ sơ này. Lý do: {reason or rule_applied}. "
-            f"Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú và "
-            f"lịch sử học THPT, hoặc đề nghị quản lý ấn định KV thủ công "
-            f"trước khi nộp."
-        )
+    kv_resolved = snapshot.get("kv_resolved")
+
+    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị.
+    if rule_applied in _KV_SUCCESS_RULE_APPLIED and kv_resolved is not None:
+        return
+
+    # Otherwise block — fail-closed default.
+    reason = (
+        snapshot.get("reason")
+        or snapshot.get("basis_reason")
+        or rule_applied
+        or "unknown"
+    )
+    log.info(
+        "submit_blocked_kv_unresolved",
+        profile_id=profile_id,
+        rule_applied=rule_applied,
+        kv_resolved=kv_resolved,
+        reason=reason,
+    )
+    raise BadRequest(
+        f"KV_UNRESOLVED ({rule_applied or 'no_rule_applied'}): engine không "
+        f"xác định được khu vực ưu tiên cho hồ sơ này. Lý do: {reason}. "
+        f"Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú và lịch "
+        f"sử học THPT, hoặc đề nghị quản lý ấn định KV thủ công trước "
+        f"khi nộp."
+    )
 
 
 async def _validate_eligibility_all_choices(

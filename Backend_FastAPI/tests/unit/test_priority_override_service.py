@@ -192,7 +192,7 @@ async def test_invalid_kv_value_raises() -> None:
 
 
 @pytest.mark.parametrize(
-    "status", ["draft", "withdrawn", "dropped", "rejected"]
+    "status", ["withdrawn", "dropped", "rejected"]
 )
 async def test_hard_denied_status_raises_for_officer(status: str) -> None:
     profile = _make_profile(status=status)
@@ -212,7 +212,7 @@ async def test_hard_denied_status_raises_for_officer(status: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "status", ["draft", "withdrawn", "dropped", "rejected"]
+    "status", ["withdrawn", "dropped", "rejected"]
 )
 async def test_hard_denied_status_raises_for_admin_too(status: str) -> None:
     """Admin also refused for hard-denied states (data integrity)."""
@@ -231,6 +231,105 @@ async def test_hard_denied_status_raises_for_admin_too(status: str) -> None:
             expected_version=5,
             acknowledge_post_publish=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase E.4 commit 5 fix-up — draft gate (gỡ deadlock submit-guard fail-closed)
+# ---------------------------------------------------------------------------
+
+
+async def test_draft_override_refused_for_officer() -> None:
+    """Officer KHÔNG được override KV ở draft — kể cả engine signal unresolved.
+    Hardening đầy đủ ở commit 7."""
+    snapshot_with_engine_signal = {
+        "kv_resolved": None,
+        "rule_applied": "address_not_normalized",
+        "requires_manual_override": True,
+        "reason": "profile_missing_permanent_commune_code",
+    }
+    profile = _make_profile(
+        status="draft",
+        snapshot=snapshot_with_engine_signal,
+    )
+    actor = _make_actor("officer")
+    db = _make_db()
+
+    with pytest.raises(BusinessRuleViolation, match="Officer không được override KV"):
+        await override_kv(
+            db,
+            profile,
+            kv_resolved="KV1",
+            reason=REASON_VALID,
+            evidence_file_id=None,
+            actor=actor,
+            expected_version=5,
+        )
+
+
+@pytest.mark.parametrize("role", ["admin", "manager"])
+async def test_draft_override_refused_without_engine_signal(role: str) -> None:
+    """Admin/manager cũng KHÔNG được override draft khi engine chưa emit
+    requires_manual_override — tránh free-form override khi candidate vẫn
+    edit form. Engine có thể resolve khi đủ data."""
+    snapshot_engine_resolve_ok = {
+        "kv_resolved": "KV1",
+        "rule_applied": "longest_duration",
+        "basis": "LICH_SU_THPT",
+        # Không có requires_manual_override
+    }
+    profile = _make_profile(
+        status="draft",
+        snapshot=snapshot_engine_resolve_ok,
+    )
+    actor = _make_actor(role)
+    db = _make_db()
+
+    with pytest.raises(BusinessRuleViolation, match="draft chỉ được override"):
+        await override_kv(
+            db,
+            profile,
+            kv_resolved="KV2",
+            reason=REASON_VALID,
+            evidence_file_id=None,
+            actor=actor,
+            expected_version=5,
+        )
+
+
+@pytest.mark.parametrize("role", ["admin", "manager"])
+async def test_draft_override_allowed_for_admin_manager_with_engine_signal(role: str) -> None:
+    """Admin/manager được override draft KHI engine emit requires_manual_override
+    (vd: address_not_normalized, catalog_gap_*, ambiguous). Gỡ deadlock với
+    submit guard fail-closed."""
+    snapshot_with_engine_signal = {
+        "kv_resolved": None,
+        "rule_applied": "ambiguous_requires_manual",
+        "requires_manual_override": True,
+        "reason": "tied_graduation_year_and_grade",
+    }
+    profile = _make_profile(
+        status="draft",
+        snapshot=snapshot_with_engine_signal,
+    )
+    actor = _make_actor(role)
+    db = _make_db()
+
+    # Should not raise — override succeeds
+    updated, _cb = await override_kv(
+        db,
+        profile,
+        kv_resolved="KV1",
+        reason=REASON_VALID,
+        evidence_file_id=None,
+        actor=actor,
+        expected_version=5,
+    )
+    snap = updated.priority_resolution_snapshot
+    assert snap["kv_resolved"] == "KV1"
+    assert snap["rule_applied"] == "manual_override"
+    assert snap["manual_override_reason"] == REASON_VALID
+    # Engine signal flag dropped post-override
+    assert "requires_manual_override" not in snap
 
 
 @pytest.mark.parametrize(

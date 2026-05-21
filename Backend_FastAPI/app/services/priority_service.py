@@ -349,7 +349,14 @@ def _derive_kv_basis_level(
     if area_resolution_basis == "manual_override":
         return "MANUAL", "admin_set_kv_directly"
 
-    # 2. Draft state — cultural chưa khai.
+    # 2. SC chính quy carve-out (yêu cầu nghiệp vụ #5+#6): SC không yêu cầu
+    # văn hóa → cultural=None vẫn pass eligibility. KV resolve qua THUONG_TRU
+    # (commune lookup). Phải check TRƯỚC "cultural is None" early-return để
+    # không kẹt vào NOT_RESOLVED sai.
+    if target_level == "so_cap" and cultural is None:
+        return "THUONG_TRU", "sc_no_cultural_uses_commune"
+
+    # 3. Draft state — cultural chưa khai (mọi target_level khác SC đều block).
     if cultural is None:
         return "NOT_RESOLVED", "cultural_not_set"
 
