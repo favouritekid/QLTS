@@ -445,12 +445,14 @@ export function AdmissionDetailClient({
 
   const handleCheckCondition = () => {
     // Navigate to first error step using backend-computed status.
-    // Phase E.4 (G0) — 8-step: Step 4=Priority (new), Step 5=Scores (was 4),
-    // Step 6=Documents (was 5).
-    if (stepsStatusRecord[1] === "error") handleStepChange(1)
-    else if (stepsStatusRecord[4] === "error") handleStepChange(4)
-    else if (stepsStatusRecord[5] === "error") handleStepChange(5)
-    else if (stepsStatusRecord[6] === "error") handleStepChange(6)
+    // Phase E.4 (G0) — 8-step: 1=Personal, 2=Family, 3=Academic,
+    // 4=Priority, 5=Scores, 6=Documents, 7=Tuition, 8=Finalize.
+    for (let step = 1; step <= 8; step++) {
+      if (stepsStatusRecord[step] === "error") {
+        handleStepChange(step)
+        return
+      }
+    }
   }
 
   if (!profile) return null
@@ -489,7 +491,7 @@ export function AdmissionDetailClient({
               Đợt tuyển sinh cho phép nộp hồ sơ chưa đầy đủ
               (<code>allow_unverified_submission=true</code>). Hồ sơ hiện có{" "}
               <strong>{profile.validation_errors?.length ?? 0}</strong> lỗi chưa khắc phục.
-              Vui lòng xem tab <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> trước khi phê duyệt.
+              Vui lòng xem danh sách <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> ở panel bên cạnh (desktop) hoặc nút &ldquo;N vấn đề&rdquo; ở góc phải (mobile) trước khi phê duyệt.
             </p>
           </div>
         )}

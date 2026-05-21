@@ -146,8 +146,9 @@ export function AdmissionActions({
             </AlertDialog>
           )}
 
-          {/* Back Button - available for steps 2-7 (step 8 is Finalize). */}
-          {currentStep > 1 && currentStep < 8 && (
+          {/* Back Button - available for all steps after the first (step 8
+              cũng cần Quay lại để officer/manager review xong có thể sửa). */}
+          {currentStep > 1 && (
             <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
               <ArrowLeft className="w-4 h-4 mr-2" />
               Quay lại
