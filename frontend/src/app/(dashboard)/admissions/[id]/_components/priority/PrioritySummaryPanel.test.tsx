@@ -226,3 +226,102 @@ describe("resolveSummaryDisplay — verifiedBucket precedence (P1 fix)", () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Commit 3 — Cap display from snapshot.path_bonus_rule.max_total_bonus
+// ---------------------------------------------------------------------------
+
+import { render, screen } from "@testing-library/react"
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { PrioritySummaryPanel } from "./PrioritySummaryPanel"
+
+function buildProfileForCap(overrides: Partial<AdmissionProfileResponse> = {}): AdmissionProfileResponse {
+  return {
+    id: 1,
+    status: "submitted",
+    version: 1,
+    academic_year: 2026,
+    permissions: {},
+    eligibility_status: "eligible",
+    validation_errors: [],
+    available_actions: [],
+    completion_percent: 100,
+    applied_rules: {},
+    family_info: [],
+    academic_history: [],
+    documents_checklist: [],
+    missing_priority_evidence_codes: [],
+    priority_resolution_snapshot: {},
+    priority_object_codes: [],
+    priority_audit_log: [],
+    cultural_education_level: "graduated_thpt",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  } as unknown as AdmissionProfileResponse
+}
+
+describe("PrioritySummaryPanel — cap display (Commit 3)", () => {
+  it("post-submit + max_total_bonus < total: render cap dòng + badge 'Bị cap' + applied = cap", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+        ut_verified_bucket: { applied_code: "04", applied_rate: 1.5 },
+        path_bonus_rule: { max_total_bonus: 2.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-cap-badge")).toHaveTextContent(/Bị cap/i)
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+2.00đ")
+  })
+
+  it("post-submit + max_total_bonus >= total: render cap dòng + KHÔNG badge + applied = total", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+        ut_verified_bucket: { applied_code: "04", applied_rate: 1.0 },
+        path_bonus_rule: { max_total_bonus: 3.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.queryByTestId("priority-summary-cap-badge")).not.toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+1.75đ")
+  })
+
+  it("post-submit + KHÔNG có path_bonus_rule: KHÔNG render cap section", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.queryByTestId("priority-summary-cap")).not.toBeInTheDocument()
+  })
+
+  it("draft preview (status='draft' + path_bonus_rule trong snapshot): KHÔNG render cap (frozen-only display)", () => {
+    const profile = buildProfileForCap({
+      status: "draft",
+      priority_resolution_snapshot: {
+        path_bonus_rule: { max_total_bonus: 2.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.queryByTestId("priority-summary-cap")).not.toBeInTheDocument()
+  })
+})

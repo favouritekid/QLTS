@@ -244,6 +244,27 @@ export const prioritySnapshotSchema = z
       .optional(),
     manual_override_reason: z.string().nullable().optional(),
     evidence_file_id: z.number().int().nullable().optional(),
+    // Commit 3 — typed snapshot fields (priority_service.py:836-866):
+    // BE-canonical so FE-thin-client renders trực tiếp thay vì derive/fallback.
+    basis: z.string().nullable().optional(),
+    basis_reason: z.string().nullable().optional(),
+    rule_law_citation: z.string().nullable().optional(),
+    eligibility: z
+      .object({
+        passed: z.boolean(),
+        reason: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    target_level: z.string().nullable().optional(),
+    admission_type: z.string().nullable().optional(),
+    path_bonus_rule: z
+      .object({
+        max_total_bonus: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough()
 

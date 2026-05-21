@@ -81,9 +81,15 @@ export interface PriorityOverrideDialogProps {
   currentKv: string | null | undefined
   /**
    * Caller's role. Service-layer enforces full rules; UI gates the
-   * "acknowledge post-publish" checkbox.
+   * "acknowledge post-publish" checkbox cho admin role.
+   *
+   * Commit 3: thêm explicit `manager` mode (trước đây bị fallback sang
+   * `officer` ở PriorityTab → manager experience lệch với quyền thật).
+   * BE service treat manager + officer chung whitelist {submitted,
+   * reviewing, revision_requested}; chỉ admin được override post-publish
+   * với ack flag. Mode `manager` ở FE phục vụ copy/disclosure.
    */
-  mode?: "officer" | "admin"
+  mode?: "officer" | "manager" | "admin"
 }
 
 export function PriorityOverrideDialog({
@@ -140,7 +146,7 @@ export function PriorityOverrideDialog({
         evidence_file_id: null,
         acknowledge_post_publish: acknowledgePostPublish,
       })
-      toast.success("Đã override KV thành công")
+      toast.success("Đã ấn định KV thành công")
       handleOpenChange(false)
     } catch (err: unknown) {
       const status = (err as { response?: { status?: number } })?.response?.status
@@ -231,12 +237,12 @@ export function PriorityOverrideDialog({
           {/* Reason textarea với counter */}
           <div className="grid gap-2">
             <Label htmlFor="override-reason">
-              Lý do override <span className="text-error-500">*</span>
+              Lý do ấn định <span className="text-error-500">*</span>
             </Label>
             <Textarea
               id="override-reason"
               data-testid="override-reason-input"
-              placeholder={`Nhập lý do override (tối thiểu ${MIN_REASON} ký tự)...`}
+              placeholder={`Nhập lý do ấn định (tối thiểu ${MIN_REASON} ký tự)...`}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               rows={4}
@@ -313,7 +319,7 @@ export function PriorityOverrideDialog({
             disabled={!canSubmit}
             data-testid="override-submit"
           >
-            {mutation.isPending ? "Đang lưu..." : "Override KV"}
+            {mutation.isPending ? "Đang lưu..." : "Ấn định KV"}
           </Button>
         </ResponsiveDialogFooter>
       </ResponsiveDialogContent>

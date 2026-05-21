@@ -49,6 +49,12 @@ interface PriorityTabProps {
    * navigation invokes this. Required prop — no default to surface gaps.
    */
   onNavigateToDocuments: () => void
+  /**
+   * Commit 3 — officer hard-deny CTA navigation. Parent wires
+   * setCurrentStep(3). EngineResultCard "Sửa dữ liệu nguồn" link invokes
+   * khi officer không có override permission ở ambiguous state.
+   */
+  onNavigateToAcademic?: () => void
 }
 
 export function PriorityTab({
@@ -56,6 +62,7 @@ export function PriorityTab({
   profile,
   isEditable,
   onNavigateToDocuments,
+  onNavigateToAcademic,
 }: PriorityTabProps) {
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
   const userRole = useAuthStore((s) => s.user?.role)
@@ -125,6 +132,7 @@ export function PriorityTab({
         preview={preview ?? null}
         canOverride={canOverride}
         onOpenOverride={() => setOverrideDialogOpen(true)}
+        onNavigateToAcademic={onNavigateToAcademic}
       />
 
       {/* § 3 UT evidence — verify/reject/untick per code + missing warning */}
@@ -147,7 +155,13 @@ export function PriorityTab({
         profileVersion={profile.version ?? 0}
         profileStatus={profile.status}
         currentKv={currentKv}
-        mode={userRole === "admin" ? "admin" : "officer"}
+        mode={
+          userRole === "admin"
+            ? "admin"
+            : userRole === "manager"
+              ? "manager"
+              : "officer"
+        }
       />
     </div>
   )

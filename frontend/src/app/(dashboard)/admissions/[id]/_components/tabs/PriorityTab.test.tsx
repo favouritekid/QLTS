@@ -406,6 +406,45 @@ describe("PriorityTab composition — Phase E.4 PR-3", () => {
     const lastCall = previewHookSpy.mock.calls.at(-1)!
     expect(lastCall[2]).toBe(false)
   })
+
+  // -------------------------------------------------------------------------
+  // Commit 3 — manager mode parity (anti-regression)
+  // -------------------------------------------------------------------------
+
+  it("Commit 3 — role=manager: OverrideDialog nhận mode='manager' (KHÔNG fallback 'officer')", () => {
+    authUserState.role = "manager"
+    const profile = makeProfile({
+      status: "submitted",
+      permissions: { override_priority_kv: true },
+      priority_resolution_snapshot: { kv_resolved: "KV1" } as Snapshot,
+    })
+    renderTab({ profile })
+
+    const dialog = screen.getByTestId("probe-override-dialog")
+    expect(dialog).toHaveAttribute("data-mode", "manager")
+  })
+
+  it("Commit 3 — role=officer: OverrideDialog nhận mode='officer'", () => {
+    authUserState.role = "officer"
+    const profile = makeProfile({
+      status: "draft",
+      permissions: { override_priority_kv: true },
+    })
+    renderTab({ profile })
+
+    expect(screen.getByTestId("probe-override-dialog")).toHaveAttribute("data-mode", "officer")
+  })
+
+  it("Commit 3 — role=admin: OverrideDialog nhận mode='admin'", () => {
+    authUserState.role = "admin"
+    const profile = makeProfile({
+      status: "draft",
+      permissions: { override_priority_kv: true },
+    })
+    renderTab({ profile })
+
+    expect(screen.getByTestId("probe-override-dialog")).toHaveAttribute("data-mode", "admin")
+  })
 })
 
 // Avoid unused-import warning for React when running with new JSX transform.

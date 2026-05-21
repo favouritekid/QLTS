@@ -507,6 +507,7 @@ export function AdmissionDetailClient({
               profile={profile}
               isEditable={can('edit')}
               onNavigateToDocuments={() => handleStepChange(6)}
+              onNavigateToAcademic={() => handleStepChange(3)}
             />
           )}
           {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}

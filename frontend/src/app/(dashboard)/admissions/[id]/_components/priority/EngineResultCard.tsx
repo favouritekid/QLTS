@@ -98,6 +98,12 @@ export interface EngineResultCardProps {
   canOverride: boolean
   /** Caller opens dialog (state lifted to PriorityTab). */
   onOpenOverride: () => void
+  /**
+   * Commit 3 — officer hard-deny CTA. Khi `!canOverride && requires_manual_override`,
+   * EngineResultCard render "Sửa dữ liệu nguồn" link để officer chuyển sang
+   * tab Học tập (step 3) thay vì silent absence của primary CTA.
+   */
+  onNavigateToAcademic?: () => void
 }
 
 export function EngineResultCard({
@@ -105,6 +111,7 @@ export function EngineResultCard({
   preview,
   canOverride,
   onOpenOverride,
+  onNavigateToAcademic,
 }: EngineResultCardProps) {
   const state = deriveEngineState(profile, preview)
   const header = STATE_HEADERS[state]
@@ -120,23 +127,36 @@ export function EngineResultCard({
     if (preview) return preview.kv_resolved ?? null
     return snapshot.kv_resolved ?? null
   })()
+  // Commit 3 — BE-first contract: ưu tiên snapshot.rule_law_citation
+  // (BE compute via resolve_law_citation in priority_service.py:843); chỉ
+  // fallback FE deriveLawCitationFallback khi BE chưa trả (legacy snapshot
+  // pre-Commit-3 deploy).
   const lawCitation = (() => {
     if (isPostDraft) {
+      if (typeof snapshot.rule_law_citation === "string" && snapshot.rule_law_citation) {
+        return snapshot.rule_law_citation
+      }
       if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
         return deriveLawCitationFallback(snapshot.rule_applied as string)
       }
       return null
     }
     if (preview) return preview.rule_law_citation
+    if (typeof snapshot.rule_law_citation === "string" && snapshot.rule_law_citation) {
+      return snapshot.rule_law_citation
+    }
     if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
       return deriveLawCitationFallback(snapshot.rule_applied as string)
     }
     return null
   })()
+  // Commit 3 — BE-first contract: snapshot.basis_reason là canonical
+  // (priority_service.py:841). `reason` chỉ là OPTIONAL error fallback
+  // (priority_service.py:863).
   const reason = (() => {
-    if (isPostDraft) return snapshot.reason ?? null
+    if (isPostDraft) return snapshot.basis_reason ?? snapshot.reason ?? null
     if (preview) return preview.reason ?? null
-    return snapshot.reason ?? null
+    return snapshot.basis_reason ?? snapshot.reason ?? null
   })()
   const areaBonus = (() => {
     if (isPostDraft) {
@@ -208,7 +228,10 @@ export function EngineResultCard({
         </div>
       )}
 
-      {/* Ambiguous — primary CTA visible, reason from engine */}
+      {/* Ambiguous — primary CTA visible cho người có quyền override.
+          Commit 3 — officer hard-deny: nếu không canOverride, render hint
+          "Đề nghị quản lý ấn định KV" + secondary link "Sửa dữ liệu nguồn"
+          (navigate tới tab Học tập) thay vì silent absence của CTA. */}
       {state === "ambiguous" && (
         <div className="space-y-2 text-sm">
           {reason && (
@@ -216,7 +239,7 @@ export function EngineResultCard({
               <span className="font-medium">Lý do:</span> {reason}
             </p>
           )}
-          {canOverride && (
+          {canOverride ? (
             <Button
               type="button"
               size="sm"
@@ -227,6 +250,28 @@ export function EngineResultCard({
               <ShieldAlert className="h-4 w-4 mr-2" />
               Chọn KV thủ công
             </Button>
+          ) : (
+            <div
+              data-testid="engine-result-officer-deny-cta"
+              className="rounded-md border border-orange-200 bg-orange-50/60 p-2 space-y-2"
+            >
+              <p className="text-sm">
+                Bạn không có quyền ấn định KV thủ công. Vui lòng{" "}
+                <span className="font-medium">đề nghị quản lý</span> ấn định,
+                hoặc bổ sung dữ liệu nguồn để hệ thống tự xác định.
+              </p>
+              {onNavigateToAcademic && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onNavigateToAcademic}
+                  data-testid="engine-result-officer-navigate-academic"
+                >
+                  Sửa dữ liệu nguồn (Tab Học tập)
+                </Button>
+              )}
+            </div>
           )}
         </div>
       )}

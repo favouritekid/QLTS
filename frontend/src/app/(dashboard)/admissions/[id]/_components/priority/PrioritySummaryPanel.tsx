@@ -131,6 +131,18 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
 
   const totalBonus = (areaBonus ?? 0) + (verifiedBucket?.rate ?? 0)
 
+  // Commit 3 — cap from BE snapshot.path_bonus_rule.max_total_bonus
+  // (priority_service.py:856). Frozen snapshot only — `PreviewPriorityKvResponse`
+  // hiện không trả path_bonus_rule, nên KHÔNG fake cap trong draft preview.
+  const isPostDraft = profile.status !== "draft"
+  const snapshot = profile.priority_resolution_snapshot ?? {}
+  const maxTotalBonus =
+    isPostDraft && snapshot.path_bonus_rule && typeof snapshot.path_bonus_rule === "object"
+      ? (snapshot.path_bonus_rule as { max_total_bonus?: number | null }).max_total_bonus ?? null
+      : null
+  const isCapped = typeof maxTotalBonus === "number" && totalBonus > maxTotalBonus
+  const appliedBonus = isCapped ? (maxTotalBonus as number) : totalBonus
+
   return (
     <section
       data-testid="priority-summary-panel"
@@ -168,6 +180,35 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
           <p className="text-xs text-muted-foreground" data-testid="priority-summary-pending-note">
             ({pendingCodes.map((c) => `UT${c}`).join(", ")} chờ duyệt → chưa cộng)
           </p>
+        )}
+
+        {typeof maxTotalBonus === "number" && (
+          <div
+            className="flex flex-col gap-1 pt-1 mt-1 border-t border-dashed border-border"
+            data-testid="priority-summary-cap"
+          >
+            <p className="text-xs text-muted-foreground flex items-baseline gap-2">
+              <span>Cap tối đa của ngành:</span>
+              <span className="tabular-nums">+{maxTotalBonus.toFixed(2)}đ</span>
+            </p>
+            <p className="flex items-baseline gap-2">
+              <span>Áp dụng cuối:</span>
+              <span
+                className="tabular-nums font-bold"
+                data-testid="priority-summary-applied"
+              >
+                +{appliedBonus.toFixed(2)}đ
+              </span>
+              {isCapped && (
+                <span
+                  className="rounded-full bg-warning-100 text-warning-800 text-xs px-2 py-0.5"
+                  data-testid="priority-summary-cap-badge"
+                >
+                  Bị cap
+                </span>
+              )}
+            </p>
+          </div>
         )}
       </div>
 
