@@ -36,6 +36,14 @@ interface ComboboxProps {
   searchPlaceholder?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * Accessible name cho trigger button. Commit 5 A11y — `placeholder`
+   * không phải accessible name; nếu chỉ có placeholder (chưa select),
+   * screen reader nói "combobox empty". Truyền `ariaLabel` để label
+   * rõ ràng ("Chọn tỉnh thường trú", "Chọn xã/phường", ...).
+   * Fallback: `placeholder` nếu không truyền.
+   */
+  ariaLabel?: string;
 }
 
 /**
@@ -73,6 +81,7 @@ export function Combobox({
   searchPlaceholder = "Search...",
   disabled = false,
   className,
+  ariaLabel,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
 
@@ -98,6 +107,7 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          aria-label={ariaLabel ?? placeholder}
           className={cn("w-full justify-between", className)}
           disabled={disabled}
         >

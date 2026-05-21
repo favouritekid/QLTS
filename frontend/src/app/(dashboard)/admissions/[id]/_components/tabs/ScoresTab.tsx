@@ -583,9 +583,13 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
                     </p>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      {subjects.map((subject) => {
+                      {subjects.map((subject, subjectIndex) => {
                          const label = SUBJECT_LABELS[subject] || subject
                          const isHighlighted = highlightedSubjects.has(subject)
+                         // Commit 5 — autoFocus ô điểm đầu tiên khi group
+                         // vừa được chọn/auto-select. Subject array key remount
+                         // khi group đổi → autoFocus fire lại đúng input đầu.
+                         const shouldAutoFocus = subjectIndex === 0 && isEditable
 
                          return (
                         <FormField
@@ -605,6 +609,7 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
                                   min={0}
                                   max={10}
                                   disabled={!isEditable}
+                                  autoFocus={shouldAutoFocus}
                                   {...field}
                                   value={field.value ?? ""}
                                   onChange={(e) =>
