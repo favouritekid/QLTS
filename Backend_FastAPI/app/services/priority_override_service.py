@@ -375,11 +375,15 @@ async def override_kv(
         and profile.status not in _POST_PUBLISH_STATUS
         and profile.status != "draft"  # draft handled by dedicated gate above
     ):
-        # Catch-all guard for unexpected statuses (vd new state machine
-        # state not in either whitelist). Fail-closed for officer path.
+        # Catch-all guard cho unexpected statuses (vd new state machine state
+        # không trong whitelist nào). Fail-closed cho non-admin path.
+        # Phase E.4 commit 7: officer đã hard-blocked ở top → branch này
+        # thực tế là manager bị từ chối cho status ngoài draft/submitted/
+        # reviewing/revision_requested.
         raise BusinessRuleViolation(
-            f"Cannot override KV in '{profile.status}' state — officer "
-            "allowed only for submitted/reviewing/revision_requested."
+            f"Cannot override KV in '{profile.status}' state — manager "
+            "allowed only for draft/submitted/reviewing/revision_requested; "
+            "admin required for post-publish overrides."
         )
 
     # ---- Step 4: Snapshot a deep copy of current state for audit log
