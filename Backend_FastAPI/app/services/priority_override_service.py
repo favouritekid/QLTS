@@ -112,8 +112,57 @@ _EVIDENCE_STATUSES: frozenset[str] = frozenset({"pending", "verified", "rejected
 _MIN_REJECT_REASON_LEN = 10
 _MAX_REJECT_REASON_LEN = 500
 
-# Officer can verify/reject UT evidence in any status except hard-denied
-# (draft means candidate still editing — verify makes no sense).
+# Phase E.4 (smoke 2026-05-21) — UT verify/reject state guard.
+#
+# Original guard used a 3-state blocklist (draft / withdrawn / dropped),
+# which permitted verify/reject in approved / confirmed / enrolled /
+# result_published / admitted / waitlisted. Service recomputes
+# ``ut_verified_bucket`` + bumps version on every mutation, so a verify
+# late in the lifecycle silently shifts published UT bucket points after
+# results were already committed (parity with the documents-policy
+# concern blocking reviewer mutation post-enrolled at
+# ``admission_document_policy.py``).
+#
+# Pattern mirrors ``_OFFICER_ALLOWED_STATUS`` + ``_POST_PUBLISH_STATUS``
+# used by manual KV override above — same workflow shape (officer/admin
+# write-path, version-bump, audit log), so same gate.
+
+# Officer/manager/admin can verify/reject UT evidence in these
+# intermediate review states. Includes ``resubmitted`` because re-
+# submission flow legitimately reopens UT review.
+_EVIDENCE_OFFICER_ALLOWED_STATUS: frozenset[str] = frozenset({
+    "submitted",
+    "reviewing",
+    "revision_requested",
+    "resubmitted",
+})
+
+# Officer NEVER mutates UT evidence in these terminal/published states
+# because UT bucket is now part of a committed admission decision /
+# student record. Admin can bypass with explicit
+# ``acknowledge_post_publish=True`` (parity with KV override gate).
+_EVIDENCE_POST_PUBLISH_STATUS: frozenset[str] = frozenset({
+    "approved",
+    "confirmed",
+    "enrolled",
+    "overridden",
+    "result_published",
+    "admitted",
+    "waitlisted",
+})
+
+# Officer + admin BOTH refuse to verify/reject in these — there is no
+# coherent meaning (draft = candidate still editing, withdrawn/dropped/
+# rejected = no UT decision to record).
+_EVIDENCE_HARD_DENIED_STATUS: frozenset[str] = frozenset({
+    "draft",
+    "withdrawn",
+    "dropped",
+    "rejected",
+})
+
+# Legacy alias retained — referenced by external callers; matches the
+# original 3-state denial set.
 _EVIDENCE_DENIED_STATUS: frozenset[str] = frozenset({
     "draft",
     "withdrawn",
@@ -417,13 +466,20 @@ async def _evidence_mutation_common_checks(
     sub_code: str,
     actor: models.User,
     expected_version: int,
+    acknowledge_post_publish: bool = False,
 ) -> None:
-    """Shared pre-mutation guard for verify + reject.
+    """Shared pre-mutation guard for verify + reject (Phase E.4 hotfix 3).
 
     Raises ConflictError on version mismatch (FIRST per memory
     `version-guard-before-state-machine`); BusinessRuleViolation on
-    hard-denied status, invalid sub_code, or sub_code not in profile's
-    submitted codes list.
+    hard-denied status, post-publish without acknowledge, status outside
+    the officer allowlist, invalid sub_code, or sub_code not in
+    profile's submitted codes list. PermissionError when officer/manager
+    attempts post-publish mutation (router maps to 403).
+
+    State guard mirrors ``_OFFICER_ALLOWED_STATUS`` + ``_POST_PUBLISH_STATUS``
+    used by ``override_kv`` above — UT bucket mutation has the same
+    "snapshot-bumping post-decision" risk as a manual KV override.
     """
     if expected_version != profile.version:
         raise ConflictError(
@@ -433,9 +489,37 @@ async def _evidence_mutation_common_checks(
             "Please refresh and try again."
         )
 
-    if profile.status in _EVIDENCE_DENIED_STATUS:
+    # Hard-denied: nobody can verify/reject here. Fail-closed.
+    if profile.status in _EVIDENCE_HARD_DENIED_STATUS:
         raise BusinessRuleViolation(
             f"Cannot verify/reject UT evidence in '{profile.status}' state."
+        )
+
+    is_admin = getattr(actor, "role", None) == "admin"
+
+    # Post-publish: officer/manager refused outright (403 at router).
+    # Admin must opt in with explicit acknowledge_post_publish=True to
+    # leave a clear audit trail entry.
+    if profile.status in _EVIDENCE_POST_PUBLISH_STATUS:
+        if not is_admin:
+            raise PermissionError(
+                f"Officer cannot verify/reject UT evidence on "
+                f"'{profile.status}' profile — admin only for post-publish "
+                "mutations."
+            )
+        if not acknowledge_post_publish:
+            raise BusinessRuleViolation(
+                f"Profile is in post-publish state '{profile.status}'. "
+                "Pass acknowledge_post_publish=true to confirm the "
+                "verify/reject; this will be recorded in the audit log."
+            )
+
+    # Catch-all: officer path must be in the allow list. Admin already
+    # passed the post-publish gate above; here we only re-check officer.
+    elif profile.status not in _EVIDENCE_OFFICER_ALLOWED_STATUS:
+        raise BusinessRuleViolation(
+            f"Cannot verify/reject UT evidence in '{profile.status}' state — "
+            "allowed only for submitted/reviewing/revision_requested/resubmitted."
         )
 
     if not sub_code or not isinstance(sub_code, str):
@@ -457,6 +541,7 @@ async def verify_object_evidence(
     document_id: Optional[int],
     actor: models.User,
     expected_version: int,
+    acknowledge_post_publish: bool = False,
 ) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
     """Officer verifies UT evidence cho 1 sub_code (Phase E.3).
 
@@ -471,10 +556,14 @@ async def verify_object_evidence(
 
     Raises:
         ConflictError: version mismatch.
-        BusinessRuleViolation: sub_code not submitted / hard-denied status.
+        BusinessRuleViolation: sub_code not submitted / hard-denied status /
+            post-publish without acknowledge.
+        PermissionError: officer/manager attempts post-publish mutation
+            (router maps to 403).
     """
     await _evidence_mutation_common_checks(
-        profile, sub_code, actor, expected_version
+        profile, sub_code, actor, expected_version,
+        acknowledge_post_publish=acknowledge_post_publish,
     )
 
     # Phase E.4 PR-2 P1 fix (audit cycle 2026-05-20) — server-side document
@@ -621,6 +710,7 @@ async def reject_object_evidence(
     reject_reason: str,
     actor: models.User,
     expected_version: int,
+    acknowledge_post_publish: bool = False,
 ) -> Tuple[models.AdmissionProfile, Callable[[], Awaitable[None]]]:
     """Officer rejects UT evidence cho 1 sub_code (Phase E.3).
 
@@ -635,10 +725,13 @@ async def reject_object_evidence(
     Raises:
         ConflictError: version mismatch.
         BusinessRuleViolation: sub_code not submitted / reason length /
-            hard-denied status.
+            hard-denied status / post-publish without acknowledge.
+        PermissionError: officer/manager attempts post-publish mutation
+            (router maps to 403).
     """
     await _evidence_mutation_common_checks(
-        profile, sub_code, actor, expected_version
+        profile, sub_code, actor, expected_version,
+        acknowledge_post_publish=acknowledge_post_publish,
     )
 
     reason_clean = (reject_reason or "").strip()
@@ -749,6 +842,7 @@ async def untick_priority_evidence(
     sub_code: str,
     actor: models.User,
     expected_version: int,
+    acknowledge_post_publish: bool = False,
 ) -> Tuple[models.AdmissionProfile, Callable[[bool], Awaitable[None]]]:
     """Untick UT code + cascade hard delete evidence file (Phase E.4 G1).
 
@@ -792,7 +886,8 @@ async def untick_priority_evidence(
 
     # Version + status + sub_code guards (reuse common helper)
     await _evidence_mutation_common_checks(
-        profile, sub_code, actor, expected_version
+        profile, sub_code, actor, expected_version,
+        acknowledge_post_publish=acknowledge_post_publish,
     )
 
     # Find ProfileDocument row to delete (if exists)

@@ -809,3 +809,158 @@ def test_priority_object_evidence_entry_verified_still_works_unchanged() -> None
     assert entry.document_id == 153
     assert entry.rejected_by is None
     assert entry.rejected_at is None
+
+
+# ===========================================================================
+# Smoke 2026-05-21 hotfix #3 — UT verify/reject post-publish state guard
+# ===========================================================================
+# User audit on hotfix-2 main caught that _evidence_mutation_common_checks
+# only blocked draft/withdrawn/dropped, permitting verify/reject on
+# approved/confirmed/enrolled/result_published/admitted/waitlisted —
+# every such call recomputes ut_verified_bucket + bumps version, silently
+# shifting published UT points after results were committed.
+#
+# Fix mirrors override_kv's pattern (priority_override_service.py:81-97):
+# allowlist [submitted, reviewing, revision_requested, resubmitted];
+# post-publish refused for officer/manager (PermissionError → 403),
+# admin needs explicit acknowledge_post_publish=True.
+
+
+def _ut_actor(role: str = "officer", actor_id: int = 7) -> SimpleNamespace:
+    return SimpleNamespace(id=actor_id, role=role)
+
+
+def _ut_profile(
+    status: str = "submitted",
+    version: int = 5,
+    codes: list[str] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=42,
+        status=status,
+        version=version,
+        priority_object_codes=codes if codes is not None else ["07"],
+        priority_object_evidence={"07": {"status": "pending"}},
+    )
+
+
+async def test_evidence_mutation_officer_refused_in_approved_state() -> None:
+    """Officer attempt to verify/reject on post-publish profile → PermissionError.
+
+    Pre-fix: this passed because approved wasn't in the 3-state denial list.
+    Post-fix: officer hits _EVIDENCE_POST_PUBLISH_STATUS branch, gets
+    PermissionError, router maps to 403.
+    """
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+
+    profile = _ut_profile(status="approved")
+    actor = _ut_actor(role="officer")
+
+    with pytest.raises(PermissionError, match="post-publish"):
+        await _evidence_mutation_common_checks(
+            profile, "07", actor, expected_version=5
+        )
+
+
+async def test_evidence_mutation_manager_refused_in_enrolled_state() -> None:
+    """Manager (non-admin) also refused on enrolled — Student record exists.
+
+    Manager has full review perms in submitted/reviewing, but enrolled
+    profile has materialized Student + StudentDocument. Mutating UT bucket
+    here would drift snapshot from the historical record.
+    """
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+
+    profile = _ut_profile(status="enrolled")
+    actor = _ut_actor(role="manager")
+
+    with pytest.raises(PermissionError, match="post-publish"):
+        await _evidence_mutation_common_checks(
+            profile, "07", actor, expected_version=5
+        )
+
+
+async def test_evidence_mutation_admin_blocked_without_acknowledge() -> None:
+    """Admin on post-publish requires explicit acknowledge_post_publish=True.
+
+    Without the flag, the gate raises BusinessRuleViolation telling admin
+    to confirm the override decision — same pattern as KV override.
+    """
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+    from app.utils.exceptions import BusinessRuleViolation
+
+    profile = _ut_profile(status="result_published")
+    actor = _ut_actor(role="admin")
+
+    with pytest.raises(BusinessRuleViolation, match="acknowledge_post_publish"):
+        await _evidence_mutation_common_checks(
+            profile, "07", actor, expected_version=5,
+            acknowledge_post_publish=False,
+        )
+
+
+async def test_evidence_mutation_admin_passes_with_acknowledge() -> None:
+    """Admin with acknowledge_post_publish=True on post-publish passes
+    the state guard.
+
+    Sub_code + version checks still apply; if all green, no raise.
+    """
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+
+    profile = _ut_profile(status="admitted")
+    actor = _ut_actor(role="admin")
+
+    # Should not raise
+    await _evidence_mutation_common_checks(
+        profile, "07", actor, expected_version=5,
+        acknowledge_post_publish=True,
+    )
+
+
+async def test_evidence_mutation_passes_in_allowed_states() -> None:
+    """Allowlist states pass without acknowledge for any actor role."""
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+
+    for status in ("submitted", "reviewing", "revision_requested", "resubmitted"):
+        profile = _ut_profile(status=status)
+        # Officer succeeds in each allowed state
+        await _evidence_mutation_common_checks(
+            profile, "07", _ut_actor(role="officer"), expected_version=5
+        )
+        # Admin also succeeds (no acknowledge needed in allowed states)
+        await _evidence_mutation_common_checks(
+            profile, "07", _ut_actor(role="admin"), expected_version=5
+        )
+
+
+async def test_evidence_mutation_hard_denied_states_block_everyone() -> None:
+    """draft / withdrawn / dropped / rejected hard-deny everyone including
+    admin. ``acknowledge_post_publish`` does NOT bypass this.
+
+    These states represent profiles where verify/reject has no coherent
+    meaning (draft = candidate editing, terminal states = no decision to
+    record).
+    """
+    from app.services.priority_override_service import (
+        _evidence_mutation_common_checks,
+    )
+    from app.utils.exceptions import BusinessRuleViolation
+
+    for status in ("draft", "withdrawn", "dropped", "rejected"):
+        profile = _ut_profile(status=status)
+        # Even admin with acknowledge=True can't bypass hard-denied
+        with pytest.raises(BusinessRuleViolation):
+            await _evidence_mutation_common_checks(
+                profile, "07", _ut_actor(role="admin"),
+                expected_version=5, acknowledge_post_publish=True,
+            )

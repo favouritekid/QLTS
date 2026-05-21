@@ -1048,15 +1048,22 @@ async def verify_priority_object_evidence(
     ``profile.documents`` tại verify time.
     """
     from app.services.priority_override_service import verify_object_evidence
+    from fastapi import HTTPException
 
-    _, post_commit_cb = await verify_object_evidence(
-        db,
-        profile,
-        sub_code=sub_code,
-        document_id=payload.document_id,
-        actor=current_user,
-        expected_version=payload.version,
-    )
+    try:
+        _, post_commit_cb = await verify_object_evidence(
+            db,
+            profile,
+            sub_code=sub_code,
+            document_id=payload.document_id,
+            actor=current_user,
+            expected_version=payload.version,
+            acknowledge_post_publish=payload.acknowledge_post_publish,
+        )
+    except PermissionError as exc:
+        # Officer/manager attempted post-publish verify; map to 403
+        # (parity với override_priority_kv handler above).
+        raise HTTPException(status_code=403, detail=str(exc))
 
     await db.commit()
     await post_commit_cb()
@@ -1093,15 +1100,20 @@ async def reject_priority_object_evidence(
     trong payload.
     """
     from app.services.priority_override_service import reject_object_evidence
+    from fastapi import HTTPException
 
-    _, post_commit_cb = await reject_object_evidence(
-        db,
-        profile,
-        sub_code=sub_code,
-        reject_reason=payload.reject_reason,
-        actor=current_user,
-        expected_version=payload.version,
-    )
+    try:
+        _, post_commit_cb = await reject_object_evidence(
+            db,
+            profile,
+            sub_code=sub_code,
+            reject_reason=payload.reject_reason,
+            actor=current_user,
+            expected_version=payload.version,
+            acknowledge_post_publish=payload.acknowledge_post_publish,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
 
     await db.commit()
     await post_commit_cb()
