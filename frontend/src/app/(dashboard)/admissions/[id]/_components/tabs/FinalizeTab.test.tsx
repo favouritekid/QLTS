@@ -141,6 +141,32 @@ describe("FinalizeTab — Decision Surface", () => {
       expect(screen.getByText("Phê duyệt")).toBeInTheDocument()
       expect(screen.queryByText("⚠️ Hồ sơ chưa đủ điều kiện")).not.toBeInTheDocument()
     })
+
+    it("bypass_warning=true: trigger Button có class warning, KHÔNG có class success (visual risk signal preserved)", () => {
+      const profile = buildProfile({
+        bypass_warning: true,
+        eligibility_status: "ineligible",
+        validation_errors: ["Thiếu CCCD"],
+      })
+      renderTab(profile, { canApprove: true })
+
+      const trigger = screen.getByText("Phê duyệt (vượt điều kiện)").closest("button")
+      expect(trigger).toBeTruthy()
+      expect(trigger?.className).toMatch(/bg-warning-600/)
+      // Anti-regression: FinalizeTab caller class success KHÔNG được override
+      // bg-warning của component (twMerge resolves to last `bg-*`).
+      expect(trigger?.className).not.toMatch(/bg-success-600/)
+    })
+
+    it("bypass_warning=false: trigger Button có class success, KHÔNG có class warning", () => {
+      const profile = buildProfile({ bypass_warning: false })
+      renderTab(profile, { canApprove: true })
+
+      const trigger = screen.getByText("Phê duyệt").closest("button")
+      expect(trigger).toBeTruthy()
+      expect(trigger?.className).toMatch(/bg-success-600/)
+      expect(trigger?.className).not.toMatch(/bg-warning-600/)
+    })
   })
 
   describe("Permission-based rendering (BE-driven, không theo status)", () => {

@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { cn } from "@/lib/utils"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface ApprovalDecisionButtonProps {
@@ -21,6 +22,12 @@ interface ApprovalDecisionButtonProps {
   isApproving: boolean
   disabled?: boolean
   size?: "default" | "sm" | "lg"
+  /**
+   * Layout-only className (width/size/min-width).
+   * Màu nền (success vs warning) do component tự compose theo
+   * `profile.bypass_warning` — caller KHÔNG override để tránh mất risk
+   * signal khi bypass_warning=true.
+   */
   className?: string
 }
 
@@ -51,7 +58,7 @@ export function ApprovalDecisionButton({
           <Button
             size={size}
             disabled={isApproving || disabled}
-            className={className ?? "bg-warning-600 hover:bg-warning-700"}
+            className={cn(className, "bg-warning-600 hover:bg-warning-700")}
           >
             {isApproving ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -106,7 +113,7 @@ export function ApprovalDecisionButton({
       size={size}
       onClick={onApprove}
       disabled={isApproving || disabled}
-      className={className ?? "bg-success-600 hover:bg-success-700"}
+      className={cn(className, "bg-success-600 hover:bg-success-700")}
     >
       {isApproving ? (
         <Loader2 className="w-4 h-4 mr-2 animate-spin" />

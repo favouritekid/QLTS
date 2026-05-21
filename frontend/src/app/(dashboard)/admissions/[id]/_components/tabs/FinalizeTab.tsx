@@ -112,7 +112,10 @@ export function FinalizeTab({
                 isApproving={isApproving}
                 disabled={!isEligible && !profile.bypass_warning || isRejecting}
                 size="lg"
-                className="w-full sm:w-auto min-w-[200px] bg-success-600 hover:bg-success-700"
+                // Layout-only — màu success/warning do component tự compose
+                // theo profile.bypass_warning (KHÔNG override để tránh mất
+                // risk signal warning khi bypass_warning=true).
+                className="w-full sm:w-auto min-w-[200px]"
               />
             )}
 
