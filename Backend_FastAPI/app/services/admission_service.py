@@ -4217,6 +4217,123 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     profile.snapshot_score = snapshot_score
 
 
+async def _validate_eligibility_all_choices(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Q9 #07 Phase E.4 — eligibility gate per yêu cầu nghiệp vụ #5.
+
+    Pipeline order (xem priority_service docstring): Eligibility → Exception
+    → Auto basis → Resolve KV → Apply path bonus → Snapshot. Eligibility chạy
+    TRƯỚC freeze để fail-fast khi cultural + vocational không match path
+    target_level/admission_type.
+
+    Behavior per flow:
+      - ``uses_choice_engine=True`` (multi-NV): query choices với eager-load
+        chain ``path → academic_info → offering → program``. Validate mỗi
+        choice. Bất kỳ choice nào fail → raise BusinessRuleViolation (caller
+        map sang BadRequest/422).
+      - ``uses_choice_engine=False`` (legacy single-path): derive target từ
+        ``profile.offering_admission_config_id`` chain. Nếu không có config →
+        raise CONFIG_GAP_TARGET_LEVEL (fail-closed per nghiệp vụ).
+
+    Reason codes (i18n key cho FE error display):
+      - ``ELIGIBILITY_FAIL_<reason>`` cho từng choice
+      - ``CONFIG_GAP_TARGET_LEVEL`` khi không derive được level/type
+
+    Per yêu cầu nghiệp vụ #5: tuyệt đối KHÔNG fallback "so_cap" khi gap.
+    """
+    from sqlalchemy import select as _sel
+    from sqlalchemy.orm import selectinload as _sel_in
+
+    from .priority_service import (
+        derive_target_level_and_type,
+        validate_eligibility,
+    )
+
+    failures: list[str] = []
+
+    if profile.uses_choice_engine:
+        # Load choices với eager chain cho derive_target_level_and_type
+        choices_stmt = (
+            _sel(models.AdmissionProfileChoice)
+            .where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+            .options(
+                _sel_in(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.program)
+                .selectinload(models.MajorProgram.degree_level_ref),
+                _sel_in(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.offering_type_config),
+            )
+            .order_by(models.AdmissionProfileChoice.display_order)
+        )
+        choices_result = await db.execute(choices_stmt)
+        choices = choices_result.scalars().all()
+
+        for choice in choices:
+            path = choice.admission_path
+            target_level, admission_type = derive_target_level_and_type(path)
+            ok, reason = validate_eligibility(profile, target_level, admission_type)
+            if not ok:
+                failures.append(
+                    f"NV{choice.display_order} ({target_level}/{admission_type}): "
+                    f"{reason}"
+                )
+    else:
+        # Legacy non-multi-NV: lookup từ offering_admission_config chain.
+        config_id = profile.offering_admission_config_id
+        if config_id is None:
+            raise BusinessRuleViolation(
+                "CONFIG_GAP_TARGET_LEVEL: hồ sơ không có offering_admission_config_id "
+                "và uses_choice_engine=False — không thể xác định bậc đào tạo. "
+                "Vui lòng cấu hình config trước khi submit."
+            )
+        config_stmt = (
+            _sel(models.OfferingAdmissionConfig)
+            .where(models.OfferingAdmissionConfig.id == config_id)
+            .options(
+                _sel_in(models.OfferingAdmissionConfig.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.program)
+                .selectinload(models.MajorProgram.degree_level_ref),
+                _sel_in(models.OfferingAdmissionConfig.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.offering_type_config),
+            )
+        )
+        config = (await db.execute(config_stmt)).scalar_one_or_none()
+        if config is None:
+            raise BusinessRuleViolation(
+                f"CONFIG_GAP_TARGET_LEVEL: offering_admission_config_id="
+                f"{config_id} không tồn tại."
+            )
+        # Build pseudo-path stub để reuse derive_target_level_and_type (helper
+        # cần __dict__['academic_info'] nên dùng config trực tiếp work với
+        # `__dict__['academic_info']` của config object).
+        # Construct a tiny shim:
+        class _PathShim:
+            pass
+        shim = _PathShim()
+        shim.__dict__["academic_info"] = config.academic_info
+        target_level, admission_type = derive_target_level_and_type(shim)  # type: ignore[arg-type]
+        ok, reason = validate_eligibility(profile, target_level, admission_type)
+        if not ok:
+            failures.append(
+                f"Legacy single-path ({target_level}/{admission_type}): {reason}"
+            )
+
+    if failures:
+        raise BusinessRuleViolation(
+            "ELIGIBILITY_FAIL: " + "; ".join(failures)
+        )
+
+
 async def _audit_warning_dismissed_if_missing(
     db: AsyncSession,
     profile_id: int,
@@ -4388,6 +4505,15 @@ async def submit_and_evaluate(
                 "Hồ sơ đa nguyện vọng phải có ít nhất 1 nguyện vọng trước khi nộp. "
                 "Vui lòng thêm nguyện vọng tại bước Điểm & Điều kiện."
             )
+
+        # Q9 #07 Phase E.4 — eligibility gate per choice trước khi freeze KV.
+        # Engine pipeline yêu cầu Eligibility → Exception → Auto basis → Resolve
+        # KV (xem priority_service docstring). Per yêu cầu nghiệp vụ #5:
+        #   - CĐ chính quy/liên thông: cultural mở rộng + (vocational nếu liên thông)
+        #   - TC chính quy/liên thông: cultural ≥ THCS + (vocational nếu liên thông)
+        #   - SC chính quy: không yêu cầu
+        # Tuyệt đối KHÔNG fallback "so_cap" khi thiếu target_level config.
+        await _validate_eligibility_all_choices(db, profile)
 
     # Must be in draft status
     if profile.status != "draft":
@@ -4670,6 +4796,12 @@ async def submit_and_evaluate(
         # event. The single source of truth lives in our callback so
         # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
         # always fire side-by-side AFTER ``db.commit()``.
+
+        # Q9 #07 Phase E.4 — eligibility cũng phải check cho legacy non-multi-NV
+        # profile (uses_choice_engine=False) qua chain offering_admission_config →
+        # academic_info → offering → program/offering_type. Helper handles both
+        # flows: nếu profile non-multi-NV, derive duy nhất 1 path từ
+        # offering_admission_config_id (legacy single-path snapshot pattern).
 
         # Q9 #07 Phase C — Freeze priority resolution snapshot at T1.
         # Captures kv_resolved + breakdown immutably at submit time so

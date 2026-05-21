@@ -645,51 +645,180 @@ async def freeze_priority_snapshot(
     return snapshot
 
 
+def derive_target_level_and_type(path: "AdmissionPath") -> tuple[str, str]:
+    """Derive (target_level, admission_type) từ AdmissionPath chain.
+
+    Chain: AdmissionPath → OfferingAcademicInfo → ProgramOffering →
+    MajorProgram.degree_level_id + ProgramOffering.offering_type_id (FK
+    config_degree_level + config_offering_type).
+
+    Returns:
+        (target_level, admission_type) — cả 2 là `code` từ config table.
+        target_level ∈ {"cao_dang", "trung_cap", "so_cap"} (Phase E.4
+        scope GDNN; "dai_hoc"/"thac_si"/"tien_si" out-of-scope).
+        admission_type ∈ {"chinh_quy", "lien_thong", "vua_lam_vua_hoc",
+        "tu_xa", "lien_ket_quoc_te"}.
+
+    Raises:
+        BusinessRuleViolation("CONFIG_GAP_TARGET_LEVEL") khi không derive
+        được do:
+          - relation chain chưa eager-load (academic_info/offering/program/
+            degree_level/offering_type)
+          - degree_level_id/offering_type_id NULL trên major_program/
+            program_offering
+          - code không nằm trong GDNN scope (vd dai_hoc)
+        Per yêu cầu nghiệp vụ #5: tuyệt đối KHÔNG fallback "so_cap" — fail-closed.
+
+    Caller MUST eager-load chain trước khi gọi:
+        selectinload(AdmissionPath.academic_info)
+          .selectinload(OfferingAcademicInfo.offering)
+          .selectinload(ProgramOffering.program)
+          .selectinload(MajorProgram.degree_level_obj)  # FK config_degree_level
+        selectinload(AdmissionPath.academic_info)
+          .selectinload(OfferingAcademicInfo.offering)
+          .selectinload(ProgramOffering.offering_type_obj)  # FK config_offering_type
+    """
+    from ..utils.exceptions import BusinessRuleViolation
+
+    _GDNN_TARGET_LEVELS = frozenset({"cao_dang", "trung_cap", "so_cap"})
+
+    academic_info = path.__dict__.get("academic_info")
+    if academic_info is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: AdmissionPath thiếu academic_info "
+            "(relation chưa eager-load hoặc DB không nhất quán)."
+        )
+    offering = academic_info.__dict__.get("offering")
+    if offering is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: OfferingAcademicInfo thiếu offering."
+        )
+    program = offering.__dict__.get("program")
+    if program is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering thiếu program (MajorProgram)."
+        )
+
+    # degree_level — model relationship `MajorProgram.degree_level_ref` →
+    # ConfigDegreeLevel(.code). Eager-load via selectinload(program.degree_level_ref).
+    degree_level_obj = program.__dict__.get("degree_level_ref")
+    target_code: Optional[str] = (
+        getattr(degree_level_obj, "code", None) if degree_level_obj else None
+    )
+    if target_code is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: MajorProgram chưa gán degree_level_id "
+            "(config_degree_level FK NULL). Vui lòng cấu hình bậc đào tạo "
+            "trước khi cho hồ sơ submit."
+        )
+    if target_code not in _GDNN_TARGET_LEVELS:
+        raise BusinessRuleViolation(
+            f"CONFIG_GAP_TARGET_LEVEL: bậc đào tạo '{target_code}' nằm ngoài "
+            f"phạm vi GDNN ({sorted(_GDNN_TARGET_LEVELS)}). Phase E.4 chỉ "
+            f"hỗ trợ CĐ/TC/SC."
+        )
+
+    # offering_type — model relationship `ProgramOffering.offering_type_config`
+    # → ConfigOfferingType(.code). Eager-load via
+    # selectinload(offering.offering_type_config).
+    offering_type_obj = offering.__dict__.get("offering_type_config")
+    admission_type: Optional[str] = (
+        getattr(offering_type_obj, "code", None) if offering_type_obj else None
+    )
+    if admission_type is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering chưa gán offering_type_id "
+            "(config_offering_type FK NULL). Vui lòng cấu hình hệ đào tạo "
+            "(chính quy / liên thông / VLVH...) trước khi cho hồ sơ submit."
+        )
+
+    return target_code, admission_type
+
+
 def validate_eligibility(
     profile: "AdmissionProfile",
     target_level: str,
+    admission_type: str = "chinh_quy",
 ) -> tuple[bool, Optional[str]]:
-    """Validate candidate eligibility for target program level.
+    """Validate candidate eligibility for target program level + type.
 
-    Per TT 05/2021 Phụ lục 01 + Luật GDNN 2014/2025:
-      - target_level='CD' (Cao đẳng): requires graduated_thpt OR graduated_gdtx
-        OR (completed_thpt + trung_cap) — path 2 cho liên thông
-      - target_level='TC' (Trung cấp): requires graduated_thcs trở lên
-      - target_level='SC' (Sơ cấp): no academic requirement
+    Per TT 05/2021 Phụ lục 01 + Luật GDNN 2014/2025 (chốt 2026-05-21):
+      - CĐ chính quy:     TN_THPT hoặc HOAN_THANH_THPT
+      - CĐ liên thông:    TN_THPT hoặc HOAN_THANH_THPT + bằng TC/CĐ
+      - TC chính quy:     TN_THCS trở lên
+      - TC liên thông:    TN_THCS trở lên + bằng SC/TC
+      - SC chính quy:     không yêu cầu văn hóa
 
-    Returns ``(is_eligible, reason_if_not)``.
+    Args:
+        profile: AdmissionProfile với cultural_education_level + vocational_qualification.
+        target_level: config_degree_level.code — "cao_dang" / "trung_cap" / "so_cap".
+        admission_type: config_offering_type.code — "chinh_quy" / "lien_thong" /
+            "vua_lam_vua_hoc" / "tu_xa" / "lien_ket_quoc_te". Default "chinh_quy"
+            cho backward-compat với callers cũ.
+
+    Returns:
+        (is_eligible, reason_code_if_not).
+        reason_code dùng làm i18n key cho FE error display.
+
+    Per yêu cầu nghiệp vụ #5: unknown target_level → block (fail-closed).
     """
     cultural = getattr(profile, "cultural_education_level", None)
     vocational = getattr(profile, "vocational_qualification", "none") or "none"
 
-    if target_level in ("CD", "cao_dang"):
-        # Path 1: tốt nghiệp THPT/GDTX direct
-        if cultural in ("graduated_thpt", "graduated_gdtx"):
-            return True, None
-        # Path 2: liên thông — đủ kiến thức THPT + bằng TC nghề
-        if cultural == "completed_thpt" and vocational == "trung_cap":
-            return True, None
-        # Path 2 extended: graduated_thcs + cao_dang already done → re-enroll OK
-        if cultural == "graduated_thcs" and vocational == "cao_dang":
-            return True, None
-        return False, "cd_requires_thpt_or_thpt_kien_thuc_plus_trung_cap"
+    _THPT_GRADUATED = ("graduated_thpt", "graduated_gdtx")
+    _THPT_KNOWLEDGE = ("completed_thpt", "graduated_thpt", "graduated_gdtx")
+    _THCS_OR_HIGHER = (
+        "graduated_thcs",
+        "completed_thpt",
+        "graduated_thpt",
+        "graduated_gdtx",
+    )
 
-    if target_level in ("TC", "trung_cap"):
-        # Per Luật GDNN: TC yêu cầu tốt nghiệp THCS trở lên
-        if cultural in (
-            "graduated_thcs",
-            "completed_thpt",
-            "graduated_thpt",
-            "graduated_gdtx",
-        ):
+    if target_level in ("cao_dang", "CD"):
+        if admission_type == "lien_thong":
+            # CĐ liên thông: kiến thức THPT (đã TN hoặc hoàn thành) + bằng TC/CĐ
+            if cultural in _THPT_KNOWLEDGE and vocational in ("trung_cap", "cao_dang"):
+                return True, None
+            return False, "cd_lien_thong_requires_thpt_knowledge_plus_tc_or_cd"
+        # CĐ chính quy + các hệ khác: TN_THPT hoặc HOAN_THANH_THPT (per spec mới
+        # 2026-05-21 — yêu cầu nghiệp vụ #5).
+        if cultural in _THPT_KNOWLEDGE:
+            return True, None
+        return False, "cd_chinh_quy_requires_thpt_or_completed_thpt"
+
+    if target_level in ("trung_cap", "TC"):
+        if admission_type == "lien_thong":
+            # TC liên thông: TN_THCS trở lên + bằng SC/TC
+            if cultural in _THCS_OR_HIGHER and vocational in ("so_cap", "trung_cap"):
+                return True, None
+            return False, "tc_lien_thong_requires_thcs_plus_sc_or_tc"
+        # TC chính quy: TN_THCS trở lên
+        if cultural in _THCS_OR_HIGHER:
             return True, None
         return False, "tc_requires_graduated_thcs_or_higher"
 
-    if target_level in ("SC", "so_cap"):
-        return True, None  # SC không yêu cầu trình độ văn hóa
+    if target_level in ("so_cap", "SC"):
+        # SC chính quy không yêu cầu văn hóa. Liên thông SC chưa định nghĩa
+        # nghiệp vụ — fail-closed.
+        if admission_type == "chinh_quy":
+            return True, None
+        return False, "sc_only_supports_chinh_quy_in_phase_e4"
 
-    # Unknown target_level — defensive pass-through (caller validates)
-    return True, None
+    # Yêu cầu nghiệp vụ #5: target_level ngoài CD/TC/SC scope → block.
+    return False, f"unsupported_target_level:{target_level}"
+
+
+# Legacy uppercase aliases for callers còn dùng "CD"/"TC"/"SC" tag.
+_LEGACY_TARGET_LEVEL_ALIAS = {
+    "CD": "cao_dang",
+    "TC": "trung_cap",
+    "SC": "so_cap",
+}
+
+
+def normalize_target_level(level: str) -> str:
+    """Map legacy "CD"/"TC"/"SC" → config code "cao_dang"/"trung_cap"/"so_cap"."""
+    return _LEGACY_TARGET_LEVEL_ALIAS.get(level, level)
 
 
 # =============================================================================

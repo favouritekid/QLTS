@@ -118,6 +118,23 @@ async def publish_admission_result(
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.criteria),
+            # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
+            # derive_target_level_and_type(path), which reads:
+            #   path.academic_info.offering.program.degree_level_ref.code
+            #   path.academic_info.offering.offering_type_config.code
+            # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
+            # every choice rejects silently. Mirrors the bonus_rule chain.
+            selectinload(models.AdmissionProfile.choices)
+            .selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info)
+            .selectinload(models.OfferingAcademicInfo.offering)
+            .selectinload(models.ProgramOffering.program)
+            .selectinload(models.MajorProgram.degree_level_ref),
+            selectinload(models.AdmissionProfile.choices)
+            .selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info)
+            .selectinload(models.OfferingAcademicInfo.offering)
+            .selectinload(models.ProgramOffering.offering_type_config),
             # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
             # NOT direct `subjects` relation (em earlier drift, fixed).
             selectinload(models.AdmissionProfile.choices)

@@ -161,6 +161,40 @@ def _evaluate_single_choice(
     reason_codes: List[str] = []
     path = choice.admission_path
 
+    # Q9 #07 Phase E.4 — Gate 0: eligibility per target_level/admission_type
+    # TRƯỚC GPA gate (per priority_service pipeline). Fail-safe T6: nếu
+    # submit-time validate đã chạy thì pass-through; legacy magic-link
+    # paths chưa qua submit gate sẽ catch ở đây.
+    #
+    # Lazy import (cùng pattern với calculate_priority_bonus): priority_service
+    # imports app.models → circular dep nếu top-level import.
+    try:
+        from app.services.priority_service import (
+            derive_target_level_and_type,
+            validate_eligibility,
+        )
+
+        target_level, admission_type = derive_target_level_and_type(path)
+        passed_elig, elig_reason = validate_eligibility(
+            profile, target_level, admission_type
+        )
+        if not passed_elig:
+            reason_codes.append(f"ELIGIBILITY_FAIL:{elig_reason}")
+            return "rejected", None, reason_codes
+    except BusinessRuleViolation as gap_exc:
+        # CONFIG_GAP_TARGET_LEVEL — eager-load chain rỗng hoặc config missing.
+        # Mark reject với explicit code để admin debug. Engine KHÔNG fallback
+        # SC (per yêu cầu nghiệp vụ #5).
+        reason_codes.append(f"CONFIG_GAP_TARGET_LEVEL:{str(gap_exc)[:200]}")
+        log.warning(
+            "choice_eligibility_config_gap",
+            profile_id=getattr(profile, "id", None),
+            choice_id=getattr(choice, "id", None),
+            path_id=getattr(path, "id", None),
+            error=str(gap_exc),
+        )
+        return "rejected", None, reason_codes
+
     # Gate 1: min GPA threshold (Sub-1 helper)
     # AdmissionPath has FK to AdmissionCriteria via criteria_id. Eager-loaded.
     criteria = getattr(path, "criteria", None)

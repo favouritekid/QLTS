@@ -51,6 +51,11 @@ class MajorProgram(Base):
         comment="FK to config_degree_level. Canonical lookup; "
                 "backfilled from legacy degree_level text column."
     )
+    # Phase E.4 (Q9 #07) — relationship cho derive_target_level_and_type()
+    # ở priority_service. Engine đọc ``degree_level_ref.code`` để map ra
+    # config_degree_level.code ("cao_dang"/"trung_cap"/"so_cap"). Eager-load
+    # bằng selectinload(MajorProgram.degree_level_ref) trong callers.
+    degree_level_ref = relationship("ConfigDegreeLevel", lazy="raise")
     code = Column(
         String(50),
         unique=True,

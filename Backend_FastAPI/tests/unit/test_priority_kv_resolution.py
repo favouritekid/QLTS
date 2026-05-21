@@ -350,8 +350,12 @@ async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
         ("graduated_gdtx", "none", "CD", True),
         # CĐ target — Path 2: liên thông (THPT kiến thức + TC)
         ("completed_thpt", "trung_cap", "CD", True),
-        # CĐ target — fail cases
-        ("completed_thpt", "none", "CD", False),  # Chưa thi TN THPT + chưa TC → CD FAIL
+        # CĐ chính quy mới (Phase E.4 chốt 2026-05-21): TN_THPT hoặc
+        # HOAN_THANH_THPT — completed_thpt được phép vì "hoàn thành THPT"
+        # đủ cho CĐ chính quy. Trước commit này test expected False; sau
+        # commit eligibility wire mới, validate_eligibility(default admission_type
+        # = chinh_quy) PASS completed_thpt cho CĐ.
+        ("completed_thpt", "none", "CD", True),
         ("graduated_thcs", "trung_cap", "CD", False),  # Chưa TN THPT → CD FAIL (path 2 strict)
         ("graduated_thcs", "none", "CD", False),  # Chỉ TN THCS → CD FAIL
         ("completed_thcs", "trung_cap", "CD", False),  # Chưa TN THCS → CD FAIL

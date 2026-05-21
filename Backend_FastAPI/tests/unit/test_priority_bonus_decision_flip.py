@@ -44,7 +44,22 @@ def _make_choice_with_scoring(
         selection_mode="fixed",
         required_count=3,
     )
+
+    # Q9 #07 Phase E.4 — _evaluate_single_choice gate 0 calls
+    # derive_target_level_and_type(path) → reads path.academic_info.offering
+    # .program.degree_level_ref.code + offering.offering_type_config.code.
+    # Without this eager-loaded chain stub, gate 0 raises CONFIG_GAP_TARGET_LEVEL
+    # và choice reject với code đó (silently regressed the bonus-flip behavior).
+    program_stub = SimpleNamespace()
+    program_stub.__dict__["degree_level_ref"] = SimpleNamespace(code="cao_dang")
+    offering_stub = SimpleNamespace()
+    offering_stub.__dict__["program"] = program_stub
+    offering_stub.__dict__["offering_type_config"] = SimpleNamespace(code="chinh_quy")
+    academic_info_stub = SimpleNamespace()
+    academic_info_stub.__dict__["offering"] = offering_stub
+
     path = SimpleNamespace(criteria=criteria)
+    path.__dict__["academic_info"] = academic_info_stub
     # Build scores so _collect_subject_scores returns something truthy;
     # the actual values don't matter because calculate_score is patched.
     score_row = SimpleNamespace(
@@ -65,9 +80,14 @@ def _make_choice_with_scoring(
         scores=[score_row, score_row, score_row],
         path_subject_group_config=config,
     )
+    # Q9 #07 Phase E.4 — profile needs cultural_education_level đủ pass
+    # eligibility gate 0. CĐ chính quy yêu cầu THPT knowledge (TN_THPT hoặc
+    # HOAN_THANH_THPT). Use graduated_thpt để không vướng vào gate 0.
     profile = SimpleNamespace(
         gpa_overall=Decimal("8.0"),
         graduation_year=None,
+        cultural_education_level="graduated_thpt",
+        vocational_qualification="none",
     )
 
     score_result = AdmissionScoreResult(
