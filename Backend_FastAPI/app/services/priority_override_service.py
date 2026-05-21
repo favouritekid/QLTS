@@ -353,11 +353,12 @@ async def override_kv(
 
     if profile.status in _POST_PUBLISH_STATUS:
         if not is_admin:
-            # Officer/manager refused post-publish; signal via
-            # PermissionError so router maps to 403.
+            # Phase E.4 commit 7: officer hard-blocked ở top; nhánh này thực
+            # tế là manager bị từ chối cho post-publish (admin-only).
+            # PermissionError → router maps to 403.
             raise PermissionError(
-                f"Officer cannot override KV on '{profile.status}' "
-                "profile — admin only for post-publish overrides."
+                f"Only admin can override KV on '{profile.status}' profile — "
+                "manager is refused for post-publish overrides."
             )
         # Admin path requires explicit acknowledgement flag.
         if not acknowledge_post_publish:

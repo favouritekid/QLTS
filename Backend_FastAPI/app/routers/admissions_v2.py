@@ -992,8 +992,11 @@ async def override_priority_kv(
             acknowledge_post_publish=payload.acknowledge_post_publish,
         )
     except PermissionError as exc:
-        # Officer attempted post-publish override; map to 403 per memory
-        # `version-guard-before-state-machine` adjacent pattern.
+        # Phase E.4 commit 7: officer hard-blocked ở service top (raises
+        # BusinessRuleViolation 400, NOT PermissionError). Branch này thực
+        # tế là manager attempted post-publish override (admin-only). Map
+        # to 403 per memory `version-guard-before-state-machine` adjacent
+        # pattern.
         raise HTTPException(status_code=403, detail=str(exc))
 
     await db.commit()
