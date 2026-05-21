@@ -689,7 +689,10 @@ async def preview_priority_kv(
     - Casbin: standard read scope (any authenticated user with profile access)
     """
     from copy import copy
-    from app.services.priority_service import resolve_kv_for_profile
+    from app.services.priority_service import (
+        derive_profile_target_context,
+        resolve_kv_for_profile,
+    )
 
     # Build transient profile-like object: profile DB state + form overrides.
     # Shallow copy + override avoids SQLAlchemy session mutation persisting.
@@ -715,7 +718,20 @@ async def preview_priority_kv(
     if payload.priority_object_codes is not None:
         preview_profile.priority_object_codes = payload.priority_object_codes
 
-    kv, meta = await resolve_kv_for_profile(preview_profile, db)
+    # Phase E.4 commit 5 fix: preview phải pass target_level + admission_type
+    # vào resolve_kv_for_profile. Trước fix: preview rơi vào legacy matrix
+    # (target_level=None) → CĐ chính quy + completed_thpt được map sang
+    # THUONG_TRU thay vì LICH_SU_THPT → basis hiển thị FE sai trước submit.
+    # Sau fix: dùng derive_profile_target_context() trên profile DB state
+    # (NOT preview_profile, vì context derive từ path chain DB-side, KHÔNG
+    # phụ thuộc form overrides).
+    target_ctx = await derive_profile_target_context(profile, db)
+    kv, meta = await resolve_kv_for_profile(
+        preview_profile,
+        db,
+        target_level=target_ctx.get("target_level"),
+        admission_type=target_ctx.get("admission_type"),
+    )
 
     # Look up bonus rates — KV area_bonus + UT object_bonus (potential + verified)
     # academic_year derived từ profile.admission_path.admission_round nếu có

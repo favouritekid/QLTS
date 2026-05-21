@@ -4217,6 +4217,72 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     profile.snapshot_score = snapshot_score
 
 
+# =============================================================================
+# Q9 #07 Phase E.4 commit 5 fix-up — submit-time guard cho KV unresolved
+# =============================================================================
+
+# Engine fail-closed rule_applied values khi KV không xác định được:
+#   - address_not_normalized      : profile thiếu permanent_commune_code
+#   - catalog_gap_commune         : commune không có trong vn_commune_area_map
+#   - catalog_gap_school          : tất cả vn_school_kv_assignment lookup miss
+#   - insufficient_data           : combo cultural/voc không match matrix
+#   - ambiguous_requires_manual   : tied graduation year + grade
+#   - not_resolved                : cultural NULL (eligibility cũng chặn)
+#
+# Submit pass-through CHỈ khi:
+#   - rule_applied = "manual_override" (manager/admin đã set KV trước submit)
+#   - rule_applied ∈ {longest_duration, tiebreak_graduation_school, commune_lookup}
+#     (engine resolve thành công, kv_resolved != None)
+_KV_UNRESOLVED_RULE_APPLIED = frozenset({
+    "address_not_normalized",
+    "catalog_gap_commune",
+    "catalog_gap_school",
+    "insufficient_data",
+    "ambiguous_requires_manual",
+    "not_resolved",
+})
+
+
+def _assert_kv_resolved_for_submit(
+    snapshot: Optional[dict],
+    profile_id: int,
+) -> None:
+    """Raise BadRequest nếu snapshot báo KV unresolved (engine fail-closed signal).
+
+    Yêu cầu nghiệp vụ #7 — engine fail-closed: KHÔNG cho submit khi KV mơ hồ.
+    Manager/admin có thể override KV trước submit qua POST override-priority-kv;
+    snapshot sau override mang rule_applied="manual_override" + kv_resolved
+    đã set → pass gate.
+
+    Args:
+        snapshot: profile.priority_resolution_snapshot (dict | None).
+        profile_id: id cho log context.
+
+    Raises:
+        BadRequest: KV unresolved, message tiếng Việt + rule_applied + reason.
+    """
+    snapshot = snapshot or {}
+    rule_applied = snapshot.get("rule_applied")
+    if (
+        snapshot.get("requires_manual_override")
+        and rule_applied in _KV_UNRESOLVED_RULE_APPLIED
+    ):
+        reason = snapshot.get("reason") or snapshot.get("basis_reason")
+        log.info(
+            "submit_blocked_kv_unresolved",
+            profile_id=profile_id,
+            rule_applied=rule_applied,
+            reason=reason,
+        )
+        raise BadRequest(
+            f"KV_UNRESOLVED ({rule_applied}): engine không xác định được khu "
+            f"vực ưu tiên cho hồ sơ này. Lý do: {reason or rule_applied}. "
+            f"Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú và "
+            f"lịch sử học THPT, hoặc đề nghị quản lý ấn định KV thủ công "
+            f"trước khi nộp."
+        )
+
+
 async def _validate_eligibility_all_choices(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -4829,7 +4895,7 @@ async def submit_and_evaluate(
                 eligibility=target_ctx.get("eligibility"),
                 path_bonus_rule=target_ctx.get("path_bonus_rule"),
             )
-        except Exception as freeze_exc:  # noqa: BLE001 — defensive: never block submit
+        except Exception as freeze_exc:  # noqa: BLE001 — defensive: never block submit on infra fail
             log.warning(
                 "priority_snapshot_freeze_failed_at_submit",
                 profile_id=profile_id,
@@ -4840,6 +4906,9 @@ async def submit_and_evaluate(
                     "Engine T6 will retry freeze."
                 ),
             )
+
+        # Q9 #07 Phase E.4 commit 5 fix-up — block submit khi KV unresolved.
+        _assert_kv_resolved_for_submit(profile.priority_resolution_snapshot, profile_id)
 
         try:
             profile, _ = await state_transition(
