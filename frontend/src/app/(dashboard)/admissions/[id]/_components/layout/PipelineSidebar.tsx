@@ -93,13 +93,25 @@ export function PipelineSidebar({
         <Progress value={completionPercent} className="h-2" />
       </div>
 
+      {/* Commit 2 fix-up — Step 8 lock override cho reviewer/officer có
+          quyền quyết định. Sau khi Commit 2 chuyển Approve/Reject/Resubmit
+          sang FinalizeTab (Step 8), nếu BE lock Step 8 do validation fail
+          thì manager với bypass_warning=true KHÔNG reach được decision
+          panel. Override: Step 8 luôn unlock nếu có 1 trong các quyền
+          quyết định. */}
       <nav className="space-y-3">
       <TooltipProvider>
         {visibleSteps.map((step) => {
           const status = stepsStatus[step.id] || "locked"
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)
-          const isLocked = status === "locked"
+          const canDecide = Boolean(
+            profile?.permissions?.approve ||
+            profile?.permissions?.reject ||
+            profile?.permissions?.resubmit
+          )
+          const isStep8Override = step.id === 8 && canDecide
+          const isLocked = !isStep8Override && status === "locked"
 
           const stepButton = (
             <button
