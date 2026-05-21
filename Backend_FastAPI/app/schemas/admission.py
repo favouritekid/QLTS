@@ -2375,6 +2375,18 @@ class VerifyObjectEvidenceRequest(BaseModel):
         None,
         description="Optional FK soft reference to supporting document.",
     )
+    # Phase E.4 hotfix 3 (smoke 2026-05-21): post-publish guard. Officer/
+    # manager refused outright (403) on approved/confirmed/enrolled/
+    # result_published/admitted/waitlisted. Admin must opt in with this
+    # flag — mirrors KV override OverridePriorityKvRequest.
+    acknowledge_post_publish: bool = Field(
+        default=False,
+        description=(
+            "Admin-only escape hatch for verifying UT on a profile already "
+            "in a post-publish state. Officer/manager refused regardless. "
+            "Audit log records the flag."
+        ),
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2397,6 +2409,15 @@ class RejectObjectEvidenceRequest(BaseModel):
         min_length=10,
         max_length=500,
         description="Reason for rejection (10-500 chars).",
+    )
+    # Phase E.4 hotfix 3 — same post-publish gate as verify above.
+    acknowledge_post_publish: bool = Field(
+        default=False,
+        description=(
+            "Admin-only escape hatch for rejecting UT on a profile already "
+            "in a post-publish state. Officer/manager refused regardless. "
+            "Audit log records the flag."
+        ),
     )
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
