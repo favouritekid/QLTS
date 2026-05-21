@@ -4240,15 +4240,18 @@ _KV_SUCCESS_RULE_APPLIED = frozenset({
 })
 
 
-def _assert_kv_resolved_for_submit(
+def _kv_unresolved_error_message(
     snapshot: Optional[dict],
     profile_id: int,
-) -> None:
-    """Raise BadRequest nếu snapshot không emit engine success signal.
+) -> Optional[str]:
+    """Return error message string nếu snapshot không emit engine success;
+    None khi snapshot resolve thành công.
 
-    Yêu cầu nghiệp vụ #7 + reviewer 2026-05-21 — engine fail-closed
-    DEFAULT-BLOCK pattern, KHÔNG defensive escape:
-      Pass CHỈ khi rule_applied ∈ whitelist success + kv_resolved != None.
+    Phase E.4 reviewer v4 2026-05-21 — KV unresolved giờ trả validation_error
+    (not raise) để submit flow giữ status=draft + commit snapshot unresolved.
+    Manager/admin sau đó có signal ``requires_manual_override=True`` trong
+    snapshot persisted để override draft (gỡ deadlock fail-closed vs draft
+    override gate).
 
     Pass paths (whitelist):
       - longest_duration / tiebreak_graduation_school / commune_lookup
@@ -4259,15 +4262,14 @@ def _assert_kv_resolved_for_submit(
       - address_not_normalized / catalog_gap_* / insufficient_data /
         ambiguous_requires_manual / not_resolved / unknown future rules
       - kv_resolved is None mà rule trong whitelist (race)
-      - Empty/None snapshot (freeze chưa chạy hoặc fail infra → fail-closed,
-        không cho submit khi không có bằng chứng KV đã resolve)
+      - Empty/None snapshot (freeze chưa chạy hoặc fail infra)
 
     Args:
         snapshot: profile.priority_resolution_snapshot (dict | None).
         profile_id: id cho log context.
 
-    Raises:
-        BadRequest: KV unresolved/missing, message tiếng Việt + rule + reason.
+    Returns:
+        Error message tiếng Việt nếu unresolved; None nếu pass.
     """
     snapshot = snapshot or {}
     rule_applied = snapshot.get("rule_applied")
@@ -4275,12 +4277,10 @@ def _assert_kv_resolved_for_submit(
 
     # Pass: rule trong success whitelist VÀ kv_resolved có giá trị.
     if rule_applied in _KV_SUCCESS_RULE_APPLIED and kv_resolved is not None:
-        return
+        return None
 
-    # Otherwise block — fail-closed default (KHÔNG defensive empty pass).
+    # Otherwise build error message — fail-closed default.
     if not snapshot:
-        # Empty/None — freeze chưa chạy hoặc fail. Submit-time block; ops sẽ
-        # thấy KV_RESOLUTION_FAILED hoặc KV_UNRESOLVED no_snapshot trong log.
         reason = "no_snapshot_present"
         log.info(
             "submit_blocked_kv_no_snapshot",
@@ -4300,13 +4300,28 @@ def _assert_kv_resolved_for_submit(
             kv_resolved=kv_resolved,
             reason=reason,
         )
-    raise BadRequest(
+    return (
         f"KV_UNRESOLVED ({rule_applied or 'no_rule_applied'}): engine không "
         f"xác định được khu vực ưu tiên cho hồ sơ này. Lý do: {reason}. "
         f"Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú và lịch "
         f"sử học THPT, hoặc đề nghị quản lý ấn định KV thủ công trước "
         f"khi nộp."
     )
+
+
+def _assert_kv_resolved_for_submit(
+    snapshot: Optional[dict],
+    profile_id: int,
+) -> None:
+    """Raise BadRequest wrapper trên ``_kv_unresolved_error_message``.
+
+    Retained cho callers external (vd alternate flows). Submit-T1 path
+    KHÔNG dùng wrapper này nữa — giờ collect error vào validation_errors
+    list để commit snapshot unresolved (signal cho manager override draft).
+    """
+    err = _kv_unresolved_error_message(snapshot, profile_id)
+    if err:
+        raise BadRequest(err)
 
 
 async def _validate_eligibility_all_choices(
@@ -4817,6 +4832,62 @@ async def submit_and_evaluate(
     if not profile.academic_history:
         errors.append("Chưa nhập quá trình học tập (Academic History is empty)")
 
+    # Q9 #07 Phase E.4 reviewer v4 — KV freeze + assert chuyển từ "post if-errors
+    # transition prep" lên đây để errors collect cho cả KV failure. Nếu raise
+    # BadRequest trong transaction success path, router rollback snapshot →
+    # manager/admin draft override gate KHÔNG thấy engine signal → deadlock.
+    # Giải pháp: freeze runs unconditionally (collect signal vào snapshot),
+    # errors list aggregate KV unresolved/resolution_failed, then `if errors:`
+    # branch flushes snapshot + returns validation_errors. Snapshot persist
+    # vào DB qua router commit → override draft sees requires_manual_override.
+    #
+    # Lazy import: priority_service imports app.models would create circular
+    # dep at module load time of this service file.
+    from .priority_service import (
+        derive_profile_target_context,
+        freeze_priority_snapshot as _freeze_kv,
+    )
+
+    try:
+        target_ctx = await derive_profile_target_context(profile, db)
+        await _freeze_kv(
+            profile=profile,
+            db=db,
+            frozen_at_status="submitted_T1",
+            resolved_by="system",
+            target_level=target_ctx.get("target_level"),
+            admission_type=target_ctx.get("admission_type"),
+            eligibility=target_ctx.get("eligibility"),
+            path_bonus_rule=target_ctx.get("path_bonus_rule"),
+        )
+    except (BadRequest, BusinessRuleViolation):
+        # Domain errors từ helper (vd version conflict) → bubble lên router.
+        raise
+    except Exception as freeze_exc:  # noqa: BLE001
+        log.error(
+            "priority_snapshot_freeze_failed_at_submit",
+            profile_id=profile_id,
+            error=str(freeze_exc),
+            error_type=type(freeze_exc).__name__,
+        )
+        errors.append(
+            f"KV_RESOLUTION_FAILED: engine không hoàn tất resolve KV cho hồ "
+            f"sơ này do lỗi hệ thống ({type(freeze_exc).__name__}). Vui lòng "
+            f"thử lại; nếu lỗi tiếp diễn, báo admin kiểm tra catalog "
+            f"(vn_commune_area_map, vn_school_kv_assignment) và cấu hình "
+            f"path/method."
+        )
+
+    # KV unresolved check — collect message vào errors list (KHÔNG raise).
+    # Snapshot freeze ở trên đã ghi requires_manual_override=True khi engine
+    # cần manual; flush + commit ở `if errors:` branch persist signal đó cho
+    # admin/manager override draft.
+    kv_error = _kv_unresolved_error_message(
+        profile.priority_resolution_snapshot, profile_id
+    )
+    if kv_error:
+        errors.append(kv_error)
+
     # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
     # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
     # Validation errors should NOT change status - stay in draft for user to fix
@@ -4894,57 +4965,10 @@ async def submit_and_evaluate(
         # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
         # always fire side-by-side AFTER ``db.commit()``.
 
-        # Q9 #07 Phase C — Freeze priority resolution snapshot at T1.
-        # Captures kv_resolved + breakdown immutably at submit time so
-        # subsequent admin edits to vn_school_kv_assignment / vn_commune_area_map
-        # don't mutate the candidate's resolved KV. T6 evaluate_cascade
-        # re-freezes with current rates per Q-P3-11 snapshot pattern.
-        # Lazy import: priority_service imports app.models which would
-        # create a circular dep at module load time.
-        from .priority_service import (
-            derive_profile_target_context,
-            freeze_priority_snapshot as _freeze_kv,
-        )
-
-        try:
-            # Phase E.4 commit 5 — bơm target_level + admission_type + bonus
-            # rule context vào snapshot để engine resolve đúng matrix mới.
-            # Multi-NV: lookup NV1 (display_order=1). Legacy: offering_admission_config.
-            target_ctx = await derive_profile_target_context(profile, db)
-            await _freeze_kv(
-                profile=profile,
-                db=db,
-                frozen_at_status="submitted_T1",
-                resolved_by="system",
-                target_level=target_ctx.get("target_level"),
-                admission_type=target_ctx.get("admission_type"),
-                eligibility=target_ctx.get("eligibility"),
-                path_bonus_rule=target_ctx.get("path_bonus_rule"),
-            )
-        except (BadRequest, BusinessRuleViolation):
-            # Domain errors từ helper (vd version conflict, validation) →
-            # bubble up nguyên trạng cho router.
-            raise
-        except Exception as freeze_exc:  # noqa: BLE001
-            # Phase E.4 reviewer 2026-05-21 fix-up — freeze infra failure
-            # phải block submit (fail-closed, KHÔNG pass-through). Pre-fix:
-            # catch + log warning + cho submit tiếp → vi phạm nghiệp vụ #7.
-            log.error(
-                "priority_snapshot_freeze_failed_at_submit",
-                profile_id=profile_id,
-                error=str(freeze_exc),
-                error_type=type(freeze_exc).__name__,
-            )
-            raise BadRequest(
-                f"KV_RESOLUTION_FAILED: engine không hoàn tất resolve KV cho "
-                f"hồ sơ này do lỗi hệ thống ({type(freeze_exc).__name__}). "
-                f"Vui lòng thử lại; nếu lỗi tiếp diễn, báo admin kiểm tra "
-                f"catalog (vn_commune_area_map, vn_school_kv_assignment) và "
-                f"cấu hình path/method."
-            ) from freeze_exc
-
-        # Q9 #07 Phase E.4 commit 5 fix-up — block submit khi KV unresolved.
-        _assert_kv_resolved_for_submit(profile.priority_resolution_snapshot, profile_id)
+        # Q9 #07 Phase E.4 reviewer v4 — freeze + KV check đã chạy ở bước
+        # validation phía trên. Nếu reach đây tức snapshot có rule_applied
+        # success + kv_resolved set (whitelist pass). Atomic increment +
+        # state transition chỉ fire khi đảm bảo no errors.
 
         try:
             profile, _ = await state_transition(
