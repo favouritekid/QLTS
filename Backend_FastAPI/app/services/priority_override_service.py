@@ -261,10 +261,29 @@ async def override_kv(
             f"(got {len(reason_clean)})"
         )
 
-    # ---- Step 3: Status whitelist (role-aware)
+    # ---- Step 3: Role-level deny — Phase E.4 commit 7 hardening
+    # Yêu cầu nghiệp vụ #10 (chốt 2026-05-21): officer KHÔNG được override KV.
+    # Manager/admin pre-publish allowed với reason + audit; admin-only cho
+    # post-publish với acknowledge flag. Pre-commit 7: officer được override
+    # cho submitted/reviewing/revision_requested → cần block toàn diện.
+    # Service-level deny là defense-in-depth: Casbin migration q9_07_e4f cũng
+    # remove role:officer policy row; UI permissions flag cũng đổi sang chỉ
+    # admin/manager. Officer reach đây = bug router/permissions → raise.
     is_admin = actor.role == "admin"
     is_manager = actor.role == "manager"
-    is_officer_path = actor.role in ("officer", "manager")  # both treated as officer path
+    is_officer_path = actor.role == "manager"  # only manager treated as officer path
+    if actor.role == "officer":
+        log.warning(
+            "officer_override_kv_attempt_denied",
+            profile_id=profile.id,
+            actor_id=actor.id,
+            profile_status=profile.status,
+        )
+        raise BusinessRuleViolation(
+            "Officer không được override KV. Chỉ manager hoặc admin được "
+            "phép ấn định KV thủ công với lý do + audit. Vui lòng đề nghị "
+            "quản lý xử lý hồ sơ này."
+        )
 
     if profile.status in _HARD_DENIED_STATUS:
         raise BusinessRuleViolation(
@@ -279,9 +298,11 @@ async def override_kv(
     # đủ ở commit 7).
     if profile.status == "draft":
         if not (is_admin or is_manager):
+            # Officer đã được block ở top (commit 7). Branch này còn cover các
+            # role khác như accountant/user nếu Casbin lọt qua.
             raise BusinessRuleViolation(
-                "Officer không được override KV ở trạng thái draft. "
-                "Vui lòng đề nghị quản lý / admin xử lý hồ sơ này."
+                "Chỉ admin hoặc manager được phép override KV ở trạng thái "
+                "draft. Vui lòng đề nghị quản lý xử lý hồ sơ này."
             )
 
         # Phase E.4 reviewer v5 2026-05-21 — RECOMPUTE LIVE thay vì trust snapshot

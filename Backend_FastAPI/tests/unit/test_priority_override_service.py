@@ -205,15 +205,26 @@ async def test_invalid_kv_value_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Phase E.4 commit 7 hardening: officer blocked at top — KHÔNG cần status-
+# specific test cho officer vì role gate fire trước status gate.
+# `test_officer_uniformly_blocked` (parametrized below) cover all states.
+
+
 @pytest.mark.parametrize(
-    "status", ["withdrawn", "dropped", "rejected"]
+    "status",
+    ["draft", "submitted", "reviewing", "revision_requested", "resubmitted",
+     "withdrawn", "dropped", "rejected", "enrolled", "approved",
+     "confirmed", "result_published"],
 )
-async def test_hard_denied_status_raises_for_officer(status: str) -> None:
+async def test_officer_uniformly_blocked_at_any_status(status: str) -> None:
+    """Phase E.4 commit 7 (yêu cầu nghiệp vụ #10): officer KHÔNG được override
+    KV bất kể profile status. Service-layer hard-deny role=='officer' ngay
+    sau version + reason validate, trước status whitelist."""
     profile = _make_profile(status=status)
     actor = _make_actor("officer")
     db = _make_db()
 
-    with pytest.raises(BusinessRuleViolation, match=status):
+    with pytest.raises(BusinessRuleViolation, match="Officer không được override KV"):
         await override_kv(
             db,
             profile,
@@ -448,15 +459,22 @@ async def test_draft_override_refused_with_stale_snapshot_signal_after_officer_f
     assert profile.priority_resolution_snapshot == stale_snapshot
 
 
+# Phase E.4 commit 7: ``test_officer_refused_post_publish_raises_permission_error``
+# REMOVED — officer giờ block ngay top với BusinessRuleViolation cho mọi status
+# (covered by ``test_officer_uniformly_blocked_at_any_status``). PermissionError
+# path còn lại chỉ cho manager attempting post-publish (treated as officer-path).
+
+
 @pytest.mark.parametrize(
     "status", ["enrolled", "approved", "confirmed", "result_published"]
 )
-async def test_officer_refused_post_publish_raises_permission_error(
+async def test_manager_refused_post_publish_raises_permission_error(
     status: str,
 ) -> None:
-    """Officer hits PermissionError for post-publish; router maps to 403."""
+    """Manager refused post-publish via PermissionError (router maps to 403).
+    Admin bypass với acknowledge_post_publish flag (separate test)."""
     profile = _make_profile(status=status)
-    actor = _make_actor("officer")
+    actor = _make_actor("manager")
     db = _make_db()
 
     with pytest.raises(PermissionError):
@@ -495,9 +513,13 @@ async def test_admin_post_publish_without_ack_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_officer_happy_path_mutates_snapshot_and_audit_log() -> None:
+async def test_manager_happy_path_mutates_snapshot_and_audit_log() -> None:
+    """Phase E.4 commit 7: officer hard-blocked; happy path now belongs to
+    manager (admin happy path covered separately with post-publish ack).
+    Manager override pre-publish status (submitted) — same mechanics as
+    pre-commit 7 officer flow."""
     profile = _make_profile(status="submitted", version=5)
-    actor = _make_actor("officer", user_id=7)
+    actor = _make_actor("manager", user_id=7)
     db = _make_db()
 
     updated, post_commit = await override_kv(
@@ -523,6 +545,8 @@ async def test_officer_happy_path_mutates_snapshot_and_audit_log() -> None:
     assert snap["manual_override_reason"] == REASON_VALID
     assert snap["evidence_file_id"] == 42
     assert snap["frozen_at_status"] == "manual_override"
+    # Manager treated as officer-path (resolved_by="officer"); only admin emit
+    # resolved_by="admin". Behavior preserved from pre-commit 7.
     assert snap["resolved_by"] == "officer"
 
     # Engine-state keys dropped post-override
@@ -545,7 +569,7 @@ async def test_officer_happy_path_mutates_snapshot_and_audit_log() -> None:
     assert audit_row.old_value["kv_resolved"] == "KV3"
     assert audit_row.new_value["kv_resolved"] == "KV1"
     assert audit_row.new_value["reason"] == REASON_VALID
-    assert audit_row.audit_metadata["actor_role"] == "officer"
+    assert audit_row.audit_metadata["actor_role"] == "manager"
 
     # Flushed but NOT committed (router responsibility)
     db.flush.assert_awaited_once()
@@ -553,6 +577,31 @@ async def test_officer_happy_path_mutates_snapshot_and_audit_log() -> None:
 
     # post_commit callable returned
     assert callable(post_commit)
+
+
+async def test_officer_blocked_even_with_valid_state_and_inputs() -> None:
+    """Phase E.4 commit 7 negative regression — officer with completely valid
+    submitted-state inputs STILL blocked. Confirms role gate is unconditional."""
+    profile = _make_profile(status="submitted", version=5)
+    actor = _make_actor("officer", user_id=7)
+    db = _make_db()
+
+    with pytest.raises(BusinessRuleViolation, match="Officer không được override KV"):
+        await override_kv(
+            db,
+            profile,
+            kv_resolved="KV1",
+            reason=REASON_VALID,
+            evidence_file_id=42,
+            actor=actor,
+            expected_version=5,
+        )
+    # Snapshot KHÔNG bị mutate
+    assert profile.priority_resolution_snapshot.get("rule_applied") != "manual_override"
+    # Version KHÔNG bump
+    assert profile.version == 5
+    # Audit log KHÔNG có row được add
+    assert len(_find_audit_rows(db)) == 0
 
 
 # ---------------------------------------------------------------------------

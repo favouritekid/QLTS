@@ -1518,20 +1518,26 @@ def _compute_frontend_fields(
             )
             and (is_owner or is_manager or is_admin)
         ),
-        # Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path).
-        # Service-layer (priority_override_service) enforces full whitelist
-        # + post-publish admin-only gate. UI uses this flag only to gate
-        # visibility of "Cán bộ ấn định thủ công" button trong PriorityTab.
-        # Officer must be assigned to profile via lead.assigned_officer_id;
-        # manager/admin scope handled by route's IDOR dep. Status whitelist
-        # here matches service-layer ``_OFFICER_ALLOWED_STATUS`` for officer
-        # path; admin bypasses (UI shows button regardless of status, dialog
-        # secondary checkbox for post-publish profiles).
+        # Q9 #07 Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10):
+        # Officer KHÔNG được override KV. Chỉ admin + manager mới có quyền.
+        # Pre-fix-up: officer được override cho submitted/reviewing/
+        # revision_requested + ownership check. Hardening:
+        #   - admin: any state (UI shows button; dialog handles post-publish ack)
+        #   - manager: submitted/reviewing/revision_requested + draft (engine
+        #     signal required, service-layer gate verifies live recompute)
+        #   - officer / accountant / user: never (UI hide button)
+        # Service-layer (priority_override_service) cũng có hard-deny officer
+        # ngay đầu override_kv là defense-in-depth.
         "override_priority_kv": (
             is_admin
             or (
-                (is_manager or (is_officer and is_owner))
-                and status in ["submitted", "reviewing", "revision_requested"]
+                is_manager
+                and status in [
+                    "draft",
+                    "submitted",
+                    "reviewing",
+                    "revision_requested",
+                ]
             )
         ),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
