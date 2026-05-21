@@ -4506,21 +4506,26 @@ async def submit_and_evaluate(
                 "Vui lòng thêm nguyện vọng tại bước Điểm & Điều kiện."
             )
 
-        # Q9 #07 Phase E.4 — eligibility gate per choice trước khi freeze KV.
-        # Engine pipeline yêu cầu Eligibility → Exception → Auto basis → Resolve
-        # KV (xem priority_service docstring). Per yêu cầu nghiệp vụ #5:
-        #   - CĐ chính quy/liên thông: cultural mở rộng + (vocational nếu liên thông)
-        #   - TC chính quy/liên thông: cultural ≥ THCS + (vocational nếu liên thông)
-        #   - SC chính quy: không yêu cầu
-        # Tuyệt đối KHÔNG fallback "so_cap" khi thiếu target_level config.
-        await _validate_eligibility_all_choices(db, profile)
-
     # Must be in draft status
     if profile.status != "draft":
         raise BadRequest(
             f"Cannot submit profile with status '{profile.status}'. "
             "Only draft profiles can be submitted."
         )
+
+    # Q9 #07 Phase E.4 — eligibility gate per yêu cầu nghiệp vụ #5: chặn TOÀN BỘ
+    # hồ sơ submit không match cultural + vocational vs target_level/admission_type
+    # của path/config. Trước fix: gate đặt trong if uses_choice_engine → 9/11 dev
+    # profile legacy single-path bypass (reviewer finding 2026-05-21).
+    #
+    # Helper handle 2 flow:
+    #   - uses_choice_engine=True (multi-NV): loop choices.admission_path
+    #   - uses_choice_engine=False (legacy): profile.offering_admission_config chain
+    #
+    # Pipeline order: Eligibility → Exception → Auto basis → Resolve KV → Apply
+    # bonus → Snapshot (xem priority_service docstring). Tuyệt đối KHÔNG fallback
+    # "so_cap" khi thiếu target_level config — raise CONFIG_GAP_TARGET_LEVEL.
+    await _validate_eligibility_all_choices(db, profile)
 
     errors: List[str] = []
 
