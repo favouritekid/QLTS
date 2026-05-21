@@ -70,11 +70,25 @@ def _make_actor(role: str = "officer", user_id: int = 7):
 
 
 def _make_db():
-    """AsyncMock session — captures db.add() calls + db.flush() awaits."""
+    """AsyncMock session — captures db.add() calls + db.flush() awaits.
+
+    Phase E.4 v5 — override_kv draft gate now calls db.execute() qua
+    ``derive_profile_target_context`` + ``resolve_kv_for_profile``. Provide
+    a permissive execute mock returning empty results; tests that need
+    specific engine behavior patch the priority_service functions instead.
+    """
     db = MagicMock()
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
+
+    # Defensive execute mock: returns a result object with scalar_one_or_none()
+    # = None + scalar().all() = []. Tests patch priority_service functions để
+    # bypass execute entirely.
+    empty_result = MagicMock()
+    empty_result.scalar_one_or_none = MagicMock(return_value=None)
+    empty_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    db.execute = AsyncMock(return_value=empty_result)
     return db
 
 
@@ -266,28 +280,70 @@ async def test_draft_override_refused_for_officer() -> None:
         )
 
 
-@pytest.mark.parametrize("role", ["admin", "manager"])
-async def test_draft_override_refused_without_engine_signal(role: str) -> None:
-    """Admin/manager cũng KHÔNG được override draft khi engine chưa emit
-    requires_manual_override — tránh free-form override khi candidate vẫn
-    edit form. Engine có thể resolve khi đủ data."""
-    snapshot_engine_resolve_ok = {
-        "kv_resolved": "KV1",
-        "rule_applied": "longest_duration",
-        "basis": "LICH_SU_THPT",
-        # Không có requires_manual_override
+# Phase E.4 v5 — Draft override now uses LIVE engine recompute (not snapshot
+# stale). Helper monkeypatch để control resolve_kv_for_profile + derive
+# context output for these tests.
+async def _fake_derive_ctx(profile_arg, db_arg):
+    return {
+        "target_level": "trung_cap",
+        "admission_type": "chinh_quy",
+        "eligibility": {"passed": True, "reason": None},
+        "path_bonus_rule": None,
+        "source": "test_stub",
     }
-    profile = _make_profile(
-        status="draft",
-        snapshot=snapshot_engine_resolve_ok,
-    )
+
+
+def _fake_resolve_factory(returns_unresolved: bool, rule: str = "address_not_normalized"):
+    """Factory: build resolve_kv_for_profile mock returning unresolved or success meta."""
+    async def _fake_resolve(profile_arg, db_arg, target_level=None, admission_type=None):
+        if returns_unresolved:
+            return None, {
+                "rule_applied": rule,
+                "pathway": "thuong_tru",
+                "basis": "THUONG_TRU",
+                "basis_reason": "tc_chinh_quy_post_thcs_uses_commune",
+                "requires_manual_override": True,
+                "reason": "profile_missing_permanent_commune_code",
+            }
+        return "KV1", {
+            "rule_applied": "commune_lookup",
+            "pathway": "thuong_tru",
+            "basis": "THUONG_TRU",
+            "basis_reason": "tc_chinh_quy_post_thcs_uses_commune",
+            "breakdown": {"commune_code_used": "66_22255"},
+        }
+    return _fake_resolve
+
+
+@pytest.mark.parametrize("role", ["admin", "manager"])
+async def test_draft_override_refused_when_engine_recompute_resolves_live(
+    role: str, monkeypatch,
+) -> None:
+    """v5: Live engine recompute resolve OK với current profile data → refuse,
+    bất kể snapshot stale có signal hay không. Tránh free-form override khi
+    engine có đường tự xử."""
+    # Snapshot có thể là stale signal (officer mới sửa data) hoặc resolved OK
+    snapshot_any = {
+        "kv_resolved": None,
+        "rule_applied": "address_not_normalized",
+        "requires_manual_override": True,  # STALE signal
+        "reason": "profile_missing_permanent_commune_code",
+    }
+    profile = _make_profile(status="draft", snapshot=snapshot_any)
     actor = _make_actor(role)
     db = _make_db()
 
-    with pytest.raises(BusinessRuleViolation, match="draft chỉ được override"):
+    # Patch live recompute → return success (engine resolve OK)
+    import app.services.priority_service as priority_module
+    monkeypatch.setattr(priority_module, "derive_profile_target_context", _fake_derive_ctx)
+    monkeypatch.setattr(
+        priority_module, "resolve_kv_for_profile",
+        _fake_resolve_factory(returns_unresolved=False),
+    )
+
+    with pytest.raises(BusinessRuleViolation, match="Engine vừa tính lại và resolve thành công"):
         await override_kv(
-            db,
-            profile,
+            db, profile,
             kv_resolved="KV2",
             reason=REASON_VALID,
             evidence_file_id=None,
@@ -297,27 +353,33 @@ async def test_draft_override_refused_without_engine_signal(role: str) -> None:
 
 
 @pytest.mark.parametrize("role", ["admin", "manager"])
-async def test_draft_override_allowed_for_admin_manager_with_engine_signal(role: str) -> None:
-    """Admin/manager được override draft KHI engine emit requires_manual_override
-    (vd: address_not_normalized, catalog_gap_*, ambiguous). Gỡ deadlock với
-    submit guard fail-closed."""
+async def test_draft_override_allowed_when_engine_recompute_still_unresolved(
+    role: str, monkeypatch,
+) -> None:
+    """v5: Live engine recompute vẫn emit unresolved → allow (matches submit
+    guard fail-closed). Snapshot có thể đã có signal cũ hoặc không — không
+    quan trọng, live engine là nguồn quyết định."""
     snapshot_with_engine_signal = {
         "kv_resolved": None,
         "rule_applied": "ambiguous_requires_manual",
         "requires_manual_override": True,
         "reason": "tied_graduation_year_and_grade",
     }
-    profile = _make_profile(
-        status="draft",
-        snapshot=snapshot_with_engine_signal,
-    )
+    profile = _make_profile(status="draft", snapshot=snapshot_with_engine_signal)
     actor = _make_actor(role)
     db = _make_db()
 
+    # Patch live recompute → return unresolved (engine vẫn không xác định)
+    import app.services.priority_service as priority_module
+    monkeypatch.setattr(priority_module, "derive_profile_target_context", _fake_derive_ctx)
+    monkeypatch.setattr(
+        priority_module, "resolve_kv_for_profile",
+        _fake_resolve_factory(returns_unresolved=True, rule="address_not_normalized"),
+    )
+
     # Should not raise — override succeeds
     updated, _cb = await override_kv(
-        db,
-        profile,
+        db, profile,
         kv_resolved="KV1",
         reason=REASON_VALID,
         evidence_file_id=None,
@@ -330,6 +392,60 @@ async def test_draft_override_allowed_for_admin_manager_with_engine_signal(role:
     assert snap["manual_override_reason"] == REASON_VALID
     # Engine signal flag dropped post-override
     assert "requires_manual_override" not in snap
+
+
+async def test_draft_override_refused_with_stale_snapshot_signal_after_officer_fix(
+    monkeypatch,
+) -> None:
+    """Reviewer P0 2026-05-21 v5 — STALE SIGNAL bug regression.
+
+    Scenario:
+      1. Officer submit thiếu commune_code → snapshot persist với rule
+         address_not_normalized + requires_manual_override=True.
+      2. Officer sửa permanent_commune_code='66_22255' (qua update_profile);
+         snapshot KHÔNG được clear/recompute auto.
+      3. Manager mở override_kv draft.
+      4. Pre-fix v5: gate kiểm tra snapshot.requires_manual_override → True
+         (stale) → pass → free-form override với KV bất kỳ. SAI nghiệp vụ.
+      5. Post-fix v5: gate recompute live → engine giờ resolve OK (commune
+         có catalog) → refuse. Officer cần submit lại để engine refreeze.
+    """
+    # Stale snapshot from old submit (commune empty)
+    stale_snapshot = {
+        "kv_resolved": None,
+        "rule_applied": "address_not_normalized",
+        "pathway": "thuong_tru",
+        "basis": "THUONG_TRU",
+        "requires_manual_override": True,  # STALE
+        "reason": "profile_missing_permanent_commune_code",
+    }
+    profile = _make_profile(status="draft", snapshot=stale_snapshot)
+    # Officer đã sửa commune_code; profile.permanent_commune_code có giá trị.
+    # Trong test này SimpleNamespace stub không tracking field; quan trọng là
+    # live recompute fake return success → simulate "engine giờ resolve OK".
+    actor = _make_actor("manager")
+    db = _make_db()
+
+    import app.services.priority_service as priority_module
+    monkeypatch.setattr(priority_module, "derive_profile_target_context", _fake_derive_ctx)
+    monkeypatch.setattr(
+        priority_module, "resolve_kv_for_profile",
+        _fake_resolve_factory(returns_unresolved=False),  # Live = OK
+    )
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await override_kv(
+            db, profile,
+            kv_resolved="KV2",  # Manager intent override
+            reason=REASON_VALID,
+            evidence_file_id=None,
+            actor=actor,
+            expected_version=5,
+        )
+    # Message phải nói rõ "engine vừa tính lại" để officer hiểu sửa data → resolve OK
+    assert "Engine vừa tính lại và resolve thành công" in str(exc.value)
+    # Snapshot KHÔNG bị mutate (override refused)
+    assert profile.priority_resolution_snapshot == stale_snapshot
 
 
 @pytest.mark.parametrize(

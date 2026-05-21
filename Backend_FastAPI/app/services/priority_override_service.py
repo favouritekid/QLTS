@@ -283,15 +283,46 @@ async def override_kv(
                 "Officer không được override KV ở trạng thái draft. "
                 "Vui lòng đề nghị quản lý / admin xử lý hồ sơ này."
             )
-        snapshot_now = profile.priority_resolution_snapshot or {}
-        if not snapshot_now.get("requires_manual_override"):
+
+        # Phase E.4 reviewer v5 2026-05-21 — RECOMPUTE LIVE thay vì trust snapshot
+        # stale. Pre-fix: kiểm tra ``snapshot.requires_manual_override`` từ DB.
+        # Edge case: officer sửa permanent_commune_code/cultural/history sau
+        # khi submit fail → snapshot vẫn cũ → manager override draft pass dù
+        # engine giờ resolve được. → sai nghiệp vụ (free-form override khi
+        # engine có đường tự xử).
+        # Fix: re-run resolve_kv_for_profile() với profile state hiện tại;
+        # CHỈ allow override draft khi engine vẫn emit unresolved signal.
+        # Lazy import (priority_service ↔ models circular dep at top-level).
+        from .priority_service import (
+            derive_profile_target_context,
+            resolve_kv_for_profile,
+        )
+
+        live_target_ctx = await derive_profile_target_context(profile, db)
+        _live_kv, live_meta = await resolve_kv_for_profile(
+            profile,
+            db,
+            target_level=live_target_ctx.get("target_level"),
+            admission_type=live_target_ctx.get("admission_type"),
+        )
+        if not live_meta.get("requires_manual_override"):
+            log.info(
+                "draft_override_refused_engine_resolved_live",
+                profile_id=profile.id,
+                actor_id=actor.id,
+                live_rule_applied=live_meta.get("rule_applied"),
+                live_basis=live_meta.get("basis"),
+                snapshot_rule_applied=(
+                    profile.priority_resolution_snapshot or {}
+                ).get("rule_applied"),
+            )
             raise BusinessRuleViolation(
-                "Hồ sơ draft chỉ được override KV khi engine không xác "
-                "định được (snapshot.requires_manual_override=True). "
-                "Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú "
-                "và lịch sử học để engine resolve tự động trước, hoặc "
-                "submit để chuyển sang trạng thái cho phép override "
-                "thường lệ (submitted/reviewing/revision_requested)."
+                "Hồ sơ draft chỉ được override KV khi engine không xác định "
+                f"được với dữ liệu hiện tại. Engine vừa tính lại và resolve "
+                f"thành công (rule={live_meta.get('rule_applied')}, "
+                f"basis={live_meta.get('basis')}). Nếu muốn áp KV khác, "
+                f"submit hồ sơ trước (state submitted/reviewing/revision_requested "
+                f"cho phép override thường lệ)."
             )
 
     if profile.status in _POST_PUBLISH_STATUS:
