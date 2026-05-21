@@ -276,7 +276,11 @@ async def override_kv(
     # admin/manager. Officer reach đây = bug router/permissions → raise.
     is_admin = actor.role == "admin"
     is_manager = actor.role == "manager"
-    is_officer_path = actor.role == "manager"  # only manager treated as officer path
+    # Phase E.4 commit 7 hardening: officer hard-deny ở top → "non-admin
+    # override path" giờ chỉ còn manager. Trước đây tên ``is_officer_path``
+    # vì cả officer + manager đều fall vào cùng whitelist; nay alias rõ
+    # tên hiện hành để reader khỏi hiểu lầm officer còn ở scope.
+    is_manager_override_path = actor.role == "manager"
     if actor.role == "officer":
         log.warning(
             "officer_override_kv_attempt_denied",
@@ -370,7 +374,7 @@ async def override_kv(
 
     if (
         not is_admin
-        and is_officer_path
+        and is_manager_override_path
         and profile.status not in _OFFICER_ALLOWED_STATUS
         and profile.status not in _POST_PUBLISH_STATUS
         and profile.status != "draft"  # draft handled by dedicated gate above

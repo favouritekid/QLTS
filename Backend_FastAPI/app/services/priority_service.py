@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
+import structlog
 from sqlalchemy import select
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from app.models.admission import AdmissionProfile
 
 
+log = structlog.get_logger(__name__)
 _ZERO = Decimal("0.00")
 
 
@@ -362,7 +364,7 @@ def _derive_kv_basis_level(
 
     voc = vocational or "none"
 
-    # 3. Backward-compat legacy branch (target_level chưa truyền — caller cũ).
+    # 4. Backward-compat legacy branch (target_level chưa truyền — caller cũ).
     #    Replicate matrix commit 4 để test legacy không break.
     if target_level is None:
         # Hồ sơ THPT-related → LICH_SU_THPT (trừ completed_thpt + so_cap/none → THUONG_TRU)
@@ -374,10 +376,10 @@ def _derive_kv_basis_level(
             return "THUONG_TRU", "legacy_thcs_pathway_uses_commune"
         return "NOT_RESOLVED", "legacy_unknown_cultural"
 
-    # 4. Phase E.4 matrix — target_level + admission_type drive basis.
+    # 5. Phase E.4 matrix — target_level + admission_type drive basis.
     atype = admission_type or "chinh_quy"
 
-    # 4a. Hybrid CĐ liên thông + completed_thpt + TC/CĐ (KHOI_LUONG_VH_THPT).
+    # 5a. Hybrid CĐ liên thông + completed_thpt + TC/CĐ (KHOI_LUONG_VH_THPT).
     # Per nghiệp vụ #6: có lịch sử THPT/GDTX hợp lệ → LICH_SU_THPT; không có
     # → THUONG_TRU; cả 2 thiếu → INSUFFICIENT_DATA (resolve step downgrade).
     if (
@@ -390,7 +392,7 @@ def _derive_kv_basis_level(
             return "LICH_SU_THPT", "cd_lien_thong_khoi_luong_with_thpt_history"
         return "THUONG_TRU", "cd_lien_thong_khoi_luong_no_thpt_history_fallback"
 
-    # 4b. CĐ (chính quy hoặc liên thông) với cultural graduated_thpt/gdtx/completed_thpt
+    # 5b. CĐ (chính quy hoặc liên thông) với cultural graduated_thpt/gdtx/completed_thpt
     # → LICH_SU_THPT. Matrix nghiệp vụ #6:
     #   - CĐ chính quy sau THPT/hoàn thành THPT → LICH_SU_THPT
     #   - CĐ chính quy diện hoàn thành THPT + TC → LICH_SU_THPT
@@ -405,7 +407,7 @@ def _derive_kv_basis_level(
         # Defensive: nếu reach here → cấu hình mismatch upstream.
         return "INSUFFICIENT_DATA", f"cd_{atype}_cultural_insufficient_for_kv_basis"
 
-    # 4c. TC matrix.
+    # 5c. TC matrix.
     if target_level == "trung_cap":
         if atype == "lien_thong":
             # TC liên thông từ SC/TC sau THCS → THUONG_TRU
@@ -424,12 +426,12 @@ def _derive_kv_basis_level(
             return "LICH_SU_THPT", "tc_chinh_quy_post_thpt_uses_school_history"
         return "INSUFFICIENT_DATA", "tc_chinh_quy_cultural_insufficient_for_kv_basis"
 
-    # 4d. SC chính quy — không yêu cầu cultural; default THUONG_TRU.
+    # 5d. SC chính quy — không yêu cầu cultural; default THUONG_TRU.
     # Engine sẽ check commune ở resolve step (ADDRESS_NOT_NORMALIZED nếu miss).
     if target_level == "so_cap":
         return "THUONG_TRU", "sc_uses_commune"
 
-    # 5. Defensive: target_level ngoài CD/TC/SC scope (eligibility gate đã chặn).
+    # 6. Defensive: target_level ngoài CD/TC/SC scope (eligibility gate đã chặn).
     return "INSUFFICIENT_DATA", f"unsupported_target_level:{target_level}"
 
 
@@ -794,13 +796,29 @@ async def freeze_priority_snapshot(
 
     Called from:
       - submit_admission_profile (T1) → frozen_at_status='submitted_T1'
-      - evaluate_cascade (T6) → frozen_at_status='engine_T6'
+      - evaluate_cascade (T6)         → frozen_at_status='engine_T6'
 
     Mutates ``profile.priority_resolution_snapshot`` directly. Caller is
     responsible for ``await db.flush()`` (no commit — service layer rule).
 
-    ``frozen_at_status`` MUST be one of:
-      'draft_preview' | 'submitted_T1' | 'engine_T6'
+    ``frozen_at_status`` values this helper writes:
+      'submitted_T1' | 'engine_T6'
+
+    Snapshot column ALSO sees ``'manual_override'`` — written directly by
+    ``priority_override_service.override_kv`` (NOT via this helper).
+
+    Phase E.4 semantics — ``frozen_at_status='submitted_T1'`` indicates the
+    snapshot was frozen DURING a submit attempt; it does NOT imply the
+    submit succeeded. Since commit ``dd108eb2`` (Phase E.4), submit
+    aggregates KV unresolved/resolution_failed into ``validation_errors``
+    instead of raising, so the snapshot persists (router still commits)
+    while ``profile.status`` stays ``'draft'``. This is required to
+    expose the engine signal (``requires_manual_override``) to the manager
+    /admin override-draft gate. To disambiguate ``submitted_T1`` snapshots,
+    callers MUST check ``profile.status``:
+      - ``status='draft'`` + ``submitted_T1``  → submit FAILED, snapshot
+        captures resolution attempt for override gate
+      - ``status='submitted'`` + ``submitted_T1`` → submit SUCCEEDED
 
     Phase E.4 (commit 5) additive fields (optional — backward-compat):
       target_level, admission_type, eligibility, basis, basis_reason,
@@ -846,6 +864,27 @@ async def freeze_priority_snapshot(
 
     profile.priority_resolution_snapshot = snapshot
     return snapshot
+
+
+def _make_path_shim_from_academic_info(academic_info: Any) -> Any:
+    """Build pseudo-AdmissionPath stub bọc academic_info đã eager-load.
+
+    ``derive_target_level_and_type`` đọc qua ``path.__dict__['academic_info']``
+    để mimic eager-load semantics; legacy callers (single-path / config
+    chain) không có thực thể AdmissionPath nên cần shim. Helper này centralize
+    pattern (trước đây duplicated 2 chỗ: admission_service._validate_*
+    + priority_service.derive_profile_target_context).
+
+    Trả về object với ``__dict__['academic_info']`` set + ``admission_method``
+    placeholder=None (legacy không có method chain — bonus_rule context fall
+    về admission_method default).
+    """
+    class _PathShim:
+        pass
+    shim = _PathShim()
+    shim.__dict__["academic_info"] = academic_info
+    shim.__dict__["admission_method"] = None
+    return shim
 
 
 def derive_target_level_and_type(path: "AdmissionPath") -> tuple[str, str]:
@@ -1143,12 +1182,7 @@ async def derive_profile_target_context(
             )
             config = (await db.execute(stmt)).scalar_one_or_none()
             if config is not None:
-                class _PathShim:
-                    pass
-                shim = _PathShim()
-                shim.__dict__["academic_info"] = config.academic_info
-                shim.__dict__["admission_method"] = None  # no path → no method
-                path = shim  # type: ignore[assignment]
+                path = _make_path_shim_from_academic_info(config.academic_info)
                 ctx["source"] = "legacy_offering_admission_config"
 
         if path is not None:
@@ -1156,8 +1190,17 @@ async def derive_profile_target_context(
                 target_level, admission_type = derive_target_level_and_type(path)
                 ctx["target_level"] = target_level
                 ctx["admission_type"] = admission_type
-            except Exception:  # noqa: BLE001 — defensive: missing chain
-                pass
+            except Exception as exc:  # noqa: BLE001 — defensive: missing chain
+                # Phase E.4 reviewer P5: log debug để trace context-derive
+                # failures (vd chain chưa eager-load đầy đủ). Vẫn không block
+                # freeze; snapshot ship null cho 2 field này, FE/audit degrade.
+                log.debug(
+                    "derive_target_level_context_failed",
+                    profile_id=getattr(profile, "id", None),
+                    source=ctx["source"],
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
             # path_bonus_rule snapshot: chain override → method.default.
             # Lazy import để tránh circular.
@@ -1167,8 +1210,14 @@ async def derive_profile_target_context(
                     rule = resolve_effective_bonus_rule(path)  # type: ignore[arg-type]
                     if rule is not None:
                         ctx["path_bonus_rule"] = dict(rule)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                log.debug(
+                    "derive_path_bonus_rule_context_failed",
+                    profile_id=getattr(profile, "id", None),
+                    source=ctx["source"],
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
         # Eligibility check audit — chỉ compute khi cả 2 field có.
         if ctx["target_level"] and ctx["admission_type"]:
@@ -1177,8 +1226,13 @@ async def derive_profile_target_context(
             )
             ctx["eligibility"] = {"passed": ok, "reason": reason}
 
-    except Exception:  # noqa: BLE001 — defensive: never block freeze on context
-        pass
+    except Exception as exc:  # noqa: BLE001 — defensive: never block freeze on context
+        log.debug(
+            "derive_profile_target_context_failed",
+            profile_id=getattr(profile, "id", None),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
 
     return ctx
 

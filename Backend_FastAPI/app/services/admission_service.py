@@ -4355,11 +4355,31 @@ async def _validate_eligibility_all_choices(
       - ``CONFIG_GAP_TARGET_LEVEL`` khi không derive được level/type
 
     Per yêu cầu nghiệp vụ #5: tuyệt đối KHÔNG fallback "so_cap" khi gap.
+
+    Error-handling contract — intentional contrast với choice engine
+    -----------------------------------------------------------------
+    Helper này (submit-time gate) raises ``BusinessRuleViolation`` UNWRAPPED:
+    bất kỳ ``derive_target_level_and_type`` CONFIG_GAP, validate_eligibility
+    fail, hoặc multi-NV inconsistency → bubble lên router → 400/422. Submit
+    fail-closed toàn bộ (Phase E.4 reviewer P0 fix — yêu cầu nghiệp vụ #5).
+
+    Đối lập với ``admission_choice_engine_service._evaluate_single_choice``
+    (engine T6 publish path) — chỗ đó WRAPS ``derive_target_level_and_type``
+    + ``validate_eligibility`` trong try/except ``BusinessRuleViolation`` và
+    convert thành per-choice ``reason_codes = ["CONFIG_GAP_TARGET_LEVEL:..."]``
+    / ``["ELIGIBILITY_FAIL:..."]`` + ``status="rejected"`` để engine vẫn
+    cascade qua các choice khác (1 choice rỗng config KHÔNG được block
+    publish 4 choice còn lại).
+
+    Tóm tắt:
+      submit-time   : fail-closed → raise → toàn hồ sơ vào draft + validation_errors
+      engine-T6     : per-choice  → reject reason_code → cascade tiếp choice sau
     """
     from sqlalchemy import select as _sel
     from sqlalchemy.orm import selectinload as _sel_in
 
     from .priority_service import (
+        _make_path_shim_from_academic_info,
         derive_target_level_and_type,
         validate_eligibility,
     )
@@ -4454,14 +4474,10 @@ async def _validate_eligibility_all_choices(
                 f"CONFIG_GAP_TARGET_LEVEL: offering_admission_config_id="
                 f"{config_id} không tồn tại."
             )
-        # Build pseudo-path stub để reuse derive_target_level_and_type (helper
-        # cần __dict__['academic_info'] nên dùng config trực tiếp work với
-        # `__dict__['academic_info']` của config object).
-        # Construct a tiny shim:
-        class _PathShim:
-            pass
-        shim = _PathShim()
-        shim.__dict__["academic_info"] = config.academic_info
+        # Build pseudo-path stub để reuse derive_target_level_and_type
+        # (helper đọc __dict__['academic_info']); shared helper centralize
+        # pattern (xem priority_service._make_path_shim_from_academic_info).
+        shim = _make_path_shim_from_academic_info(config.academic_info)
         target_level, admission_type = derive_target_level_and_type(shim)  # type: ignore[arg-type]
         ok, reason = validate_eligibility(profile, target_level, admission_type)
         if not ok:
