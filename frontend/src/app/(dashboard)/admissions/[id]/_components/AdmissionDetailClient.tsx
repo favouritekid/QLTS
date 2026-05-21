@@ -530,6 +530,7 @@ export function AdmissionDetailClient({
               onReject={handleReject}
               isRejecting={rejectMutation.isPending}
               canReject={can('reject')}
+              onNavigateToDocuments={() => handleStepChange(6)}
             />
           )}
         </div>

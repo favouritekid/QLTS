@@ -17,22 +17,28 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface ReviewDetailsProps {
   profile: AdmissionProfileResponse
+  /**
+   * Commit 4 fix-up — wire real callback (AdmissionDetailClient
+   * setCurrentStep(6)) thay vì noop. UtEvidenceCards có button "Mở tab
+   * Giấy tờ để upload" khi thiếu minh chứng UT; noop sẽ tạo CTA chết.
+   */
+  onNavigateToDocuments: () => void
 }
 
-export function ReviewDetails({ profile }: ReviewDetailsProps) {
+export function ReviewDetails({ profile, onNavigateToDocuments }: ReviewDetailsProps) {
   return (
     <div className="space-y-3">
       {/* Priority KV summary (read-only at Step 8). */}
       <PrioritySummaryPanel profile={profile} preview={null} />
 
       {/* UT evidence read-only — canVerify=false + isEditable=false ép
-          component render display-only. onNavigateToDocuments no-op vì
-          ở Step 8 manager đã có DocumentChecklist bên dưới. */}
+          component render display-only. "Mở tab Giấy tờ" button vẫn
+          navigate được khi thiếu evidence. */}
       <UtEvidenceCards
         profile={profile}
         canVerify={false}
         isEditable={false}
-        onNavigateToDocuments={() => {}}
+        onNavigateToDocuments={onNavigateToDocuments}
       />
 
       <ScoreSnapshot profile={profile} />

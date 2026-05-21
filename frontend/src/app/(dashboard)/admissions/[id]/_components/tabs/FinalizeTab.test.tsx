@@ -75,6 +75,7 @@ function renderTab(
     onApprove: vi.fn(),
     onReject: vi.fn(),
     onResubmit: vi.fn(),
+    onNavigateToDocuments: vi.fn(),
   }
   render(
     <FinalizeTab
@@ -92,6 +93,7 @@ function renderTab(
       onReject={spies.onReject}
       isRejecting={false}
       canReject={false}
+      onNavigateToDocuments={spies.onNavigateToDocuments}
       {...overrides}
     />
   )
@@ -203,6 +205,7 @@ describe("FinalizeTab — Decision Surface", () => {
           canApprove={false}
           isRejecting={false}
           canReject={false}
+          onNavigateToDocuments={vi.fn()}
         />
       )
       expect(container.textContent).not.toContain("Nộp hồ sơ")

@@ -54,6 +54,10 @@ interface FinalizeTabProps {
   onReject?: () => void
   isRejecting?: boolean
   canReject: boolean
+
+  // Commit 4 fix-up — pass-through cho ReviewDetails → UtEvidenceCards
+  // "Mở tab Giấy tờ để upload" CTA khi thiếu minh chứng UT.
+  onNavigateToDocuments: () => void
 }
 
 export function FinalizeTab({
@@ -71,6 +75,7 @@ export function FinalizeTab({
   onReject,
   isRejecting = false,
   canReject,
+  onNavigateToDocuments,
 }: FinalizeTabProps) {
   const hasDecisionAction = canSubmit || canResubmit || canApprove || canReject
 
@@ -78,7 +83,7 @@ export function FinalizeTab({
     <div className="max-w-7xl mx-auto space-y-6 pb-8">
       <ExecutiveSummaryHeader profile={profile} />
       <HealthCheckGrid profile={profile} />
-      <ReviewDetails profile={profile} />
+      <ReviewDetails profile={profile} onNavigateToDocuments={onNavigateToDocuments} />
 
       {hasDecisionAction && (
         <Card className="p-6 bg-gradient-to-br from-gray-50 to-white lg:sticky lg:bottom-4 lg:z-30 lg:shadow-lg">
