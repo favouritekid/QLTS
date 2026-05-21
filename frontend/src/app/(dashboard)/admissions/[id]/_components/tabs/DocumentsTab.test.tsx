@@ -1138,7 +1138,7 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     );
     render(<DocumentsTab profile={profile as never} isEditable />);
     const summary = screen.getByTestId("eligibility-summary-mandatory");
-    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/5 verified/);
+    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/5 đã duyệt/);
     expect(summary).toHaveTextContent(/cần 3 nữa/);
   });
 
@@ -1164,7 +1164,7 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     );
     render(<DocumentsTab profile={profile as never} isEditable />);
     const summary = screen.getByTestId("eligibility-summary-mandatory");
-    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/2 verified/);
+    expect(summary).toHaveTextContent(/Bắt buộc:\s*2\/2 đã duyệt/);
     expect(summary.textContent).not.toMatch(/cần/);
   });
 
@@ -1191,7 +1191,7 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     const summary = screen.getByTestId("eligibility-summary-mandatory");
     // paper_submitted is "satisfied" but NOT "verified" — spec text is strict.
-    expect(summary).toHaveTextContent(/1\/2 verified/);
+    expect(summary).toHaveTextContent(/1\/2 đã duyệt/);
     expect(summary).toHaveTextContent(/cần 1 nữa/);
   });
 
@@ -1227,7 +1227,7 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     const summary = screen.getByTestId("eligibility-summary-priority");
-    expect(summary).toHaveTextContent(/Ưu tiên:\s*1\/3 docs uploaded/);
+    expect(summary).toHaveTextContent(/Ưu tiên:\s*1\/3 đã tải lên/);
     expect(summary).toHaveTextContent(/UT07, UT08 thiếu minh chứng/);
   });
 
@@ -1254,7 +1254,7 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     ]);
     render(<DocumentsTab profile={profile as never} isEditable />);
     const summary = screen.getByTestId("eligibility-summary-priority");
-    expect(summary).toHaveTextContent(/Ưu tiên:\s*2\/2 docs uploaded/);
+    expect(summary).toHaveTextContent(/Ưu tiên:\s*2\/2 đã tải lên/);
     expect(summary.textContent).not.toMatch(/thiếu minh chứng/);
   });
 
@@ -1291,9 +1291,9 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     render(<DocumentsTab profile={profile as never} isEditable />);
     expect(
       screen.getByTestId("eligibility-summary-mandatory"),
-    ).toHaveTextContent(/1\/2 verified.*cần 1 nữa/);
+    ).toHaveTextContent(/1\/2 đã duyệt.*cần 1 nữa/);
     expect(
       screen.getByTestId("eligibility-summary-priority"),
-    ).toHaveTextContent(/0\/1 docs uploaded.*UT08 thiếu/);
+    ).toHaveTextContent(/0\/1 đã tải lên.*UT08 thiếu/);
   });
 });
