@@ -1,9 +1,14 @@
 # app/services/priority_override_service.py
-"""Q9 #07 Phase E.2 + E.3 — Priority bonus officer/admin write-path.
+"""Q9 #07 Phase E.2 + E.3 + E.4 — Priority bonus admin/manager (KV) +
+officer/admin/manager (UT) write-path.
 
-Service-layer functions cho manual KV override (Phase E.2) + UT evidence
-verify/reject (Phase E.3 — chưa ship Wave 2). Architectural rules
-(per CLAUDE.md PART 7):
+Service-layer functions cho:
+  - Manual KV override (Phase E.2; commit 7 hardening 2026-05-21):
+    ADMIN + MANAGER only. Officer hard-denied ngay đầu override_kv.
+  - UT evidence verify/reject (Phase E.3): officer + manager + admin
+    write-path; officer-scope via lead.assigned_officer_id IDOR check.
+
+Architectural rules (per CLAUDE.md PART 7):
 
 * No FastAPI imports — raise DomainExceptions, return (result, post_commit_cb)
 * Router commits; service flushes only
@@ -24,7 +29,7 @@ Snapshot mutation (override_kv):
       evidence_file_id: optional,
       frozen_at: now ISO (refresh on override),
       frozen_at_status: 'manual_override',
-      resolved_by: actor.role  # 'officer' | 'admin'
+      resolved_by: 'admin' | 'manager'  # Phase E.4 commit 7: officer denied
   }
   profile.area_resolution_basis ← 'manual_override'
   profile.version += 1
@@ -395,7 +400,11 @@ async def override_kv(
         "evidence_file_id": evidence_file_id,
         "frozen_at": now_iso,
         "frozen_at_status": "manual_override",
-        "resolved_by": "admin" if is_admin else "officer",
+        # Phase E.4 commit 7 fix-up — actor.role thực thay vì hardcode "officer".
+        # Officer đã hard-deny ở top → manager/admin là 2 role hợp lệ duy nhất.
+        # Allowlist explicit để fail-safe nếu future role được add (vd "auditor"
+        # với override permission) — chỉ admin/manager mới persist trong audit.
+        "resolved_by": "admin" if is_admin else "manager",
     }
     # Drop ambiguous engine-state keys that no longer apply post-override
     new_snapshot.pop("requires_manual_override", None)

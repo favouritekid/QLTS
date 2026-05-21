@@ -545,9 +545,9 @@ async def test_manager_happy_path_mutates_snapshot_and_audit_log() -> None:
     assert snap["manual_override_reason"] == REASON_VALID
     assert snap["evidence_file_id"] == 42
     assert snap["frozen_at_status"] == "manual_override"
-    # Manager treated as officer-path (resolved_by="officer"); only admin emit
-    # resolved_by="admin". Behavior preserved from pre-commit 7.
-    assert snap["resolved_by"] == "officer"
+    # Phase E.4 commit 7 fix-up: resolved_by phản ánh actor.role thực.
+    # Manager override → "manager" (KHÔNG còn "officer" stale).
+    assert snap["resolved_by"] == "manager"
 
     # Engine-state keys dropped post-override
     assert "requires_manual_override" not in snap or not snap["requires_manual_override"]
@@ -643,7 +643,9 @@ async def test_second_override_overwrites_manual_keys() -> None:
     """First override sets manual_override_*; second overwrites with new
     actor + reason (snapshot LAST wins, audit log preserves chain).
     """
-    # Profile already had one override (e.g., from officer)
+    # Profile already had one override (e.g., legacy pre-commit-7 officer
+    # state, or manager first pass). Snapshot value retained để verify
+    # chain-of-override LAST wins semantics regardless of prior actor.
     profile = _make_profile(
         status="submitted",
         version=6,
@@ -653,11 +655,11 @@ async def test_second_override_overwrites_manual_keys() -> None:
             "rule_applied": "manual_override",
             "manual_override_by": 7,
             "manual_override_at": "2026-05-19T01:00:00Z",
-            "manual_override_reason": "Officer first pass override reason 20 chars+",
+            "manual_override_reason": "Manager first pass override reason 20 chars+",
             "evidence_file_id": 11,
             "frozen_at": "2026-05-19T01:00:00Z",
             "frozen_at_status": "manual_override",
-            "resolved_by": "officer",
+            "resolved_by": "manager",
         },
     )
     admin = _make_actor("admin", user_id=99)

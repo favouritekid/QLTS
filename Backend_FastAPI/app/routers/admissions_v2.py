@@ -925,14 +925,15 @@ async def get_priority_object_catalog(
 
 
 # =============================================================================
-# Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path)
+# Q9 #07 Phase E.2 + E.4 commit 7 hardening — Manual KV override
+# (admin + manager write-path; officer hard-denied per nghiệp vụ #10)
 # =============================================================================
 
 
 @router.post(
     "/{profile_id}/override-priority-kv",
     response_model=schemas.AdmissionProfileResponse,
-    summary="Override KV thủ công (officer/admin write-path — Phase E.2)",
+    summary="Override KV thủ công (admin/manager write-path — Phase E.4)",
 )
 async def override_priority_kv(
     profile_id: int,
@@ -941,27 +942,36 @@ async def override_priority_kv(
     profile: models.AdmissionProfile = Depends(get_admission_for_user),
     current_user: models.User = CasbinAuth,
 ):
-    """Officer/admin manually override profile's KV (Phase E.2 write-path).
+    """Admin/manager manually override profile's KV (Phase E.2 + E.4 commit 7).
+
+    Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10): officer hard-denied
+    toàn diện. Chỉ admin/manager. Casbin migration q9_07_e4f đã remove
+    role:officer policy row; service-layer cũng raise BusinessRuleViolation
+    cho actor.role=="officer" là defense-in-depth.
 
     Service-layer ``priority_override_service.override_kv()`` enforces:
     * Version guard FIRST (memory `version-guard-before-state-machine`)
-    * Status whitelist (officer: submitted/reviewing/revision_requested;
-      admin bypass với ``acknowledge_post_publish=true`` for post-publish)
+    * Role gate: officer DENIED unconditionally (BusinessRuleViolation 400)
+    * Status whitelist (manager: submitted/reviewing/revision_requested +
+      draft khi engine signal unresolved; admin bypass với
+      ``acknowledge_post_publish=true`` for post-publish)
     * Reason 20-500 char validation
+    * Live engine recompute cho draft (verify still unresolved)
     * Snapshot mutation + audit log INSERT + version bump
 
     Snapshot keys overwritten on each override (Decision D1):
     * ``manual_override_by/at/reason`` + ``evidence_file_id``
-    * ``frozen_at_status='manual_override'`` + ``resolved_by`` (officer/admin)
+    * ``frozen_at_status='manual_override'`` + ``resolved_by`` (admin|manager)
 
     Audit log preserves full chain — query via composite index
     ``(profile_id, action_type, created_at DESC)``.
 
     Security:
-    * IDOR: ``get_admission_for_user`` (3-tier scope admin/manager/officer)
-    * Casbin: ``q9_07_e0c`` migration seeds policy
-      (officer/manager/admin ALLOW, accountant DENY).
-    * Service ``PermissionError`` (officer post-publish) → 403.
+    * IDOR: ``get_admission_for_user`` (3-tier scope admin/manager/officer
+      read; officer cannot reach mutation per Casbin q9_07_e4f).
+    * Casbin: ``q9_07_e0c`` seeds policy, ``q9_07_e4f`` removes officer row
+      (admin/manager ALLOW, officer NO POLICY, accountant DENY).
+    * Service ``PermissionError`` (manager post-publish) → 403.
 
     Dispatches ``PRIORITY_KV_OVERRIDDEN`` event post-commit (catalog seed
     Wave 1; payload: application_id, lead_id, actor_id, actor_name,

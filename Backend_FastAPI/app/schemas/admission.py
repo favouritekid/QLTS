@@ -2288,20 +2288,29 @@ class PriorityObjectCatalogItem(BaseModel):
 
 
 # =============================================================================
-# Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path)
+# Q9 #07 Phase E.2 + E.4 commit 7 — Manual KV override
+# (admin/manager write-path; officer hard-denied per nghiệp vụ #10)
 # =============================================================================
 
 
 class OverridePriorityKvRequest(BaseModel):
-    """Officer/admin override KV manually trên profile.
+    """Admin/manager override KV manually trên profile.
+
+    Phase E.4 commit 7 hardening: officer KHÔNG được override KV. Casbin
+    migration q9_07_e4f đã remove role:officer policy row; service-layer
+    raises BusinessRuleViolation cho actor.role=="officer".
 
     Service-layer (priority_override_service.override_kv) enforces:
     * Optimistic-lock via ``version`` body field (memory
       `version-guard-before-state-machine` — version guard runs FIRST,
       before status whitelist).
-    * Officer status whitelist {submitted, reviewing, revision_requested};
-      hard-deny {draft, withdrawn, dropped, rejected}; post-publish states
-      require admin role + ``acknowledge_post_publish=True``.
+    * Role gate: officer DENIED unconditionally; manager + admin allowed.
+    * Status whitelist:
+        - admin: any state (UI shows button; dialog handles post-publish ack)
+        - manager: submitted/reviewing/revision_requested + draft (engine
+          signal required, service verifies live recompute)
+        - withdrawn/dropped/rejected hard-deny (all roles)
+        - post-publish states require admin + ``acknowledge_post_publish=True``
     * Reason 20-500 char text (mandatory; persisted in
       ``profile.priority_resolution_snapshot.manual_override_reason``
       + ``priority_audit_log.new_value.reason``).
