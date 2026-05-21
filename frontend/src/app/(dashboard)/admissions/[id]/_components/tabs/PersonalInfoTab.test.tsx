@@ -10,7 +10,8 @@
 import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { useForm, FormProvider } from "react-hook-form";
+import { useForm, FormProvider, type UseFormReturn } from "react-hook-form";
+import { act } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createTestQueryClient } from "@/test/utils/test-utils";
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions";
@@ -18,6 +19,14 @@ import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/li
 // Mock useConfigData — all category lists return empty
 vi.mock("@/lib/hooks/useConfigData", () => ({
   useConfigData: () => ({ data: [], isLoading: false }),
+}));
+
+// Mock useAdministrative — place_of_birth combobox uses useProvinces("legacy");
+// no network calls allowed in test (would emit MSW-style XHR errors).
+vi.mock("@/lib/hooks/useAdministrative", () => ({
+  useProvinces: () => ({ data: [], isLoading: false }),
+  useDistricts: () => ({ data: [], isLoading: false }),
+  useWards: () => ({ data: [], isLoading: false }),
 }));
 
 // Mock AdaptiveAddressSelect — lightweight spy that exposes key props
@@ -114,6 +123,10 @@ const DEFAULT_VALUES: Partial<AdmissionProfileUpdateInput> = {
   permanent_ward: "",
 };
 
+// Module-level form spy lets tests reach into form state after rendering.
+// Cleared in beforeEach via capturedFormRef reassign.
+let capturedFormRef: UseFormReturn<AdmissionProfileUpdateInput> | null = null;
+
 /** Wrapper that provides FormProvider + renders PersonalInfoTab */
 function TestFormHost({
   profile,
@@ -129,8 +142,12 @@ function TestFormHost({
       permanent_province: profile.permanent_province || "",
       permanent_district: profile.permanent_district || "",
       permanent_ward: profile.permanent_ward || "",
+      permanent_commune_code:
+        (profile as unknown as { permanent_commune_code?: string | null })
+          .permanent_commune_code ?? null,
     } as AdmissionProfileUpdateInput,
   });
+  capturedFormRef = form;
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -149,6 +166,7 @@ describe("PersonalInfoTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedAddressProps = {};
+    capturedFormRef = null;
   });
 
   describe("addressMode derivation", () => {
@@ -218,6 +236,109 @@ describe("PersonalInfoTab", () => {
       render(<TestFormHost profile={profile} isEditable={true} />);
 
       expect(screen.getByTestId("address-disabled").textContent).toBe("false");
+    });
+  });
+
+  describe("Phase E.4 KV bridge — permanent_commune_code wiring", () => {
+    it("wires onWardCodeChange handler into AdaptiveAddressSelect", () => {
+      const profile = buildProfile({ version: 1 });
+      render(<TestFormHost profile={profile} />);
+
+      expect(typeof capturedAddressProps.onWardCodeChange).toBe("function");
+    });
+
+    it("onWardCodeChange sets permanent_commune_code form field", () => {
+      const profile = buildProfile({ version: 1 });
+      render(<TestFormHost profile={profile} />);
+
+      const onWardCodeChange =
+        capturedAddressProps.onWardCodeChange as (code: string | null) => void;
+      act(() => {
+        onWardCodeChange("66_002");
+      });
+
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBe("66_002");
+    });
+
+    it("onWardCodeChange(null) clears permanent_commune_code", () => {
+      const profile = buildProfile({
+        version: 1,
+      });
+      // Seed the form với code có sẵn để verify it gets cleared
+      render(<TestFormHost profile={profile} />);
+
+      const onWardCodeChange =
+        capturedAddressProps.onWardCodeChange as (code: string | null) => void;
+      act(() => {
+        onWardCodeChange("66_002");
+      });
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBe("66_002");
+
+      act(() => {
+        onWardCodeChange(null);
+      });
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
+    });
+
+    it("changing province clears permanent_commune_code", () => {
+      const profile = buildProfile({ version: 1 });
+      render(<TestFormHost profile={profile} />);
+
+      // Seed code first
+      const onWardCodeChange =
+        capturedAddressProps.onWardCodeChange as (code: string | null) => void;
+      act(() => {
+        onWardCodeChange("66_002");
+      });
+
+      const onProvinceChange =
+        capturedAddressProps.onProvinceChange as (v: string) => void;
+      act(() => {
+        onProvinceChange("Hà Nội");
+      });
+
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
+    });
+
+    it("changing district clears permanent_commune_code", () => {
+      const profile = buildProfile({
+        permanent_district: "Quận 1",
+        version: 1,
+      });
+      render(<TestFormHost profile={profile} />);
+
+      const onWardCodeChange =
+        capturedAddressProps.onWardCodeChange as (code: string | null) => void;
+      act(() => {
+        onWardCodeChange("01_001");
+      });
+
+      const onDistrictChange =
+        capturedAddressProps.onDistrictChange as (v: string | null) => void;
+      act(() => {
+        onDistrictChange("Quận 2");
+      });
+
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
+    });
+
+    it("changing address mode clears permanent_commune_code", () => {
+      const profile = buildProfile({ version: 1 });
+      render(<TestFormHost profile={profile} />);
+
+      const onWardCodeChange =
+        capturedAddressProps.onWardCodeChange as (code: string | null) => void;
+      act(() => {
+        onWardCodeChange("66_002");
+      });
+
+      const onModeChange =
+        capturedAddressProps.onModeChange as (m: "current" | "legacy") => void;
+      act(() => {
+        onModeChange("legacy");
+      });
+
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
     });
   });
 });

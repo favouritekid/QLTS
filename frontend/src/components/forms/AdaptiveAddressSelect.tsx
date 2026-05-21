@@ -32,6 +32,15 @@ interface AdaptiveAddressSelectProps {
   onProvinceChange: (province: string) => void
   onDistrictChange: (district: string | null) => void
   onWardChange: (ward: string) => void
+  /**
+   * Phase E.4 KV bridge: canonical commune/ward code from administrative_nodes.
+   * Fires alongside `onWardChange` whenever the ward selection changes. Receives
+   * the ward `code` field from the administrative API (e.g. "01_00025") or
+   * `null` when ward is cleared / not found in the loaded list. Callers that
+   * track `permanent_commune_code` (PriorityTab KV resolution) wire this to
+   * form state; callers that don't simply omit the prop.
+   */
+  onWardCodeChange?: (wardCode: string | null) => void
   onResidentialGroupChange?: (residentialGroup: string) => void
   onStreetAddressChange?: (streetAddress: string) => void
   /** Address mode: "current" (2-level) or "legacy" (3-level) */
@@ -50,6 +59,7 @@ export function AdaptiveAddressSelect({
   onProvinceChange,
   onDistrictChange,
   onWardChange,
+  onWardCodeChange,
   onResidentialGroupChange,
   onStreetAddressChange,
   mode,
@@ -102,22 +112,42 @@ export function AdaptiveAddressSelect({
   )
 
   // ---- Handlers ----
+  // Phase E.4 KV bridge: every transition that changes the selected ward
+  // (mode switch, province/district reset, direct ward pick, or clear)
+  // must mirror the ward code so callers tracking `permanent_commune_code`
+  // never see a stale or orphaned code. `lookupWardCode` reads the loaded
+  // wards list; returns `null` when ward is empty or not present in the
+  // current province's ward set (e.g. mode switched mid-edit).
+  const lookupWardCode = (wardName: string): string | null => {
+    if (!wardName) return null
+    const ward = wards.find((w) => w.name === wardName)
+    return ward?.code ?? null
+  }
+
   const handleModeChange = (newMode: AddressMode) => {
     onModeChange(newMode)
     onProvinceChange("")
     onDistrictChange(null)
     onWardChange("")
+    onWardCodeChange?.(null)
   }
 
   const handleProvinceChange = (name: string) => {
     onProvinceChange(name)
     onDistrictChange(null)
     onWardChange("")
+    onWardCodeChange?.(null)
   }
 
   const handleDistrictChange = (name: string) => {
     onDistrictChange(name || null)
     onWardChange("")
+    onWardCodeChange?.(null)
+  }
+
+  const handleWardChange = (name: string) => {
+    onWardChange(name)
+    onWardCodeChange?.(lookupWardCode(name))
   }
 
   // ---- Render ----
@@ -189,7 +219,7 @@ export function AdaptiveAddressSelect({
         <div>
           <Combobox
             value={wardValue || ""}
-            onChange={onWardChange}
+            onChange={handleWardChange}
             options={wardOptions}
             placeholder="Phường/Xã"
             searchPlaceholder="Tìm phường/xã..."
