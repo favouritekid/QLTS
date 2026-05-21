@@ -44,6 +44,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
+  const permanentCommuneCode = useWatch({ control: form.control, name: "permanent_commune_code" }) ?? null
   const permanentResidentialGroup = useWatch({ control: form.control, name: "permanent_residential_group" }) || ""
   const permanentStreetAddress = useWatch({ control: form.control, name: "permanent_street_address" }) || ""
 
@@ -251,6 +252,10 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               provinceValue={permanentProvince}
               districtValue={permanentDistrict}
               wardValue={permanentWard}
+              // Phase E.4 KV bridge fix Finding 1: canonical code là primary
+              // key của combobox. Pass code thay vì để component lookup ngược
+              // từ name (tránh ambiguity 2 xã trùng tên 2 tỉnh).
+              wardCodeValue={permanentCommuneCode}
               residentialGroupValue={permanentResidentialGroup}
               streetAddressValue={permanentStreetAddress}
               onProvinceChange={(value) => {

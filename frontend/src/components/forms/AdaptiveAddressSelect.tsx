@@ -24,7 +24,20 @@ import { Input } from "@/components/ui/input"
 interface AdaptiveAddressSelectProps {
   provinceValue: string
   districtValue: string | null
+  /**
+   * Display name của xã/phường — fallback render khi `wardCodeValue` chưa
+   * có (vd hồ sơ legacy chỉ lưu tên). Callers cũ chỉ cần truyền `wardValue`.
+   */
   wardValue: string
+  /**
+   * Phase E.4 KV bridge: canonical commune/ward code (administrative_nodes.code,
+   * vd "01_00025"). Là **primary key** của combobox xã/phường sau commit fix
+   * Finding 1 — combobox `value` = code, options[].value = code, label = name.
+   * Khi prop này có giá trị, component lookup name từ code; nếu null/undefined,
+   * fall back lookup ngược từ `wardValue` (display name) để backward-compat
+   * với callers chưa wire code (vd hồ sơ cũ trước cải cách).
+   */
+  wardCodeValue?: string | null
   /** Tổ dân phố / Thôn / Buôn / Ấp / Khóm / Khu phố — community sub-unit, free-text. */
   residentialGroupValue?: string
   /** Số nhà, tên đường — street address line, free-text. */
@@ -54,6 +67,7 @@ export function AdaptiveAddressSelect({
   provinceValue,
   districtValue,
   wardValue,
+  wardCodeValue,
   residentialGroupValue,
   streetAddressValue,
   onProvinceChange,
@@ -106,23 +120,34 @@ export function AdaptiveAddressSelect({
     [districts],
   )
 
+  // Phase E.4 KV bridge fix Finding 1: options[].value = canonical ward.code
+  // (administrative_nodes.code), label = display name. Ward.code là primary
+  // key — tránh ambiguity khi 2 xã/phường trùng tên ở 2 tỉnh/quận khác.
   const wardOptions = useMemo(
-    () => wards.map((w) => ({ value: w.name, label: w.name })),
+    () => wards.map((w) => ({ value: w.code, label: w.name })),
     [wards],
   )
+
+  // Derive combobox internal value (= ward.code) từ 2 nguồn theo priority:
+  //   1. `wardCodeValue` prop (callers new — pass canonical code thẳng)
+  //   2. Fallback: lookup `wardValue` (display name) ngược ra code từ wards
+  //      list — backward-compat cho hồ sơ legacy chưa wire code.
+  // Khi cả 2 đều miss (vd wards list chưa load, hoặc name không match) →
+  // combobox shows placeholder; sẽ render đúng khi wards load và user re-pick.
+  const selectedWardCode = useMemo(() => {
+    if (wardCodeValue) return wardCodeValue
+    if (wardValue) {
+      const matched = wards.find((w) => w.name === wardValue)
+      return matched?.code ?? ""
+    }
+    return ""
+  }, [wardCodeValue, wardValue, wards])
 
   // ---- Handlers ----
   // Phase E.4 KV bridge: every transition that changes the selected ward
   // (mode switch, province/district reset, direct ward pick, or clear)
-  // must mirror the ward code so callers tracking `permanent_commune_code`
-  // never see a stale or orphaned code. `lookupWardCode` reads the loaded
-  // wards list; returns `null` when ward is empty or not present in the
-  // current province's ward set (e.g. mode switched mid-edit).
-  const lookupWardCode = (wardName: string): string | null => {
-    if (!wardName) return null
-    const ward = wards.find((w) => w.name === wardName)
-    return ward?.code ?? null
-  }
+  // must mirror cả name (display) lẫn code (canonical KV input) qua callbacks
+  // để callers tracking `permanent_commune_code` không có stale orphan code.
 
   const handleModeChange = (newMode: AddressMode) => {
     onModeChange(newMode)
@@ -145,9 +170,17 @@ export function AdaptiveAddressSelect({
     onWardCodeChange?.(null)
   }
 
-  const handleWardChange = (name: string) => {
-    onWardChange(name)
-    onWardCodeChange?.(lookupWardCode(name))
+  const handleWardChange = (code: string) => {
+    // Combobox onChange giờ truyền ward.code (canonical). Lookup ward record
+    // để fire onWardChange(display name) — keep public API caller cũ unchanged.
+    if (!code) {
+      onWardChange("")
+      onWardCodeChange?.(null)
+      return
+    }
+    const ward = wards.find((w) => w.code === code)
+    onWardChange(ward?.name ?? "")
+    onWardCodeChange?.(ward?.code ?? null)
   }
 
   // ---- Render ----
@@ -215,10 +248,12 @@ export function AdaptiveAddressSelect({
           </div>
         ) : null}
 
-        {/* Ward */}
+        {/* Ward — combobox dùng ward.code làm canonical key (Phase E.4 Finding 1).
+            `value` = ward.code, options[].value = ward.code. Display name resolve
+            qua options[].label. */}
         <div>
           <Combobox
-            value={wardValue || ""}
+            value={selectedWardCode}
             onChange={handleWardChange}
             options={wardOptions}
             placeholder="Phường/Xã"

@@ -60,11 +60,15 @@ export function PriorityTab({
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
   const userRole = useAuthStore((s) => s.user?.role)
 
-  // Form watches drive live preview query. Same fields as Phase E.3 PriorityTab —
-  // unchanged contract với usePreviewPriorityKv hook.
+  // Form watches drive live preview query. Same fields as Phase E.3 PriorityTab.
+  // Phase E.4 Finding 2 fix: KHÔNG watch + KHÔNG gửi `area_resolution_basis` vì
+  // engine giờ tự suy ra basis từ cultural + vocational + permanent_commune_code
+  // (yêu cầu nghiệp vụ #3 + #6). Field area_resolution_basis legacy có thể
+  // còn `manual_override` (đặt qua PriorityOverrideDialog OUTPUT bypass) hoặc
+  // `permanent_address_special` (legacy stale từ commit trước radio bị xoá);
+  // truyền nó vào preview = ép engine đi nhánh cũ → engine fail-closed sai.
   const cultural = form.watch("cultural_education_level")
   const vocational = form.watch("vocational_qualification")
-  const areaBasis = form.watch("area_resolution_basis")
   const communeCode = form.watch("permanent_commune_code")
   const academicHistory = form.watch("academic_history")
   const utCodes = form.watch("priority_object_codes")
@@ -79,7 +83,8 @@ export function PriorityTab({
     {
       cultural_education_level: cultural ?? null,
       vocational_qualification: vocational ?? null,
-      area_resolution_basis: areaBasis ?? null,
+      // area_resolution_basis intentionally omitted (null) — auto-basis ở BE
+      area_resolution_basis: null,
       permanent_commune_code: communeCode ?? null,
       academic_history:
         (academicHistory as PreviewPriorityKvRequest["academic_history"]) ?? null,
