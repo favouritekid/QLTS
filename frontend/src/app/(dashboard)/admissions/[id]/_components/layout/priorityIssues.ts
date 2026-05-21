@@ -21,7 +21,9 @@ export function derivePriorityIssues(profile: AdmissionProfileResponse | null): 
 
   const missingUt = profile.missing_priority_evidence_codes ?? []
   if (missingUt.length > 0) {
-    issues.push(`Thiếu minh chứng UT: ${missingUt.join(", ")}`)
+    // BE có thể trả ["07"] hoặc ["UT07"]; chuẩn hóa prefix UT cho UI.
+    const labeled = missingUt.map((c) => (c.startsWith("UT") ? c : `UT${c}`))
+    issues.push(`Thiếu minh chứng ưu tiên: ${labeled.join(", ")}`)
   }
 
   return issues

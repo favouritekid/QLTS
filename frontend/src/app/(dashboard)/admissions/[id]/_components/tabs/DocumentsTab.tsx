@@ -1531,7 +1531,7 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
       {eligibilitySummary.visible && (
         <Card className="mt-4" data-testid="documents-tab-eligibility-summary">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Eligibility summary</CardTitle>
+            <CardTitle className="text-base">Tóm tắt điều kiện hồ sơ</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5 text-sm">
             {eligibilitySummary.mandatoryTotal > 0 && (
@@ -1541,7 +1541,7 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
               >
                 <span className="font-medium">Bắt buộc:</span>{" "}
                 {eligibilitySummary.mandatoryVerified}/
-                {eligibilitySummary.mandatoryTotal} verified
+                {eligibilitySummary.mandatoryTotal} đã duyệt
                 {eligibilitySummary.mandatoryRemaining > 0 && (
                   <span className="text-muted-foreground">
                     {" · cần "}
@@ -1557,7 +1557,7 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
               >
                 <span className="font-medium">Ưu tiên:</span>{" "}
                 {eligibilitySummary.priorityUploaded}/
-                {eligibilitySummary.priorityTotal} docs uploaded
+                {eligibilitySummary.priorityTotal} đã tải lên
                 {eligibilitySummary.priorityMissingCodes.length > 0 && (
                   <span className="text-muted-foreground">
                     {" · "}

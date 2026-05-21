@@ -115,7 +115,7 @@ export function FinalizeTab({
                 profile={profile}
                 onApprove={onApprove}
                 isApproving={isApproving}
-                disabled={!isEligible && !profile.bypass_warning || isRejecting}
+                disabled={(!isEligible && !profile.bypass_warning) || isRejecting}
                 size="lg"
                 // Layout-only — màu success/warning do component tự compose
                 // theo profile.bypass_warning (KHÔNG override để tránh mất

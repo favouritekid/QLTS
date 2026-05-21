@@ -121,11 +121,11 @@ export function UtEvidenceCards({
       className="space-y-3 rounded-lg border border-border bg-card p-4"
     >
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold">§ 3. Đối tượng ưu tiên (UT)</h3>
+        <h3 className="text-base font-semibold">Đối tượng ưu tiên</h3>
         {codes.length > 0 && (
           <p className="text-xs text-muted-foreground">
-            Officer đã ghi nhận: {codes.length} diện ({verifiedCount} verified,{" "}
-            {pendingCount} pending)
+            Đã ghi nhận: {codes.length} diện ({verifiedCount} đã duyệt,{" "}
+            {pendingCount} chờ duyệt)
           </p>
         )}
       </div>
@@ -616,7 +616,8 @@ function UtAddDisclosure({
           )}
           {!isLoading && catalog.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              Catalog rỗng cho năm {profile.academic_year}. Admin cần seed config.
+              Chưa có danh mục đối tượng ưu tiên cho năm {profile.academic_year}.
+              Vui lòng liên hệ quản trị hệ thống.
             </p>
           )}
           {catalog.map((item: PriorityObjectCatalogItem) => {

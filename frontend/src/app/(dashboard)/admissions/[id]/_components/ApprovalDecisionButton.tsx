@@ -71,29 +71,32 @@ export function ApprovalDecisionButton({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>⚠️ Hồ sơ chưa đủ điều kiện</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2">
-                <p>
-                  Đợt tuyển sinh này cho phép nộp hồ sơ chưa đầy đủ
-                  (<code>allow_unverified_submission=true</code>), nhưng hồ sơ
-                  hiện có{" "}
-                  <strong>{profile.validation_errors?.length ?? 0} lỗi</strong>
-                  {" "}chưa khắc phục:
-                </p>
-                {profile.validation_errors && profile.validation_errors.length > 0 && (
-                  <ul className="list-disc pl-5 text-sm max-h-40 overflow-y-auto">
-                    {profile.validation_errors.map((err, i) => (
-                      <li key={i}>{err}</li>
-                    ))}
-                  </ul>
-                )}
-                <p className="text-warning-800 font-medium">
-                  Phê duyệt sẽ tạo hồ sơ vào hệ thống với dữ liệu thiếu
-                  (ví dụ: tên ứng viên, ngày sinh, CCCD…). Bạn có chắc?
-                </p>
-              </div>
+            {/* Commit 6 — single-paragraph Description tránh hydration
+                warning `<p>` chứa `<div>/<ul>`. Validation errors list +
+                final confirm copy render thành sibling block bên dưới. */}
+            <AlertDialogDescription>
+              Đợt tuyển sinh này cho phép nộp hồ sơ chưa đầy đủ
+              (<code>allow_unverified_submission=true</code>), nhưng hồ sơ
+              hiện có{" "}
+              <strong>{profile.validation_errors?.length ?? 0} lỗi</strong>
+              {" "}chưa khắc phục.
             </AlertDialogDescription>
           </AlertDialogHeader>
+
+          <div className="space-y-2">
+            {profile.validation_errors && profile.validation_errors.length > 0 && (
+              <ul className="list-disc pl-5 text-sm max-h-40 overflow-y-auto">
+                {profile.validation_errors.map((err, i) => (
+                  <li key={i}>{err}</li>
+                ))}
+              </ul>
+            )}
+            <p className="text-sm text-warning-800 font-medium">
+              Phê duyệt sẽ tạo hồ sơ vào hệ thống với dữ liệu thiếu
+              (ví dụ: tên ứng viên, ngày sinh, CCCD…). Bạn có chắc?
+            </p>
+          </div>
+
           <AlertDialogFooter>
             <AlertDialogCancel>Để tôi xem lại</AlertDialogCancel>
             <AlertDialogAction

@@ -60,13 +60,23 @@ describe("derivePriorityIssues", () => {
     expect(issues[0]).toMatch(/Khu vực ưu tiên/i)
   })
 
-  it("flags missing_priority_evidence_codes with code list", () => {
+  it("flags missing_priority_evidence_codes with code list (prefix UT auto)", () => {
     const profile = buildProfile({
-      missing_priority_evidence_codes: ["UT07"],
+      missing_priority_evidence_codes: ["07"],
     })
     const issues = derivePriorityIssues(profile)
     expect(issues).toHaveLength(1)
     expect(issues[0]).toContain("UT07")
+  })
+
+  it("flags missing_priority_evidence_codes — preserve existing UT prefix", () => {
+    const profile = buildProfile({
+      missing_priority_evidence_codes: ["UT07"],
+    })
+    const issues = derivePriorityIssues(profile)
+    expect(issues[0]).toContain("UT07")
+    // Không duplicate prefix → "UTUT07"
+    expect(issues[0]).not.toContain("UTUT07")
   })
 
   it("combines both flags", () => {
