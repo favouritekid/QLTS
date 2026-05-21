@@ -2,15 +2,19 @@
 
 /**
  * Phase 7: Permission-Based Rendering (ADR-FE-002)
- * 
- * Button visibility is now controlled by backend permissions via can() pattern.
- * - ❌ FORBIDDEN: {isDraft && <Button />}
- * - ✅ REQUIRED: {can('submit') && <Button />}
+ *
+ * Sticky bar render theo BE `can()` flags, KHÔNG đoán theo profile.status.
+ *
+ * Commit 2 — Decision Surface refactor:
+ * Approve/Reject/Submit/Resubmit ĐÃ chuyển sang [FinalizeTab](./tabs/FinalizeTab.tsx)
+ * (Step 8 decision panel) cùng bypass_warning guard. Sticky bar còn lại
+ * chỉ navigation + non-decision workflow actions (publish_result,
+ * request_revision, claim, enroll, send_confirmation, ...).
  */
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock, CheckCircle, XCircle, Trash, ArrowRight, ArrowLeft } from "lucide-react"
+import { Loader2, Save, GraduationCap, ClipboardCheck, XCircle, Trash, ArrowRight, ArrowLeft } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +26,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { cn } from "@/lib/utils"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
@@ -35,20 +38,10 @@ interface AdmissionActionsProps {
   currentStep: number
   onStepChange: (step: number) => void
   isSaving: boolean
-  isSubmitting: boolean
   isEnrolling: boolean
   onSave: () => void
-  onSubmit: () => void
   onEnroll: () => void
   onCheckCondition?: () => void
-  // Resubmit action (officer - rejected profiles)
-  onResubmit?: () => void
-  isResubmitting?: boolean
-  // Optional: For Manager actions
-  onApprove?: () => void
-  onReject?: () => void
-  isApproving?: boolean
-  isRejecting?: boolean
   // Phase 3 multi-NV: 1-click publish-result (bỏ start-review YAGNI 2026-05-15)
   onPublishResult?: () => void
   isPublishingResult?: boolean
@@ -70,18 +63,10 @@ export function AdmissionActions({
   currentStep,
   onStepChange,
   isSaving,
-  isSubmitting,
   isEnrolling,
   onSave,
-  onSubmit,
   onEnroll,
   onCheckCondition,
-  onResubmit,
-  isResubmitting = false,
-  onApprove,
-  onReject,
-  isApproving = false,
-  isRejecting = false,
   onPublishResult,
   isPublishingResult = false,
   onRequestRevision,
@@ -93,15 +78,9 @@ export function AdmissionActions({
   onDelete,
   isDeleting = false,
 }: AdmissionActionsProps) {
-  // =========================================================================
-  // Phase 7: Permission-Based Button Visibility
-  // =========================================================================
   const { can } = usePermissions(profile)
   const statusConfig = getStatusConfig(profile.status)
-  
-  // Check eligibility from backend (not local calculation)
-  const isEligible = profile.eligibility_status === 'eligible'
-  
+
   return (
     <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
       {/* Mobile (<640px): allow horizontal scroll inside bar so wide
@@ -171,134 +150,13 @@ export function AdmissionActions({
             </Button>
           )}
 
-          {/* Finalize at step 8 */}
-          {currentStep === 8 && can('submit') && (
-            <>
-              {/* Check Condition */}
-              <Button variant="outline" onClick={onCheckCondition}>
-                <ClipboardCheck className="w-4 h-4 mr-2" />
-                Kiểm tra toàn bộ
-              </Button>
-
-              {/* Submit */}
-              <Button
-                onClick={onSubmit}
-                disabled={isSubmitting || !isEligible}
-                className={cn(!isEligible && "opacity-80")}
-              >
-                {isSubmitting ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : !isEligible ? (
-                  <Lock className="w-4 h-4 mr-2" />
-                ) : (
-                  <Send className="w-4 h-4 mr-2" />
-                )}
-                Nộp hồ sơ
-              </Button>
-            </>
-          )}
-
-          {/* Resubmit - Officer action for rejected profiles */}
-          {can('resubmit') && onResubmit && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button disabled={isResubmitting}>
-                  {isResubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                  Nộp lại hồ sơ
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Nộp lại hồ sơ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hồ sơ đã bị từ chối trước đó. Sau khi nộp lại, hồ sơ sẽ được chuyển sang trạng thái chờ duyệt.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onResubmit}>
-                    Nộp lại
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Manager Actions - Permission-based (ADR-FE-002).
-              F7 fix: when profile bypassed eligibility check
-              (`bypass_warning=true`), wrap Approve in a confirmation
-              dialog that lists the validation errors. Without this,
-              admin clicks Approve and silently approves a hồ sơ với
-              7 missing required fields → student row with NULL name. */}
-          {can('approve') && onApprove && (
-            profile.bypass_warning ? (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    disabled={isApproving}
-                    className="bg-warning-600 hover:bg-warning-700"
-                  >
-                    {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                    Phê duyệt (vượt điều kiện)
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>⚠️ Hồ sơ chưa đủ điều kiện</AlertDialogTitle>
-                    <AlertDialogDescription asChild>
-                      <div className="space-y-2">
-                        <p>
-                          Đợt tuyển sinh này cho phép nộp hồ sơ chưa đầy đủ
-                          (<code>allow_unverified_submission=true</code>),
-                          nhưng hồ sơ hiện có{" "}
-                          <strong>{profile.validation_errors?.length ?? 0} lỗi</strong>
-                          {" "}chưa khắc phục:
-                        </p>
-                        {profile.validation_errors && profile.validation_errors.length > 0 && (
-                          <ul className="list-disc pl-5 text-sm max-h-40 overflow-y-auto">
-                            {profile.validation_errors.map((err, i) => (
-                              <li key={i}>{err}</li>
-                            ))}
-                          </ul>
-                        )}
-                        <p className="text-warning-800 font-medium">
-                          Phê duyệt sẽ tạo hồ sơ vào hệ thống với dữ liệu thiếu
-                          (ví dụ: tên ứng viên, ngày sinh, CCCD…). Bạn có chắc?
-                        </p>
-                      </div>
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Để tôi xem lại</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={(e) => { e.preventDefault(); onApprove(); }}
-                      className="bg-warning-600 hover:bg-warning-700"
-                    >
-                      Vẫn phê duyệt
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            ) : (
-              <Button
-                onClick={onApprove}
-                disabled={isApproving}
-                className="bg-success-600 hover:bg-success-700"
-              >
-                {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                Phê duyệt
-              </Button>
-            )
-          )}
-
-          {can('reject') && onReject && (
-            <Button
-              onClick={onReject}
-              disabled={isRejecting}
-              variant="destructive"
-            >
-              {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-              Từ chối
+          {/* Kiểm tra toàn bộ — step 8 only (navigate to first error step).
+              Submit/Approve/Reject/Resubmit ĐÃ chuyển sang FinalizeTab
+              decision panel (Commit 2). */}
+          {currentStep === 8 && onCheckCondition && (
+            <Button variant="outline" onClick={onCheckCondition}>
+              <ClipboardCheck className="w-4 h-4 mr-2" />
+              Kiểm tra toàn bộ
             </Button>
           )}
 

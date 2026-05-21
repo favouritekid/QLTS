@@ -90,12 +90,8 @@ function defaultSpies() {
   return {
     onStepChange: vi.fn(),
     onSave: vi.fn(),
-    onSubmit: vi.fn(),
     onEnroll: vi.fn(),
     onCheckCondition: vi.fn(),
-    onResubmit: vi.fn(),
-    onApprove: vi.fn(),
-    onReject: vi.fn(),
     onClaim: vi.fn(),
     onUnclaim: vi.fn(),
     onDelete: vi.fn(),
@@ -113,7 +109,6 @@ function renderActions(
       profile={profile}
       currentStep={currentStep}
       isSaving={false}
-      isSubmitting={false}
       isEnrolling={false}
       {...spies}
     />
@@ -182,46 +177,33 @@ describe("AdmissionActions", () => {
     });
   });
 
-  // ===== STEP 8: SUBMIT (Phase E.4 workbench — UT verify gộp vào Step 4) =====
+  // ===== STEP 8: NAVIGATION-ONLY (decision actions moved to FinalizeTab) =====
 
-  describe("Step 8: Submit", () => {
-    it("shows Check + Submit when submit=true and eligible", () => {
+  describe("Step 8: Sticky bar (navigation + Kiểm tra toàn bộ only)", () => {
+    it("shows Kiểm tra toàn bộ at step 8 (any role)", () => {
       const profile = buildProfile({
         status: "draft",
         permissions: { submit: true },
-        eligibility_status: "eligible",
       });
       renderActions(profile, 8);
 
       expect(screen.getByText("Kiểm tra toàn bộ")).toBeInTheDocument();
-      expect(screen.getByText("Nộp hồ sơ")).toBeInTheDocument();
-      // Submit button should be enabled
-      const submitBtn = screen.getByText("Nộp hồ sơ").closest("button");
-      expect(submitBtn).not.toBeDisabled();
     });
 
-    it("Submit disabled when ineligible", () => {
+    it("Commit 2: KHÔNG render Submit/Approve/Reject/Resubmit ở sticky bar (moved to FinalizeTab)", () => {
       const profile = buildProfile({
         status: "draft",
-        permissions: { submit: true },
-        eligibility_status: "ineligible",
+        permissions: { submit: true, approve: true, reject: true, resubmit: true },
+        eligibility_status: "eligible",
       });
       renderActions(profile, 8);
 
-      const submitBtn = screen.getByText("Nộp hồ sơ").closest("button");
-      expect(submitBtn).toBeDisabled();
-    });
-
-    it("click Submit calls onSubmit", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { submit: true },
-        eligibility_status: "eligible",
-      });
-      const spies = renderActions(profile, 8);
-
-      fireEvent.click(screen.getByText("Nộp hồ sơ"));
-      expect(spies.onSubmit).toHaveBeenCalled();
+      expect(screen.queryByText("Nộp hồ sơ")).not.toBeInTheDocument();
+      expect(screen.queryByText("Phê duyệt")).not.toBeInTheDocument();
+      expect(screen.queryByText("Nộp lại hồ sơ")).not.toBeInTheDocument();
+      // "Từ chối" có thể appear ở các nơi khác (badge, etc.); chỉ assert
+      // không có Reject button bằng cách query button có aria-label/role
+      expect(screen.queryByRole("button", { name: "Từ chối" })).not.toBeInTheDocument();
     });
 
     it("hides Tiếp tục + Lưu nhưng GIỮ Quay lại ở step 8 (officer/manager có thể sửa lại)", () => {
@@ -235,75 +217,9 @@ describe("AdmissionActions", () => {
     });
   });
 
-  // ===== RESUBMIT (rejected / revision_requested) =====
+  // ===== MANAGER WORKFLOW ACTIONS (claim/unclaim — non-decision) =====
 
-  describe("Resubmit", () => {
-    it("rejected + resubmit=true: shows resubmit + badge Từ chối", () => {
-      const profile = buildProfile({
-        status: "rejected",
-        permissions: { resubmit: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("rejected").label)).toBeInTheDocument();
-    });
-
-    it("revision_requested + resubmit=true: shows resubmit + badge Yêu cầu bổ sung", () => {
-      const profile = buildProfile({
-        status: "revision_requested",
-        permissions: { resubmit: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("revision_requested").label)).toBeInTheDocument();
-    });
-
-    it("click dialog-confirmed Resubmit calls onResubmit", () => {
-      const profile = buildProfile({
-        status: "rejected",
-        permissions: { resubmit: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      // With mocked AlertDialog, trigger + action both render.
-      // "Nộp lại" is the dialog action text (AlertDialogAction).
-      const buttons = screen.getAllByText("Nộp lại");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onResubmit).toHaveBeenCalled();
-    });
-  });
-
-  // ===== MANAGER ACTIONS (submitted/resubmitted) =====
-
-  describe("Manager actions", () => {
-    it("submitted + approve/reject/claim: shows all 3 buttons + badge", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { approve: true, reject: true, claim: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
-      // "Từ chối" appears as both reject button text AND may appear in dialog
-      expect(screen.getAllByText("Từ chối").length).toBeGreaterThanOrEqual(1);
-      // "Nhận duyệt" appears as trigger + dialog action
-      expect(screen.getAllByText("Nhận duyệt").length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText(getStatusConfig("submitted").label)).toBeInTheDocument();
-    });
-
-    it("resubmitted + approve/reject: shows approve + reject", () => {
-      const profile = buildProfile({
-        status: "resubmitted",
-        permissions: { approve: true, reject: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("resubmitted").label)).toBeInTheDocument();
-    });
-
+  describe("Manager workflow actions (non-decision)", () => {
     it("unclaim=true: shows unclaim button", () => {
       const profile = buildProfile({
         status: "submitted",

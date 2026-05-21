@@ -519,32 +519,31 @@ export function AdmissionDetailClient({
               isEligible={isEligible}
               onSubmit={handleSubmit}
               isSubmitting={submitMutation.isPending}
-              onApprove={handleApprove}              // ✅ NEW
-              onReject={handleReject}                // ✅ NEW
-              isApproving={approveMutation.isPending} // ✅ NEW
-              isRejecting={rejectMutation.isPending} // ✅ NEW
+              canSubmit={can('submit')}
+              onResubmit={handleResubmit}
+              isResubmitting={resubmitMutation.isPending}
+              canResubmit={can('resubmit')}
+              onApprove={handleApprove}
+              isApproving={approveMutation.isPending}
               canApprove={can('approve')}
+              onReject={handleReject}
+              isRejecting={rejectMutation.isPending}
+              canReject={can('reject')}
             />
           )}
         </div>
 
-        {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}
+        {/* STICKY ACTIONS (Commit 2 — navigation + non-decision workflow only)
+            Approve/Reject/Submit/Resubmit moved to FinalizeTab decision panel
+            to enforce a single decision surface and preserve bypass_warning guard. */}
         <AdmissionActions
           profile={profile}
           currentStep={currentStep}
           onStepChange={handleStepChange}
           isSaving={updateMutation.isPending}
-          isSubmitting={submitMutation.isPending}
           isEnrolling={enrollMutation.isPending}
           onSave={handleSave}
-          onSubmit={handleSubmit}
-          onResubmit={handleResubmit}
-          isResubmitting={resubmitMutation.isPending}
           onEnroll={handleEnroll}
-          onApprove={handleApprove}
-          onReject={handleReject}
-          isApproving={approveMutation.isPending}
-          isRejecting={rejectMutation.isPending}
           onPublishResult={handlePublishResult}
           isPublishingResult={publishResultMutation.isPending}
           onRequestRevision={handleRequestRevision}
