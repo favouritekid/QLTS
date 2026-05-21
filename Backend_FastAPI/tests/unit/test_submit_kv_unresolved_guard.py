@@ -1,21 +1,26 @@
 """Unit tests for ``_assert_kv_resolved_for_submit`` (Phase E.4 commit 5 fix-up).
 
-Reviewer 2026-05-21 — DEFAULT-BLOCK pattern (whitelist success rules + kv_resolved):
+Reviewer 2026-05-21 v3 — DEFAULT-BLOCK NO defensive escape.
 
-Pre-fix (commit 5 v1): block khi `requires_manual_override=True` + rule_applied
-∈ blacklist 6 codes. Sai hướng fail-closed: unknown future rule pass mặc định;
-`not_resolved` không có flag cũng pass.
+Pre-fix-up v1: blacklist block (block khi rule trong unresolved list) → unknown
+future rule + flag True pass sai hướng fail-closed.
 
-Post-fix (commit 5 v2): chỉ pass khi rule trong WHITELIST success
-{longest_duration, tiebreak_graduation_school, commune_lookup, manual_override}
-VÀ kv_resolved != None. Mọi case khác → block.
+Pre-fix-up v2: whitelist success + defensive escape empty/None pass. Vẫn fail-open
+khi freeze fail infra → snapshot stays empty/old + submit pass.
+
+Post-fix-up v3 (this): chỉ pass khi rule_applied ∈ {longest_duration,
+tiebreak_graduation_school, commune_lookup, manual_override} VÀ kv_resolved
+!= None. Empty/None snapshot, race state, unknown rule — TẤT CẢ block.
 
 Tests pin gate logic:
-  - 6 fail-closed rules block (address_not_normalized, catalog_gap_*, ...)
-  - manual_override với kv_resolved set → pass
-  - 3 happy paths (longest_duration, commune_lookup, ...) → pass
-  - Snapshot empty/None → pass defensive (engine T1 freeze fail infra)
-  - Default-block edge cases: unknown rule, kv_resolved None + success rule, etc.
+  - 6 unresolved rules → block
+  - manual_override + kv_resolved → pass
+  - 3 success rules với kv_resolved → pass
+  - Race: success rule + kv_resolved=None → block
+  - Race: unresolved rule + kv_resolved set → block
+  - Unknown future rule → block
+  - **Empty {} snapshot → block** (v3: NO defensive escape)
+  - **None snapshot → block** (v3: NO defensive escape)
 """
 from __future__ import annotations
 
@@ -140,15 +145,23 @@ def test_longest_duration_without_kv_resolved_blocks() -> None:
 # ===========================================================================
 
 
-def test_empty_snapshot_passes_defensive() -> None:
-    """Snapshot rỗng (vd engine T1 freeze fail do infra) → KHÔNG block submit.
-    Block path chỉ khi engine explicit signal unresolved; empty là failure
-    mode khác (đã log warning ở freeze try/except)."""
-    _assert_kv_resolved_for_submit({}, profile_id=1)
+def test_empty_snapshot_blocks_no_defensive_escape() -> None:
+    """v3 fix-up 2026-05-21: empty snapshot → BLOCK (KHÔNG defensive pass).
+    Freeze fail infra phải block submit, không pass-through. Freeze try/except
+    upstream giờ raise BadRequest('KV_RESOLUTION_FAILED') trực tiếp; nếu route
+    nào bỏ qua, guard này là defensive last-line block."""
+    with pytest.raises(BadRequest) as exc:
+        _assert_kv_resolved_for_submit({}, profile_id=1)
+    assert "KV_UNRESOLVED" in str(exc.value)
+    assert "no_snapshot_present" in str(exc.value)
 
 
-def test_none_snapshot_passes_defensive() -> None:
-    _assert_kv_resolved_for_submit(None, profile_id=1)
+def test_none_snapshot_blocks_no_defensive_escape() -> None:
+    """v3 fix-up — None snapshot cũng block (cùng lý do empty)."""
+    with pytest.raises(BadRequest) as exc:
+        _assert_kv_resolved_for_submit(None, profile_id=1)
+    assert "KV_UNRESOLVED" in str(exc.value)
+    assert "no_snapshot_present" in str(exc.value)
 
 
 # ===========================================================================
