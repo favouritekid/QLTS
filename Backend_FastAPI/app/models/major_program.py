@@ -51,6 +51,22 @@ class MajorProgram(Base):
         comment="FK to config_degree_level. Canonical lookup; "
                 "backfilled from legacy degree_level text column."
     )
+    # Phase E.4 (Q9 #07) — relationship cho derive_target_level_and_type()
+    # ở priority_service. Engine đọc ``degree_level_ref.code`` để map ra
+    # config_degree_level.code ("cao_dang"/"trung_cap"/"so_cap"). Eager-load
+    # bằng selectinload(MajorProgram.degree_level_ref) trong callers.
+    #
+    # P2 deferred (post-launch FU): chain selectinload pattern (.academic_info
+    # → .offering → .program → .degree_level_ref + .offering_type_config) lặp
+    # ở 5 chỗ (admissions_v2.publish, admission_service._validate_eligibility_
+    # all_choices x2, priority_service.derive_profile_target_context x2). Root
+    # entity khác nhau (AdmissionProfile/AdmissionProfileChoice/Offering
+    # AdmissionConfig) nên extract chung helper sẽ có signature phức tạp +
+    # cross-module import. Anchor test (test_priority_config_models.py:
+    # test_major_program_degree_level_ref_uses_lazy_raise) đã pin contract
+    # lazy="raise"; nếu caller quên eager-load sẽ raise tại runtime — đủ net
+    # cho regression. Write-path low volume nên acceptable trade-off.
+    degree_level_ref = relationship("ConfigDegreeLevel", lazy="raise")
     code = Column(
         String(50),
         unique=True,

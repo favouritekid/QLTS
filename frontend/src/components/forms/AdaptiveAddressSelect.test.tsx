@@ -77,10 +77,12 @@ interface Props {
   provinceValue?: string
   districtValue?: string | null
   wardValue?: string
+  wardCodeValue?: string | null
   mode?: AddressMode
   onProvinceChange?: (v: string) => void
   onDistrictChange?: (v: string | null) => void
   onWardChange?: (v: string) => void
+  onWardCodeChange?: (code: string | null) => void
   onModeChange?: (m: AddressMode) => void
 }
 
@@ -90,10 +92,12 @@ async function renderComponent(overrides: Props = {}) {
     provinceValue: "",
     districtValue: null,
     wardValue: "",
+    wardCodeValue: null as string | null,
     mode: "current" as AddressMode,
     onProvinceChange: vi.fn(),
     onDistrictChange: vi.fn(),
     onWardChange: vi.fn(),
+    onWardCodeChange: vi.fn(),
     onModeChange: vi.fn(),
     ...overrides,
   }
@@ -250,6 +254,157 @@ describe("AdaptiveAddressSelect", () => {
       expect(props.onProvinceChange).toHaveBeenCalledWith("Dak Lak")
       expect(props.onDistrictChange).toHaveBeenCalledWith(null)
       expect(props.onWardChange).toHaveBeenCalledWith("")
+    })
+  })
+
+  // -----------------------------------------------------------------
+  // Phase E.4 KV BRIDGE — ward code expose
+  // -----------------------------------------------------------------
+
+  it("ward combobox dùng ward.code làm option value (canonical key)", async () => {
+    mockUseWards.mockReturnValue({
+      data: [
+        { code: "66_001", name: "Phường Tân An", province_code: "66", district_code: null },
+        { code: "66_002", name: "Xã Ea Kao", province_code: "66", district_code: null },
+      ],
+      isLoading: false,
+    })
+
+    await renderComponent({ mode: "current", provinceValue: "Dak Lak" })
+
+    const wardSelect = screen.getByLabelText("Phường/Xã") as HTMLSelectElement
+    const optionValues = Array.from(wardSelect.options).map((o) => o.value)
+    expect(optionValues).toContain("66_001")
+    expect(optionValues).toContain("66_002")
+    // Không còn dùng ward.name làm value
+    expect(optionValues).not.toContain("Phường Tân An")
+    expect(optionValues).not.toContain("Xã Ea Kao")
+  })
+
+  it("selecting ward (by code) fires onWardChange(name) + onWardCodeChange(code)", async () => {
+    mockUseWards.mockReturnValue({
+      data: [
+        { code: "66_001", name: "Phường Tân An", province_code: "66", district_code: null },
+        { code: "66_002", name: "Xã Ea Kao", province_code: "66", district_code: null },
+      ],
+      isLoading: false,
+    })
+
+    const { props } = await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+    })
+
+    // Combobox value đổi sang ward.code (canonical primary key)
+    fireEvent.change(screen.getByLabelText("Phường/Xã"), {
+      target: { value: "66_002" },
+    })
+
+    await waitFor(() => {
+      expect(props.onWardChange).toHaveBeenCalledWith("Xã Ea Kao")
+      expect(props.onWardCodeChange).toHaveBeenCalledWith("66_002")
+    })
+  })
+
+  it("ward selection cleared (empty string) emits empty name + null commune code", async () => {
+    mockUseWards.mockReturnValue({
+      data: [{ code: "66_001", name: "Phường Tân An", province_code: "66", district_code: null }],
+      isLoading: false,
+    })
+
+    const { props } = await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+      wardValue: "Phường Tân An",
+      wardCodeValue: "66_001",
+    })
+
+    fireEvent.change(screen.getByLabelText("Phường/Xã"), { target: { value: "" } })
+
+    await waitFor(() => {
+      expect(props.onWardChange).toHaveBeenCalledWith("")
+      expect(props.onWardCodeChange).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it("wardCodeValue prop sets combobox internal selection (hydration)", async () => {
+    mockUseWards.mockReturnValue({
+      data: [
+        { code: "66_001", name: "Phường Tân An", province_code: "66", district_code: null },
+        { code: "66_002", name: "Xã Ea Kao", province_code: "66", district_code: null },
+      ],
+      isLoading: false,
+    })
+
+    await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+      wardCodeValue: "66_002",
+    })
+
+    expect((screen.getByLabelText("Phường/Xã") as HTMLSelectElement).value).toBe(
+      "66_002",
+    )
+  })
+
+  it("fallback hydration từ wardValue (name) khi wardCodeValue chưa có (legacy profile)", async () => {
+    mockUseWards.mockReturnValue({
+      data: [
+        { code: "66_001", name: "Phường Tân An", province_code: "66", district_code: null },
+      ],
+      isLoading: false,
+    })
+
+    await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+      wardValue: "Phường Tân An",
+      // wardCodeValue undefined — legacy profile chỉ có name
+    })
+
+    // Component lookup ngược name → code để select đúng option
+    expect((screen.getByLabelText("Phường/Xã") as HTMLSelectElement).value).toBe(
+      "66_001",
+    )
+  })
+
+  it("province change clears commune code along with ward/district", async () => {
+    const { props } = await renderComponent({ mode: "current" })
+
+    fireEvent.change(screen.getByLabelText(/Tỉnh/), {
+      target: { value: "Dak Lak" },
+    })
+
+    await waitFor(() => {
+      expect(props.onWardCodeChange).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it("mode switch clears commune code", async () => {
+    const { props } = await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+    })
+
+    fireEvent.click(screen.getByLabelText(/Hộ khẩu cũ/))
+
+    await waitFor(() => {
+      expect(props.onWardCodeChange).toHaveBeenCalledWith(null)
+    })
+  })
+
+  it("district change (legacy mode) clears commune code", async () => {
+    const { props } = await renderComponent({
+      mode: "legacy",
+      provinceValue: "Lao Cai",
+    })
+
+    fireEvent.change(screen.getByLabelText("Quận/Huyện"), {
+      target: { value: "Bat Xat" },
+    })
+
+    await waitFor(() => {
+      expect(props.onWardCodeChange).toHaveBeenCalledWith(null)
     })
   })
 })

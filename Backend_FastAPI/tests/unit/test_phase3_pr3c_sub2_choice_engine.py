@@ -74,6 +74,21 @@ def _make_path(
         admission_path_id=1,
         subject_group=subject_group,
     )
+    # Q9 #07 Phase E.4 — _evaluate_single_choice Gate 0 calls
+    # derive_target_level_and_type(path) reading
+    # path.academic_info.offering.program.degree_level_ref.code
+    # + offering.offering_type_config.code. Without this eager-loaded chain
+    # stub, gate 0 raises CONFIG_GAP_TARGET_LEVEL → silently regresses every
+    # choice to 'rejected'. Mirror pattern from
+    # test_priority_bonus_decision_flip.py (Phase E.4 commit 5 fix).
+    program_stub = SimpleNamespace()
+    program_stub.__dict__["degree_level_ref"] = SimpleNamespace(code="cao_dang")
+    offering_stub = SimpleNamespace()
+    offering_stub.__dict__["program"] = program_stub
+    offering_stub.__dict__["offering_type_config"] = SimpleNamespace(code="chinh_quy")
+    academic_info_stub = SimpleNamespace()
+    academic_info_stub.__dict__["offering"] = offering_stub
+
     path = SimpleNamespace(
         id=1,
         admission_method=method,
@@ -81,6 +96,7 @@ def _make_path(
         bonus_rule_override=bonus_rule_override,
         path_subject_group_config=config,
     )
+    path.__dict__["academic_info"] = academic_info_stub
     return path, config
 
 
@@ -127,6 +143,13 @@ def _make_profile(*, status="reviewing", gpa=None, choices=None):
         graduation_year=2024,
         uses_choice_engine=True,
         choices=choices or [],
+        # Q9 #07 Phase E.4 — _evaluate_single_choice Gate 0 also calls
+        # validate_eligibility(profile, target, type) which reads
+        # cultural_education_level + vocational_qualification. CĐ chính quy
+        # (set in _make_path stub) yêu cầu THPT knowledge. Default safe value
+        # ``graduated_thpt`` để legacy tests không vướng eligibility fail.
+        cultural_education_level="graduated_thpt",
+        vocational_qualification="none",
     )
 
 

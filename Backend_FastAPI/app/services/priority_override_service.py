@@ -1,9 +1,14 @@
 # app/services/priority_override_service.py
-"""Q9 #07 Phase E.2 + E.3 — Priority bonus officer/admin write-path.
+"""Q9 #07 Phase E.2 + E.3 + E.4 — Priority bonus admin/manager (KV) +
+officer/admin/manager (UT) write-path.
 
-Service-layer functions cho manual KV override (Phase E.2) + UT evidence
-verify/reject (Phase E.3 — chưa ship Wave 2). Architectural rules
-(per CLAUDE.md PART 7):
+Service-layer functions cho:
+  - Manual KV override (Phase E.2; commit 7 hardening 2026-05-21):
+    ADMIN + MANAGER only. Officer hard-denied ngay đầu override_kv.
+  - UT evidence verify/reject (Phase E.3): officer + manager + admin
+    write-path; officer-scope via lead.assigned_officer_id IDOR check.
+
+Architectural rules (per CLAUDE.md PART 7):
 
 * No FastAPI imports — raise DomainExceptions, return (result, post_commit_cb)
 * Router commits; service flushes only
@@ -24,7 +29,7 @@ Snapshot mutation (override_kv):
       evidence_file_id: optional,
       frozen_at: now ISO (refresh on override),
       frozen_at_status: 'manual_override',
-      resolved_by: actor.role  # 'officer' | 'admin'
+      resolved_by: 'admin' | 'manager'  # Phase E.4 commit 7: officer denied
   }
   profile.area_resolution_basis ← 'manual_override'
   profile.version += 1
@@ -96,9 +101,19 @@ _POST_PUBLISH_STATUS: frozenset[str] = frozenset({
     "waitlisted",
 })
 
-# Officer + admin BOTH refuse to override these (data inconsistency risk).
+# Phase E.4 commit 5 fix-up — KV override hard-deny matrix:
+# Pre-fix: ``draft`` đứng cùng withdrawn/dropped/rejected → block toàn bộ
+# override. Hậu quả: submit guard fail-closed (yêu cầu nghiệp vụ #7) raise
+# KV_UNRESOLVED + message "yêu cầu quản lý ấn định KV thủ công trước khi
+# nộp" → manager/admin KHÔNG có đường để fulfill yêu cầu đó vì profile
+# vẫn draft. Deadlock.
+#
+# Fix: tách ``draft`` khỏi hard-deny generic. Override trên draft được
+# allow CHỈ cho admin/manager + CHỈ khi engine đã emit signal unresolved
+# (snapshot.requires_manual_override=True). Officer giữ refused toàn diện
+# cho draft (kể cả engine signal) — hardening đầy đủ ở commit 7 (Casbin
+# + service guard).
 _HARD_DENIED_STATUS: frozenset[str] = frozenset({
-    "draft",
     "withdrawn",
     "dropped",
     "rejected",
@@ -251,24 +266,103 @@ async def override_kv(
             f"(got {len(reason_clean)})"
         )
 
-    # ---- Step 3: Status whitelist (role-aware)
+    # ---- Step 3: Role-level deny — Phase E.4 commit 7 hardening
+    # Yêu cầu nghiệp vụ #10 (chốt 2026-05-21): officer KHÔNG được override KV.
+    # Manager/admin pre-publish allowed với reason + audit; admin-only cho
+    # post-publish với acknowledge flag. Pre-commit 7: officer được override
+    # cho submitted/reviewing/revision_requested → cần block toàn diện.
+    # Service-level deny là defense-in-depth: Casbin migration q9_07_e4f cũng
+    # remove role:officer policy row; UI permissions flag cũng đổi sang chỉ
+    # admin/manager. Officer reach đây = bug router/permissions → raise.
     is_admin = actor.role == "admin"
-    is_officer_path = actor.role in ("officer", "manager")  # both treated as officer path
+    is_manager = actor.role == "manager"
+    # Phase E.4 commit 7 hardening: officer hard-deny ở top → "non-admin
+    # override path" giờ chỉ còn manager. Trước đây tên ``is_officer_path``
+    # vì cả officer + manager đều fall vào cùng whitelist; nay alias rõ
+    # tên hiện hành để reader khỏi hiểu lầm officer còn ở scope.
+    is_manager_override_path = actor.role == "manager"
+    if actor.role == "officer":
+        log.warning(
+            "officer_override_kv_attempt_denied",
+            profile_id=profile.id,
+            actor_id=actor.id,
+            profile_status=profile.status,
+        )
+        raise BusinessRuleViolation(
+            "Officer không được override KV. Chỉ manager hoặc admin được "
+            "phép ấn định KV thủ công với lý do + audit. Vui lòng đề nghị "
+            "quản lý xử lý hồ sơ này."
+        )
 
     if profile.status in _HARD_DENIED_STATUS:
         raise BusinessRuleViolation(
             f"Cannot override KV in '{profile.status}' state — profile "
-            "is in draft/withdrawn/dropped/rejected and not eligible for "
+            "is in withdrawn/dropped/rejected and not eligible for "
             "manual KV intervention."
         )
 
+    # Phase E.4 commit 5 fix-up — draft gate riêng (gỡ deadlock với submit
+    # guard fail-closed). Cho admin/manager override draft CHỈ khi engine
+    # đã emit signal unresolved; officer giữ refused draft (hardening đầy
+    # đủ ở commit 7).
+    if profile.status == "draft":
+        if not (is_admin or is_manager):
+            # Officer đã được block ở top (commit 7). Branch này còn cover các
+            # role khác như accountant/user nếu Casbin lọt qua.
+            raise BusinessRuleViolation(
+                "Chỉ admin hoặc manager được phép override KV ở trạng thái "
+                "draft. Vui lòng đề nghị quản lý xử lý hồ sơ này."
+            )
+
+        # Phase E.4 reviewer v5 2026-05-21 — RECOMPUTE LIVE thay vì trust snapshot
+        # stale. Pre-fix: kiểm tra ``snapshot.requires_manual_override`` từ DB.
+        # Edge case: officer sửa permanent_commune_code/cultural/history sau
+        # khi submit fail → snapshot vẫn cũ → manager override draft pass dù
+        # engine giờ resolve được. → sai nghiệp vụ (free-form override khi
+        # engine có đường tự xử).
+        # Fix: re-run resolve_kv_for_profile() với profile state hiện tại;
+        # CHỈ allow override draft khi engine vẫn emit unresolved signal.
+        # Lazy import (priority_service ↔ models circular dep at top-level).
+        from .priority_service import (
+            derive_profile_target_context,
+            resolve_kv_for_profile,
+        )
+
+        live_target_ctx = await derive_profile_target_context(profile, db)
+        _live_kv, live_meta = await resolve_kv_for_profile(
+            profile,
+            db,
+            target_level=live_target_ctx.get("target_level"),
+            admission_type=live_target_ctx.get("admission_type"),
+        )
+        if not live_meta.get("requires_manual_override"):
+            log.info(
+                "draft_override_refused_engine_resolved_live",
+                profile_id=profile.id,
+                actor_id=actor.id,
+                live_rule_applied=live_meta.get("rule_applied"),
+                live_basis=live_meta.get("basis"),
+                snapshot_rule_applied=(
+                    profile.priority_resolution_snapshot or {}
+                ).get("rule_applied"),
+            )
+            raise BusinessRuleViolation(
+                "Hồ sơ draft chỉ được override KV khi engine không xác định "
+                f"được với dữ liệu hiện tại. Engine vừa tính lại và resolve "
+                f"thành công (rule={live_meta.get('rule_applied')}, "
+                f"basis={live_meta.get('basis')}). Nếu muốn áp KV khác, "
+                f"submit hồ sơ trước (state submitted/reviewing/revision_requested "
+                f"cho phép override thường lệ)."
+            )
+
     if profile.status in _POST_PUBLISH_STATUS:
         if not is_admin:
-            # Officer/manager refused post-publish; signal via
-            # PermissionError so router maps to 403.
+            # Phase E.4 commit 7: officer hard-blocked ở top; nhánh này thực
+            # tế là manager bị từ chối cho post-publish (admin-only).
+            # PermissionError → router maps to 403.
             raise PermissionError(
-                f"Officer cannot override KV on '{profile.status}' "
-                "profile — admin only for post-publish overrides."
+                f"Only admin can override KV on '{profile.status}' profile — "
+                "manager is refused for post-publish overrides."
             )
         # Admin path requires explicit acknowledgement flag.
         if not acknowledge_post_publish:
@@ -280,15 +374,20 @@ async def override_kv(
 
     if (
         not is_admin
-        and is_officer_path
+        and is_manager_override_path
         and profile.status not in _OFFICER_ALLOWED_STATUS
         and profile.status not in _POST_PUBLISH_STATUS
+        and profile.status != "draft"  # draft handled by dedicated gate above
     ):
-        # Catch-all guard for unexpected statuses (vd new state machine
-        # state not in either whitelist). Fail-closed for officer path.
+        # Catch-all guard cho unexpected statuses (vd new state machine state
+        # không trong whitelist nào). Fail-closed cho non-admin path.
+        # Phase E.4 commit 7: officer đã hard-blocked ở top → branch này
+        # thực tế là manager bị từ chối cho status ngoài draft/submitted/
+        # reviewing/revision_requested.
         raise BusinessRuleViolation(
-            f"Cannot override KV in '{profile.status}' state — officer "
-            "allowed only for submitted/reviewing/revision_requested."
+            f"Cannot override KV in '{profile.status}' state — manager "
+            "allowed only for draft/submitted/reviewing/revision_requested; "
+            "admin required for post-publish overrides."
         )
 
     # ---- Step 4: Snapshot a deep copy of current state for audit log
@@ -310,7 +409,11 @@ async def override_kv(
         "evidence_file_id": evidence_file_id,
         "frozen_at": now_iso,
         "frozen_at_status": "manual_override",
-        "resolved_by": "admin" if is_admin else "officer",
+        # Phase E.4 commit 7 fix-up — actor.role thực thay vì hardcode "officer".
+        # Officer đã hard-deny ở top → manager/admin là 2 role hợp lệ duy nhất.
+        # Allowlist explicit để fail-safe nếu future role được add (vd "auditor"
+        # với override permission) — chỉ admin/manager mới persist trong audit.
+        "resolved_by": "admin" if is_admin else "manager",
     }
     # Drop ambiguous engine-state keys that no longer apply post-override
     new_snapshot.pop("requires_manual_override", None)

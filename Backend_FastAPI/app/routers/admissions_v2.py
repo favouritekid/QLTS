@@ -118,6 +118,23 @@ async def publish_admission_result(
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.criteria),
+            # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
+            # derive_target_level_and_type(path), which reads:
+            #   path.academic_info.offering.program.degree_level_ref.code
+            #   path.academic_info.offering.offering_type_config.code
+            # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
+            # every choice rejects silently. Mirrors the bonus_rule chain.
+            selectinload(models.AdmissionProfile.choices)
+            .selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info)
+            .selectinload(models.OfferingAcademicInfo.offering)
+            .selectinload(models.ProgramOffering.program)
+            .selectinload(models.MajorProgram.degree_level_ref),
+            selectinload(models.AdmissionProfile.choices)
+            .selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info)
+            .selectinload(models.OfferingAcademicInfo.offering)
+            .selectinload(models.ProgramOffering.offering_type_config),
             # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
             # NOT direct `subjects` relation (em earlier drift, fixed).
             selectinload(models.AdmissionProfile.choices)
@@ -672,7 +689,10 @@ async def preview_priority_kv(
     - Casbin: standard read scope (any authenticated user with profile access)
     """
     from copy import copy
-    from app.services.priority_service import resolve_kv_for_profile
+    from app.services.priority_service import (
+        derive_profile_target_context,
+        resolve_kv_for_profile,
+    )
 
     # Build transient profile-like object: profile DB state + form overrides.
     # Shallow copy + override avoids SQLAlchemy session mutation persisting.
@@ -698,7 +718,20 @@ async def preview_priority_kv(
     if payload.priority_object_codes is not None:
         preview_profile.priority_object_codes = payload.priority_object_codes
 
-    kv, meta = await resolve_kv_for_profile(preview_profile, db)
+    # Phase E.4 commit 5 fix: preview phải pass target_level + admission_type
+    # vào resolve_kv_for_profile. Trước fix: preview rơi vào legacy matrix
+    # (target_level=None) → CĐ chính quy + completed_thpt được map sang
+    # THUONG_TRU thay vì LICH_SU_THPT → basis hiển thị FE sai trước submit.
+    # Sau fix: dùng derive_profile_target_context() trên profile DB state
+    # (NOT preview_profile, vì context derive từ path chain DB-side, KHÔNG
+    # phụ thuộc form overrides).
+    target_ctx = await derive_profile_target_context(profile, db)
+    kv, meta = await resolve_kv_for_profile(
+        preview_profile,
+        db,
+        target_level=target_ctx.get("target_level"),
+        admission_type=target_ctx.get("admission_type"),
+    )
 
     # Look up bonus rates — KV area_bonus + UT object_bonus (potential + verified)
     # academic_year derived từ profile.admission_path.admission_round nếu có
@@ -892,14 +925,15 @@ async def get_priority_object_catalog(
 
 
 # =============================================================================
-# Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path)
+# Q9 #07 Phase E.2 + E.4 commit 7 hardening — Manual KV override
+# (admin + manager write-path; officer hard-denied per nghiệp vụ #10)
 # =============================================================================
 
 
 @router.post(
     "/{profile_id}/override-priority-kv",
     response_model=schemas.AdmissionProfileResponse,
-    summary="Override KV thủ công (officer/admin write-path — Phase E.2)",
+    summary="Override KV thủ công (admin/manager write-path — Phase E.4)",
 )
 async def override_priority_kv(
     profile_id: int,
@@ -908,27 +942,36 @@ async def override_priority_kv(
     profile: models.AdmissionProfile = Depends(get_admission_for_user),
     current_user: models.User = CasbinAuth,
 ):
-    """Officer/admin manually override profile's KV (Phase E.2 write-path).
+    """Admin/manager manually override profile's KV (Phase E.2 + E.4 commit 7).
+
+    Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10): officer hard-denied
+    toàn diện. Chỉ admin/manager. Casbin migration q9_07_e4f đã remove
+    role:officer policy row; service-layer cũng raise BusinessRuleViolation
+    cho actor.role=="officer" là defense-in-depth.
 
     Service-layer ``priority_override_service.override_kv()`` enforces:
     * Version guard FIRST (memory `version-guard-before-state-machine`)
-    * Status whitelist (officer: submitted/reviewing/revision_requested;
-      admin bypass với ``acknowledge_post_publish=true`` for post-publish)
+    * Role gate: officer DENIED unconditionally (BusinessRuleViolation 400)
+    * Status whitelist (manager: submitted/reviewing/revision_requested +
+      draft khi engine signal unresolved; admin bypass với
+      ``acknowledge_post_publish=true`` for post-publish)
     * Reason 20-500 char validation
+    * Live engine recompute cho draft (verify still unresolved)
     * Snapshot mutation + audit log INSERT + version bump
 
     Snapshot keys overwritten on each override (Decision D1):
     * ``manual_override_by/at/reason`` + ``evidence_file_id``
-    * ``frozen_at_status='manual_override'`` + ``resolved_by`` (officer/admin)
+    * ``frozen_at_status='manual_override'`` + ``resolved_by`` (admin|manager)
 
     Audit log preserves full chain — query via composite index
     ``(profile_id, action_type, created_at DESC)``.
 
     Security:
-    * IDOR: ``get_admission_for_user`` (3-tier scope admin/manager/officer)
-    * Casbin: ``q9_07_e0c`` migration seeds policy
-      (officer/manager/admin ALLOW, accountant DENY).
-    * Service ``PermissionError`` (officer post-publish) → 403.
+    * IDOR: ``get_admission_for_user`` (3-tier scope admin/manager/officer
+      read; officer cannot reach mutation per Casbin q9_07_e4f).
+    * Casbin: ``q9_07_e0c`` seeds policy, ``q9_07_e4f`` removes officer row
+      (admin/manager ALLOW, officer NO POLICY, accountant DENY).
+    * Service ``PermissionError`` (manager post-publish) → 403.
 
     Dispatches ``PRIORITY_KV_OVERRIDDEN`` event post-commit (catalog seed
     Wave 1; payload: application_id, lead_id, actor_id, actor_name,
@@ -949,8 +992,11 @@ async def override_priority_kv(
             acknowledge_post_publish=payload.acknowledge_post_publish,
         )
     except PermissionError as exc:
-        # Officer attempted post-publish override; map to 403 per memory
-        # `version-guard-before-state-machine` adjacent pattern.
+        # Phase E.4 commit 7: officer hard-blocked ở service top (raises
+        # BusinessRuleViolation 400, NOT PermissionError). Branch này thực
+        # tế là manager attempted post-publish override (admin-only). Map
+        # to 403 per memory `version-guard-before-state-machine` adjacent
+        # pattern.
         raise HTTPException(status_code=403, detail=str(exc))
 
     await db.commit()

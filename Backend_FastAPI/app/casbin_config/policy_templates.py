@@ -196,12 +196,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "DELETE"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*",         "action": "PATCH"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/choices/*/scores",  "action": "PATCH"},
-        # Q9 #07 Phase E — Priority bonus override + UT evidence verify/reject.
-        # Officer scope: must be assigned to profile (IDOR check trong service);
-        # manager + admin inherit via diamond. Accountant DENY block below.
-        # Service-layer additional gates: version guard (memory
-        # `version-guard-before-state-machine`) + status whitelist (officer mode).
-        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST"},
+        # Q9 #07 Phase E — Priority bonus + UT evidence verify/reject.
+        # Officer scope: assigned to profile (IDOR check trong service);
+        # manager + admin inherit via diamond (verify/reject). Accountant
+        # DENY block below.
+        # Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10): override-
+        # priority-kv MOVED TO MANAGER_TEMPLATE — officer KHÔNG được override
+        # KV. Service-layer priority_override_service hard-deny officer ngay
+        # đầu override_kv là defense-in-depth.
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH"},
         # Q9 #07 Phase E.4 PR-2 — Priority evidence upload + untick (officer
@@ -469,6 +471,10 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
         {"subject": "{role}", "object": "/api/admissions/{id}/request-revision", "action": "POST"},  # Request revision
         {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
+        # Q9 #07 Phase E.4 commit 7 — Manual KV override (manager-explicit;
+        # officer hard-blocked at service level per nghiệp vụ #10). Admin
+        # inherits via wildcard `/*`.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv", "action": "POST"},
         # NOTE: /withdraw lives in OFFICER_TEMPLATE — manager inherits via diamond.
         {"subject": "{role}", "object": "/api/admissions/{id}/claim", "action": "POST"},  # Claim profile for review
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile

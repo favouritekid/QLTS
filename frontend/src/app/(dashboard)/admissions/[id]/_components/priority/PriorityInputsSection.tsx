@@ -1,28 +1,25 @@
 /**
- * Q9 #07 Phase E.4 — § 1 Inputs section (officer-friendly UX refactor).
+ * Q9 #07 Phase E.4 — § 1 Inputs section.
  *
- * Linear 1-column layout:
- *   Trình độ:
- *     Văn hóa:  [select]      ← Tab 1
- *     Nghề:     [select]      ← Tab 2
- *   Cách xác định khu vực:
- *     ( ) Theo trường học           area_resolution_basis = null
- *     ( ) Theo nơi thường trú        area_resolution_basis = "permanent_address_special"
- *       ↳ Xã/phường thường trú: [input]  (conditional reveal)
+ * Officer chỉ nhập trình độ:
+ *   Văn hóa:  [select]      ← Tab 1
+ *   Nghề:     [select]      ← Tab 2
  *
- * UX rationale: replaces the previous "Bật trường hợp đặc biệt" switch +
- * raw commune-code input which read as bypass-control + jargon-heavy
- * helper text. The new radio framing surfaces the OFFICER DECISION
- * ("which basis are we using") instead of a binary edge-case toggle,
- * and the helper text on the commune field stays short — officers
- * tra cứu mã hành chính separately, không tự đoán.
+ * KV resolution basis là OUTPUT của engine (cultural + vocational + lịch sử
+ * học + permanent_commune_code từ tab Thông tin). Officer KHÔNG chọn basis
+ * — vi phạm thin-client + nghiệp vụ "hệ thống tự suy ra basis". Display
+ * basis derived hiển thị ở §2 EngineResultCard (state + reason + citation).
  *
- * Mapping to BE contract is UNCHANGED:
- *   - Theo trường học           → area_resolution_basis = null
- *   - Theo nơi thường trú        → area_resolution_basis = "permanent_address_special"
- *   - permanent_commune_code field shape unchanged
+ * Admin/manager override KV thực hiện qua PriorityOverrideDialog (output
+ * bypass), KHÔNG qua field area_resolution_basis ở §1.
  *
- * No business logic on FE — area resolution still computed by BE engine.
+ * History (audit cycle 2026-05-21):
+ *   - v0: switch "Bật trường hợp đặc biệt" + mã xã input — UX jargon-heavy.
+ *   - v1 (cycle 1): radio "Theo trường học / Theo nơi thường trú" + commune
+ *     input. Vẫn vi phạm thin-client: officer ÉP basis = bypass engine.
+ *   - v2 (THIS): officer chỉ khai trình độ; basis derive ở BE; commune
+ *     code source-of-truth ở tab Thông tin (PersonalInfoTab wire qua
+ *     AdaptiveAddressSelect).
  */
 "use client"
 
@@ -33,13 +30,7 @@ import {
   FormLabel,
   FormControl,
   FormMessage,
-  FormDescription,
 } from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import {
-  RadioGroup,
-  RadioGroupItem,
-} from "@/components/ui/radio-group"
 import {
   Select,
   SelectContent,
@@ -65,12 +56,6 @@ const VOCATIONAL_OPTIONS = [
   { value: "cao_dang",   label: "Cao đẳng" },
 ]
 
-// Internal radio values — distinct from BE enum to avoid colliding với
-// the optional/nullable shape. ``null`` (school basis) is not a valid
-// HTML radio value, so we map UI strings ↔ BE field locally.
-const BASIS_BY_SCHOOL = "by_school"
-const BASIS_BY_PERMANENT_ADDRESS = "permanent_address_special"
-
 export interface PriorityInputsSectionProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
@@ -80,15 +65,12 @@ export function PriorityInputsSection({
   form,
   isEditable,
 }: PriorityInputsSectionProps) {
-  const areaBasis = form.watch("area_resolution_basis")
-  const isPermanentAddress = areaBasis === BASIS_BY_PERMANENT_ADDRESS
-
   return (
     <section
       data-testid="priority-inputs-section"
       className="space-y-4 rounded-lg border border-border bg-card p-4"
     >
-      <h3 className="text-base font-semibold">Trình độ &amp; Khu vực</h3>
+      <h3 className="text-base font-semibold">Trình độ</h3>
 
       {/* Trình độ — văn hóa + nghề */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -157,99 +139,15 @@ export function PriorityInputsSection({
         />
       </div>
 
-      {/* Cách xác định khu vực — replaces the prior "Bật trường hợp đặc biệt"
-          switch. Officer chooses the resolution basis explicitly. */}
-      <FormField
-        control={form.control}
-        name="area_resolution_basis"
-        render={({ field }) => {
-          const radioValue = isPermanentAddress
-            ? BASIS_BY_PERMANENT_ADDRESS
-            : BASIS_BY_SCHOOL
-          return (
-            <FormItem className="space-y-2 rounded-md border border-dashed border-border p-3">
-              <FormLabel className="text-sm font-medium">
-                Cách xác định khu vực
-              </FormLabel>
-              <FormControl>
-                <RadioGroup
-                  value={radioValue}
-                  onValueChange={(v) => {
-                    // Map UI → BE field: school basis writes null.
-                    field.onChange(
-                      v === BASIS_BY_PERMANENT_ADDRESS
-                        ? BASIS_BY_PERMANENT_ADDRESS
-                        : null,
-                    )
-                  }}
-                  disabled={!isEditable}
-                  className="gap-2"
-                  data-testid="area-resolution-basis-radio"
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem
-                      value={BASIS_BY_SCHOOL}
-                      id="area-basis-by-school"
-                      data-testid="area-basis-by-school"
-                    />
-                    <label
-                      htmlFor="area-basis-by-school"
-                      className="text-sm cursor-pointer"
-                    >
-                      Theo trường học
-                    </label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem
-                      value={BASIS_BY_PERMANENT_ADDRESS}
-                      id="area-basis-by-permanent-address"
-                      data-testid="area-basis-by-permanent-address"
-                    />
-                    <label
-                      htmlFor="area-basis-by-permanent-address"
-                      className="text-sm cursor-pointer"
-                    >
-                      Theo nơi thường trú
-                    </label>
-                  </div>
-                </RadioGroup>
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )
-        }}
-      />
-
-      {/* Commune code (conditional reveal). Short helper text — no
-          MOET cardinality copy, no "trường hợp đặc biệt" wording. */}
-      {isPermanentAddress && (
-        <FormField
-          control={form.control}
-          name="permanent_commune_code"
-          render={({ field }) => (
-            <FormItem data-testid="commune-code-field">
-              <FormLabel htmlFor="permanent_commune_code">
-                Xã/phường thường trú
-              </FormLabel>
-              <FormControl>
-                <Input
-                  id="permanent_commune_code"
-                  data-testid="permanent-commune-code-input"
-                  placeholder="VD: 01_00025"
-                  value={field.value ?? ""}
-                  onChange={(e) => field.onChange(e.target.value || null)}
-                  disabled={!isEditable}
-                />
-              </FormControl>
-              <FormDescription className="text-xs">
-                Nhập mã xã/phường nếu hồ sơ thuộc diện tính khu vực theo
-                thường trú.
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      )}
+      {/* Thông báo derived basis — officer biết engine sẽ tự suy ra. */}
+      <p
+        data-testid="auto-basis-hint"
+        className="text-xs text-muted-foreground"
+      >
+        Hệ thống tự xác định cách tính khu vực ưu tiên dựa trên trình độ +
+        địa chỉ thường trú (tab Thông tin) + lịch sử học (tab Học tập).
+        Kết quả hiển thị bên dưới.
+      </p>
     </section>
   )
 }

@@ -132,3 +132,28 @@ def test_models_are_in_base_metadata() -> None:
         "vn_school_kv_assignment",
     ):
         assert tbl in table_names, f"{tbl} not registered in Base.metadata"
+
+
+def test_major_program_degree_level_ref_uses_lazy_raise() -> None:
+    """Phase E.4 (Q9 #07) anchor: MajorProgram.degree_level_ref MUST stay
+    lazy='raise'.
+
+    priority_service.derive_target_level_and_type() reads
+    ``program.degree_level_ref.code`` via __dict__ to mimic eager-load
+    semantics. Callers (admissions_v2, admission_service) selectinload
+    the full chain choices→admission_path→academic_info→offering→program
+    →degree_level_ref. If lazy mode regresses to 'select' (SQLAlchemy
+    default), a caller that forgets selectinload would silently issue
+    extra queries instead of crashing — making a future N+1 invisible
+    until prod load reveals it.
+    """
+    from sqlalchemy import inspect
+
+    from app.models.major_program import MajorProgram
+
+    rel = inspect(MajorProgram).relationships["degree_level_ref"]
+    assert rel.lazy == "raise", (
+        f"degree_level_ref.lazy regressed to {rel.lazy!r}. "
+        "Phase E.4 contract requires lazy='raise' (see "
+        "priority_service.derive_target_level_and_type)."
+    )

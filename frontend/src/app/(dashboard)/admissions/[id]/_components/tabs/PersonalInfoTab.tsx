@@ -44,6 +44,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
   const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
   const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
+  const permanentCommuneCode = useWatch({ control: form.control, name: "permanent_commune_code" }) ?? null
   const permanentResidentialGroup = useWatch({ control: form.control, name: "permanent_residential_group" }) || ""
   const permanentStreetAddress = useWatch({ control: form.control, name: "permanent_street_address" }) || ""
 
@@ -251,15 +252,36 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               provinceValue={permanentProvince}
               districtValue={permanentDistrict}
               wardValue={permanentWard}
+              // Phase E.4 KV bridge fix Finding 1: canonical code là primary
+              // key của combobox. Pass code thay vì để component lookup ngược
+              // từ name (tránh ambiguity 2 xã trùng tên 2 tỉnh).
+              wardCodeValue={permanentCommuneCode}
               residentialGroupValue={permanentResidentialGroup}
               streetAddressValue={permanentStreetAddress}
-              onProvinceChange={(value) => form.setValue("permanent_province", value)}
-              onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
-              onWardChange={(value) => form.setValue("permanent_ward", value)}
+              onProvinceChange={(value) => {
+                form.setValue("permanent_province", value, { shouldDirty: true })
+                // Province reset clears ward chain → mã xã canonical theo đó.
+                form.setValue("permanent_commune_code", null, { shouldDirty: true })
+              }}
+              onDistrictChange={(value) => {
+                form.setValue("permanent_district", value || "", { shouldDirty: true })
+                form.setValue("permanent_commune_code", null, { shouldDirty: true })
+              }}
+              onWardChange={(value) => form.setValue("permanent_ward", value, { shouldDirty: true })}
+              // Phase E.4 KV bridge — engine đọc permanent_commune_code chuẩn,
+              // KHÔNG đọc tên ward. PriorityTab hết phải hỏi officer gõ mã.
+              onWardCodeChange={(code) =>
+                form.setValue("permanent_commune_code", code, { shouldDirty: true })
+              }
               onResidentialGroupChange={(value) => form.setValue("permanent_residential_group", value)}
               onStreetAddressChange={(value) => form.setValue("permanent_street_address", value)}
               mode={addressMode}
-              onModeChange={setAddressMode}
+              onModeChange={(newMode) => {
+                setAddressMode(newMode)
+                // Mode switch resets cả tỉnh/quận/xã → mã xã cũng phải clear
+                // để tránh stale code orphan.
+                form.setValue("permanent_commune_code", null, { shouldDirty: true })
+              }}
               disabled={!isEditable}
             />
         </CardContent>

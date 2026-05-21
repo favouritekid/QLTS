@@ -39,6 +39,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
+import structlog
 from sqlalchemy import select
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from app.models.admission import AdmissionProfile
 
 
+log = structlog.get_logger(__name__)
 _ZERO = Decimal("0.00")
 
 
@@ -282,57 +284,155 @@ def _today():
 # =============================================================================
 
 
+def _has_thpt_history(academic_history: Optional[list]) -> bool:
+    """True khi profile có ít nhất 1 academic_history entry mức THPT/GDTX hợp lệ.
+
+    "Hợp lệ" = level ∈ {THPT, THCS_THPT, GDTX} + school_id + year_from/year_to
+    không null. Dùng cho hybrid rule CĐ liên thông KHOI_LUONG_VH_THPT + TC
+    (yêu cầu nghiệp vụ #6): có history → LICH_SU_THPT; không có → THUONG_TRU.
+    """
+    if not academic_history:
+        return False
+    return any(
+        isinstance(e, dict)
+        and e.get("level") in {"THPT", "THCS_THPT", "GDTX"}
+        and e.get("school_id")
+        and e.get("year_from") is not None
+        and e.get("year_to") is not None
+        for e in academic_history
+    )
+
+
 def _derive_kv_basis_level(
     cultural: Optional[str],
     vocational: str,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+    academic_history: Optional[list] = None,
     area_resolution_basis: Optional[str] = None,
-) -> str:
-    """Map (cultural, vocational, area_basis) → KV resolution basis.
+) -> tuple[str, str]:
+    """Map profile context → KV resolution basis + reason code.
 
-    Returns one of:
-      'THPT'              — apply 3-year THPT multi-school rule (rows 1, 2)
-      'COMMUNE_FALLBACK'  — TN THCS bất kể vocational / so_cap / completed_thpt+none
-                            (rows 3, 4+5 merged, 6) — per nghiệp vụ trường 2026-05-18
-      'COMMUNE_SPECIAL'   — 4 special cases bypass (row 8)
-      'MANUAL'            — admin override (row 9)
-      'NOT_RESOLVED'      — cultural chưa khai (row 7, draft)
+    Phase E.4 (commit 5) refactor — signature mở rộng target_level +
+    admission_type + academic_history để khớp matrix nghiệp vụ #6:
 
-    See `Documents/Q9_07_PR5_REDESIGN.md` v1.3 Section "KV resolution basis
-    derivation matrix" cho 9 rows complete spec.
+      - TC sau THCS (target=trung_cap chính quy, cultural=graduated_thcs) → THUONG_TRU
+      - TC sau THPT/hoàn thành THPT → LICH_SU_THPT
+      - CĐ chính quy sau THPT/hoàn thành THPT → LICH_SU_THPT
+      - CĐ chính quy hoàn thành THPT + TC → LICH_SU_THPT (extended TT path)
+      - TC liên thông từ SC/TC sau THCS → THUONG_TRU
+      - TC liên thông có THPT/hoàn thành THPT → LICH_SU_THPT
+      - CĐ liên thông từ TC/CĐ có TN_THPT → LICH_SU_THPT
+      - CĐ liên thông KHOI_LUONG_VH_THPT + TC (completed_thpt + trung_cap/cao_dang):
+          có history THPT/GDTX hợp lệ → LICH_SU_THPT
+          không có history → THUONG_TRU
+          thiếu cả history lẫn commune → INSUFFICIENT_DATA (resolve step xử lý)
+
+    Returns ``(basis, basis_reason)``:
+      basis ∈ {
+        'LICH_SU_THPT'           — multi-school rule TT 05/2021 Mục 5.b
+        'THUONG_TRU'             — vn_commune_area_map lookup
+        'COMMUNE_SPECIAL'        — exception override (PT DTNT / ĐBKK 18+ tháng)
+        'MANUAL'                 — admin/manager override KV trực tiếp
+        'INSUFFICIENT_DATA'      — thiếu cultural/target/cấu hình quan trọng
+        'MANUAL_REVIEW_REQUIRED' — multi-school tied graduation
+        'NOT_RESOLVED'           — draft, cultural chưa khai
+      }
+      basis_reason — short snake_case key cho audit / FE display.
+
+    Backward compat: target_level/admission_type/academic_history mặc định None;
+    callers cũ chỉ truyền cultural + vocational + area_basis sẽ fall vào
+    "LEGACY" path (replicate hành vi commit 4) — KHÔNG break test cũ NGAY,
+    sẽ phase out khi resolve_kv_for_profile fully threaded.
     """
-    # Row 8/9: area_resolution_basis overrides matrix
+    # 1. Override paths — output bypass, áp trên mọi context.
     if area_resolution_basis == "permanent_address_special":
-        return "COMMUNE_SPECIAL"
+        return "COMMUNE_SPECIAL", "permanent_address_special_override"
     if area_resolution_basis == "manual_override":
-        return "MANUAL"
+        return "MANUAL", "admin_set_kv_directly"
 
-    # Row 7: cultural not set (draft state)
+    # 2. SC chính quy carve-out (yêu cầu nghiệp vụ #5+#6): SC không yêu cầu
+    # văn hóa → cultural=None vẫn pass eligibility. KV resolve qua THUONG_TRU
+    # (commune lookup). Phải check TRƯỚC "cultural is None" early-return để
+    # không kẹt vào NOT_RESOLVED sai.
+    if target_level == "so_cap" and cultural is None:
+        return "THUONG_TRU", "sc_no_cultural_uses_commune"
+
+    # 3. Draft state — cultural chưa khai (mọi target_level khác SC đều block).
     if cultural is None:
-        return "NOT_RESOLVED"
+        return "NOT_RESOLVED", "cultural_not_set"
 
-    # Rows 1, 2 (partial), 3: THPT-related cultural levels
-    if cultural in ("graduated_thpt", "graduated_gdtx", "completed_thpt"):
-        # Row 3 (completed_thpt + so_cap/none) → COMMUNE_FALLBACK
-        if cultural == "completed_thpt" and vocational in ("so_cap", "none"):
-            return "COMMUNE_FALLBACK"
-        return "THPT"  # Rows 1 + 2
+    voc = vocational or "none"
 
-    # Rows 4, 5: graduated_thcs → COMMUNE_FALLBACK regardless of vocational.
-    #
-    # Nghiệp vụ trường (user confirmed 2026-05-18): TN THCS bất kể đã có TC nghề
-    # hay chưa → KV theo nơi thường trú (hộ khẩu), KHÔNG theo trường TC nghề.
-    # Lý do: TT 05/2021 verbatim Mục 1 "tốt nghiệp trung học" — TN THCS chưa
-    # đủ "lịch sử trung học phổ thông" để tính KV theo trường. Override
-    # v1.3 design doc Row 4 (TC basis) — engine TC pathway = DEAD code path.
-    if cultural == "graduated_thcs":
-        return "COMMUNE_FALLBACK"  # Rows 4 + 5 merged
+    # 4. Backward-compat legacy branch (target_level chưa truyền — caller cũ).
+    #    Replicate matrix commit 4 để test legacy không break.
+    if target_level is None:
+        # Hồ sơ THPT-related → LICH_SU_THPT (trừ completed_thpt + so_cap/none → THUONG_TRU)
+        if cultural in ("graduated_thpt", "graduated_gdtx", "completed_thpt"):
+            if cultural == "completed_thpt" and voc in ("so_cap", "none"):
+                return "THUONG_TRU", "legacy_completed_thpt_no_vocational"
+            return "LICH_SU_THPT", "legacy_thpt_pathway"
+        if cultural in ("graduated_thcs", "completed_thcs"):
+            return "THUONG_TRU", "legacy_thcs_pathway_uses_commune"
+        return "NOT_RESOLVED", "legacy_unknown_cultural"
 
-    # Row 6: completed_thcs (any vocational) → fallback
-    if cultural == "completed_thcs":
-        return "COMMUNE_FALLBACK"
+    # 5. Phase E.4 matrix — target_level + admission_type drive basis.
+    atype = admission_type or "chinh_quy"
 
-    # Defensive: unknown cultural (shouldn't happen due to CHECK enum)
-    return "NOT_RESOLVED"
+    # 5a. Hybrid CĐ liên thông + completed_thpt + TC/CĐ (KHOI_LUONG_VH_THPT).
+    # Per nghiệp vụ #6: có lịch sử THPT/GDTX hợp lệ → LICH_SU_THPT; không có
+    # → THUONG_TRU; cả 2 thiếu → INSUFFICIENT_DATA (resolve step downgrade).
+    if (
+        target_level == "cao_dang"
+        and atype == "lien_thong"
+        and cultural == "completed_thpt"
+        and voc in ("trung_cap", "cao_dang")
+    ):
+        if _has_thpt_history(academic_history):
+            return "LICH_SU_THPT", "cd_lien_thong_khoi_luong_with_thpt_history"
+        return "THUONG_TRU", "cd_lien_thong_khoi_luong_no_thpt_history_fallback"
+
+    # 5b. CĐ (chính quy hoặc liên thông) với cultural graduated_thpt/gdtx/completed_thpt
+    # → LICH_SU_THPT. Matrix nghiệp vụ #6:
+    #   - CĐ chính quy sau THPT/hoàn thành THPT → LICH_SU_THPT
+    #   - CĐ chính quy diện hoàn thành THPT + TC → LICH_SU_THPT
+    #   - CĐ liên thông từ TC/CĐ có THPT → LICH_SU_THPT
+    if target_level == "cao_dang":
+        if cultural in ("graduated_thpt", "graduated_gdtx"):
+            return "LICH_SU_THPT", f"cd_{atype}_post_thpt_uses_school_history"
+        if cultural == "completed_thpt":
+            # CĐ chính quy + hoàn thành THPT đủ kiến thức → LICH_SU_THPT (nghiệp vụ #5)
+            return "LICH_SU_THPT", f"cd_{atype}_completed_thpt_uses_school_history"
+        # Eligibility gate đã chặn graduated_thcs/completed_thcs cho CĐ chính quy.
+        # Defensive: nếu reach here → cấu hình mismatch upstream.
+        return "INSUFFICIENT_DATA", f"cd_{atype}_cultural_insufficient_for_kv_basis"
+
+    # 5c. TC matrix.
+    if target_level == "trung_cap":
+        if atype == "lien_thong":
+            # TC liên thông từ SC/TC sau THCS → THUONG_TRU
+            if cultural == "graduated_thcs" and voc in ("so_cap", "trung_cap"):
+                return "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc_uses_commune"
+            # TC liên thông có THPT/hoàn thành THPT → LICH_SU_THPT
+            if cultural in ("completed_thpt", "graduated_thpt", "graduated_gdtx"):
+                return "LICH_SU_THPT", "tc_lien_thong_post_thpt_uses_school_history"
+            return "INSUFFICIENT_DATA", "tc_lien_thong_cultural_insufficient_for_kv_basis"
+        # TC chính quy:
+        # - TN_THCS → THUONG_TRU
+        # - completed/graduated THPT/GDTX → LICH_SU_THPT
+        if cultural == "graduated_thcs":
+            return "THUONG_TRU", "tc_chinh_quy_post_thcs_uses_commune"
+        if cultural in ("completed_thpt", "graduated_thpt", "graduated_gdtx"):
+            return "LICH_SU_THPT", "tc_chinh_quy_post_thpt_uses_school_history"
+        return "INSUFFICIENT_DATA", "tc_chinh_quy_cultural_insufficient_for_kv_basis"
+
+    # 5d. SC chính quy — không yêu cầu cultural; default THUONG_TRU.
+    # Engine sẽ check commune ở resolve step (ADDRESS_NOT_NORMALIZED nếu miss).
+    if target_level == "so_cap":
+        return "THUONG_TRU", "sc_uses_commune"
+
+    # 6. Defensive: target_level ngoài CD/TC/SC scope (eligibility gate đã chặn).
+    return "INSUFFICIENT_DATA", f"unsupported_target_level:{target_level}"
 
 
 async def _lookup_commune_kv(
@@ -387,120 +487,176 @@ async def lookup_kv_for_school_year(
 async def resolve_kv_for_profile(
     profile: "AdmissionProfile",
     db: "AsyncSession",
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
 ) -> tuple[Optional[str], dict[str, Any]]:
-    """Resolve KV for a profile per TT 05/2021 Phụ lục 01 multi-school rule.
+    """Resolve KV cho profile per TT 05/2021 Phụ lục 01.
 
-    Returns ``(kv_code, meta_dict)`` where ``meta_dict`` matches the shape
-    of ``priority_resolution_snapshot`` (without freeze metadata):
+    Phase E.4 (commit 5) refactor — pipeline:
+       Eligibility (upstream gate) → Exception → Auto basis → Resolve KV
+       → Apply path bonus (caller) → Snapshot (freeze).
 
-        {
-            'rule_applied': str,   # longest_duration | tiebreak_graduation_school
-                                   # | commune_lookup | manual_override
-                                   # | ambiguous_requires_manual
-            'pathway': str,        # thpt_multi_school | tc_multi_school
-                                   # | commune_fallback | commune_special
-                                   # | manual | not_resolved
-            'breakdown': {...} | None,
-            'requires_manual_override': bool (optional),
-            'reason': str (optional)
-        }
+    Fail-closed: tuyệt đối KHÔNG silent 0đ. Khi catalog/data thiếu, trả
+    rule_applied đặc tả lỗi:
+      - "catalog_gap_school"      — vn_school_kv_assignment thiếu row
+      - "catalog_gap_commune"     — vn_commune_area_map thiếu commune_code
+      - "address_not_normalized"  — profile thiếu permanent_commune_code
+      - "ambiguous_requires_manual" — tied graduation
+      - "not_resolved"            — cultural NULL (draft)
+      - "insufficient_data"       — combo input không match matrix nào
 
-    NULL kv_code → engine ignores (legacy fallback 0đ).
+    Args:
+      profile: AdmissionProfile với cultural_education_level + vocational_qualification
+               + permanent_commune_code + academic_history + area_resolution_basis.
+      db: AsyncSession.
+      target_level: 'cao_dang' / 'trung_cap' / 'so_cap' từ path/config chain.
+                    Optional cho backward-compat (callers cũ); None → legacy
+                    matrix (cảnh báo: matrix giảm độ chính xác).
+      admission_type: 'chinh_quy' / 'lien_thong' / ... từ config_offering_type.
+                      Optional. Default 'chinh_quy' khi target_level đã set.
 
-    See `Documents/Q9_07_PR5_REDESIGN.md` v1.3 Section "Resolution algorithm".
+    Returns ``(kv_code, meta_dict)``:
+       kv_code: 'KV1' / 'KV2' / 'KV2-NT' / 'KV3' hoặc None khi unresolved.
+       meta_dict (matches priority_resolution_snapshot subset):
+         {
+             'rule_applied': str,
+             'pathway': str,            # legacy alias cho FE display
+             'basis': str,              # LICH_SU_THPT / THUONG_TRU / ...
+             'basis_reason': str,       # short reason code
+             'breakdown': {...} | None,
+             'requires_manual_override': bool (optional),
+             'reason': str (optional)
+         }
     """
     cultural = getattr(profile, "cultural_education_level", None)
     vocational = getattr(profile, "vocational_qualification", "none") or "none"
     area_basis = getattr(profile, "area_resolution_basis", None)
+    academic_history = getattr(profile, "academic_history", None) or []
 
-    basis = _derive_kv_basis_level(cultural, vocational, area_basis)
+    basis, basis_reason = _derive_kv_basis_level(
+        cultural=cultural,
+        vocational=vocational,
+        target_level=target_level,
+        admission_type=admission_type,
+        academic_history=academic_history,
+        area_resolution_basis=area_basis,
+    )
 
-    # --- Row 8: 4 special cases bypass (PT DTNT / dự bị / quân nhân / xuất ngũ) ---
+    # Common meta scaffold — basis + basis_reason luôn included.
+    def _meta_base(**extra) -> dict[str, Any]:
+        base = {"basis": basis, "basis_reason": basis_reason}
+        base.update(extra)
+        return base
+
+    # --- COMMUNE_SPECIAL: exception bypass (PT DTNT / ĐBKK 18+ tháng). ---
+    # Hôm nay chỉ wire 2 case (yêu cầu nghiệp vụ #11), 4 case full defer Phase F.
     if basis == "COMMUNE_SPECIAL":
         commune_code = getattr(profile, "permanent_commune_code", None)
-        if commune_code:
-            kv = await _lookup_commune_kv(db, commune_code)
-            return kv, {
-                "rule_applied": "commune_lookup",
-                "pathway": "commune_special",
-                "breakdown": {"commune_code_used": commune_code},
-            }
-        return None, {
-            "rule_applied": "ambiguous_requires_manual",
-            "pathway": "commune_special",
-            "requires_manual_override": True,
-            "reason": "special_case_no_commune",
-        }
+        if not commune_code:
+            return None, _meta_base(
+                rule_applied="address_not_normalized",
+                pathway="commune_special",
+                requires_manual_override=True,
+                reason="special_case_no_commune_code",
+            )
+        kv = await _lookup_commune_kv(db, commune_code)
+        if kv is None:
+            return None, _meta_base(
+                rule_applied="catalog_gap_commune",
+                pathway="commune_special",
+                requires_manual_override=True,
+                reason="commune_code_not_in_catalog",
+                breakdown={"commune_code_attempted": commune_code},
+            )
+        return kv, _meta_base(
+            rule_applied="commune_lookup",
+            pathway="commune_special",
+            breakdown={"commune_code_used": commune_code},
+        )
 
-    # --- Row 9: admin/officer manual override ---
+    # --- MANUAL: admin/manager override KV trực tiếp ---
     if basis == "MANUAL":
-        # Caller should have set kv_resolved in snapshot before calling;
-        # treat as no-op here (returns NULL → snapshot keeps existing).
-        return None, {
-            "rule_applied": "manual_override",
-            "pathway": "manual",
-            "requires_manual_override": False,
-            "reason": "admin_set_kv_directly",
-        }
+        # Caller phải đã set kv_resolved trong snapshot trước khi gọi engine;
+        # engine trả None để báo "không tự resolve, dùng existing kv_resolved".
+        return None, _meta_base(
+            rule_applied="manual_override",
+            pathway="manual",
+            requires_manual_override=False,
+            reason="admin_set_kv_directly",
+        )
 
-    # --- Row 7: cultural not set (draft) ---
+    # --- NOT_RESOLVED: cultural chưa khai (draft). ---
     if basis == "NOT_RESOLVED":
-        return None, {
-            "rule_applied": "ambiguous_requires_manual",
-            "pathway": "not_resolved",
-            "requires_manual_override": False,
-            "reason": "cultural_not_set",
-        }
+        return None, _meta_base(
+            rule_applied="not_resolved",
+            pathway="not_resolved",
+            requires_manual_override=False,
+            reason="cultural_not_set",
+        )
 
-    # --- Rows 3, 5, 6: commune fallback (THCS only / so_cap / completed_thpt+none) ---
-    if basis == "COMMUNE_FALLBACK":
+    # --- INSUFFICIENT_DATA: combo không match matrix nào (eligibility gate đã chặn upstream). ---
+    if basis == "INSUFFICIENT_DATA":
+        return None, _meta_base(
+            rule_applied="insufficient_data",
+            pathway="insufficient_data",
+            requires_manual_override=True,
+            reason=basis_reason,
+        )
+
+    # --- THUONG_TRU: vn_commune_area_map lookup theo permanent_commune_code. ---
+    if basis == "THUONG_TRU":
         commune_code = getattr(profile, "permanent_commune_code", None)
-        if commune_code:
-            kv = await _lookup_commune_kv(db, commune_code)
-            return kv, {
-                "rule_applied": "commune_lookup",
-                "pathway": "commune_fallback",
-                "breakdown": {"commune_code_used": commune_code},
-            }
-        return None, {
-            "rule_applied": "ambiguous_requires_manual",
-            "pathway": "commune_fallback",
-            "requires_manual_override": True,
-            "reason": "fallback_no_commune",
-        }
+        if not commune_code:
+            return None, _meta_base(
+                rule_applied="address_not_normalized",
+                pathway="thuong_tru",
+                requires_manual_override=True,
+                reason="profile_missing_permanent_commune_code",
+            )
+        kv = await _lookup_commune_kv(db, commune_code)
+        if kv is None:
+            return None, _meta_base(
+                rule_applied="catalog_gap_commune",
+                pathway="thuong_tru",
+                requires_manual_override=True,
+                reason="commune_code_not_in_catalog",
+                breakdown={"commune_code_attempted": commune_code},
+            )
+        return kv, _meta_base(
+            rule_applied="commune_lookup",
+            pathway="thuong_tru",
+            breakdown={"commune_code_used": commune_code},
+        )
 
-    # --- Rows 1, 2: THPT multi-school rule (per TT 05/2021 Mục 1+2+3) ---
-    # basis="THPT" matches standalone THPT + liên cấp THCS_THPT (candidate
-    # học liên cấp 2-3 + tốt nghiệp THPT). Memory note: vn_school.level enum
-    # = THCS/THPT/THCS_THPT/TRUNG_HOC_NGHE/OTHER per phase1_09; mirror trong
-    # AcademicRecordSchema Phase D.1 (Q9 #07).
-    #
-    # NOTE: Row 4 (graduated_thcs + TC) folded into COMMUNE_FALLBACK per
-    # nghiệp vụ trường 2026-05-18. TC basis code removed (was dead path).
-    accepted_levels = {"THPT", "THCS_THPT"}
+    # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.b. ---
+    # Aggregate duration per KV qua academic_history, longest duration wins,
+    # tie → graduation school (year_to + grade_to).
+    accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
 
-    history = getattr(profile, "academic_history", None) or []
     basis_entries = [
-        e for e in history
+        e for e in academic_history
         if isinstance(e, dict)
         and e.get("level") in accepted_levels
         and e.get("school_id")
     ]
 
-    pathway = "thpt_multi_school"
+    pathway = "lich_su_thpt"
 
     if not basis_entries:
-        return None, {
-            "rule_applied": "ambiguous_requires_manual",
-            "pathway": pathway,
-            "requires_manual_override": True,
-            "reason": "no_qualifying_entries",
-            "breakdown": {"target_level": basis, "entries": []},
-        }
+        return None, _meta_base(
+            rule_applied="insufficient_data",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason="no_qualifying_thpt_history_entries",
+            breakdown={"entries": []},
+        )
 
-    # Per-year KV duration map + breakdown per entry
+    # Per-year KV duration map + breakdown per entry. Track lookup failures
+    # explicit để fail-closed (catalog_gap_school).
     kv_years: dict[str, int] = {}
     breakdown_entries: list[dict[str, Any]] = []
+    missing_lookups: list[dict[str, Any]] = []
 
     for entry in basis_entries:
         sid = entry["school_id"]
@@ -515,6 +671,8 @@ async def resolve_kv_for_profile(
             if kv:
                 kv_years[kv] = kv_years.get(kv, 0) + 1
                 entry_years_by_kv.append({"year": year, "kv": kv})
+            else:
+                missing_lookups.append({"school_id": sid, "year": year})
 
         breakdown_entries.append({
             "school_id": sid,
@@ -525,34 +683,39 @@ async def resolve_kv_for_profile(
         })
 
     if not kv_years:
-        return None, {
-            "rule_applied": "ambiguous_requires_manual",
-            "pathway": pathway,
-            "requires_manual_override": True,
-            "reason": "no_kv_lookup_succeeded",
-            "breakdown": {
-                "target_level": basis,
+        # Tất cả lookup miss → vn_school_kv_assignment thiếu catalog cho 100%
+        # entries. Fail-closed: trả catalog_gap_school + KV=None.
+        return None, _meta_base(
+            rule_applied="catalog_gap_school",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason="all_school_lookups_failed",
+            breakdown={
                 "entries": breakdown_entries,
                 "kv_totals": {},
+                "missing_lookups": missing_lookups,
             },
-        }
+        )
 
     max_yrs = max(kv_years.values())
     winners = [kv for kv, y in kv_years.items() if y == max_yrs]
 
     breakdown_base = {
-        "target_level": basis,
         "entries": breakdown_entries,
         "kv_totals": kv_years,
         "winner_years": max_yrs,
     }
+    if missing_lookups:
+        # Partial catalog gap — engine vẫn resolve theo entries có data,
+        # nhưng audit ghi lại để admin biết catalog cần seed.
+        breakdown_base["partial_catalog_missing"] = missing_lookups
 
     if len(winners) == 1:
-        return winners[0], {
-            "rule_applied": "longest_duration",
-            "pathway": pathway,
-            "breakdown": breakdown_base,
-        }
+        return winners[0], _meta_base(
+            rule_applied="longest_duration",
+            pathway=pathway,
+            breakdown=breakdown_base,
+        )
 
     # Tiebreak: graduation school (highest year_to + grade_to, stable index).
     # M1: detect ambiguous (2+ entries cùng year_to + grade_to) → require manual.
@@ -572,12 +735,12 @@ async def resolve_kv_for_profile(
             top_entry.get("year_to") == second_entry.get("year_to")
             and top_entry.get("grade_to") == second_entry.get("grade_to")
         ):
-            return None, {
-                "rule_applied": "ambiguous_requires_manual",
-                "pathway": pathway,
-                "requires_manual_override": True,
-                "reason": "tied_graduation_year_and_grade",
-                "breakdown": {
+            return None, _meta_base(
+                rule_applied="ambiguous_requires_manual",
+                pathway=pathway,
+                requires_manual_override=True,
+                reason="tied_graduation_year_and_grade",
+                breakdown={
                     **breakdown_base,
                     "tied_kv": winners,
                     "tied_entries": [
@@ -585,22 +748,36 @@ async def resolve_kv_for_profile(
                         second_entry["school_id"],
                     ],
                 },
-            }
+            )
 
     grad_entry = sorted_entries[0][1]
     grad_kv = await lookup_kv_for_school_year(
         db, grad_entry["school_id"], grad_entry["year_to"]
     )
-    return grad_kv, {
-        "rule_applied": "tiebreak_graduation_school",
-        "pathway": pathway,
-        "breakdown": {
+    if grad_kv is None:
+        # Graduation school year miss catalog → fail-closed.
+        return None, _meta_base(
+            rule_applied="catalog_gap_school",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason="graduation_school_lookup_failed",
+            breakdown={
+                **breakdown_base,
+                "tied_kv": winners,
+                "graduation_school_id": grad_entry["school_id"],
+                "graduation_year": grad_entry["year_to"],
+            },
+        )
+    return grad_kv, _meta_base(
+        rule_applied="tiebreak_graduation_school",
+        pathway=pathway,
+        breakdown={
             **breakdown_base,
             "tied_kv": winners,
             "graduation_school_id": grad_entry["school_id"],
             "graduation_year": grad_entry["year_to"],
         },
-    }
+    )
 
 
 async def freeze_priority_snapshot(
@@ -609,31 +786,75 @@ async def freeze_priority_snapshot(
     frozen_at_status: str,
     resolved_by: str = "system",
     manual_override_reason: Optional[str] = None,
+    *,
+    target_level: Optional[str] = None,
+    admission_type: Optional[str] = None,
+    eligibility: Optional[dict] = None,
+    path_bonus_rule: Optional[dict] = None,
 ) -> dict[str, Any]:
     """Compute KV resolution + freeze into ``profile.priority_resolution_snapshot``.
 
     Called from:
       - submit_admission_profile (T1) → frozen_at_status='submitted_T1'
-      - evaluate_cascade (T6) → frozen_at_status='engine_T6'
+      - evaluate_cascade (T6)         → frozen_at_status='engine_T6'
 
     Mutates ``profile.priority_resolution_snapshot`` directly. Caller is
     responsible for ``await db.flush()`` (no commit — service layer rule).
 
-    ``frozen_at_status`` MUST be one of:
-      'draft_preview' | 'submitted_T1' | 'engine_T6'
+    ``frozen_at_status`` values this helper writes:
+      'submitted_T1' | 'engine_T6'
+
+    Snapshot column ALSO sees ``'manual_override'`` — written directly by
+    ``priority_override_service.override_kv`` (NOT via this helper).
+
+    Phase E.4 semantics — ``frozen_at_status='submitted_T1'`` indicates the
+    snapshot was frozen DURING a submit attempt; it does NOT imply the
+    submit succeeded. Since commit ``dd108eb2`` (Phase E.4), submit
+    aggregates KV unresolved/resolution_failed into ``validation_errors``
+    instead of raising, so the snapshot persists (router still commits)
+    while ``profile.status`` stays ``'draft'``. This is required to
+    expose the engine signal (``requires_manual_override``) to the manager
+    /admin override-draft gate. To disambiguate ``submitted_T1`` snapshots,
+    callers MUST check ``profile.status``:
+      - ``status='draft'`` + ``submitted_T1``  → submit FAILED, snapshot
+        captures resolution attempt for override gate
+      - ``status='submitted'`` + ``submitted_T1`` → submit SUCCEEDED
+
+    Phase E.4 (commit 5) additive fields (optional — backward-compat):
+      target_level, admission_type, eligibility, basis, basis_reason,
+      rule_law_citation, path_bonus_rule.
 
     Returns the snapshot dict (also written to profile column).
     """
-    kv_resolved, meta = await resolve_kv_for_profile(profile, db)
+    kv_resolved, meta = await resolve_kv_for_profile(
+        profile,
+        db,
+        target_level=target_level,
+        admission_type=admission_type,
+    )
+    rule_applied = meta.get("rule_applied")
     snapshot: dict[str, Any] = {
         "kv_resolved": kv_resolved,
-        "rule_applied": meta.get("rule_applied"),
+        "rule_applied": rule_applied,
         "pathway": meta.get("pathway"),
+        "basis": meta.get("basis"),
+        "basis_reason": meta.get("basis_reason"),
         "breakdown": meta.get("breakdown"),
+        "rule_law_citation": resolve_law_citation(rule_applied),
         "frozen_at": datetime.now(timezone.utc).isoformat(),
         "frozen_at_status": frozen_at_status,
         "resolved_by": resolved_by,
     }
+    # Phase E.4 additive snapshot context — KHÔNG bắt buộc; callers chưa
+    # eager-load path chain sẽ ship null, FE/audit log degrade gracefully.
+    if target_level is not None:
+        snapshot["target_level"] = target_level
+    if admission_type is not None:
+        snapshot["admission_type"] = admission_type
+    if eligibility is not None:
+        snapshot["eligibility"] = eligibility
+    if path_bonus_rule is not None:
+        snapshot["path_bonus_rule"] = path_bonus_rule
     if manual_override_reason:
         snapshot["manual_override_reason"] = manual_override_reason
     if meta.get("requires_manual_override"):
@@ -645,51 +866,201 @@ async def freeze_priority_snapshot(
     return snapshot
 
 
+def _make_path_shim_from_academic_info(academic_info: Any) -> Any:
+    """Build pseudo-AdmissionPath stub bọc academic_info đã eager-load.
+
+    ``derive_target_level_and_type`` đọc qua ``path.__dict__['academic_info']``
+    để mimic eager-load semantics; legacy callers (single-path / config
+    chain) không có thực thể AdmissionPath nên cần shim. Helper này centralize
+    pattern (trước đây duplicated 2 chỗ: admission_service._validate_*
+    + priority_service.derive_profile_target_context).
+
+    Trả về object với ``__dict__['academic_info']`` set + ``admission_method``
+    placeholder=None (legacy không có method chain — bonus_rule context fall
+    về admission_method default).
+    """
+    class _PathShim:
+        pass
+    shim = _PathShim()
+    shim.__dict__["academic_info"] = academic_info
+    shim.__dict__["admission_method"] = None
+    return shim
+
+
+def derive_target_level_and_type(path: "AdmissionPath") -> tuple[str, str]:
+    """Derive (target_level, admission_type) từ AdmissionPath chain.
+
+    Chain: AdmissionPath → OfferingAcademicInfo → ProgramOffering →
+    MajorProgram.degree_level_id + ProgramOffering.offering_type_id (FK
+    config_degree_level + config_offering_type).
+
+    Returns:
+        (target_level, admission_type) — cả 2 là `code` từ config table.
+        target_level ∈ {"cao_dang", "trung_cap", "so_cap"} (Phase E.4
+        scope GDNN; "dai_hoc"/"thac_si"/"tien_si" out-of-scope).
+        admission_type ∈ {"chinh_quy", "lien_thong", "vua_lam_vua_hoc",
+        "tu_xa", "lien_ket_quoc_te"}.
+
+    Raises:
+        BusinessRuleViolation("CONFIG_GAP_TARGET_LEVEL") khi không derive
+        được do:
+          - relation chain chưa eager-load (academic_info/offering/program/
+            degree_level/offering_type)
+          - degree_level_id/offering_type_id NULL trên major_program/
+            program_offering
+          - code không nằm trong GDNN scope (vd dai_hoc)
+        Per yêu cầu nghiệp vụ #5: tuyệt đối KHÔNG fallback "so_cap" — fail-closed.
+
+    Caller MUST eager-load chain trước khi gọi:
+        selectinload(AdmissionPath.academic_info)
+          .selectinload(OfferingAcademicInfo.offering)
+          .selectinload(ProgramOffering.program)
+          .selectinload(MajorProgram.degree_level_obj)  # FK config_degree_level
+        selectinload(AdmissionPath.academic_info)
+          .selectinload(OfferingAcademicInfo.offering)
+          .selectinload(ProgramOffering.offering_type_obj)  # FK config_offering_type
+    """
+    from ..utils.exceptions import BusinessRuleViolation
+
+    _GDNN_TARGET_LEVELS = frozenset({"cao_dang", "trung_cap", "so_cap"})
+
+    academic_info = path.__dict__.get("academic_info")
+    if academic_info is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: AdmissionPath thiếu academic_info "
+            "(relation chưa eager-load hoặc DB không nhất quán)."
+        )
+    offering = academic_info.__dict__.get("offering")
+    if offering is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: OfferingAcademicInfo thiếu offering."
+        )
+    program = offering.__dict__.get("program")
+    if program is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering thiếu program (MajorProgram)."
+        )
+
+    # degree_level — model relationship `MajorProgram.degree_level_ref` →
+    # ConfigDegreeLevel(.code). Eager-load via selectinload(program.degree_level_ref).
+    degree_level_obj = program.__dict__.get("degree_level_ref")
+    target_code: Optional[str] = (
+        getattr(degree_level_obj, "code", None) if degree_level_obj else None
+    )
+    if target_code is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: MajorProgram chưa gán degree_level_id "
+            "(config_degree_level FK NULL). Vui lòng cấu hình bậc đào tạo "
+            "trước khi cho hồ sơ submit."
+        )
+    if target_code not in _GDNN_TARGET_LEVELS:
+        raise BusinessRuleViolation(
+            f"CONFIG_GAP_TARGET_LEVEL: bậc đào tạo '{target_code}' nằm ngoài "
+            f"phạm vi GDNN ({sorted(_GDNN_TARGET_LEVELS)}). Phase E.4 chỉ "
+            f"hỗ trợ CĐ/TC/SC."
+        )
+
+    # offering_type — model relationship `ProgramOffering.offering_type_config`
+    # → ConfigOfferingType(.code). Eager-load via
+    # selectinload(offering.offering_type_config).
+    offering_type_obj = offering.__dict__.get("offering_type_config")
+    admission_type: Optional[str] = (
+        getattr(offering_type_obj, "code", None) if offering_type_obj else None
+    )
+    if admission_type is None:
+        raise BusinessRuleViolation(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering chưa gán offering_type_id "
+            "(config_offering_type FK NULL). Vui lòng cấu hình hệ đào tạo "
+            "(chính quy / liên thông / VLVH...) trước khi cho hồ sơ submit."
+        )
+
+    return target_code, admission_type
+
+
 def validate_eligibility(
     profile: "AdmissionProfile",
     target_level: str,
+    admission_type: str = "chinh_quy",
 ) -> tuple[bool, Optional[str]]:
-    """Validate candidate eligibility for target program level.
+    """Validate candidate eligibility for target program level + type.
 
-    Per TT 05/2021 Phụ lục 01 + Luật GDNN 2014/2025:
-      - target_level='CD' (Cao đẳng): requires graduated_thpt OR graduated_gdtx
-        OR (completed_thpt + trung_cap) — path 2 cho liên thông
-      - target_level='TC' (Trung cấp): requires graduated_thcs trở lên
-      - target_level='SC' (Sơ cấp): no academic requirement
+    Per TT 05/2021 Phụ lục 01 + Luật GDNN 2014/2025 (chốt 2026-05-21):
+      - CĐ chính quy:     TN_THPT hoặc HOAN_THANH_THPT
+      - CĐ liên thông:    TN_THPT hoặc HOAN_THANH_THPT + bằng TC/CĐ
+      - TC chính quy:     TN_THCS trở lên
+      - TC liên thông:    TN_THCS trở lên + bằng SC/TC
+      - SC chính quy:     không yêu cầu văn hóa
 
-    Returns ``(is_eligible, reason_if_not)``.
+    Args:
+        profile: AdmissionProfile với cultural_education_level + vocational_qualification.
+        target_level: config_degree_level.code — "cao_dang" / "trung_cap" / "so_cap".
+        admission_type: config_offering_type.code — "chinh_quy" / "lien_thong" /
+            "vua_lam_vua_hoc" / "tu_xa" / "lien_ket_quoc_te". Default "chinh_quy"
+            cho backward-compat với callers cũ.
+
+    Returns:
+        (is_eligible, reason_code_if_not).
+        reason_code dùng làm i18n key cho FE error display.
+
+    Per yêu cầu nghiệp vụ #5: unknown target_level → block (fail-closed).
     """
     cultural = getattr(profile, "cultural_education_level", None)
     vocational = getattr(profile, "vocational_qualification", "none") or "none"
 
-    if target_level in ("CD", "cao_dang"):
-        # Path 1: tốt nghiệp THPT/GDTX direct
-        if cultural in ("graduated_thpt", "graduated_gdtx"):
-            return True, None
-        # Path 2: liên thông — đủ kiến thức THPT + bằng TC nghề
-        if cultural == "completed_thpt" and vocational == "trung_cap":
-            return True, None
-        # Path 2 extended: graduated_thcs + cao_dang already done → re-enroll OK
-        if cultural == "graduated_thcs" and vocational == "cao_dang":
-            return True, None
-        return False, "cd_requires_thpt_or_thpt_kien_thuc_plus_trung_cap"
+    _THPT_GRADUATED = ("graduated_thpt", "graduated_gdtx")
+    _THPT_KNOWLEDGE = ("completed_thpt", "graduated_thpt", "graduated_gdtx")
+    _THCS_OR_HIGHER = (
+        "graduated_thcs",
+        "completed_thpt",
+        "graduated_thpt",
+        "graduated_gdtx",
+    )
 
-    if target_level in ("TC", "trung_cap"):
-        # Per Luật GDNN: TC yêu cầu tốt nghiệp THCS trở lên
-        if cultural in (
-            "graduated_thcs",
-            "completed_thpt",
-            "graduated_thpt",
-            "graduated_gdtx",
-        ):
+    if target_level in ("cao_dang", "CD"):
+        if admission_type == "lien_thong":
+            # CĐ liên thông: kiến thức THPT (đã TN hoặc hoàn thành) + bằng TC/CĐ
+            if cultural in _THPT_KNOWLEDGE and vocational in ("trung_cap", "cao_dang"):
+                return True, None
+            return False, "cd_lien_thong_requires_thpt_knowledge_plus_tc_or_cd"
+        # CĐ chính quy + các hệ khác: TN_THPT hoặc HOAN_THANH_THPT (per spec mới
+        # 2026-05-21 — yêu cầu nghiệp vụ #5).
+        if cultural in _THPT_KNOWLEDGE:
+            return True, None
+        return False, "cd_chinh_quy_requires_thpt_or_completed_thpt"
+
+    if target_level in ("trung_cap", "TC"):
+        if admission_type == "lien_thong":
+            # TC liên thông: TN_THCS trở lên + bằng SC/TC
+            if cultural in _THCS_OR_HIGHER and vocational in ("so_cap", "trung_cap"):
+                return True, None
+            return False, "tc_lien_thong_requires_thcs_plus_sc_or_tc"
+        # TC chính quy: TN_THCS trở lên
+        if cultural in _THCS_OR_HIGHER:
             return True, None
         return False, "tc_requires_graduated_thcs_or_higher"
 
-    if target_level in ("SC", "so_cap"):
-        return True, None  # SC không yêu cầu trình độ văn hóa
+    if target_level in ("so_cap", "SC"):
+        # SC chính quy không yêu cầu văn hóa. Liên thông SC chưa định nghĩa
+        # nghiệp vụ — fail-closed.
+        if admission_type == "chinh_quy":
+            return True, None
+        return False, "sc_only_supports_chinh_quy_in_phase_e4"
 
-    # Unknown target_level — defensive pass-through (caller validates)
-    return True, None
+    # Yêu cầu nghiệp vụ #5: target_level ngoài CD/TC/SC scope → block.
+    return False, f"unsupported_target_level:{target_level}"
+
+
+# Legacy uppercase aliases for callers còn dùng "CD"/"TC"/"SC" tag.
+_LEGACY_TARGET_LEVEL_ALIAS = {
+    "CD": "cao_dang",
+    "TC": "trung_cap",
+    "SC": "so_cap",
+}
+
+
+def normalize_target_level(level: str) -> str:
+    """Map legacy "CD"/"TC"/"SC" → config code "cao_dang"/"trung_cap"/"so_cap"."""
+    return _LEGACY_TARGET_LEVEL_ALIAS.get(level, level)
 
 
 # =============================================================================
@@ -713,10 +1084,157 @@ RULE_LAW_CITATION: dict[str, Optional[str]] = {
     "commune_lookup": "TT 05/2021 Phụ lục 01 Mục 4",
     # Row 9: admin/officer ấn định KV thủ công
     "manual_override": "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
-    # Edge cases: cultural not set, no qualifying entries, no KV lookup, tied
-    # graduation year+grade — engine không quyết định được, không có citation.
+    # Phase E.4 commit 5 — fail-closed codes mới. Citation = None (engine
+    # không quyết định được; admin xử lý qua override hoặc catalog seed).
     "ambiguous_requires_manual": None,
+    "address_not_normalized": None,
+    "catalog_gap_commune": None,
+    "catalog_gap_school": None,
+    "insufficient_data": None,
+    "not_resolved": None,
 }
+
+
+async def derive_profile_target_context(
+    profile: "AdmissionProfile",
+    db: "AsyncSession",
+) -> dict[str, Any]:
+    """Derive context cho freeze_priority_snapshot từ profile chain.
+
+    Returns dict với keys:
+      - target_level: str | None
+      - admission_type: str | None
+      - path_bonus_rule: dict | None
+      - eligibility: {"passed": bool, "reason": str | None} | None
+      - source: 'multi_nv_first_choice' | 'legacy_offering_admission_config' | 'unknown'
+
+    Multi-NV: lookup choice với display_order=1; derive từ admission_path chain.
+    Legacy: lookup offering_admission_config_id; derive từ chain.
+
+    Fail-safe: nếu chain missing/incomplete, return None cho từng field;
+    snapshot vẫn freeze nhưng context fields = None (engine T6 re-freeze sẽ
+    cố retry khi caller eager-load đầy đủ).
+
+    Eligibility chỉ compute khi target_level + admission_type cả 2 đều có.
+    """
+    from sqlalchemy import select as _sel
+    from sqlalchemy.orm import selectinload as _sel_in
+
+    ctx: dict[str, Any] = {
+        "target_level": None,
+        "admission_type": None,
+        "path_bonus_rule": None,
+        "eligibility": None,
+        "source": "unknown",
+    }
+
+    try:
+        # Lazy import to avoid model circular dep at module load
+        from app import models
+
+        path = None
+        method = None
+
+        if profile.uses_choice_engine:
+            # Multi-NV: NV1 (display_order=1) làm primary cho snapshot context.
+            stmt = (
+                _sel(models.AdmissionProfileChoice)
+                .where(
+                    models.AdmissionProfileChoice.admission_profile_id == profile.id,
+                    models.AdmissionProfileChoice.display_order == 1,
+                )
+                .options(
+                    _sel_in(models.AdmissionProfileChoice.admission_path)
+                    .selectinload(models.AdmissionPath.admission_method),
+                    _sel_in(models.AdmissionProfileChoice.admission_path)
+                    .selectinload(models.AdmissionPath.academic_info)
+                    .selectinload(models.OfferingAcademicInfo.offering)
+                    .selectinload(models.ProgramOffering.program)
+                    .selectinload(models.MajorProgram.degree_level_ref),
+                    _sel_in(models.AdmissionProfileChoice.admission_path)
+                    .selectinload(models.AdmissionPath.academic_info)
+                    .selectinload(models.OfferingAcademicInfo.offering)
+                    .selectinload(models.ProgramOffering.offering_type_config),
+                )
+                .limit(1)
+            )
+            choice = (await db.execute(stmt)).scalar_one_or_none()
+            if choice is not None and choice.admission_path is not None:
+                path = choice.admission_path
+                method = path.__dict__.get("admission_method")
+                ctx["source"] = "multi_nv_first_choice"
+        elif profile.offering_admission_config_id is not None:
+            # Legacy single-path: derive từ offering_admission_config chain.
+            # KHÔNG có bonus_rule_override (chỉ AdmissionPath có) — bonus_rule
+            # context sẽ là None cho legacy; engine fallback admission_method default.
+            stmt = (
+                _sel(models.OfferingAdmissionConfig)
+                .where(models.OfferingAdmissionConfig.id == profile.offering_admission_config_id)
+                .options(
+                    _sel_in(models.OfferingAdmissionConfig.academic_info)
+                    .selectinload(models.OfferingAcademicInfo.offering)
+                    .selectinload(models.ProgramOffering.program)
+                    .selectinload(models.MajorProgram.degree_level_ref),
+                    _sel_in(models.OfferingAdmissionConfig.academic_info)
+                    .selectinload(models.OfferingAcademicInfo.offering)
+                    .selectinload(models.ProgramOffering.offering_type_config),
+                )
+            )
+            config = (await db.execute(stmt)).scalar_one_or_none()
+            if config is not None:
+                path = _make_path_shim_from_academic_info(config.academic_info)
+                ctx["source"] = "legacy_offering_admission_config"
+
+        if path is not None:
+            try:
+                target_level, admission_type = derive_target_level_and_type(path)
+                ctx["target_level"] = target_level
+                ctx["admission_type"] = admission_type
+            except Exception as exc:  # noqa: BLE001 — defensive: missing chain
+                # Phase E.4 reviewer P5: log debug để trace context-derive
+                # failures (vd chain chưa eager-load đầy đủ). Vẫn không block
+                # freeze; snapshot ship null cho 2 field này, FE/audit degrade.
+                log.debug(
+                    "derive_target_level_context_failed",
+                    profile_id=getattr(profile, "id", None),
+                    source=ctx["source"],
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # path_bonus_rule snapshot: chain override → method.default.
+            # Lazy import để tránh circular.
+            try:
+                from .admission_choice_engine_service import resolve_effective_bonus_rule
+                if hasattr(path, "bonus_rule_override") or method is not None:
+                    rule = resolve_effective_bonus_rule(path)  # type: ignore[arg-type]
+                    if rule is not None:
+                        ctx["path_bonus_rule"] = dict(rule)
+            except Exception as exc:  # noqa: BLE001
+                log.debug(
+                    "derive_path_bonus_rule_context_failed",
+                    profile_id=getattr(profile, "id", None),
+                    source=ctx["source"],
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+        # Eligibility check audit — chỉ compute khi cả 2 field có.
+        if ctx["target_level"] and ctx["admission_type"]:
+            ok, reason = validate_eligibility(
+                profile, ctx["target_level"], ctx["admission_type"]
+            )
+            ctx["eligibility"] = {"passed": ok, "reason": reason}
+
+    except Exception as exc:  # noqa: BLE001 — defensive: never block freeze on context
+        log.debug(
+            "derive_profile_target_context_failed",
+            profile_id=getattr(profile, "id", None),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
+    return ctx
 
 
 def resolve_law_citation(rule_applied: Optional[str]) -> Optional[str]:

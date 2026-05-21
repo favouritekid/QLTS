@@ -1518,20 +1518,26 @@ def _compute_frontend_fields(
             )
             and (is_owner or is_manager or is_admin)
         ),
-        # Q9 #07 Phase E.2 — Manual KV override (officer/admin write-path).
-        # Service-layer (priority_override_service) enforces full whitelist
-        # + post-publish admin-only gate. UI uses this flag only to gate
-        # visibility of "Cán bộ ấn định thủ công" button trong PriorityTab.
-        # Officer must be assigned to profile via lead.assigned_officer_id;
-        # manager/admin scope handled by route's IDOR dep. Status whitelist
-        # here matches service-layer ``_OFFICER_ALLOWED_STATUS`` for officer
-        # path; admin bypasses (UI shows button regardless of status, dialog
-        # secondary checkbox for post-publish profiles).
+        # Q9 #07 Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10):
+        # Officer KHÔNG được override KV. Chỉ admin + manager mới có quyền.
+        # Pre-fix-up: officer được override cho submitted/reviewing/
+        # revision_requested + ownership check. Hardening:
+        #   - admin: any state (UI shows button; dialog handles post-publish ack)
+        #   - manager: submitted/reviewing/revision_requested + draft (engine
+        #     signal required, service-layer gate verifies live recompute)
+        #   - officer / accountant / user: never (UI hide button)
+        # Service-layer (priority_override_service) cũng có hard-deny officer
+        # ngay đầu override_kv là defense-in-depth.
         "override_priority_kv": (
             is_admin
             or (
-                (is_manager or (is_officer and is_owner))
-                and status in ["submitted", "reviewing", "revision_requested"]
+                is_manager
+                and status in [
+                    "draft",
+                    "submitted",
+                    "reviewing",
+                    "revision_requested",
+                ]
             )
         ),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
@@ -4217,6 +4223,274 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     profile.snapshot_score = snapshot_score
 
 
+# =============================================================================
+# Q9 #07 Phase E.4 commit 5 fix-up — submit-time guard cho KV unresolved
+# =============================================================================
+
+# Phase E.4 commit 5 fix-up — submit guard FLIP từ blacklist sang whitelist
+# success (reviewer P1: "nếu requires_manual_override is True thì block
+# mặc định, chỉ pass các rule thành công rõ ràng").
+#
+# Pass-through CHỈ khi:
+#   - rule_applied ∈ _KV_SUCCESS_RULE_APPLIED (engine resolve thành công)
+#   - VÀ kv_resolved != None (snapshot có giá trị KV thực)
+#
+# Empty/None snapshot → pass defensive (engine T1 freeze fail infra; warning
+# đã log ở freeze try/except). Mọi rule_applied khác / kv_resolved None →
+# block với BadRequest tiếng Việt + guidance.
+_KV_SUCCESS_RULE_APPLIED = frozenset({
+    "longest_duration",
+    "tiebreak_graduation_school",
+    "commune_lookup",
+    "manual_override",
+})
+
+
+def _kv_unresolved_error_message(
+    snapshot: Optional[dict],
+    profile_id: int,
+) -> Optional[str]:
+    """Return error message string nếu snapshot không emit engine success;
+    None khi snapshot resolve thành công.
+
+    Phase E.4 reviewer v4 2026-05-21 — KV unresolved giờ trả validation_error
+    (not raise) để submit flow giữ status=draft + commit snapshot unresolved.
+    Manager/admin sau đó có signal ``requires_manual_override=True`` trong
+    snapshot persisted để override draft (gỡ deadlock fail-closed vs draft
+    override gate).
+
+    Pass paths (whitelist):
+      - longest_duration / tiebreak_graduation_school / commune_lookup
+        (engine resolve qua LICH_SU_THPT hoặc THUONG_TRU/COMMUNE_SPECIAL)
+      - manual_override (admin/manager đã set KV thủ công pre-submit)
+
+    Block paths (fail-closed mọi case khác — KHÔNG có defensive escape):
+      - address_not_normalized / catalog_gap_* / insufficient_data /
+        ambiguous_requires_manual / not_resolved / unknown future rules
+      - kv_resolved is None mà rule trong whitelist (race)
+      - Empty/None snapshot (freeze chưa chạy hoặc fail infra)
+
+    Args:
+        snapshot: profile.priority_resolution_snapshot (dict | None).
+        profile_id: id cho log context.
+
+    Returns:
+        Error message tiếng Việt nếu unresolved; None nếu pass.
+    """
+    snapshot = snapshot or {}
+    rule_applied = snapshot.get("rule_applied")
+    kv_resolved = snapshot.get("kv_resolved")
+
+    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị.
+    if rule_applied in _KV_SUCCESS_RULE_APPLIED and kv_resolved is not None:
+        return None
+
+    # Otherwise build error message — fail-closed default.
+    if not snapshot:
+        reason = "no_snapshot_present"
+        log.info(
+            "submit_blocked_kv_no_snapshot",
+            profile_id=profile_id,
+        )
+    else:
+        reason = (
+            snapshot.get("reason")
+            or snapshot.get("basis_reason")
+            or rule_applied
+            or "unknown"
+        )
+        log.info(
+            "submit_blocked_kv_unresolved",
+            profile_id=profile_id,
+            rule_applied=rule_applied,
+            kv_resolved=kv_resolved,
+            reason=reason,
+        )
+    return (
+        f"KV_UNRESOLVED ({rule_applied or 'no_rule_applied'}): engine không "
+        f"xác định được khu vực ưu tiên cho hồ sơ này. Lý do: {reason}. "
+        f"Vui lòng kiểm tra trình độ văn hóa, địa chỉ thường trú và lịch "
+        f"sử học THPT, hoặc đề nghị quản lý ấn định KV thủ công trước "
+        f"khi nộp."
+    )
+
+
+def _assert_kv_resolved_for_submit(
+    snapshot: Optional[dict],
+    profile_id: int,
+) -> None:
+    """Raise BadRequest wrapper trên ``_kv_unresolved_error_message``.
+
+    Retained cho callers external (vd alternate flows). Submit-T1 path
+    KHÔNG dùng wrapper này nữa — giờ collect error vào validation_errors
+    list để commit snapshot unresolved (signal cho manager override draft).
+    """
+    err = _kv_unresolved_error_message(snapshot, profile_id)
+    if err:
+        raise BadRequest(err)
+
+
+async def _validate_eligibility_all_choices(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Q9 #07 Phase E.4 — eligibility gate per yêu cầu nghiệp vụ #5.
+
+    Pipeline order (xem priority_service docstring): Eligibility → Exception
+    → Auto basis → Resolve KV → Apply path bonus → Snapshot. Eligibility chạy
+    TRƯỚC freeze để fail-fast khi cultural + vocational không match path
+    target_level/admission_type.
+
+    Behavior per flow:
+      - ``uses_choice_engine=True`` (multi-NV): query choices với eager-load
+        chain ``path → academic_info → offering → program``. Validate mỗi
+        choice. Bất kỳ choice nào fail → raise BusinessRuleViolation (caller
+        map sang BadRequest/422).
+      - ``uses_choice_engine=False`` (legacy single-path): derive target từ
+        ``profile.offering_admission_config_id`` chain. Nếu không có config →
+        raise CONFIG_GAP_TARGET_LEVEL (fail-closed per nghiệp vụ).
+
+    Reason codes (i18n key cho FE error display):
+      - ``ELIGIBILITY_FAIL_<reason>`` cho từng choice
+      - ``CONFIG_GAP_TARGET_LEVEL`` khi không derive được level/type
+
+    Per yêu cầu nghiệp vụ #5: tuyệt đối KHÔNG fallback "so_cap" khi gap.
+
+    Error-handling contract — intentional contrast với choice engine
+    -----------------------------------------------------------------
+    Helper này (submit-time gate) raises ``BusinessRuleViolation`` UNWRAPPED:
+    bất kỳ ``derive_target_level_and_type`` CONFIG_GAP, validate_eligibility
+    fail, hoặc multi-NV inconsistency → bubble lên router → 400/422. Submit
+    fail-closed toàn bộ (Phase E.4 reviewer P0 fix — yêu cầu nghiệp vụ #5).
+
+    Đối lập với ``admission_choice_engine_service._evaluate_single_choice``
+    (engine T6 publish path) — chỗ đó WRAPS ``derive_target_level_and_type``
+    + ``validate_eligibility`` trong try/except ``BusinessRuleViolation`` và
+    convert thành per-choice ``reason_codes = ["CONFIG_GAP_TARGET_LEVEL:..."]``
+    / ``["ELIGIBILITY_FAIL:..."]`` + ``status="rejected"`` để engine vẫn
+    cascade qua các choice khác (1 choice rỗng config KHÔNG được block
+    publish 4 choice còn lại).
+
+    Tóm tắt:
+      submit-time   : fail-closed → raise → toàn hồ sơ vào draft + validation_errors
+      engine-T6     : per-choice  → reject reason_code → cascade tiếp choice sau
+    """
+    from sqlalchemy import select as _sel
+    from sqlalchemy.orm import selectinload as _sel_in
+
+    from .priority_service import (
+        _make_path_shim_from_academic_info,
+        derive_target_level_and_type,
+        validate_eligibility,
+    )
+
+    failures: list[str] = []
+    # Phase E.4 commit 6 — Multi-NV consistency guard (yêu cầu nghiệp vụ #12):
+    # collect target_level + admission_type per choice trong cùng loop. Sau
+    # loop, raise BusinessRuleViolation MULTI_NV_INCONSISTENT nếu khác nhau.
+    # MVP: block submit; per-choice KV snapshot defer Phase F.
+    targets_seen: set[str] = set()
+    types_seen: set[str] = set()
+    choices_summary: list[str] = []
+
+    if profile.uses_choice_engine:
+        # Load choices với eager chain cho derive_target_level_and_type
+        choices_stmt = (
+            _sel(models.AdmissionProfileChoice)
+            .where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+            .options(
+                _sel_in(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.program)
+                .selectinload(models.MajorProgram.degree_level_ref),
+                _sel_in(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.offering_type_config),
+            )
+            .order_by(models.AdmissionProfileChoice.display_order)
+        )
+        choices_result = await db.execute(choices_stmt)
+        choices = choices_result.scalars().all()
+
+        for choice in choices:
+            path = choice.admission_path
+            target_level, admission_type = derive_target_level_and_type(path)
+            targets_seen.add(target_level)
+            types_seen.add(admission_type)
+            choices_summary.append(
+                f"NV{choice.display_order}={target_level}/{admission_type}"
+            )
+            ok, reason = validate_eligibility(profile, target_level, admission_type)
+            if not ok:
+                failures.append(
+                    f"NV{choice.display_order} ({target_level}/{admission_type}): "
+                    f"{reason}"
+                )
+
+        # Phase E.4 commit 6 — Multi-NV consistency check (yêu cầu nghiệp vụ #12).
+        # KHI có > 1 choice và target/admission_type khác nhau → block submit
+        # với guidance tách hồ sơ. Snapshot KV freeze ở submit dùng NV1 làm
+        # primary (commit 5); per-choice snapshot defer Phase F — nên multi-NV
+        # khác basis tạo race conditions cho engine T6 + audit ambiguity.
+        if len(choices) >= 2 and (len(targets_seen) > 1 or len(types_seen) > 1):
+            raise BusinessRuleViolation(
+                "MULTI_NV_INCONSISTENT: hồ sơ đa nguyện vọng có các nguyện "
+                f"vọng KHÔNG đồng nhất bậc đào tạo hoặc hệ đào tạo "
+                f"({', '.join(choices_summary)}). Đợt MVP chỉ hỗ trợ các "
+                f"nguyện vọng cùng (target_level, admission_type) để engine "
+                f"tính khu vực ưu tiên + chính sách bonus thống nhất. Vui "
+                f"lòng tách thành nhiều hồ sơ riêng (mỗi hồ sơ 1 bậc/hệ) "
+                f"hoặc chọn lại các nguyện vọng đồng nhất."
+            )
+    else:
+        # Legacy non-multi-NV: lookup từ offering_admission_config chain.
+        config_id = profile.offering_admission_config_id
+        if config_id is None:
+            raise BusinessRuleViolation(
+                "CONFIG_GAP_TARGET_LEVEL: hồ sơ không có offering_admission_config_id "
+                "và uses_choice_engine=False — không thể xác định bậc đào tạo. "
+                "Vui lòng cấu hình config trước khi submit."
+            )
+        config_stmt = (
+            _sel(models.OfferingAdmissionConfig)
+            .where(models.OfferingAdmissionConfig.id == config_id)
+            .options(
+                _sel_in(models.OfferingAdmissionConfig.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.program)
+                .selectinload(models.MajorProgram.degree_level_ref),
+                _sel_in(models.OfferingAdmissionConfig.academic_info)
+                .selectinload(models.OfferingAcademicInfo.offering)
+                .selectinload(models.ProgramOffering.offering_type_config),
+            )
+        )
+        config = (await db.execute(config_stmt)).scalar_one_or_none()
+        if config is None:
+            raise BusinessRuleViolation(
+                f"CONFIG_GAP_TARGET_LEVEL: offering_admission_config_id="
+                f"{config_id} không tồn tại."
+            )
+        # Build pseudo-path stub để reuse derive_target_level_and_type
+        # (helper đọc __dict__['academic_info']); shared helper centralize
+        # pattern (xem priority_service._make_path_shim_from_academic_info).
+        shim = _make_path_shim_from_academic_info(config.academic_info)
+        target_level, admission_type = derive_target_level_and_type(shim)  # type: ignore[arg-type]
+        ok, reason = validate_eligibility(profile, target_level, admission_type)
+        if not ok:
+            failures.append(
+                f"Legacy single-path ({target_level}/{admission_type}): {reason}"
+            )
+
+    if failures:
+        raise BusinessRuleViolation(
+            "ELIGIBILITY_FAIL: " + "; ".join(failures)
+        )
+
+
 async def _audit_warning_dismissed_if_missing(
     db: AsyncSession,
     profile_id: int,
@@ -4395,6 +4669,20 @@ async def submit_and_evaluate(
             f"Cannot submit profile with status '{profile.status}'. "
             "Only draft profiles can be submitted."
         )
+
+    # Q9 #07 Phase E.4 — eligibility gate per yêu cầu nghiệp vụ #5: chặn TOÀN BỘ
+    # hồ sơ submit không match cultural + vocational vs target_level/admission_type
+    # của path/config. Trước fix: gate đặt trong if uses_choice_engine → 9/11 dev
+    # profile legacy single-path bypass (reviewer finding 2026-05-21).
+    #
+    # Helper handle 2 flow:
+    #   - uses_choice_engine=True (multi-NV): loop choices.admission_path
+    #   - uses_choice_engine=False (legacy): profile.offering_admission_config chain
+    #
+    # Pipeline order: Eligibility → Exception → Auto basis → Resolve KV → Apply
+    # bonus → Snapshot (xem priority_service docstring). Tuyệt đối KHÔNG fallback
+    # "so_cap" khi thiếu target_level config — raise CONFIG_GAP_TARGET_LEVEL.
+    await _validate_eligibility_all_choices(db, profile)
 
     errors: List[str] = []
 
@@ -4594,6 +4882,62 @@ async def submit_and_evaluate(
     if not profile.academic_history:
         errors.append("Chưa nhập quá trình học tập (Academic History is empty)")
 
+    # Q9 #07 Phase E.4 reviewer v4 — KV freeze + assert chuyển từ "post if-errors
+    # transition prep" lên đây để errors collect cho cả KV failure. Nếu raise
+    # BadRequest trong transaction success path, router rollback snapshot →
+    # manager/admin draft override gate KHÔNG thấy engine signal → deadlock.
+    # Giải pháp: freeze runs unconditionally (collect signal vào snapshot),
+    # errors list aggregate KV unresolved/resolution_failed, then `if errors:`
+    # branch flushes snapshot + returns validation_errors. Snapshot persist
+    # vào DB qua router commit → override draft sees requires_manual_override.
+    #
+    # Lazy import: priority_service imports app.models would create circular
+    # dep at module load time of this service file.
+    from .priority_service import (
+        derive_profile_target_context,
+        freeze_priority_snapshot as _freeze_kv,
+    )
+
+    try:
+        target_ctx = await derive_profile_target_context(profile, db)
+        await _freeze_kv(
+            profile=profile,
+            db=db,
+            frozen_at_status="submitted_T1",
+            resolved_by="system",
+            target_level=target_ctx.get("target_level"),
+            admission_type=target_ctx.get("admission_type"),
+            eligibility=target_ctx.get("eligibility"),
+            path_bonus_rule=target_ctx.get("path_bonus_rule"),
+        )
+    except (BadRequest, BusinessRuleViolation):
+        # Domain errors từ helper (vd version conflict) → bubble lên router.
+        raise
+    except Exception as freeze_exc:  # noqa: BLE001
+        log.error(
+            "priority_snapshot_freeze_failed_at_submit",
+            profile_id=profile_id,
+            error=str(freeze_exc),
+            error_type=type(freeze_exc).__name__,
+        )
+        errors.append(
+            f"KV_RESOLUTION_FAILED: engine không hoàn tất resolve KV cho hồ "
+            f"sơ này do lỗi hệ thống ({type(freeze_exc).__name__}). Vui lòng "
+            f"thử lại; nếu lỗi tiếp diễn, báo admin kiểm tra catalog "
+            f"(vn_commune_area_map, vn_school_kv_assignment) và cấu hình "
+            f"path/method."
+        )
+
+    # KV unresolved check — collect message vào errors list (KHÔNG raise).
+    # Snapshot freeze ở trên đã ghi requires_manual_override=True khi engine
+    # cần manual; flush + commit ở `if errors:` branch persist signal đó cho
+    # admin/manager override draft.
+    kv_error = _kv_unresolved_error_message(
+        profile.priority_resolution_snapshot, profile_id
+    )
+    if kv_error:
+        errors.append(kv_error)
+
     # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
     # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
     # Validation errors should NOT change status - stay in draft for user to fix
@@ -4671,33 +5015,10 @@ async def submit_and_evaluate(
         # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
         # always fire side-by-side AFTER ``db.commit()``.
 
-        # Q9 #07 Phase C — Freeze priority resolution snapshot at T1.
-        # Captures kv_resolved + breakdown immutably at submit time so
-        # subsequent admin edits to vn_school_kv_assignment / vn_commune_area_map
-        # don't mutate the candidate's resolved KV. T6 evaluate_cascade
-        # re-freezes with current rates per Q-P3-11 snapshot pattern.
-        # Lazy import: priority_service imports app.models which would
-        # create a circular dep at module load time.
-        from .priority_service import freeze_priority_snapshot as _freeze_kv
-
-        try:
-            await _freeze_kv(
-                profile=profile,
-                db=db,
-                frozen_at_status="submitted_T1",
-                resolved_by="system",
-            )
-        except Exception as freeze_exc:  # noqa: BLE001 — defensive: never block submit
-            log.warning(
-                "priority_snapshot_freeze_failed_at_submit",
-                profile_id=profile_id,
-                error=str(freeze_exc),
-                reason=(
-                    "KV resolution failed during submit T1; profile still "
-                    "submits but priority_resolution_snapshot stays empty. "
-                    "Engine T6 will retry freeze."
-                ),
-            )
+        # Q9 #07 Phase E.4 reviewer v4 — freeze + KV check đã chạy ở bước
+        # validation phía trên. Nếu reach đây tức snapshot có rule_applied
+        # success + kv_resolved set (whitelist pass). Atomic increment +
+        # state transition chỉ fire khi đảm bảo no errors.
 
         try:
             profile, _ = await state_transition(
