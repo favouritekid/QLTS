@@ -6,6 +6,7 @@ import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useMemo } from "react"
 import { IssueSummary } from "./IssueSummary"
+import { derivePriorityIssues } from "./priorityIssues"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface PipelineSidebarProps {
@@ -77,12 +78,7 @@ export function PipelineSidebar({
       if (validationSummary.documents?.has_error) counts[6] = validationSummary.documents.count
     }
 
-    if (profile) {
-      const snapshot = profile.priority_resolution_snapshot ?? null
-      const requiresManualOverride = snapshot?.requires_manual_override === true
-      const missingUtCount = profile.missing_priority_evidence_codes?.length ?? 0
-      counts[4] = (requiresManualOverride ? 1 : 0) + missingUtCount
-    }
+    counts[4] = derivePriorityIssues(profile).length
 
     return counts
   }, [validationSummary, profile])

@@ -4,6 +4,7 @@ import { AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { IssueSummary } from "./IssueSummary"
+import { derivePriorityIssues } from "./priorityIssues"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface GroupedValidationErrors {
@@ -23,7 +24,10 @@ export function MobileIssueDrawer({
   validationErrors,
   groupedValidationErrors,
 }: MobileIssueDrawerProps) {
-  if (validationErrors.length === 0) return null
+  const priorityIssues = derivePriorityIssues(profile)
+  const totalCount = validationErrors.length + priorityIssues.length
+
+  if (totalCount === 0) return null
 
   return (
     <Sheet>
@@ -32,10 +36,10 @@ export function MobileIssueDrawer({
           variant="outline"
           size="sm"
           className="lg:hidden fixed bottom-20 right-4 z-30 shadow-lg bg-error-50 border-error-300 text-error-700 hover:bg-error-100"
-          aria-label={`Mở danh sách ${validationErrors.length} vấn đề cần sửa`}
+          aria-label={`Mở danh sách ${totalCount} vấn đề cần sửa`}
         >
           <AlertCircle className="w-4 h-4 mr-2" />
-          {validationErrors.length} vấn đề
+          {totalCount} vấn đề
         </Button>
       </SheetTrigger>
       <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto">

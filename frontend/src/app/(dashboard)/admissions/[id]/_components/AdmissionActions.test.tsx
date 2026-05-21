@@ -224,13 +224,14 @@ describe("AdmissionActions", () => {
       expect(spies.onSubmit).toHaveBeenCalled();
     });
 
-    it("hides step nav on step 8 (Finalize/Submit)", () => {
+    it("hides Tiếp tục + Lưu nhưng GIỮ Quay lại ở step 8 (officer/manager có thể sửa lại)", () => {
       const profile = buildProfile({ status: "draft", permissions: { submit: true } });
       renderActions(profile, 8);
 
       expect(screen.queryByText("Tiếp tục")).not.toBeInTheDocument();
-      expect(screen.queryByText("Quay lại")).not.toBeInTheDocument();
       expect(screen.queryByText("Lưu thay đổi")).not.toBeInTheDocument();
+      // Commit 1: Quay lại visible ở step 8 để officer/manager review xong có thể sửa hồ sơ.
+      expect(screen.getByText("Quay lại")).toBeInTheDocument();
     });
   });
 
