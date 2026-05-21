@@ -4359,6 +4359,13 @@ async def _validate_eligibility_all_choices(
     )
 
     failures: list[str] = []
+    # Phase E.4 commit 6 — Multi-NV consistency guard (yêu cầu nghiệp vụ #12):
+    # collect target_level + admission_type per choice trong cùng loop. Sau
+    # loop, raise BusinessRuleViolation MULTI_NV_INCONSISTENT nếu khác nhau.
+    # MVP: block submit; per-choice KV snapshot defer Phase F.
+    targets_seen: set[str] = set()
+    types_seen: set[str] = set()
+    choices_summary: list[str] = []
 
     if profile.uses_choice_engine:
         # Load choices với eager chain cho derive_target_level_and_type
@@ -4386,12 +4393,33 @@ async def _validate_eligibility_all_choices(
         for choice in choices:
             path = choice.admission_path
             target_level, admission_type = derive_target_level_and_type(path)
+            targets_seen.add(target_level)
+            types_seen.add(admission_type)
+            choices_summary.append(
+                f"NV{choice.display_order}={target_level}/{admission_type}"
+            )
             ok, reason = validate_eligibility(profile, target_level, admission_type)
             if not ok:
                 failures.append(
                     f"NV{choice.display_order} ({target_level}/{admission_type}): "
                     f"{reason}"
                 )
+
+        # Phase E.4 commit 6 — Multi-NV consistency check (yêu cầu nghiệp vụ #12).
+        # KHI có > 1 choice và target/admission_type khác nhau → block submit
+        # với guidance tách hồ sơ. Snapshot KV freeze ở submit dùng NV1 làm
+        # primary (commit 5); per-choice snapshot defer Phase F — nên multi-NV
+        # khác basis tạo race conditions cho engine T6 + audit ambiguity.
+        if len(choices) >= 2 and (len(targets_seen) > 1 or len(types_seen) > 1):
+            raise BusinessRuleViolation(
+                "MULTI_NV_INCONSISTENT: hồ sơ đa nguyện vọng có các nguyện "
+                f"vọng KHÔNG đồng nhất bậc đào tạo hoặc hệ đào tạo "
+                f"({', '.join(choices_summary)}). Đợt MVP chỉ hỗ trợ các "
+                f"nguyện vọng cùng (target_level, admission_type) để engine "
+                f"tính khu vực ưu tiên + chính sách bonus thống nhất. Vui "
+                f"lòng tách thành nhiều hồ sơ riêng (mỗi hồ sơ 1 bậc/hệ) "
+                f"hoặc chọn lại các nguyện vọng đồng nhất."
+            )
     else:
         # Legacy non-multi-NV: lookup từ offering_admission_config chain.
         config_id = profile.offering_admission_config_id

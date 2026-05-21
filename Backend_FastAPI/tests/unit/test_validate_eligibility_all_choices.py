@@ -96,7 +96,8 @@ def _make_db_legacy(config_stub: SimpleNamespace | None):
 # ===========================================================================
 
 
-async def test_multi_nv_all_choices_pass() -> None:
+async def test_multi_nv_all_choices_pass_same_target_type() -> None:
+    """Multi-NV cùng (cao_dang, chinh_quy) cho cả 2 NV → consistency pass."""
     profile = _profile(cultural="graduated_thpt", uses_choice_engine=True)
     choices = [
         SimpleNamespace(
@@ -104,7 +105,7 @@ async def test_multi_nv_all_choices_pass() -> None:
             display_order=1,
         ),
         SimpleNamespace(
-            admission_path=_make_path("trung_cap", "chinh_quy"),
+            admission_path=_make_path("cao_dang", "chinh_quy"),
             display_order=2,
         ),
     ]
@@ -115,9 +116,38 @@ async def test_multi_nv_all_choices_pass() -> None:
 
 
 async def test_multi_nv_one_choice_fails_blocks_submit() -> None:
-    # cultural=graduated_thcs → CĐ chính quy fail, TC chính quy pass.
-    # Helper phải raise vì có ít nhất 1 choice fail.
+    """cultural=graduated_thcs + cả 2 NV CĐ chính quy → CĐ fail eligibility
+    cho cả 2; raise ELIGIBILITY_FAIL (KHÔNG raise MULTI_NV vì consistency OK)."""
     profile = _profile(cultural="graduated_thcs", uses_choice_engine=True)
+    choices = [
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=1,
+        ),
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=2,
+        ),
+    ]
+    db = _make_db_multi_nv(choices)
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _validate_eligibility_all_choices(db, profile)
+    assert "ELIGIBILITY_FAIL" in str(exc.value)
+    assert "NV1" in str(exc.value)
+    assert "cao_dang" in str(exc.value)
+
+
+# ===========================================================================
+# Phase E.4 commit 6 — Multi-NV consistency guard (yêu cầu nghiệp vụ #12)
+# ===========================================================================
+
+
+async def test_multi_nv_inconsistent_target_levels_blocks() -> None:
+    """2 NV với target_level khác nhau (CĐ vs TC) → MULTI_NV_INCONSISTENT.
+    Profile cultural OK cho cả 2 (graduated_thpt) — block hoàn toàn do
+    target/type mismatch, không phải eligibility data."""
+    profile = _profile(cultural="graduated_thpt", uses_choice_engine=True)
     choices = [
         SimpleNamespace(
             admission_path=_make_path("cao_dang", "chinh_quy"),
@@ -132,9 +162,116 @@ async def test_multi_nv_one_choice_fails_blocks_submit() -> None:
 
     with pytest.raises(BusinessRuleViolation) as exc:
         await _validate_eligibility_all_choices(db, profile)
-    assert "ELIGIBILITY_FAIL" in str(exc.value)
-    assert "NV1" in str(exc.value)
-    assert "cao_dang" in str(exc.value)
+    msg = str(exc.value)
+    assert "MULTI_NV_INCONSISTENT" in msg
+    assert "NV1=cao_dang/chinh_quy" in msg
+    assert "NV2=trung_cap/chinh_quy" in msg
+    assert "tách thành nhiều hồ sơ riêng" in msg
+
+
+async def test_multi_nv_inconsistent_admission_types_blocks() -> None:
+    """Cùng target_level (CĐ) nhưng admission_type khác (chính quy vs liên thông)
+    → MULTI_NV_INCONSISTENT."""
+    profile = _profile(
+        cultural="graduated_thpt", vocational="trung_cap", uses_choice_engine=True,
+    )
+    choices = [
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=1,
+        ),
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "lien_thong"),
+            display_order=2,
+        ),
+    ]
+    db = _make_db_multi_nv(choices)
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _validate_eligibility_all_choices(db, profile)
+    msg = str(exc.value)
+    assert "MULTI_NV_INCONSISTENT" in msg
+    assert "NV1=cao_dang/chinh_quy" in msg
+    assert "NV2=cao_dang/lien_thong" in msg
+
+
+async def test_multi_nv_same_target_and_type_passes() -> None:
+    """3 NV cùng CĐ chính quy (chỉ khác admission_method qua path config) →
+    consistency pass; eligibility check cho mỗi NV."""
+    profile = _profile(cultural="graduated_thpt", uses_choice_engine=True)
+    choices = [
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=1,
+        ),
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=2,
+        ),
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=3,
+        ),
+    ]
+    db = _make_db_multi_nv(choices)
+
+    # Should not raise
+    await _validate_eligibility_all_choices(db, profile)
+
+
+async def test_single_nv_no_consistency_check_needed() -> None:
+    """1 NV duy nhất → consistency check skip (chỉ fire khi len(choices) >= 2)."""
+    profile = _profile(cultural="graduated_thpt", uses_choice_engine=True)
+    choices = [
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),
+            display_order=1,
+        ),
+    ]
+    db = _make_db_multi_nv(choices)
+
+    # Should not raise
+    await _validate_eligibility_all_choices(db, profile)
+
+
+async def test_multi_nv_inconsistent_with_eligibility_fail_prefers_consistency_msg() -> None:
+    """Khi cả 2 vấn đề tồn tại (multi-NV inconsistent + eligibility fail
+    cho ít nhất 1 NV), helper raise MULTI_NV_INCONSISTENT trước (architectural
+    error first; data error after split sẽ surface eligibility riêng cho mỗi
+    hồ sơ con)."""
+    profile = _profile(cultural="graduated_thcs", uses_choice_engine=True)
+    choices = [
+        SimpleNamespace(
+            admission_path=_make_path("cao_dang", "chinh_quy"),  # graduated_thcs fail CĐ
+            display_order=1,
+        ),
+        SimpleNamespace(
+            admission_path=_make_path("trung_cap", "chinh_quy"),  # graduated_thcs OK TC
+            display_order=2,
+        ),
+    ]
+    db = _make_db_multi_nv(choices)
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _validate_eligibility_all_choices(db, profile)
+    # Multi-NV raise BEFORE eligibility (loop collects both, raise MULTI first)
+    assert "MULTI_NV_INCONSISTENT" in str(exc.value)
+
+
+async def test_legacy_non_multi_nv_no_consistency_check() -> None:
+    """uses_choice_engine=False (legacy single-path) — không có multi-NV concept."""
+    profile = _profile(
+        cultural="graduated_thpt",
+        uses_choice_engine=False,
+        offering_admission_config_id=42,
+    )
+    path = _make_path("cao_dang", "chinh_quy")
+    config_stub = SimpleNamespace()
+    config_stub.academic_info = path.__dict__["academic_info"]
+    db = _make_db_legacy(config_stub=config_stub)
+
+    # Should not raise
+    await _validate_eligibility_all_choices(db, profile)
 
 
 async def test_multi_nv_config_gap_blocks() -> None:
