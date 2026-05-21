@@ -4802,12 +4802,6 @@ async def submit_and_evaluate(
         # APPLICATION_STATUS_CHANGED + ADMISSION_PROFILE_SUBMITTED
         # always fire side-by-side AFTER ``db.commit()``.
 
-        # Q9 #07 Phase E.4 — eligibility cũng phải check cho legacy non-multi-NV
-        # profile (uses_choice_engine=False) qua chain offering_admission_config →
-        # academic_info → offering → program/offering_type. Helper handles both
-        # flows: nếu profile non-multi-NV, derive duy nhất 1 path từ
-        # offering_admission_config_id (legacy single-path snapshot pattern).
-
         # Q9 #07 Phase C — Freeze priority resolution snapshot at T1.
         # Captures kv_resolved + breakdown immutably at submit time so
         # subsequent admin edits to vn_school_kv_assignment / vn_commune_area_map
@@ -4815,14 +4809,25 @@ async def submit_and_evaluate(
         # re-freezes with current rates per Q-P3-11 snapshot pattern.
         # Lazy import: priority_service imports app.models which would
         # create a circular dep at module load time.
-        from .priority_service import freeze_priority_snapshot as _freeze_kv
+        from .priority_service import (
+            derive_profile_target_context,
+            freeze_priority_snapshot as _freeze_kv,
+        )
 
         try:
+            # Phase E.4 commit 5 — bơm target_level + admission_type + bonus
+            # rule context vào snapshot để engine resolve đúng matrix mới.
+            # Multi-NV: lookup NV1 (display_order=1). Legacy: offering_admission_config.
+            target_ctx = await derive_profile_target_context(profile, db)
             await _freeze_kv(
                 profile=profile,
                 db=db,
                 frozen_at_status="submitted_T1",
                 resolved_by="system",
+                target_level=target_ctx.get("target_level"),
+                admission_type=target_ctx.get("admission_type"),
+                eligibility=target_ctx.get("eligibility"),
+                path_bonus_rule=target_ctx.get("path_bonus_rule"),
             )
         except Exception as freeze_exc:  # noqa: BLE001 — defensive: never block submit
             log.warning(

@@ -34,35 +34,33 @@ from app.services.priority_service import (
 @pytest.mark.parametrize(
     "cultural,vocational,area_basis,expected_basis",
     [
-        # Row 1: graduated_thpt + any vocational → THPT
-        ("graduated_thpt", "none", None, "THPT"),
-        ("graduated_thpt", "trung_cap", None, "THPT"),
-        ("graduated_gdtx", "cao_dang", None, "THPT"),
-        # Row 2: completed_thpt + (trung_cap | cao_dang) → THPT
-        ("completed_thpt", "trung_cap", None, "THPT"),
-        ("completed_thpt", "cao_dang", None, "THPT"),
-        # Row 3: completed_thpt + (so_cap | none) → COMMUNE_FALLBACK
-        ("completed_thpt", "so_cap", None, "COMMUNE_FALLBACK"),
-        ("completed_thpt", "none", None, "COMMUNE_FALLBACK"),
-        # Rows 4+5 merged (per nghiệp vụ user 2026-05-18): graduated_thcs →
-        # COMMUNE_FALLBACK regardless of vocational. Original v1.3 design had
-        # Row 4 → TC basis cho liên thông TC pathway, NHƯNG user clarified:
-        # TN THCS bất kể có TC nghề → KV theo hộ khẩu (case 1 generic).
-        ("graduated_thcs", "trung_cap", None, "COMMUNE_FALLBACK"),
-        ("graduated_thcs", "cao_dang", None, "COMMUNE_FALLBACK"),
-        ("graduated_thcs", "so_cap", None, "COMMUNE_FALLBACK"),
-        ("graduated_thcs", "none", None, "COMMUNE_FALLBACK"),
-        # Row 6: completed_thcs + any → COMMUNE_FALLBACK
-        ("completed_thcs", "none", None, "COMMUNE_FALLBACK"),
-        ("completed_thcs", "trung_cap", None, "COMMUNE_FALLBACK"),
-        # Row 7: cultural NULL → NOT_RESOLVED
+        # Phase E.4 commit 5: _derive_kv_basis_level rename basis values:
+        #   "THPT" → "LICH_SU_THPT"
+        #   "COMMUNE_FALLBACK" → "THUONG_TRU"
+        # Legacy 3-arg signature (target_level=None) vẫn được hỗ trợ;
+        # callers cũ fall vào legacy matrix branch.
+        ("graduated_thpt", "none", None, "LICH_SU_THPT"),
+        ("graduated_thpt", "trung_cap", None, "LICH_SU_THPT"),
+        ("graduated_gdtx", "cao_dang", None, "LICH_SU_THPT"),
+        ("completed_thpt", "trung_cap", None, "LICH_SU_THPT"),
+        ("completed_thpt", "cao_dang", None, "LICH_SU_THPT"),
+        # completed_thpt + so_cap/none — legacy branch fall back commune
+        ("completed_thpt", "so_cap", None, "THUONG_TRU"),
+        ("completed_thpt", "none", None, "THUONG_TRU"),
+        # graduated_thcs all → THUONG_TRU (per nghiệp vụ 2026-05-18 user override)
+        ("graduated_thcs", "trung_cap", None, "THUONG_TRU"),
+        ("graduated_thcs", "cao_dang", None, "THUONG_TRU"),
+        ("graduated_thcs", "so_cap", None, "THUONG_TRU"),
+        ("graduated_thcs", "none", None, "THUONG_TRU"),
+        ("completed_thcs", "none", None, "THUONG_TRU"),
+        ("completed_thcs", "trung_cap", None, "THUONG_TRU"),
+        # Cultural NULL → NOT_RESOLVED
         (None, "none", None, "NOT_RESOLVED"),
         (None, "trung_cap", None, "NOT_RESOLVED"),
-        # Row 8: area_basis bypass — special_case wins regardless of cultural
+        # area_basis bypass — output overrides matrix
         ("graduated_thpt", "none", "permanent_address_special", "COMMUNE_SPECIAL"),
         ("graduated_thcs", "trung_cap", "permanent_address_special", "COMMUNE_SPECIAL"),
         (None, "none", "permanent_address_special", "COMMUNE_SPECIAL"),
-        # Row 9: manual_override bypass
         ("graduated_thpt", "none", "manual_override", "MANUAL"),
         ("graduated_thcs", "cao_dang", "manual_override", "MANUAL"),
     ],
@@ -70,12 +68,24 @@ from app.services.priority_service import (
 def test_derive_kv_basis_level_full_matrix(
     cultural, vocational, area_basis, expected_basis
 ):
-    assert _derive_kv_basis_level(cultural, vocational, area_basis) == expected_basis
+    # Phase E.4: returns tuple (basis, basis_reason). Test pin basis only;
+    # basis_reason coverage trong test_priority_eligibility_kv_matrix.py mới.
+    basis, _reason = _derive_kv_basis_level(
+        cultural=cultural,
+        vocational=vocational,
+        area_resolution_basis=area_basis,
+    )
+    assert basis == expected_basis
 
 
 def test_derive_kv_basis_level_unknown_cultural_defensive():
     """Defensive: unknown cultural (CHECK should prevent, but defensive)."""
-    assert _derive_kv_basis_level("alien_value", "none", None) == "NOT_RESOLVED"
+    basis, _reason = _derive_kv_basis_level(
+        cultural="alien_value",
+        vocational="none",
+        area_resolution_basis=None,
+    )
+    assert basis == "NOT_RESOLVED"
 
 
 # =============================================================================
@@ -196,7 +206,7 @@ async def test_resolve_kv_commune_fallback_thcs_only():
     db = _mock_db(commune_kv="KV2-NT")
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV2-NT"
-    assert meta["pathway"] == "commune_fallback"
+    assert meta["pathway"] == "thuong_tru"
 
 
 @pytest.mark.asyncio
@@ -218,7 +228,7 @@ async def test_resolve_kv_thpt_tied_then_tiebreak_graduation():
     kv, meta = await resolve_kv_for_profile(profile, db)
     # School 200 is graduation (year_to=2023 > 2021, grade_to=12 > 11)
     assert kv == "KV3"
-    assert meta["pathway"] == "thpt_multi_school"
+    assert meta["pathway"] == "lich_su_thpt"
     assert meta["rule_applied"] == "tiebreak_graduation_school"
     assert meta["breakdown"]["graduation_school_id"] == 200
 
@@ -267,7 +277,10 @@ async def test_resolve_kv_m1_ambiguous_tied_graduation():
 
 @pytest.mark.asyncio
 async def test_resolve_kv_no_qualifying_entries():
-    """Cultural pathway THPT but no entries with level='THPT' in history."""
+    """Cultural pathway THPT but no entries with level='THPT' in history.
+
+    Phase E.4 commit 5: rule_applied = 'insufficient_data', reason rename.
+    """
     profile = _mock_profile(
         cultural_education_level="graduated_thpt",
         academic_history=[
@@ -279,7 +292,8 @@ async def test_resolve_kv_no_qualifying_entries():
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv is None
     assert meta["requires_manual_override"] is True
-    assert meta["reason"] == "no_qualifying_entries"
+    assert meta["rule_applied"] == "insufficient_data"
+    assert meta["reason"] == "no_qualifying_thpt_history_entries"
 
 
 @pytest.mark.asyncio
@@ -305,7 +319,7 @@ async def test_resolve_kv_thpt_accepts_thcs_thpt_lien_cap():
     db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV1"
-    assert meta["pathway"] == "thpt_multi_school"
+    assert meta["pathway"] == "lich_su_thpt"
     assert meta["breakdown"]["winner_years"] == 3
 
 
@@ -334,7 +348,7 @@ async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
     db = _mock_db(commune_kv="KV1")
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV1"
-    assert meta["pathway"] == "commune_fallback"
+    assert meta["pathway"] == "thuong_tru"
     assert meta["rule_applied"] == "commune_lookup"
 
 
@@ -424,7 +438,7 @@ async def test_resolve_kv_pre_2025_history_hits_before_entry():
     db = _mock_db(school_kv_sequence=["KV1", "KV1", "KV1"])
     kv, meta = await resolve_kv_for_profile(profile, db)
     assert kv == "KV1"
-    assert meta["pathway"] == "thpt_multi_school"
+    assert meta["pathway"] == "lich_su_thpt"
     assert meta["breakdown"]["winner_years"] == 3
 
 

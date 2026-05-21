@@ -394,23 +394,48 @@ async def evaluate_cascade(
         # create a circular dep at module load time of this engine file.
         from app.services.priority_service import (
             calculate_priority_bonus,
+            derive_profile_target_context,
+            derive_target_level_and_type,
             freeze_priority_snapshot,
+            validate_eligibility,
         )
 
         # Q9 #07 Phase C — Re-freeze priority_resolution_snapshot at T6 engine.
         # T1 submit already froze with submit-time data; T6 re-freezes in
         # case academic_history / cultural fields were edited during
         # revision_requested cycle. Mirrors Q-P3-11 bonus_rule_snapshot
-        # double-freeze pattern. Best-effort: if KV resolution fails (eg
-        # missing commune data Phase B.2 pending), engine continues — the
-        # downstream calculate_priority_bonus reads snapshot.kv_resolved
-        # = None and returns 0đ gracefully.
+        # double-freeze pattern.
+        #
+        # Phase E.4 commit 5: T6 freeze bơm context từ choice hiện tại (eager-
+        # loaded path đầy đủ qua chain academic_info/offering/program). Cheaper
+        # than derive_profile_target_context() vì path đã ở memory.
         try:
+            t6_target_level: Optional[str] = None
+            t6_admission_type: Optional[str] = None
+            t6_eligibility: Optional[dict] = None
+            t6_bonus_rule: Optional[dict] = (
+                dict(choice.bonus_rule_snapshot) if choice.bonus_rule_snapshot else None
+            )
+            try:
+                t6_target_level, t6_admission_type = derive_target_level_and_type(path)
+                ok, reason = validate_eligibility(
+                    profile, t6_target_level, t6_admission_type
+                )
+                t6_eligibility = {"passed": ok, "reason": reason}
+            except Exception:  # noqa: BLE001
+                # Path chain missing → defer context, snapshot vẫn freeze với basis
+                # = INSUFFICIENT_DATA hoặc legacy matrix.
+                pass
+
             await freeze_priority_snapshot(
                 profile=profile,
                 db=db,
                 frozen_at_status="engine_T6",
                 resolved_by="system",
+                target_level=t6_target_level,
+                admission_type=t6_admission_type,
+                eligibility=t6_eligibility,
+                path_bonus_rule=t6_bonus_rule,
             )
         except Exception as kv_freeze_exc:  # noqa: BLE001
             log.warning(
