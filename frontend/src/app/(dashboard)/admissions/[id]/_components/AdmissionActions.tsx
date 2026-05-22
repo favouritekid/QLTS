@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { Loader2, Save, ClipboardCheck, ArrowRight, ArrowLeft } from "lucide-react"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
+import { canDecide } from "@/lib/utils/admission-permissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
 import { SendMagicLinkButton } from "./SendMagicLinkButton"
@@ -45,24 +46,12 @@ export function AdmissionActions({
   const { can } = usePermissions(profile)
   const statusConfig = getStatusConfig(profile.status)
 
-  // Code review 2026-05-22 — sticky 'Tiếp tục' gate cùng điều kiện
-  // PipelineSidebar (Step 8 unlock) để UX consistent. Ưu tiên BE-aggregated
-  // `permissions.has_decision` flag (admission_service.py ~1617); fallback
-  // OR-7-flags cho backward-compat với deploy chưa ship BE change.
-  const perms = profile.permissions
-  const canDecide = Boolean(
-    perms?.has_decision ??
-    (perms?.approve ||
-      perms?.reject ||
-      perms?.resubmit ||
-      perms?.submit ||
-      perms?.request_revision ||
-      perms?.publish_result ||
-      perms?.enroll)
-  )
+  // Sticky 'Tiếp tục' gate cùng điều kiện PipelineSidebar (Step 8 unlock).
+  // Helper trusts BE-aggregated `permissions.has_decision`, fallback OR-7.
+  const decide = canDecide(profile.permissions)
   // Hide Tiếp tục khi step 7 + no decision perm → user không advance qua
   // Step 8 disabled. Step 1-6 navigation vẫn cho phép.
-  const showNextButton = currentStep < 8 && !(currentStep === 7 && !canDecide)
+  const showNextButton = currentStep < 8 && !(currentStep === 7 && !decide)
 
   return (
     <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">

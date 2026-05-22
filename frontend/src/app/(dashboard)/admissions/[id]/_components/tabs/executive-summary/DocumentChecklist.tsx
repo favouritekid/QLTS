@@ -406,7 +406,7 @@ function DocumentRow({
           <DialogHeader>
             <DialogTitle>Từ chối tài liệu</DialogTitle>
             <DialogDescription>
-              Nhập lý do từ chối tài liệu &quot;{doc.label}&quot;.
+              Nhập lý do từ chối tài liệu “{doc.label}”.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
