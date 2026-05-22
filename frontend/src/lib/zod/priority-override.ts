@@ -25,8 +25,8 @@ export const overridePriorityKvRequestSchema = z.object({
   reason: z
     .string()
     .trim()
-    .min(20, "Lý do override phải có ít nhất 20 ký tự")
-    .max(500, "Lý do override không được vượt quá 500 ký tự"),
+    .min(20, "Lý do ấn định phải có ít nhất 20 ký tự")
+    .max(500, "Lý do ấn định không được vượt quá 500 ký tự"),
   /** Optional FK soft-reference to supporting evidence document. */
   evidence_file_id: z.number().int().positive().nullable().optional(),
   /**

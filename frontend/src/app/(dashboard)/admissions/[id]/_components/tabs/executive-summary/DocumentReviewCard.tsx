@@ -24,7 +24,12 @@ export function DocumentReviewCard({ profile }: DocumentReviewCardProps) {
   const utVerifiedCount = utEvidence.filter((d) => d.status === "verified").length
   const missingUtCount = profile.missing_priority_evidence_codes?.length ?? 0
 
-  const isComplete = mandatoryCount > 0 && verifiedCount === mandatoryCount && missingUtCount === 0
+  // Path không bắt buộc tài liệu + không thiếu UT → coi như đủ điều kiện
+  // ("không có gì để duyệt"). Tránh false-error icon đỏ.
+  const noMandatoryRequired = mandatoryCount === 0
+  const isComplete =
+    (noMandatoryRequired || verifiedCount === mandatoryCount) &&
+    missingUtCount === 0
   const hasPending = submittedCount < mandatoryCount || missingUtCount > 0
   const StatusIcon = isComplete ? CheckCircle2 : hasPending ? Clock : AlertTriangle
   const statusColor = isComplete

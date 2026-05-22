@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configApi } from "@/lib/api/config"
 import { ChoiceListEditor } from "@/components/admissions/ChoiceListEditor"
 import { AddChoiceDialog } from "@/components/admissions/AddChoiceDialog"
-import type { AppliedRules, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AppliedRules, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import type { AdmissionProfileChoiceResponse } from "@/lib/zod/admission-choices"
 
 // Internal interface for UI logic compatibility
@@ -243,7 +243,20 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
     }
     return selectedGroupDetails?.subjects || []
   }, [isBestNMode, uniqueSubjects, selectedGroupDetails])
-  
+
+  // Commit 5 + post-feedback fix-up — desktop-only autoFocus ô điểm đầu
+  // sau khi subjects array đổi (group auto-select hoặc user pick group).
+  // Skip mobile (`matchMedia` >= lg breakpoint 1024px) để tránh auto bật
+  // bàn phím + kéo viewport per Web Interface Guidelines.
+  const firstSubjectScoreRef = useRef<HTMLInputElement | null>(null)
+  const firstSubject = subjects[0]
+  useEffect(() => {
+    if (!firstSubject || !isEditable) return
+    if (typeof window === "undefined" || !window.matchMedia) return
+    if (!window.matchMedia("(min-width: 1024px)").matches) return
+    firstSubjectScoreRef.current?.focus({ preventScroll: true })
+  }, [firstSubject, isEditable])
+
   // Determine Highlighted Subjects (from Backend Snapshot)
   const highlightedSubjects = useMemo(() => {
       if (!isBestNMode || !profile?.snapshot_score?.selected_subjects) return new Set<string>()
@@ -586,10 +599,6 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
                       {subjects.map((subject, subjectIndex) => {
                          const label = SUBJECT_LABELS[subject] || subject
                          const isHighlighted = highlightedSubjects.has(subject)
-                         // Commit 5 — autoFocus ô điểm đầu tiên khi group
-                         // vừa được chọn/auto-select. Subject array key remount
-                         // khi group đổi → autoFocus fire lại đúng input đầu.
-                         const shouldAutoFocus = subjectIndex === 0 && isEditable
 
                          return (
                         <FormField
@@ -609,7 +618,7 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
                                   min={0}
                                   max={10}
                                   disabled={!isEditable}
-                                  autoFocus={shouldAutoFocus}
+                                  ref={subjectIndex === 0 ? firstSubjectScoreRef : undefined}
                                   {...field}
                                   value={field.value ?? ""}
                                   onChange={(e) =>

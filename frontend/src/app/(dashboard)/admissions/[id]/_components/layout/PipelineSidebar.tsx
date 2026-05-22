@@ -54,7 +54,7 @@ export function PipelineSidebar({
   validationSummary,
   groupedValidationErrors,
   completionPercent,
-  canVerifyPriorityObject: _canVerifyPriorityObject = false,
+  canVerifyPriorityObject: _canVerifyPriorityObject = false, // eslint-disable-line @typescript-eslint/no-unused-vars -- legacy prop kept for backward-compat; Phase E.3 logic gộp vào Step 4
 }: PipelineSidebarProps) {
   const visibleSteps = STEPS
 

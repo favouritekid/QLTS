@@ -161,8 +161,8 @@ export function PriorityOverrideDialog({
         const detail =
           (err as { response?: { data?: { detail?: string } } })?.response?.data
             ?.detail
-        toast.error(detail || "Bạn không có quyền override KV trên hồ sơ này.")
-        setError(detail || "Không có quyền override.")
+        toast.error(detail || "Bạn không có quyền ấn định KV trên hồ sơ này.")
+        setError(detail || "Không có quyền ấn định.")
       } else if (status === 400) {
         const detail =
           (err as { response?: { data?: { detail?: string } } })?.response?.data
@@ -170,7 +170,7 @@ export function PriorityOverrideDialog({
         toast.error(detail || "Yêu cầu không hợp lệ.")
         setError(detail || "Yêu cầu không hợp lệ.")
       } else {
-        toast.error("Không thể override KV. Vui lòng thử lại.")
+        toast.error("Không thể ấn định KV. Vui lòng thử lại.")
         setError("Lỗi server. Vui lòng thử lại sau.")
       }
     }
@@ -188,8 +188,8 @@ export function PriorityOverrideDialog({
             Cán bộ ấn định KV thủ công
           </ResponsiveDialogTitle>
           <ResponsiveDialogDescription>
-            Override Khu vực ưu tiên trên hồ sơ này. Thay đổi sẽ được ghi vào
-            audit log với lý do bạn cung cấp.
+            Ấn định Khu vực ưu tiên trên hồ sơ này. Thay đổi sẽ được ghi vào
+            nhật ký với lý do bạn cung cấp.
           </ResponsiveDialogDescription>
         </ResponsiveDialogHeader>
 
@@ -269,12 +269,12 @@ export function PriorityOverrideDialog({
               <AlertTriangle className="h-4 w-4 shrink-0 text-warning-700 mt-0.5" />
               <div className="space-y-2 flex-1">
                 <p className="text-warning-900 font-medium">
-                  Hồ sơ đã ở trạng thái post-publish: {profileStatus}
+                  Hồ sơ đã ở trạng thái sau công bố: {profileStatus}
                 </p>
                 <p className="text-warning-800 text-xs">
-                  Override KV sau khi hồ sơ đã được công bố kết quả là thao tác
-                  hiếm gặp. Hành động này sẽ được ghi vào audit log với metadata
-                  acknowledged_post_publish=true.
+                  Ấn định KV sau khi hồ sơ đã được công bố kết quả là thao tác
+                  hiếm gặp. Hành động này sẽ được ghi vào nhật ký với cờ xác
+                  nhận đặc biệt.
                 </p>
                 <div className="flex items-start gap-2">
                   <Checkbox

@@ -28,7 +28,7 @@ function actionMeta(actionType: string) {
     case "kv_manual_override":
       return {
         icon: ShieldCheck,
-        label: "Override KV",
+        label: "Ấn định KV",
         color: "text-amber-700",
         bg: "bg-amber-50",
       }
