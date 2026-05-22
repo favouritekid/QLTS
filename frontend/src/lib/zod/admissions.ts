@@ -96,6 +96,13 @@ export const priorityObjectEvidenceEntrySchema = z.object({
   document_id: z.number().int().nullable().optional(),
   verified_by: z.number().int().nullable().optional(),
   verified_at: z.string().datetime({ offset: true }).nullable().optional(),
+  // Phase E.4 fix (smoke 2026-05-20 lesson) — BE schema admission.py:515
+  // persist rejected_by/rejected_at vào evidence JSONB entry khi PATCH
+  // reject. FE strict schema thiếu 2 field này → mọi GET sau reject sẽ
+  // ResponseValidationError extra_forbidden khi enforce parsing. Add để
+  // contract parity với BE.
+  rejected_by: z.number().int().nullable().optional(),
+  rejected_at: z.string().datetime({ offset: true }).nullable().optional(),
   reject_reason: z.string().max(500).nullable().optional(),
   requested_at: z.string().datetime({ offset: true }).nullable().optional(),
   // Q9 #07 Phase E.4 Decision #3 — PERSISTED paper_only_verification flag.

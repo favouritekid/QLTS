@@ -33,6 +33,10 @@ function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): Admiss
     documents_checklist: [],
     missing_priority_evidence_codes: [],
     priority_resolution_snapshot: {},
+    // Round 2B #4 — default cultural_education_level non-null để các test
+    // cũ không trigger flag "Chưa khai trình độ văn hóa". Test riêng cho
+    // thiếu cultural set explicit null.
+    cultural_education_level: "graduated_thpt",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -83,8 +87,37 @@ describe("derivePriorityIssues", () => {
     const profile = buildProfile({
       priority_resolution_snapshot: { requires_manual_override: true },
       missing_priority_evidence_codes: ["UT07", "UT05"],
+      cultural_education_level: "graduated_thpt",
     } as Partial<AdmissionProfileResponse>)
     expect(derivePriorityIssues(profile)).toHaveLength(2)
+  })
+
+  it("Round 2B #4: thiếu cultural_education_level → flag 'Chưa khai trình độ văn hóa'", () => {
+    const profile = buildProfile({
+      cultural_education_level: null,
+    } as Partial<AdmissionProfileResponse>)
+    const issues = derivePriorityIssues(profile)
+    expect(issues.some((s) => /Chưa khai trình độ văn hóa/i.test(s))).toBe(true)
+  })
+
+  it("Round 2B #4: post-submit + kv_resolved=null + !requires_manual_override → defensive flag", () => {
+    const profile = buildProfile({
+      status: "submitted",
+      cultural_education_level: "graduated_thpt",
+      priority_resolution_snapshot: { kv_resolved: null },
+    } as Partial<AdmissionProfileResponse>)
+    const issues = derivePriorityIssues(profile)
+    expect(issues.some((s) => /chưa resolve được KV/i.test(s))).toBe(true)
+  })
+
+  it("Round 2B #4: draft + kv_resolved=null → KHÔNG flag (chưa preview)", () => {
+    const profile = buildProfile({
+      status: "draft",
+      cultural_education_level: "graduated_thpt",
+      priority_resolution_snapshot: { kv_resolved: null },
+    } as Partial<AdmissionProfileResponse>)
+    const issues = derivePriorityIssues(profile)
+    expect(issues.some((s) => /chưa resolve được KV/i.test(s))).toBe(false)
   })
 })
 
