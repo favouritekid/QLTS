@@ -130,9 +130,9 @@ export function FinalizeTab({
                     className="w-full sm:w-auto min-w-[160px]"
                   >
                     {isRequestingRevision ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                     ) : (
-                      <ClipboardCheck className="w-4 h-4 mr-2" />
+                      <ClipboardCheck className="w-4 h-4 mr-2" aria-hidden="true" />
                     )}
                     Yêu cầu sửa
                   </Button>
@@ -170,12 +170,12 @@ export function FinalizeTab({
               >
                 {isRejecting ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                     Đang xử lý…
                   </>
                 ) : (
                   <>
-                    <XCircle className="w-4 h-4 mr-2" />
+                    <XCircle className="w-4 h-4 mr-2" aria-hidden="true" />
                     Từ chối hồ sơ
                   </>
                 )}
@@ -205,9 +205,9 @@ export function FinalizeTab({
                     className="w-full sm:w-auto min-w-[200px] bg-success-600 hover:bg-success-700"
                   >
                     {isPublishingResult ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                     ) : (
-                      <GraduationCap className="w-4 h-4 mr-2" />
+                      <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
                     )}
                     Công bố kết quả
                   </Button>
@@ -246,9 +246,9 @@ export function FinalizeTab({
                 className="w-full sm:w-auto min-w-[200px] bg-info-600 hover:bg-info-700"
               >
                 {isEnrolling ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                 ) : (
-                  <GraduationCap className="w-4 h-4 mr-2" />
+                  <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
                 )}
                 Ghi danh
               </Button>
@@ -263,12 +263,12 @@ export function FinalizeTab({
               >
                 {isSubmitting ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                     Đang xử lý…
                   </>
                 ) : (
                   <>
-                    <Send className="w-4 h-4 mr-2" />
+                    <Send className="w-4 h-4 mr-2" aria-hidden="true" />
                     Nộp hồ sơ chính thức
                   </>
                 )}
@@ -280,9 +280,9 @@ export function FinalizeTab({
                 <AlertDialogTrigger asChild>
                   <Button size="lg" disabled={isResubmitting} className="w-full sm:w-auto min-w-[200px]">
                     {isResubmitting ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
                     ) : (
-                      <Send className="w-4 h-4 mr-2" />
+                      <Send className="w-4 h-4 mr-2" aria-hidden="true" />
                     )}
                     Nộp lại hồ sơ
                   </Button>

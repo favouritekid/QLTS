@@ -87,7 +87,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
       <div className="space-y-6">
         <Card>
           <CardContent className="py-12 text-center">
-            <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" />
+            <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" aria-hidden="true" />
             <h3 className="text-lg font-medium mb-2">Chưa có thông tin học phí</h3>
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
               Học phí chưa được tính cho hồ sơ này.
@@ -124,7 +124,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
       <div className="space-y-6">
         <Card>
           <CardContent className="py-12 text-center">
-            <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" />
+            <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" aria-hidden="true" />
             <h3 className="text-lg font-medium mb-2">Chưa tính học phí</h3>
             <p className="text-muted-foreground text-sm mb-6 max-w-md mx-auto">
               Hồ sơ cần được tính học phí trước khi có thể thanh toán.
@@ -161,7 +161,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
       >
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
-            <CreditCard className="h-5 w-5" />
+            <CreditCard className="h-5 w-5" aria-hidden="true" />
             Tổng quan học phí
           </CardTitle>
           <CardDescription>
@@ -190,17 +190,17 @@ export function TuitionTab({ profile }: TuitionTabProps) {
               value={
                 isPaid ? (
                   <div className="flex items-center gap-1.5 text-success-600">
-                    <CheckCircle className="h-5 w-5" />
+                    <CheckCircle className="h-5 w-5" aria-hidden="true" />
                     <span>Đã thanh toán</span>
                   </div>
                 ) : hasOverdue ? (
                   <div className="flex items-center gap-1.5 text-destructive">
-                    <AlertTriangle className="h-5 w-5" />
+                    <AlertTriangle className="h-5 w-5" aria-hidden="true" />
                     <span>Quá hạn</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-1.5 text-warning-600">
-                    <Clock className="h-5 w-5" />
+                    <Clock className="h-5 w-5" aria-hidden="true" />
                     <span>Chờ thanh toán</span>
                   </div>
                 )
@@ -212,7 +212,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           {/* Overdue alert */}
           {hasOverdue && (
             <div className="mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/30 flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
+              <AlertTriangle className="h-5 w-5 text-destructive shrink-0" aria-hidden="true" />
               <div className="flex-1">
                 <p className="font-medium text-destructive">
                   Có {summary.overdue_invoices} hóa đơn quá hạn
@@ -235,14 +235,14 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           <div className="mt-6 flex justify-end gap-2">
             {canCalculateFee && (
               <Button variant="outline" onClick={() => setCalcDialogOpen(true)}>
-                <Calculator className="h-4 w-4 mr-2" />
+                <Calculator className="h-4 w-4 mr-2" aria-hidden="true" />
                 Tính lại
               </Button>
             )}
             {canAccessFinanceModule && (
               <Button asChild>
                 <Link href={`/finance/fees?profile_id=${profile.id}`}>
-                  <ExternalLink className="h-4 w-4 mr-2" />
+                  <ExternalLink className="h-4 w-4 mr-2" aria-hidden="true" />
                   Quản lý trong Finance
                 </Link>
               </Button>
@@ -255,7 +255,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
-            <Receipt className="h-5 w-5" />
+            <Receipt className="h-5 w-5" aria-hidden="true" />
             Danh sách học phí ({summary.fees.length})
           </CardTitle>
         </CardHeader>
@@ -272,7 +272,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                 <>
                   <div className="flex items-center gap-3">
                     <div className="p-2 bg-primary/10 rounded">
-                      <FileText className="h-4 w-4 text-primary" />
+                      <FileText className="h-4 w-4 text-primary" aria-hidden="true" />
                     </div>
                     <div>
                       <p className="font-medium">
@@ -316,7 +316,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           <CardContent className="py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Receipt className="h-5 w-5 text-muted-foreground" />
+                <Receipt className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
                 <div>
                   <p className="font-medium">Hóa đơn</p>
                   <p className="text-xs text-muted-foreground">
@@ -332,7 +332,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                 <Button variant="outline" size="sm" asChild>
                   <Link href={`/finance/invoices?profile_id=${profile.id}`}>
                     Xem hóa đơn
-                    <ExternalLink className="h-3 w-3 ml-1" />
+                    <ExternalLink className="h-3 w-3 ml-1" aria-hidden="true" />
                   </Link>
                 </Button>
               )}
@@ -383,7 +383,7 @@ function InlineCalculateButton({
   if (canCalculateFee) {
     return (
       <Button onClick={onOpen}>
-        <Calculator className="h-4 w-4 mr-2" />
+        <Calculator className="h-4 w-4 mr-2" aria-hidden="true" />
         Tính học phí
       </Button>
     )
@@ -395,7 +395,7 @@ function InlineCalculateButton({
           {/* span wraps the disabled button so the tooltip still fires */}
           <span>
             <Button disabled>
-              <Calculator className="h-4 w-4 mr-2" />
+              <Calculator className="h-4 w-4 mr-2" aria-hidden="true" />
               Tính học phí
             </Button>
           </span>
@@ -457,7 +457,7 @@ function NoticeCard({
     <Card className="border-dashed border-primary/30 bg-primary/5">
       <CardContent className="pt-4">
         <div className="flex items-start gap-3">
-          <Calculator className="h-5 w-5 text-primary mt-0.5" />
+          <Calculator className="h-5 w-5 text-primary mt-0.5" aria-hidden="true" />
           <div className="text-sm">
             <p className="font-medium text-primary">Lưu ý</p>
             <p className="text-muted-foreground">

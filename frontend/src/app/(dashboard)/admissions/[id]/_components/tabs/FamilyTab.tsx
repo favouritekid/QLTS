@@ -51,7 +51,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
       <Card className="shadow-sm">
         <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold flex items-center gap-2">
-                <UserCheck className="w-5 h-5 text-primary" />
+                <UserCheck className="w-5 h-5 text-primary" aria-hidden="true" />
                 Người giám hộ chính
             </CardTitle>
             <CardDescription className="text-sm">
@@ -95,7 +95,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
                     className="w-full sm:w-auto mt-4"
                     onClick={() => addMember(true)}
                 >
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                     Thêm người giám hộ chính
                 </Button>
            )}
@@ -106,7 +106,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
       <Card className="shadow-sm border-border">
         <CardHeader className="pb-2">
             <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-                <Users className="w-5 h-5" />
+                <Users className="w-5 h-5" aria-hidden="true" />
                 Thành viên khác
             </CardTitle>
             <CardDescription className="text-sm">
@@ -146,7 +146,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
                     className="w-full sm:w-auto mt-4"
                     onClick={() => addMember(false)}
                 >
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                     Thêm thành viên
                 </Button>
             )}
@@ -168,7 +168,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                         <FormItem>
                           <FormLabel className="text-xs">Họ và tên</FormLabel>
                           <FormControl>
-                            <Input {...field} placeholder="Nguyễn Văn A" disabled={!isEditable} />
+                            <Input {...field} placeholder="VD: Nguyễn Văn A" autoComplete="name" spellCheck={false} disabled={!isEditable} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -183,7 +183,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                         <FormItem>
                           <FormLabel className="text-xs">Quan hệ</FormLabel>
                           <FormControl>
-                            <Input {...field} placeholder={isPrimary ? "Bố/Mẹ" : "Anh/Chị"} disabled={!isEditable} />
+                            <Input {...field} placeholder={isPrimary ? "Bố/Mẹ" : "Anh/Chị"} spellCheck={false} disabled={!isEditable} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -198,7 +198,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                         <FormItem>
                           <FormLabel className="text-xs">SĐT</FormLabel>
                           <FormControl>
-                            <Input {...field} placeholder="09xxxxxxxx" disabled={!isEditable} />
+                            <Input {...field} type="tel" inputMode="tel" autoComplete="tel" placeholder="VD: 0901234567" spellCheck={false} disabled={!isEditable} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -213,7 +213,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                         <FormItem>
                           <FormLabel className="text-xs">Nghề nghiệp</FormLabel>
                           <FormControl>
-                            <Input {...field} placeholder="Công nhân..." disabled={!isEditable} />
+                            <Input {...field} placeholder="VD: Công nhân…" spellCheck={false} disabled={!isEditable} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -224,7 +224,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                 {isEditable && (
                     <div className="md:col-span-1 flex items-end justify-end pb-2">
                         <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-error-50" aria-label="Xóa người giám hộ">
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                         </Button>
                     </div>
                 )}

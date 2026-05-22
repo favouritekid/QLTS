@@ -58,7 +58,7 @@ export interface PreviewPriorityKvResponse {
   // để PrioritySummaryPanel render cap consistent giữa draft và frozen.
   // Shape match snapshot.path_bonus_rule. Null nếu chain chưa eager-load
   // (preview best-effort).
-  path_bonus_rule: { max_total_bonus?: number | null } | null
+  path_bonus_rule?: { max_total_bonus?: number | null } | null
 }
 
 export const priorityKvApi = {

@@ -71,11 +71,11 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
         <Card className="shadow-sm border-border">
             <CardHeader className="pb-2">
                 <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-                <GraduationCap className="h-5 w-5" />
+                <GraduationCap className="h-5 w-5" aria-hidden="true" />
                 Lịch sử học tập
                 </CardTitle>
                 <CardDescription className="text-sm">
-                Thông tin các trường đã học (từ cấp 2, cấp 3...)
+                Thông tin các trường đã học (từ cấp 2, cấp 3…)
                 </CardDescription>
             </CardHeader>
 
@@ -95,7 +95,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 -mr-2"
                                 aria-label="Xóa lịch sử học tập"
                                 >
-                                <Trash2 className="h-4 w-4" />
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
                                 </Button>
                             )}
                         </div>
@@ -280,7 +280,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     <FormLabel className="text-xs">Trình độ</FormLabel>
                                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
                                     <FormControl>
-                                        <SelectTrigger className="bg-background">
+                                        <SelectTrigger className="bg-background" aria-label="Chọn trình độ tốt nghiệp">
                                         <SelectValue placeholder="Chọn" />
                                         </SelectTrigger>
                                     </FormControl>
@@ -320,7 +320,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             variant="outline"
                             onClick={addRecord}
                         >
-                            <Plus className="w-4 h-4 mr-2" />
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                             Thêm trường
                         </Button>
                         {/* Commit 5 — quick-add 3 năm THPT */}
@@ -330,7 +330,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             onClick={addThreeYearsThpt}
                             data-testid="academic-quick-add-thpt"
                         >
-                            <Plus className="w-4 h-4 mr-2" />
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                             Thêm 3 năm THPT (lớp 10/11/12)
                         </Button>
                     </div>
