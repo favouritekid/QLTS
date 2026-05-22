@@ -896,6 +896,13 @@ export const admissionProfileResponseSchema = z.object({
   // the Approve button.
   bypass_warning: z.boolean().default(false),
 
+  // P0-1 fix 2026-05-22 — BE-aggregated mode flag thay thế FE
+  // `user.role` string check ở PriorityTab (vi phạm Thin Client RULE 2
+  // frontend/CLAUDE.md). Server-derived, drift-free khi Casbin policy đổi.
+  override_priority_kv_mode: z
+    .enum(["admin", "manager", "officer", "none"])
+    .default("none"),
+
   // Validation errors (reasons for ineligibility)
   validation_errors: z.array(z.string()).default([]),
   

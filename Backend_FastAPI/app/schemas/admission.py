@@ -1166,6 +1166,19 @@ class AdmissionProfileResponse(BaseModel):
         default=False,
         description="True if profile bypassed eligibility check via allow_unverified_submission flag"
     )
+
+    # P0-1 fix 2026-05-22 — BE-aggregated mode flag thay thế FE `user.role`
+    # string check ở PriorityTab (vi phạm Thin Client RULE 2 frontend/CLAUDE.md).
+    # FE đọc thẳng field này để pass xuống PriorityOverrideDialog.mode →
+    # render đúng UX copy/severity theo role. Server-derived, drift-free khi
+    # Casbin policy thay đổi (vd accountant diamond-inherit manager).
+    #
+    # Officer mode KHÔNG phải "none" — vẫn render dialog read-only + secondary
+    # CTA "Đề nghị quản lý ấn định KV" khi requires_manual_override.
+    override_priority_kv_mode: Literal["admin", "manager", "officer", "none"] = Field(
+        default="none",
+        description="Mode flag cho PriorityOverrideDialog (admin/manager/officer/none). Server-derived, không check role.role ở FE.",
+    )
     
     # Validation errors (reasons why profile is not eligible)
     validation_errors: List[str] = Field(

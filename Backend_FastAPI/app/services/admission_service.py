@@ -1632,6 +1632,28 @@ def _compute_frontend_fields(
         )
     )
     profile.permissions = permissions
+
+    # P0-1 fix 2026-05-22 (review B-scope) — BE-aggregated mode flag thay thế
+    # FE `user.role` string check ở PriorityTab (vi phạm Thin Client RULE 2
+    # frontend/CLAUDE.md). Drift risk: nếu Casbin policy đổi (accountant
+    # diamond-inherit manager, role rename), FE silent flip mode. Top-level
+    # field thay vì nested trong permissions dict (`Dict[str, bool]` không
+    # nhận string literal).
+    #
+    # Values:
+    #   - "admin":   admin user, full bypass (post-publish via acknowledge flag)
+    #   - "manager": manager user, post-pre-publish window only
+    #   - "officer": officer (READ-ONLY dialog view; backend hard-deny mutation —
+    #                kept for FE empty-state CTA "Đề nghị quản lý ấn định KV")
+    #   - "none":    không có quyền access workbench
+    if is_admin:
+        profile.override_priority_kv_mode = "admin"
+    elif is_manager:
+        profile.override_priority_kv_mode = "manager"
+    elif is_officer:
+        profile.override_priority_kv_mode = "officer"
+    else:
+        profile.override_priority_kv_mode = "none"
     
     # =========================================================================
     # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)

@@ -26,7 +26,6 @@ import { UseFormReturn } from "react-hook-form"
 
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
-import { useAuthStore } from "@/lib/stores/auth.store"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdateInput,
@@ -65,7 +64,11 @@ export function PriorityTab({
   onNavigateToAcademic,
 }: PriorityTabProps) {
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
-  const userRole = useAuthStore((s) => s.user?.role)
+  // P0-1 fix 2026-05-22 — KHÔNG check user.role string ở FE (vi phạm Thin
+  // Client RULE 2 frontend/CLAUDE.md). Đọc mode flag từ BE-aggregated
+  // `profile.override_priority_kv_mode` (server-derived qua Casbin policy +
+  // status whitelist). Drift-free khi role/policy thay đổi.
+  const overrideMode = profile.override_priority_kv_mode ?? "none"
 
   // Form watches drive live preview query. Same fields as Phase E.3 PriorityTab.
   // Phase E.4 Finding 2 fix: KHÔNG watch + KHÔNG gửi `area_resolution_basis` vì
@@ -158,13 +161,7 @@ export function PriorityTab({
         profileVersion={profile.version ?? 0}
         profileStatus={profile.status}
         currentKv={currentKv}
-        mode={
-          userRole === "admin"
-            ? "admin"
-            : userRole === "manager"
-              ? "manager"
-              : "officer"
-        }
+        mode={overrideMode === "none" ? "officer" : overrideMode}
       />
     </div>
   )

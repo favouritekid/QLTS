@@ -139,18 +139,81 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
         socketStub.fire(event, { application_id: 42, lead_id: 99 })
       })
 
+      // P2-4 (2026-05-22) — sau debounce flush (300ms).
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 400))
+      })
+
       // Cascade root key
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: admissionsKeys.all }),
-      )
-      // Targeted detail
-      expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ queryKey: admissionsKeys.detail(42) }),
       )
       // Lead projection
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: leadsKeys.detail(99) }),
       )
+
+      invalidateSpy.mockRestore()
+    })
+
+    // P1-3 anchor 2026-05-22 — payload thiếu lead_id (T6 batch publish có
+    // thể không carry lead_id) — handler `typeof data.lead_id === 'number'`
+    // guard. Verify NO leadsKeys.detail call (tránh `leadsKeys.detail(undefined)`
+    // bug nhiễm React Query cache).
+    it("ADMISSION_RESULT_PUBLISHED without lead_id: cascade admission only, NO leadsKeys call", async () => {
+      const { invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("admission_result_published", { application_id: 42 })
+      })
+
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 400))
+      })
+
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: admissionsKeys.all }),
+      )
+
+      // KHÔNG có leadsKeys call (guard typeof === 'number' chặn undefined)
+      const leadCalls = invalidateSpy.mock.calls.filter(([opts]) => {
+        const key = (opts as { queryKey: readonly unknown[] }).queryKey
+        return Array.isArray(key) && key[0] === "leads"
+      })
+      expect(leadCalls.length).toBe(0)
+
+      invalidateSpy.mockRestore()
+    })
+
+    it("ADMISSION_DECISION_ADMITTED without application_id: graceful, no per-profile detail call", async () => {
+      const { invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("admission_decision_admitted", {})
+      })
+
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 400))
+      })
+
+      // Cascade root vẫn fire (handler unconditional schedule admissionAll)
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: admissionsKeys.all }),
+      )
+
+      // KHÔNG có per-profile detail call (guard typeof === 'number')
+      const detailCalls = invalidateSpy.mock.calls.filter(([opts]) => {
+        const key = (opts as { queryKey: readonly unknown[] }).queryKey
+        return (
+          Array.isArray(key) &&
+          key.length === 3 &&
+          key[0] === "admissions" &&
+          key[1] === "detail"
+        )
+      })
+      expect(detailCalls.length).toBe(0)
 
       invalidateSpy.mockRestore()
     })

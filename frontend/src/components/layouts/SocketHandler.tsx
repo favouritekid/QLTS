@@ -717,21 +717,22 @@ export function SocketHandler() {
       [key: string]: unknown;
     }) => {
       console.log(
-        "[SocketHandler] admission status-flip event → invalidating admission caches",
+        "[SocketHandler] admission status-flip event → scheduling invalidation",
         { profile: data.application_id, lead: data.lead_id },
       );
-      // Cascade list + status-counts + stats + details via root key.
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
-      // Targeted detail refresh nếu có profile ID (event_catalog.py
-      // guarantees application_id ở variables list).
+      // P2-4 (review B-scope 2026-05-22) — DEBOUNCE thay vì sync invalidate.
+      // T6 publish_result emit batch (~50 profile decision events liên tục)
+      // → 50× sync `invalidateQueries(admissionsKeys.all)` cùng 1 frame =
+      // React Query queue thrash. Match pattern PRIORITY_* listeners +
+      // data_updated cùng dùng `scheduleInvalidation` (300ms debounce).
+      scheduleInvalidation({ admissionAll: true });
+      // Targeted detail refresh nếu có profile ID (cùng debounce queue).
       if (typeof data.application_id === "number") {
-        queryClient.invalidateQueries({
-          queryKey: admissionsKeys.detail(data.application_id),
-        });
+        scheduleInvalidation({ admissionDetail: data.application_id });
       }
-      // Lead row có thể projection từ admission decision (lead_admission_sync).
+      // Lead row projection từ admission decision (lead_admission_sync).
       if (typeof data.lead_id === "number") {
-        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+        scheduleInvalidation({ leadDetail: data.lead_id });
       }
     };
 
