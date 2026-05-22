@@ -618,9 +618,17 @@ function LegacySingleNvScoresTab({ form, isEditable, appliedRules, profile }: Sc
                                   min={0}
                                   max={10}
                                   disabled={!isEditable}
-                                  ref={subjectIndex === 0 ? firstSubjectScoreRef : undefined}
                                   {...field}
                                   value={field.value ?? ""}
+                                  ref={(el) => {
+                                    // Merge RHF field.ref + local firstSubjectScoreRef
+                                    // để focus desktop-only useEffect dùng được mà không
+                                    // chiếm ref của react-hook-form (gây TS2783).
+                                    field.ref(el)
+                                    if (subjectIndex === 0) {
+                                      firstSubjectScoreRef.current = el
+                                    }
+                                  }}
                                   onChange={(e) =>
                                     field.onChange(
                                       e.target.value ? parseFloat(e.target.value) : null

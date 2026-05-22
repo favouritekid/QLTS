@@ -93,12 +93,19 @@ export function PipelineSidebar({
         <Progress value={completionPercent} className="h-2" />
       </div>
 
-      {/* Commit 2 fix-up — Step 8 lock override cho reviewer/officer có
-          quyền quyết định. Sau khi Commit 2 chuyển Approve/Reject/Resubmit
-          sang FinalizeTab (Step 8), nếu BE lock Step 8 do validation fail
-          thì manager với bypass_warning=true KHÔNG reach được decision
-          panel. Override: Step 8 luôn unlock nếu có 1 trong các quyền
-          quyết định. */}
+      {/* Commit 2 fix-up + Commit 7 follow-up — Step 8 lock override cho
+          mọi user có quyền decision (FinalizeTab Step 8 = Decision Hub).
+          Sau Commit 7 thêm submit/request_revision/publish_result/enroll
+          vào decision panel. Nếu BE lock Step 8 do validation fail nhưng
+          user có quyền quyết định (vd bypass_warning, officer rejected
+          state, manager review claimed, admin published) thì UI cần cho
+          phép navigate đến Step 8 để reach decision surface.
+
+          UI vs BE gate semantics: override CHỈ là UI navigation gate cho
+          tiện. BE mutation API (approve/reject/submit/enroll/...) vẫn
+          validate state machine + IDOR scope độc lập. Override không
+          bypass authorization — nếu BE thu hồi quyền runtime, action
+          API call sẽ fail-closed với 403/409. */}
       <nav className="space-y-3">
       <TooltipProvider>
         {visibleSteps.map((step) => {
@@ -108,7 +115,11 @@ export function PipelineSidebar({
           const canDecide = Boolean(
             profile?.permissions?.approve ||
             profile?.permissions?.reject ||
-            profile?.permissions?.resubmit
+            profile?.permissions?.resubmit ||
+            profile?.permissions?.submit ||
+            profile?.permissions?.request_revision ||
+            profile?.permissions?.publish_result ||
+            profile?.permissions?.enroll
           )
           const isStep8Override = step.id === 8 && canDecide
           const isLocked = !isStep8Override && status === "locked"

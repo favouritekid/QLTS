@@ -85,9 +85,10 @@ export interface PriorityOverrideDialogProps {
    *
    * Commit 3: thêm explicit `manager` mode (trước đây bị fallback sang
    * `officer` ở PriorityTab → manager experience lệch với quyền thật).
-   * BE service treat manager + officer chung whitelist {submitted,
-   * reviewing, revision_requested}; chỉ admin được override post-publish
-   * với ack flag. Mode `manager` ở FE phục vụ copy/disclosure.
+   * Officer route hiện hard-deny ở EngineResultCard (xem `canOverride`);
+   * manager + admin được phép gọi BE service. Chỉ admin được ấn định
+   * post-publish với `acknowledge_post_publish=true`. Mode `manager` ở
+   * FE phục vụ copy/disclosure, không nới quyền BE.
    */
   mode?: "officer" | "manager" | "admin"
 }
@@ -287,7 +288,7 @@ export function PriorityOverrideDialog({
                     htmlFor="ack-post-publish"
                     className="text-warning-900 cursor-pointer"
                   >
-                    Tôi xác nhận muốn override hồ sơ post-publish.
+                    Tôi xác nhận muốn ấn định KV cho hồ sơ đã công bố kết quả.
                   </Label>
                 </div>
               </div>

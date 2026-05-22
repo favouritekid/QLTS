@@ -13,9 +13,16 @@
  * Decision actions (Phê duyệt/Từ chối/Nộp/Nộp lại/Công bố/Ghi danh/
  * Yêu cầu sửa) vẫn nằm ở FinalizeTab Step 8 (decision surface).
  *
- * Outbound communication (Send confirmation + 3 magic links) vẫn ở
- * sticky bar — chúng permission-gated MUTEX nên max 1-2 visible per
- * state, không gây ma trận.
+ * Decision (Commit 7 follow-up post-review): outbound communication
+ * (Send confirmation + 3 magic links) GIỮ ở sticky bar — không chuyển
+ * vào drawer. Lý do:
+ *   - Permission MUTEX: officer pre-submit chỉ show send_submit_link;
+ *     manager approved chỉ show send_confirmation; v.v. → max 1-2
+ *     button visible đồng thời, không gây ma trận.
+ *   - Discoverability: officer flow approved cần "Gửi liên kết xác
+ *     nhận" 1-click visible, không nên ẩn 2 click trong drawer.
+ *   - Heavy internal Dialog state (URL copy/retry/loading) — Button
+ *     standalone fit hơn DropdownMenuItem wrapper.
  */
 
 import { useState } from "react"
