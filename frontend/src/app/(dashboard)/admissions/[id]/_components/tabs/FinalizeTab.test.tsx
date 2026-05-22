@@ -75,6 +75,9 @@ function renderTab(
     onApprove: vi.fn(),
     onReject: vi.fn(),
     onResubmit: vi.fn(),
+    onRequestRevision: vi.fn(),
+    onPublishResult: vi.fn(),
+    onEnroll: vi.fn(),
     onNavigateToDocuments: vi.fn(),
   }
   render(
@@ -93,6 +96,15 @@ function renderTab(
       onReject={spies.onReject}
       isRejecting={false}
       canReject={false}
+      onRequestRevision={spies.onRequestRevision}
+      isRequestingRevision={false}
+      canRequestRevision={false}
+      onPublishResult={spies.onPublishResult}
+      isPublishingResult={false}
+      canPublishResult={false}
+      onEnroll={spies.onEnroll}
+      isEnrolling={false}
+      canEnroll={false}
       onNavigateToDocuments={spies.onNavigateToDocuments}
       {...overrides}
     />
@@ -205,6 +217,9 @@ describe("FinalizeTab — Decision Surface", () => {
           canApprove={false}
           isRejecting={false}
           canReject={false}
+          canRequestRevision={false}
+          canPublishResult={false}
+          canEnroll={false}
           onNavigateToDocuments={vi.fn()}
         />
       )

@@ -13,7 +13,7 @@
 
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Send, Loader2, XCircle } from "lucide-react"
+import { Send, Loader2, XCircle, GraduationCap, ClipboardCheck } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,6 +55,22 @@ interface FinalizeTabProps {
   isRejecting?: boolean
   canReject: boolean
 
+  // Commit 7 — workflow actions di chuyển từ sticky bar vào decision panel.
+  // Request revision (manager — yêu cầu officer sửa)
+  onRequestRevision?: () => void
+  isRequestingRevision?: boolean
+  canRequestRevision: boolean
+
+  // Publish result (manager/admin multi-NV — engine cascade)
+  onPublishResult?: () => void
+  isPublishingResult?: boolean
+  canPublishResult: boolean
+
+  // Enroll (manager — state confirmed/overridden post-approval)
+  onEnroll?: () => void
+  isEnrolling?: boolean
+  canEnroll: boolean
+
   // Commit 4 fix-up — pass-through cho ReviewDetails → UtEvidenceCards
   // "Mở tab Giấy tờ để upload" CTA khi thiếu minh chứng UT.
   onNavigateToDocuments: () => void
@@ -75,9 +91,25 @@ export function FinalizeTab({
   onReject,
   isRejecting = false,
   canReject,
+  onRequestRevision,
+  isRequestingRevision = false,
+  canRequestRevision,
+  onPublishResult,
+  isPublishingResult = false,
+  canPublishResult,
+  onEnroll,
+  isEnrolling = false,
+  canEnroll,
   onNavigateToDocuments,
 }: FinalizeTabProps) {
-  const hasDecisionAction = canSubmit || canResubmit || canApprove || canReject
+  const hasDecisionAction =
+    canSubmit ||
+    canResubmit ||
+    canApprove ||
+    canReject ||
+    canRequestRevision ||
+    canPublishResult ||
+    canEnroll
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-8">
@@ -88,6 +120,46 @@ export function FinalizeTab({
       {hasDecisionAction && (
         <Card className="p-6 bg-gradient-to-br from-gray-50 to-white lg:sticky lg:bottom-4 lg:z-30 lg:shadow-lg">
           <div className="flex flex-col sm:flex-row justify-center items-center gap-4 flex-wrap">
+            {canRequestRevision && onRequestRevision && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    disabled={isRequestingRevision || isApproving || isRejecting}
+                    className="w-full sm:w-auto min-w-[160px]"
+                  >
+                    {isRequestingRevision ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <ClipboardCheck className="w-4 h-4 mr-2" />
+                    )}
+                    Yêu cầu sửa
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Yêu cầu sửa hồ sơ?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Hồ sơ sẽ chuyển sang trạng thái <strong>Cần sửa</strong>. Officer
+                      phụ trách sẽ nhận thông báo và có thể chỉnh sửa rồi nộp lại.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Hủy</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onRequestRevision?.()
+                      }}
+                    >
+                      Yêu cầu sửa
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+
             {canReject && onReject && (
               <Button
                 size="lg"
@@ -122,6 +194,64 @@ export function FinalizeTab({
                 // risk signal warning khi bypass_warning=true).
                 className="w-full sm:w-auto min-w-[200px]"
               />
+            )}
+
+            {canPublishResult && onPublishResult && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    size="lg"
+                    disabled={isPublishingResult}
+                    className="w-full sm:w-auto min-w-[200px] bg-success-600 hover:bg-success-700"
+                  >
+                    {isPublishingResult ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <GraduationCap className="w-4 h-4 mr-2" />
+                    )}
+                    Công bố kết quả
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Công bố kết quả xét tuyển?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Hệ thống sẽ chạy <strong>engine xét tuần tự các nguyện vọng</strong>
+                      {" "}theo thứ tự ưu tiên. Mỗi NV sẽ có quyết định riêng:
+                      {" "}<strong>Đậu</strong> / <strong>Trượt</strong> / <strong>Bị bỏ qua</strong>
+                      {" "}/ <strong>Dự bị</strong>. Hành động không thể hoàn tác (chỉ admin có thể rollback về Nháp).
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Hủy</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={(e) => {
+                        e.preventDefault()
+                        onPublishResult?.()
+                      }}
+                      className="bg-success-600 hover:bg-success-700"
+                    >
+                      Công bố kết quả
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+
+            {canEnroll && onEnroll && (
+              <Button
+                size="lg"
+                onClick={onEnroll}
+                disabled={isEnrolling}
+                className="w-full sm:w-auto min-w-[200px] bg-info-600 hover:bg-info-700"
+              >
+                {isEnrolling ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <GraduationCap className="w-4 h-4 mr-2" />
+                )}
+                Ghi danh
+              </Button>
             )}
 
             {canSubmit && (

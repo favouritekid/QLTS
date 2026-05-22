@@ -470,6 +470,12 @@ export function AdmissionDetailClient({
         validationErrors={validationErrors}
         validationSummary={validationSummary}
         groupedValidationErrors={groupedValidationErrors}
+        onClaim={handleClaim}
+        onUnclaim={handleUnclaim}
+        isClaiming={claimMutation.isPending}
+        isUnclaiming={unclaimMutation.isPending}
+        onDelete={handleDelete}
+        isDeleting={deleteMutation.isPending}
       >
         {/* Status Banner for rejected/resubmitted profiles */}
         <StatusBanner status={profile.status} />
@@ -530,32 +536,30 @@ export function AdmissionDetailClient({
               onReject={handleReject}
               isRejecting={rejectMutation.isPending}
               canReject={can('reject')}
+              onRequestRevision={handleRequestRevision}
+              isRequestingRevision={requestRevisionMutation.isPending}
+              canRequestRevision={can('request_revision')}
+              onPublishResult={handlePublishResult}
+              isPublishingResult={publishResultMutation.isPending}
+              canPublishResult={can('publish_result')}
+              onEnroll={handleEnroll}
+              isEnrolling={enrollMutation.isPending}
+              canEnroll={can('enroll')}
               onNavigateToDocuments={() => handleStepChange(6)}
             />
           )}
         </div>
 
-        {/* STICKY ACTIONS (Commit 2 — navigation + non-decision workflow only)
-            Approve/Reject/Submit/Resubmit moved to FinalizeTab decision panel
-            to enforce a single decision surface and preserve bypass_warning guard. */}
+        {/* STICKY ACTIONS (Commit 7 — navigation + Save + Magic links only)
+            Decision (Submit/Resubmit/Approve/Reject/RequestRevision/PublishResult/Enroll)
+            → FinalizeTab Step 8 decision panel.
+            Workflow (Claim/Unclaim/Delete/MinorCorrection) → ProfileActionMenu trong header. */}
         <AdmissionActions
           profile={profile}
           currentStep={currentStep}
           onStepChange={handleStepChange}
           isSaving={updateMutation.isPending}
-          isEnrolling={enrollMutation.isPending}
           onSave={handleSave}
-          onEnroll={handleEnroll}
-          onPublishResult={handlePublishResult}
-          isPublishingResult={publishResultMutation.isPending}
-          onRequestRevision={handleRequestRevision}
-          isRequestingRevision={requestRevisionMutation.isPending}
-          onClaim={handleClaim}
-          onUnclaim={handleUnclaim}
-          isClaiming={claimMutation.isPending}
-          isUnclaiming={unclaimMutation.isPending}
-          onDelete={handleDelete}
-          isDeleting={deleteMutation.isPending}
           onCheckCondition={handleCheckCondition}
         />
       </AdmissionLayout>

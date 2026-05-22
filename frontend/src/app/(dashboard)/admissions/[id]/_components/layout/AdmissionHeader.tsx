@@ -5,9 +5,16 @@ import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { getStatusConfig } from "@/lib/status-config"
 import { FeeStatusLink } from "@/components/finance"
 import { AlertCircle, CheckCircle2, MapPin, Award, FileCheck } from "lucide-react"
+import { ProfileActionMenu } from "./ProfileActionMenu"
 
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
+  onClaim?: () => void
+  onUnclaim?: () => void
+  isClaiming?: boolean
+  isUnclaiming?: boolean
+  onDelete?: () => void
+  isDeleting?: boolean
 }
 
 /**
@@ -121,7 +128,15 @@ function HeaderChips({ profile }: { profile: AdmissionProfileResponse }) {
   )
 }
 
-export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
+export function AdmissionHeader({
+  profile,
+  onClaim,
+  onUnclaim,
+  isClaiming = false,
+  isUnclaiming = false,
+  onDelete,
+  isDeleting = false,
+}: AdmissionHeaderProps) {
   const statusConfig = profile?.status ? getStatusConfig(profile.status, "admission") : null
 
   return (
@@ -162,6 +177,21 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
 
       {/* Commit 4 — review signal chips for manager/admin cockpit. */}
       {profile && <HeaderChips profile={profile} />}
+
+      {/* Commit 7 — overflow menu cho workflow + utility actions
+          (claim/unclaim/minor correction/delete). Gom các action ít dùng
+          để sticky bar tinh giản. */}
+      {profile && (
+        <ProfileActionMenu
+          profile={profile}
+          onClaim={onClaim}
+          onUnclaim={onUnclaim}
+          isClaiming={isClaiming}
+          isUnclaiming={isUnclaiming}
+          onDelete={onDelete}
+          isDeleting={isDeleting}
+        />
+      )}
     </div>
   )
 }

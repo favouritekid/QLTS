@@ -90,11 +90,7 @@ function defaultSpies() {
   return {
     onStepChange: vi.fn(),
     onSave: vi.fn(),
-    onEnroll: vi.fn(),
     onCheckCondition: vi.fn(),
-    onClaim: vi.fn(),
-    onUnclaim: vi.fn(),
-    onDelete: vi.fn(),
   };
 }
 
@@ -109,7 +105,6 @@ function renderActions(
       profile={profile}
       currentStep={currentStep}
       isSaving={false}
-      isEnrolling={false}
       {...spies}
     />
   );
@@ -217,134 +212,9 @@ describe("AdmissionActions", () => {
     });
   });
 
-  // ===== MANAGER WORKFLOW ACTIONS (claim/unclaim — non-decision) =====
-
-  describe("Manager workflow actions (non-decision)", () => {
-    it("unclaim=true: shows unclaim button", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { unclaim: true },
-      });
-      renderActions(profile, 8);
-
-      // Trigger + dialog action both show "Bỏ nhận"
-      expect(screen.getAllByText("Bỏ nhận").length).toBeGreaterThanOrEqual(1);
-    });
-
-    it("click dialog-confirmed Claim calls onClaim", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { claim: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      // Mocked AlertDialog renders trigger + action with same text "Nhận duyệt"
-      const buttons = screen.getAllByText("Nhận duyệt");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onClaim).toHaveBeenCalled();
-    });
-
-    it("click dialog-confirmed Unclaim calls onUnclaim", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { unclaim: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      const buttons = screen.getAllByText("Bỏ nhận");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onUnclaim).toHaveBeenCalled();
-    });
-  });
-
-  // ===== DELETE =====
-
-  describe("Delete", () => {
-    it("delete=true: shows delete trigger button + dialog action", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { delete: true },
-      });
-      renderActions(profile, 1);
-
-      // Both trigger (aria-label) and dialog action (text) match "Xóa hồ sơ"
-      const deleteButtons = screen.getAllByRole("button", { name: /xóa hồ sơ/i });
-      expect(deleteButtons.length).toBeGreaterThanOrEqual(2); // trigger + dialog action
-
-      // Trigger is icon-only: has aria-label but no text child
-      const trigger = deleteButtons.find(
-        (btn) => btn.getAttribute("aria-label") === "Xóa hồ sơ"
-      );
-      expect(trigger).toBeTruthy();
-    });
-
-    it("click dialog-confirmed Delete calls onDelete", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { delete: true },
-      });
-      const spies = renderActions(profile, 1);
-
-      const buttons = screen.getAllByText("Xóa hồ sơ");
-      fireEvent.click(buttons[buttons.length - 1]); // dialog action
-      expect(spies.onDelete).toHaveBeenCalled();
-    });
-  });
-
-  // ===== ENROLL (confirmed / overridden — matches backend contract) =====
-  //
-  // Backend only emits `permissions.enroll = True` for status ∈
-  // {confirmed, overridden} — see _compute_frontend_fields in
-  // admission_service.py. Tests must model that combo, not the
-  // impossible-in-practice `approved + enroll=true`.
-
-  describe("Enroll", () => {
-    it("confirmed + enroll=true: shows enroll + badge Đã xác nhận", () => {
-      const profile = buildProfile({
-        status: "confirmed",
-        permissions: { enroll: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("confirmed").label)).toBeInTheDocument();
-    });
-
-    it("overridden + enroll=true: shows enroll + badge Đã override", () => {
-      const profile = buildProfile({
-        status: "overridden",
-        permissions: { enroll: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("overridden").label)).toBeInTheDocument();
-    });
-
-    it("click Enroll calls onEnroll", () => {
-      const profile = buildProfile({
-        status: "confirmed",
-        permissions: { enroll: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      fireEvent.click(screen.getByText("Ghi danh"));
-      expect(spies.onEnroll).toHaveBeenCalled();
-    });
-
-    it("approved does NOT show Ghi danh (contract: enroll gated on confirmed/overridden)", () => {
-      // Defense against regression: if someone ever re-adds an incorrect
-      // enroll permission for approved, this test catches it before it
-      // reaches production.
-      const profile = buildProfile({
-        status: "approved",
-        permissions: { enroll: false, send_confirmation: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
-    });
-  });
+  // Commit 7: Claim/Unclaim/Delete moved to ProfileActionMenu (header dropdown).
+  // Enroll/PublishResult/RequestRevision moved to FinalizeTab decision panel.
+  // Tests for those actions live in ProfileActionMenu.test.tsx + FinalizeTab.test.tsx.
 
   // ===== SEND CONFIRMATION (approved) =====
 
@@ -379,8 +249,9 @@ describe("AdmissionActions", () => {
       renderActions(profile, 8);
 
       expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
-      // Sanity: Ghi danh DOES show at confirmed.
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
+      // Commit 7: Ghi danh moved to FinalizeTab decision panel; sticky bar
+      // không render. AdmissionActions chỉ giữ navigation + send buttons.
+      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
     });
 
     it("submitted does NOT show send button (not approved yet)", () => {
