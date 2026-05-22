@@ -26,7 +26,6 @@ import { UseFormReturn } from "react-hook-form"
 
 import { usePreviewPriorityKv } from "@/lib/hooks/use-preview-priority-kv"
 import type { PreviewPriorityKvRequest } from "@/lib/api/priority-kv"
-import { useAuthStore } from "@/lib/stores/auth.store"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdateInput,
@@ -49,6 +48,12 @@ interface PriorityTabProps {
    * navigation invokes this. Required prop — no default to surface gaps.
    */
   onNavigateToDocuments: () => void
+  /**
+   * Commit 3 — officer hard-deny CTA navigation. Parent wires
+   * setCurrentStep(3). EngineResultCard "Sửa dữ liệu nguồn" link invokes
+   * khi officer không có override permission ở ambiguous state.
+   */
+  onNavigateToAcademic?: () => void
 }
 
 export function PriorityTab({
@@ -56,9 +61,14 @@ export function PriorityTab({
   profile,
   isEditable,
   onNavigateToDocuments,
+  onNavigateToAcademic,
 }: PriorityTabProps) {
   const [overrideDialogOpen, setOverrideDialogOpen] = useState(false)
-  const userRole = useAuthStore((s) => s.user?.role)
+  // P0-1 fix 2026-05-22 — KHÔNG check user.role string ở FE (vi phạm Thin
+  // Client RULE 2 frontend/CLAUDE.md). Đọc mode flag từ BE-aggregated
+  // `profile.override_priority_kv_mode` (server-derived qua Casbin policy +
+  // status whitelist). Drift-free khi role/policy thay đổi.
+  const overrideMode = profile.override_priority_kv_mode ?? "none"
 
   // Form watches drive live preview query. Same fields as Phase E.3 PriorityTab.
   // Phase E.4 Finding 2 fix: KHÔNG watch + KHÔNG gửi `area_resolution_basis` vì
@@ -125,15 +135,19 @@ export function PriorityTab({
         preview={preview ?? null}
         canOverride={canOverride}
         onOpenOverride={() => setOverrideDialogOpen(true)}
+        onNavigateToAcademic={onNavigateToAcademic}
       />
 
-      {/* § 3 UT evidence — verify/reject/untick per code + missing warning */}
+      {/* § 3 UT evidence — verify/reject/untick per code + missing warning.
+          formCodes (RHF watch) ưu tiên hơn profile snapshot để tick thêm
+          UT thấy ngay, không chờ save+refetch. */}
       <UtEvidenceCards
         profile={profile}
         canVerify={canVerify}
         isEditable={isEditable}
         onNavigateToDocuments={onNavigateToDocuments}
         onCodesChange={handleCodesChange}
+        formCodes={utCodes}
       />
 
       {/* § 4 Summary — tổng + audit disclosure + law disclosure (no actions) */}
@@ -147,7 +161,7 @@ export function PriorityTab({
         profileVersion={profile.version ?? 0}
         profileStatus={profile.status}
         currentKv={currentKv}
-        mode={userRole === "admin" ? "admin" : "officer"}
+        mode={overrideMode === "none" ? "officer" : overrideMode}
       />
     </div>
   )

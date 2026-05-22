@@ -1166,6 +1166,19 @@ class AdmissionProfileResponse(BaseModel):
         default=False,
         description="True if profile bypassed eligibility check via allow_unverified_submission flag"
     )
+
+    # P0-1 fix 2026-05-22 — BE-aggregated mode flag thay thế FE `user.role`
+    # string check ở PriorityTab (vi phạm Thin Client RULE 2 frontend/CLAUDE.md).
+    # FE đọc thẳng field này để pass xuống PriorityOverrideDialog.mode →
+    # render đúng UX copy/severity theo role. Server-derived, drift-free khi
+    # Casbin policy thay đổi (vd accountant diamond-inherit manager).
+    #
+    # Officer mode KHÔNG phải "none" — vẫn render dialog read-only + secondary
+    # CTA "Đề nghị quản lý ấn định KV" khi requires_manual_override.
+    override_priority_kv_mode: Literal["admin", "manager", "officer", "none"] = Field(
+        default="none",
+        description="Mode flag cho PriorityOverrideDialog (admin/manager/officer/none). Server-derived, không check role.role ở FE.",
+    )
     
     # Validation errors (reasons why profile is not eligible)
     validation_errors: List[str] = Field(
@@ -2141,8 +2154,11 @@ class AdmissionWaitlistRejectResponse(BaseModel):
     choice_id: int
     decision: Literal["rejected"] = "rejected"
     profile_id: int
+    # P1 fix 2026-05-22: trước đây có dòng duplicate `profile_status: Literal["admitted"]`
+    # ngay sau dòng "rejected" → Python class body lấy cái cuối thành Literal["admitted"].
+    # Service trả "rejected" → Pydantic ValidationError → 500 SAU db.commit() → mutation
+    # thành công ở DB nhưng client thấy lỗi. Verified bằng runtime probe trong container.
     profile_status: Literal["rejected"] = "rejected"
-    profile_status: Literal["admitted"] = "admitted"
 
 
 class AdmissionAdminRollbackRequest(BaseModel):
@@ -2259,6 +2275,18 @@ class PreviewPriorityKvResponse(BaseModel):
         description=(
             "Citation pháp lý (vd 'TT 05/2021 Phụ lục 01 Mục 5.b') resolved "
             "từ rule_applied. FE EngineResultCard hiển thị để officer scan/trust."
+        )
+    )
+
+    # Code review 2026-05-22 — path_bonus_rule denorm trong preview để FE
+    # hiển thị cap consistent giữa draft preview và frozen snapshot. Trước
+    # đây UX inconsistency: draft show "+3.50đ", sau submit cap về "+2.50đ".
+    # Shape match snapshot.path_bonus_rule (priority_service.py:856).
+    path_bonus_rule: Optional[dict] = Field(
+        None,
+        description=(
+            "Path's bonus cap rule {'max_total_bonus': float|None}. FE PrioritySummaryPanel "
+            "đọc để hiển thị cap badge + applied_bonus = min(total, cap) trong draft."
         )
     )
 

@@ -326,6 +326,8 @@ def _resolve_allowed_subjects(choice: "AdmissionProfileChoice") -> List[str]:
 async def evaluate_cascade(
     db: AsyncSession,
     profile: "AdmissionProfile",
+    *,
+    actor: Optional[Any] = None,
 ) -> Tuple[CascadeResult, Optional[Callable[[], Awaitable[None]]]]:
     """T6 publish: sequential admit cascade per profile.choices.
 
@@ -343,6 +345,14 @@ async def evaluate_cascade(
         * Marks remaining choices `'skip'` after first admit
         * Transitions `profile.status` via state_service.transition()
         * Dispatches ADMISSION_RESULT_PUBLISHED + per-choice decision event
+
+    Args:
+        db: Caller async session.
+        profile: AdmissionProfile để publish.
+        actor: User triggering publish (manager/admin) — P2 fix 2026-05-22.
+               Trước đây không pass xuống `transition()` cho 2 edge
+               reviewing→result_published→admitted/rejected → status history
+               + dispatched event ghi `actor_id=None` (audit trail bị mất).
 
     Returns:
         `(CascadeResult, post_commit_callback)` — V3.0 contract.
@@ -548,14 +558,18 @@ async def evaluate_cascade(
     await db.flush()
 
     # Transition profile status: reviewing → result_published → final
-    # (state machine forbids reviewing → admitted directly per PR-3B map)
+    # (state machine forbids reviewing → admitted directly per PR-3B map).
+    # P2 fix 2026-05-22: forward actor để 2 transition event_metadata +
+    # status_history ghi đúng người trigger publish (trước đây actor_id=None).
     _, cb1 = await state_service.transition(
         db, profile, "result_published",
+        actor=actor,
         source="choice_engine",
         event_metadata={"cascade_run": True, "admitted_count": 1 if admitted_found else 0},
     )
     _, cb2 = await state_service.transition(
         db, profile, final_status,
+        actor=actor,
         source="choice_engine",
         event_metadata={
             "cascade_run": True,
@@ -569,6 +583,25 @@ async def evaluate_cascade(
         final_status=final_status,
         admitted_choice_id=result.admitted_choice_id,
         per_choice_count=len(result.per_choice_decisions),
+    )
+
+    # P2 fix 2026-05-22 — sync Lead.consultation_status_id +
+    # pipeline_stage_id + funnel/KPI sau khi profile.status flip thật
+    # (admitted/rejected). Trước đây V2 engine NỀN không gọi sync nên
+    # lead remain stale ở sts06/sts07 (waitlisted floor / submitted) dù
+    # admission_profile đã admitted. Legacy admission_service.py có sync
+    # cho mọi state-flipping action (approve/reject/enroll/...); V2
+    # parity với legacy contract qua lead_admission_sync mapping
+    # (admitted → sts09, rejected → sts16 per ADMISSION_TO_LEAD_STATUS_MAP).
+    # Same transaction (flush only) — caller commit cùng cascade atomically.
+    # NOTE: result_published là intermediate state (no-op trong sync map),
+    # nên chỉ cần gọi 1 lần sau cb2 transition tới final_status.
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=actor.id if actor else None,
+        reason="Choice engine cascade — publish_result",
     )
 
     # Chain callbacks: caller commits + awaits both dispatches
@@ -661,7 +694,9 @@ async def publish_result(
             source="api",
         )
 
-    return await evaluate_cascade(db, profile)
+    # P2 fix 2026-05-22: forward actor xuống cascade để 2 transition
+    # reviewing→result_published→final ghi đúng actor_id vào audit trail.
+    return await evaluate_cascade(db, profile, actor=actor)
 
 
 # ============================================================================
@@ -720,6 +755,19 @@ async def promote_waitlisted_choice(
             "choice_id": choice.id,
             "display_order": choice.display_order,
         },
+    )
+
+    # P2 fix 2026-05-22 — sync Lead/Pipeline sau khi profile.status flip
+    # waitlisted → admitted. Trước đây V2 promote không sync nên Lead vẫn
+    # ở sts07 dù admission đã admitted. Mapping admitted → sts09 per
+    # ADMISSION_TO_LEAD_STATUS_MAP. `profile.lead` đã eager-load ở IDOR
+    # gate `get_admission_for_manager` (deps.py:2209).
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=actor.id if actor else None,
+        reason=reason or "Waitlist promote — manual admin",
     )
 
     return (
@@ -799,6 +847,17 @@ async def reject_waitlisted_choice(
             "display_order": choice.display_order,
             "reason": reason,
         },
+    )
+
+    # P2 fix 2026-05-22 — sync Lead/Pipeline sau khi profile.status flip
+    # waitlisted → rejected. Trước đây V2 reject không sync. Mapping
+    # rejected → sts16 per ADMISSION_TO_LEAD_STATUS_MAP.
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=actor.id if actor else None,
+        reason=reason,
     )
 
     return (

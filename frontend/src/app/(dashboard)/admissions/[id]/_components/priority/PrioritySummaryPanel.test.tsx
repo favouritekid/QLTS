@@ -28,6 +28,7 @@ const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   ut_breakdown: null,
   total_bonus_potential: 0.75,
   rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+  path_bonus_rule: null,
 }
 
 describe("resolveSummaryDisplay — kv precedence", () => {
@@ -224,5 +225,181 @@ describe("resolveSummaryDisplay — verifiedBucket precedence (P1 fix)", () => {
       code: "04",
       rate: 1.0,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Commit 3 — Cap display from snapshot.path_bonus_rule.max_total_bonus
+// ---------------------------------------------------------------------------
+
+import { render, screen } from "@testing-library/react"
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { PrioritySummaryPanel } from "./PrioritySummaryPanel"
+
+function buildProfileForCap(overrides: Partial<AdmissionProfileResponse> = {}): AdmissionProfileResponse {
+  return {
+    id: 1,
+    status: "submitted",
+    version: 1,
+    academic_year: 2026,
+    permissions: {},
+    eligibility_status: "eligible",
+    validation_errors: [],
+    available_actions: [],
+    completion_percent: 100,
+    applied_rules: {},
+    family_info: [],
+    academic_history: [],
+    documents_checklist: [],
+    missing_priority_evidence_codes: [],
+    priority_resolution_snapshot: {},
+    priority_object_codes: [],
+    priority_audit_log: [],
+    cultural_education_level: "graduated_thpt",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  } as unknown as AdmissionProfileResponse
+}
+
+describe("PrioritySummaryPanel — cap display (Commit 3)", () => {
+  it("post-submit + max_total_bonus < total: render cap dòng + badge 'Bị cap' + applied = cap", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+        ut_verified_bucket: { applied_code: "04", applied_rate: 1.5 },
+        path_bonus_rule: { max_total_bonus: 2.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-cap-badge")).toHaveTextContent(/Bị cap/i)
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+2.00đ")
+  })
+
+  it("post-submit + max_total_bonus >= total: render cap dòng + KHÔNG badge + applied = total", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+        ut_verified_bucket: { applied_code: "04", applied_rate: 1.0 },
+        path_bonus_rule: { max_total_bonus: 3.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.queryByTestId("priority-summary-cap-badge")).not.toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+1.75đ")
+  })
+
+  it("post-submit + KHÔNG có path_bonus_rule: KHÔNG render cap section", () => {
+    const profile = buildProfileForCap({
+      status: "submitted",
+      priority_resolution_snapshot: {
+        kv_resolved: "KV1",
+        breakdown: { area_bonus: 0.75 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.queryByTestId("priority-summary-cap")).not.toBeInTheDocument()
+  })
+
+  it("draft preview (status='draft' + path_bonus_rule trong snapshot): KHÔNG render cap (frozen-only display)", () => {
+    const profile = buildProfileForCap({
+      status: "draft",
+      priority_resolution_snapshot: {
+        path_bonus_rule: { max_total_bonus: 2.0 },
+      },
+    } as Partial<AdmissionProfileResponse>)
+
+    render(<PrioritySummaryPanel profile={profile} preview={null} />)
+
+    expect(screen.queryByTestId("priority-summary-cap")).not.toBeInTheDocument()
+  })
+
+  // P2-3 anchor 2026-05-22 (review B-scope) — draft + preview.path_bonus_rule
+  // non-null là motivation chính của BE change (denorm path_bonus_rule trong
+  // PreviewPriorityKvResponse). Trước fix: preview thiếu field → UX
+  // inconsistency (draft hiển thị uncapped, sau submit cap khác). Sau fix:
+  // draft đọc preview.path_bonus_rule.max_total_bonus → render cap khớp frozen.
+  it("draft + preview.path_bonus_rule.max_total_bonus=2.0 + total > cap: render cap + badge + applied = cap", () => {
+    const profile = buildProfileForCap({
+      status: "draft",
+      priority_resolution_snapshot: {},
+    } as Partial<AdmissionProfileResponse>)
+
+    const preview = {
+      kv_resolved: "KV1",
+      pathway: "thpt_multi_school",
+      rule_applied: "longest_duration",
+      requires_manual_override: false,
+      reason: null,
+      breakdown: null,
+      area_bonus: 0.75,
+      object_bonus_potential: 1.5,
+      object_bonus_verified: 1.5,
+      ut_breakdown: {
+        codes_submitted: ["04"],
+        applied_code_potential: "04",
+        applied_rate_potential: "1.50",
+        verified_codes: ["04"],
+        applied_code_verified: "04",
+        applied_rate_verified: "1.50",
+      },
+      total_bonus_potential: 2.25,
+      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+      path_bonus_rule: { max_total_bonus: 2.0 },
+    }
+
+    render(<PrioritySummaryPanel profile={profile} preview={preview} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-cap-badge")).toHaveTextContent(/Bị cap/i)
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+2.00đ")
+  })
+
+  it("draft + preview.path_bonus_rule.max_total_bonus=3.0 + total < cap: render cap dòng + KHÔNG badge", () => {
+    const profile = buildProfileForCap({
+      status: "draft",
+      priority_resolution_snapshot: {},
+    } as Partial<AdmissionProfileResponse>)
+
+    const preview = {
+      kv_resolved: "KV1",
+      pathway: "thpt_multi_school",
+      rule_applied: "longest_duration",
+      requires_manual_override: false,
+      reason: null,
+      breakdown: null,
+      area_bonus: 0.75,
+      object_bonus_potential: 1.0,
+      object_bonus_verified: 1.0,
+      ut_breakdown: {
+        codes_submitted: ["07"],
+        applied_code_potential: "07",
+        applied_rate_potential: "1.00",
+        verified_codes: ["07"],
+        applied_code_verified: "07",
+        applied_rate_verified: "1.00",
+      },
+      total_bonus_potential: 1.75,
+      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+      path_bonus_rule: { max_total_bonus: 3.0 },
+    }
+
+    render(<PrioritySummaryPanel profile={profile} preview={preview} />)
+
+    expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
+    expect(screen.queryByTestId("priority-summary-cap-badge")).not.toBeInTheDocument()
+    expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+1.75đ")
   })
 })

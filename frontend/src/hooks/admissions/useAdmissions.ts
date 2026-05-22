@@ -371,6 +371,11 @@ export function usePublishAdmissionResult(id: number) {
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      // P2 (2026-05-22) — publish flips status sang result_published/
+      // admitted/waitlisted/rejected → dashboard stats card phải refetch
+      // cùng list/counts/detail. Các mutation status-changing khác đã có
+      // stats invalidation; thêm vào đây cho parity.
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, {

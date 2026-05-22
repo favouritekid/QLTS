@@ -184,9 +184,17 @@ export function AdmissionDetailClient({
 
   // Form Reset on Data Update
   // CRITICAL: Use vm.version as dependency to detect server-side changes
-  // vm.version is incremented by backend on each successful update
+  // vm.version is incremented by backend on each successful update.
+  //
+  // Realtime drift guard (2026-05-22 P1): nếu user đang nhập dở (isDirty)
+  // thì KHÔNG reset form khi version đổi do realtime refetch (vd. tab khác,
+  // officer khác emit SystemEvent → SocketHandler invalidates → refetch).
+  // Giữ nguyên draft local; optimistic-lock conflict sẽ surface ở save time
+  // (BE trả 409 với version mismatch) — user có UI rõ ràng để resolve thay
+  // vì silent overwrite. Initial load vẫn reset bình thường vì RHF mới
+  // mount, isDirty=false.
   useEffect(() => {
-    if (vm) {
+    if (vm && !form.formState.isDirty) {
       const p = vm as unknown as AdmissionProfileResponse
       form.reset({
         citizen_id: vm.citizen_id || "",
@@ -445,12 +453,14 @@ export function AdmissionDetailClient({
 
   const handleCheckCondition = () => {
     // Navigate to first error step using backend-computed status.
-    // Phase E.4 (G0) — 8-step: Step 4=Priority (new), Step 5=Scores (was 4),
-    // Step 6=Documents (was 5).
-    if (stepsStatusRecord[1] === "error") handleStepChange(1)
-    else if (stepsStatusRecord[4] === "error") handleStepChange(4)
-    else if (stepsStatusRecord[5] === "error") handleStepChange(5)
-    else if (stepsStatusRecord[6] === "error") handleStepChange(6)
+    // Phase E.4 (G0) — 8-step: 1=Personal, 2=Family, 3=Academic,
+    // 4=Priority, 5=Scores, 6=Documents, 7=Tuition, 8=Finalize.
+    for (let step = 1; step <= 8; step++) {
+      if (stepsStatusRecord[step] === "error") {
+        handleStepChange(step)
+        return
+      }
+    }
   }
 
   if (!profile) return null
@@ -468,6 +478,12 @@ export function AdmissionDetailClient({
         validationErrors={validationErrors}
         validationSummary={validationSummary}
         groupedValidationErrors={groupedValidationErrors}
+        onClaim={handleClaim}
+        onUnclaim={handleUnclaim}
+        isClaiming={claimMutation.isPending}
+        isUnclaiming={unclaimMutation.isPending}
+        onDelete={handleDelete}
+        isDeleting={deleteMutation.isPending}
       >
         {/* Status Banner for rejected/resubmitted profiles */}
         <StatusBanner status={profile.status} />
@@ -489,7 +505,7 @@ export function AdmissionDetailClient({
               Đợt tuyển sinh cho phép nộp hồ sơ chưa đầy đủ
               (<code>allow_unverified_submission=true</code>). Hồ sơ hiện có{" "}
               <strong>{profile.validation_errors?.length ?? 0}</strong> lỗi chưa khắc phục.
-              Vui lòng xem tab <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> trước khi phê duyệt.
+              Vui lòng xem danh sách <strong>&ldquo;Vấn đề cần sửa&rdquo;</strong> ở panel bên cạnh (desktop) hoặc nút &ldquo;N vấn đề&rdquo; ở góc phải (mobile) trước khi phê duyệt.
             </p>
           </div>
         )}
@@ -505,6 +521,7 @@ export function AdmissionDetailClient({
               profile={profile}
               isEditable={can('edit')}
               onNavigateToDocuments={() => handleStepChange(6)}
+              onNavigateToAcademic={() => handleStepChange(3)}
             />
           )}
           {currentStep === 5 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
@@ -517,42 +534,40 @@ export function AdmissionDetailClient({
               isEligible={isEligible}
               onSubmit={handleSubmit}
               isSubmitting={submitMutation.isPending}
-              onApprove={handleApprove}              // ✅ NEW
-              onReject={handleReject}                // ✅ NEW
-              isApproving={approveMutation.isPending} // ✅ NEW
-              isRejecting={rejectMutation.isPending} // ✅ NEW
+              canSubmit={can('submit')}
+              onResubmit={handleResubmit}
+              isResubmitting={resubmitMutation.isPending}
+              canResubmit={can('resubmit')}
+              onApprove={handleApprove}
+              isApproving={approveMutation.isPending}
               canApprove={can('approve')}
+              onReject={handleReject}
+              isRejecting={rejectMutation.isPending}
+              canReject={can('reject')}
+              onRequestRevision={handleRequestRevision}
+              isRequestingRevision={requestRevisionMutation.isPending}
+              canRequestRevision={can('request_revision')}
+              onPublishResult={handlePublishResult}
+              isPublishingResult={publishResultMutation.isPending}
+              canPublishResult={can('publish_result')}
+              onEnroll={handleEnroll}
+              isEnrolling={enrollMutation.isPending}
+              canEnroll={can('enroll')}
+              onNavigateToDocuments={() => handleStepChange(6)}
             />
           )}
         </div>
 
-        {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}
+        {/* STICKY ACTIONS (Commit 7 — navigation + Save + Magic links only)
+            Decision (Submit/Resubmit/Approve/Reject/RequestRevision/PublishResult/Enroll)
+            → FinalizeTab Step 8 decision panel.
+            Workflow (Claim/Unclaim/Delete/MinorCorrection) → ProfileActionMenu trong header. */}
         <AdmissionActions
           profile={profile}
           currentStep={currentStep}
           onStepChange={handleStepChange}
           isSaving={updateMutation.isPending}
-          isSubmitting={submitMutation.isPending}
-          isEnrolling={enrollMutation.isPending}
           onSave={handleSave}
-          onSubmit={handleSubmit}
-          onResubmit={handleResubmit}
-          isResubmitting={resubmitMutation.isPending}
-          onEnroll={handleEnroll}
-          onApprove={handleApprove}
-          onReject={handleReject}
-          isApproving={approveMutation.isPending}
-          isRejecting={rejectMutation.isPending}
-          onPublishResult={handlePublishResult}
-          isPublishingResult={publishResultMutation.isPending}
-          onRequestRevision={handleRequestRevision}
-          isRequestingRevision={requestRevisionMutation.isPending}
-          onClaim={handleClaim}
-          onUnclaim={handleUnclaim}
-          isClaiming={claimMutation.isPending}
-          isUnclaiming={unclaimMutation.isPending}
-          onDelete={handleDelete}
-          isDeleting={deleteMutation.isPending}
           onCheckCondition={handleCheckCondition}
         />
       </AdmissionLayout>
@@ -570,7 +585,7 @@ export function AdmissionDetailClient({
           <AlertDialogHeader>
             <AlertDialogTitle>Thay đổi chưa lưu</AlertDialogTitle>
             <AlertDialogDescription>
-              Thay đổi ở bước hiện tại sẽ bị mất nếu bạn bỏ qua. Chọn &quot;Ở lại và lưu&quot; để giữ lại dữ liệu, hoặc bỏ thay đổi để chuyển bước.
+              Thay đổi ở bước hiện tại sẽ bị mất nếu bạn bỏ qua. Chọn &ldquo;Ở lại và lưu&rdquo; để giữ lại dữ liệu, hoặc bỏ thay đổi để chuyển bước.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -578,7 +593,7 @@ export function AdmissionDetailClient({
               onClick={handleConfirmStepChange}
               className={cn(buttonVariants({ variant: "destructive" }))}
             >
-              <AlertTriangle className="mr-2 h-4 w-4" />
+              <AlertTriangle className="mr-2 h-4 w-4" aria-hidden="true" />
               Bỏ thay đổi và tiếp tục
             </AlertDialogAction>
             <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>

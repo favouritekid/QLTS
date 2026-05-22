@@ -90,15 +90,7 @@ function defaultSpies() {
   return {
     onStepChange: vi.fn(),
     onSave: vi.fn(),
-    onSubmit: vi.fn(),
-    onEnroll: vi.fn(),
     onCheckCondition: vi.fn(),
-    onResubmit: vi.fn(),
-    onApprove: vi.fn(),
-    onReject: vi.fn(),
-    onClaim: vi.fn(),
-    onUnclaim: vi.fn(),
-    onDelete: vi.fn(),
   };
 }
 
@@ -113,8 +105,6 @@ function renderActions(
       profile={profile}
       currentStep={currentStep}
       isSaving={false}
-      isSubmitting={false}
-      isEnrolling={false}
       {...spies}
     />
   );
@@ -180,254 +170,88 @@ describe("AdmissionActions", () => {
       fireEvent.click(screen.getByText("Lưu thay đổi"));
       expect(spies.onSave).toHaveBeenCalled();
     });
+
+    // Code review 2026-05-22 Round 2 #6 anchor — sticky 'Tiếp tục' phải chặn
+    // step 7 → 8 transition khi user không có decision permission. Cùng gate
+    // logic với PipelineSidebar.isStep8Override (canDecide = OR-7-flags hoặc
+    // BE-aggregated has_decision).
+    it("step 7 + no decision permission: HIDES Tiếp tục (Step 8 disabled)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true }, // no decision perms (submit/approve/...)
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByText("Tiếp tục")).not.toBeInTheDocument();
+      // Other navigation still visible
+      expect(screen.getByText("Quay lại")).toBeInTheDocument();
+      expect(screen.getByText("Lưu thay đổi")).toBeInTheDocument();
+    });
+
+    it("step 7 + has_decision flag: SHOWS Tiếp tục (decision panel reachable)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true, has_decision: true },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.getByText("Tiếp tục")).toBeInTheDocument();
+    });
+
+    it("step 7 + officer submit perm (fallback OR-7): SHOWS Tiếp tục (backward-compat)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true, submit: true }, // no has_decision flag yet
+      });
+      renderActions(profile, 7);
+
+      expect(screen.getByText("Tiếp tục")).toBeInTheDocument();
+    });
   });
 
-  // ===== STEP 8: SUBMIT (Phase E.4 workbench — UT verify gộp vào Step 4) =====
+  // ===== STEP 8: NAVIGATION-ONLY (decision actions moved to FinalizeTab) =====
 
-  describe("Step 8: Submit", () => {
-    it("shows Check + Submit when submit=true and eligible", () => {
+  describe("Step 8: Sticky bar (navigation + Kiểm tra toàn bộ only)", () => {
+    it("shows Kiểm tra toàn bộ at step 8 (any role)", () => {
       const profile = buildProfile({
         status: "draft",
         permissions: { submit: true },
-        eligibility_status: "eligible",
       });
       renderActions(profile, 8);
 
       expect(screen.getByText("Kiểm tra toàn bộ")).toBeInTheDocument();
-      expect(screen.getByText("Nộp hồ sơ")).toBeInTheDocument();
-      // Submit button should be enabled
-      const submitBtn = screen.getByText("Nộp hồ sơ").closest("button");
-      expect(submitBtn).not.toBeDisabled();
     });
 
-    it("Submit disabled when ineligible", () => {
+    it("Commit 2: KHÔNG render Submit/Approve/Reject/Resubmit ở sticky bar (moved to FinalizeTab)", () => {
       const profile = buildProfile({
         status: "draft",
-        permissions: { submit: true },
-        eligibility_status: "ineligible",
+        permissions: { submit: true, approve: true, reject: true, resubmit: true },
+        eligibility_status: "eligible",
       });
       renderActions(profile, 8);
 
-      const submitBtn = screen.getByText("Nộp hồ sơ").closest("button");
-      expect(submitBtn).toBeDisabled();
+      expect(screen.queryByText("Nộp hồ sơ")).not.toBeInTheDocument();
+      expect(screen.queryByText("Phê duyệt")).not.toBeInTheDocument();
+      expect(screen.queryByText("Nộp lại hồ sơ")).not.toBeInTheDocument();
+      // "Từ chối" có thể appear ở các nơi khác (badge, etc.); chỉ assert
+      // không có Reject button bằng cách query button có aria-label/role
+      expect(screen.queryByRole("button", { name: "Từ chối" })).not.toBeInTheDocument();
     });
 
-    it("click Submit calls onSubmit", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { submit: true },
-        eligibility_status: "eligible",
-      });
-      const spies = renderActions(profile, 8);
-
-      fireEvent.click(screen.getByText("Nộp hồ sơ"));
-      expect(spies.onSubmit).toHaveBeenCalled();
-    });
-
-    it("hides step nav on step 8 (Finalize/Submit)", () => {
+    it("hides Tiếp tục + Lưu nhưng GIỮ Quay lại ở step 8 (officer/manager có thể sửa lại)", () => {
       const profile = buildProfile({ status: "draft", permissions: { submit: true } });
       renderActions(profile, 8);
 
       expect(screen.queryByText("Tiếp tục")).not.toBeInTheDocument();
-      expect(screen.queryByText("Quay lại")).not.toBeInTheDocument();
       expect(screen.queryByText("Lưu thay đổi")).not.toBeInTheDocument();
+      // Commit 1: Quay lại visible ở step 8 để officer/manager review xong có thể sửa hồ sơ.
+      expect(screen.getByText("Quay lại")).toBeInTheDocument();
     });
   });
 
-  // ===== RESUBMIT (rejected / revision_requested) =====
-
-  describe("Resubmit", () => {
-    it("rejected + resubmit=true: shows resubmit + badge Từ chối", () => {
-      const profile = buildProfile({
-        status: "rejected",
-        permissions: { resubmit: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("rejected").label)).toBeInTheDocument();
-    });
-
-    it("revision_requested + resubmit=true: shows resubmit + badge Yêu cầu bổ sung", () => {
-      const profile = buildProfile({
-        status: "revision_requested",
-        permissions: { resubmit: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Nộp lại hồ sơ")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("revision_requested").label)).toBeInTheDocument();
-    });
-
-    it("click dialog-confirmed Resubmit calls onResubmit", () => {
-      const profile = buildProfile({
-        status: "rejected",
-        permissions: { resubmit: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      // With mocked AlertDialog, trigger + action both render.
-      // "Nộp lại" is the dialog action text (AlertDialogAction).
-      const buttons = screen.getAllByText("Nộp lại");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onResubmit).toHaveBeenCalled();
-    });
-  });
-
-  // ===== MANAGER ACTIONS (submitted/resubmitted) =====
-
-  describe("Manager actions", () => {
-    it("submitted + approve/reject/claim: shows all 3 buttons + badge", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { approve: true, reject: true, claim: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
-      // "Từ chối" appears as both reject button text AND may appear in dialog
-      expect(screen.getAllByText("Từ chối").length).toBeGreaterThanOrEqual(1);
-      // "Nhận duyệt" appears as trigger + dialog action
-      expect(screen.getAllByText("Nhận duyệt").length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText(getStatusConfig("submitted").label)).toBeInTheDocument();
-    });
-
-    it("resubmitted + approve/reject: shows approve + reject", () => {
-      const profile = buildProfile({
-        status: "resubmitted",
-        permissions: { approve: true, reject: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Phê duyệt")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("resubmitted").label)).toBeInTheDocument();
-    });
-
-    it("unclaim=true: shows unclaim button", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { unclaim: true },
-      });
-      renderActions(profile, 8);
-
-      // Trigger + dialog action both show "Bỏ nhận"
-      expect(screen.getAllByText("Bỏ nhận").length).toBeGreaterThanOrEqual(1);
-    });
-
-    it("click dialog-confirmed Claim calls onClaim", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { claim: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      // Mocked AlertDialog renders trigger + action with same text "Nhận duyệt"
-      const buttons = screen.getAllByText("Nhận duyệt");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onClaim).toHaveBeenCalled();
-    });
-
-    it("click dialog-confirmed Unclaim calls onUnclaim", () => {
-      const profile = buildProfile({
-        status: "submitted",
-        permissions: { unclaim: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      const buttons = screen.getAllByText("Bỏ nhận");
-      fireEvent.click(buttons[buttons.length - 1]); // last = dialog action
-      expect(spies.onUnclaim).toHaveBeenCalled();
-    });
-  });
-
-  // ===== DELETE =====
-
-  describe("Delete", () => {
-    it("delete=true: shows delete trigger button + dialog action", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { delete: true },
-      });
-      renderActions(profile, 1);
-
-      // Both trigger (aria-label) and dialog action (text) match "Xóa hồ sơ"
-      const deleteButtons = screen.getAllByRole("button", { name: /xóa hồ sơ/i });
-      expect(deleteButtons.length).toBeGreaterThanOrEqual(2); // trigger + dialog action
-
-      // Trigger is icon-only: has aria-label but no text child
-      const trigger = deleteButtons.find(
-        (btn) => btn.getAttribute("aria-label") === "Xóa hồ sơ"
-      );
-      expect(trigger).toBeTruthy();
-    });
-
-    it("click dialog-confirmed Delete calls onDelete", () => {
-      const profile = buildProfile({
-        status: "draft",
-        permissions: { delete: true },
-      });
-      const spies = renderActions(profile, 1);
-
-      const buttons = screen.getAllByText("Xóa hồ sơ");
-      fireEvent.click(buttons[buttons.length - 1]); // dialog action
-      expect(spies.onDelete).toHaveBeenCalled();
-    });
-  });
-
-  // ===== ENROLL (confirmed / overridden — matches backend contract) =====
-  //
-  // Backend only emits `permissions.enroll = True` for status ∈
-  // {confirmed, overridden} — see _compute_frontend_fields in
-  // admission_service.py. Tests must model that combo, not the
-  // impossible-in-practice `approved + enroll=true`.
-
-  describe("Enroll", () => {
-    it("confirmed + enroll=true: shows enroll + badge Đã xác nhận", () => {
-      const profile = buildProfile({
-        status: "confirmed",
-        permissions: { enroll: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("confirmed").label)).toBeInTheDocument();
-    });
-
-    it("overridden + enroll=true: shows enroll + badge Đã override", () => {
-      const profile = buildProfile({
-        status: "overridden",
-        permissions: { enroll: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
-      expect(screen.getByText(getStatusConfig("overridden").label)).toBeInTheDocument();
-    });
-
-    it("click Enroll calls onEnroll", () => {
-      const profile = buildProfile({
-        status: "confirmed",
-        permissions: { enroll: true },
-      });
-      const spies = renderActions(profile, 8);
-
-      fireEvent.click(screen.getByText("Ghi danh"));
-      expect(spies.onEnroll).toHaveBeenCalled();
-    });
-
-    it("approved does NOT show Ghi danh (contract: enroll gated on confirmed/overridden)", () => {
-      // Defense against regression: if someone ever re-adds an incorrect
-      // enroll permission for approved, this test catches it before it
-      // reaches production.
-      const profile = buildProfile({
-        status: "approved",
-        permissions: { enroll: false, send_confirmation: true },
-      });
-      renderActions(profile, 8);
-
-      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
-    });
-  });
+  // Commit 7: Claim/Unclaim/Delete moved to ProfileActionMenu (header dropdown).
+  // Enroll/PublishResult/RequestRevision moved to FinalizeTab decision panel.
+  // Tests for those actions live in ProfileActionMenu.test.tsx + FinalizeTab.test.tsx.
 
   // ===== SEND CONFIRMATION (approved) =====
 
@@ -462,8 +286,9 @@ describe("AdmissionActions", () => {
       renderActions(profile, 8);
 
       expect(screen.queryByTestId("send-confirmation-button")).not.toBeInTheDocument();
-      // Sanity: Ghi danh DOES show at confirmed.
-      expect(screen.getByText("Ghi danh")).toBeInTheDocument();
+      // Commit 7: Ghi danh moved to FinalizeTab decision panel; sticky bar
+      // không render. AdmissionActions chỉ giữ navigation + send buttons.
+      expect(screen.queryByText("Ghi danh")).not.toBeInTheDocument();
     });
 
     it("submitted does NOT show send button (not approved yet)", () => {

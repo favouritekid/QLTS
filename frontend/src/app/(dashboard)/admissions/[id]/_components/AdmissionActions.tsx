@@ -1,68 +1,37 @@
 "use client"
 
 /**
- * Phase 7: Permission-Based Rendering (ADR-FE-002)
- * 
- * Button visibility is now controlled by backend permissions via can() pattern.
- * - ❌ FORBIDDEN: {isDraft && <Button />}
- * - ✅ REQUIRED: {can('submit') && <Button />}
+ * Sticky bar — Commit 7 button consolidation.
+ *
+ * Render TỐI THIỂU theo BE permission flags:
+ *   - Navigation: Quay lại / Tiếp tục (step 1-7) / Save / Kiểm tra toàn bộ (step 8)
+ *   - Outbound communication: 4 send_* buttons (mutex per state)
+ *
+ * KHÔNG còn:
+ *   - Decision actions (Submit/Resubmit/Approve/Reject/RequestRevision/
+ *     PublishResult/Enroll) → FinalizeTab Step 8 decision panel.
+ *   - Workflow utilities (Claim/Unclaim/Delete/MinorCorrection) →
+ *     ProfileActionMenu trong header (⋮).
+ *
+ * Sticky bar còn lại ~2-4 buttons cho mọi state.
  */
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock, CheckCircle, XCircle, Trash, ArrowRight, ArrowLeft } from "lucide-react"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-import { cn } from "@/lib/utils"
+import { Loader2, Save, ClipboardCheck, ArrowRight, ArrowLeft } from "lucide-react"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
 import { SendMagicLinkButton } from "./SendMagicLinkButton"
-import { MinorCorrectionDialog } from "./MinorCorrectionDialog"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
   currentStep: number
   onStepChange: (step: number) => void
   isSaving: boolean
-  isSubmitting: boolean
-  isEnrolling: boolean
   onSave: () => void
-  onSubmit: () => void
-  onEnroll: () => void
   onCheckCondition?: () => void
-  // Resubmit action (officer - rejected profiles)
-  onResubmit?: () => void
-  isResubmitting?: boolean
-  // Optional: For Manager actions
-  onApprove?: () => void
-  onReject?: () => void
-  isApproving?: boolean
-  isRejecting?: boolean
-  // Phase 3 multi-NV: 1-click publish-result (bỏ start-review YAGNI 2026-05-15)
-  onPublishResult?: () => void
-  isPublishingResult?: boolean
-  // E2E #10 — Request revision (manager → officer fix flow)
-  onRequestRevision?: () => void
-  isRequestingRevision?: boolean
-  // Claim/unclaim actions
-  onClaim?: () => void
-  onUnclaim?: () => void
-  isClaiming?: boolean
-  isUnclaiming?: boolean
-  // Delete action
-  onDelete?: () => void
-  isDeleting?: boolean
 }
 
 export function AdmissionActions({
@@ -70,44 +39,35 @@ export function AdmissionActions({
   currentStep,
   onStepChange,
   isSaving,
-  isSubmitting,
-  isEnrolling,
   onSave,
-  onSubmit,
-  onEnroll,
   onCheckCondition,
-  onResubmit,
-  isResubmitting = false,
-  onApprove,
-  onReject,
-  isApproving = false,
-  isRejecting = false,
-  onPublishResult,
-  isPublishingResult = false,
-  onRequestRevision,
-  isRequestingRevision = false,
-  onClaim,
-  onUnclaim,
-  isClaiming = false,
-  isUnclaiming = false,
-  onDelete,
-  isDeleting = false,
 }: AdmissionActionsProps) {
-  // =========================================================================
-  // Phase 7: Permission-Based Button Visibility
-  // =========================================================================
   const { can } = usePermissions(profile)
   const statusConfig = getStatusConfig(profile.status)
-  
-  // Check eligibility from backend (not local calculation)
-  const isEligible = profile.eligibility_status === 'eligible'
-  
+
+  // Code review 2026-05-22 — sticky 'Tiếp tục' gate cùng điều kiện
+  // PipelineSidebar (Step 8 unlock) để UX consistent. Ưu tiên BE-aggregated
+  // `permissions.has_decision` flag (admission_service.py ~1617); fallback
+  // OR-7-flags cho backward-compat với deploy chưa ship BE change.
+  const perms = profile.permissions
+  const canDecide = Boolean(
+    perms?.has_decision ??
+    (perms?.approve ||
+      perms?.reject ||
+      perms?.resubmit ||
+      perms?.submit ||
+      perms?.request_revision ||
+      perms?.publish_result ||
+      perms?.enroll)
+  )
+  // Hide Tiếp tục khi step 7 + no decision perm → user không advance qua
+  // Step 8 disabled. Step 1-6 navigation vẫn cho phép.
+  const showNextButton = currentStep < 8 && !(currentStep === 7 && !canDecide)
+
   return (
     <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
       {/* Mobile (<640px): allow horizontal scroll inside bar so wide
-          action sets (e.g. step 7 with 5 buttons) stay reachable without
-          forcing the user to scroll the whole page. Wave 6 S-BUG-1 fix
-          (action bar 549px overflow at 375px viewport). */}
+          action sets stay reachable without forcing page scroll. */}
       <div className="container max-w-7xl mx-auto h-16 px-3 sm:px-6 flex items-center justify-between gap-2 overflow-x-auto">
         {/* Status Badge */}
         <div className="flex items-center gap-4 flex-shrink-0">
@@ -117,350 +77,43 @@ export function AdmissionActions({
           <StatusBadge config={statusConfig} />
         </div>
 
-        {/* Action Buttons - Phase 2: Context-Based.
-            flex-shrink-0 prevents buttons collapsing into ellipsis;
-            scroll lives on the outer container. */}
         <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-          {/* DELETE - Always available if can('delete') */}
-          {can('delete') && onDelete && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="ghost" size="sm" disabled={isDeleting} aria-label="Xóa hồ sơ">
-                  {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash className="w-4 h-4" />}
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Bạn có chắc chắn muốn xóa hồ sơ này?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hành động này không thể hoàn tác. Hồ sơ tuyển sinh sẽ bị xóa vĩnh viễn khỏi hệ thống.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                    Xóa hồ sơ
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Back Button - available for steps 2-7 (step 8 is Finalize). */}
-          {currentStep > 1 && currentStep < 8 && (
+          {/* Back Button — all steps after the first (Commit 1: step 8 cũng có) */}
+          {currentStep > 1 && (
             <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
+              <ArrowLeft className="w-4 h-4 mr-2" aria-hidden="true" />
               Quay lại
             </Button>
           )}
 
-          {/* Save Changes - only when profile is editable. */}
+          {/* Save — step 1-7 with edit permission */}
           {currentStep < 8 && can('save') && (
             <Button variant="outline" onClick={onSave} disabled={isSaving}>
-              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" /> : <Save className="w-4 h-4 mr-2" aria-hidden="true" />}
               Lưu thay đổi
             </Button>
           )}
 
-          {/* Next Step Button - steps 1-7, advances to next. */}
-          {currentStep < 8 && (
+          {/* Next — step 1-7 + decision-perm gate cho 7→8 transition */}
+          {showNextButton && (
             <Button onClick={() => onStepChange(currentStep + 1)}>
               Tiếp tục
-              <ArrowRight className="w-4 h-4 ml-2" />
+              <ArrowRight className="w-4 h-4 ml-2" aria-hidden="true" />
             </Button>
           )}
 
-          {/* Finalize at step 8 */}
-          {currentStep === 8 && can('submit') && (
-            <>
-              {/* Check Condition */}
-              <Button variant="outline" onClick={onCheckCondition}>
-                <ClipboardCheck className="w-4 h-4 mr-2" />
-                Kiểm tra toàn bộ
-              </Button>
-
-              {/* Submit */}
-              <Button
-                onClick={onSubmit}
-                disabled={isSubmitting || !isEligible}
-                className={cn(!isEligible && "opacity-80")}
-              >
-                {isSubmitting ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : !isEligible ? (
-                  <Lock className="w-4 h-4 mr-2" />
-                ) : (
-                  <Send className="w-4 h-4 mr-2" />
-                )}
-                Nộp hồ sơ
-              </Button>
-            </>
-          )}
-
-          {/* Resubmit - Officer action for rejected profiles */}
-          {can('resubmit') && onResubmit && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button disabled={isResubmitting}>
-                  {isResubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}
-                  Nộp lại hồ sơ
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Nộp lại hồ sơ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hồ sơ đã bị từ chối trước đó. Sau khi nộp lại, hồ sơ sẽ được chuyển sang trạng thái chờ duyệt.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onResubmit}>
-                    Nộp lại
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Manager Actions - Permission-based (ADR-FE-002).
-              F7 fix: when profile bypassed eligibility check
-              (`bypass_warning=true`), wrap Approve in a confirmation
-              dialog that lists the validation errors. Without this,
-              admin clicks Approve and silently approves a hồ sơ với
-              7 missing required fields → student row with NULL name. */}
-          {can('approve') && onApprove && (
-            profile.bypass_warning ? (
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    disabled={isApproving}
-                    className="bg-warning-600 hover:bg-warning-700"
-                  >
-                    {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                    Phê duyệt (vượt điều kiện)
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>⚠️ Hồ sơ chưa đủ điều kiện</AlertDialogTitle>
-                    <AlertDialogDescription asChild>
-                      <div className="space-y-2">
-                        <p>
-                          Đợt tuyển sinh này cho phép nộp hồ sơ chưa đầy đủ
-                          (<code>allow_unverified_submission=true</code>),
-                          nhưng hồ sơ hiện có{" "}
-                          <strong>{profile.validation_errors?.length ?? 0} lỗi</strong>
-                          {" "}chưa khắc phục:
-                        </p>
-                        {profile.validation_errors && profile.validation_errors.length > 0 && (
-                          <ul className="list-disc pl-5 text-sm max-h-40 overflow-y-auto">
-                            {profile.validation_errors.map((err, i) => (
-                              <li key={i}>{err}</li>
-                            ))}
-                          </ul>
-                        )}
-                        <p className="text-warning-800 font-medium">
-                          Phê duyệt sẽ tạo hồ sơ vào hệ thống với dữ liệu thiếu
-                          (ví dụ: tên ứng viên, ngày sinh, CCCD…). Bạn có chắc?
-                        </p>
-                      </div>
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>Để tôi xem lại</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={(e) => { e.preventDefault(); onApprove(); }}
-                      className="bg-warning-600 hover:bg-warning-700"
-                    >
-                      Vẫn phê duyệt
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            ) : (
-              <Button
-                onClick={onApprove}
-                disabled={isApproving}
-                className="bg-success-600 hover:bg-success-700"
-              >
-                {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
-                Phê duyệt
-              </Button>
-            )
-          )}
-
-          {can('reject') && onReject && (
-            <Button
-              onClick={onReject}
-              disabled={isRejecting}
-              variant="destructive"
-            >
-              {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-              Từ chối
+          {/* Kiểm tra toàn bộ — step 8 utility, navigate to first error step */}
+          {currentStep === 8 && onCheckCondition && (
+            <Button variant="outline" onClick={onCheckCondition}>
+              <ClipboardCheck className="w-4 h-4 mr-2" aria-hidden="true" />
+              Kiểm tra toàn bộ
             </Button>
           )}
 
-          {/* Phase 3 multi-NV: Publish Result (T6) — Thin Client compliance
-              gate via can('publish_result') BE flag. Permission tự refine
-              theo profile.uses_choice_engine + status IN (submitted,
-              reviewing) + role manager/admin (xem
-              admission_service._compute_frontend_fields). 1-click flow:
-              BE auto-transition submitted→reviewing internal nếu cần →
-              engine cascade per NV → admitted/rejected. KHÔNG REVERSIBLE
-              (chỉ admin rollback qua T17 = về draft, mất mọi decision). */}
-          {can('publish_result') && onPublishResult && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  disabled={isPublishingResult}
-                  className="bg-success-600 hover:bg-success-700"
-                >
-                  {isPublishingResult ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
-                  Công bố kết quả
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Công bố kết quả xét tuyển?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hệ thống sẽ chạy <strong>engine xét tuần tự các nguyện vọng</strong>
-                    {" "}theo thứ tự ưu tiên. Mỗi NV sẽ có quyết định riêng:
-                    {" "}<strong>Đậu</strong> / <strong>Trượt</strong> / <strong>Bị bỏ qua</strong>
-                    {" "}/ <strong>Dự bị</strong>. Hồ sơ sẽ chuyển sang trạng thái
-                    {" "}<strong>Đã công bố</strong> rồi <strong>Trúng tuyển</strong>
-                    {" "}hoặc <strong>Bị từ chối</strong>. Hành động không thể
-                    hoàn tác (chỉ admin có thể rollback về Nháp).
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={(e) => {
-                      // E2E #3 fix 2026-05-15 — defensive wrapper. Symptom:
-                      // Radix AlertDialogAction onClick sometimes did not
-                      // invoke handler in browser session. preventDefault
-                      // ensures dialog close handler doesn't swallow event;
-                      // explicit invoke guarantees mutate fires. Pattern
-                      // mirrored on request-revision below.
-                      e.preventDefault()
-                      onPublishResult?.()
-                    }}
-                    className="bg-success-600 hover:bg-success-700"
-                  >
-                    Công bố kết quả
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* E2E #10 — Request Revision (Yêu cầu sửa) for manager/admin.
-              Mirrors claim/unclaim AlertDialog pattern. Permission flag
-              `request_revision` already in _compute_frontend_fields:1443. */}
-          {can('request_revision') && onRequestRevision && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" disabled={isRequestingRevision}>
-                  {isRequestingRevision ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <ClipboardCheck className="w-4 h-4 mr-2" />
-                  )}
-                  Yêu cầu sửa
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Yêu cầu sửa hồ sơ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Hồ sơ sẽ chuyển sang trạng thái <strong>Cần sửa</strong>.
-                    Officer phụ trách sẽ nhận thông báo và có thể chỉnh sửa
-                    rồi nộp lại.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={(e) => {
-                      e.preventDefault()
-                      onRequestRevision?.()
-                    }}
-                  >
-                    Yêu cầu sửa
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Claim/Unclaim Actions */}
-          {can('claim') && onClaim && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" disabled={isClaiming}>
-                  {isClaiming ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <ClipboardCheck className="w-4 h-4 mr-2" />}
-                  Nhận duyệt
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Nhận duyệt hồ sơ?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Bạn sẽ được gán là người duyệt hồ sơ này. Bạn có thể bỏ nhận bất cứ lúc nào.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onClaim}>
-                    Nhận duyệt
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {can('unclaim') && onUnclaim && (
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="outline" disabled={isUnclaiming}>
-                  {isUnclaiming ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
-                  Bỏ nhận
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Bỏ nhận duyệt?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Bạn sẽ không còn là người duyệt hồ sơ này. Manager khác có thể nhận duyệt.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Hủy</AlertDialogCancel>
-                  <AlertDialogAction onClick={onUnclaim}>
-                    Bỏ nhận
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          )}
-
-          {/* Send magic-link. Visibility is driven by the backend
-              `send_confirmation` permission (see _compute_frontend_fields:
-              status=='approved' && manager/admin). Previously gated on
-              `can('enroll')`, which is never true on `approved` per backend
-              contract — the button was unreachable on real approved profiles.
-              See project_send_confirmation_ops_gaps. */}
+          {/* Outbound communication — mutex per state, max 1-2 visible. */}
           {can('send_confirmation') && (
             <SendConfirmationButton profileId={profile.id} />
           )}
-
-          {/* W2-1 fix Wave 7 (2026-05-16) — Generate magic-link cho 3
-              candidate self-service actions. BE-driven permission flags
-              `send_submit_link` / `send_resubmit_link` / `send_withdraw_link`
-              tự kiểm tra state + role (mirror service precheck), nên FE
-              hiển thị button đúng lúc đúng action. Mỗi button tự handle
-              dialog + copy URL pattern (reuse SendConfirmationButton UX). */}
           {can('send_submit_link') && (
             <SendMagicLinkButton profileId={profile.id} action="submit" />
           )}
@@ -470,41 +123,12 @@ export function AdmissionActions({
           {can('send_withdraw_link') && (
             <SendMagicLinkButton profileId={profile.id} action="withdraw" />
           )}
-
-          {/* Post-approval minor correction. External `can()` gate
-              mirrors SendConfirmationButton's pattern — caller decides
-              visibility so the dialog component (and its
-              useMinorCorrection mutation hook) never mounts when the
-              backend hasn't authorized this profile. Without the gate,
-              tests without a QueryClientProvider crash on hook
-              instantiation; with the gate, only profiles whose backend
-              flag is true ever invoke the hook. The dialog also
-              double-checks `minor_correction_fields` length internally
-              so a flag=true / fields=[] state stays renderable but
-              empty (matching the contract documented in
-              `_resolve_minor_correction_state`). */}
-          {can('minor_correction') && (
-            <MinorCorrectionDialog profile={profile} />
-          )}
-
-          {/* Enroll - can('enroll') when status ∈ {approved, confirmed, overridden}.
-              Label is "Ghi danh" (not "Xác nhận nhập học") so officers don't
-              confuse it with the applicant-facing "xác nhận" magic-link step. */}
-          {can('enroll') && (
-            <Button onClick={onEnroll} disabled={isEnrolling} className="bg-info-600 hover:bg-info-700">
-              {isEnrolling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
-              Ghi danh
-            </Button>
-          )}
         </div>
       </div>
     </div>
   )
 }
 
-/**
- * StatusBadge - Uses status-config for consistent styling
- */
 interface StatusBadgeProps {
   config: ReturnType<typeof getStatusConfig>
 }

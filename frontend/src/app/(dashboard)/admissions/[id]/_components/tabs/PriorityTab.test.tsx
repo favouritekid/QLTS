@@ -132,15 +132,12 @@ vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
   usePreviewPriorityKv: (...args: PreviewHookArgs) => previewHookSpy(...args),
 }))
 
-// auth.store — userRole drives override dialog mode = admin vs officer.
-const authUserState: { role: string | null } = { role: "officer" }
+// P0-1 fix 2026-05-22 — auth.store mock no longer needed. PriorityTab swap
+// đọc mode từ `profile.override_priority_kv_mode` (server-derived) thay vì
+// user.role string. Keep no-op mock để tránh import resolution surprise
+// nếu PriorityTab re-add dependency tương lai.
 vi.mock("@/lib/stores/auth.store", () => ({
-  useAuthStore: <T,>(
-    selector: (s: { user: { role: string } | null }) => T,
-  ): T =>
-    selector({
-      user: authUserState.role ? { role: authUserState.role } : null,
-    }),
+  useAuthStore: () => null,
 }))
 
 // ---------------------------------------------------------------------------
@@ -205,8 +202,10 @@ function makeProfile(over: {
   priority_resolution_snapshot?: Snapshot | null
   priority_object_codes?: string[] | null
   priority_object_evidence?: Record<string, unknown> | null
+  /** P0-1 fix 2026-05-22 — server-derived mode flag thay thế user.role check. */
+  override_priority_kv_mode?: "admin" | "manager" | "officer" | "none"
 }): AdmissionProfileResponse {
-  // Minimal partial — cast at the call site. PriorityTab only reads ~6 fields.
+  // Minimal partial — cast at the call site. PriorityTab only reads ~7 fields.
   return {
     id: 42,
     status: over.status,
@@ -215,6 +214,7 @@ function makeProfile(over: {
     priority_resolution_snapshot: over.priority_resolution_snapshot ?? null,
     priority_object_codes: over.priority_object_codes ?? null,
     priority_object_evidence: over.priority_object_evidence ?? null,
+    override_priority_kv_mode: over.override_priority_kv_mode ?? "officer",
   } as unknown as AdmissionProfileResponse
 }
 
@@ -230,7 +230,6 @@ beforeEach(() => {
   summarySpy.mockClear()
   overrideDialogSpy.mockClear()
   previewHookSpy.mockClear()
-  authUserState.role = "officer"
 })
 
 describe("PriorityTab composition — Phase E.4 PR-3", () => {
@@ -356,12 +355,12 @@ describe("PriorityTab composition — Phase E.4 PR-3", () => {
     expect(screen.getByTestId("probe-summary")).toBeInTheDocument()
   })
 
-  it("Case 7 — submitted + frozen + manual KV override: OverrideDialog receives currentKv from snapshot, mode=admin when role=admin", () => {
-    authUserState.role = "admin"
+  it("Case 7 — submitted + frozen + manual KV override: OverrideDialog receives currentKv from snapshot, mode=admin when override_priority_kv_mode=admin", () => {
     const profile = makeProfile({
       status: "submitted",
       version: 7,
       permissions: { override_priority_kv: true },
+      override_priority_kv_mode: "admin",  // P0-1 — server-derived mode
       priority_resolution_snapshot: {
         kv_resolved: "KV2-NT",
         rule_applied: "manual_override",
@@ -405,6 +404,64 @@ describe("PriorityTab composition — Phase E.4 PR-3", () => {
     // Preview disabled because not draft (frozen contract precedence).
     const lastCall = previewHookSpy.mock.calls.at(-1)!
     expect(lastCall[2]).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // Commit 3 — manager mode parity (anti-regression)
+  // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // P0-1 fix 2026-05-22 — mode flag từ server-derived profile field
+  // (override_priority_kv_mode) thay thế user.role string check ở FE.
+  // Anti-regression: nếu ai swap về user.role pattern, 4 test này fail.
+  // -------------------------------------------------------------------------
+
+  it("P0-1 — override_priority_kv_mode=manager: OverrideDialog nhận mode='manager' (KHÔNG fallback 'officer')", () => {
+    const profile = makeProfile({
+      status: "submitted",
+      permissions: { override_priority_kv: true },
+      override_priority_kv_mode: "manager",
+      priority_resolution_snapshot: { kv_resolved: "KV1" } as Snapshot,
+    })
+    renderTab({ profile })
+
+    const dialog = screen.getByTestId("probe-override-dialog")
+    expect(dialog).toHaveAttribute("data-mode", "manager")
+  })
+
+  it("P0-1 — override_priority_kv_mode=officer: OverrideDialog nhận mode='officer'", () => {
+    const profile = makeProfile({
+      status: "draft",
+      permissions: { override_priority_kv: true },
+      override_priority_kv_mode: "officer",
+    })
+    renderTab({ profile })
+
+    expect(screen.getByTestId("probe-override-dialog")).toHaveAttribute("data-mode", "officer")
+  })
+
+  it("P0-1 — override_priority_kv_mode=admin: OverrideDialog nhận mode='admin'", () => {
+    const profile = makeProfile({
+      status: "draft",
+      permissions: { override_priority_kv: true },
+      override_priority_kv_mode: "admin",
+    })
+    renderTab({ profile })
+
+    expect(screen.getByTestId("probe-override-dialog")).toHaveAttribute("data-mode", "admin")
+  })
+
+  it("P0-1 — override_priority_kv_mode=none: dialog vẫn mount với fallback mode='officer' (read-only display)", () => {
+    const profile = makeProfile({
+      status: "draft",
+      permissions: { override_priority_kv: true },
+      override_priority_kv_mode: "none",
+    })
+    renderTab({ profile })
+
+    // "none" → "officer" mapping (PriorityTab.tsx) để dialog vẫn render
+    // read-only view; backend hard-deny mutation đảm bảo safety.
+    expect(screen.getByTestId("probe-override-dialog")).toHaveAttribute("data-mode", "officer")
   })
 })
 

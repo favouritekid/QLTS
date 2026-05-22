@@ -150,6 +150,12 @@ def _make_profile(*, status="reviewing", gpa=None, choices=None):
         # ``graduated_thpt`` để legacy tests không vướng eligibility fail.
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
+        # P2 fix 2026-05-22 — evaluate_cascade gọi sync_lead_from_admission()
+        # sau cascade transitions; helper truy cập profile.lead → AttributeError
+        # nếu stub thiếu attribute. None làm helper graceful skip (warning log
+        # "Lead not loaded on profile", return False — match contract khi router
+        # quên eager-load).
+        lead=None,
     )
 
 
@@ -397,6 +403,65 @@ class TestEvaluateCascade:
         second_call_status = transition_mock.await_args_list[1].args[2]
         assert first_call_status == "result_published"
         assert second_call_status == "admitted"
+
+    @pytest.mark.asyncio
+    async def test_cascade_calls_sync_lead_from_admission(
+        self, db_session, patched_state_and_dispatch,
+    ):
+        """⭐ P1-1 anchor 2026-05-22 — evaluate_cascade MUST call
+        sync_lead_from_admission() sau cascade transitions. Trước fix, V2
+        choice-engine không sync Lead/Pipeline → admitted profile có
+        Lead.consultation_status_id vẫn stale ở sts06/sts07 dù admission
+        đã flip.
+
+        Verify: helper invoked với expected (db, profile, actor_id, reason).
+        """
+        from unittest.mock import patch as _patch
+        path, config = _make_path(min_gpa=6.0)
+        nv1 = _make_choice(
+            choice_id=1, display_order=1, path=path, config=config,
+            scores_dict={"MATH": 9.0, "PHYS": 8.0, "CHEM": 8.5},
+        )
+        profile = _make_profile(gpa=7.5, choices=[nv1])
+        actor = SimpleNamespace(id=88, role="manager")
+
+        with _patch(
+            "app.services.lead_admission_sync.sync_lead_from_admission",
+            new=AsyncMock(return_value=True),
+        ) as sync_mock:
+            await evaluate_cascade(db_session, profile, actor=actor)
+
+        sync_mock.assert_awaited_once()
+        kwargs = sync_mock.await_args.kwargs
+        assert kwargs["profile"] is profile
+        assert kwargs["changed_by_user_id"] == 88
+        assert "Choice engine cascade" in kwargs["reason"]
+
+    @pytest.mark.asyncio
+    async def test_cascade_forwards_actor_to_transitions(
+        self, db_session, patched_state_and_dispatch,
+    ):
+        """⭐ P2 fix #4 anchor 2026-05-22 — evaluate_cascade MUST forward
+        actor xuống 2 transition() để audit trail (status_history +
+        dispatched event payload) ghi đúng actor_id thay vì None.
+        """
+        transition_mock, _ = patched_state_and_dispatch
+        path, config = _make_path(min_gpa=6.0)
+        nv1 = _make_choice(
+            choice_id=1, display_order=1, path=path, config=config,
+            scores_dict={"MATH": 9.0, "PHYS": 8.0, "CHEM": 8.5},
+        )
+        profile = _make_profile(gpa=7.5, choices=[nv1])
+        actor = SimpleNamespace(id=88, role="admin")
+
+        await evaluate_cascade(db_session, profile, actor=actor)
+
+        assert transition_mock.await_count == 2
+        for call in transition_mock.await_args_list:
+            assert call.kwargs.get("actor") is actor, (
+                "evaluate_cascade phải forward actor xuống transition() "
+                "(P2 fix #4 audit trail)"
+            )
 
 
 # ============================================================================

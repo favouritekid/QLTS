@@ -44,16 +44,38 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     })
   }
 
+  // Commit 5 — quick-add 3 năm THPT. Tạo 3 record lớp 10/11/12 mặc định
+  // dùng năm hiện tại làm tốt nghiệp; officer chỉ cần điền tên trường +
+  // GPA. Engine yêu cầu lịch sử THPT để xác định KV → tăng tốc nhập hồ
+  // sơ tốt nghiệp năm hiện tại.
+  const addThreeYearsThpt = () => {
+    const gradYear = new Date().getFullYear()
+    for (let i = 0; i < 3; i++) {
+      const grade = 10 + i
+      const year = gradYear - 2 + i
+      append({
+        school_id: null,
+        school_name: "",
+        level: null,
+        year_from: year,
+        year_to: year,
+        grade_to: grade,
+        gpa: null,
+        graduation_type: grade === 12 ? "THPT" : null,
+      } as Parameters<typeof append>[0])
+    }
+  }
+
   return (
     <div className="space-y-8">
         <Card className="shadow-sm border-border">
             <CardHeader className="pb-2">
                 <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
-                <GraduationCap className="h-5 w-5" />
+                <GraduationCap className="h-5 w-5" aria-hidden="true" />
                 Lịch sử học tập
                 </CardTitle>
                 <CardDescription className="text-sm">
-                Thông tin các trường đã học (từ cấp 2, cấp 3...)
+                Thông tin các trường đã học (từ cấp 2, cấp 3…)
                 </CardDescription>
             </CardHeader>
 
@@ -73,7 +95,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 -mr-2"
                                 aria-label="Xóa lịch sử học tập"
                                 >
-                                <Trash2 className="h-4 w-4" />
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
                                 </Button>
                             )}
                         </div>
@@ -110,27 +132,47 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             </div>
                             {/* Free-text fallback if no school_id picked */}
                             {!form.watch(`academic_history.${index}.school_id`) && (
-                                <FormField
-                                    control={form.control}
-                                    name={`academic_history.${index}.school_name`}
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel className="text-xs text-muted-foreground">
-                                                Hoặc nhập tên thủ công (trường ngoài danh mục)
-                                            </FormLabel>
-                                            <FormControl>
-                                                <Input
-                                                    {...field}
-                                                    value={field.value ?? ""}
-                                                    placeholder="VD: THPT Nguyễn Huệ"
-                                                    disabled={!isEditable}
-                                                    className="bg-background"
-                                                />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
+                                <>
+                                    <FormField
+                                        control={form.control}
+                                        name={`academic_history.${index}.school_name`}
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel className="text-xs text-muted-foreground">
+                                                    Hoặc nhập tên thủ công (trường ngoài danh mục)
+                                                </FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        {...field}
+                                                        value={field.value ?? ""}
+                                                        placeholder="VD: THPT Nguyễn Huệ"
+                                                        disabled={!isEditable}
+                                                        className="bg-background"
+                                                    />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    {/* Commit 5 — free-text school warning. Engine resolve KV
+                                        cần school_id (administrative_nodes link). Trường nhập
+                                        tay sẽ không kết nối, KV chỉ resolve được khi quản lý
+                                        ấn định thủ công. */}
+                                    {(form.watch(`academic_history.${index}.school_name`) ?? "").trim().length > 0 && (
+                                        <div
+                                            role="alert"
+                                            data-testid={`academic-freetext-warning-${index}`}
+                                            className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                                        >
+                                            <span aria-hidden="true">⚠</span>
+                                            <span>
+                                                Trường nhập tay sẽ không dùng được để tự xác định
+                                                KV. Vui lòng chọn từ danh mục bên trên, hoặc đề
+                                                nghị quản lý ấn định KV thủ công.
+                                            </span>
+                                        </div>
                                     )}
-                                />
+                                </>
                             )}
                         </div>
                         
@@ -238,7 +280,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     <FormLabel className="text-xs">Trình độ</FormLabel>
                                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
                                     <FormControl>
-                                        <SelectTrigger className="bg-background">
+                                        <SelectTrigger className="bg-background" aria-label="Chọn trình độ tốt nghiệp">
                                         <SelectValue placeholder="Chọn" />
                                         </SelectTrigger>
                                     </FormControl>
@@ -270,16 +312,28 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                     </div>
                 )}
 
-                {/* ADD BUTTON */}
+                {/* ADD BUTTONS */}
                 {isEditable && (
-                     <Button 
-                        variant="outline"
-                        className="w-full sm:w-auto mt-4"
-                        onClick={addRecord}
-                    >
-                        <Plus className="w-4 h-4 mr-2" />
-                        Thêm trường
-                    </Button>
+                    <div className="flex flex-wrap gap-2 mt-4">
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={addRecord}
+                        >
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
+                            Thêm trường
+                        </Button>
+                        {/* Commit 5 — quick-add 3 năm THPT */}
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={addThreeYearsThpt}
+                            data-testid="academic-quick-add-thpt"
+                        >
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
+                            Thêm 3 năm THPT (lớp 10/11/12)
+                        </Button>
+                    </div>
                 )}
             </CardContent>
         </Card>

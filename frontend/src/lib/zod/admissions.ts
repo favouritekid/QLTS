@@ -96,6 +96,13 @@ export const priorityObjectEvidenceEntrySchema = z.object({
   document_id: z.number().int().nullable().optional(),
   verified_by: z.number().int().nullable().optional(),
   verified_at: z.string().datetime({ offset: true }).nullable().optional(),
+  // Phase E.4 fix (smoke 2026-05-20 lesson) — BE schema admission.py:515
+  // persist rejected_by/rejected_at vào evidence JSONB entry khi PATCH
+  // reject. FE strict schema thiếu 2 field này → mọi GET sau reject sẽ
+  // ResponseValidationError extra_forbidden khi enforce parsing. Add để
+  // contract parity với BE.
+  rejected_by: z.number().int().nullable().optional(),
+  rejected_at: z.string().datetime({ offset: true }).nullable().optional(),
   reject_reason: z.string().max(500).nullable().optional(),
   requested_at: z.string().datetime({ offset: true }).nullable().optional(),
   // Q9 #07 Phase E.4 Decision #3 — PERSISTED paper_only_verification flag.
@@ -237,6 +244,11 @@ export const prioritySnapshotSchema = z
       .union([z.number().int(), z.string()])
       .nullable()
       .optional(),
+    // Code review 2026-05-22 — denorm actor.full_name vào snapshot khi
+    // override (priority_override_service.py:407). UI render tên thay vì
+    // raw user_id. Backward-compat: legacy snapshots (pre-deploy) sẽ
+    // null → FE fallback "#{actor_id}".
+    manual_override_by_name: z.string().nullable().optional(),
     manual_override_at: z
       .string()
       .datetime({ offset: true })
@@ -244,6 +256,27 @@ export const prioritySnapshotSchema = z
       .optional(),
     manual_override_reason: z.string().nullable().optional(),
     evidence_file_id: z.number().int().nullable().optional(),
+    // Commit 3 — typed snapshot fields (priority_service.py:836-866):
+    // BE-canonical so FE-thin-client renders trực tiếp thay vì derive/fallback.
+    basis: z.string().nullable().optional(),
+    basis_reason: z.string().nullable().optional(),
+    rule_law_citation: z.string().nullable().optional(),
+    eligibility: z
+      .object({
+        passed: z.boolean(),
+        reason: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    target_level: z.string().nullable().optional(),
+    admission_type: z.string().nullable().optional(),
+    path_bonus_rule: z
+      .object({
+        max_total_bonus: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
   })
   .passthrough()
 
@@ -862,6 +895,13 @@ export const admissionProfileResponseSchema = z.object({
   // renders an orange warning banner + confirmation dialog in front of
   // the Approve button.
   bypass_warning: z.boolean().default(false),
+
+  // P0-1 fix 2026-05-22 — BE-aggregated mode flag thay thế FE
+  // `user.role` string check ở PriorityTab (vi phạm Thin Client RULE 2
+  // frontend/CLAUDE.md). Server-derived, drift-free khi Casbin policy đổi.
+  override_priority_kv_mode: z
+    .enum(["admin", "manager", "officer", "none"])
+    .default("none"),
 
   // Validation errors (reasons for ineligibility)
   validation_errors: z.array(z.string()).default([]),

@@ -298,3 +298,16 @@ local_backup/
 # scripts/plan-loop.ps1 : personal PowerShell automation (Windows-specific)
 frontend/src/app/dev/
 scripts/plan-loop.ps1
+
+# Review pass-3 2026-05-22 (F6 finding) — dev-only smoke artifacts với
+# hard-coded test credentials. KHÔNG commit lên git history.
+# tmp/ : scratch workspace (downloads, ad-hoc backup, PDF dumps)
+# Backend_FastAPI/scripts/smoke_*.py : smoke test scripts với
+#   NEW_PASSWORD="Smoke@2026" hard-coded — leak nếu push
+# smoke-*.png : workbench screenshot từ Chrome MCP smoke session
+tmp/
+Backend_FastAPI/scripts/smoke_*.py
+smoke-*.png
+# officer/lead activity reports — query exports chứa PII (tên, lead counts,
+# timestamps). KHÔNG commit; canonical metric = KPI dashboard.
+Documents/reports/officer_*.csv

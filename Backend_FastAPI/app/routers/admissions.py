@@ -1472,8 +1472,10 @@ async def approve_admission(
     request: Request,
     profile_id: int,
     data: schemas.ApproveRequest,
-    current_user: models.User = Depends(deps.get_current_active_user),  # ✅ FIX: Strict Active User Check
-    # profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # REMOVED: Service handles fetching with lock
+    current_user: models.User = CasbinAuth,  # Code review 2026-05-22: swap
+    # inline role check → CasbinAuth dep so 403 fires before Pydantic body
+    # validation (was inline check + 422 schema leak risk + anti-pattern
+    # "Logic in Router" per CLAUDE.md). Consistent với reject/request_revision.
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -1482,7 +1484,7 @@ async def approve_admission(
     **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3):
     - Layer 1: Rate limiting (200 req/hour)
     - Layer 2: RBAC via CasbinAuth (Manager/Admin only)
-    - Layer 3: IDOR via get_admission_for_manager (unit check)
+    - Layer 3: IDOR via _check_idor_access in service (unit check)
     - Layer 4: Service layer handles business logic
 
     **State Transition:**
@@ -1502,12 +1504,9 @@ async def approve_admission(
 
     **Errors:**
     - 400: Invalid state transition or version mismatch
+    - 403: Officer/accountant role (Casbin denied before body parse)
     - 404: Profile not found (or IDOR protection)
     """
-    
-    # Check Manager/Admin Role explicitly since we removed CasbinAuth/IDOR dep
-    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
-         raise PermissionDeniedError("Only Managers or Admins can approve profiles")
 
     # ADM-026 review (Round 2): admin-only bypass + audit are enforced
     # together inside `_assert_quota_or_bypass`. The router pre-gate was

@@ -32,9 +32,16 @@ interface PendingInvalidations {
   dashboard: boolean;
   // ADM-032 — single flag is enough; ``admissionsKeys.all`` cascades.
   admissionAll: boolean;
+  // P2 (2026-05-22) — scope hẹp cho event KHÔNG đổi status/row contents
+  // (doc mutations, minor corrections). Tránh refetch storm list +
+  // status-counts + stats khi data_updated chỉ touch field hồ sơ.
+  admissionDetails: Set<number>;
 }
 
-const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
+// F1 (review pass-2 2026-05-22) — export để test dùng fake timers
+// (`vi.advanceTimersByTime(INVALIDATION_DEBOUNCE_MS + 1)`) thay vì
+// hard-code magic number 400ms (flaky nếu bump debounce).
+export const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
 
 /**
  * Component "vô hình" (không render)
@@ -66,6 +73,8 @@ export function SocketHandler() {
     // every detail/list/status-counts/stats query under the
     // ``["admissions"]`` root.
     admissionAll: false,
+    // P2 (2026-05-22) — detail-only invalidation scope.
+    admissionDetails: new Set(),
   });
   const invalidationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -78,7 +87,8 @@ export function SocketHandler() {
                     pending.leadTimelines.size > 0 ||
                     pending.pipeline ||
                     pending.dashboard ||
-                    pending.admissionAll;
+                    pending.admissionAll ||
+                    pending.admissionDetails.size > 0;
 
     if (!hasWork) return;
 
@@ -89,6 +99,7 @@ export function SocketHandler() {
       pipeline: pending.pipeline,
       dashboard: pending.dashboard,
       admissionAll: pending.admissionAll,
+      admissionDetailsCount: pending.admissionDetails.size,
     });
 
     // Invalidate leads list (only once, not per-lead)
@@ -119,10 +130,20 @@ export function SocketHandler() {
     // ADM-032 — admission profile cascade. ``admissionsKeys.all``
     // (root ``["admissions"]``) invalidates every detail/list/
     // status-counts/stats query rooted under it. One call covers
-    // every doc-mutation broadcast (upload / paper / verify / reject
-    // / reset).
+    // every status-flipping broadcast (create/delete/status_changed/
+    // fee_calculated).
     if (pending.admissionAll) {
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+    } else if (pending.admissionDetails.size > 0) {
+      // P2 (2026-05-22) — narrow scope cho event KHÔNG đổi status:
+      // doc mutations + minor corrections. List/counts/stats không cần
+      // refetch nên skip nếu chưa có admissionAll=true. Nếu cả 2 set
+      // (admissionAll=true) thì cascade root đã cover detail rồi.
+      for (const profileId of pending.admissionDetails) {
+        queryClient.invalidateQueries({
+          queryKey: admissionsKeys.detail(profileId),
+        });
+      }
     }
 
     // Reset pending state
@@ -133,6 +154,7 @@ export function SocketHandler() {
       pipeline: false,
       dashboard: false,
       admissionAll: false,
+      admissionDetails: new Set(),
     };
   }, [queryClient]);
 
@@ -142,8 +164,10 @@ export function SocketHandler() {
     leadTimeline?: number;
     pipeline?: boolean;
     dashboard?: boolean;
-    // ADM-032
+    // ADM-032 — broad cascade (status-flipping events)
     admissionAll?: boolean;
+    // P2 (2026-05-22) — detail-only scope (doc/minor-correction events)
+    admissionDetail?: number;
   }) => {
     // Accumulate the requested invalidations
     if (updates.leadsLists) {
@@ -163,6 +187,9 @@ export function SocketHandler() {
     }
     if (updates.admissionAll) {
       pendingInvalidationsRef.current.admissionAll = true;
+    }
+    if (updates.admissionDetail !== undefined) {
+      pendingInvalidationsRef.current.admissionDetails.add(updates.admissionDetail);
     }
 
     // Clear existing timeout and schedule new one
@@ -270,6 +297,14 @@ export function SocketHandler() {
 
     console.log("[SocketHandler] ✅ Registering event listeners (socket connected)");
 
+    // P2/P3 (2026-05-22) — opt-in payload logging. PII (name/phone/email),
+    // status, officer_id... có thể appear trong payload nên KHÔNG log
+    // unconditional ở production. Gate behind explicit env flag. Default:
+    // log event name only, không dump payload.
+    const debugSocketPayload =
+      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "1" ||
+      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "true";
+
     // ✅ SECURITY FIX: Simplified force logout handlers
     // Backend emits to user_room_{user_id}, so all sessions receive the event
     // No need to track JTI client-side - backend manages session invalidation
@@ -316,7 +351,13 @@ export function SocketHandler() {
 
     // Lắng nghe sự kiện notification (real-time notifications)
     const handleNewNotification = (notification: Notification) => {
-      console.log("[SocketHandler] Received new notification:", notification);
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] Received new notification:", notification);
+      } else {
+        console.log(
+          `[SocketHandler] Received new notification (id=${notification.id}, type=${notification.type})`,
+        );
+      }
 
       // Add notification to the query cache
       addNotification(notification);
@@ -379,7 +420,13 @@ export function SocketHandler() {
       data?: Record<string, unknown>;
       timestamp: string;
     }) => {
-      console.log("[SocketHandler] Received data_updated event:", data);
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] Received data_updated event:", data);
+      } else {
+        console.log(
+          `[SocketHandler] Received data_updated event (resource=${data.resource_type}, op=${data.operation}, id=${data.resource_id})`,
+        );
+      }
 
       // Invalidate queries based on resource_type
       switch (data.resource_type) {
@@ -413,7 +460,17 @@ export function SocketHandler() {
           // paper / verify / reject / reset). Silent invalidate via
           // the shared 300ms debounce; no toast (officer phụ trách
           // nhiều hồ sơ sẽ thấy spam nếu enable).
-          scheduleInvalidation({ admissionAll: true });
+          //
+          // P2 (2026-05-22) — doc mutations KHÔNG đổi profile.status hay
+          // row content trong list (docs ratio không hiển thị columns),
+          // chỉ refetch detail. Tránh refetch storm list/counts/stats.
+          // Status-flipping events đã có channel riêng (application_*).
+          if (data.operation === "update" && typeof data.resource_id === "number") {
+            scheduleInvalidation({ admissionDetail: data.resource_id });
+          } else {
+            // create/delete operations affect list rows
+            scheduleInvalidation({ admissionAll: true });
+          }
           break;
 
         case "organization":
@@ -632,7 +689,54 @@ export function SocketHandler() {
         "[SocketHandler] application_minor_corrected → invalidating admission caches",
         { profile: data.application_id, fields: data.changed_fields },
       );
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      // P2 (2026-05-22) — minor correction post-approval chỉ touch field
+      // hồ sơ, KHÔNG đổi status/badge trong list. Detail-only scope đủ.
+      queryClient.invalidateQueries({
+        queryKey: admissionsKeys.detail(data.application_id),
+      });
+    };
+
+    // P2 (2026-05-22) — ADMISSION_* domain event consumer cho realtime
+    // cross-tab/cross-user sync. BE notification_dispatcher.py:299 emit
+    // mỗi event với `event.value` (snake_case) qua Socket.IO sau khi
+    // outbox commit. Trước đây FE chỉ lắng nghe application_status_changed
+    // (legacy event); ADMISSION_RESULT_PUBLISHED + 4 decision/waitlist
+    // events là canonical Phase 3 PR-3B/3C events nhưng KHÔNG có consumer
+    // → manager publish ở browser A thì browser B không refresh list/
+    // counts/stats. Mọi event nhóm này đều flip profile.status → cascade
+    // root key `admissionsKeys.all`. Payload chuẩn từ event_catalog.py
+    // chứa application_id + lead_id (optional vài event).
+    //
+    // Events covered:
+    //   - admission_result_published (T6 admin batch publish)
+    //   - admission_decision_admitted (T7 per-profile admit)
+    //   - admission_decision_waitlisted (T8 per-profile waitlist)
+    //   - admission_decision_rejected (T9 per-profile reject)
+    //   - admission_waitlist_promoted (T10 admin promote waitlist)
+    //   - admission_waitlist_rejected (T11 admin reject waitlist)
+    const handleAdmissionStatusFlipEvent = (data: {
+      application_id?: number;
+      lead_id?: number;
+      [key: string]: unknown;
+    }) => {
+      console.log(
+        "[SocketHandler] admission status-flip event → scheduling invalidation",
+        { profile: data.application_id, lead: data.lead_id },
+      );
+      // P2-4 (review B-scope 2026-05-22) — DEBOUNCE thay vì sync invalidate.
+      // T6 publish_result emit batch (~50 profile decision events liên tục)
+      // → 50× sync `invalidateQueries(admissionsKeys.all)` cùng 1 frame =
+      // React Query queue thrash. Match pattern PRIORITY_* listeners +
+      // data_updated cùng dùng `scheduleInvalidation` (300ms debounce).
+      scheduleInvalidation({ admissionAll: true });
+      // Targeted detail refresh nếu có profile ID (cùng debounce queue).
+      if (typeof data.application_id === "number") {
+        scheduleInvalidation({ admissionDetail: data.application_id });
+      }
+      // Lead row projection từ admission decision (lead_admission_sync).
+      if (typeof data.lead_id === "number") {
+        scheduleInvalidation({ leadDetail: data.lead_id });
+      }
     };
 
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
@@ -1142,10 +1246,49 @@ export function SocketHandler() {
     socket.on("ctv_commission_created", handleCtvCommissionCreated);
     socket.on("ctv_lead_converted", handleCtvLeadConverted);
 
+    // P2 (2026-05-22) — ADMISSION_* domain events (BE event_catalog.py)
+    socket.on("admission_result_published", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_admitted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_waitlisted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_rejected", handleAdmissionStatusFlipEvent);
+    socket.on("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
 
-    // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
+    // P2 (2026-05-22) — PRIORITY_* events. BE event_catalog.py:1091/1130/1160
+    // dispatch khi officer/admin override KV / verify object UT / reject
+    // object UT. Trước đây FE listener thiếu — operator B (cùng hồ sơ
+    // qua tab khác) thấy PriorityTab/preview stale tới manual refetch.
+    // Detail-only scope: priority field thay đổi KHÔNG flip profile.status
+    // hay row content list (priority chỉ hiển thị trong detail view).
+    const handlePriorityEvent = (data: {
+      application_id?: number;
+      [key: string]: unknown;
+    }) => {
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] priority event → invalidating detail", data);
+      } else {
+        console.log(
+          `[SocketHandler] priority event (profile=${data.application_id})`,
+        );
+      }
+      if (typeof data.application_id === "number") {
+        scheduleInvalidation({ admissionDetail: data.application_id });
+      }
+    };
+    socket.on("priority_kv_overridden", handlePriorityEvent);
+    socket.on("priority_object_verified", handlePriorityEvent);
+    socket.on("priority_object_rejected", handlePriorityEvent);
+
+    // DEBUG: Log incoming Socket.IO events to diagnose real-time sync.
+    // (`debugSocketPayload` declared earlier at top of effect.)
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
-      console.log(`[SocketHandler] 🔔 Event received: ${event}`, args);
+      if (debugSocketPayload) {
+        console.log(`[SocketHandler] 🔔 Event received: ${event}`, args);
+      } else {
+        console.log(
+          `[SocketHandler] 🔔 Event received: ${event} (${args.length} arg${args.length === 1 ? "" : "s"})`,
+        );
+      }
     };
     socket.onAny(handleAnyEvent);
 
@@ -1188,6 +1331,19 @@ export function SocketHandler() {
       socket.off("ctv_suspended", handleCtvSuspended);
       socket.off("ctv_commission_created", handleCtvCommissionCreated);
       socket.off("ctv_lead_converted", handleCtvLeadConverted);
+
+      // P2 (2026-05-22) — ADMISSION_* cleanup
+      socket.off("admission_result_published", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_admitted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_waitlisted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_rejected", handleAdmissionStatusFlipEvent);
+      socket.off("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
+
+      // P2 (2026-05-22) — PRIORITY_* cleanup
+      socket.off("priority_kv_overridden", handlePriorityEvent);
+      socket.off("priority_object_verified", handlePriorityEvent);
+      socket.off("priority_object_rejected", handlePriorityEvent);
 
       socket.offAny(handleAnyEvent);
     };

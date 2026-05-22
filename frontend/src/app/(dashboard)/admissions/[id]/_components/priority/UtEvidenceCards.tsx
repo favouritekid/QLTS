@@ -95,6 +95,14 @@ export interface UtEvidenceCardsProps {
    * profile mutation. Service-layer enforces version guard.
    */
   onCodesChange?: (codes: string[]) => void
+  /**
+   * Followup fix: form state codes (RHF watch) ưu tiên hơn
+   * `profile.priority_object_codes` (server snapshot) để officer tick thêm
+   * UT thấy card mới render ngay, không phải chờ save+refetch. Caller
+   * (PriorityTab) truyền `form.watch("priority_object_codes")` xuống.
+   * Bỏ qua nếu undefined → fallback profile snapshot.
+   */
+  formCodes?: string[] | null
 }
 
 export function UtEvidenceCards({
@@ -103,8 +111,12 @@ export function UtEvidenceCards({
   isEditable,
   onNavigateToDocuments,
   onCodesChange,
+  formCodes,
 }: UtEvidenceCardsProps) {
-  const codes = profile.priority_object_codes ?? []
+  // Followup fix: trước đây luôn đọc profile.priority_object_codes → tick
+  // thêm UT trong form state không reflect render tới save+refetch. Giờ
+  // ưu tiên formCodes nếu caller truyền (PriorityTab RHF watch).
+  const codes = formCodes ?? profile.priority_object_codes ?? []
   const evidence = getEvidence(profile)
   const verifiedCount = codes.filter((c) => evidence[c]?.status === "verified").length
   const pendingCount = codes.filter((c) => evidence[c]?.status === "pending").length
@@ -121,11 +133,11 @@ export function UtEvidenceCards({
       className="space-y-3 rounded-lg border border-border bg-card p-4"
     >
       <div className="flex items-center justify-between">
-        <h3 className="text-base font-semibold">§ 3. Đối tượng ưu tiên (UT)</h3>
+        <h3 className="text-base font-semibold">Đối tượng ưu tiên</h3>
         {codes.length > 0 && (
           <p className="text-xs text-muted-foreground">
-            Officer đã ghi nhận: {codes.length} diện ({verifiedCount} verified,{" "}
-            {pendingCount} pending)
+            Đã ghi nhận: {codes.length} diện ({verifiedCount} đã duyệt,{" "}
+            {pendingCount} chờ duyệt)
           </p>
         )}
       </div>
@@ -161,6 +173,7 @@ export function UtEvidenceCards({
           open={addOpen}
           onOpenChange={setAddOpen}
           profile={profile}
+          currentCodes={codes}
           onCodesChange={onCodesChange}
         />
       )}
@@ -574,6 +587,13 @@ interface UtAddDisclosureProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   profile: AdmissionProfileResponse
+  /**
+   * Source-of-truth codes từ caller (UtEvidenceCards `codes` = formCodes ??
+   * profile.priority_object_codes). Phải đọc từ form state thay vì
+   * `profile.priority_object_codes` trực tiếp — nếu không, tick UT04 xong
+   * tick UT07 sẽ overwrite về `[07]` vì profile snapshot chưa save+refetch.
+   */
+  currentCodes: string[]
   onCodesChange?: (codes: string[]) => void
 }
 
@@ -581,19 +601,19 @@ function UtAddDisclosure({
   open,
   onOpenChange,
   profile,
+  currentCodes,
   onCodesChange,
 }: UtAddDisclosureProps) {
   const { data: catalog = [], isLoading } = useUtCatalog(profile.academic_year ?? new Date().getFullYear())
-  const existingCodes = new Set(profile.priority_object_codes ?? [])
+  const existingCodes = new Set(currentCodes)
 
   const toggleCode = (subCode: string) => {
-    const codes = profile.priority_object_codes ?? []
-    if (codes.includes(subCode)) {
+    if (existingCodes.has(subCode)) {
       // Untick handled via UntickConfirmDialog; this branch should not fire
       // (catalog checkboxes marked existing as readOnly).
       return
     }
-    onCodesChange?.([...codes, subCode])
+    onCodesChange?.([...currentCodes, subCode])
   }
 
   return (
@@ -616,7 +636,8 @@ function UtAddDisclosure({
           )}
           {!isLoading && catalog.length === 0 && (
             <p className="text-xs text-muted-foreground">
-              Catalog rỗng cho năm {profile.academic_year}. Admin cần seed config.
+              Chưa có danh mục đối tượng ưu tiên cho năm {profile.academic_year}.
+              Vui lòng liên hệ quản trị hệ thống.
             </p>
           )}
           {catalog.map((item: PriorityObjectCatalogItem) => {

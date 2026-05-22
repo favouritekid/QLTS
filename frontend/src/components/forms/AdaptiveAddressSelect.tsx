@@ -227,6 +227,7 @@ export function AdaptiveAddressSelect({
             onChange={handleProvinceChange}
             options={provinceOptions}
             placeholder={isLegacy ? "Tỉnh/Thành phố (63 tỉnh)" : "Tỉnh/Thành phố (34 tỉnh)"}
+            ariaLabel={`Chọn tỉnh/thành phố — ${label}`}
             searchPlaceholder="Tìm tỉnh/thành phố..."
             emptyText="Không tìm thấy"
             disabled={disabled || loadingProvinces}
@@ -241,6 +242,7 @@ export function AdaptiveAddressSelect({
               onChange={handleDistrictChange}
               options={districtOptions}
               placeholder="Quận/Huyện"
+              ariaLabel={`Chọn quận/huyện — ${label}`}
               searchPlaceholder="Tìm quận/huyện..."
               emptyText={loadingDistricts ? "Đang tải..." : "Không tìm thấy"}
               disabled={disabled || !selectedProvinceCode || loadingDistricts}
@@ -257,6 +259,7 @@ export function AdaptiveAddressSelect({
             onChange={handleWardChange}
             options={wardOptions}
             placeholder="Phường/Xã"
+            ariaLabel={`Chọn xã/phường — ${label}`}
             searchPlaceholder="Tìm phường/xã..."
             emptyText={loadingWards ? "Đang tải..." : "Không tìm thấy"}
             disabled={

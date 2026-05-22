@@ -507,3 +507,90 @@ async def test_mixed_batch_marks_each_row_independently(setup_test_database):
         for r in rows:
             assert r.claimed_until is None  # Step 3 cleared on every row
             assert r.attempts == 1
+
+
+# --- 8. P2 anchor (2026-05-22) — rooms derivation from payload -------------
+
+
+async def test_worker_passes_rooms_for_admission_event(setup_test_database):
+    """Anchor: worker MUST resolve rooms từ payload và pass `rooms=`
+    xuống `dispatch()`. Trước fix, sensitive event qua outbox bị
+    `_emit_domain_event` fail-closed do `rooms=None` (notification_dispatcher.py:281).
+
+    Test verify contract: ``_resolve_rooms_for_event`` derived rooms
+    được forward đúng kwarg `rooms=` cho dispatcher. Patch helper để
+    cô lập rooms logic khỏi DB load + isolate dispatch verification.
+    """
+    from app.database import AsyncSessionLocal
+    from app.models import NotificationOutbox
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                NotificationOutbox(
+                    event_code="admission_decision_admitted",
+                    payload={"application_id": 100, "lead_id": 200},
+                    idempotency_key="ANCHOR-ROOMS-1",
+                )
+            )
+
+    expected_rooms = ["role_admin", "unit_5", "user_room_42"]
+
+    with patch(
+        "app.tasks.notification_outbox_tasks._resolve_rooms_for_event",
+        new_callable=AsyncMock,
+        return_value=expected_rooms,
+    ), patch(
+        "app.tasks.notification_outbox_tasks.dispatch",
+        new_callable=AsyncMock,
+        return_value=([], None),
+    ) as mock_dispatch:
+        result = _run_worker_sync()
+
+    assert result["dispatched"] == 1
+    assert mock_dispatch.await_count == 1
+    call_kwargs = mock_dispatch.call_args.kwargs
+    # Anchor: rooms kwarg MUST be forwarded (trước fix kwarg vắng mặt)
+    assert "rooms" in call_kwargs, "Worker phải pass rooms= xuống dispatch()"
+    assert call_kwargs["rooms"] == expected_rooms
+
+
+async def test_worker_rooms_derivation_failure_falls_back_to_none(
+    setup_test_database,
+):
+    """Defensive: nếu `_resolve_rooms_for_event` raise (e.g., DB
+    transient error khi load profile), worker fallback `rooms=None`
+    thay vì crash row. Dispatcher fail-closed cho sensitive event là
+    đúng contract — row vẫn được mark ``ok`` (delivery sẽ retry qua
+    in-app/email path khác, không lặp outbox).
+    """
+    from app.database import AsyncSessionLocal
+    from app.models import NotificationOutbox
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                NotificationOutbox(
+                    event_code="admission_decision_admitted",
+                    payload={"application_id": 9999},  # non-existent
+                    idempotency_key="ANCHOR-ROOMS-FALLBACK",
+                )
+            )
+
+    with patch(
+        "app.tasks.notification_outbox_tasks._resolve_rooms_for_event",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("simulated rooms load failure"),
+    ), patch(
+        "app.tasks.notification_outbox_tasks.dispatch",
+        new_callable=AsyncMock,
+        return_value=([], None),
+    ) as mock_dispatch:
+        result = _run_worker_sync()
+
+    # Row vẫn dispatch (rooms=None forward; dispatcher sẽ fail-closed sensitive,
+    # nhưng đó là decision của dispatcher, không phải của worker)
+    assert result["dispatched"] == 1
+    assert mock_dispatch.await_count == 1
+    call_kwargs = mock_dispatch.call_args.kwargs
+    assert call_kwargs.get("rooms") is None

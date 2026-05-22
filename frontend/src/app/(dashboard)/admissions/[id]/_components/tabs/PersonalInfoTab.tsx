@@ -84,7 +84,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem className="col-span-2 md:col-span-1">
                 <FormLabel>Họ và tên</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Nhập họ và tên" />
+                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Nhập họ và tên" autoComplete="name" />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -144,7 +144,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>CCCD/CMND</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} maxLength={12} disabled={!isEditable} placeholder="Số CCCD" />
+                  <Input {...field} value={field.value || ""} maxLength={12} disabled={!isEditable} placeholder="VD: 001234567890" inputMode="numeric" pattern="[0-9]*" autoComplete="off" spellCheck={false} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -159,7 +159,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>Số BHXH (nếu có)</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Mã số BHXH" />
+                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: 0112345678" autoComplete="off" spellCheck={false} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -179,7 +179,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
-                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -202,7 +202,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
-                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -227,7 +227,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <FormItem>
                   <FormLabel>Số điện thoại</FormLabel>
                   <FormControl>
-                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Số điện thoại" />
+                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: 0901234567" type="tel" inputMode="tel" autoComplete="tel" spellCheck={false} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -240,14 +240,15 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <FormItem>
                   <FormLabel>Email</FormLabel>
                   <FormControl>
-                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Email" />
+                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: nguyen.van.a@example.com" type="email" inputMode="email" autoComplete="email" spellCheck={false} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
             />
             
-            <AdaptiveAddressSelect
+            <div className="col-span-2 space-y-2">
+              <AdaptiveAddressSelect
               label="Hộ khẩu thường trú"
               provinceValue={permanentProvince}
               districtValue={permanentDistrict}
@@ -284,6 +285,30 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               }}
               disabled={!isEditable}
             />
+
+            {/* Commit 5 — Address normalized indicator. BE engine resolve
+                KV qua permanent_commune_code (canonical). Officer cần thấy
+                trạng thái rõ thay vì chờ fail ở Submit/Priority. */}
+            {permanentCommuneCode ? (
+              <p
+                className="text-xs text-success-700 flex items-center gap-1"
+                data-testid="address-normalized-ok"
+              >
+                <span aria-hidden="true">✓</span>
+                Đã chuẩn hóa mã xã/phường — KV có thể tự xác định
+              </p>
+            ) : permanentWard ? (
+              <p
+                className="text-xs text-warning-700 flex items-center gap-1"
+                data-testid="address-normalized-warning"
+                role="alert"
+              >
+                <span aria-hidden="true">⚠</span>
+                Địa chỉ chưa chuẩn hóa mã xã — KV có thể không tự xác định.
+                Vui lòng chọn lại xã/phường từ danh mục.
+              </p>
+            ) : null}
+            </div>
         </CardContent>
       </Card>
 
@@ -306,7 +331,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={nationalities?.map(n => ({ value: n.code, label: n.name })) || []}
                     placeholder="Chọn quốc tịch"
-                    searchPlaceholder="Tìm kiếm quốc tịch..."
+                    searchPlaceholder="Tìm kiếm quốc tịch…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -329,7 +354,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={ethnicities?.map(e => ({ value: e.code, label: e.name })) || []}
                     placeholder="Chọn dân tộc"
-                    searchPlaceholder="Tìm kiếm dân tộc..."
+                    searchPlaceholder="Tìm kiếm dân tộc…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -352,7 +377,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={religions?.map(r => ({ value: r.code, label: r.name })) || []}
                     placeholder="Chọn tôn giáo"
-                    searchPlaceholder="Tìm kiếm tôn giáo..."
+                    searchPlaceholder="Tìm kiếm tôn giáo…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -375,7 +400,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={disabilities?.map(d => ({ value: d.code, label: d.name })) || []}
                     placeholder="Chọn loại khuyết tật"
-                    searchPlaceholder="Tìm kiếm..."
+                    searchPlaceholder="Tìm kiếm…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />

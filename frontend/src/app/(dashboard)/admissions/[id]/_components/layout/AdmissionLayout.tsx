@@ -3,6 +3,7 @@
 import { ReactNode } from "react"
 import { AdmissionHeader } from "./AdmissionHeader"
 import { PipelineSidebar } from "./PipelineSidebar"
+import { MobileIssueDrawer } from "./MobileIssueDrawer"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface AdmissionLayoutProps {
@@ -22,6 +23,13 @@ interface AdmissionLayoutProps {
     documents?: { category: string; errors: string[]; count: number }
     scores?: { category: string; errors: string[]; count: number }
   } | null
+  // Commit 7 — pass-through cho ProfileActionMenu trong header.
+  onClaim?: () => void
+  onUnclaim?: () => void
+  isClaiming?: boolean
+  isUnclaiming?: boolean
+  onDelete?: () => void
+  isDeleting?: boolean
 }
 
 export function AdmissionLayout({
@@ -32,19 +40,32 @@ export function AdmissionLayout({
   stepsStatus,
   validationErrors = [],
   validationSummary,
-  groupedValidationErrors
+  groupedValidationErrors,
+  onClaim,
+  onUnclaim,
+  isClaiming = false,
+  isUnclaiming = false,
+  onDelete,
+  isDeleting = false,
 }: AdmissionLayoutProps) {
   return (
     <div className="flex flex-col min-h-screen bg-muted/50">
-       {/* 1. Sticky Header */}
        <div className="sticky top-0 z-30 bg-background border-b shadow-sm">
-          <AdmissionHeader profile={profile} />
+          <AdmissionHeader
+            profile={profile}
+            onClaim={onClaim}
+            onUnclaim={onUnclaim}
+            isClaiming={isClaiming}
+            isUnclaiming={isUnclaiming}
+            onDelete={onDelete}
+            isDeleting={isDeleting}
+          />
        </div>
 
        <div className="flex flex-1 container max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-6 gap-4 md:gap-8">
-          {/* 3. Sidebar Nav */}
           <aside className="w-56 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
              <PipelineSidebar
+                profile={profile}
                 currentStep={currentStep}
                 onStepChange={onStepChange}
                 stepsStatus={stepsStatus}
@@ -55,11 +76,16 @@ export function AdmissionLayout({
              />
           </aside>
 
-          {/* 4. Main Content */}
           <main className="flex-1 pb-20">
              {children}
           </main>
        </div>
+
+       <MobileIssueDrawer
+          profile={profile}
+          validationErrors={validationErrors}
+          groupedValidationErrors={groupedValidationErrors}
+       />
     </div>
   )
 }

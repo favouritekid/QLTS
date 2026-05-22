@@ -54,7 +54,7 @@ describe("PriorityAuditTimeline", () => {
         ]}
       />,
     )
-    expect(screen.getByText("Override KV")).toBeInTheDocument()
+    expect(screen.getByText("Ấn định KV")).toBeInTheDocument()
     expect(screen.getByText(/KV3 → KV1/)).toBeInTheDocument()
     expect(screen.getByText(/Trường vùng cao xa/)).toBeInTheDocument()
     expect(screen.getByText(/bởi Phạm Thái Hà/)).toBeInTheDocument()
@@ -121,7 +121,7 @@ describe("PriorityAuditTimeline", () => {
     expect(screen.getByText(/3 thao tác gần nhất/i)).toBeInTheDocument()
     expect(screen.getByText("Từ chối UT")).toBeInTheDocument()
     expect(screen.getByText("Duyệt UT")).toBeInTheDocument()
-    expect(screen.getByText("Override KV")).toBeInTheDocument()
+    expect(screen.getByText("Ấn định KV")).toBeInTheDocument()
   })
 
   it("renders unknown action_type with raw label (no crash)", () => {
@@ -140,6 +140,6 @@ describe("PriorityAuditTimeline", () => {
       />,
     )
     expect(screen.queryByText(/bởi/)).not.toBeInTheDocument()
-    expect(screen.getByText("Override KV")).toBeInTheDocument()
+    expect(screen.getByText("Ấn định KV")).toBeInTheDocument()
   })
 })

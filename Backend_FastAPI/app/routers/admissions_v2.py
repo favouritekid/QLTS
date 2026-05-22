@@ -104,6 +104,11 @@ async def publish_admission_result(
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
         .options(
+            # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
+            # sync_lead_from_admission() sau khi profile.status flip
+            # (reviewing → result_published → admitted/rejected). Trước
+            # đây không eager-load → sync silent fail "Lead not loaded".
+            selectinload(models.AdmissionProfile.lead),
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.admission_method),
@@ -858,6 +863,29 @@ async def preview_priority_kv(
     from app.services.priority_service import resolve_law_citation
     rule_law_citation = resolve_law_citation(meta.get("rule_applied"))
 
+    # Code review 2026-05-22 — denorm path_bonus_rule trong preview để FE
+    # hiển thị cap consistent giữa draft (preview) và frozen (snapshot).
+    # Trước fix: PrioritySummaryPanel chỉ render cap ở isPostDraft (snapshot
+    # path_bonus_rule); draft hiện "+3.50đ" rồi sau submit cap "+2.50đ"
+    # gây UX surprise. Best-effort lookup từ profile.admission_path; None
+    # nếu chain chưa eager-load đầy đủ — FE degrade gracefully (không cap
+    # trong draft, vẫn cap đúng sau submit khi snapshot frozen).
+    path_bonus_rule_dict: Optional[dict] = None
+    try:
+        from app.services.admission_choice_engine_service import resolve_effective_bonus_rule
+        path_obj = getattr(profile, "admission_path", None)
+        if path_obj is not None:
+            rule = resolve_effective_bonus_rule(path_obj)
+            if rule is not None:
+                path_bonus_rule_dict = dict(rule)
+    except Exception as exc:  # noqa: BLE001 — preview là best-effort, fail soft
+        log.debug(
+            "preview_priority_kv.path_bonus_rule_lookup_failed",
+            profile_id=profile_id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
     return schemas.PreviewPriorityKvResponse(
         kv_resolved=kv,
         pathway=meta.get("pathway"),
@@ -871,6 +899,7 @@ async def preview_priority_kv(
         ut_breakdown=ut_breakdown_data,
         total_bonus_potential=total_bonus_potential,
         rule_law_citation=rule_law_citation,
+        path_bonus_rule=path_bonus_rule_dict,
     )
 
 

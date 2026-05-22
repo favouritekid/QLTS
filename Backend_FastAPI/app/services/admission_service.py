@@ -1614,7 +1614,46 @@ def _compute_frontend_fields(
         ),
         "view": True,
     }
+    # Code review 2026-05-22 — aggregate `has_decision` flag để FE
+    # PipelineSidebar (Step 8 unlock gate) + AdmissionActions (sticky Next
+    # gate 7→8) check 1 flag thay vì OR 7 permission flags rời rạc. Nếu
+    # tương lai thêm decision permission mới (vd `cancel`), BE chỉ cần
+    # thêm flag vào OR-list dưới và FE pickup ngay mà không cần update.
+    permissions["has_decision"] = any(
+        permissions[key]
+        for key in (
+            "submit",
+            "approve",
+            "reject",
+            "resubmit",
+            "request_revision",
+            "publish_result",
+            "enroll",
+        )
+    )
     profile.permissions = permissions
+
+    # P0-1 fix 2026-05-22 (review B-scope) — BE-aggregated mode flag thay thế
+    # FE `user.role` string check ở PriorityTab (vi phạm Thin Client RULE 2
+    # frontend/CLAUDE.md). Drift risk: nếu Casbin policy đổi (accountant
+    # diamond-inherit manager, role rename), FE silent flip mode. Top-level
+    # field thay vì nested trong permissions dict (`Dict[str, bool]` không
+    # nhận string literal).
+    #
+    # Values:
+    #   - "admin":   admin user, full bypass (post-publish via acknowledge flag)
+    #   - "manager": manager user, post-pre-publish window only
+    #   - "officer": officer (READ-ONLY dialog view; backend hard-deny mutation —
+    #                kept for FE empty-state CTA "Đề nghị quản lý ấn định KV")
+    #   - "none":    không có quyền access workbench
+    if is_admin:
+        profile.override_priority_kv_mode = "admin"
+    elif is_manager:
+        profile.override_priority_kv_mode = "manager"
+    elif is_officer:
+        profile.override_priority_kv_mode = "officer"
+    else:
+        profile.override_priority_kv_mode = "none"
     
     # =========================================================================
     # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)

@@ -398,12 +398,17 @@ async def override_kv(
 
     # ---- Step 5: Build new snapshot — overwrite with manual override metadata
     now_iso = datetime.now(timezone.utc).isoformat()
+    # Code review 2026-05-22: denorm actor.full_name vào snapshot để FE
+    # render tên thay vì raw user_id. Actor đã được eager-loaded ở top
+    # qua get_admission_for_review/access; actor.full_name luôn available.
+    actor_display_name = (actor.full_name or "").strip() or None
     new_snapshot: dict[str, Any] = {
         **prev_snapshot,  # preserve fields not part of override (breakdown, etc.)
         "kv_resolved": kv_resolved,
         "pathway": "manual",
         "rule_applied": "manual_override",
         "manual_override_by": actor.id,
+        "manual_override_by_name": actor_display_name,
         "manual_override_at": now_iso,
         "manual_override_reason": reason_clean,
         "evidence_file_id": evidence_file_id,

@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/collapsible"
 import type { PreviewPriorityKvResponse } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { resolveEngineDisplay } from "./engineDisplay"
 
 export type EngineResultState =
   | "happy"
@@ -98,6 +99,12 @@ export interface EngineResultCardProps {
   canOverride: boolean
   /** Caller opens dialog (state lifted to PriorityTab). */
   onOpenOverride: () => void
+  /**
+   * Commit 3 — officer hard-deny CTA. Khi `!canOverride && requires_manual_override`,
+   * EngineResultCard render "Sửa dữ liệu nguồn" link để officer chuyển sang
+   * tab Học tập (step 3) thay vì silent absence của primary CTA.
+   */
+  onNavigateToAcademic?: () => void
 }
 
 export function EngineResultCard({
@@ -105,51 +112,16 @@ export function EngineResultCard({
   preview,
   canOverride,
   onOpenOverride,
+  onNavigateToAcademic,
 }: EngineResultCardProps) {
   const state = deriveEngineState(profile, preview)
   const header = STATE_HEADERS[state]
   const snapshot = profile.priority_resolution_snapshot ?? {}
-  const isPostDraft = profile.status !== "draft"
 
-  // P1 fix (PR-3 Step D audit): frozen contract — snapshot AUTHORITATIVE
-  // post-submit; preview only consulted trong draft. Defensive vs preview
-  // accidentally fired post-submit (PriorityTab gates query, but components
-  // also defensive).
-  const kv = (() => {
-    if (isPostDraft) return snapshot.kv_resolved ?? null
-    if (preview) return preview.kv_resolved ?? null
-    return snapshot.kv_resolved ?? null
-  })()
-  const lawCitation = (() => {
-    if (isPostDraft) {
-      if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
-        return deriveLawCitationFallback(snapshot.rule_applied as string)
-      }
-      return null
-    }
-    if (preview) return preview.rule_law_citation
-    if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
-      return deriveLawCitationFallback(snapshot.rule_applied as string)
-    }
-    return null
-  })()
-  const reason = (() => {
-    if (isPostDraft) return snapshot.reason ?? null
-    if (preview) return preview.reason ?? null
-    return snapshot.reason ?? null
-  })()
-  const areaBonus = (() => {
-    if (isPostDraft) {
-      const breakdown = snapshot.breakdown
-      if (breakdown && typeof breakdown === "object" && "area_bonus" in breakdown) {
-        const v = (breakdown as Record<string, unknown>).area_bonus
-        return typeof v === "number" ? v : 0
-      }
-      return 0
-    }
-    if (typeof preview?.area_bonus === "number") return preview.area_bonus
-    return 0
-  })()
+  // Commit 8 followup — pure helper extract (priority/engineDisplay.ts):
+  // gom 4 IIFE precedence logic (kv/lawCitation/reason/areaBonus) thành 1
+  // pure function unit-testable độc lập.
+  const { kv, lawCitation, reason, areaBonus } = resolveEngineDisplay(profile, preview)
 
   return (
     <section
@@ -192,7 +164,16 @@ export function EngineResultCard({
             <div className="mt-2 rounded-md border border-purple-200 bg-purple-50/60 p-2 text-xs">
               <p>
                 <span className="font-medium">Ấn định bởi:</span>{" "}
-                {(snapshot.manual_override_by as string | number | null) ?? "—"}
+                {/* Code review 2026-05-22 — ưu tiên denorm `manual_override_by_name`
+                    (priority_override_service.py:407). Legacy snapshot pre-deploy
+                    chưa có field → fallback `#{actor_id}`. */}
+                {(() => {
+                  const name = snapshot.manual_override_by_name
+                  if (typeof name === "string" && name) return name
+                  const id = snapshot.manual_override_by
+                  if (id !== undefined && id !== null && id !== "") return `#${id}`
+                  return "—"
+                })()}
                 {snapshot.manual_override_at && (
                   <span className="ml-2 opacity-70">
                     · {formatTimestamp(snapshot.manual_override_at as string)}
@@ -208,7 +189,10 @@ export function EngineResultCard({
         </div>
       )}
 
-      {/* Ambiguous — primary CTA visible, reason from engine */}
+      {/* Ambiguous — primary CTA visible cho người có quyền override.
+          Commit 3 — officer hard-deny: nếu không canOverride, render hint
+          "Đề nghị quản lý ấn định KV" + secondary link "Sửa dữ liệu nguồn"
+          (navigate tới tab Học tập) thay vì silent absence của CTA. */}
       {state === "ambiguous" && (
         <div className="space-y-2 text-sm">
           {reason && (
@@ -216,7 +200,7 @@ export function EngineResultCard({
               <span className="font-medium">Lý do:</span> {reason}
             </p>
           )}
-          {canOverride && (
+          {canOverride ? (
             <Button
               type="button"
               size="sm"
@@ -227,6 +211,28 @@ export function EngineResultCard({
               <ShieldAlert className="h-4 w-4 mr-2" />
               Chọn KV thủ công
             </Button>
+          ) : (
+            <div
+              data-testid="engine-result-officer-deny-cta"
+              className="rounded-md border border-orange-200 bg-orange-50/60 p-2 space-y-2"
+            >
+              <p className="text-sm">
+                Bạn không có quyền ấn định KV thủ công. Vui lòng{" "}
+                <span className="font-medium">đề nghị quản lý</span> ấn định,
+                hoặc bổ sung dữ liệu nguồn để hệ thống tự xác định.
+              </p>
+              {onNavigateToAcademic && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onNavigateToAcademic}
+                  data-testid="engine-result-officer-navigate-academic"
+                >
+                  Sửa dữ liệu nguồn (Tab Học tập)
+                </Button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -305,21 +311,8 @@ export function EngineResultCard({
 // =============================================================================
 // PURE HELPERS
 // =============================================================================
-
-/**
- * Fallback law citation cho frozen snapshot khi preview null. Map MUST align
- * BE priority_service.RULE_LAW_CITATION (5 keys).
- */
-function deriveLawCitationFallback(ruleApplied: string): string | null {
-  const map: Record<string, string | null> = {
-    longest_duration: "TT 05/2021 Phụ lục 01 Mục 5.b",
-    tiebreak_graduation_school: "TT 05/2021 Phụ lục 01 Mục 5.a",
-    commune_lookup: "TT 05/2021 Phụ lục 01 Mục 4",
-    manual_override: "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
-    ambiguous_requires_manual: null,
-  }
-  return map[ruleApplied] ?? null
-}
+// deriveLawCitationFallback + resolveEngineDisplay extracted vào engineDisplay.ts
+// (Commit 8 followup) để unit-test pure tách khỏi component render.
 
 function formatTimestamp(iso: string): string {
   try {

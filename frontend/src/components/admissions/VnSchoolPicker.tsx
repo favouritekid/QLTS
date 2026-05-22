@@ -98,13 +98,15 @@ export function VnSchoolPicker({
 
   return (
     <div className={cn("space-y-1", className)}>
+      <div className="flex gap-1 items-stretch">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="w-full justify-between font-normal"
+            aria-label="Chọn trường THPT từ danh mục"
+            className="flex-1 justify-between font-normal"
             disabled={disabled}
           >
             <span
@@ -115,16 +117,7 @@ export function VnSchoolPicker({
             >
               {displayLabel}
             </span>
-            <div className="flex items-center gap-1 ml-2 shrink-0">
-              {value.school_id && !disabled && (
-                <X
-                  className="h-4 w-4 text-muted-foreground hover:text-destructive"
-                  onClick={handleManualClear}
-                  aria-label="Xóa lựa chọn"
-                />
-              )}
-              <ChevronsUpDown className="h-4 w-4 opacity-50" />
-            </div>
+            <ChevronsUpDown className="h-4 w-4 opacity-50 ml-2 shrink-0" />
           </Button>
         </PopoverTrigger>
         <PopoverContent
@@ -205,6 +198,23 @@ export function VnSchoolPicker({
           </Command>
         </PopoverContent>
       </Popover>
+
+      {/* Clear button — tách khỏi combobox trigger (Commit 5 A11y) để
+          tránh nested interactive. Button riêng, accessible name rõ,
+          keyboard tab focus được. */}
+      {value.school_id && !disabled && (
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleManualClear}
+          aria-label="Bỏ chọn trường"
+          className="shrink-0 text-muted-foreground hover:text-destructive"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      )}
+      </div>
 
       {/* Selected school metadata badge */}
       {value.school_id && (

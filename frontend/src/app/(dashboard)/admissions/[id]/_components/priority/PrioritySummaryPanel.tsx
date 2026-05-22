@@ -119,6 +119,45 @@ export function resolveSummaryDisplay(
   return { kv: kv ?? null, areaBonus, verifiedBucket }
 }
 
+/**
+ * Cap resolver — extracted helper P2-3 anchor 2026-05-22.
+ *
+ * Source-of-truth precedence cho `path_bonus_rule.max_total_bonus`:
+ *   - Post-draft (frozen): `snapshot.path_bonus_rule` (immutable sau submit/override)
+ *   - Draft (live): `preview.path_bonus_rule` (BE eager-load best-effort)
+ *
+ * Trước fix Code review 2026-05-22: preview KHÔNG trả `path_bonus_rule`
+ * → UX inconsistency (draft hiển thị "+3.50đ" full, sau submit cap còn
+ * "+2.50đ"). Phase 3 PR-3C ship preview field denorm → cap consistent
+ * giữa draft và frozen.
+ */
+export interface CapResolution {
+  maxTotalBonus: number | null
+  isCapped: boolean
+  appliedBonus: number
+}
+
+export function resolveCap(
+  profile: Pick<AdmissionProfileResponse, "status" | "priority_resolution_snapshot">,
+  preview: Pick<PreviewPriorityKvResponse, "path_bonus_rule"> | null,
+  totalBonus: number,
+): CapResolution {
+  const isPostDraft = profile.status !== "draft"
+  const snapshot = (profile.priority_resolution_snapshot ?? {}) as Record<string, unknown>
+  const snapshotRule =
+    snapshot.path_bonus_rule && typeof snapshot.path_bonus_rule === "object"
+      ? (snapshot.path_bonus_rule as { max_total_bonus?: number | null }).max_total_bonus ?? null
+      : null
+  const previewRule =
+    preview?.path_bonus_rule && typeof preview.path_bonus_rule === "object"
+      ? preview.path_bonus_rule.max_total_bonus ?? null
+      : null
+  const maxTotalBonus = isPostDraft ? snapshotRule : previewRule
+  const isCapped = typeof maxTotalBonus === "number" && totalBonus > maxTotalBonus
+  const appliedBonus = isCapped ? (maxTotalBonus as number) : totalBonus
+  return { maxTotalBonus, isCapped, appliedBonus }
+}
+
 export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelProps) {
   const [auditOpen, setAuditOpen] = useState(false)
   const [lawOpen, setLawOpen] = useState(false)
@@ -130,6 +169,10 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
     .filter((code) => evidence[code]?.status === "pending")
 
   const totalBonus = (areaBonus ?? 0) + (verifiedBucket?.rate ?? 0)
+
+  const { maxTotalBonus, isCapped, appliedBonus } = resolveCap(
+    profile, preview, totalBonus,
+  )
 
   return (
     <section
@@ -168,6 +211,35 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
           <p className="text-xs text-muted-foreground" data-testid="priority-summary-pending-note">
             ({pendingCodes.map((c) => `UT${c}`).join(", ")} chờ duyệt → chưa cộng)
           </p>
+        )}
+
+        {typeof maxTotalBonus === "number" && (
+          <div
+            className="flex flex-col gap-1 pt-1 mt-1 border-t border-dashed border-border"
+            data-testid="priority-summary-cap"
+          >
+            <p className="text-xs text-muted-foreground flex items-baseline gap-2">
+              <span>Cap tối đa của ngành:</span>
+              <span className="tabular-nums">+{maxTotalBonus.toFixed(2)}đ</span>
+            </p>
+            <p className="flex items-baseline gap-2">
+              <span>Áp dụng cuối:</span>
+              <span
+                className="tabular-nums font-bold"
+                data-testid="priority-summary-applied"
+              >
+                +{appliedBonus.toFixed(2)}đ
+              </span>
+              {isCapped && (
+                <span
+                  className="rounded-full bg-warning-100 text-warning-800 text-xs px-2 py-0.5"
+                  data-testid="priority-summary-cap-badge"
+                >
+                  Bị cap
+                </span>
+              )}
+            </p>
+          </div>
         )}
       </div>
 

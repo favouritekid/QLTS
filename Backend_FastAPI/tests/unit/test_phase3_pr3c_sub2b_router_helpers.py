@@ -42,6 +42,11 @@ def _make_profile(*, status="reviewing", uses_choice_engine=True, choices=None):
         gpa_overall=Decimal("7.5"),
         graduation_year=2024,
         choices=choices or [],
+        # P2 fix 2026-05-22 — evaluate_cascade + promote_waitlisted_choice +
+        # reject_waitlisted_choice gọi sync_lead_from_admission(profile.lead);
+        # helper raises AttributeError nếu stub thiếu attribute. None làm
+        # helper graceful skip (warning log, return False).
+        lead=None,
     )
 
 
@@ -126,10 +131,20 @@ class TestPublishResult:
     async def test_happy_path_calls_cascade(
         self, db_session, patched_evaluate_cascade,
     ):
-        """Pre-checks pass → evaluate_cascade called with profile."""
+        """Pre-checks pass → evaluate_cascade called with profile + actor.
+
+        P2 fix 2026-05-22: publish_result forward actor xuống cascade để
+        2 transition reviewing→result_published→admitted/rejected ghi đúng
+        actor_id vào status_history + dispatched event payload (trước đây
+        actor_id=None — audit trail bị mất danh tính người publish).
+        """
         profile = _make_profile(status="reviewing", uses_choice_engine=True)
         result, callback = await publish_result(db_session, profile)
-        patched_evaluate_cascade.assert_awaited_once_with(db_session, profile)
+        # Default actor=None khi caller (test) không truyền — same shape
+        # với production router luôn pass actor=current_user.
+        patched_evaluate_cascade.assert_awaited_once_with(
+            db_session, profile, actor=None
+        )
         assert result.profile_id == 42
 
 
