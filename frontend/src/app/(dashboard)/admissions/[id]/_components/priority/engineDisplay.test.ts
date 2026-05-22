@@ -24,6 +24,7 @@ const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   ut_breakdown: null,
   total_bonus_potential: 0.75,
   rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b (preview)",
+  path_bonus_rule: null,
 }
 
 type SnapshotInput = AdmissionProfileResponse["priority_resolution_snapshot"]

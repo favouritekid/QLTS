@@ -144,7 +144,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>CCCD/CMND</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} maxLength={12} disabled={!isEditable} placeholder="Số CCCD" inputMode="numeric" pattern="[0-9]*" autoComplete="off" />
+                  <Input {...field} value={field.value || ""} maxLength={12} disabled={!isEditable} placeholder="VD: 001234567890" inputMode="numeric" pattern="[0-9]*" autoComplete="off" spellCheck={false} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -159,7 +159,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>Số BHXH (nếu có)</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Mã số BHXH" />
+                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: 0112345678" autoComplete="off" spellCheck={false} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -179,7 +179,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
-                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -202,7 +202,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={provinceOptions}
                     placeholder="Chọn tỉnh/thành phố"
-                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -227,7 +227,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <FormItem>
                   <FormLabel>Số điện thoại</FormLabel>
                   <FormControl>
-                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Số điện thoại" type="tel" inputMode="tel" autoComplete="tel" />
+                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: 0901234567" type="tel" inputMode="tel" autoComplete="tel" spellCheck={false} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -240,7 +240,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <FormItem>
                   <FormLabel>Email</FormLabel>
                   <FormControl>
-                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Email" type="email" inputMode="email" autoComplete="email" />
+                    <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="VD: nguyen.van.a@example.com" type="email" inputMode="email" autoComplete="email" spellCheck={false} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -331,7 +331,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={nationalities?.map(n => ({ value: n.code, label: n.name })) || []}
                     placeholder="Chọn quốc tịch"
-                    searchPlaceholder="Tìm kiếm quốc tịch..."
+                    searchPlaceholder="Tìm kiếm quốc tịch…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -354,7 +354,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={ethnicities?.map(e => ({ value: e.code, label: e.name })) || []}
                     placeholder="Chọn dân tộc"
-                    searchPlaceholder="Tìm kiếm dân tộc..."
+                    searchPlaceholder="Tìm kiếm dân tộc…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -377,7 +377,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={religions?.map(r => ({ value: r.code, label: r.name })) || []}
                     placeholder="Chọn tôn giáo"
-                    searchPlaceholder="Tìm kiếm tôn giáo..."
+                    searchPlaceholder="Tìm kiếm tôn giáo…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />
@@ -400,7 +400,7 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                     onChange={field.onChange}
                     options={disabilities?.map(d => ({ value: d.code, label: d.name })) || []}
                     placeholder="Chọn loại khuyết tật"
-                    searchPlaceholder="Tìm kiếm..."
+                    searchPlaceholder="Tìm kiếm…"
                     emptyText="Không tìm thấy"
                     disabled={!isEditable}
                   />

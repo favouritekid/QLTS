@@ -81,7 +81,7 @@ export function AdmissionActions({
           {/* Back Button — all steps after the first (Commit 1: step 8 cũng có) */}
           {currentStep > 1 && (
             <Button variant="outline" onClick={() => onStepChange(currentStep - 1)}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
+              <ArrowLeft className="w-4 h-4 mr-2" aria-hidden="true" />
               Quay lại
             </Button>
           )}
@@ -89,7 +89,7 @@ export function AdmissionActions({
           {/* Save — step 1-7 with edit permission */}
           {currentStep < 8 && can('save') && (
             <Button variant="outline" onClick={onSave} disabled={isSaving}>
-              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" /> : <Save className="w-4 h-4 mr-2" aria-hidden="true" />}
               Lưu thay đổi
             </Button>
           )}
@@ -98,14 +98,14 @@ export function AdmissionActions({
           {showNextButton && (
             <Button onClick={() => onStepChange(currentStep + 1)}>
               Tiếp tục
-              <ArrowRight className="w-4 h-4 ml-2" />
+              <ArrowRight className="w-4 h-4 ml-2" aria-hidden="true" />
             </Button>
           )}
 
           {/* Kiểm tra toàn bộ — step 8 utility, navigate to first error step */}
           {currentStep === 8 && onCheckCondition && (
             <Button variant="outline" onClick={onCheckCondition}>
-              <ClipboardCheck className="w-4 h-4 mr-2" />
+              <ClipboardCheck className="w-4 h-4 mr-2" aria-hidden="true" />
               Kiểm tra toàn bộ
             </Button>
           )}

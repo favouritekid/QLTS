@@ -577,7 +577,7 @@ export function AdmissionDetailClient({
           <AlertDialogHeader>
             <AlertDialogTitle>Thay đổi chưa lưu</AlertDialogTitle>
             <AlertDialogDescription>
-              Thay đổi ở bước hiện tại sẽ bị mất nếu bạn bỏ qua. Chọn &quot;Ở lại và lưu&quot; để giữ lại dữ liệu, hoặc bỏ thay đổi để chuyển bước.
+              Thay đổi ở bước hiện tại sẽ bị mất nếu bạn bỏ qua. Chọn &ldquo;Ở lại và lưu&rdquo; để giữ lại dữ liệu, hoặc bỏ thay đổi để chuyển bước.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -585,7 +585,7 @@ export function AdmissionDetailClient({
               onClick={handleConfirmStepChange}
               className={cn(buttonVariants({ variant: "destructive" }))}
             >
-              <AlertTriangle className="mr-2 h-4 w-4" />
+              <AlertTriangle className="mr-2 h-4 w-4" aria-hidden="true" />
               Bỏ thay đổi và tiếp tục
             </AlertDialogAction>
             <AlertDialogCancel>Ở lại và lưu</AlertDialogCancel>

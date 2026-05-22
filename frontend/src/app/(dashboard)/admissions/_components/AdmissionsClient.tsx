@@ -43,6 +43,7 @@ import {
   BarChart3,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -259,6 +260,7 @@ interface AdmissionsClientProps {
 
 export function AdmissionsClient({ initialData, initialQueryParams }: AdmissionsClientProps) {
   const queryClient = useQueryClient()
+  const router = useRouter()
 
   // ── Filter state (URL sync + localStorage) ────────────────────────────
   const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useAdmissionsFilter()
@@ -508,7 +510,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <Input
-              placeholder="Tìm kiếm theo tên, email, CCCD..."
+              placeholder="Tìm kiếm theo tên, email, CCCD…"
+              aria-label="Tìm kiếm hồ sơ tuyển sinh"
+              name="admissions-search"
+              autoComplete="off"
+              spellCheck={false}
               value={state.search}
               onChange={(e) => handlers.handleSearchChange(e.target.value)}
               className="pl-10"
@@ -521,7 +527,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
                 onClick={() => handlers.handleSearchChange("")}
                 aria-label="Xóa tìm kiếm"
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4" aria-hidden="true" />
               </Button>
             )}
           </div>
@@ -531,7 +537,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             value={state.academicYear !== undefined ? String(state.academicYear) : "all"}
             onValueChange={(val) => handlers.handleYearChange(val === "all" ? undefined : Number(val))}
           >
-            <SelectTrigger className="w-full sm:w-[140px]">
+            <SelectTrigger className="w-full sm:w-[140px]" aria-label="Lọc theo năm học">
               <SelectValue placeholder="Năm học" />
             </SelectTrigger>
             <SelectContent>
@@ -549,7 +555,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             value={state.majorFilter || "all"}
             onValueChange={(val) => handlers.handleMajorChange(val === "all" ? "" : val)}
           >
-            <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectTrigger className="w-full sm:w-[180px]" aria-label="Lọc theo ngành học">
               <SelectValue placeholder="Ngành" />
             </SelectTrigger>
             <SelectContent>
@@ -565,7 +571,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
           {/* Status Filter (dropdown multi-select) */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="w-full sm:w-auto gap-2">
+              <Button variant="outline" className="w-full sm:w-auto gap-2" aria-label="Lọc theo trạng thái hồ sơ">
                 <Filter className="h-4 w-4" aria-hidden="true" />
                 Trạng thái
                 {state.statusFilters.length > 0 && (
@@ -606,7 +612,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             value={state.degreeLevelFilter || "all"}
             onValueChange={(val) => handlers.handleDegreeLevelChange(val === "all" ? "" : val)}
           >
-            <SelectTrigger className="w-full sm:w-[160px]">
+            <SelectTrigger className="w-full sm:w-[160px]" aria-label="Lọc theo trình độ đào tạo">
               <SelectValue placeholder="Trình độ" />
             </SelectTrigger>
             <SelectContent>
@@ -624,7 +630,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             value={state.paymentStatusFilter || "all"}
             onValueChange={(val) => handlers.handlePaymentStatusChange(val === "all" ? "" : val)}
           >
-            <SelectTrigger className="w-full sm:w-[180px]">
+            <SelectTrigger className="w-full sm:w-[180px]" aria-label="Lọc theo trạng thái học phí">
               <SelectValue placeholder="Học phí" />
             </SelectTrigger>
             <SelectContent>
@@ -698,7 +704,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
           {/* Clear all filters */}
           {hasActiveFilters && (
             <Button variant="ghost" size="sm" onClick={handlers.resetFilters} className="gap-1">
-              <X className="h-4 w-4" />
+              <X className="h-4 w-4" aria-hidden="true" />
               Xóa bộ lọc
             </Button>
           )}
@@ -838,19 +844,44 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
                   ))}
                 </TableHeader>
                 <TableBody>
-                  {table.getRowModel().rows.map((row) => (
-                    <TableRow
-                      key={row.id}
-                      data-state={row.getIsSelected() && "selected"}
-                      className="cursor-pointer"
-                    >
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
+                  {table.getRowModel().rows.map((row) => {
+                    const profileId = (row.original as { id?: number })?.id
+                    const handleRowActivate = () => {
+                      if (profileId !== undefined) {
+                        router.push(`/admissions/${profileId}`)
+                      }
+                    }
+                    return (
+                      <TableRow
+                        key={row.id}
+                        data-state={row.getIsSelected() && "selected"}
+                        className="cursor-pointer"
+                        // Web Interface Guidelines: clickable row cần keyboard
+                        // a11y. tabIndex + Enter/Space handler để keyboard
+                        // users navigate được. Cells nội bộ có button/link
+                        // riêng vẫn focusable bình thường.
+                        tabIndex={profileId !== undefined ? 0 : -1}
+                        role={profileId !== undefined ? "link" : undefined}
+                        onKeyDown={(e) => {
+                          if (profileId === undefined) return
+                          if (e.key === "Enter" || e.key === " ") {
+                            // Skip nếu focus đang ở element interactive bên trong (button/link/input/checkbox)
+                            const target = e.target as HTMLElement
+                            const isInner = target.closest("button, a, input, [role='checkbox']")
+                            if (isInner && isInner !== e.currentTarget) return
+                            e.preventDefault()
+                            handleRowActivate()
+                          }
+                        }}
+                      >
+                        {row.getVisibleCells().map((cell) => (
+                          <TableCell key={cell.id}>
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -992,7 +1023,7 @@ function AdmissionCard({ profile, isSelected, onSelect }: AdmissionCardProps) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Thao tác">
-              <MoreVertical className="h-4 w-4" />
+              <MoreVertical className="h-4 w-4" aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">

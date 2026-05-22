@@ -96,7 +96,7 @@ export function AdmissionsBulkActionsBar({
             className="h-8 gap-1.5 text-success-600 hover:text-success-700"
             disabled={isLoading}
           >
-            <CheckCircle className="h-4 w-4" />
+            <CheckCircle className="h-4 w-4" aria-hidden="true" />
             <span className="hidden sm:inline">Duyệt</span>
           </Button>
         )}
@@ -109,7 +109,7 @@ export function AdmissionsBulkActionsBar({
             className="h-8 gap-1.5 text-error-600 hover:text-error-700"
             disabled={isLoading}
           >
-            <XCircle className="h-4 w-4" />
+            <XCircle className="h-4 w-4" aria-hidden="true" />
             <span className="hidden sm:inline">Từ chối</span>
           </Button>
         )}
@@ -122,7 +122,7 @@ export function AdmissionsBulkActionsBar({
             className="h-8 gap-1.5"
             disabled={isLoading}
           >
-            <UserPlus className="h-4 w-4" />
+            <UserPlus className="h-4 w-4" aria-hidden="true" />
             <span className="hidden sm:inline">Gán officer</span>
           </Button>
         )}
@@ -134,7 +134,7 @@ export function AdmissionsBulkActionsBar({
           className="h-8 gap-1.5"
           disabled={isLoading}
         >
-          <Download className="h-4 w-4" />
+          <Download className="h-4 w-4" aria-hidden="true" />
           <span className="hidden sm:inline">Xuất CSV</span>
         </Button>
       </div>

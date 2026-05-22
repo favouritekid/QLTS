@@ -173,6 +173,7 @@ export function UtEvidenceCards({
           open={addOpen}
           onOpenChange={setAddOpen}
           profile={profile}
+          currentCodes={codes}
           onCodesChange={onCodesChange}
         />
       )}
@@ -586,6 +587,13 @@ interface UtAddDisclosureProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   profile: AdmissionProfileResponse
+  /**
+   * Source-of-truth codes từ caller (UtEvidenceCards `codes` = formCodes ??
+   * profile.priority_object_codes). Phải đọc từ form state thay vì
+   * `profile.priority_object_codes` trực tiếp — nếu không, tick UT04 xong
+   * tick UT07 sẽ overwrite về `[07]` vì profile snapshot chưa save+refetch.
+   */
+  currentCodes: string[]
   onCodesChange?: (codes: string[]) => void
 }
 
@@ -593,19 +601,19 @@ function UtAddDisclosure({
   open,
   onOpenChange,
   profile,
+  currentCodes,
   onCodesChange,
 }: UtAddDisclosureProps) {
   const { data: catalog = [], isLoading } = useUtCatalog(profile.academic_year ?? new Date().getFullYear())
-  const existingCodes = new Set(profile.priority_object_codes ?? [])
+  const existingCodes = new Set(currentCodes)
 
   const toggleCode = (subCode: string) => {
-    const codes = profile.priority_object_codes ?? []
-    if (codes.includes(subCode)) {
+    if (existingCodes.has(subCode)) {
       // Untick handled via UntickConfirmDialog; this branch should not fire
       // (catalog checkboxes marked existing as readOnly).
       return
     }
-    onCodesChange?.([...codes, subCode])
+    onCodesChange?.([...currentCodes, subCode])
   }
 
   return (
