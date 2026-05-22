@@ -1614,6 +1614,23 @@ def _compute_frontend_fields(
         ),
         "view": True,
     }
+    # Code review 2026-05-22 — aggregate `has_decision` flag để FE
+    # PipelineSidebar (Step 8 unlock gate) + AdmissionActions (sticky Next
+    # gate 7→8) check 1 flag thay vì OR 7 permission flags rời rạc. Nếu
+    # tương lai thêm decision permission mới (vd `cancel`), BE chỉ cần
+    # thêm flag vào OR-list dưới và FE pickup ngay mà không cần update.
+    permissions["has_decision"] = any(
+        permissions[key]
+        for key in (
+            "submit",
+            "approve",
+            "reject",
+            "resubmit",
+            "request_revision",
+            "publish_result",
+            "enroll",
+        )
+    )
     profile.permissions = permissions
     
     # =========================================================================

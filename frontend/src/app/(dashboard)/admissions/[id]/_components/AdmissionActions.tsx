@@ -45,20 +45,20 @@ export function AdmissionActions({
   const { can } = usePermissions(profile)
   const statusConfig = getStatusConfig(profile.status)
 
-  // Followup fix: sticky 'Tiếp tục' bypass Step 8 lock của PipelineSidebar
-  // khi user không có decision permission. Gate cùng điều kiện sidebar
-  // (xem layout/PipelineSidebar.tsx:115-123) để UX consistent — user
-  // không decision perm KHÔNG navigate step 7→8 qua sticky bar (API vẫn
-  // gate, nhưng UX contract phải match sidebar lock state).
-  // TODO: thay bằng BE-aggregated `permissions.has_decision` khi ship.
+  // Code review 2026-05-22 — sticky 'Tiếp tục' gate cùng điều kiện
+  // PipelineSidebar (Step 8 unlock) để UX consistent. Ưu tiên BE-aggregated
+  // `permissions.has_decision` flag (admission_service.py ~1617); fallback
+  // OR-7-flags cho backward-compat với deploy chưa ship BE change.
+  const perms = profile.permissions
   const canDecide = Boolean(
-    profile.permissions?.approve ||
-    profile.permissions?.reject ||
-    profile.permissions?.resubmit ||
-    profile.permissions?.submit ||
-    profile.permissions?.request_revision ||
-    profile.permissions?.publish_result ||
-    profile.permissions?.enroll
+    perms?.has_decision ??
+    (perms?.approve ||
+      perms?.reject ||
+      perms?.resubmit ||
+      perms?.submit ||
+      perms?.request_revision ||
+      perms?.publish_result ||
+      perms?.enroll)
   )
   // Hide Tiếp tục khi step 7 + no decision perm → user không advance qua
   // Step 8 disabled. Step 1-6 navigation vẫn cho phép.

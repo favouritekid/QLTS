@@ -2262,6 +2262,18 @@ class PreviewPriorityKvResponse(BaseModel):
         )
     )
 
+    # Code review 2026-05-22 — path_bonus_rule denorm trong preview để FE
+    # hiển thị cap consistent giữa draft preview và frozen snapshot. Trước
+    # đây UX inconsistency: draft show "+3.50đ", sau submit cap về "+2.50đ".
+    # Shape match snapshot.path_bonus_rule (priority_service.py:856).
+    path_bonus_rule: Optional[dict] = Field(
+        None,
+        description=(
+            "Path's bonus cap rule {'max_total_bonus': float|None}. FE PrioritySummaryPanel "
+            "đọc để hiển thị cap badge + applied_bonus = min(total, cap) trong draft."
+        )
+    )
+
     model_config = ConfigDict(from_attributes=True)
 
 

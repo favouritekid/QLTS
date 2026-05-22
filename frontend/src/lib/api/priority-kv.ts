@@ -54,6 +54,11 @@ export interface PreviewPriorityKvResponse {
   // EngineResultCard hiển thị "Căn cứ: <citation>" để officer scan/trust.
   // Null khi rule_applied không match map (vd ambiguous_requires_manual).
   rule_law_citation: string | null
+  // Code review 2026-05-22 — path's bonus cap rule denorm trong preview
+  // để PrioritySummaryPanel render cap consistent giữa draft và frozen.
+  // Shape match snapshot.path_bonus_rule. Null nếu chain chưa eager-load
+  // (preview best-effort).
+  path_bonus_rule: { max_total_bonus?: number | null } | null
 }
 
 export const priorityKvApi = {

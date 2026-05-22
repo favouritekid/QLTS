@@ -131,15 +131,23 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
 
   const totalBonus = (areaBonus ?? 0) + (verifiedBucket?.rate ?? 0)
 
-  // Commit 3 — cap from BE snapshot.path_bonus_rule.max_total_bonus
-  // (priority_service.py:856). Frozen snapshot only — `PreviewPriorityKvResponse`
-  // hiện không trả path_bonus_rule, nên KHÔNG fake cap trong draft preview.
+  // Cap = `path_bonus_rule.max_total_bonus`. Source-of-truth precedence:
+  //   - Post-draft: snapshot.path_bonus_rule (frozen at submit/override)
+  //   - Draft: preview.path_bonus_rule (Code review 2026-05-22 fix —
+  //     trước fix preview không trả field này → UX inconsistency draft
+  //     "+3.50đ" vs sau submit cap "+2.50đ"). Best-effort fallback null
+  //     nếu preview chưa load đầy đủ admission_path chain.
   const isPostDraft = profile.status !== "draft"
   const snapshot = profile.priority_resolution_snapshot ?? {}
-  const maxTotalBonus =
-    isPostDraft && snapshot.path_bonus_rule && typeof snapshot.path_bonus_rule === "object"
+  const snapshotRule =
+    snapshot.path_bonus_rule && typeof snapshot.path_bonus_rule === "object"
       ? (snapshot.path_bonus_rule as { max_total_bonus?: number | null }).max_total_bonus ?? null
       : null
+  const previewRule =
+    preview?.path_bonus_rule && typeof preview.path_bonus_rule === "object"
+      ? preview.path_bonus_rule.max_total_bonus ?? null
+      : null
+  const maxTotalBonus = isPostDraft ? snapshotRule : previewRule
   const isCapped = typeof maxTotalBonus === "number" && totalBonus > maxTotalBonus
   const appliedBonus = isCapped ? (maxTotalBonus as number) : totalBonus
 

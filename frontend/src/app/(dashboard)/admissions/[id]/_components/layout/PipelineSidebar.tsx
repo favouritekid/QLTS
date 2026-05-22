@@ -112,14 +112,21 @@ export function PipelineSidebar({
           const status = stepsStatus[step.id] || "locked"
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)
+          // Code review 2026-05-22 — ưu tiên BE-aggregated `has_decision`
+          // flag (admission_service._compute_frontend_fields ~line 1617).
+          // Fallback OR-7-flags cho backward-compat với deploy chưa ship
+          // BE change. Khi flag stable → có thể clean fallback (memory:
+          // FE-BE additive forward-compat).
+          const perms = profile?.permissions
           const canDecide = Boolean(
-            profile?.permissions?.approve ||
-            profile?.permissions?.reject ||
-            profile?.permissions?.resubmit ||
-            profile?.permissions?.submit ||
-            profile?.permissions?.request_revision ||
-            profile?.permissions?.publish_result ||
-            profile?.permissions?.enroll
+            perms?.has_decision ??
+            (perms?.approve ||
+              perms?.reject ||
+              perms?.resubmit ||
+              perms?.submit ||
+              perms?.request_revision ||
+              perms?.publish_result ||
+              perms?.enroll)
           )
           const isStep8Override = step.id === 8 && canDecide
           const isLocked = !isStep8Override && status === "locked"

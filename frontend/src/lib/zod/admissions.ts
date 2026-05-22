@@ -244,6 +244,11 @@ export const prioritySnapshotSchema = z
       .union([z.number().int(), z.string()])
       .nullable()
       .optional(),
+    // Code review 2026-05-22 — denorm actor.full_name vào snapshot khi
+    // override (priority_override_service.py:407). UI render tên thay vì
+    // raw user_id. Backward-compat: legacy snapshots (pre-deploy) sẽ
+    // null → FE fallback "#{actor_id}".
+    manual_override_by_name: z.string().nullable().optional(),
     manual_override_at: z
       .string()
       .datetime({ offset: true })
