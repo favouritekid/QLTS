@@ -294,6 +294,14 @@ export function SocketHandler() {
 
     console.log("[SocketHandler] ✅ Registering event listeners (socket connected)");
 
+    // P2/P3 (2026-05-22) — opt-in payload logging. PII (name/phone/email),
+    // status, officer_id... có thể appear trong payload nên KHÔNG log
+    // unconditional ở production. Gate behind explicit env flag. Default:
+    // log event name only, không dump payload.
+    const debugSocketPayload =
+      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "1" ||
+      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "true";
+
     // ✅ SECURITY FIX: Simplified force logout handlers
     // Backend emits to user_room_{user_id}, so all sessions receive the event
     // No need to track JTI client-side - backend manages session invalidation
@@ -340,7 +348,13 @@ export function SocketHandler() {
 
     // Lắng nghe sự kiện notification (real-time notifications)
     const handleNewNotification = (notification: Notification) => {
-      console.log("[SocketHandler] Received new notification:", notification);
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] Received new notification:", notification);
+      } else {
+        console.log(
+          `[SocketHandler] Received new notification (id=${notification.id}, type=${notification.type})`,
+        );
+      }
 
       // Add notification to the query cache
       addNotification(notification);
@@ -403,7 +417,13 @@ export function SocketHandler() {
       data?: Record<string, unknown>;
       timestamp: string;
     }) => {
-      console.log("[SocketHandler] Received data_updated event:", data);
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] Received data_updated event:", data);
+      } else {
+        console.log(
+          `[SocketHandler] Received data_updated event (resource=${data.resource_type}, op=${data.operation}, id=${data.resource_id})`,
+        );
+      }
 
       // Invalidate queries based on resource_type
       switch (data.resource_type) {
@@ -671,6 +691,48 @@ export function SocketHandler() {
       queryClient.invalidateQueries({
         queryKey: admissionsKeys.detail(data.application_id),
       });
+    };
+
+    // P2 (2026-05-22) — ADMISSION_* domain event consumer cho realtime
+    // cross-tab/cross-user sync. BE notification_dispatcher.py:299 emit
+    // mỗi event với `event.value` (snake_case) qua Socket.IO sau khi
+    // outbox commit. Trước đây FE chỉ lắng nghe application_status_changed
+    // (legacy event); ADMISSION_RESULT_PUBLISHED + 4 decision/waitlist
+    // events là canonical Phase 3 PR-3B/3C events nhưng KHÔNG có consumer
+    // → manager publish ở browser A thì browser B không refresh list/
+    // counts/stats. Mọi event nhóm này đều flip profile.status → cascade
+    // root key `admissionsKeys.all`. Payload chuẩn từ event_catalog.py
+    // chứa application_id + lead_id (optional vài event).
+    //
+    // Events covered:
+    //   - admission_result_published (T6 admin batch publish)
+    //   - admission_decision_admitted (T7 per-profile admit)
+    //   - admission_decision_waitlisted (T8 per-profile waitlist)
+    //   - admission_decision_rejected (T9 per-profile reject)
+    //   - admission_waitlist_promoted (T10 admin promote waitlist)
+    //   - admission_waitlist_rejected (T11 admin reject waitlist)
+    const handleAdmissionStatusFlipEvent = (data: {
+      application_id?: number;
+      lead_id?: number;
+      [key: string]: unknown;
+    }) => {
+      console.log(
+        "[SocketHandler] admission status-flip event → invalidating admission caches",
+        { profile: data.application_id, lead: data.lead_id },
+      );
+      // Cascade list + status-counts + stats + details via root key.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
+      // Targeted detail refresh nếu có profile ID (event_catalog.py
+      // guarantees application_id ở variables list).
+      if (typeof data.application_id === "number") {
+        queryClient.invalidateQueries({
+          queryKey: admissionsKeys.detail(data.application_id),
+        });
+      }
+      // Lead row có thể projection từ admission decision (lead_admission_sync).
+      if (typeof data.lead_id === "number") {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      }
     };
 
     // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
@@ -1180,17 +1242,16 @@ export function SocketHandler() {
     socket.on("ctv_commission_created", handleCtvCommissionCreated);
     socket.on("ctv_lead_converted", handleCtvLeadConverted);
 
+    // P2 (2026-05-22) — ADMISSION_* domain events (BE event_catalog.py)
+    socket.on("admission_result_published", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_admitted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_waitlisted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_decision_rejected", handleAdmissionStatusFlipEvent);
+    socket.on("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
+    socket.on("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
 
     // DEBUG: Log incoming Socket.IO events to diagnose real-time sync.
-    //
-    // P2/P3 (2026-05-22) — payload có thể chứa PII (name/phone/email),
-    // status, officer_id... KHÔNG nên log unconditional ở production.
-    // Gate behind explicit opt-in env flag (development default vẫn off
-    // để giảm noise). Set `NEXT_PUBLIC_DEBUG_SOCKET=1` để bật khi cần
-    // diagnose. Default: chỉ log event name + args count, KHÔNG dump payload.
-    const debugSocketPayload =
-      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "1" ||
-      process.env.NEXT_PUBLIC_DEBUG_SOCKET === "true";
+    // (`debugSocketPayload` declared earlier at top of effect.)
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
       if (debugSocketPayload) {
         console.log(`[SocketHandler] 🔔 Event received: ${event}`, args);
@@ -1241,6 +1302,14 @@ export function SocketHandler() {
       socket.off("ctv_suspended", handleCtvSuspended);
       socket.off("ctv_commission_created", handleCtvCommissionCreated);
       socket.off("ctv_lead_converted", handleCtvLeadConverted);
+
+      // P2 (2026-05-22) — ADMISSION_* cleanup
+      socket.off("admission_result_published", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_admitted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_waitlisted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_decision_rejected", handleAdmissionStatusFlipEvent);
+      socket.off("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
+      socket.off("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
 
       socket.offAny(handleAnyEvent);
     };
