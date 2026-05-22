@@ -104,15 +104,23 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
       : null;
   }, []);
 
-  const [scope, setScope] = useState<DashboardScope | null>(() => initialUrlScope ?? resolvedScope);
-    // Normalize legacy "team" → "unit"
+  // ⚠ HYDRATION-CRITICAL: useState init MUST be `null` (neutral default),
+  // not derived from Zustand persist store. Reading `resolvedScope` (which
+  // reads `useAuth().user.role`) at init time causes mismatch:
+  //   - SSR: localStorage undefined → user=null → resolvedScope=null → scope=null
+  //   - Client first render: Zustand persist rehydrate sync BEFORE React render
+  //     → user=persisted → resolvedScope="organization"/"unit"/"personal"
+  //     → scope=resolved → renders different element tree vs SSR
+  // The !scope skeleton guard below + useEffect resolution (rAF) below keep
+  // first client render identical to SSR; scope settles post-mount.
+  // Anchor: `auth.store.ts:79-87` onRehydrateStorage sync.
+  const [scope, setScope] = useState<DashboardScope | null>(null);
 
-  // Track whether scope was initialized from URL (stable across renders)
-
-  // Sync scope from role during render — only if URL didn't provide a scope
-  // and only when resolvedScope changes (i.e., user hydrates)
-
-  // Secondary filter states — initialized from URL
+  // Secondary filter states — initialized from URL.
+  // NOTE: getUrlParam() returns null on SSR (no window). Safe because the
+  // `!scope` skeleton guard below blocks rendering until useEffect resolves
+  // scope, and on SSR scope is also null. If that guard is removed, move
+  // these initializers to useEffect to avoid hydration mismatch.
   const [selectedUnitId, setSelectedUnitId] = useState<number | null>(() => {
     const raw = getUrlParam("unit");
     if (!raw) return null;
@@ -171,12 +179,16 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     window.history.replaceState({ ...window.history.state, _dashboardFilters: true }, "", newUrl);
   }, []);
 
+  // Post-mount scope resolution: URL param wins; fall back to role-derived
+  // default. Defers from useState init to keep first client render identical
+  // to SSR (skeleton). rAF schedules the state set after paint so React
+  // can finish hydrating before the dashboard tree mounts.
   useEffect(() => {
-    if (initialUrlScope !== null) return;
     if (scope !== null) return;
-    if (resolvedScope === null) return;
+    const next = initialUrlScope ?? resolvedScope;
+    if (next === null) return;
     const frame = window.requestAnimationFrame(() => {
-      setScope(resolvedScope);
+      setScope(next);
     });
     return () => window.cancelAnimationFrame(frame);
   }, [initialUrlScope, resolvedScope, scope]);
