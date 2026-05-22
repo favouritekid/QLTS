@@ -19,6 +19,7 @@ import { describe, it, expect } from "vitest"
 import {
   admissionProfileUpdateSchema,
   appliedRulesSchema,
+  priorityObjectEvidenceEntrySchema,
   subjectGroupSnapshotSchema,
 } from "./admissions"
 
@@ -281,5 +282,57 @@ describe("admissionProfileUpdateSchema priority fields (Q9 #07)", () => {
     expect("high_school_id" in parsed).toBe(false)
     expect("high_school_kv_resolved" in parsed).toBe(false)
     expect("area_resolution_reason" in parsed).toBe(false)
+  })
+})
+
+/**
+ * priorityObjectEvidenceEntrySchema — rejected_by / rejected_at parity.
+ *
+ * BE schema (Backend_FastAPI/app/schemas/admission.py:515) persists
+ * `rejected_by` (officer id) + `rejected_at` (ISO timestamp) vào evidence
+ * JSONB entry sau khi PATCH reject. FE strict schema phải accept cả 2 —
+ * trước khi thêm vào schema, mọi GET profile sau reject bị
+ * ResponseValidationError extra_forbidden ở client parse layer.
+ *
+ * Anchor cứng để bất kỳ refactor schema nào về sau cũng buộc giữ contract.
+ */
+describe("priorityObjectEvidenceEntrySchema — rejected fields parity", () => {
+  it("parses rejected entry kèm rejected_by + rejected_at + reject_reason", () => {
+    const parsed = priorityObjectEvidenceEntrySchema.parse({
+      status: "rejected",
+      document_id: 1234,
+      rejected_by: 42,
+      rejected_at: "2026-05-22T10:30:00+07:00",
+      reject_reason: "Giấy tờ mờ — yêu cầu nộp lại",
+      requested_at: "2026-05-22T09:00:00+07:00",
+    })
+
+    expect(parsed.status).toBe("rejected")
+    expect(parsed.rejected_by).toBe(42)
+    expect(parsed.rejected_at).toBe("2026-05-22T10:30:00+07:00")
+    expect(parsed.reject_reason).toBe("Giấy tờ mờ — yêu cầu nộp lại")
+  })
+
+  it("accepts rejected entry với rejected_by/rejected_at = null (BE shape khi reject chưa propagate)", () => {
+    const parsed = priorityObjectEvidenceEntrySchema.parse({
+      status: "rejected",
+      rejected_by: null,
+      rejected_at: null,
+      reject_reason: "TBD",
+    })
+
+    expect(parsed.rejected_by).toBeNull()
+    expect(parsed.rejected_at).toBeNull()
+  })
+
+  it("strict mode rejects khi có extra field (anchor cho schema drift)", () => {
+    expect(() =>
+      priorityObjectEvidenceEntrySchema.parse({
+        status: "verified",
+        verified_by: 7,
+        verified_at: "2026-05-22T08:00:00+07:00",
+        extraneous_field: "should fail",
+      }),
+    ).toThrow()
   })
 })

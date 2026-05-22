@@ -170,6 +170,43 @@ describe("AdmissionActions", () => {
       fireEvent.click(screen.getByText("Lưu thay đổi"));
       expect(spies.onSave).toHaveBeenCalled();
     });
+
+    // Code review 2026-05-22 Round 2 #6 anchor — sticky 'Tiếp tục' phải chặn
+    // step 7 → 8 transition khi user không có decision permission. Cùng gate
+    // logic với PipelineSidebar.isStep8Override (canDecide = OR-7-flags hoặc
+    // BE-aggregated has_decision).
+    it("step 7 + no decision permission: HIDES Tiếp tục (Step 8 disabled)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true }, // no decision perms (submit/approve/...)
+      });
+      renderActions(profile, 7);
+
+      expect(screen.queryByText("Tiếp tục")).not.toBeInTheDocument();
+      // Other navigation still visible
+      expect(screen.getByText("Quay lại")).toBeInTheDocument();
+      expect(screen.getByText("Lưu thay đổi")).toBeInTheDocument();
+    });
+
+    it("step 7 + has_decision flag: SHOWS Tiếp tục (decision panel reachable)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true, has_decision: true },
+      });
+      renderActions(profile, 7);
+
+      expect(screen.getByText("Tiếp tục")).toBeInTheDocument();
+    });
+
+    it("step 7 + officer submit perm (fallback OR-7): SHOWS Tiếp tục (backward-compat)", () => {
+      const profile = buildProfile({
+        status: "draft",
+        permissions: { save: true, submit: true }, // no has_decision flag yet
+      });
+      renderActions(profile, 7);
+
+      expect(screen.getByText("Tiếp tục")).toBeInTheDocument();
+    });
   });
 
   // ===== STEP 8: NAVIGATION-ONLY (decision actions moved to FinalizeTab) =====
