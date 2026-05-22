@@ -1250,6 +1250,31 @@ export function SocketHandler() {
     socket.on("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
     socket.on("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
 
+    // P2 (2026-05-22) — PRIORITY_* events. BE event_catalog.py:1091/1130/1160
+    // dispatch khi officer/admin override KV / verify object UT / reject
+    // object UT. Trước đây FE listener thiếu — operator B (cùng hồ sơ
+    // qua tab khác) thấy PriorityTab/preview stale tới manual refetch.
+    // Detail-only scope: priority field thay đổi KHÔNG flip profile.status
+    // hay row content list (priority chỉ hiển thị trong detail view).
+    const handlePriorityEvent = (data: {
+      application_id?: number;
+      [key: string]: unknown;
+    }) => {
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] priority event → invalidating detail", data);
+      } else {
+        console.log(
+          `[SocketHandler] priority event (profile=${data.application_id})`,
+        );
+      }
+      if (typeof data.application_id === "number") {
+        scheduleInvalidation({ admissionDetail: data.application_id });
+      }
+    };
+    socket.on("priority_kv_overridden", handlePriorityEvent);
+    socket.on("priority_object_verified", handlePriorityEvent);
+    socket.on("priority_object_rejected", handlePriorityEvent);
+
     // DEBUG: Log incoming Socket.IO events to diagnose real-time sync.
     // (`debugSocketPayload` declared earlier at top of effect.)
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -1310,6 +1335,11 @@ export function SocketHandler() {
       socket.off("admission_decision_rejected", handleAdmissionStatusFlipEvent);
       socket.off("admission_waitlist_promoted", handleAdmissionStatusFlipEvent);
       socket.off("admission_waitlist_rejected", handleAdmissionStatusFlipEvent);
+
+      // P2 (2026-05-22) — PRIORITY_* cleanup
+      socket.off("priority_kv_overridden", handlePriorityEvent);
+      socket.off("priority_object_verified", handlePriorityEvent);
+      socket.off("priority_object_rejected", handlePriorityEvent);
 
       socket.offAny(handleAnyEvent);
     };

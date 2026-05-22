@@ -2141,8 +2141,11 @@ class AdmissionWaitlistRejectResponse(BaseModel):
     choice_id: int
     decision: Literal["rejected"] = "rejected"
     profile_id: int
+    # P1 fix 2026-05-22: trước đây có dòng duplicate `profile_status: Literal["admitted"]`
+    # ngay sau dòng "rejected" → Python class body lấy cái cuối thành Literal["admitted"].
+    # Service trả "rejected" → Pydantic ValidationError → 500 SAU db.commit() → mutation
+    # thành công ở DB nhưng client thấy lỗi. Verified bằng runtime probe trong container.
     profile_status: Literal["rejected"] = "rejected"
-    profile_status: Literal["admitted"] = "admitted"
 
 
 class AdmissionAdminRollbackRequest(BaseModel):

@@ -104,6 +104,11 @@ async def publish_admission_result(
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
         .options(
+            # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
+            # sync_lead_from_admission() sau khi profile.status flip
+            # (reviewing → result_published → admitted/rejected). Trước
+            # đây không eager-load → sync silent fail "Lead not loaded".
+            selectinload(models.AdmissionProfile.lead),
             selectinload(models.AdmissionProfile.choices)
             .selectinload(models.AdmissionProfileChoice.admission_path)
             .selectinload(models.AdmissionPath.admission_method),

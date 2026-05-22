@@ -58,12 +58,20 @@ T0-4b and ``Documents/ADMISSION_REFACTOR_PLAN.md`` §3.3.e/f.
 """
 import logging
 
-from sqlalchemy import text
+from typing import Any, Optional
+
+from sqlalchemy import select, text
+from sqlalchemy.orm import selectinload
 
 from ..celery_app import celery_app
 from ..core.event_catalog import get_event
 from ..core.events import SystemEvents
-from ..services.notification_dispatcher import dispatch
+from ..services.notification_dispatcher import (
+    _rooms_for_admission,
+    _rooms_for_lead,
+    _rooms_for_user,
+    dispatch,
+)
 from .utils import run_async_task, task_db_session
 
 
@@ -208,6 +216,68 @@ async def _claim_batch(session) -> list[tuple]:
     return [(r.id, r.event_code, r.payload, r.idempotency_key) for r in rows]
 
 
+async def _resolve_rooms_for_event(
+    session,
+    event: SystemEvents,
+    payload: dict,
+) -> Optional[list[str]]:
+    """Derive Socket.IO target rooms cho 1 outbox row.
+
+    P2 fix 2026-05-22 — bridge contract gap giữa outbox và dispatcher.
+    Trước đây worker gọi ``dispatch(rooms=None)`` → dispatcher với
+    ``SOCKET_SCOPED_EMIT=True`` (default) fail-closes sensitive event
+    tại ``notification_dispatcher.py:281`` ("Sensitive event broadcast
+    blocked: missing rooms"). Hệ quả: 6 ADMISSION_* events
+    (RESULT_PUBLISHED, DECISION_ADMITTED/WAITLISTED/REJECTED,
+    WAITLIST_PROMOTED/REJECTED) + các sensitive event khác đi qua outbox
+    KHÔNG bao giờ tới Socket.IO browser dù FE đã có listener.
+
+    Strategy: payload chứa entity ID (``application_id`` / ``lead_id`` /
+    ``user_id``); load entity với eager-load + gọi helper room derivation
+    có sẵn ở dispatcher module. Pattern mirror ``admission_tasks.py:127-141,
+    196`` đã sử dụng cùng helper trong scope khác.
+
+    Returns:
+        List rooms cho dispatcher target, hoặc None nếu không derive được
+        (dispatcher sẽ fail-closed cho sensitive event — đúng contract).
+        Public event không cần rooms (dispatcher broadcast global).
+
+    Note: helper safety — ``_rooms_for_admission(None)`` trả
+    ``["role_admin"]`` thay vì crash, nên fallback luôn có admin
+    visibility tối thiểu khi profile bị delete giữa outbox INSERT và
+    worker drain.
+    """
+    from .. import models
+
+    # Admission-scoped events: payload chứa application_id (= profile.id)
+    # per admission_state_service.py:459-470 payload contract.
+    app_id = payload.get("application_id")
+    if isinstance(app_id, int):
+        stmt = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == app_id)
+            .options(selectinload(models.AdmissionProfile.lead))
+        )
+        result = await session.execute(stmt)
+        profile = result.scalar_one_or_none()
+        return _rooms_for_admission(profile)
+
+    # Lead-scoped events: payload chứa lead_id.
+    lead_id = payload.get("lead_id")
+    if isinstance(lead_id, int):
+        lead = await session.get(models.Lead, lead_id)
+        return _rooms_for_lead(lead)
+
+    # User-targeted events: payload chứa user_id / target_user_id.
+    user_id = payload.get("user_id") or payload.get("target_user_id")
+    if isinstance(user_id, int):
+        return _rooms_for_user(user_id)
+
+    # Public event (organization_*, pipeline_config_*) — dispatcher tự
+    # broadcast global, rooms=None là intended path.
+    return None
+
+
 async def _dispatch_each(session, pending) -> list[tuple]:
     """Step 2 — per-row dispatch (no claim lock held).
 
@@ -244,6 +314,25 @@ async def _dispatch_each(session, pending) -> list[tuple]:
             )
             continue
 
+        # P2 fix 2026-05-22 — derive Socket.IO rooms từ payload trước
+        # khi gọi dispatcher. Trước đây không truyền rooms → fail-closed
+        # tại _emit_domain_event cho mọi sensitive event qua outbox path.
+        try:
+            rooms = await _resolve_rooms_for_event(session, event, payload)
+        except Exception as room_err:  # noqa: BLE001
+            # Defensive: rooms derivation failure không được crash worker
+            # — nếu sensitive event, dispatcher sẽ fail-closed như cũ
+            # (đúng contract); nếu public event, broadcast global vẫn ok.
+            log.warning(
+                "Outbox rooms derivation failed (non-fatal); fallback to None",
+                extra={
+                    "row_id": row_id,
+                    "event_code": event_code,
+                    "error": str(room_err)[:200],
+                },
+            )
+            rooms = None
+
         try:
             notif_ids, notif_cb = await dispatch(
                 db=session,
@@ -252,6 +341,7 @@ async def _dispatch_each(session, pending) -> list[tuple]:
                 dedupe_key=idem_key,
                 skip_preference_check=event_def.bypass_consent_check,
                 strict=True,
+                rooms=rooms,
             )
             await session.commit()
         except Exception as e:  # noqa: BLE001 — worker isolates per-row failures

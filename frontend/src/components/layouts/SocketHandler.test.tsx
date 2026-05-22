@@ -221,6 +221,41 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
     })
   })
 
+  describe("PRIORITY_* events → detail-only scope (P2 anchor)", () => {
+    it.each([
+      "priority_kv_overridden",
+      "priority_object_verified",
+      "priority_object_rejected",
+    ])("%s invalidates admission detail only (NOT list/stats cascade)", async (event) => {
+      const { invalidateSpy, queryClient } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire(event, { application_id: 55 })
+      })
+
+      // Debounce 300ms cho admissionDetails Set flush
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 400))
+      })
+
+      // Detail key flushed
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: admissionsKeys.detail(55) }),
+      )
+
+      // KHÔNG cascade root — priority chỉ ảnh hưởng detail view
+      const rootCalls = invalidateSpy.mock.calls.filter(([opts]) => {
+        const key = (opts as { queryKey: readonly unknown[] }).queryKey
+        return Array.isArray(key) && key.length === 1 && key[0] === "admissions"
+      })
+      expect(rootCalls.length).toBe(0)
+
+      invalidateSpy.mockRestore()
+      queryClient.clear()
+    })
+  })
+
   describe("application_minor_corrected → detail-only", () => {
     it("invalidates admission detail only, NOT root cascade", async () => {
       const { invalidateSpy, queryClient } = renderHandler()

@@ -150,6 +150,12 @@ def _make_profile(*, status="reviewing", gpa=None, choices=None):
         # ``graduated_thpt`` để legacy tests không vướng eligibility fail.
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
+        # P2 fix 2026-05-22 — evaluate_cascade gọi sync_lead_from_admission()
+        # sau cascade transitions; helper truy cập profile.lead → AttributeError
+        # nếu stub thiếu attribute. None làm helper graceful skip (warning log
+        # "Lead not loaded on profile", return False — match contract khi router
+        # quên eager-load).
+        lead=None,
     )
 
 
