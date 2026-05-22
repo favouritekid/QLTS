@@ -61,11 +61,20 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // that redirects them out of the page is a worse UX than hiding it.
   const userRole = useAuthStore((s) => s.user?.role)
   const canAccessFinanceModule = hasFinanceAccess(userRole)
+  // P3 (2026-05-22) — BE coi {approved, overridden, admitted} là admitted-like
+  // (`admission_status.py:69` AdmittedLike). Status admitted/overridden cũng
+  // đủ điều kiện tính phí nhưng FE trước đây chỉ accept approved/confirmed/
+  // enrolled → user ở 2 status đó thấy "cần được duyệt trước" dù lý do thật
+  // là thiếu quyền. Mirror BE set để message chính xác.
+  const isPostApprovalStatus =
+    profile.status === "approved" ||
+    profile.status === "overridden" ||
+    profile.status === "admitted" ||
+    profile.status === "confirmed" ||
+    profile.status === "enrolled"
   const disabledReason =
     !canCalculateFee
-      ? profile.status === "approved" ||
-        profile.status === "confirmed" ||
-        profile.status === "enrolled"
+      ? isPostApprovalStatus
         ? "Bạn không có quyền tính phí cho hồ sơ này"
         : "Hồ sơ cần được duyệt trước khi tính phí"
       : undefined

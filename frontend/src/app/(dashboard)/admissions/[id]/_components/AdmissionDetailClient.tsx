@@ -184,9 +184,17 @@ export function AdmissionDetailClient({
 
   // Form Reset on Data Update
   // CRITICAL: Use vm.version as dependency to detect server-side changes
-  // vm.version is incremented by backend on each successful update
+  // vm.version is incremented by backend on each successful update.
+  //
+  // Realtime drift guard (2026-05-22 P1): nếu user đang nhập dở (isDirty)
+  // thì KHÔNG reset form khi version đổi do realtime refetch (vd. tab khác,
+  // officer khác emit SystemEvent → SocketHandler invalidates → refetch).
+  // Giữ nguyên draft local; optimistic-lock conflict sẽ surface ở save time
+  // (BE trả 409 với version mismatch) — user có UI rõ ràng để resolve thay
+  // vì silent overwrite. Initial load vẫn reset bình thường vì RHF mới
+  // mount, isDirty=false.
   useEffect(() => {
-    if (vm) {
+    if (vm && !form.formState.isDirty) {
       const p = vm as unknown as AdmissionProfileResponse
       form.reset({
         citizen_id: vm.citizen_id || "",

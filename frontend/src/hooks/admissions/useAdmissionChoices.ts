@@ -15,6 +15,7 @@ import {
   replaceChoiceScores,
   updateChoiceDisplayOrder,
 } from "@/lib/api/admission-choices"
+import { admissionsKeys } from "./useAdmissions"
 import type {
   AdmissionProfileChoiceCreate,
   ChoiceScoresReplaceRequest,
@@ -47,6 +48,31 @@ function invalidateAfterChoiceMutation(
   })
   void queryClient.invalidateQueries({
     queryKey: admissionDetailKey(profileId),
+  })
+}
+
+/**
+ * P2 (2026-05-22) — Waitlist promote/reject flips profile.status thật trên BE
+ * (waitlisted → admitted/rejected per `admission_choice_engine_service.py:712` +
+ * `admission_state_service.py:217`). Choice-only invalidation chưa đủ —
+ * list rows, status-counts chip, stats card cũng phải refetch. Tách hàm
+ * riêng để dùng cho 2 mutation status-flipping; mutation chỉ-touch-choice
+ * giữ `invalidateAfterChoiceMutation` (scope hẹp).
+ */
+function invalidateAfterWaitlistStatusFlip(
+  queryClient: ReturnType<typeof useQueryClient>,
+  profileId: number,
+) {
+  invalidateAfterChoiceMutation(queryClient, profileId)
+  // List view rows + status badges + counters
+  void queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+  // Status counts chip
+  void queryClient.invalidateQueries({
+    queryKey: [...admissionsKeys.all, "status-counts"],
+  })
+  // Stats dashboard card
+  void queryClient.invalidateQueries({
+    queryKey: [...admissionsKeys.all, "stats"],
   })
 }
 
@@ -133,7 +159,9 @@ export function usePromoteWaitlistedChoice(profileId: number) {
         reason,
       }),
     onSuccess: () => {
-      invalidateAfterChoiceMutation(queryClient, profileId)
+      // P2 (2026-05-22) — promote flips profile.status waitlisted → admitted
+      // trên BE, invalidate list/counts/stats cùng choices+detail.
+      invalidateAfterWaitlistStatusFlip(queryClient, profileId)
     },
   })
 }
@@ -163,7 +191,9 @@ export function useRejectWaitlistedChoice(profileId: number) {
         reason,
       }),
     onSuccess: () => {
-      invalidateAfterChoiceMutation(queryClient, profileId)
+      // P2 (2026-05-22) — reject flips profile.status waitlisted → rejected
+      // trên BE (T11 edge), invalidate list/counts/stats cùng choices+detail.
+      invalidateAfterWaitlistStatusFlip(queryClient, profileId)
     },
   })
 }
