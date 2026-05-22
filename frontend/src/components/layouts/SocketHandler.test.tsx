@@ -16,7 +16,7 @@
  * `queryClient.invalidateQueries` calls qua spy.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { render, act } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
@@ -88,9 +88,23 @@ vi.mock("@/lib/socket/client", () => ({
 }))
 
 // Import AFTER mocks
-import { SocketHandler as SocketHandlerComponent } from "./SocketHandler"
+import {
+  SocketHandler as SocketHandlerComponent,
+  INVALIDATION_DEBOUNCE_MS,
+} from "./SocketHandler"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import { leadsKeys } from "@/hooks/useLeads"
+
+// F1 (review pass-2 2026-05-22) — deterministic debounce flush. Trước
+// dùng wall-clock `setTimeout(400)` magic number → flaky nếu SocketHandler
+// bump debounce delay. Helper dùng fake timers + đọc constant exported.
+async function flushDebounce() {
+  await act(async () => {
+    vi.advanceTimersByTime(INVALIDATION_DEBOUNCE_MS + 1)
+    // Microtask cycle để invalidateQueries callbacks chạy xong
+    await Promise.resolve()
+  })
+}
 
 function renderHandler() {
   const queryClient = new QueryClient({
@@ -121,6 +135,12 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
   beforeEach(() => {
     socketStub.reset()
     vi.clearAllMocks()
+    // F1 — fake timers cho deterministic debounce flush.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   describe("ADMISSION_* domain events → cascade invalidation", () => {
@@ -139,10 +159,8 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
         socketStub.fire(event, { application_id: 42, lead_id: 99 })
       })
 
-      // P2-4 (2026-05-22) — sau debounce flush (300ms).
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      // F1 (review pass-2 2026-05-22) — deterministic debounce flush.
+      await flushDebounce()
 
       // Cascade root key
       expect(invalidateSpy).toHaveBeenCalledWith(
@@ -168,9 +186,7 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
         socketStub.fire("admission_result_published", { application_id: 42 })
       })
 
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      await flushDebounce()
 
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: admissionsKeys.all }),
@@ -194,9 +210,7 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
         socketStub.fire("admission_decision_admitted", {})
       })
 
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      await flushDebounce()
 
       // Cascade root vẫn fire (handler unconditional schedule admissionAll)
       expect(invalidateSpy).toHaveBeenCalledWith(
@@ -234,9 +248,7 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
       })
 
       // Debounce 300ms → wait
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      await flushDebounce()
 
       // Detail key invalidated
       expect(invalidateSpy).toHaveBeenCalledWith(
@@ -271,9 +283,7 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
         })
       })
 
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      await flushDebounce()
 
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: admissionsKeys.all }),
@@ -298,9 +308,7 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
       })
 
       // Debounce 300ms cho admissionDetails Set flush
-      await act(async () => {
-        await new Promise((r) => setTimeout(r, 400))
-      })
+      await flushDebounce()
 
       // Detail key flushed
       expect(invalidateSpy).toHaveBeenCalledWith(

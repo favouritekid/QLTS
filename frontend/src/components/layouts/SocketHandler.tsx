@@ -38,7 +38,10 @@ interface PendingInvalidations {
   admissionDetails: Set<number>;
 }
 
-const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
+// F1 (review pass-2 2026-05-22) — export để test dùng fake timers
+// (`vi.advanceTimersByTime(INVALIDATION_DEBOUNCE_MS + 1)`) thay vì
+// hard-code magic number 400ms (flaky nếu bump debounce).
+export const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
 
 /**
  * Component "vô hình" (không render)
