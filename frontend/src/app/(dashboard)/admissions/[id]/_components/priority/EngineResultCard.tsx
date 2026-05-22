@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/collapsible"
 import type { PreviewPriorityKvResponse } from "@/lib/api/priority-kv"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { resolveEngineDisplay } from "./engineDisplay"
 
 export type EngineResultState =
   | "happy"
@@ -116,60 +117,11 @@ export function EngineResultCard({
   const state = deriveEngineState(profile, preview)
   const header = STATE_HEADERS[state]
   const snapshot = profile.priority_resolution_snapshot ?? {}
-  const isPostDraft = profile.status !== "draft"
 
-  // P1 fix (PR-3 Step D audit): frozen contract — snapshot AUTHORITATIVE
-  // post-submit; preview only consulted trong draft. Defensive vs preview
-  // accidentally fired post-submit (PriorityTab gates query, but components
-  // also defensive).
-  const kv = (() => {
-    if (isPostDraft) return snapshot.kv_resolved ?? null
-    if (preview) return preview.kv_resolved ?? null
-    return snapshot.kv_resolved ?? null
-  })()
-  // Commit 3 — BE-first contract: ưu tiên snapshot.rule_law_citation
-  // (BE compute via resolve_law_citation in priority_service.py:843); chỉ
-  // fallback FE deriveLawCitationFallback khi BE chưa trả (legacy snapshot
-  // pre-Commit-3 deploy).
-  const lawCitation = (() => {
-    if (isPostDraft) {
-      if (typeof snapshot.rule_law_citation === "string" && snapshot.rule_law_citation) {
-        return snapshot.rule_law_citation
-      }
-      if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
-        return deriveLawCitationFallback(snapshot.rule_applied as string)
-      }
-      return null
-    }
-    if (preview) return preview.rule_law_citation
-    if (typeof snapshot.rule_law_citation === "string" && snapshot.rule_law_citation) {
-      return snapshot.rule_law_citation
-    }
-    if (snapshot.rule_applied && typeof snapshot.rule_applied === "string") {
-      return deriveLawCitationFallback(snapshot.rule_applied as string)
-    }
-    return null
-  })()
-  // Commit 3 — BE-first contract: snapshot.basis_reason là canonical
-  // (priority_service.py:841). `reason` chỉ là OPTIONAL error fallback
-  // (priority_service.py:863).
-  const reason = (() => {
-    if (isPostDraft) return snapshot.basis_reason ?? snapshot.reason ?? null
-    if (preview) return preview.reason ?? null
-    return snapshot.basis_reason ?? snapshot.reason ?? null
-  })()
-  const areaBonus = (() => {
-    if (isPostDraft) {
-      const breakdown = snapshot.breakdown
-      if (breakdown && typeof breakdown === "object" && "area_bonus" in breakdown) {
-        const v = (breakdown as Record<string, unknown>).area_bonus
-        return typeof v === "number" ? v : 0
-      }
-      return 0
-    }
-    if (typeof preview?.area_bonus === "number") return preview.area_bonus
-    return 0
-  })()
+  // Commit 8 followup — pure helper extract (priority/engineDisplay.ts):
+  // gom 4 IIFE precedence logic (kv/lawCitation/reason/areaBonus) thành 1
+  // pure function unit-testable độc lập.
+  const { kv, lawCitation, reason, areaBonus } = resolveEngineDisplay(profile, preview)
 
   return (
     <section
@@ -350,21 +302,8 @@ export function EngineResultCard({
 // =============================================================================
 // PURE HELPERS
 // =============================================================================
-
-/**
- * Fallback law citation cho frozen snapshot khi preview null. Map MUST align
- * BE priority_service.RULE_LAW_CITATION (5 keys).
- */
-function deriveLawCitationFallback(ruleApplied: string): string | null {
-  const map: Record<string, string | null> = {
-    longest_duration: "TT 05/2021 Phụ lục 01 Mục 5.b",
-    tiebreak_graduation_school: "TT 05/2021 Phụ lục 01 Mục 5.a",
-    commune_lookup: "TT 05/2021 Phụ lục 01 Mục 4",
-    manual_override: "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
-    ambiguous_requires_manual: null,
-  }
-  return map[ruleApplied] ?? null
-}
+// deriveLawCitationFallback + resolveEngineDisplay extracted vào engineDisplay.ts
+// (Commit 8 followup) để unit-test pure tách khỏi component render.
 
 function formatTimestamp(iso: string): string {
   try {
