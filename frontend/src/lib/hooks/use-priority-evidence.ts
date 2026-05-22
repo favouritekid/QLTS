@@ -12,6 +12,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { priorityEvidenceApi } from "@/lib/api/priority-evidence"
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import type {
   AdmissionProfileResponse,
   UntickPriorityEvidenceRequest,
@@ -21,19 +22,25 @@ import type {
   VerifyObjectEvidenceRequest,
 } from "@/lib/zod/priority-evidence"
 
-const admissionDetailKey = (id: number) => ["admission", id] as const
-
+// Followup fix: trước đây dùng `["admission", id]` (singular) → drift với
+// `useAdmissions.admissionsKeys.detail(id)` = `["admissions","detail",id]`
+// → invalidate không trigger refetch detail thực tế. Dùng shared key
+// constant để FE giữ cache parity.
 function invalidateRelated(
   queryClient: ReturnType<typeof useQueryClient>,
   profileId: number,
   updated: AdmissionProfileResponse,
 ) {
-  queryClient.setQueryData(admissionDetailKey(profileId), updated)
-  queryClient.invalidateQueries({ queryKey: admissionDetailKey(profileId) })
+  const detailKey = admissionsKeys.detail(profileId)
+  queryClient.setQueryData(detailKey, updated)
+  queryClient.invalidateQueries({ queryKey: detailKey })
+  // Sibling preview-priority-kv cache key: chính xác là "priority-kv-preview"
+  // (xem `use-preview-priority-kv.ts:16`). Predicate cũ "preview-priority-kv"
+  // reversed → không match, preview stale sau verify/reject/upload.
   queryClient.invalidateQueries({
     predicate: (q) =>
       Array.isArray(q.queryKey) &&
-      q.queryKey[0] === "preview-priority-kv" &&
+      q.queryKey[0] === "priority-kv-preview" &&
       q.queryKey[1] === profileId,
   })
 }

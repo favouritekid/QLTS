@@ -95,6 +95,14 @@ export interface UtEvidenceCardsProps {
    * profile mutation. Service-layer enforces version guard.
    */
   onCodesChange?: (codes: string[]) => void
+  /**
+   * Followup fix: form state codes (RHF watch) ưu tiên hơn
+   * `profile.priority_object_codes` (server snapshot) để officer tick thêm
+   * UT thấy card mới render ngay, không phải chờ save+refetch. Caller
+   * (PriorityTab) truyền `form.watch("priority_object_codes")` xuống.
+   * Bỏ qua nếu undefined → fallback profile snapshot.
+   */
+  formCodes?: string[] | null
 }
 
 export function UtEvidenceCards({
@@ -103,8 +111,12 @@ export function UtEvidenceCards({
   isEditable,
   onNavigateToDocuments,
   onCodesChange,
+  formCodes,
 }: UtEvidenceCardsProps) {
-  const codes = profile.priority_object_codes ?? []
+  // Followup fix: trước đây luôn đọc profile.priority_object_codes → tick
+  // thêm UT trong form state không reflect render tới save+refetch. Giờ
+  // ưu tiên formCodes nếu caller truyền (PriorityTab RHF watch).
+  const codes = formCodes ?? profile.priority_object_codes ?? []
   const evidence = getEvidence(profile)
   const verifiedCount = codes.filter((c) => evidence[c]?.status === "verified").length
   const pendingCount = codes.filter((c) => evidence[c]?.status === "pending").length

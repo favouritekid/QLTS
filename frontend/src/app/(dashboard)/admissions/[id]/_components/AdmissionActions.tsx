@@ -45,6 +45,25 @@ export function AdmissionActions({
   const { can } = usePermissions(profile)
   const statusConfig = getStatusConfig(profile.status)
 
+  // Followup fix: sticky 'Tiếp tục' bypass Step 8 lock của PipelineSidebar
+  // khi user không có decision permission. Gate cùng điều kiện sidebar
+  // (xem layout/PipelineSidebar.tsx:115-123) để UX consistent — user
+  // không decision perm KHÔNG navigate step 7→8 qua sticky bar (API vẫn
+  // gate, nhưng UX contract phải match sidebar lock state).
+  // TODO: thay bằng BE-aggregated `permissions.has_decision` khi ship.
+  const canDecide = Boolean(
+    profile.permissions?.approve ||
+    profile.permissions?.reject ||
+    profile.permissions?.resubmit ||
+    profile.permissions?.submit ||
+    profile.permissions?.request_revision ||
+    profile.permissions?.publish_result ||
+    profile.permissions?.enroll
+  )
+  // Hide Tiếp tục khi step 7 + no decision perm → user không advance qua
+  // Step 8 disabled. Step 1-6 navigation vẫn cho phép.
+  const showNextButton = currentStep < 8 && !(currentStep === 7 && !canDecide)
+
   return (
     <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
       {/* Mobile (<640px): allow horizontal scroll inside bar so wide
@@ -75,8 +94,8 @@ export function AdmissionActions({
             </Button>
           )}
 
-          {/* Next — step 1-7 */}
-          {currentStep < 8 && (
+          {/* Next — step 1-7 + decision-perm gate cho 7→8 transition */}
+          {showNextButton && (
             <Button onClick={() => onStepChange(currentStep + 1)}>
               Tiếp tục
               <ArrowRight className="w-4 h-4 ml-2" />

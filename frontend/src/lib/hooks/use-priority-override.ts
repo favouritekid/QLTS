@@ -20,11 +20,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { priorityOverrideApi } from "@/lib/api/priority-override"
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { OverridePriorityKvRequest } from "@/lib/zod/priority-override"
 
-/** Cache keys mirror existing admission detail convention. */
-const admissionDetailKey = (id: number) => ["admission", id] as const
+// Followup fix: dùng shared admissionsKeys.detail thay vì local
+// ["admission", id] singular drift — đảm bảo invalidate trigger detail
+// refetch thực tế.
 
 export function useOverridePriorityKv(profileId: number) {
   const queryClient = useQueryClient()
@@ -39,17 +41,19 @@ export function useOverridePriorityKv(profileId: number) {
       // Cache parity per memory `react-query-mutation-cache-parity`:
       // set fresh data to surface immediately + invalidate to refetch
       // background (covers race với concurrent socket data_updated).
-      queryClient.setQueryData(admissionDetailKey(profileId), updated)
+      const detailKey = admissionsKeys.detail(profileId)
+      queryClient.setQueryData(detailKey, updated)
       await queryClient.invalidateQueries({
-        queryKey: admissionDetailKey(profileId),
+        queryKey: detailKey,
       })
       // Sibling caches that depend on snapshot also need refresh —
-      // e.g., PriorityTab live-preview query (preview-priority-kv).
-      // Use predicate match để avoid hardcoding every key.
+      // PriorityTab live-preview query (key prefix "priority-kv-preview"
+      // per use-preview-priority-kv.ts:16). Predicate match để avoid
+      // hardcoding mọi key permutation.
       await queryClient.invalidateQueries({
         predicate: (query) =>
           Array.isArray(query.queryKey) &&
-          query.queryKey[0] === "preview-priority-kv" &&
+          query.queryKey[0] === "priority-kv-preview" &&
           query.queryKey[1] === profileId,
       })
     },

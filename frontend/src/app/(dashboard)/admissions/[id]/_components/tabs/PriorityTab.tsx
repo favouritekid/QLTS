@@ -135,13 +135,16 @@ export function PriorityTab({
         onNavigateToAcademic={onNavigateToAcademic}
       />
 
-      {/* § 3 UT evidence — verify/reject/untick per code + missing warning */}
+      {/* § 3 UT evidence — verify/reject/untick per code + missing warning.
+          formCodes (RHF watch) ưu tiên hơn profile snapshot để tick thêm
+          UT thấy ngay, không chờ save+refetch. */}
       <UtEvidenceCards
         profile={profile}
         canVerify={canVerify}
         isEditable={isEditable}
         onNavigateToDocuments={onNavigateToDocuments}
         onCodesChange={handleCodesChange}
+        formCodes={utCodes}
       />
 
       {/* § 4 Summary — tổng + audit disclosure + law disclosure (no actions) */}
