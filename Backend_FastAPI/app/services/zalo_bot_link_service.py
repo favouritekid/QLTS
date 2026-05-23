@@ -239,13 +239,18 @@ async def verify_and_link(
         # AFTER the router commits — safe_dispatch must NEVER fire while
         # the link write is still in-flight (see MASTER_ARCHITECTURE Part 7).
         from app.core.events import SystemEvents
-        from app.services.notification_dispatcher import safe_dispatch
+        from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
 
         _displaced_user_id = displaced_user_id
         _new_user_id = user_id
         _chat_prefix = mask_chat_id(chat_id)
 
         async def _post_commit() -> None:
+            # Sensitive event MUST pass rooms= per
+            # `test_sensitive_events_always_dispatch_with_rooms` AST contract
+            # (auth_model/notification_dispatcher fail-closed). Route to the
+            # displaced user's personal inbox + admins. Pattern mirrors
+            # admin/users.py user-targeted dispatches (USER_DEACTIVATED etc.).
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.ZALO_BOT_LINK_DISPLACED,
@@ -255,6 +260,7 @@ async def verify_and_link(
                     "chat_id_prefix": _chat_prefix,
                     "actor_id": _new_user_id,
                 },
+                rooms=rooms_for_user(_displaced_user_id),
             )
 
         post_commit = _post_commit
