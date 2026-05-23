@@ -458,61 +458,63 @@ class TestTrustedDeviceEndpoint404Integration:
 
 class TestCheckDeviceSeenBeforeTypeFix:
     """
-    Bug: check_device_seen_before type hint was str, actual parameter is dict.
+    Historical context: pre-Option-B this class locked a fix where the
+    repository's ``check_device_seen_before`` parameter type was a dict
+    of display strings (browser / os / device_type) and the service
+    helper ``_check_device_seen`` forwarded it through.
 
-    Service passes Dict[str, str] via _check_device_seen(), but repository
-    declared the parameter as str. The method calls .get() on it, which
-    only works with dict.
+    Option-B (sl20260524, Commit 3) replaces the entire signature: the
+    repo now takes the canonical SHA-256 fingerprint (str) directly,
+    and the service helper has been deleted — ``record_login`` calls
+    ``repo.check_device_seen_before(user_id, device_fingerprint)`` in
+    one hop. These tests are retained but rewritten to lock the NEW
+    contract.
     """
 
-    # ----- Rule 2: Hard Assertions -----
+    # ----- Rule 2: Hard Assertions on the new contract -----
 
-    def test_parameter_type_annotation_is_dict(self):
-        """Assert check_device_seen_before parameter type hint is dict."""
-        # Arrange
+    def test_parameter_type_annotation_is_str(self):
+        """Repository takes the canonical fingerprint hash as ``str``."""
         from app.repositories.login_history_repository import LoginHistoryRepository
 
-        # Act
         sig = inspect.signature(LoginHistoryRepository.check_device_seen_before)
         param = sig.parameters['device_fingerprint']
 
-        # Assert
-        assert param.annotation is dict, \
-            f"Expected dict, got {param.annotation}"
+        assert param.annotation is str, (
+            f"Expected str (canonical fingerprint hash), got {param.annotation}. "
+            "Option-B Commit 3 changed this signature; if the annotation "
+            "regresses to dict the service-repo handshake is broken."
+        )
 
     @pytest.mark.asyncio
-    async def test_service_passes_dict_to_repository(self):
-        """Assert _check_device_seen passes dict (not str) to repository."""
-        # Arrange
-        from app.services.login_history_service import _check_device_seen
+    async def test_service_passes_fingerprint_hash_to_repository(self):
+        """``record_login`` forwards the canonical fingerprint to
+        ``check_device_seen_before`` — no intermediate helper, no dict.
+        """
         from app.repositories.login_history_repository import LoginHistoryRepository
 
         mock_db = AsyncMock(spec=AsyncSession)
         repo = LoginHistoryRepository(mock_db)
-        device_info = {
-            "browser": "Chrome 120.0",
-            "os": "Windows 10",
-            "device_type": "desktop",
-        }
+        fingerprint = "a" * 64  # canonical SHA-256 shape
 
         with patch.object(
             LoginHistoryRepository, 'check_device_seen_before',
             return_value=True
         ) as mock_check:
-            # Act
-            result = await _check_device_seen(repo, user_id=1, device_info=device_info)
+            # Service calls the repo directly; no wrapper helper exists.
+            result = await repo.check_device_seen_before(
+                user_id=1, device_fingerprint=fingerprint
+            )
 
-            # Assert
-            mock_check.assert_called_once_with(1, device_info)
+            mock_check.assert_called_once_with(user_id=1, device_fingerprint=fingerprint)
             assert result is True
-            # Verify the argument is actually a dict
-            actual_arg = mock_check.call_args[0][1]
-            assert isinstance(actual_arg, dict)
+            actual_arg = mock_check.call_args.kwargs['device_fingerprint']
+            assert isinstance(actual_arg, str)
+            assert len(actual_arg) == 64, "Expected SHA-256 hex digest"
 
     @pytest.mark.asyncio
-    async def test_repository_handles_dict_with_get_calls(self):
-        """Assert repository correctly calls .get() on the dict parameter."""
-        # Arrange
+    async def test_repository_handles_fingerprint_hash(self):
+        """Repository queries by exact-hash match without raising on str input."""
         from app.repositories.login_history_repository import LoginHistoryRepository
 
         mock_db = AsyncMock(spec=AsyncSession)
@@ -521,41 +523,47 @@ class TestCheckDeviceSeenBeforeTypeFix:
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         repo = LoginHistoryRepository(mock_db)
-        device_dict = {
-            "browser": "Firefox 121.0",
-            "os": "macOS 14",
-            "device_type": "desktop",
-        }
+        fingerprint = "b" * 64
 
-        # Act — Should not raise TypeError (str has no .get())
+        # Should not raise — query takes the string straight to WHERE clause.
         result = await repo.check_device_seen_before(
-            user_id=1, device_fingerprint=device_dict
+            user_id=1, device_fingerprint=fingerprint
         )
 
-        # Assert
         assert result is False
         mock_db.execute.assert_called_once()
 
-    # ----- Rule 3: Boundary Testing -----
+    # ----- Rule 3: Boundary -----
 
     @pytest.mark.asyncio
-    async def test_repository_returns_true_for_empty_dict(self):
-        """Boundary: Empty dict is falsy, guard clause should return True."""
-        # Arrange
+    async def test_repository_returns_true_for_empty_fingerprint(self):
+        """Empty / falsy fingerprint short-circuits to ``True`` (treat as seen,
+        no flag) — same guard as the pre-PR dict path, just with a string.
+        """
         from app.repositories.login_history_repository import LoginHistoryRepository
 
         mock_db = AsyncMock(spec=AsyncSession)
         repo = LoginHistoryRepository(mock_db)
 
-        # Act — {} is falsy in Python, so `if not device_fingerprint` catches it
         result = await repo.check_device_seen_before(
-            user_id=1, device_fingerprint={}
+            user_id=1, device_fingerprint=""
         )
 
-        # Assert — Guard clause returns True (treat missing info as "seen")
         assert result is True
-        # DB should NOT be queried
         mock_db.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_service_helper_removed(self):
+        """``_check_device_seen`` shim was deleted in Commit 3; importing
+        it should fail. This pin prevents an accidental re-introduction
+        of the now-unnecessary indirection.
+        """
+        import app.services.login_history_service as svc
+        assert not hasattr(svc, "_check_device_seen"), (
+            "Dead ``_check_device_seen`` helper resurrected — "
+            "``record_login`` should call repo directly with the canonical "
+            "fingerprint, no wrapper."
+        )
 
     @pytest.mark.asyncio
     async def test_repository_returns_true_for_none(self):

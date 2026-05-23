@@ -167,9 +167,12 @@ async def record_login(
     # match post-migration).
     is_trusted_device = await trusted_repo.is_device_trusted(user_id, device_fingerprint)
 
-    # Check for anomalies (skip new_device check if trusted)
+    # Check for anomalies (skip new_device check if trusted). The repo
+    # now does an exact-hash match on login_history.device_fingerprint
+    # (Option-B Commit 3) so we pass the canonical fingerprint directly,
+    # no more brittle display-string comparison.
     is_new_ip = not await login_repo.check_ip_seen_before(user_id, ip_address)
-    is_new_device = False if is_trusted_device else not await _check_device_seen(login_repo, user_id, device_info)
+    is_new_device = False if is_trusted_device else not await login_repo.check_device_seen_before(user_id, device_fingerprint)
     is_new_location = not await login_repo.check_country_seen_before(user_id, country)
 
     # Check for impossible travel
@@ -591,15 +594,6 @@ def _parse_user_agent(user_agent: Optional[str]) -> Dict[str, Optional[str]]:
             "browser_family": None,
             "os_family": None,
         }
-
-
-async def _check_device_seen(
-    repo: LoginHistoryRepository,
-    user_id: int,
-    device_info: Dict[str, str],
-) -> bool:
-    """Check if device has been seen before."""
-    return await repo.check_device_seen_before(user_id, device_info)
 
 
 def _check_impossible_travel(
