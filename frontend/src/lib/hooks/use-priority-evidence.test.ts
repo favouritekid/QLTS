@@ -95,7 +95,7 @@ function assertCacheParity(
   )
 
   // 3. sibling preview-priority-kv predicate must accept this profile's preview
-  const predicateCall = invalidateSpy.mock.calls.find(([opts]) => {
+  const predicateCall = invalidateSpy.mock.calls.find(([opts]: [unknown]) => {
     return typeof (opts as { predicate?: unknown })?.predicate === "function"
   })
   expect(predicateCall).toBeDefined()
@@ -168,7 +168,7 @@ describe("use-priority-evidence — mutation cache parity (P1-4)", () => {
       act(() => {
         result.current.mutate({
           version: 5,
-          reason: "Minh chứng không hợp lệ — quá hạn",
+          reject_reason: "Minh chứng không hợp lệ — quá hạn",
         })
       })
 
