@@ -459,21 +459,25 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
     async def get_stale_sent_count(self, lag_minutes: int = 60) -> int:
         """Count deliveries sent > lag_minutes ago without webhook confirmation.
 
-        2026-04-22: ``zalo`` excluded from this filter — backend currently
-        does not consume the ``user_received_message`` ZBS Template Message
-        delivery webhook (header ``X-ZEvent-Server: ZNS``); the reconcile
-        task auto-marks ``sent → delivered`` after 60min instead, so a
-        ``sent`` zalo row older than 60min is the *expected* interim state,
-        not an alert condition. Re-add ``zalo`` once the webhook handler is
-        wired (separate follow-up). ``sms`` retained for when a future
-        SMS channel implementation lands; currently produces no rows.
+        2026-05-23: ``zalo`` re-included after ZBS Template Message webhook
+        handler shipped (commit ``d357c029`` — ``user_received_message``
+        events with ``X-ZEvent-Server: ZNS`` now route to
+        ``_handle_delivery_status`` and transition ``sent → delivered``
+        within ~3-10s of provider acknowledgement). A ``sent`` zalo row
+        older than ``lag_minutes`` is therefore a meaningful alert
+        condition: either the webhook delivery silently failed or the
+        provider never confirmed. Pairs with the reconcile task as a
+        defence-in-depth observability signal. See outstanding-debt P3-9.
+
+        ``sms`` retained for when a future SMS channel implementation
+        lands; currently produces no rows.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=lag_minutes)
         q = (
             select(func.count()).select_from(NotificationDelivery)
             .where(
                 NotificationDelivery.status == "sent",
-                NotificationDelivery.channel.in_(["sms"]),
+                NotificationDelivery.channel.in_(["sms", "zalo"]),
                 NotificationDelivery.sent_at <= cutoff,
             )
         )

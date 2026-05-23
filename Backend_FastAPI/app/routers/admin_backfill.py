@@ -223,6 +223,111 @@ async def bulk_resolve_exceptions(
 # =============================================================================
 
 
+_CSV_FIELDNAMES = (
+    "id",
+    "profile_id",
+    "exception_type",
+    "details",
+    "created_at",
+    "resolved_at",
+    "resolved_by_user_id",
+    "resolved_by_username",
+    "resolution_notes",
+)
+
+
+def _format_csv_header() -> bytes:
+    """Render the CSV header line.
+
+    Default csv.DictWriter quoting (csv.QUOTE_MINIMAL) preserves the
+    pre-PR-1 header shape ``id,profile_id,exception_type,...`` so
+    downstream tools that grep the header line continue to work.
+    """
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf, fieldnames=_CSV_FIELDNAMES, extrasaction="ignore"
+    )
+    writer.writeheader()
+    return buf.getvalue().encode("utf-8")
+
+
+def _format_csv_row(row: dict) -> bytes:
+    """Render one CSV data row using QUOTE_MINIMAL.
+
+    QUOTE_MINIMAL quotes only when the value contains the delimiter,
+    quotechar, or newline — same default as the pre-PR-1 router so
+    bytes-equality with the legacy materialised buffer (sans sanitiser
+    prefix) is preserved.
+    """
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf, fieldnames=_CSV_FIELDNAMES, extrasaction="ignore"
+    )
+    writer.writerow(row)
+    return buf.getvalue().encode("utf-8")
+
+
+async def _csv_export_stream(
+    db: AsyncSession,
+    *,
+    exception_type: Optional[str],
+    is_resolved: Optional[bool],
+    on_finish: Optional[callable] = None,
+):
+    """Per-row async generator for the admin backfill CSV export.
+
+    Lifted to a module-level coroutine generator so unit tests can drive
+    it directly with a mocked ``iter_csv_rows`` (httpx ASGITransport
+    buffers ``StreamingResponse`` end-to-end, so chunk-count assertions
+    have to come from the generator, not from the HTTP layer).
+
+    PR-1 Commit 3 (2026-05-23) — true async streaming. The pre-fix body
+    materialised every row into ``io.StringIO`` then wrapped
+    ``iter([buf.getvalue()])`` which defeated ``StreamingResponse``.
+    Now: header chunk first, then one CSV-line chunk per row, end of
+    stream when ``iter_csv_rows`` exhausts. ``on_finish`` is invoked
+    with the final ``row_count`` so the caller can write an audit log
+    line outside this generator's scope.
+
+    Sanitises user-controlled string columns via the shared
+    ``sanitize_csv_cell`` helper (``app/utils/csv_helpers.py``) to
+    prevent CSV/formula injection (OWASP CWE-1236). The shared helper
+    handles ``=``, ``+``, ``-``, ``@``, ``\\t``, ``\\r``, ``\\n``, ``|``
+    plus DDE pattern logging — narrower than a local FORMULA_PREFIX
+    denylist would be.
+    """
+    import json
+    from app.utils.csv_helpers import sanitize_csv_cell
+
+    yield _format_csv_header()
+
+    row_count = 0
+    async for row in backfill_service.iter_csv_rows(
+        db,
+        exception_type=exception_type,
+        is_resolved=is_resolved,
+    ):
+        # JSONB ``details`` → string, then sanitise the encoded JSON
+        # because untrusted user content can land inside it and Excel
+        # interprets leading ``=`` / ``+`` / ``-`` / ``@`` / control
+        # chars as a formula. Sanitise BEFORE csv.DictWriter so default
+        # QUOTE_MINIMAL quoting wraps any prepended single quote when
+        # the cell already contains a comma.
+        row["details"] = sanitize_csv_cell(
+            json.dumps(row["details"], ensure_ascii=False)
+        )
+        for k in ("resolved_by_username", "resolution_notes"):
+            v = row.get(k)
+            if isinstance(v, str):
+                row[k] = sanitize_csv_cell(v)
+
+        yield _format_csv_row(row)
+        row_count += 1
+
+    if on_finish is not None:
+        on_finish(row_count)
+
+
 @router.get(
     "/export.csv",
     response_class=StreamingResponse,
@@ -243,51 +348,38 @@ async def export_csv(
     ``details`` JSONB is dumped as raw JSON string into a single column —
     admin tooling parses downstream. Filename uses UTC timestamp for unique
     download names.
+
+    PR-1 Commit 3 (2026-05-23) — true async streaming via
+    ``_csv_export_stream`` module-level coroutine generator (testable
+    in isolation). Sanitises user-controlled string columns via shared
+    ``sanitize_csv_cell`` helper to prevent CSV/formula injection
+    (OWASP CWE-1236).
     """
-    import json
-
-    rows = []
-    async for row in backfill_service.iter_csv_rows(
-        db,
-        exception_type=exception_type,
-        is_resolved=is_resolved,
-    ):
-        # JSON-encode the dict column for CSV cell safety
-        row["details"] = json.dumps(row["details"], ensure_ascii=False)
-        rows.append(row)
-
-    buf = io.StringIO()
-    fieldnames = [
-        "id",
-        "profile_id",
-        "exception_type",
-        "details",
-        "created_at",
-        "resolved_at",
-        "resolved_by_user_id",
-        "resolved_by_username",
-        "resolution_notes",
-    ]
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
-    for r in rows:
-        writer.writerow(r)
-    buf.seek(0)
-
     from datetime import timezone as _tz
     ts = datetime.now(_tz.utc).strftime("%Y%m%dT%H%M%SZ")
     filename = f"backfill_exceptions_{ts}.csv"
 
     log.info(
-        "admin_backfill.export_csv",
+        "admin_backfill.export_csv.start",
         actor_id=current_admin.id,
-        row_count=len(rows),
         exception_type=exception_type,
         is_resolved=is_resolved,
     )
 
+    def _log_finish(row_count: int) -> None:
+        log.info(
+            "admin_backfill.export_csv.finish",
+            actor_id=current_admin.id,
+            row_count=row_count,
+        )
+
     return StreamingResponse(
-        iter([buf.getvalue()]),
+        _csv_export_stream(
+            db,
+            exception_type=exception_type,
+            is_resolved=is_resolved,
+            on_finish=_log_finish,
+        ),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
