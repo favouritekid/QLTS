@@ -341,6 +341,179 @@ async def test_list_filter_is_resolved_false_excludes_closed(
 
 
 # ============================================================================
+# PR-1 Commit 3 (2026-05-23) — CSV export streaming + injection sanitize
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_csv_export_stream_yields_one_chunk_per_row(backfill_seed: dict):
+    """Per-row streaming contract — drive the generator directly.
+
+    ``httpx.ASGITransport`` (in-process test transport) buffers the full
+    ``StreamingResponse`` body before yielding to ``client.stream``, so
+    chunk-count assertions can NOT be made through the HTTP layer.
+    Instead, exercise ``_csv_export_stream`` directly + count yields.
+
+    Before PR-1 Commit 3 the router materialised every row into a single
+    ``io.StringIO`` then wrapped ``iter([buf.getvalue()])`` —
+    ``StreamingResponse`` only ever saw one chunk. After the fix the
+    body is an async generator: header chunk first, then one chunk per
+    row, then end-of-stream. Pin: with 3 seeded rows we expect 4
+    chunks (1 header + 3 data).
+    """
+    from app.routers.admin_backfill import _csv_export_stream
+
+    async with AsyncSessionLocal() as s:
+        chunks: list[bytes] = []
+        finish_calls: list[int] = []
+
+        async for chunk in _csv_export_stream(
+            s,
+            exception_type=None,
+            is_resolved=None,
+            on_finish=lambda count: finish_calls.append(count),
+        ):
+            chunks.append(chunk)
+
+    # 1 header + ≥3 seeded rows. The seed fixture writes exactly 3 rows
+    # for this profile but other tests in the suite may seed more, so the
+    # assertion is "> 1 chunk" — pre-fix behaviour was exactly 1.
+    assert len(chunks) > 1, (
+        f"Expected per-row streaming (> 1 chunk) but got {len(chunks)}. "
+        f"Router may have regressed to ``iter([buf.getvalue()])``."
+    )
+    # ``on_finish`` callback must fire exactly once with the row count
+    # (rows yielded, not including the header chunk).
+    assert len(finish_calls) == 1
+    assert finish_calls[0] == len(chunks) - 1, (
+        f"on_finish row_count {finish_calls[0]} should equal data chunks "
+        f"{len(chunks) - 1} (chunks minus header)."
+    )
+
+    # First chunk MUST be the header line (preserves pre-PR-1 unquoted
+    # header shape so downstream grep continues to work).
+    header = chunks[0].decode("utf-8")
+    assert header.startswith("id,profile_id,exception_type"), (
+        f"First chunk must be header line; got: {header!r}"
+    )
+
+    # All seeded ids present somewhere in the data chunks.
+    body = b"".join(chunks).decode("utf-8")
+    for ex_id in backfill_seed["exception_ids"]:
+        assert str(ex_id) in body, f"Seeded row id={ex_id} missing from CSV body"
+
+
+@pytest.mark.asyncio
+async def test_csv_export_sanitizes_formula_injection_in_resolution_notes(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    seed_lead_dependencies: dict,
+):
+    """User-controlled ``resolution_notes`` cells with formula-trigger
+    prefix MUST be sanitised via ``sanitize_csv_cell`` before CSV emit.
+
+    OWASP CWE-1236. The shared helper at ``app/utils/csv_helpers.py:55``
+    prepends a single quote so Excel treats the cell as text, not as a
+    formula. PR-1 Commit 3 wires this into the streaming generator —
+    regression here would re-open the formula-injection vector.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = models.Lead(
+                full_name=f"Sanitize seed lead {ts}",
+                phone=f"097{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead)
+            await s.flush()
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=f"5{ts:08d}2"[:12],
+                status="draft",
+                applied_rules={},
+                academic_year=2026,
+                uses_choice_engine=False,
+            )
+            s.add(profile)
+            await s.flush()
+            ex = models.AdmissionBackfillException(
+                profile_id=profile.id,
+                exception_type="selected_subject_group_ambiguous",
+                details={"matches": [1, 2]},
+            )
+            s.add(ex)
+            await s.flush()
+            ex_id = ex.id
+
+    # Resolve with a dangerous-prefix notes string. Avoid characters that
+    # csv would auto-quote (comma / quote / newline) so we can assert on
+    # the raw cell content without quoting-layer interference.
+    malicious = "=DANGEROUS_FORMULA()"
+    resolve = await client.patch(
+        f"/api/v2/admin/admission-backfill-exceptions/{ex_id}/resolve",
+        headers=admin_token_headers,
+        json={"resolution_notes": malicious},
+    )
+    assert resolve.status_code == 200, resolve.text
+
+    response = await client.get(
+        "/api/v2/admin/admission-backfill-exceptions/export.csv",
+        headers=admin_token_headers,
+        params={"exception_type": "selected_subject_group_ambiguous"},
+    )
+    assert response.status_code == 200
+    text = response.text
+
+    # Sanitised: cell content starts with a literal single quote followed
+    # by the original formula. resolution_notes is the LAST column so it
+    # is preceded by a comma and terminated by CR/LF.
+    sanitised_cell = f",'{malicious}\r\n"
+    assert sanitised_cell in text, (
+        f"Expected sanitised cell {sanitised_cell!r} in CSV body; "
+        f"first 600 chars:\n{text[:600]!r}"
+    )
+    # And the raw, unsanitised form (no leading single quote) MUST NOT
+    # appear as a cell — that would mean sanitize_csv_cell was bypassed.
+    raw_cell = f",{malicious}\r\n"
+    assert raw_cell not in text, (
+        f"CSV contains malicious formula unprefixed — sanitiser bypass. "
+        f"CWE-1236 regression."
+    )
+
+
+@pytest.mark.asyncio
+async def test_csv_export_handles_empty_result(
+    client: AsyncClient,
+    admin_token_headers: dict,
+):
+    """Zero matching rows still emits the header line + 200 status.
+
+    Defensive: a filter combo that matches nothing must not raise — the
+    async generator yields only the header chunk.
+    """
+    response = await client.get(
+        "/api/v2/admin/admission-backfill-exceptions/export.csv",
+        headers=admin_token_headers,
+        params={"exception_type": "__nonexistent_type__"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    text = response.text
+    # Header line emitted (unquoted shape, preserves pre-PR-1 contract)
+    assert text.startswith("id,profile_id,exception_type"), (
+        f"Expected header line as sole chunk; got: {text[:200]!r}"
+    )
+    # No data rows — only the header line
+    lines = [line for line in text.split("\n") if line.strip()]
+    assert len(lines) == 1, (
+        f"Empty-result CSV should have exactly 1 line (header); got {len(lines)} lines"
+    )
+
+
+# ============================================================================
 # PR-CO-4 (FU #118) — Bulk-resolve atomicity anchor
 # ============================================================================
 
