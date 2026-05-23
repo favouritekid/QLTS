@@ -294,6 +294,25 @@ describe("OfficerDashboardClient", () => {
   });
 
   // =========================================================================
+  // Hydration gate — unsupported role (PR #325 hasMounted)
+  // =========================================================================
+
+  it("renders 'Không có quyền' alert when persisted user.role is unsupported (e.g. accountant)", async () => {
+    // PR #324 Commit 1 Known Limitation closure: accountant/user/other roles
+    // landing on /dashboard/officer manually (no nav entry) used to mismatch
+    // (SSR skeleton vs client Alert). hasMounted gate aligns first client
+    // render with SSR; Alert fires NEXT render post-mount.
+    (mockUser as any).role = "accountant";
+    setUrlSearch("");
+    renderWithProviders();
+    await waitFor(() => {
+      expect(screen.getByText("Không có quyền truy cập")).toBeInTheDocument();
+    });
+    // SmartHeader (supported-role branch) must NOT render
+    expect(screen.queryByTestId("smart-header")).not.toBeInTheDocument();
+  });
+
+  // =========================================================================
   // URL state init — unit / officer
   // =========================================================================
 
