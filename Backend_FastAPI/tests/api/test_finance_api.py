@@ -695,8 +695,26 @@ class TestFinanceRolePermissions:
         # Should have PUT /api/payments/{id}/verify
         assert ("/api/payments/{id}/verify", "PUT") in accountant_actions
 
-    def test_officer_cannot_calculate_fee(self):
-        """Officer policy should NOT include calculate fee permission."""
+    def test_officer_can_calculate_fee_scoped(self):
+        """Officer template INCLUDES /api/fees/calculate POST (scoped).
+
+        Decision reference: memory ``admission-audit-decisions-2026-04-24``
+        chốt officer scoped fee calc — officer initiates fee calculation
+        on their assigned profile within the approved/confirmed/enrolled
+        status whitelist. The service layer ``_fee_calc_authorized``
+        enforces ownership + status guard at runtime; the Casbin gate
+        only opens the route.
+
+        Recording payments (``/api/payments`` POST) and issuing invoices
+        (``/api/invoices/{id}/issue`` PUT) remain accountant-only per
+        separation of duties — asserted here as symmetry guard so a
+        future template drift that grants officer those writes fails
+        loud at unit-test time.
+
+        Pre-PR-1 this test was ``test_officer_cannot_calculate_fee`` —
+        flipped 2026-05-23 to match the policy reality shipped
+        2026-04-24 (memory ``test-debt-admission-workflow-e2e``).
+        """
         from app.casbin_config.policy_templates import OFFICER_TEMPLATE
 
         officer_actions = [
@@ -704,8 +722,22 @@ class TestFinanceRolePermissions:
             for p in OFFICER_TEMPLATE["policies"]
         ]
 
-        # Officer should NOT have POST /api/fees/calculate
-        assert ("/api/fees/calculate", "POST") not in officer_actions
+        # Officer HAS /api/fees/calculate POST (scoped to assigned profile,
+        # service-layer ownership + status whitelist enforced).
+        assert ("/api/fees/calculate", "POST") in officer_actions, (
+            "OFFICER_TEMPLATE must include /api/fees/calculate POST per "
+            "decision admission-audit-decisions-2026-04-24."
+        )
+
+        # Officer LACKS accountant-only finance writes (symmetry drift guard).
+        assert ("/api/payments", "POST") not in officer_actions, (
+            "Officer must NOT have /api/payments POST — accountant-only "
+            "(separation of duties)."
+        )
+        assert ("/api/invoices/{id}/issue", "PUT") not in officer_actions, (
+            "Officer must NOT have /api/invoices/{id}/issue PUT — "
+            "accountant-only (separation of duties)."
+        )
 
     def test_accountant_can_calculate_fee(self):
         """Accountant policy should include calculate fee permission."""
