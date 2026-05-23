@@ -4,6 +4,26 @@
 # Template file - ${DOMAIN} is replaced by envsubst during deployment
 # =============================================================================
 
+# --- Catch-all: reject unknown Host headers (defence-in-depth) ---
+# `default_server` matches any request whose Host header does not match the
+# named `server_name` blocks below. `return 444` is nginx-specific: close
+# the connection without sending any response (no Location echo, no headers).
+# Closes memory `nginx-host-validation-gap-2026-05-23` — pairs with the
+# code-audit-verified mute of starlette CVE PYSEC-2026-161 (memory
+# `starlette-fastapi-coordinated-upgrade-debt`) as defence-in-depth.
+server {
+    listen 80 default_server;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    return 444;
+}
+
 # --- HTTP: Redirect to HTTPS + ACME challenge ---
 server {
     listen 80;
