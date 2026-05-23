@@ -205,8 +205,8 @@ class PaymentService:
         _db = self.db
         # Snapshot rooms pre-commit: profile may be unloaded after session close,
         # and fail-closed guard requires non-empty rooms for sensitive events.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(profile) if fee and profile else None
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(profile) if fee and profile else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch
@@ -388,8 +388,8 @@ class PaymentService:
         }
         _db = self.db
         # Snapshot rooms pre-commit for scoped domain emit.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(profile) if profile else None
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(profile) if profile else None
 
         _fee_fully_paid = fee_remaining <= 0
         _fee_fully_paid_payload = {
@@ -499,8 +499,8 @@ class PaymentService:
         }
         _db = self.db
         # Snapshot rooms pre-commit for scoped domain emit.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(_profile) if _profile else None
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(_profile) if _profile else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch
@@ -973,8 +973,8 @@ class RefundService:
         }
         _db = self.db
         # Snapshot rooms pre-commit for scoped domain emit.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(profile) if profile is not None else None
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(profile) if profile is not None else None
 
         async def post_commit():
             from app.services.notification_dispatcher import safe_dispatch

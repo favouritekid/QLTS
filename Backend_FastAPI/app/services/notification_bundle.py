@@ -67,8 +67,8 @@ class NotificationIntent:
            ``settings.SOCKET_SCOPED_EMIT=True`` — a sensitive intent without
            rooms will be blocked by the fail-closed guard in
            ``_emit_domain_event``. Build via
-           ``_rooms_for_admission(profile)`` / ``_rooms_for_lead(lead)`` /
-           ``_rooms_for_user(user_id)`` helpers at the call site.
+           ``rooms_for_admission(profile)`` / ``rooms_for_lead(lead)`` /
+           ``rooms_for_user(user_id)`` helpers at the call site.
     """
 
     event: SystemEvents

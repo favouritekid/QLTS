@@ -46,7 +46,7 @@ from app.schemas.collaborator import (
 from app.core.events import SystemEvents
 from app.core.rate_limits import limiter, RateLimits
 from app.services import collaborator_service
-from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
+from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
 from app.utils.exceptions import ResourceNotFoundError
 
 # ============================================================================
@@ -201,7 +201,7 @@ async def review_claim(
 
     # Dispatch notification to CTV
     ctv_user_id = claim.collaborator.user_id if claim.collaborator else None
-    _ctv_rooms = _rooms_for_user(ctv_user_id) if ctv_user_id else ["role_admin"]
+    _ctv_rooms = rooms_for_user(ctv_user_id) if ctv_user_id else ["role_admin"]
     if review_data.status == "approved":
         await safe_dispatch(
             db=db,
@@ -292,7 +292,7 @@ async def approve_collaborator_endpoint(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_approved:{approved.id}",
-            rooms=_rooms_for_user(approved.user_id),
+            rooms=rooms_for_user(approved.user_id),
         )
 
     # Reload with relationships
@@ -347,7 +347,7 @@ async def suspend_collaborator_endpoint(
                 "actor_id": current_user.id,
             },
             dedupe_key=f"ctv_suspended:{collaborator.id}",
-            rooms=_rooms_for_user(collaborator.user_id),
+            rooms=rooms_for_user(collaborator.user_id),
         )
 
     repo = CollaboratorRepository(db)

@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest"
 import type { PreviewPriorityKvResponse } from "@/lib/api/priority-kv"
 
-import { resolveSummaryDisplay } from "./PrioritySummaryPanel"
+import { resolveCap, resolveSummaryDisplay } from "./PrioritySummaryPanel"
 
 const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   kv_resolved: "KV1",
@@ -401,5 +401,68 @@ describe("PrioritySummaryPanel — cap display (Commit 3)", () => {
     expect(screen.getByTestId("priority-summary-cap")).toBeInTheDocument()
     expect(screen.queryByTestId("priority-summary-cap-badge")).not.toBeInTheDocument()
     expect(screen.getByTestId("priority-summary-applied")).toHaveTextContent("+1.75đ")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// PR #324 Commit 2 — resolveCap direct unit tests (P1-4 follow-up review).
+// Indirect coverage existed via `PrioritySummaryPanel` cap-display tests
+// above, but the cap precedence (preview-wins-on-draft vs snapshot-wins-on-
+// post-draft) was implicit. Pin it explicitly so a refactor that drops the
+// `isPostDraft` branch fails loudly here, not in a downstream UI test.
+// ---------------------------------------------------------------------------
+describe("resolveCap — cap precedence", () => {
+  it("draft + preview.path_bonus_rule.max_total_bonus=2.0 + totalBonus=3.0 → preview wins, capped to 2.0", () => {
+    const profile = {
+      status: "draft" as const,
+      priority_resolution_snapshot: {},
+    }
+    const preview = { path_bonus_rule: { max_total_bonus: 2.0 } }
+    expect(resolveCap(profile, preview, 3.0)).toEqual({
+      maxTotalBonus: 2.0,
+      isCapped: true,
+      appliedBonus: 2.0,
+    })
+  })
+
+  it("post-draft + snapshot.path_bonus_rule.max_total_bonus=1.5 + totalBonus=2.0 → snapshot wins (preview ignored)", () => {
+    const profile = {
+      status: "submitted" as const,
+      priority_resolution_snapshot: {
+        path_bonus_rule: { max_total_bonus: 1.5 },
+      },
+    }
+    // Even when preview supplies a different cap, snapshot is authoritative
+    // post-draft (frozen contract mirrors `resolveSummaryDisplay` behaviour).
+    const preview = { path_bonus_rule: { max_total_bonus: 5.0 } }
+    expect(resolveCap(profile, preview, 2.0)).toEqual({
+      maxTotalBonus: 1.5,
+      isCapped: true,
+      appliedBonus: 1.5,
+    })
+  })
+
+  it("draft + preview=null + totalBonus=2.0 → no cap, applied = total", () => {
+    const profile = {
+      status: "draft" as const,
+      priority_resolution_snapshot: {},
+    }
+    expect(resolveCap(profile, null, 2.0)).toEqual({
+      maxTotalBonus: null,
+      isCapped: false,
+      appliedBonus: 2.0,
+    })
+  })
+
+  it("post-draft + snapshot có nhưng KHÔNG path_bonus_rule + totalBonus=2.0 → no cap", () => {
+    const profile = {
+      status: "submitted" as const,
+      priority_resolution_snapshot: { kv_resolved: "KV1" },
+    }
+    expect(resolveCap(profile, null, 2.0)).toEqual({
+      maxTotalBonus: null,
+      isCapped: false,
+      appliedBonus: 2.0,
+    })
   })
 })

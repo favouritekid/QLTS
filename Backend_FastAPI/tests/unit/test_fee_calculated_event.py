@@ -40,7 +40,7 @@ async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_ch
 
     profile = MagicMock()
     profile.id = 99
-    profile.__dict__["lead"] = lead  # _rooms_for_admission / getattr path
+    profile.__dict__["lead"] = lead  # rooms_for_admission / getattr path
 
     # --- Wire a service instance with mocked collaborators.
     # db.refresh is the step that populates fee.id in reality; fake it by
@@ -67,7 +67,7 @@ async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_ch
         "app.services.lead_admission_sync.sync_lead_tuition_calculated",
         new=_fake_sync,
     ), patch(
-        "app.services.notification_dispatcher._rooms_for_admission",
+        "app.services.notification_dispatcher.rooms_for_admission",
         return_value=["role_admin", "unit_1", "user_room_42"],
     ), patch(
         "app.services.notification_dispatcher.safe_dispatch",
@@ -132,7 +132,7 @@ async def test_calculate_fee_reports_lead_stage_unchanged_when_sync_noop():
     svc._get_installment_plan = AsyncMock(return_value=None)
 
     with patch(
-        "app.services.notification_dispatcher._rooms_for_admission",
+        "app.services.notification_dispatcher.rooms_for_admission",
         return_value=["role_admin", "unit_1", "user_room_42"],
     ), patch(
         "app.services.notification_dispatcher.safe_dispatch",

@@ -132,14 +132,6 @@ vi.mock("@/lib/hooks/use-preview-priority-kv", () => ({
   usePreviewPriorityKv: (...args: PreviewHookArgs) => previewHookSpy(...args),
 }))
 
-// P0-1 fix 2026-05-22 — auth.store mock no longer needed. PriorityTab swap
-// đọc mode từ `profile.override_priority_kv_mode` (server-derived) thay vì
-// user.role string. Keep no-op mock để tránh import resolution surprise
-// nếu PriorityTab re-add dependency tương lai.
-vi.mock("@/lib/stores/auth.store", () => ({
-  useAuthStore: () => null,
-}))
-
 // ---------------------------------------------------------------------------
 // Test harness: wraps PriorityTab with a real react-hook-form so form.watch
 // returns real values for the preview hook gate (per PR-3 P1 design — gate

@@ -164,15 +164,15 @@ export function EngineResultCard({
             <div className="mt-2 rounded-md border border-purple-200 bg-purple-50/60 p-2 text-xs">
               <p>
                 <span className="font-medium">Ấn định bởi:</span>{" "}
-                {/* Code review 2026-05-22 — ưu tiên denorm `manual_override_by_name`
+                {/* Prefer denorm `manual_override_by_name`
                     (priority_override_service.py:407). Legacy snapshot pre-deploy
-                    chưa có field → fallback `#{actor_id}`. */}
+                    chưa có field → fallback `#{actor_id}`. BE invariant guarantees
+                    at least `manual_override_by` present when state==='override'. */}
                 {(() => {
                   const name = snapshot.manual_override_by_name
                   if (typeof name === "string" && name) return name
                   const id = snapshot.manual_override_by
-                  if (id !== undefined && id !== null && id !== "") return `#${id}`
-                  return "—"
+                  return `#${id}`
                 })()}
                 {snapshot.manual_override_at && (
                   <span className="ml-2 opacity-70">
@@ -241,7 +241,7 @@ export function EngineResultCard({
       {state === "missing" && (
         <p className="text-sm text-muted-foreground">
           Vui lòng khai trình độ văn hóa ở phần trên + lịch sử học THPT ở tab
-          &quot;Học tập&quot; để hệ thống xác định KV.
+          “Học tập” để hệ thống xác định KV.
         </p>
       )}
 

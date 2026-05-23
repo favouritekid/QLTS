@@ -277,7 +277,7 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
                 >
                   <FormControl>
                     <SelectTrigger>
-                      <SelectValue placeholder="Chọn tổ hợp môn..." />
+                      <SelectValue placeholder="Chọn tổ hợp môn…" />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>

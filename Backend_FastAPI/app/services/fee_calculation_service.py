@@ -307,8 +307,8 @@ class FeeCalculationService:
         # Pre-compute everything the closure needs while the session is
         # still attached; rooms must come from the admission helper since
         # the emit runs AFTER the router commits.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(profile)
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(profile)
         _event_payload = {
             "admission_profile_id": admission_profile_id,
             "lead_id": getattr(_lead_obj, "id", None) if _lead_obj else None,

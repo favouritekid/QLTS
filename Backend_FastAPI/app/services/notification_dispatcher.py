@@ -348,12 +348,12 @@ async def _emit_domain_event(
 #   * `user_room_<lead.assigned_officer_id>`   — assigned officer across units
 #
 # Caller responsibility: eager-load `profile.lead` (selectinload) before
-# calling `_rooms_for_admission`. The helper returns `["role_admin"]` only
+# calling `rooms_for_admission`. The helper returns `["role_admin"]` only
 # if the lead relationship or its scoping fields are unavailable — in that
 # case admins still see the event while unit/officer targeting is skipped.
 
 
-def _rooms_for_admission(profile) -> List[str]:
+def rooms_for_admission(profile) -> List[str]:
     """Compute Socket.IO rooms for an admission-scoped event.
 
     Returns a list containing `role_admin` + (if available) the owning
@@ -371,10 +371,10 @@ def _rooms_for_admission(profile) -> List[str]:
     return rooms
 
 
-def _rooms_for_lead(lead) -> List[str]:
+def rooms_for_lead(lead) -> List[str]:
     """Compute Socket.IO rooms for a lead-scoped event.
 
-    Mirror of `_rooms_for_admission` for events that carry a Lead row
+    Mirror of `rooms_for_admission` for events that carry a Lead row
     directly (e.g. LEAD_CREATED, LEAD_ASSIGNED).
     """
     rooms: List[str] = ["role_admin"]
@@ -388,7 +388,7 @@ def _rooms_for_lead(lead) -> List[str]:
     return rooms
 
 
-def _rooms_for_user(user_id: Optional[int]) -> List[str]:
+def rooms_for_user(user_id: Optional[int]) -> List[str]:
     """Rooms for user-targeted sensitive events (USER_DEACTIVATED, USER_ROLE_CHANGED, SUSPICIOUS_LOGIN).
 
     Admin visibility + the target user's personal inbox. No unit scoping —
@@ -632,8 +632,8 @@ async def dispatch(
                Required for sensitive events (admission/lead/finance/user
                PII) when ``settings.SOCKET_SCOPED_EMIT=True``; public
                events (org/pipeline config) may pass None and broadcast.
-               Use ``_rooms_for_admission(profile)`` / ``_rooms_for_lead(lead)``
-               / ``_rooms_for_user(user_id)`` helpers at the call site.
+               Use ``rooms_for_admission(profile)`` / ``rooms_for_lead(lead)``
+               / ``rooms_for_user(user_id)`` helpers at the call site.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
@@ -1729,7 +1729,7 @@ async def dispatch_to_user(
 
     Convenience wrapper that ensures the user_id is in the payload
     for SpecificUsersResolver. Default Socket.IO scope is the target
-    user's personal room + admins (``_rooms_for_user``) — callers may
+    user's personal room + admins (``rooms_for_user``) — callers may
     override via ``rooms=`` if the event needs broader/narrower targeting.
 
     Args:
@@ -1745,7 +1745,7 @@ async def dispatch_to_user(
         Caller is responsible for calling db.commit() then callback().
     """
     payload["user_id"] = user_id
-    effective_rooms = rooms if rooms is not None else _rooms_for_user(user_id)
+    effective_rooms = rooms if rooms is not None else rooms_for_user(user_id)
     return await dispatch(db, event, payload, dedupe_key, rooms=effective_rooms)
 
 

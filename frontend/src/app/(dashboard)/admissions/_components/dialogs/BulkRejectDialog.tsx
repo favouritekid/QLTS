@@ -74,7 +74,7 @@ export function BulkRejectDialog({
             </Label>
             <Textarea
               id="reason"
-              placeholder="Nhập lý do từ chối (ít nhất 10 ký tự)..."
+              placeholder="Nhập lý do từ chối (ít nhất 10 ký tự)…"
               value={reason}
               onChange={(e) => {
                 setReason(e.target.value)

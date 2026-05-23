@@ -193,7 +193,7 @@ def check_admission_surveys_due_task(self):
                                 submitted_at=submitted_ref,
                                 tracking_id=tracking_id,
                             ),
-                            rooms=notification_dispatcher._rooms_for_admission(profile),
+                            rooms=notification_dispatcher.rooms_for_admission(profile),
                         )
                         if notif_cb:
                             post_commit_callbacks.append(notif_cb)
@@ -311,7 +311,7 @@ def check_admission_confirmation_reminders_task(self):
         from ..models.lead import Lead
         from ..models.admission import AdmissionProfile as _ProfileModel
         from ..services import notification_dispatcher
-        from ..services.notification_dispatcher import _rooms_for_admission
+        from ..services.notification_dispatcher import rooms_for_admission
 
         result = {
             "checked": 0,
@@ -437,7 +437,7 @@ def check_admission_confirmation_reminders_task(self):
                             f"{settings.FRONTEND_URL.rstrip('/')}"
                             f"/confirm/{token.token}"
                         )
-                        rooms = _rooms_for_admission(profile)
+                        rooms = rooms_for_admission(profile)
 
                         if (
                             not in_6h_window

@@ -262,8 +262,8 @@ class InvoiceService:
             ]
             _db = self.db
             # Snapshot rooms pre-commit so post-commit callback doesn't lazy-fetch
-            from app.services.notification_dispatcher import _rooms_for_admission
-            _issued_rooms = _rooms_for_admission(_prof) if _prof is not None else ["role_admin"]
+            from app.services.notification_dispatcher import rooms_for_admission
+            _issued_rooms = rooms_for_admission(_prof) if _prof is not None else ["role_admin"]
 
             async def _post_commit_cb_fn():
                 from app.services.notification_dispatcher import safe_dispatch
@@ -471,8 +471,8 @@ class InvoiceService:
             degree_level=_degree_level,
         )
         _db = self.db
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _invoice_rooms = _rooms_for_admission(_profile) if _profile is not None else ["role_admin"]
+        from app.services.notification_dispatcher import rooms_for_admission
+        _invoice_rooms = rooms_for_admission(_profile) if _profile is not None else ["role_admin"]
 
         async def post_commit():
             if not _invoice_payload.get("user_id"):
@@ -647,7 +647,7 @@ class InvoiceService:
             as_of_date=check_date,
         )
 
-        from app.services.notification_dispatcher import _rooms_for_admission
+        from app.services.notification_dispatcher import rooms_for_admission
 
         marked = []
         overdue_payloads = []
@@ -684,7 +684,7 @@ class InvoiceService:
                     _lead_id = _prof.lead_id
                     if getattr(_prof, "lead", None):
                         _officer_id = _prof.lead.assigned_officer_id
-                    _rooms_this = _rooms_for_admission(_prof)
+                    _rooms_this = rooms_for_admission(_prof)
 
             overdue_payloads.append({
                 "invoice_id": invoice.id,

@@ -263,6 +263,21 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/payments/intents", "action": "POST"},  # Create payment intent (online)
         {"subject": "{role}", "object": "/api/payments/intents/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/methods", "action": "GET"},
+        # NOTE (PR #324 Commit 5) — Officer DENY for /api/leads/export,
+        # /bulk-assign, /bulk-delete, /distribution-preview was DESIGNED
+        # here but NOT shipped. Reason: officer sits as an inheritance
+        # parent in the diamond (admin -> manager -> officer; accountant
+        # -> officer), so a DENY at the officer subject propagates UP
+        # to manager + admin AND DOWN to accountant via Casbin's
+        # `g(r.sub, p.sub)` policy expansion — verified empirically with
+        # `test_casbin_lead_static_route_collision.py` 2026-05-23 (test
+        # showed 11/16 cells flipped to DENY). The keyMatch4 collision
+        # bypass that exposes these 4 routes to officer is mitigated
+        # at the FE layer (`LeadDialog.tsx:285` enabled-gate). A proper
+        # BE fix needs a custom matcher (e.g., `keyMatchPriority` or
+        # `keyMatch4Numeric`) that respects the regex constraint inside
+        # `{token}` — tracked separately per memory
+        # `launch-readiness-over-creep` + `lead-keymatch4-collision-followup`.
     ]
 }
 
@@ -431,6 +446,16 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/check-duplicate",     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import",              "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import/template",     "action": "GET",  "eft": "deny"},
+        # PR #324 Commit 5 — mirror OFFICER_TEMPLATE block above for the
+        # 4 lead static routes. Separation-of-duties: finance staff never
+        # operate the lead distribution / export / bulk-assign / bulk-delete
+        # paths. Inheritance via `g, role:accountant, role:officer` would
+        # otherwise let accountant flow through any future officer ALLOW
+        # added to these paths; explicit deny pins the contract.
+        {"subject": "{role}", "object": "/api/leads/export",               "action": "GET",  "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/bulk-assign",          "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/bulk-delete",          "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/distribution-preview", "action": "GET",  "eft": "deny"},
     ]
 }
 

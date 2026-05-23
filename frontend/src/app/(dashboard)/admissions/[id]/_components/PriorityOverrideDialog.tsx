@@ -223,7 +223,7 @@ export function PriorityOverrideDialog({
               onValueChange={(v) => setKvResolved(v as KvCode)}
             >
               <SelectTrigger id="override-kv" data-testid="override-kv-select">
-                <SelectValue placeholder="Chọn KV mới..." />
+                <SelectValue placeholder="Chọn KV mới…" />
               </SelectTrigger>
               <SelectContent>
                 {KV_CODES.map((code) => (

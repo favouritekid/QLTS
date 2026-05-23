@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useMemo } from "react"
 import { IssueSummary } from "./IssueSummary"
 import { derivePriorityIssues } from "./priorityIssues"
+import { canDecide } from "@/lib/utils/admission-permissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface PipelineSidebarProps {
@@ -112,23 +113,9 @@ export function PipelineSidebar({
           const status = stepsStatus[step.id] || "locked"
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)
-          // Code review 2026-05-22 — ưu tiên BE-aggregated `has_decision`
-          // flag (admission_service._compute_frontend_fields ~line 1617).
-          // Fallback OR-7-flags cho backward-compat với deploy chưa ship
-          // BE change. Khi flag stable → có thể clean fallback (memory:
-          // FE-BE additive forward-compat).
-          const perms = profile?.permissions
-          const canDecide = Boolean(
-            perms?.has_decision ??
-            (perms?.approve ||
-              perms?.reject ||
-              perms?.resubmit ||
-              perms?.submit ||
-              perms?.request_revision ||
-              perms?.publish_result ||
-              perms?.enroll)
-          )
-          const isStep8Override = step.id === 8 && canDecide
+          // Trust BE-aggregated `permissions.has_decision`, fallback OR-7.
+          const decide = canDecide(profile?.permissions)
+          const isStep8Override = step.id === 8 && decide
           const isLocked = !isStep8Override && status === "locked"
 
           const stepButton = (
