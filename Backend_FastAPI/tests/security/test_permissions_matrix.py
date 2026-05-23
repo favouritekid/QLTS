@@ -1,5 +1,43 @@
 # tests/routers/test_permissions_matrix.py
 # -*- coding: utf-8 -*-
+"""Role × Endpoint permission matrix integration tests.
+
+PR-1.5 Commit 1 (2026-05-23) — concise diagnosis of the 17 historical
+failures observed during the test-debt sweep on branch
+``test-debt/permission-matrix-and-testadmin-race-2026-05-23``.
+
+VERIFIED — Cluster 3A (httpx cookie jar contamination)
+------------------------------------------------------
+All 7 ``PERMISSION_DENIED`` cells (admin/manager/officer expected 200
+or 409, observed 403) reach the backend as ``role:user`` (testuser_regular,
+id=4) regardless of which ``*_token_headers`` Bearer is passed. Mechanism:
+``test_permission_matrix`` depends on all 4 ``*_token_headers`` fixtures →
+each fixture's ``_get_token_headers`` performs a login that ``Set-Cookie``s
+``access_token`` → the persistent ``AsyncClient`` cookie jar keeps the
+LAST login's cookie → the auth dependency prefers cookie over Bearer.
+Direct enforcer verification on ``qlts_test`` confirms the underlying
+Casbin policies allow correctly (``role:admin /api/admin/users GET`` and
+``role:officer /api/leads GET`` both return ``True``). Fix shipped in
+Commit 2: clear ``client.cookies`` before each parametrized request.
+Reference: memory ``test-httpx-cookie-jar-contamination``.
+
+HYPOTHESIS / RESIDUAL — Cluster 3B (fixture data seed)
+------------------------------------------------------
+10 cells with ``RESOURCE_NOT_FOUND`` (404 for ``/api/leads/1`` and
+``/api/admin/assignment-config/1``) are downstream of Cluster 3A — the
+request lands as testuser_regular, IDOR gate returns 404. Whether a
+secondary fixture-seed drift exists for ``Lead(id=1)`` cannot be
+classified until Cluster 3A is fixed and the matrix is rerun with
+correct identities. Tracked as Commit 4 (CONDITIONAL).
+
+HYPOTHESIS / RESIDUAL — testadmin parallel race / OOM
+-----------------------------------------------------
+Earlier session observed backend OOM under parallel pytest invocations.
+``tests/fixtures/users.py:33`` ``create_user_with_role`` already
+idempotent (SELECT existing + ``on_conflict_do_nothing`` for CasbinRule).
+Not proven as a primary cause for any of the 17 matrix failures; deferred
+as residual test-debt until evidence promotes it.
+"""
 import logging
 
 import pytest
