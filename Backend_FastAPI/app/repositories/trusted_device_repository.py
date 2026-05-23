@@ -100,28 +100,54 @@ class TrustedDeviceRepository(BaseRepository[models.TrustedDevice]):
         browser: Optional[str] = None,
         os: Optional[str] = None,
         ip_address: Optional[str] = None,
+        # sl20260524 / Option-B Commit 4 — canonical fingerprint inputs.
+        # Optional so legacy callers (none in-tree after Commit 4, but
+        # third-party scripts or future fixtures) don't break; runtime
+        # caller ``confirm_login`` always passes all three.
+        browser_family: Optional[str] = None,
+        os_family: Optional[str] = None,
+        device_type: Optional[str] = None,
     ) -> models.TrustedDevice:
-        """
-        Add a device to the trusted list.
-        
-        If the device already exists, updates the trust timestamp.
-        
+        """Add a device to the trusted list (or refresh an existing trust).
+
+        Option-B Commit 4 extends this method to persist the canonical
+        fingerprint inputs (browser_family, os_family, device_type)
+        alongside the display strings. The display strings continue to
+        feed the user-visible name on ``/settings/security``; the family
+        triple drives the hash so the trust survives browser/OS
+        version drift.
+
+        Self-heal behaviour: if an existing trusted_device row has NULL
+        canonical columns (e.g., created by the sl20260524 migration's
+        Step 5b fallback heuristic with a guessed device_type, or by a
+        legacy code path), the next ``trust_device`` call overwrites the
+        canonical columns with the freshly-parsed values. Display
+        ``browser`` / ``os`` are NOT overwritten so admin-visible
+        history stays intact.
+
         Returns:
-            The created or updated TrustedDevice
+            The created or updated TrustedDevice.
         """
         existing = await self.get_by_fingerprint(user_id, device_fingerprint)
-        
+
         if existing:
-            # Update existing trust
+            # Update existing trust — refresh timestamps + IP / name.
             existing.trusted_at = datetime.now(timezone.utc)
             existing.last_used_at = datetime.now(timezone.utc)
             if name:
                 existing.name = name
             if ip_address:
                 existing.trusted_from_ip = ip_address
+            # Self-heal canonical columns if missing on the existing row.
+            if browser_family is not None and existing.browser_family is None:
+                existing.browser_family = browser_family
+            if os_family is not None and existing.os_family is None:
+                existing.os_family = os_family
+            if device_type is not None and existing.device_type is None:
+                existing.device_type = device_type
             return existing
-        
-        # Create new trusted device
+
+        # Create new trusted device with both display + canonical fields.
         now = datetime.now(timezone.utc)
         device = models.TrustedDevice(
             user_id=user_id,
@@ -129,6 +155,9 @@ class TrustedDeviceRepository(BaseRepository[models.TrustedDevice]):
             name=name,
             browser=browser,
             os=os,
+            browser_family=browser_family,
+            os_family=os_family,
+            device_type=device_type,
             first_seen_at=now,
             trusted_at=now,
             last_used_at=now,

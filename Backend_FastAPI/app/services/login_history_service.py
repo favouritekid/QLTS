@@ -446,11 +446,10 @@ async def confirm_login(
             else (login.browser or login.os or "Trusted device")
         )
 
-        # Note: Commit 4 will extend ``trust_device`` to accept the
-        # family + device_type kwargs so the trusted_device row can store
-        # them. Until then the legacy signature (browser/os display +
-        # IP) is sufficient — the fingerprint hash is what matters for
-        # match correctness.
+        # Option-B Commit 4 — pass canonical family + device_type kwargs
+        # so the trusted_device row stores everything that goes into the
+        # fingerprint hash, not just the display strings. The repo
+        # self-heals existing rows with NULL canonical columns from this.
         trusted_device = await trusted_repo.trust_device(
             user_id=user_id,
             device_fingerprint=device_fingerprint,
@@ -458,6 +457,9 @@ async def confirm_login(
             browser=login.browser,
             os=login.os,
             ip_address=login.ip_address,
+            browser_family=browser_family,
+            os_family=os_family,
+            device_type=device_type,
         )
     
     # ✅ FIX: Clear password_reset_required when user confirms login is legitimate
