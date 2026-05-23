@@ -393,7 +393,13 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
       - Q9 #07 Phase E Wave 1 (2026-05-19) added 5 deny rows for
         priority bonus routes (preview/catalog + override/verify/reject).
         Separation-of-duties — finance không touch priority scoring data.
-      - Total NOW: 38 deny rows.
+      - PR #324 Commit 5 (2026-05-23) added 4 deny rows for the 4 lead
+        static routes (export / bulk-* / distribution-preview) as
+        defence-in-depth against keyMatch4 collision. Redundant under
+        the current matcher (existing `/api/leads/{id}` GET/PUT denies
+        already cover these via collision), but locks intent if matcher
+        is ever tightened.
+      - Total NOW: 42 deny rows.
     """
     db_url = os.environ["DATABASE_URL"]
     enforcer, engine = await _seed_test_db_and_load_enforcer(db_url)
@@ -467,6 +473,15 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             # KHÔNG scan/manage UT minh chứng (separation-of-duties).
             ("/api/v2/admissions/*/priority-evidence/*/upload",    "POST"),
             ("/api/v2/admissions/*/priority-evidence/*",           "DELETE"),
+            # PR #324 Commit 5 (2026-05-23) — defence-in-depth against
+            # keyMatch4 collision on `/api/leads/{id}` matching static
+            # routes. Officer-side fix deferred (officer is parent role;
+            # DENY would propagate). Migration
+            # `qa20260522_tighten_lead_denies` seeds these.
+            ("/api/leads/export",                                  "GET"),
+            ("/api/leads/bulk-assign",                             "POST"),
+            ("/api/leads/bulk-delete",                             "POST"),
+            ("/api/leads/distribution-preview",                    "GET"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "
