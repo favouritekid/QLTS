@@ -512,7 +512,7 @@ async def test_mixed_batch_marks_each_row_independently(setup_test_database):
 # --- 8. P2 anchor (2026-05-22) — rooms derivation from payload -------------
 
 
-async def test_worker_passesrooms_for_admission_event(setup_test_database):
+async def test_worker_passes_rooms_for_admission_event(setup_test_database):
     """Anchor: worker MUST resolve rooms từ payload và pass `rooms=`
     xuống `dispatch()`. Trước fix, sensitive event qua outbox bị
     `_emit_domain_event` fail-closed do `rooms=None` (notification_dispatcher.py:281).
