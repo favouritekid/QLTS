@@ -185,9 +185,14 @@ async def _complete_login_flow(
                 "actor_id": _notif_user_id,
             }
 
-            from ..services.notification_dispatcher import rooms_for_user
-            _notif_rooms = rooms_for_user(_notif_user_id)
-
+            # Option-B Commit 7: DO NOT pass ``rooms_for_user`` for the
+            # SUSPICIOUS_LOGIN event. The dispatcher computes the socket
+            # rooms itself, gated by each user's ``browser`` notification
+            # preference and explicitly omitting ``role_admin`` (this is
+            # an actor-targeted event, not an admin alert). Passing
+            # ``rooms_for_user`` here would short-circuit that gating and
+            # broadcast the banner bump to every admin for every user's
+            # suspicious login.
             async def _dispatch_suspicious_login():
                 try:
                     async with database.AsyncSessionLocal() as notif_db:
@@ -195,7 +200,7 @@ async def _complete_login_flow(
                             db=notif_db,
                             event=SystemEvents.SUSPICIOUS_LOGIN,
                             payload=_notif_payload,
-                            rooms=_notif_rooms,
+                            rooms=None,
                         )
                 except Exception as notif_error:
                     log.error("Failed to dispatch suspicious login notification",
