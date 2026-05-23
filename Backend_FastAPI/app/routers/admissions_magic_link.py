@@ -33,7 +33,7 @@ from ..schemas.magic_link import (
 )
 from ..services import magic_link_service
 from ..services.notification_dispatcher import (
-    _rooms_for_admission,
+    rooms_for_admission,
     safe_dispatch,
 )
 from ..utils.exceptions import BadRequest, ResourceNotFoundError
@@ -121,7 +121,7 @@ async def consume_magic_link_token(
                     "actor_name": "Ứng viên xác nhận",
                 },
                 dedupe_key=f"admission_profile_confirmed:{profile.id}",
-                rooms=_rooms_for_admission(profile),
+                rooms=rooms_for_admission(profile),
             )
 
         return MagicLinkConsumeResponse(

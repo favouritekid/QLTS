@@ -512,7 +512,7 @@ async def test_mixed_batch_marks_each_row_independently(setup_test_database):
 # --- 8. P2 anchor (2026-05-22) — rooms derivation from payload -------------
 
 
-async def test_worker_passes_rooms_for_admission_event(setup_test_database):
+async def test_worker_passesrooms_for_admission_event(setup_test_database):
     """Anchor: worker MUST resolve rooms từ payload và pass `rooms=`
     xuống `dispatch()`. Trước fix, sensitive event qua outbox bị
     `_emit_domain_event` fail-closed do `rooms=None` (notification_dispatcher.py:281).
@@ -594,3 +594,69 @@ async def test_worker_rooms_derivation_failure_falls_back_to_none(
     assert mock_dispatch.await_count == 1
     call_kwargs = mock_dispatch.call_args.kwargs
     assert call_kwargs.get("rooms") is None
+
+
+# ---------------------------------------------------------------------------
+# PR #324 Commit 4 — rooms_for_admission contract anchor (P1-2).
+#
+# notification_outbox_tasks + 26 other modules import this helper to build
+# the scoped `rooms=` list for sensitive events (admission mutations, lead
+# updates, finance transactions). It's now a public API; the contract that
+# admin always sees the event + unit/officer scoping only flows through the
+# lead relationship needs an explicit anchor so a refactor that flips the
+# return shape (e.g., admin scoping removed, or admin moved to fallback)
+# fails loudly here.
+# ---------------------------------------------------------------------------
+class _StubLead:
+    """Minimal duck-typed lead — the helper reads two attrs via getattr."""
+
+    def __init__(self, unit_id, assigned_officer_id):
+        self.unit_id = unit_id
+        self.assigned_officer_id = assigned_officer_id
+
+
+class _StubProfile:
+    """Profile wrapper that may or may not have a lead attached."""
+
+    def __init__(self, lead):
+        self.lead = lead
+
+
+def test_rooms_for_admission_returns_three_tuple_with_lead():
+    """Admin + unit + assigned officer when lead is fully populated."""
+    from app.services.notification_dispatcher import rooms_for_admission
+
+    profile = _StubProfile(_StubLead(unit_id=5, assigned_officer_id=42))
+    assert rooms_for_admission(profile) == [
+        "role_admin",
+        "unit_5",
+        "user_room_42",
+    ]
+
+
+def test_rooms_for_admission_returns_admin_only_when_lead_null():
+    """Profile without an eager-loaded lead still emits to role_admin only.
+
+    Caller-responsibility contract: selectinload(profile.lead) before
+    dispatch. The helper degrades gracefully — admins keep visibility,
+    unit/officer scoping is skipped silently. This is the fallback path
+    `notification_dispatcher.py:351` documents.
+    """
+    from app.services.notification_dispatcher import rooms_for_admission
+
+    profile = _StubProfile(lead=None)
+    assert rooms_for_admission(profile) == ["role_admin"]
+
+
+def test_rooms_for_admission_skips_officer_when_unassigned():
+    """Lead present + unit set + no assigned officer → admin + unit only.
+
+    Distinct from the lead-null case above: this covers freshly created
+    leads in the distribution-pending state where unit_id is set but
+    assigned_officer_id is still null. unit-room subscribers must still
+    receive the event (manager fanout); officer-room is rightly skipped.
+    """
+    from app.services.notification_dispatcher import rooms_for_admission
+
+    profile = _StubProfile(_StubLead(unit_id=5, assigned_officer_id=None))
+    assert rooms_for_admission(profile) == ["role_admin", "unit_5"]

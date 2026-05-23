@@ -1044,7 +1044,7 @@ async def update_existing_user(
 
     # ✅ NOTIFICATION 2.0: Dispatch USER_ROLE_CHANGED if role or unit changed
     if "role" in changes or "unit_id" in changes:
-        from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
+        from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
         from app.core.events import SystemEvents
 
         old_unit_str = changes.get("unit_id", {}).get("old") if "unit_id" in changes else None
@@ -1067,12 +1067,12 @@ async def update_existing_user(
                 "actor_id": _current_admin_id,
             },
             dedupe_key=f"user_role_changed:{_updated_user_id}:{_updated_role}:{_updated_unit_id}",
-            rooms=_rooms_for_user(_updated_user_id),
+            rooms=rooms_for_user(_updated_user_id),
         )
 
     # Dispatch USER_DEACTIVATED notification if status changed to inactive
     if "status" in changes and changes["status"]["new"] == "inactive":
-        from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
+        from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
         from app.core.events import SystemEvents
         await safe_dispatch(
             db=db,
@@ -1086,7 +1086,7 @@ async def update_existing_user(
             },
             dedupe_key=f"user_deactivated:{_updated_user_id}",
             skip_preference_check=True,  # Critical notification
-            rooms=_rooms_for_user(_updated_user_id),
+            rooms=rooms_for_user(_updated_user_id),
         )
 
     # Send notification to user if admin updated their info
@@ -1098,7 +1098,7 @@ async def update_existing_user(
             changes=list(changes.keys()),
         )
         change_description = ", ".join([f"{key}" for key in changes.keys()])
-        from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
+        from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
         from app.core.events import SystemEvents
 
         await safe_dispatch(
@@ -1110,7 +1110,7 @@ async def update_existing_user(
                 "actor_id": _current_admin_id,
             },
             dedupe_key=f"user_profile_updated:{_updated_user_id}",
-            rooms=_rooms_for_user(_updated_user_id),
+            rooms=rooms_for_user(_updated_user_id),
         )
     else:
         log.debug(

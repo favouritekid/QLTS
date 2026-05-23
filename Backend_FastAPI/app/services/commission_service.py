@@ -153,7 +153,7 @@ async def check_and_create_commission(
     # Build notification callback
     async def _notify():
         from app.core.events import SystemEvents
-        from app.services.notification_dispatcher import safe_dispatch, _rooms_for_user
+        from app.services.notification_dispatcher import safe_dispatch, rooms_for_user
 
         for record in records:
             await safe_dispatch(
@@ -168,7 +168,7 @@ async def check_and_create_commission(
                     "actor_id": actor_id,
                 },
                 dedupe_key=f"ctv_commission_created:{record.id}",
-                rooms=_rooms_for_user(collaborator.user_id) if collaborator.user_id else ["role_admin"],
+                rooms=rooms_for_user(collaborator.user_id) if collaborator.user_id else ["role_admin"],
             )
 
     return records, _notify

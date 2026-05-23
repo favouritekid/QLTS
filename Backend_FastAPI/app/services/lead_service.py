@@ -1174,8 +1174,8 @@ async def create_lead(
 
         # Snapshot rooms for LEAD_* sensitive emits (fail-closed guard requires
         # non-empty rooms when SOCKET_SCOPED_EMIT=true).
-        from app.services.notification_dispatcher import _rooms_for_lead
-        _lead_rooms = _rooms_for_lead(db_lead)
+        from app.services.notification_dispatcher import rooms_for_lead
+        _lead_rooms = rooms_for_lead(db_lead)
 
         # ✅ Dispatch LEAD_CREATED notification in savepoint
         _lead_created_cb = None
@@ -1695,7 +1695,7 @@ async def update_lead(
         if reassignment_triggered:
             # Dispatch notification for lead reassignment in savepoint (safe for post-commit callback)
             try:
-                from app.services.notification_dispatcher import _rooms_for_lead
+                from app.services.notification_dispatcher import rooms_for_lead
                 async with db.begin_nested():
                     _, _reassign_cb = await dispatch(
                         db=db,
@@ -1710,7 +1710,7 @@ async def update_lead(
                             notify_user_ids=[old_officer_id] if old_officer_id else [],
                         ),
                         dedupe_key=f"lead_reassigned:{lead_id}",
-                        rooms=_rooms_for_lead(lead),
+                        rooms=rooms_for_lead(lead),
                     )
             except Exception as e:
                 log.error(
@@ -2158,7 +2158,7 @@ async def assign_lead_manually(
             else (lead.offering.offering_type if lead.offering else "N/A")
         )
 
-        from app.services.notification_dispatcher import _rooms_for_lead
+        from app.services.notification_dispatcher import rooms_for_lead
         async with db.begin_nested():
             _, _assign_cb = await dispatch(
                 db=db,
@@ -2168,7 +2168,7 @@ async def assign_lead_manually(
                     offering_name=offering_name,
                 ),
                 dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
-                rooms=_rooms_for_lead(lead),
+                rooms=rooms_for_lead(lead),
             )
     except Exception as e:
         log.error(

@@ -55,9 +55,9 @@ async def test_w9_n13_officer_import_no_nameerror_codepath():
     from app.routers import leads as leads_router
 
     source = inspect.getsource(leads_router.officer_import_leads)
-    # Pre-fix bug: `rooms=_rooms_for_lead(lead)` — `lead` undefined
-    assert "_rooms_for_lead(lead)" not in source, (
-        "W9-N.1.3 regression: `_rooms_for_lead(lead)` references undefined "
+    # Pre-fix bug: `rooms=rooms_for_lead(lead)` — `lead` undefined
+    assert "rooms_for_lead(lead)" not in source, (
+        "W9-N.1.3 regression: `rooms_for_lead(lead)` references undefined "
         "`lead` var in officer_import_leads scope (bulk endpoint, no "
         "singular lead). Use captured user.unit_id + role_admin rooms instead."
     )

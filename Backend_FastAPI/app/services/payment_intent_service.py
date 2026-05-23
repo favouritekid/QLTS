@@ -445,8 +445,8 @@ class PaymentIntentService:
             }
         _db = self.db
         # Snapshot rooms pre-commit for scoped domain emit.
-        from app.services.notification_dispatcher import _rooms_for_admission
-        _rooms = _rooms_for_admission(profile) if profile is not None else None
+        from app.services.notification_dispatcher import rooms_for_admission
+        _rooms = rooms_for_admission(profile) if profile is not None else None
 
         _fee_fully_paid_payload: Optional[Dict[str, Any]] = None
         if fee is not None and fee.is_fully_paid:

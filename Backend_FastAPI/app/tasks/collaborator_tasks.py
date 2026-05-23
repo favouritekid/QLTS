@@ -107,7 +107,7 @@ def check_ctv_attribution_expiry_task(self):
 
                         # Notify CTV
                         if row.user_id:
-                            from app.services.notification_dispatcher import _rooms_for_user
+                            from app.services.notification_dispatcher import rooms_for_user
                             await safe_dispatch(
                                 db=db,
                                 event=SystemEvents.CTV_ATTRIBUTION_EXPIRED,
@@ -118,7 +118,7 @@ def check_ctv_attribution_expiry_task(self):
                                     "actor_id": 0,
                                 },
                                 dedupe_key=f"ctv_attribution_expired:{row.lead_id}",
-                                rooms=_rooms_for_user(row.user_id),
+                                rooms=rooms_for_user(row.user_id),
                             )
 
                         expired_count += 1
@@ -127,7 +127,7 @@ def check_ctv_attribution_expiry_task(self):
                     # WARNING: Notify CTV about upcoming expiry
                     days_remaining = ATTRIBUTION_EXPIRE_DAYS - days_since_review
                     if row.user_id:
-                        from app.services.notification_dispatcher import _rooms_for_user
+                        from app.services.notification_dispatcher import rooms_for_user
                         await safe_dispatch(
                             db=db,
                             event=SystemEvents.CTV_ATTRIBUTION_EXPIRING,
@@ -139,7 +139,7 @@ def check_ctv_attribution_expiry_task(self):
                                 "actor_id": 0,
                             },
                             dedupe_key=f"ctv_attribution_expiring:{row.lead_id}:{days_remaining}",
-                            rooms=_rooms_for_user(row.user_id),
+                            rooms=rooms_for_user(row.user_id),
                         )
                     warned_count += 1
 
@@ -237,7 +237,7 @@ def send_ctv_weekly_summary_task(self):
                     "commission_amount_this_week": str(comm_stats["total"]),
                 }
 
-                from app.services.notification_dispatcher import _rooms_for_user
+                from app.services.notification_dispatcher import rooms_for_user
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.CTV_WEEKLY_SUMMARY,
@@ -248,7 +248,7 @@ def send_ctv_weekly_summary_task(self):
                         "actor_id": 0,
                     },
                     dedupe_key=f"ctv_weekly_summary:{collab.id}:{now.isocalendar()[1]}",
-                    rooms=_rooms_for_user(collab.user_id) if collab.user_id else ["role_admin"],
+                    rooms=rooms_for_user(collab.user_id) if collab.user_id else ["role_admin"],
                 )
                 sent_count += 1
 

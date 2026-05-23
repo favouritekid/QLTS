@@ -368,7 +368,7 @@ class SystemEvents(str, Enum):
     sessions viewing the profile refresh. Privacy: payload carries
     field NAMES only; old/new values stay in the audit log behind RBAC.
     Rooms scope = role_admin + unit_<lead.unit_id> +
-    user_room_<lead.assigned_officer_id> via ``_rooms_for_admission``.
+    user_room_<lead.assigned_officer_id> via ``rooms_for_admission``.
     """
 
     # =========================================================================
@@ -528,7 +528,7 @@ class SystemEvents(str, Enum):
             "actor_id": int                   # The user that ran the calculation
         }
 
-    Recipients: scoped via ``_rooms_for_admission(profile)`` — admin
+    Recipients: scoped via ``rooms_for_admission(profile)`` — admin
     role + lead unit + assigned officer. No notification-channel fanout.
     """
 

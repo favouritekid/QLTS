@@ -185,8 +185,8 @@ async def _complete_login_flow(
                 "actor_id": _notif_user_id,
             }
 
-            from ..services.notification_dispatcher import _rooms_for_user
-            _notif_rooms = _rooms_for_user(_notif_user_id)
+            from ..services.notification_dispatcher import rooms_for_user
+            _notif_rooms = rooms_for_user(_notif_user_id)
 
             async def _dispatch_suspicious_login():
                 try:

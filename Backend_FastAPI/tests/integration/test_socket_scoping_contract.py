@@ -187,6 +187,6 @@ def test_sensitive_events_always_dispatch_with_rooms():
             + detail
             + "\n\nEvery sensitive SystemEvents reference in dispatch() / "
             "safe_dispatch() / NotificationIntent(...) must pass `rooms=...` "
-            "(non-None). Use _rooms_for_admission / _rooms_for_lead / "
-            "_rooms_for_user from notification_dispatcher."
+            "(non-None). Use rooms_for_admission / rooms_for_lead / "
+            "rooms_for_user from notification_dispatcher."
         )

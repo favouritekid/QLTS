@@ -237,7 +237,7 @@ async def update_officer_availability(
     # ✅ Dispatch notification in savepoint (records flushed with main transaction)
     _notif_cb = None
     try:
-        from app.services.notification_dispatcher import _rooms_for_user
+        from app.services.notification_dispatcher import rooms_for_user
         _notif_rooms = ["role_admin"]
         if user.unit_id:
             _notif_rooms.append(f"unit_{user.unit_id}")

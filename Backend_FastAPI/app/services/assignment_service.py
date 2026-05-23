@@ -158,13 +158,13 @@ async def automatically_assign_lead(
 
                     # ✅ REFACTOR: Dispatch notification for assignment failure
                     try:
-                        from app.services.notification_dispatcher import _rooms_for_lead
+                        from app.services.notification_dispatcher import rooms_for_lead
                         _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
                             payload=EventPayload.for_lead_assignment_failed(lead, lead_unit_id, "No officers available"),
                             dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers",
-                            rooms=_rooms_for_lead(lead),
+                            rooms=rooms_for_lead(lead),
                         )
                         if notif_cb:
                             _post_commit_callbacks.append(notif_cb)
@@ -255,13 +255,13 @@ async def automatically_assign_lead(
 
                     # ✅ REFACTOR: Dispatch notification for assignment failure
                     try:
-                        from app.services.notification_dispatcher import _rooms_for_lead
+                        from app.services.notification_dispatcher import rooms_for_lead
                         _, notif_cb = await dispatch(
                             db=db,
                             event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
                             payload=EventPayload.for_lead_assignment_failed(lead, lead_unit_id, "All officers at full capacity"),
                             dedupe_key=f"lead_assignment_failed:{lead_id}:capacity",
-                            rooms=_rooms_for_lead(lead),
+                            rooms=rooms_for_lead(lead),
                         )
                         if notif_cb:
                             _post_commit_callbacks.append(notif_cb)
@@ -435,7 +435,7 @@ async def automatically_assign_lead(
                 offering_name = getattr(lead.offering, 'offering_type', 'N/A')
 
             # Dispatch notification (saves to DB via flush, caller commits)
-            from app.services.notification_dispatcher import _rooms_for_lead
+            from app.services.notification_dispatcher import rooms_for_lead
             _, notif_cb = await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_ASSIGNED,
@@ -446,7 +446,7 @@ async def automatically_assign_lead(
                     assignment_method="automatic",
                 ),
                 dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}",
-                rooms=_rooms_for_lead(lead),
+                rooms=rooms_for_lead(lead),
             )
             if notif_cb:
                 _post_commit_callbacks.append(notif_cb)

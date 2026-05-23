@@ -34,7 +34,7 @@ from ..core.deps import (
     get_admission_for_user_read,
 )
 from ..services import admission_service
-from ..services.notification_dispatcher import safe_dispatch, _rooms_for_admission, _rooms_for_lead
+from ..services.notification_dispatcher import safe_dispatch, rooms_for_admission, rooms_for_lead
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
@@ -329,7 +329,7 @@ async def create_admission_profile(
                 "actor_name": current_user.full_name or current_user.username,
             },
             dedupe_key=f"admission_profile_created:{profile.id}",
-            rooms=_rooms_for_admission(profile),
+            rooms=rooms_for_admission(profile),
         )
 
         return profile
@@ -1248,7 +1248,7 @@ async def delete_admission_profile(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"admission_profile_deleted:{profile_id}",
-                rooms=_rooms_for_lead(_deleted_lead),
+                rooms=rooms_for_lead(_deleted_lead),
             )
 
         log.info(
@@ -1865,7 +1865,7 @@ async def override_admission(
                     "actor_name": current_user.full_name or current_user.username,
                 },
                 dedupe_key=f"admission_profile_overridden:{profile_id}",
-                rooms=_rooms_for_admission(result),
+                rooms=rooms_for_admission(result),
             )
 
         # 5. RETURN Pydantic Model
@@ -2121,7 +2121,7 @@ async def confirm_admission_by_token(
                     "actor_name": "Ứng viên xác nhận",
                 },
                 dedupe_key=f"admission_profile_confirmed:{profile.id}",
-                rooms=_rooms_for_admission(profile),
+                rooms=rooms_for_admission(profile),
             )
 
         # 5. RETURN Response

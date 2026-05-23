@@ -67,9 +67,9 @@ from ..celery_app import celery_app
 from ..core.event_catalog import get_event
 from ..core.events import SystemEvents
 from ..services.notification_dispatcher import (
-    _rooms_for_admission,
-    _rooms_for_lead,
-    _rooms_for_user,
+    rooms_for_admission,
+    rooms_for_lead,
+    rooms_for_user,
     dispatch,
 )
 from .utils import run_async_task, task_db_session
@@ -242,7 +242,7 @@ async def _resolve_rooms_for_event(
         (dispatcher sẽ fail-closed cho sensitive event — đúng contract).
         Public event không cần rooms (dispatcher broadcast global).
 
-    Note: helper safety — ``_rooms_for_admission(None)`` trả
+    Note: helper safety — ``rooms_for_admission(None)`` trả
     ``["role_admin"]`` thay vì crash, nên fallback luôn có admin
     visibility tối thiểu khi profile bị delete giữa outbox INSERT và
     worker drain.
@@ -260,18 +260,18 @@ async def _resolve_rooms_for_event(
         )
         result = await session.execute(stmt)
         profile = result.scalar_one_or_none()
-        return _rooms_for_admission(profile)
+        return rooms_for_admission(profile)
 
     # Lead-scoped events: payload chứa lead_id.
     lead_id = payload.get("lead_id")
     if isinstance(lead_id, int):
         lead = await session.get(models.Lead, lead_id)
-        return _rooms_for_lead(lead)
+        return rooms_for_lead(lead)
 
     # User-targeted events: payload chứa user_id / target_user_id.
     user_id = payload.get("user_id") or payload.get("target_user_id")
     if isinstance(user_id, int):
-        return _rooms_for_user(user_id)
+        return rooms_for_user(user_id)
 
     # Public event (organization_*, pipeline_config_*) — dispatcher tự
     # broadcast global, rooms=None là intended path.
