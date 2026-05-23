@@ -17,11 +17,13 @@ server {
 }
 
 server {
+    # `ssl_reject_handshake on` (nginx ≥1.19.4) terminates TLS handshake
+    # WITHOUT serving any certificate. Cleaner than `return 444 + cert`
+    # because SNI scanners get a TLS alert instead of reading the cert
+    # subject (avoids leaking ${DOMAIN} via IP/probe scans). No
+    # ssl_certificate directives needed when ssl_reject_handshake=on.
     listen 443 ssl default_server;
-    http2 on;
-    ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    return 444;
+    ssl_reject_handshake on;
 }
 
 # --- HTTP: Redirect to HTTPS + ACME challenge ---
