@@ -30,6 +30,9 @@ class LoginHistory(Base):
         # Composite indexes (created by perf20260126001)
         Index('ix_login_history_user_response_loginat', 'user_id', 'user_response', 'login_at'),
         Index('ix_login_history_user_ip_response', 'user_id', 'ip_address', 'user_response'),
+        # sl20260524 — canonical fingerprint lookup index (Commit 1 migration).
+        # Powers ``check_device_seen_before`` exact-match query post-Commit 3.
+        Index('ix_login_history_user_fp_response', 'user_id', 'device_fingerprint', 'user_response'),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -50,10 +53,21 @@ class LoginHistory(Base):
     country = Column(String(100), nullable=True)
     city = Column(String(100), nullable=True)
 
-    # Device/Browser info (extracted from User-Agent header)
+    # Device/Browser info (extracted from User-Agent header).
+    # browser / os carry the full display strings ("Mobile Safari 26.4" /
+    # "iOS 18.7") for admin UI. The canonical family + fingerprint trio
+    # below was added by sl20260524 migration (Option-B Commit 1) so the
+    # version suffix doesn't drift the fingerprint on browser/OS updates.
     device_type = Column(String(50), nullable=True)  # mobile, desktop, tablet
-    browser = Column(String(100), nullable=True)  # e.g., "Chrome 120.0"
-    os = Column(String(100), nullable=True)  # e.g., "Windows 10"
+    browser = Column(String(100), nullable=True)
+    os = Column(String(100), nullable=True)
+    browser_family = Column(String(64), nullable=True)
+    os_family = Column(String(64), nullable=True)
+    # device_fingerprint covered by composite index `ix_login_history_user_fp_response`
+    # declared in __table_args__ above (sl20260524 migration). No single-column
+    # ``index=True`` here — the composite already serves the canonical lookup
+    # path WHERE user_id = ? AND device_fingerprint = ? AND user_response IS DISTINCT FROM ?.
+    device_fingerprint = Column(String(64), nullable=True)
 
     # Anomaly flags (calculated at login time)
     is_new_ip = Column(Boolean, default=False, nullable=False)

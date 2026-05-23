@@ -367,6 +367,11 @@ class TestStaleLoginConfirmationFix:
         mock_login.browser = "Chrome"
         mock_login.os = "Windows"
         mock_login.device_type = "desktop"
+        # sl20260524 — confirm_login now reads canonical columns; explicit
+        # None forces the ``_family_from_display`` fallback path so this
+        # legacy test still exercises the trust-device flow.
+        mock_login.browser_family = None
+        mock_login.os_family = None
 
         mock_user = MagicMock(spec=models.User)
         mock_user.id = user_id
@@ -407,6 +412,10 @@ class TestStaleLoginConfirmationFix:
         mock_login.browser = "Chrome"
         mock_login.os = "Windows"
         mock_login.device_type = "desktop"
+        # sl20260524 — confirm_login now reads canonical columns; explicit
+        # None forces the ``_family_from_display`` fallback path.
+        mock_login.browser_family = None
+        mock_login.os_family = None
 
         mock_user = MagicMock(spec=models.User)
         mock_user.id = user_id
