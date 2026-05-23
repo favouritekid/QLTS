@@ -26,7 +26,7 @@ import { useEffect, useState } from "react";
 export function useHasMounted(): boolean {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    setMounted(true);
+    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
   return mounted;
 }
