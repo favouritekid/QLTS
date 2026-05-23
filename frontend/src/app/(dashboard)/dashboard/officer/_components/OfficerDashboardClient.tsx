@@ -47,6 +47,7 @@ import {
 import { DashboardDateProvider, useDashboardDate } from "@/contexts/DashboardDateContext";
 import { useDashboardStats, useOfficerKpiPlan, type DashboardScope, type EnhancedOfficerStats } from "@/hooks/useDashboardStats";
 import { useAuth } from "@/hooks/useAuth";
+import { useHasMounted } from "@/hooks/useHasMounted";
 
 // =============================================================================
 // INNER CONTENT (must be inside DashboardDateProvider to use useDashboardDate)
@@ -79,8 +80,14 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     window.history.pushState({ _dashboardFilters: true }, "", newUrl);
   }, []);
 
-  // Get user to determine default scope
+  // Get user to determine default scope.
+  // hasMounted gates role-aware branches so first client render aligns
+  // with SSR (both render `!user || !hasMounted` skeleton path), even
+  // when `useAuth().user` returns a persisted accountant/user/other
+  // unsupported role on the client. Anchor: `useHasMounted.ts` JSDoc
+  // + PR #324 Commit 1 Known Limitation closed by PR #325.
   const { user } = useAuth();
+  const hasMounted = useHasMounted();
 
   // Resolve scope from user role (null if user not yet hydrated)
   const resolvedScope: DashboardScope | null = user
@@ -287,7 +294,11 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
     estimated_lost_revenue: s.estimated_lost_revenue,
   })), [stats?.sales_funnel]);
 
-  const isUnsupportedRole = !!user && resolvedScope === null;
+  // Gate role-aware Alert behind hasMounted so SSR (user=null → skeleton)
+  // and client first render (persisted user=accountant/other → would
+  // otherwise show Alert) emit the same tree → no hydration mismatch.
+  // Alert fires on the NEXT render after mount effect.
+  const isUnsupportedRole = hasMounted && !!user && resolvedScope === null;
 
   if (isUnsupportedRole) {
     return (

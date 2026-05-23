@@ -249,7 +249,11 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/health"]
+      # Host header MUST match server_name in default.conf.template
+      # because the new `default_server` catch-all (PR #325) returns 444
+      # for any Host that does not match ${DOMAIN} / www.${DOMAIN}.
+      # wget defaults to `Host: 127.0.0.1` → would hit catch-all → fail.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--header=Host: ${DOMAIN}", "http://127.0.0.1/health"]
       interval: 30s
       timeout: 5s
       retries: 3

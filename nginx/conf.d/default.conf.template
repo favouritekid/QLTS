@@ -4,6 +4,28 @@
 # Template file - ${DOMAIN} is replaced by envsubst during deployment
 # =============================================================================
 
+# --- Catch-all: reject unknown Host headers (defence-in-depth) ---
+# `default_server` matches any request whose Host header does not match the
+# named `server_name` blocks below. `return 444` is nginx-specific: close
+# the connection without sending any response (no Location echo, no headers).
+# Closes memory `nginx-host-validation-gap-2026-05-23` — pairs with the
+# code-audit-verified mute of starlette CVE PYSEC-2026-161 (memory
+# `starlette-fastapi-coordinated-upgrade-debt`) as defence-in-depth.
+server {
+    listen 80 default_server;
+    return 444;
+}
+
+server {
+    # `ssl_reject_handshake on` (nginx ≥1.19.4) terminates TLS handshake
+    # WITHOUT serving any certificate. Cleaner than `return 444 + cert`
+    # because SNI scanners get a TLS alert instead of reading the cert
+    # subject (avoids leaking ${DOMAIN} via IP/probe scans). No
+    # ssl_certificate directives needed when ssl_reject_handshake=on.
+    listen 443 ssl default_server;
+    ssl_reject_handshake on;
+}
+
 # --- HTTP: Redirect to HTTPS + ACME challenge ---
 server {
     listen 80;
