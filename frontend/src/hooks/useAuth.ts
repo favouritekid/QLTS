@@ -82,7 +82,7 @@ export function useAuth(options?: UseAuthOptions) {
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
 
-      const { user, login_notification } = loginResponse;
+      const { user, login_notification, suspicious_login_count } = loginResponse;
 
       setAuth(user);
       triggerBannerCheck(user.password_reset_required);
@@ -92,11 +92,16 @@ export function useAuth(options?: UseAuthOptions) {
         const locationInfo = login_notification.location || "Không rõ vị trí";
         const deviceInfo = login_notification.device || "Không rõ thiết bị";
 
-        // Trigger persistent suspicious login banner
-        triggerSuspiciousLoginBanner(1);
+        // Option-B Commit 6: pass the REAL pending count from the BE
+        // response (suspicious_login_count) instead of the hardcoded
+        // ``1`` that hid the real backlog. ``?? 1`` defends against an
+        // older BE that hasn't shipped Commit 5 yet (banner still
+        // shows up, just with the old approximation).
+        const pendingCount = suspicious_login_count ?? 1;
+        triggerSuspiciousLoginBanner(pendingCount);
 
         toast.warning(
-          `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
+          `Phát hiện ${pendingCount} đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
           {
             duration: 15000,
             id: `suspicious-login-${login_notification.login_id}`,
@@ -148,16 +153,18 @@ export function useAuth(options?: UseAuthOptions) {
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
 
-      const { user, login_notification } = loginResponse;
+      const { user, login_notification, suspicious_login_count } = loginResponse;
 
       setAuth(user);
       triggerBannerCheck(user.password_reset_required);
       toast.success("Đăng nhập thành công!");
 
       if (login_notification) {
-        triggerSuspiciousLoginBanner(1);
+        // Same real-count contract as loginMutation (Option-B Commit 6).
+        const pendingCount = suspicious_login_count ?? 1;
+        triggerSuspiciousLoginBanner(pendingCount);
         toast.warning(
-          `Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address}`,
+          `Phát hiện ${pendingCount} đăng nhập đáng ngờ\nIP: ${login_notification.ip_address}`,
           { duration: 15000 }
         );
       }

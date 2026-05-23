@@ -43,11 +43,38 @@ export interface LoginNotification {
   anomalies: string[];
 }
 
+/**
+ * Option-B Commit 8: socket payload pushed to `user_room_<uid>` when the
+ * dispatcher emits a SUSPICIOUS_LOGIN domain event (gated by the user's
+ * `browser` channel preference per Commit 7).
+ *
+ * Field name `login_history_id` mirrors the BE payload built in
+ * `Backend_FastAPI/app/routers/auth.py:_notif_payload` — do NOT rename
+ * to `login_id` on the FE side (that would silently break the contract
+ * and the listener would receive `undefined`).
+ */
+export interface SuspiciousLoginSocketPayload {
+  login_history_id: number;
+  ip_address: string;
+  location?: string | null;
+  device?: string | null;
+  risk_score: number;
+  anomalies: string[];
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;
   user: User; // ✅ User object now returned directly from /login
   login_notification?: LoginNotification | null;  // R1+R2: Optional suspicious login notification
+  /**
+   * Option-B Commit 5: total count of this user's pending suspicious
+   * logins (across all sessions, not just this login attempt). Drives
+   * the SecurityBanner badge — pre-PR the FE hardcoded `1`, which hid
+   * any pre-existing backlog from the user. Defaults to `0`; backend
+   * tolerates count-query errors so the field is always present.
+   */
+  suspicious_login_count?: number;
   // refresh_token removed - now in HttpOnly cookie
   // MFA fields (present when mfa_required=true)
   mfa_required?: boolean;

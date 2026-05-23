@@ -94,7 +94,12 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
     mutationFn: confirmLogin,
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
-      queryClient.invalidateQueries({ queryKey: ["suspiciousCount"] });
+      // Option-B Commit 6: ``["suspiciousCount"]`` invalidate removed.
+      // No ``useQuery`` in the codebase ever consumed that key — the
+      // real banner count comes from the BE login response (Commit 5)
+      // + the SocketHandler bump listener (Commit 8). This was a
+      // no-op cache invalidation left over from a hook that never
+      // shipped.
       setSuccessMessage(
         response.device_trusted
           ? "Đã xác nhận đăng nhập và thêm thiết bị vào danh sách tin cậy."
@@ -111,11 +116,11 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
   const secureMutation = useMutation({
     mutationFn: secureAccount,
     onSuccess: (response) => {
-      // Cross-invalidation: secure account affects sessions, login history, and auth
+      // Cross-invalidation: secure account affects sessions, login history, and auth.
+      // ``["suspiciousCount"]`` removed — see confirmMutation comment above.
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
       queryClient.invalidateQueries({ queryKey: sessionKeys.all });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      queryClient.invalidateQueries({ queryKey: ["suspiciousCount"] });
       setSecureDialogOpen(false);
       setSuccessMessage(
         `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
