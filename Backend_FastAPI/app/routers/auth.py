@@ -236,12 +236,29 @@ async def _complete_login_flow(
         log.error("Failed to commit DB changes during login", user_id=user.id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Could not save session")
 
+    # 6b. Count pending suspicious logins for the response banner
+    # (Option-B Commit 5). The FE banner was hardcoded to ``1`` post-
+    # login when any login_notification arrived — that hid the real
+    # backlog size from the user. We do this AFTER commit (so the row
+    # we just inserted is counted if it was suspicious) and tolerate
+    # errors silently because it's banner UX, not auth correctness.
+    suspicious_login_count = 0
+    try:
+        from ..repositories.login_history_repository import LoginHistoryRepository
+        suspicious_login_count = await LoginHistoryRepository(db).count_pending_suspicious(user.id)
+    except Exception as count_error:
+        log.error(
+            "Failed to count pending suspicious logins for response",
+            user_id=user.id, error=str(count_error),
+        )
+
     # 7. Build response from snapshot (not ORM objects)
     response = JSONResponse(
         content={
             "token_type": "bearer",
             "user": user_snapshot,
             "login_notification": login_notification_data,
+            "suspicious_login_count": suspicious_login_count,
         },
         status_code=200,
     )

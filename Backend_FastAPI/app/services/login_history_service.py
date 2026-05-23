@@ -116,7 +116,13 @@ async def record_login(
     country: Optional[str] = None,
     city: Optional[str] = None,
     oauth_provider: Optional[str] = None,
-    # Phase 1: Added for merged email sending (previously in AnomalyDetector)
+    # email_to / username were used by the now-removed direct
+    # ``send_login_alert_email_task.delay()`` call (Option-B Commit 5).
+    # They're kept in the signature with deprecation comments so the
+    # auth caller doesn't need an in-flight signature change to keep
+    # passing them; this commit moves the email path through the
+    # notification dispatcher (auth.py:_dispatch_suspicious_login)
+    # which DOES honour user notification_preference.
     email_to: Optional[str] = None,
     username: Optional[str] = None,
     # R1+R2 FIX: Added for pending notification storage
@@ -124,12 +130,18 @@ async def record_login(
 ) -> Tuple[models.LoginHistory, Callable]:
     """
     Record a login attempt and detect anomalies.
-    
-    PHASE 1 MERGE: This is now the single source of truth for anomaly detection.
+
+    OPTION-B Commit 5: this function NO LONGER sends the suspicious-login
+    email directly. That responsibility now lives entirely with the
+    notification dispatcher (``safe_dispatch(SUSPICIOUS_LOGIN, ...)`` in
+    ``auth.py``), which filters recipients by user preference per channel.
+    Pre-PR the direct ``.delay()`` call here bypassed preference and led
+    to users who had disabled the email channel still receiving alerts.
+
     - Records login history for persistent audit trail
     - Detects suspicious activity (new IP, device, location)
-    - Sends email alert for suspicious logins (moved from AnomalyDetector)
-    
+    - Logs + stores pending Redis notification for socket reliability
+
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
     
@@ -220,8 +232,21 @@ async def record_login(
     if is_trusted_device:
         await trusted_repo.update_last_used(user_id, device_fingerprint)
     
-    # Post-commit callback for notifications and email alerts
-    # PHASE 1 MERGE: Email sending moved here from AnomalyDetector
+    # Post-commit callback — log + Redis pending notification only.
+    # Email is NOT sent from here anymore (Option-B Commit 5): pre-PR
+    # this fired ``send_login_alert_email_task.delay()`` DIRECTLY,
+    # bypassing the user's notification_preference (the dispatcher path
+    # in ``auth.py`` does honour preference). Result: users who had
+    # disabled email for security group still received email — proven
+    # in the 2026-05-23 prod log (channel_counts.email=0 from filter,
+    # but inbox still got the alert).
+    #
+    # The dispatcher in ``auth.py:_dispatch_suspicious_login`` now is
+    # the single source of email — Commit 7 will also gate the socket
+    # emit so user_room delivery respects preference. The Celery task
+    # ``send_login_alert_email_task`` definition is left intact for the
+    # dispatcher to call via the SUSPICIOUS_LOGIN notification rule's
+    # email action.
     async def _post_commit():
         if login.is_suspicious:
             log.warning(
@@ -233,51 +258,7 @@ async def record_login(
                 new_device=is_new_device,
                 new_location=is_new_location,
             )
-            
-            # PHASE 1: Send email alert (previously in AnomalyDetector/auth.py)
-            if email_to and username:
-                try:
-                    from app.celery_utils import send_login_alert_email_task
-                    
-                    # Build location string
-                    location_parts = []
-                    if city:
-                        location_parts.append(city)
-                    if country:
-                        location_parts.append(country)
-                    location = ", ".join(location_parts) if location_parts else None
-                    
-                    # Build anomalies dict for email template
-                    anomalies_dict = {
-                        "is_suspicious": True,
-                        "new_ip": is_new_ip,
-                        "new_device": is_new_device,
-                        "new_location": is_new_location,
-                    }
-                    
-                    send_login_alert_email_task.delay(
-                        email_to=email_to,
-                        username=username,
-                        ip_address=ip_address or "Unknown",
-                        user_agent=user_agent or "Unknown",
-                        device_type=device_info.get("device_type") or "Unknown",
-                        browser=device_info.get("browser") or "Unknown",
-                        os=device_info.get("os") or "Unknown",
-                        anomalies=anomalies_dict,
-                        location=location,
-                    )
-                    log.info(
-                        "Login alert email queued from login_history_service",
-                        user_id=user_id,
-                        email_to=email_to,
-                    )
-                except Exception as email_error:
-                    log.error(
-                        "Failed to queue login alert email",
-                        user_id=user_id,
-                        error=str(email_error),
-                    )
-            
+
             # R1+R2 FIX: Store pending notification in Redis for socket delivery on connect
             # This solves the race condition where socket isn't connected when notification is emitted
             if refresh_jti:
