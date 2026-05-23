@@ -296,6 +296,21 @@ async def test_permission_matrix(
         log.debug("Reloaded Casbin policies before request")
     # <<< KẾT THÚC SỬA >>>
 
+    # PR-1.5 Commit 2 (2026-05-23) — Cookie jar isolation per request.
+    # All 4 ``*_token_headers`` fixtures are dependencies of this test,
+    # so each test entry has been preceded by 4 sequential ``_get_token_headers``
+    # calls. Each of those POSTs to ``/api/auth/login`` and the response
+    # ``Set-Cookie: access_token=...`` lands in the shared ``AsyncClient``
+    # cookie jar — the LAST login's cookie wins and overrides whichever
+    # ``Authorization: Bearer ...`` we attach below, because the auth
+    # dependency prefers the cookie token.
+    # Clearing the jar right before the request forces the backend to
+    # read the Bearer header attached via ``headers=token_headers``, so
+    # the role under test is actually the one we asked for.
+    # Reference: module docstring Cluster 3A + memory
+    # ``test-httpx-cookie-jar-contamination``.
+    client.cookies.clear()
+
     response = await client.request(
         method=http_method, url=endpoint_url, headers=token_headers, json=json_payload
     )
