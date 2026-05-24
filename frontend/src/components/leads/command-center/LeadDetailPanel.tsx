@@ -235,7 +235,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
         {/* Row 3: Action Buttons - space between */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" asChild>
+            <Button variant="outline" size="sm" className="h-11 sm:h-7 px-2 text-xs" asChild>
               <Link href={`/leads/${lead.id}`}>
                 <ExternalLink className="h-3.5 w-3.5 mr-1" />
                 Xem
@@ -244,7 +244,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             <Button
               variant="outline"
               size="sm"
-              className="h-7 px-2 text-xs"
+              className="h-11 sm:h-7 px-2 text-xs"
               onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
             >
               <Phone className="h-3.5 w-3.5 mr-1" />
@@ -253,7 +253,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             <Button
               variant="outline"
               size="sm"
-              className="h-7 px-2 text-xs"
+              className="h-11 sm:h-7 px-2 text-xs"
               onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
             >
               <span className="font-bold mr-1">Z</span>
@@ -267,7 +267,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 w-7 p-0"
+                className="h-11 w-11 sm:h-7 sm:w-7 p-0"
                 onClick={() => setActionSheetOpen(true)}
                 aria-label="Mở menu thao tác"
               >
@@ -349,7 +349,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           ) : (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label="Mở menu thao tác">
+                <Button variant="ghost" size="sm" className="h-11 w-11 sm:h-7 sm:w-7 p-0" aria-label="Mở menu thao tác">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -468,7 +468,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-5 px-2 text-[10px] border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
+                      className="h-11 sm:h-5 px-2 text-xs sm:text-[10px] border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
                       onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
                     >
                       Gọi ngay
