@@ -557,7 +557,7 @@ export function QuickConsultationSectionV2({
             </span>
           </div>
           {lead.pipeline_stage && (
-            <Badge variant="outline" className="ml-auto text-[10px] font-normal">
+            <Badge variant="outline" className="ml-auto text-xs font-normal">
               {lead.pipeline_stage.name}
             </Badge>
           )}
@@ -721,7 +721,7 @@ export function QuickConsultationSectionV2({
             Bước 2: Kết quả tư vấn
           </Label>
           {!pendingStatus && (
-            <span className="text-[11px] text-amber-600">
+            <span className="text-xs text-amber-600">
               Chọn một kết quả bên dưới để lưu
             </span>
           )}
@@ -730,7 +730,7 @@ export function QuickConsultationSectionV2({
         {/* ── Không liên hệ được ── */}
         {groupedStatuses.universal.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Không liên hệ được
             </Label>
             <div className="flex flex-wrap gap-1.5">
@@ -762,7 +762,7 @@ export function QuickConsultationSectionV2({
         {/* ── Liên hệ được ── */}
         {groupedStatuses.sameStage.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Liên hệ được
             </Label>
             {renderStatusGrid(groupedStatuses.sameStage, "same")}
@@ -772,7 +772,7 @@ export function QuickConsultationSectionV2({
         {/* Next stage */}
         {groupedStatuses.nextStage.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Tiến tới →
             </Label>
             {renderStatusGrid(groupedStatuses.nextStage, "next")}

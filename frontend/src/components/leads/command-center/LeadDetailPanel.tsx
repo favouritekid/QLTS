@@ -196,7 +196,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {lead.assignment_status && (
             <Badge
               variant="outline"
-              className={cn("text-[10px] shrink-0", getAssignmentStatusColor(lead.assignment_status))}
+              className={cn("text-xs shrink-0", getAssignmentStatusColor(lead.assignment_status))}
             >
               {getAssignmentStatusLabel(lead.assignment_status)}
             </Badge>
@@ -212,7 +212,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             return (
               <Badge
                 variant="outline"
-                className={cn("border-0 font-medium text-[10px]", stageColor && "text-white")}
+                className={cn("border-0 font-medium text-xs", stageColor && "text-white")}
                 style={{ backgroundColor: stageColor || undefined }}
               >
                 {lead.pipeline_stage.name}
@@ -409,12 +409,12 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 <User className="h-4 w-4 text-primary shrink-0" />
                 <span>Thông tin</span>
                 {lead.is_hot_lead && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
+                  <Badge variant="outline" className="text-xs px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
                     🔥 Hot
                   </Badge>
                 )}
                 {lead.is_overdue && (
-                  <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5">
+                  <Badge variant="destructive" className="text-xs px-1.5 py-0 h-5">
                     Quá hạn
                   </Badge>
                 )}
