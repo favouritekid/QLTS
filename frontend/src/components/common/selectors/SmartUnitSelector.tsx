@@ -275,11 +275,19 @@ function ComboboxVariant({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0" align="start">
+      {/* Mobile: fit viewport instead of fixed 400px (overflow on 375px). */}
+      <PopoverContent className="w-[calc(100vw-2rem)] max-w-[400px] sm:w-[400px] p-0" align="start">
         <Command>
           <CommandInput placeholder="Tim kiem don vi..." />
           <CommandEmpty>Khong tim thay don vi nao.</CommandEmpty>
-          <CommandGroup className="max-h-[300px] overflow-auto">
+          {/* onTouchMove/onWheel stopPropagation: see SmartOfferingSelector —
+              defeats Radix Dialog react-remove-scroll touch-lock so the
+              portaled popover list scrolls on mobile. */}
+          <CommandGroup
+            className="max-h-[300px] overflow-auto overscroll-contain"
+            onTouchMove={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
             {allowNone && (
               <CommandItem
                 value="none"
