@@ -17,6 +17,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Inject all env vars referenced by ``docker-compose.yml`` interpolation
+    # (root cause of 10/10 fail runs through 2026-05-24 — see PR #332 body).
+    # CI test creds are intentionally unsafe placeholders; the stack only
+    # binds to localhost inside this runner and is torn down on job end.
+    env:
+      POSTGRES_USER: qlts
+      POSTGRES_PASSWORD: ci-test-postgres-pw
+      POSTGRES_DB: qlts_test
+      DOMAIN: localhost
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,11 +46,30 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium --with-deps
 
-      # Start full stack via docker compose
+      # Generate ``.env.production`` so the backend service's ``env_file:``
+      # directive resolves (it's referenced unconditionally in
+      # docker-compose.yml). Values are CI-only placeholders mirroring the
+      # pattern used by backend-test.yml + nightly-backend-pytest.yml.
+      - name: Generate .env.production for backend env_file load
+        run: |
+          cat > .env.production <<EOF
+          APP_ENV=production
+          SECRET_KEY=ci-test-secret-key-for-nightly-only
+          JWT_SECRET_KEY=ci-test-jwt-secret-for-nightly-only
+          MAIL_USERNAME=ci-test@example.com
+          MAIL_PASSWORD=ci-test-placeholder
+          MAIL_FROM=ci-test@example.com
+          MAIL_SERVER=smtp.example.com
+          EOF
+
+      # ``-f docker-compose.yml`` bypasses the auto-loaded
+      # ``docker-compose.override.yml`` (dev mode) which requires
+      # ``Backend_FastAPI/.env`` that doesn't exist in CI. We want the
+      # production-like stack here anyway.
       - name: Start services
         run: |
-          docker compose up -d postgres redis backend frontend
-          docker compose exec -T backend alembic upgrade head
+          docker compose -f docker-compose.yml up -d postgres redis backend frontend
+          docker compose -f docker-compose.yml exec -T backend alembic upgrade head
           # Wait for services
           timeout 60 bash -c 'until curl -sf http://localhost:8000/docs > /dev/null; do sleep 2; done'
           timeout 60 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
@@ -48,9 +78,9 @@ jobs:
       # Seed data (required for E2E tests)
       - name: Seed database
         run: |
-          docker compose exec -T backend pip install -r requirements-dev.txt -q
-          docker compose exec -T backend python -m scripts.seed_from_xlsx
-          docker compose exec -T backend python -m app.scripts.seed_notification_rules
+          docker compose -f docker-compose.yml exec -T backend pip install -r requirements-dev.txt -q
+          docker compose -f docker-compose.yml exec -T backend python -m scripts.seed_from_xlsx
+          docker compose -f docker-compose.yml exec -T backend python -m app.scripts.seed_notification_rules
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow
@@ -111,4 +141,4 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.yml down -v
