@@ -627,7 +627,7 @@ export function QuickConsultationSectionV2({
               )}
             />
             {scheduleOption !== "none" && !scheduleOpen && (
-              <Badge variant="secondary" className="ml-1 h-4 px-1.5 text-[10px]">
+              <Badge variant="secondary" className="ml-1 h-4 px-1.5 text-xs">
                 {getSchedulePreviewText(scheduleOption, customDateTime)}
               </Badge>
             )}
@@ -784,7 +784,7 @@ export function QuickConsultationSectionV2({
           <div>
             <button
               type="button"
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors min-h-11 sm:min-h-0 py-2 sm:py-0"
               onClick={() => setShowPreviousStage((prev) => !prev)}
             >
               <ChevronDown
@@ -843,7 +843,7 @@ export function QuickConsultationSectionV2({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="h-11 sm:h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={cancelPending}
                 >
                   Hoàn tác
@@ -852,7 +852,7 @@ export function QuickConsultationSectionV2({
                   type="button"
                   variant="default"
                   size="sm"
-                  className="h-7 px-3 text-xs"
+                  className="h-11 sm:h-7 px-3 text-xs"
                   onClick={() => commitSave(pendingStatus)}
                   disabled={addConsultation.isPending}
                   title="Ctrl+Enter để lưu nhanh"
