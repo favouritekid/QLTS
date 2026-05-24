@@ -20,6 +20,7 @@ from datetime import datetime
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
+from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -37,18 +38,59 @@ async def _login(client: AsyncClient, username: str, password: str) -> dict:
 
 @pytest_asyncio.fixture
 async def fee_calc_config(seed_lead_dependencies: dict):
-    """Seed admission path (lax submit) so probes can create + approve quickly."""
+    """Seed Phase E.4 submit invariants so PR-7 fee authorization tests
+    can actually reach the ``/api/fees/calculate`` gate.
+
+    Mirrors the canonical ``adm_config`` pattern in
+    ``tests/api/test_admission_workflow_api.py:177`` — same submit-gate
+    requirements (degree_level + offering_type + OAC + VnSchool + KV
+    assignment) so this test file does not drift its own bespoke setup.
+
+    Fixture only. No production code change, no manual override.
+    """
     uid = seed_lead_dependencies["unit_id"]
     mpid = seed_lead_dependencies["major_program_id"]
     ts = f"{int(datetime.now().timestamp())}"
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            ot = models.ConfigOfferingType(code=f"tq_{ts}", name=f"TQ_{ts}", display_order=1)
-            s.add(ot); await s.flush()
+            # Canonical GDNN degree code (Phase E.4 whitelist) — get-or-create
+            # to tolerate parallel-test-module DB collisions.
+            cdl = (await s.execute(
+                select(models.ConfigDegreeLevel).where(
+                    models.ConfigDegreeLevel.code == "cao_dang"
+                )
+            )).scalar_one_or_none()
+            if cdl is None:
+                cdl = models.ConfigDegreeLevel(
+                    code="cao_dang", name="Cao đẳng", display_order=1,
+                )
+                s.add(cdl); await s.flush()
+
+            # Canonical chính quy offering type — same get-or-create rationale.
+            cot = (await s.execute(
+                select(models.ConfigOfferingType).where(
+                    models.ConfigOfferingType.code == "chinh_quy"
+                )
+            )).scalar_one_or_none()
+            if cot is None:
+                cot = models.ConfigOfferingType(
+                    code="chinh_quy", name="Chính quy", display_order=1,
+                )
+                s.add(cot); await s.flush()
+
+            # Backfill MAJOR_1.degree_level_id (seed_lead_dependencies leaves
+            # it NULL for backward compat; submit gate requires the FK).
+            major = (await s.execute(
+                select(models.MajorProgram).where(models.MajorProgram.id == mpid)
+            )).scalar_one()
+            if major.degree_level_id is None:
+                major.degree_level_id = cdl.id
+                await s.flush()
+
             dt = models.ConfigDocumentType(code=f"tcc_{ts}", name=f"TCC_{ts}", display_order=1)
             s.add(dt); await s.flush()
             po = models.ProgramOffering(
-                offering_type=f"TQ_{ts}", program_id=mpid, offering_type_id=ot.id,
+                offering_type=f"TQ_{ts}", program_id=mpid, offering_type_id=cot.id,
                 is_active=True, duration_semesters=6,
             )
             s.add(po); await s.flush()
@@ -80,17 +122,46 @@ async def fee_calc_config(seed_lead_dependencies: dict):
             )
             s.add(ap); await s.flush()
             dg = models.DocumentGroup(
-                offering_type_id=ot.id,
+                offering_type_id=cot.id,
                 admission_method_id=am.id,
                 code=f"dg_{ts}",
                 name=f"DG_{ts}",
                 is_active=True,
             )
             s.add(dg); await s.flush()
+
+            # OAC link → admission_service.create_profile step 14b
+            # auto-writes profile.offering_admission_config_id.
+            oac = models.OfferingAdmissionConfig(
+                academic_info_id=ai.id, criteria_id=ac.id, is_active=True,
+            )
+            s.add(oac); await s.flush()
+
+            # Phase E.4 KV resolution catalog — VnSchool + KV assignment
+            # covering candidate's THPT years (2019-2022). academic_history
+            # entry must carry ``school_id`` (passed via _create_approved_
+            # profile PUT body) so the LICH_SU_THPT branch resolves a KV.
+            sch = models.VnSchool(
+                moet_school_code=f"S{ts[-6:]}",
+                moet_province_code="001",
+                name=f"THPT Test {ts}",
+                province="Hà Nội",
+                district="Ba Đình",
+                level="THPT",
+            )
+            s.add(sch); await s.flush()
+            kva = models.VnSchoolKvAssignment(
+                school_id=sch.id, kv_code="KV3",
+                effective_from_year=2019, effective_to_year=2022,
+                source="manual_admin",
+            )
+            s.add(kva); await s.flush()
+            school_id = sch.id
     return {
         "unit_id": uid,
         "offering_id": po.id,
         "method_id": am.id,
+        "school_id": school_id,
     }
 
 
@@ -129,6 +200,12 @@ async def _create_approved_profile(
     oh = await _login(client, officer_user["username"], officer_user["password"])
     cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
     v = prof["version"]
+    # PR-1.5 Commit 5 (2026-05-24) — Phase E.4 submit invariants. Mirrors
+    # the _submit helper in tests/api/test_admission_workflow_api.py:
+    #   * cultural_education_level + vocational_qualification → satisfy
+    #     CĐ chính quy eligibility gate (priority_service.validate_eligibility)
+    #   * academic_history entry carries level + grade_to + school_id so the
+    #     LICH_SU_THPT branch resolves a KV via vn_school_kv_assignment
     await client.put(f"{ADMISSIONS}/{prof['id']}", json={
         "version": v,
         "citizen_id": cccd,
@@ -137,8 +214,19 @@ async def _create_approved_profile(
         "nationality": "Viet Nam",
         "ethnicity": "Kinh",
         "place_of_birth": "Test",
+        "cultural_education_level": "graduated_thpt",
+        "vocational_qualification": "none",
         "family_info": [{"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}],
-        "academic_history": [{"school_name": "THPT", "year_from": 2019, "year_to": 2022, "gpa": 8.5, "graduation_type": "THPT"}],
+        "academic_history": [{
+            "school_name": "THPT",
+            "year_from": 2019,
+            "year_to": 2022,
+            "gpa": 8.5,
+            "graduation_type": "THPT",
+            "level": "THPT",
+            "grade_to": 12,
+            "school_id": cfg["school_id"],
+        }],
         "admission_scores": {"gpa": 8.5, "subject_scores": {}},
     }, headers=oh)
 
