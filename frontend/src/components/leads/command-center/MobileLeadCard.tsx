@@ -133,8 +133,9 @@ export function MobileLeadCard({
         <Button
           variant="ghost"
           size="icon"
-          className="h-10 w-10"
+          className="h-11 w-11"
           onClick={() => setActionSheetOpen(true)}
+          aria-label="Mở menu hành động"
         >
           <MoreVertical className="h-4 w-4" />
         </Button>

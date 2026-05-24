@@ -113,7 +113,7 @@ function FilterDropdown({ label, count, children }: FilterDropdownProps) {
           variant="outline"
           size="sm"
           className={cn(
-            "h-9 md:h-8 gap-1 transition-colors duration-200",
+            "h-11 md:h-8 gap-1 transition-colors duration-200",
             count > 0 && "border-primary bg-primary/5"
           )}
         >
@@ -609,7 +609,7 @@ export function LeadFilterBar({
                   placeholder="Tìm cán bộ…"
                   value={officerSearch}
                   onChange={(e) => handleOfficerSearchChange(e.target.value)}
-                  className="h-7 text-xs"
+                  className="h-11 text-base sm:h-7 sm:text-xs"
                 />
                 <div className="max-h-48 space-y-2 overflow-y-auto">
                   {officers.map((officer) => (
@@ -892,7 +892,7 @@ export function LeadFilterBar({
                     placeholder="Tìm cán bộ…"
                     value={officerSearch}
                     onChange={(e) => handleOfficerSearchChange(e.target.value)}
-                    className="h-7 text-xs"
+                    className="h-11 text-base sm:h-7 sm:text-xs"
                   />
                   <div className="max-h-48 space-y-2 overflow-y-auto">
                     {officers.map((officer) => (
@@ -993,7 +993,7 @@ export function LeadFilterBar({
             {!isFiltersExpanded && hiddenCount > 0 && (
               <Badge
                 variant="outline"
-                className="h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
+                className="h-9 sm:h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
                 onClick={() => setIsFiltersExpanded(true)}
               >
                 +{hiddenCount} more
@@ -1005,7 +1005,7 @@ export function LeadFilterBar({
             {isFiltersExpanded && allPills.length > MAX_VISIBLE_PILLS && (
               <Badge
                 variant="outline"
-                className="h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
+                className="h-9 sm:h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
                 onClick={() => setIsFiltersExpanded(false)}
               >
                 Thu gọn
