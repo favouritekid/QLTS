@@ -410,7 +410,7 @@ export function LeadFilterBar({
             placeholder="Tìm kiếm..."
             value={localSearch}
             onChange={(e) => handleSearchInputChange(e.target.value)}
-            className="h-9 pl-9 pr-8 text-sm md:h-8"
+            className="h-11 pl-9 pr-8 text-base sm:text-sm md:h-8"
           />
           {localSearch && (
             <button
@@ -419,7 +419,7 @@ export function LeadFilterBar({
                 if (debounceRef.current) clearTimeout(debounceRef.current);
                 onSearchChange("");
               }}
-              className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
+              className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 flex h-9 w-9 items-center justify-center sm:h-auto sm:w-auto sm:right-2"
               aria-label="Xóa tìm kiếm"
             >
               <X className="h-4 w-4" />
@@ -431,7 +431,7 @@ export function LeadFilterBar({
         <Button
           variant="outline"
           size="sm"
-          className="h-9 gap-1.5 md:hidden"
+          className="h-11 gap-1.5 md:hidden"
           onClick={() => setMobileFiltersOpen(!mobileFiltersOpen)}
         >
           <ChevronDown className={cn("h-4 w-4 transition-transform", mobileFiltersOpen && "rotate-180")} />
@@ -444,7 +444,7 @@ export function LeadFilterBar({
         </Button>
 
         {/* Mobile: Add Lead button */}
-        <Button size="sm" onClick={onAddLead} className="h-9 gap-1.5 md:hidden">
+        <Button size="sm" onClick={onAddLead} className="h-11 gap-1.5 md:hidden">
           <Plus className="h-4 w-4" />
           <span className="sr-only sm:not-sr-only">Thêm</span>
         </Button>
@@ -782,7 +782,7 @@ export function LeadFilterBar({
                     variant="outline"
                     size="sm"
                     className={cn(
-                      "h-9 gap-1",
+                      "h-11 md:h-8 gap-1",
                       unitId && "border-primary bg-primary/5"
                     )}
                   >
@@ -928,7 +928,7 @@ export function LeadFilterBar({
                 variant="ghost"
                 size="sm"
                 onClick={() => { onReset(); setMobileFiltersOpen(false); }}
-                className="h-9 text-xs"
+                className="h-11 text-xs"
               >
                 <RotateCcw className="mr-1 h-3.5 w-3.5" />
                 Đặt lại
