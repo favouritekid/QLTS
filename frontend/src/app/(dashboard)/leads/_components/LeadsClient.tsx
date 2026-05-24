@@ -568,7 +568,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
 
       {/* Mobile: Detail Panel Sheet */}
       <Sheet open={mobileDetailOpen} onOpenChange={setMobileDetailOpen}>
-        <SheetContent side="right" className="w-[85vw] sm:w-[400px] sm:max-w-md p-0">
+        <SheetContent side="right" className="w-[calc(100vw-1rem)] sm:w-[400px] sm:max-w-md p-0">
           <SheetHeader className="sr-only">
             <SheetTitle>Chi tiết Lead</SheetTitle>
           </SheetHeader>
