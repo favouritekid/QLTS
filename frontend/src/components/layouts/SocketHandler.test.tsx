@@ -48,6 +48,13 @@ vi.mock("sonner", () => ({
   },
 }))
 
+// Option-B Commit 8 — spy the banner bump so we can assert the
+// suspicious_login socket listener calls it exactly once per event.
+const mockBumpSuspiciousLoginBanner = vi.fn()
+vi.mock("@/components/layouts/SecurityBanner", () => ({
+  bumpSuspiciousLoginBanner: () => mockBumpSuspiciousLoginBanner(),
+}))
+
 // Socket stub w/ event registry
 type SocketHandler = (...args: unknown[]) => void
 const socketStub = {
@@ -359,6 +366,96 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
 
       invalidateSpy.mockRestore()
       queryClient.clear()
+    })
+  })
+
+  // =========================================================================
+  // Option-B Commit 8 — suspicious_login real-time banner bump
+  // =========================================================================
+  describe("suspicious_login event → banner bump + loginHistory invalidate", () => {
+    it("bumps the banner exactly once per event", async () => {
+      const { invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("suspicious_login", {
+          login_history_id: 1094,
+          ip_address: "14.224.147.130",
+          location: "HCMC, Vietnam",
+          device: "Mobile Safari on iOS",
+          risk_score: 40,
+          anomalies: ["new_device"],
+        })
+      })
+
+      expect(mockBumpSuspiciousLoginBanner).toHaveBeenCalledTimes(1)
+      invalidateSpy.mockRestore()
+    })
+
+    it("invalidates the loginHistory query so /settings/security reconciles", async () => {
+      const { invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("suspicious_login", {
+          login_history_id: 1095,
+          ip_address: "1.2.3.4",
+          risk_score: 70,
+          anomalies: ["new_ip", "new_device"],
+        })
+      })
+
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["loginHistory"] }),
+      )
+      invalidateSpy.mockRestore()
+    })
+
+    it("does NOT show a toast (notification channel owns that to avoid double-fire)", async () => {
+      // The same SUSPICIOUS_LOGIN reaches the FE twice: once as a
+      // ``notification`` socket event (which toasts after full
+      // preference filtering) and once as this ``suspicious_login``
+      // domain event (banner bump only). The suspicious_login handler
+      // must NOT toast or we'd double-fire + bypass notification-level
+      // preference.
+      const { toast } = await import("sonner")
+      const { invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("suspicious_login", {
+          login_history_id: 1096,
+          ip_address: "5.6.7.8",
+          risk_score: 40,
+          anomalies: ["new_device"],
+        })
+      })
+
+      expect(toast.warning).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(toast.info).not.toHaveBeenCalled()
+      invalidateSpy.mockRestore()
+    })
+
+    it("listener is cleaned up on unmount (no bump after unmount)", async () => {
+      const { unmount, invalidateSpy } = renderHandler()
+      await fireConnect()
+
+      unmount()
+
+      act(() => {
+        socketStub.fire("suspicious_login", {
+          login_history_id: 1097,
+          ip_address: "9.9.9.9",
+          risk_score: 40,
+          anomalies: ["new_device"],
+        })
+      })
+
+      // After unmount the off() cleanup removed the handler, so firing
+      // the event hits zero registered handlers → no bump.
+      expect(mockBumpSuspiciousLoginBanner).not.toHaveBeenCalled()
+      invalidateSpy.mockRestore()
     })
   })
 })

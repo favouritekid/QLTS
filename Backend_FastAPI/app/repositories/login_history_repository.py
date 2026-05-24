@@ -112,20 +112,28 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
     ) -> bool:
         """
         Check if this IP address has been used before by this user.
-        
-        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
-        This ensures attacker's IP triggers alerts on re-login after victim
-        clicks 'Not Me'.
+
+        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as
+        attack) so the attacker's IP keeps triggering alerts on re-login
+        after the victim clicks "Not Me".
+
+        OPTION-B FIX (sl20260524): ``user_response != "secured"`` evaluates
+        to NULL when ``user_response IS NULL`` (Postgres three-valued
+        logic), and NULL is falsy in a WHERE — so pending (unresponded)
+        rows were silently excluded from the "seen" history. We use
+        ``is_distinct_from("secured")`` which is NULL-safe and matches
+        both pending (NULL) and confirmed rows while still excluding
+        secured.
         """
         if not ip_address:
             return True  # Unknown IP treated as "seen" (no flag)
-            
+
         query = select(self.model.id).where(
             and_(
                 self.model.user_id == user_id,
                 self.model.ip_address == ip_address,
-                # SECURITY FIX: Don't count 'secured' logins as legitimate history
-                self.model.user_response != "secured",
+                # NULL-safe: matches NULL (pending) + 'confirmed', excludes 'secured'
+                self.model.user_response.is_distinct_from("secured"),
             )
         ).limit(1)
         result = await self.db.execute(query)
@@ -134,27 +142,37 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
     async def check_device_seen_before(
         self,
         user_id: int,
-        device_fingerprint: dict,
+        device_fingerprint: str,
     ) -> bool:
         """
-        Check if this device has been used before.
-        Device fingerprint = hash of (browser + os + device_type).
-        
-        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
-        This ensures attacker's device triggers alerts on re-login after victim
-        clicks 'Not Me'.
+        Check if this device has been used before by this user.
+
+        OPTION-B FIX (sl20260524): query is now an exact-hash match on
+        ``login_history.device_fingerprint`` (the canonical SHA-256 from
+        the family + device_type + user_id + salt — see
+        ``app.services.login_history_service.generate_device_fingerprint``).
+
+        Pre-PR the signature was a ``device_info`` dict and the query
+        compared the display-string columns (``browser`` / ``os`` /
+        ``device_type``) for equality — that meant every browser/OS
+        version bump broke the match. The canonical fingerprint baked in
+        by sl20260524's backfill restores stability across version drift.
+
+        Index: ``ix_login_history_user_fp_response`` on
+        ``(user_id, device_fingerprint, user_response)`` powers this path.
+
+        SECURITY FIX + NULL fix: same ``is_distinct_from("secured")``
+        semantics as ``check_ip_seen_before`` — pending rows count as
+        seen, secured rows do not.
         """
         if not device_fingerprint:
             return True
-            
+
         query = select(self.model.id).where(
             and_(
                 self.model.user_id == user_id,
-                self.model.browser == device_fingerprint.get("browser", ""),
-                self.model.os == device_fingerprint.get("os", ""),
-                self.model.device_type == device_fingerprint.get("device_type", ""),
-                # SECURITY FIX: Don't count 'secured' logins as legitimate history
-                self.model.user_response != "secured",
+                self.model.device_fingerprint == device_fingerprint,
+                self.model.user_response.is_distinct_from("secured"),
             )
         ).limit(1)
         result = await self.db.execute(query)
@@ -167,24 +185,50 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
     ) -> bool:
         """
         Check if user has logged in from this country before.
-        
-        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
-        This ensures attacker's country triggers alerts on re-login after victim
-        clicks 'Not Me'.
+
+        See ``check_ip_seen_before`` for the NULL-safe predicate rationale.
         """
         if not country:
             return True
-            
+
         query = select(self.model.id).where(
             and_(
                 self.model.user_id == user_id,
                 self.model.country == country,
-                # SECURITY FIX: Don't count 'secured' logins as legitimate history
-                self.model.user_response != "secured",
+                # NULL-safe: matches NULL (pending) + 'confirmed', excludes 'secured'
+                self.model.user_response.is_distinct_from("secured"),
             )
         ).limit(1)
         result = await self.db.execute(query)
         return result.scalar_one_or_none() is not None
+
+    async def count_pending_suspicious(
+        self,
+        user_id: int,
+    ) -> int:
+        """Count this user's suspicious logins that are still pending review.
+
+        Mirrors the ``get_suspicious_logins(pending_only=True)`` filter
+        but returns a scalar — used by the ``/auth/login`` response to
+        populate ``suspicious_login_count`` so the FE banner shows the
+        real number instead of a hardcoded ``1``.
+
+        "Suspicious" = ``is_new_ip OR is_new_device OR is_new_location``
+        (matches ``LoginHistory.is_suspicious`` property). "Pending" =
+        ``user_response IS NULL``.
+        """
+        query = select(func.count(self.model.id)).where(
+            and_(
+                self.model.user_id == user_id,
+                or_(
+                    self.model.is_new_ip == True,
+                    self.model.is_new_device == True,
+                    self.model.is_new_location == True,
+                ),
+                self.model.user_response.is_(None),
+            )
+        )
+        return await self.db.scalar(query) or 0
 
     async def mark_as_confirmed(
         self,

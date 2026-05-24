@@ -109,6 +109,42 @@ export function triggerSuspiciousLoginBanner(count: number): void {
   }
 }
 
+/**
+ * Option-B Commit 8: increment the banner count by one in response to a
+ * real-time ``suspicious_login`` socket event (a NEW suspicious login
+ * landed in another session while this tab is open).
+ *
+ * Unlike ``triggerSuspiciousLoginBanner`` which SETS an absolute count
+ * (from the login response or the /settings/security fetch), this
+ * helper ADDS to the current count — the socket payload represents one
+ * incremental event, and we don't want a re-fetch round-trip just to
+ * learn "+1". The SocketHandler also debounce-invalidates the
+ * ``loginHistory`` query so the authoritative count reconciles on the
+ * next /settings/security visit.
+ *
+ * Respects the same priority + dismiss rules as the SET path: the
+ * password_reset banner still wins, and a dismissed banner stays
+ * dismissed (the user explicitly snoozed for 24h).
+ */
+export function bumpSuspiciousLoginBanner(): void {
+  const store = useSecurityBannerStore.getState();
+  const nextCount = store.suspiciousCount + 1;
+  store.setSuspiciousCount(nextCount);
+
+  // password_reset banner has higher priority — keep it showing.
+  if (store.bannerType === "password_reset" && store.isVisible) {
+    return;
+  }
+
+  // Honour an active 24h dismissal — don't re-surface a snoozed banner.
+  if (isDismissed(DISMISS_SUSPICIOUS_KEY)) {
+    return;
+  }
+
+  store.setBannerType("suspicious_login");
+  store.setVisible(true);
+}
+
 function isDismissed(key: string): boolean {
   if (typeof window === "undefined") return false;
   const dismissedUntil = localStorage.getItem(key);

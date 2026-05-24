@@ -389,15 +389,66 @@ def rooms_for_lead(lead) -> List[str]:
 
 
 def rooms_for_user(user_id: Optional[int]) -> List[str]:
-    """Rooms for user-targeted sensitive events (USER_DEACTIVATED, USER_ROLE_CHANGED, SUSPICIOUS_LOGIN).
+    """Rooms for user-targeted sensitive events (USER_DEACTIVATED, USER_ROLE_CHANGED).
 
     Admin visibility + the target user's personal inbox. No unit scoping —
     user-centric events do not derive from an admission/lead tree.
+
+    NOTE: SUSPICIOUS_LOGIN used to be on this list but moved off in
+    Option-B Commit 7 — it now uses preference-gated rooms computed
+    inside ``dispatch()`` (see ``_compute_suspicious_login_rooms``) and
+    explicitly omits ``role_admin`` because the event targets the actor
+    user, not the admin community.
     """
     rooms: List[str] = ["role_admin"]
     if user_id is not None:
         rooms.append(f"user_room_{user_id}")
     return rooms
+
+
+# ---------------------------------------------------------------------------
+# Option-B Commit 7 — SUSPICIOUS_LOGIN socket gating
+# ---------------------------------------------------------------------------
+# The dispatcher has multiple ``_emit_domain_event`` callsites:
+#
+#   * Early branches (lines ~673/700/751/801/912): rule missing /
+#     non-user class / config error / no recipients / all recipients
+#     filtered. At these points the per-channel preference filter
+#     hasn't run yet — for SUSPICIOUS_LOGIN we'd be emitting to whatever
+#     ``rooms`` the caller passed (typically ``rooms_for_user`` =
+#     ``role_admin`` + ``user_room_<uid>``), bypassing preference.
+#   * Final branch (~line 1243): runs AFTER preference filter has built
+#     ``channel_recipient_map``. For SUSPICIOUS_LOGIN we use that map's
+#     ``browser`` entry to derive rooms — only users who opted into
+#     ``security``/``browser`` see the socket bump.
+#
+# Plan v10 (V8.P0 + V9.P0): early branches SKIP emit for SUSPICIOUS_LOGIN,
+# final branch emits only ``user_room_<eligible>`` and OMITS ``role_admin``.
+
+
+def _is_suspicious_login_event(event: "SystemEvents") -> bool:
+    """Single predicate so the early-branch skip logic doesn't drift."""
+    return event == SystemEvents.SUSPICIOUS_LOGIN
+
+
+def _compute_suspicious_login_rooms(
+    channel_recipient_map: Dict[str, List[int]],
+) -> List[str]:
+    """Build the room list for a SUSPICIOUS_LOGIN emit at the final branch.
+
+    Only users whose ``security`` group + ``browser`` channel preference
+    is enabled appear in ``channel_recipient_map["browser"]`` (after
+    Step 3's preference filter). We turn each eligible user_id into
+    their personal ``user_room_<uid>`` and return that list — no
+    ``role_admin``, no unit rooms.
+
+    Empty list is meaningful: ``_emit_domain_event`` is fail-closed for
+    sensitive events with empty rooms (line ~281), so the emit is
+    skipped entirely. That is the correct UX: if the actor has disabled
+    the browser channel, no banner bump fires.
+    """
+    eligible_browser_user_ids = channel_recipient_map.get("browser", [])
+    return [f"user_room_{uid}" for uid in eligible_browser_user_ids]
 
 
 def _all_role_rooms() -> List[str]:
@@ -671,6 +722,17 @@ async def dispatch(
     if not definition or definition.retired:
         log.warning("Unknown or retired event, skip dispatch", event_type=event.value)
         async def _domain_only_callback():
+            # Option-B Commit 7: SUSPICIOUS_LOGIN early branches skip the
+            # domain emit entirely because preference filter hasn't run
+            # yet and the rooms here would bypass user choice. Other
+            # events continue to emit so data-sync listeners (LEAD_*,
+            # ADMISSION_*) keep working.
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (unknown/retired event)",
+                    event_type=event.value,
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -679,6 +741,12 @@ async def dispatch(
         log.debug("Non-user event, domain-only dispatch",
                   event_type=event.value, cls=definition.notification_class)
         async def _domain_only_callback():
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (non-user class)",
+                    event_type=event.value,
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -689,6 +757,12 @@ async def dispatch(
         log.error("Config error loading rule, skip dispatch",
                   event_type=event.value, error=str(e))
         async def _domain_only_callback():
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (config error)",
+                    event_type=event.value, error=str(e),
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -698,6 +772,12 @@ async def dispatch(
             event_type=event.value,
         )
         async def _domain_only_callback():
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (no enabled rule)",
+                    event_type=event.value,
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -749,6 +829,12 @@ async def dispatch(
                 condition=config.condition
             )
             async def _domain_only_callback():
+                if _is_suspicious_login_event(event):
+                    log.info(
+                        "SUSPICIOUS_LOGIN early-branch skip (condition not met)",
+                        event_type=event.value,
+                    )
+                    return
                 await _emit_domain_event(event, payload, rooms=rooms)
             return [], _domain_only_callback
 
@@ -799,6 +885,12 @@ async def dispatch(
     if not all_internal_user_ids and not has_external_actions:
         log.info("No recipients resolved for event (still emitting domain event)", event_type=event.value)
         async def _domain_only_callback():
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (no recipients resolved)",
+                    event_type=event.value,
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -910,6 +1002,12 @@ async def dispatch(
         log.info("All recipients filtered out (still emitting domain event)",
                 event_type=event.value, group=group.value)
         async def _domain_only_callback():
+            if _is_suspicious_login_event(event):
+                log.info(
+                    "SUSPICIOUS_LOGIN early-branch skip (all recipients filtered)",
+                    event_type=event.value, group=group.value,
+                )
+                return
             await _emit_domain_event(event, payload, rooms=rooms)
         return [], _domain_only_callback
 
@@ -1239,8 +1337,25 @@ async def dispatch(
             channel_counts={ch: len(ids) for ch, ids in channel_recipient_map.items()},
         )
 
-        # Step 7.25: ✅ REAL-TIME SYNC: Emit domain event for UI refresh
-        await _emit_domain_event(event, payload, rooms=rooms)
+        # Step 7.25: ✅ REAL-TIME SYNC: Emit domain event for UI refresh.
+        # Option-B Commit 7: SUSPICIOUS_LOGIN computes its rooms from
+        # ``channel_recipient_map["browser"]`` — only users who passed
+        # the security/browser preference filter receive the banner
+        # bump. role_admin is NOT included (this is an actor-targeted
+        # event, not an admin alert). If no eligible users remain,
+        # ``_compute_suspicious_login_rooms`` returns ``[]`` and
+        # ``_emit_domain_event``'s fail-closed guard skips the emit.
+        if _is_suspicious_login_event(event):
+            emit_rooms = _compute_suspicious_login_rooms(channel_recipient_map)
+            if not emit_rooms:
+                log.info(
+                    "SUSPICIOUS_LOGIN socket emit skipped (no browser-eligible recipients)",
+                    event_type=event.value,
+                )
+            else:
+                await _emit_domain_event(event, payload, rooms=emit_rooms)
+        else:
+            await _emit_domain_event(event, payload, rooms=rooms)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
         # Only cache for browser-eligible users (bell icon / dropdown).
