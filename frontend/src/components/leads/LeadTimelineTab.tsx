@@ -586,7 +586,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  className="h-11 w-11 sm:h-7 sm:w-7 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                                 >
                                   <MoreVertical className="h-4 w-4 text-muted-foreground" />
                                 </Button>

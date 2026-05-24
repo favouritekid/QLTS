@@ -124,7 +124,7 @@ export function LeadKanbanCard({ lead, isDragging = false }: LeadKanbanCardProps
             <Button
               variant="ghost"
               size="sm"
-              className="h-6 w-6 p-0"
+              className="h-11 w-11 sm:h-6 sm:w-6 p-0"
               asChild
               onClick={(e) => e.stopPropagation()}
               aria-label="Xem chi tiết lead"

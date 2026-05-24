@@ -810,7 +810,7 @@ export function LeadsTable({
               size="sm"
               onClick={() => onPageChange?.(page - 1)}
               disabled={page <= 1}
-              className="h-8 w-8 p-0"
+              className="h-11 w-11 md:h-8 md:w-8 p-0"
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
@@ -822,7 +822,7 @@ export function LeadsTable({
               size="sm"
               onClick={() => onPageChange?.(page + 1)}
               disabled={page >= totalPages}
-              className="h-8 w-8 p-0"
+              className="h-11 w-11 md:h-8 md:w-8 p-0"
             >
               <ChevronRight className="h-4 w-4" />
             </Button>

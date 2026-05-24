@@ -336,14 +336,27 @@ function ComboboxVariant({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[420px] p-0" align="start">
+      {/* Mobile: fit viewport (avoid 420px overflow on 375px screens).
+          Desktop (sm+): keep the 420px design width. */}
+      <PopoverContent className="w-[calc(100vw-2rem)] max-w-[420px] sm:w-[420px] p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput
             placeholder="Tìm kiếm ngành, loại hình..."
             value={searchQuery}
             onValueChange={setSearchQuery}
           />
-          <div className="max-h-[350px] overflow-y-auto">
+          {/* onTouchMove/onWheel stopPropagation: when this combobox renders
+              inside a Radix Dialog (e.g. LeadDialog), the Dialog's
+              react-remove-scroll attaches a bubble-phase document touchmove
+              listener that preventDefault()s scroll on this portaled popover
+              (it lives outside the dialog's scroll-lock shard). Stopping
+              propagation here keeps the event from reaching that listener so
+              native touch scroll works on mobile. Verified @375px. */}
+          <div
+            className="max-h-[350px] overflow-y-auto overscroll-contain"
+            onTouchMove={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
             <CommandEmpty>Không tìm thấy chương trình nào.</CommandEmpty>
             {allowAll && (
               <CommandGroup>

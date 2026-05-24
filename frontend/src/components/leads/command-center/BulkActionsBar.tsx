@@ -58,7 +58,8 @@ export function BulkActionsBar({
         "fixed bottom-6 left-1/2 z-50 -translate-x-1/2",
         "animate-in slide-in-from-bottom-4 fade-in-0 duration-200",
         "bg-background/95 supports-[backdrop-filter]:bg-background/80 backdrop-blur",
-        "flex items-center gap-3 rounded-lg border px-4 py-3 shadow-lg"
+        "flex flex-wrap items-center justify-center gap-3 rounded-lg border px-4 py-3 shadow-lg",
+        "max-w-[calc(100vw-1rem)]"
       )}
     >
       {/* Selection count */}
@@ -71,7 +72,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={onClearSelection}
-          className="h-6 w-6 p-0"
+          className="h-11 w-11 sm:h-6 sm:w-6 p-0"
           aria-label="Bỏ chọn tất cả"
         >
           <X className="h-4 w-4" />
@@ -87,7 +88,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkAssign(selectedLeads)}
-          className="h-8 gap-1.5"
+          className="h-11 sm:h-8 gap-1.5"
         >
           <UserPlus className="h-4 w-4" />
           Gán cán bộ
@@ -96,7 +97,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkChangeStage(selectedLeads)}
-          className="h-8 gap-1.5"
+          className="h-11 sm:h-8 gap-1.5"
         >
           <Layers className="h-4 w-4" />
           Đổi giai đoạn
@@ -105,7 +106,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkExport(selectedLeads)}
-          className="h-8 gap-1.5"
+          className="h-11 sm:h-8 gap-1.5"
         >
           <Download className="h-4 w-4" />
           Xuất
@@ -114,7 +115,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkDelete(selectedLeads)}
-          className="h-8 gap-1.5 text-error-600 hover:text-error-700"
+          className="h-11 sm:h-8 gap-1.5 text-error-600 hover:text-error-700"
         >
           <Trash2 className="h-4 w-4" />
           Xóa

@@ -284,7 +284,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 w-6 p-0 text-muted-foreground hover:text-muted-foreground shrink-0"
+                  className="h-11 w-11 sm:h-6 sm:w-6 p-0 text-muted-foreground hover:text-muted-foreground shrink-0"
                   onClick={() => handleCopyPhone(lead.phone)}
                   aria-label={phoneCopied ? "Đã sao chép" : "Sao chép số điện thoại"}
                 >

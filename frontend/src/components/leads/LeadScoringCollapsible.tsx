@@ -49,7 +49,7 @@ function ScoreBadge({
         <Icon className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0">
-        <p className="text-[10px] text-muted-foreground uppercase tracking-wide truncate">
+        <p className="text-xs text-muted-foreground uppercase tracking-wide truncate">
           {label}
         </p>
         <p className={cn("text-sm font-bold", isNull ? "text-muted-foreground" : colorClass.split(" ")[0])}>
@@ -101,7 +101,7 @@ export function LeadScoringCollapsible({
             >
               <TrendingUp className="h-3 w-3" />
               {overallScore}
-              <span className="text-[10px] font-normal opacity-80">
+              <span className="text-xs font-normal opacity-80">
                 ({getLeadScoreLabelShort(overallScore)})
               </span>
             </div>

@@ -362,30 +362,36 @@ function ComboboxVariant({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[350px] p-0" align="start">
+      <PopoverContent className="w-[calc(100vw-2rem)] max-w-[350px] sm:w-[350px] p-0" align="start">
         <Command>
           <CommandInput placeholder="Tim kiem trang thai..." />
           <CommandEmpty>Khong tim thay trang thai nao.</CommandEmpty>
-          {Array.from(groupedStatuses.entries()).map(([stageName, stageStatuses]) => (
-            <CommandGroup key={stageName} heading={stageName}>
-              {stageStatuses.map((status) => (
-                <CommandItem
-                  key={status.id}
-                  value={`${status.name} ${status.stageName}`}
-                  onSelect={() => {
-                    onChange(status.id);
-                    setOpen(false);
-                  }}
-                >
-                  <StatusItem
-                    status={status}
-                    showOutcomeType={showOutcomeType}
-                    isSelected={value === status.id}
-                  />
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          ))}
+          <div
+            className="max-h-[300px] overflow-y-auto overscroll-contain"
+            onTouchMove={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            {Array.from(groupedStatuses.entries()).map(([stageName, stageStatuses]) => (
+              <CommandGroup key={stageName} heading={stageName}>
+                {stageStatuses.map((status) => (
+                  <CommandItem
+                    key={status.id}
+                    value={`${status.name} ${status.stageName}`}
+                    onSelect={() => {
+                      onChange(status.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <StatusItem
+                      status={status}
+                      showOutcomeType={showOutcomeType}
+                      isSelected={value === status.id}
+                    />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </div>
         </Command>
       </PopoverContent>
     </Popover>

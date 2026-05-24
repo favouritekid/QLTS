@@ -443,7 +443,7 @@ export function QuickConsultationSectionV2({
     const isPending = pendingStatus?.id === status.id;
 
     const base =
-      "relative flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors";
+      "relative flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors min-h-11 sm:min-h-0";
 
     if (isPending) {
       return cn(base, "ring-2 ring-primary ring-offset-1 scale-[1.02]", getOutcomeBg(status.outcome_type));
@@ -557,7 +557,7 @@ export function QuickConsultationSectionV2({
             </span>
           </div>
           {lead.pipeline_stage && (
-            <Badge variant="outline" className="ml-auto text-[10px] font-normal">
+            <Badge variant="outline" className="ml-auto text-xs font-normal">
               {lead.pipeline_stage.name}
             </Badge>
           )}
@@ -579,7 +579,7 @@ export function QuickConsultationSectionV2({
           onValueChange={(value) =>
             value && setMethod(value as ConsultationMethod)
           }
-          className="flex justify-start gap-1"
+          className="flex flex-wrap justify-start gap-1"
         >
           {methodOptions.map((opt) => {
             const Icon = opt.icon;
@@ -589,7 +589,7 @@ export function QuickConsultationSectionV2({
                 value={opt.value}
                 size="sm"
                 className={cn(
-                  "h-8 gap-1.5 px-2.5 text-xs",
+                  "h-11 sm:h-8 gap-1.5 px-2.5 text-xs",
                   "data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                 )}
               >
@@ -615,7 +615,7 @@ export function QuickConsultationSectionV2({
         <div>
           <button
             type="button"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors min-h-11 sm:min-h-0 py-2 sm:py-0"
             onClick={() => setScheduleOpen((prev) => !prev)}
           >
             <CalendarClock className="h-3.5 w-3.5" />
@@ -627,7 +627,7 @@ export function QuickConsultationSectionV2({
               )}
             />
             {scheduleOption !== "none" && !scheduleOpen && (
-              <Badge variant="secondary" className="ml-1 h-4 px-1.5 text-[10px]">
+              <Badge variant="secondary" className="ml-1 h-4 px-1.5 text-xs">
                 {getSchedulePreviewText(scheduleOption, customDateTime)}
               </Badge>
             )}
@@ -649,35 +649,35 @@ export function QuickConsultationSectionV2({
                 <ToggleGroupItem
                   value="none"
                   size="sm"
-                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-11 sm:h-7 px-2.5 text-xs"
                 >
                   Không
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="30m"
                   size="sm"
-                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-11 sm:h-7 px-2.5 text-xs"
                 >
                   30p
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="1h"
                   size="sm"
-                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-11 sm:h-7 px-2.5 text-xs"
                 >
                   1h
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="tomorrow"
                   size="sm"
-                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-11 sm:h-7 px-2.5 text-xs"
                 >
                   Ngày mai
                 </ToggleGroupItem>
                 <ToggleGroupItem
                   value="custom"
                   size="sm"
-                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+                  className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-11 sm:h-7 px-2.5 text-xs"
                 >
                   <CalendarClock className="mr-1 h-3 w-3" />
                   Tùy chọn
@@ -691,7 +691,7 @@ export function QuickConsultationSectionV2({
                     onChange={(date) => setCustomDateTime(date)}
                     placeholder="Chọn ngày giờ"
                     minDate={new Date()}
-                    className="h-8 text-xs"
+                    className="h-11 sm:h-8 text-xs"
                     open={isDatePickerOpen}
                     onOpenChange={setIsDatePickerOpen}
                     hideTrigger
@@ -721,7 +721,7 @@ export function QuickConsultationSectionV2({
             Bước 2: Kết quả tư vấn
           </Label>
           {!pendingStatus && (
-            <span className="text-[11px] text-amber-600">
+            <span className="text-xs text-amber-600">
               Chọn một kết quả bên dưới để lưu
             </span>
           )}
@@ -730,7 +730,7 @@ export function QuickConsultationSectionV2({
         {/* ── Không liên hệ được ── */}
         {groupedStatuses.universal.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Không liên hệ được
             </Label>
             <div className="flex flex-wrap gap-1.5">
@@ -739,7 +739,7 @@ export function QuickConsultationSectionV2({
                   key={status.id}
                   type="button"
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100",
+                    "flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 min-h-11 sm:min-h-0",
                     pendingStatus?.id === status.id &&
                       "ring-2 ring-primary ring-offset-1"
                   )}
@@ -762,7 +762,7 @@ export function QuickConsultationSectionV2({
         {/* ── Liên hệ được ── */}
         {groupedStatuses.sameStage.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Liên hệ được
             </Label>
             {renderStatusGrid(groupedStatuses.sameStage, "same")}
@@ -772,7 +772,7 @@ export function QuickConsultationSectionV2({
         {/* Next stage */}
         {groupedStatuses.nextStage.length > 0 && (
           <div className="space-y-1.5">
-            <Label className="text-muted-foreground text-[11px]">
+            <Label className="text-muted-foreground text-xs">
               Tiến tới →
             </Label>
             {renderStatusGrid(groupedStatuses.nextStage, "next")}
@@ -784,7 +784,7 @@ export function QuickConsultationSectionV2({
           <div>
             <button
               type="button"
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors min-h-11 sm:min-h-0 py-2 sm:py-0"
               onClick={() => setShowPreviousStage((prev) => !prev)}
             >
               <ChevronDown
@@ -843,7 +843,7 @@ export function QuickConsultationSectionV2({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="h-11 sm:h-7 px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
                   onClick={cancelPending}
                 >
                   Hoàn tác
@@ -852,7 +852,7 @@ export function QuickConsultationSectionV2({
                   type="button"
                   variant="default"
                   size="sm"
-                  className="h-7 px-3 text-xs"
+                  className="h-11 sm:h-7 px-3 text-xs"
                   onClick={() => commitSave(pendingStatus)}
                   disabled={addConsultation.isPending}
                   title="Ctrl+Enter để lưu nhanh"

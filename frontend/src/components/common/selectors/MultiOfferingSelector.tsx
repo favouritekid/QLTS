@@ -206,17 +206,17 @@ export function MultiOfferingSelector({
     <div className={cn("space-y-2", className)}>
       {/* Search Input */}
       <div className="relative">
-        <Search className="text-muted-foreground absolute top-2 left-2 h-4 w-4" />
+        <Search className="text-muted-foreground absolute top-1/2 left-2 h-4 w-4 -translate-y-1/2" />
         <Input
           placeholder="Tìm chương trình..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="h-8 pl-8 pr-8 text-sm"
+          className="h-11 sm:h-8 pl-8 pr-8 text-base sm:text-sm"
         />
         {searchQuery && (
           <button
             onClick={() => setSearchQuery("")}
-            className="text-muted-foreground hover:text-foreground absolute top-2 right-2"
+            className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 -translate-y-1/2 flex h-9 w-9 items-center justify-center sm:right-2 sm:h-auto sm:w-auto"
           >
             <X className="h-4 w-4" />
           </button>
@@ -236,7 +236,7 @@ export function MultiOfferingSelector({
               <button
                 type="button"
                 onClick={() => toggleGroup(degreeLevel)}
-                className="hover:bg-muted/50 flex w-full items-center justify-between px-2 py-1.5 text-left transition-colors"
+                className="hover:bg-muted/50 flex min-h-11 sm:min-h-0 w-full items-center justify-between px-2 py-1.5 text-left transition-colors"
               >
                 <div className="flex items-center gap-1.5">
                   {isCollapsed ? (
@@ -248,11 +248,11 @@ export function MultiOfferingSelector({
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedCount > 0 && (
-                    <span className="bg-primary text-primary-foreground rounded-full px-1.5 py-0.5 text-[10px]">
+                    <span className="bg-primary text-primary-foreground rounded-full px-1.5 py-0.5 text-xs">
                       {selectedCount}
                     </span>
                   )}
-                  <span className="text-muted-foreground text-[10px]">
+                  <span className="text-muted-foreground text-xs">
                     {levelOfferings.length}
                   </span>
                 </div>

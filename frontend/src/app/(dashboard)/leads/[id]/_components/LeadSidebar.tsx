@@ -218,7 +218,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 px-2 text-xs text-info-600 hover:bg-info-50"
+            className="h-11 sm:h-6 px-2 text-xs text-info-600 hover:bg-info-50"
             onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
           >
             Gọi
@@ -318,20 +318,20 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
           <div className="bg-background rounded-md p-2 border">
             <div className="flex items-center gap-1 text-muted-foreground mb-0.5">
               <Clock className="h-3 w-3" />
-              <span className="text-[10px]">Trong pipeline</span>
+              <span className="text-xs">Trong pipeline</span>
             </div>
             <div className="font-semibold text-sm" suppressHydrationWarning>{daysInPipeline ?? "..."} ngày</div>
           </div>
           <div className="bg-background rounded-md p-2 border">
             <div className="flex items-center gap-1 text-muted-foreground mb-0.5">
               <History className="h-3 w-3" />
-              <span className="text-[10px]">Số lần tư vấn</span>
+              <span className="text-xs">Số lần tư vấn</span>
             </div>
             <div className="font-semibold text-sm">{lead.consultation_count}</div>
           </div>
         </div>
 
-        <div className="text-[10px] text-muted-foreground flex items-center gap-1 pt-1" suppressHydrationWarning>
+        <div className="text-xs text-muted-foreground flex items-center gap-1 pt-1" suppressHydrationWarning>
           <Calendar className="h-3 w-3" />
           Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
         </div>

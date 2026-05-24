@@ -161,7 +161,7 @@ export function InsightsHelperDrawer({ trigger }: InsightsHelperDrawerProps) {
           </Button>
         )}
       </SheetTrigger>
-      <SheetContent side="right" className="w-[420px] sm:w-[520px] overflow-y-auto">
+      <SheetContent side="right" className="w-[calc(100vw-1rem)] sm:w-[520px] overflow-y-auto">
         <SheetHeader className="mb-6">
           <SheetTitle className="flex items-center gap-2 text-lg">
             <HelpCircle aria-hidden="true" className="h-5 w-5 text-primary" />
