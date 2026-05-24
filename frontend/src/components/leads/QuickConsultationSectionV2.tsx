@@ -579,7 +579,7 @@ export function QuickConsultationSectionV2({
           onValueChange={(value) =>
             value && setMethod(value as ConsultationMethod)
           }
-          className="flex justify-start gap-1"
+          className="flex flex-wrap justify-start gap-1"
         >
           {methodOptions.map((opt) => {
             const Icon = opt.icon;
