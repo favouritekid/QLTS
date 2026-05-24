@@ -16,6 +16,8 @@ import { feesKeys } from "@/hooks/finance/useFees";
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
 import { pipelineKeys } from "@/hooks/usePipeline";
 import { isSafeUrl } from "@/lib/utils";
+import { bumpSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
+import type { SuspiciousLoginSocketPayload } from "@/types/api.types";
 
 // =============================================================================
 // DEBOUNCED INVALIDATION HELPER
@@ -1210,10 +1212,39 @@ export function SocketHandler() {
     // Login notification is now included in login API response and handled by useAuth.ts
     // See: useAuth.ts onSuccess handler
 
+    // Option-B Commit 8 — real-time SUSPICIOUS_LOGIN banner bump.
+    // BE (Commit 7) emits ``suspicious_login`` ONLY to the actor's
+    // ``user_room_<uid>`` and ONLY if they passed the security/browser
+    // preference filter — so by the time this fires, the user is
+    // already eligible. We:
+    //   1. bump the banner count by 1 (incremental — payload is one event)
+    //   2. debounce-invalidate the loginHistory query so /settings/security
+    //      reconciles the authoritative count + row on next view
+    // We deliberately DO NOT show a toast here: the same event also
+    // arrives via the ``notification`` channel handler (which already
+    // renders the toast after full preference filtering). Toasting here
+    // too would double-fire and could bypass the notification-level
+    // preference. Banner bump is the only FE-owned reaction.
+    const handleSuspiciousLogin = (data: SuspiciousLoginSocketPayload) => {
+      if (debugSocketPayload) {
+        console.log("[SocketHandler] Received suspicious_login event:", data);
+      } else {
+        console.log(
+          `[SocketHandler] suspicious_login (login_history_id=${data?.login_history_id})`,
+        );
+      }
+      bumpSuspiciousLoginBanner();
+      // No dedicated debounce bucket for login history — invalidate
+      // directly; this event is rare (one per anomalous login) so a
+      // single immediate invalidate won't cause a refetch storm.
+      queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
     socket.on("notification", handleNewNotification);
+    socket.on("suspicious_login", handleSuspiciousLogin);
     socket.on("data_updated", handleDataUpdated);
     socket.on("lead_assigned", handleLeadAssigned);
     socket.on("lead_created", handleLeadCreated);
@@ -1300,6 +1331,7 @@ export function SocketHandler() {
       socket.off("force_logout_batch", handleForceLogoutBatch);
       socket.off("force_logout_all", handleForceLogoutAll);
       socket.off("notification", handleNewNotification);
+      socket.off("suspicious_login", handleSuspiciousLogin);
       socket.off("data_updated", handleDataUpdated);
       socket.off("lead_assigned", handleLeadAssigned);
       socket.off("lead_created", handleLeadCreated);
