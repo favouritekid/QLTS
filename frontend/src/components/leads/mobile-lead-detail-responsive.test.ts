@@ -29,6 +29,17 @@ const offering = read("../common/selectors/SmartOfferingSelector.tsx");
 const unit = read("../common/selectors/SmartUnitSelector.tsx");
 const sheet = read("../ui/sheet.tsx");
 
+// Round 2 — lead-list + direct-detail audit (#7-#9)
+const leadsClient = read("../../app/(dashboard)/leads/_components/LeadsClient.tsx");
+const insightsDrawer = read("./InsightsHelperDrawer.tsx");
+const statusSelector = read("../common/selectors/SmartConsultationStatusSelector.tsx");
+const bulkBar = read("./command-center/BulkActionsBar.tsx");
+const filterBar = read("./command-center/LeadFilterBar.tsx");
+const mobileCard = read("./command-center/MobileLeadCard.tsx");
+const detailClient = read("../../app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx");
+const infoTabs = read("../../app/(dashboard)/leads/[id]/_components/LeadInfoTabs.tsx");
+const sidebar = read("../../app/(dashboard)/leads/[id]/_components/LeadSidebar.tsx");
+
 describe("Bug #2 — consultation method toggle wraps on mobile", () => {
   it("method ToggleGroup uses flex-wrap (no horizontal overflow @375px)", () => {
     // The method selector row must wrap; pre-fix it was `flex justify-start
@@ -74,5 +85,62 @@ describe("Touch targets — 44px on mobile, compact on desktop", () => {
     expect(v2).toMatch(/h-11 sm:h-8/);     // method chips
     expect(v2).toMatch(/h-11 sm:h-7/);     // outcome chips
     expect(v2).toMatch(/min-h-11 sm:min-h-0/); // status pills / disclosure
+  });
+});
+
+describe("Round 2 #7 — drawer / popover width overflow @375px", () => {
+  it("LeadsClient mobile detail Sheet uses viewport-relative width", () => {
+    expect(leadsClient).toMatch(/w-\[calc\(100vw-1rem\)\] sm:w-\[400px\]/);
+    expect(leadsClient).not.toMatch(/w-\[85vw\] sm:w-\[400px\]/); // old 318px clip
+  });
+
+  it("InsightsHelperDrawer base width no longer fixed 420px", () => {
+    expect(insightsDrawer).toMatch(/w-\[calc\(100vw-1rem\)\] sm:w-\[520px\]/);
+    expect(insightsDrawer).not.toMatch(/w-\[420px\] sm:w-\[520px\]/);
+  });
+
+  it("SmartConsultationStatusSelector: responsive width + touch-scroll shim", () => {
+    // parity with Offering/Unit — defeats Dialog react-remove-scroll touch-lock
+    expect(statusSelector).toMatch(/w-\[calc\(100vw-2rem\)\][^"]*sm:w-\[350px\]/);
+    expect(statusSelector).not.toMatch(/className="w-\[350px\] p-0"/);
+    expect(statusSelector).toMatch(/onTouchMove=\{\(e\)\s*=>\s*e\.stopPropagation\(\)\}/);
+    expect(statusSelector).toContain("overscroll-contain");
+  });
+});
+
+describe("Round 2 #8 — command-center touch targets + bulk-bar overflow", () => {
+  it("BulkActionsBar wraps + caps width + 44px targets", () => {
+    expect(bulkBar).toContain("flex-wrap");
+    expect(bulkBar).toMatch(/max-w-\[calc\(100vw-1rem\)\]/);
+    expect(bulkBar).toMatch(/h-11 sm:h-8/);             // 4 action buttons
+    expect(bulkBar).toMatch(/h-11 w-11 sm:h-6 sm:w-6/); // clear button
+  });
+
+  it("LeadFilterBar bumps trigger + officer inputs + collapse pills", () => {
+    expect(filterBar).toMatch(/h-11 md:h-8/);                      // filter trigger
+    expect(filterBar).toMatch(/h-11 text-base sm:h-7 sm:text-xs/); // officer search (text-base = no iOS zoom)
+    expect(filterBar).toMatch(/h-9 sm:h-6 cursor-pointer/);        // +X-more / Thu-gon
+    expect(filterBar).not.toMatch(/"h-9 md:h-8 gap-1/);            // old trigger gone
+  });
+
+  it("MobileLeadCard action button 44px + labelled", () => {
+    expect(mobileCard).toMatch(/h-11 w-11/);
+    expect(mobileCard).toMatch(/aria-label="Mở menu hành động"/);
+    expect(mobileCard).not.toMatch(/className="h-10 w-10"/);
+  });
+});
+
+describe("Round 2 #9 — direct /leads/[id] detail", () => {
+  it("LeadDetailClient copy-phone is 44px on mobile", () => {
+    expect(detailClient).toMatch(/h-11 w-11 sm:h-6 sm:w-6/);
+  });
+
+  it("LeadInfoTabs assign button 44px on mobile", () => {
+    expect(infoTabs).toMatch(/h-11 sm:h-7 text-xs/);
+  });
+
+  it("LeadSidebar call button 44px + stats off micro-px token", () => {
+    expect(sidebar).toMatch(/h-11 sm:h-6 px-2 text-xs/);
+    expect(sidebar).not.toMatch(/text-\[10px\]/); // normalized to text-xs token
   });
 });
