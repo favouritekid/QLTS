@@ -28,20 +28,34 @@ name: Backend Test (PR Gate)
 # Trigger: ANY change under Backend_FastAPI/** — including tests/. No
 # path-filter loophole.
 #
-# Performance budget: <8 phút median.
+# Performance budget: <10 phút median.
 #
-# Test composition (2026-05-14 audit, S2 hardening item #5):
-# the original "full pytest" approach hung indefinitely on 3 consecutive
-# runs (25844187752, 25845356360, 25846362694) — root cause traced to
-# pre-existing test-debt deadlocks in ``test_admission_workflow_e2e.py``
-# (memory ``test-debt-admission-workflow-e2e``) and slow heavy-fixture
-# integration sweeps. Until the test-debt PR lands, this gate runs an
-# explicit allowlist of CRITICAL production-safety tests:
+# DESIGN — BOUNDED RISK GATE (PR-1.6, 2026-05-24):
+# This is a SOLO-DEV velocity-optimized PR gate. It is intentionally
+# scoped to system-breaking risk paths, NOT 100% pytest coverage. The
+# full backend suite lives in ``nightly-backend-pytest.yml`` (schedule +
+# workflow_dispatch) — required for pre-release runs, NOT required as
+# a per-PR gate. Memory ``ci-pytest-selective-allowlist-pattern`` +
+# ``solo-dev-batch-prs-to-reduce-ci-overhead``: per-PR CI overhead at
+# 30-60 phút × N PR-a-week is the actual cost driver for a solo dev;
+# a bounded curated gate that catches release-blockers in <10 phút is
+# the right trade-off vs an exhaustive 25-30 phút full suite per PR.
+#
+# Per-test ``--timeout=60`` (pytest-timeout, added in prior commit)
+# guards each tier against a future regression that re-introduces a
+# hang — aborts the offending test cleanly, captures the rest of the
+# tier's signal, never times out the whole GitHub Actions job.
+#
+# Tier composition (curated for release-blocker coverage):
 #
 #   Tier 1: Phase 3 multi-NV core (choice schema, state machine, engine,
 #           CRUD, magic-link consume) — Wave A/B acceptance gates
 #   Tier 2: RBAC + CCCD lock + CSRF (Casbin matrix, confirm lock ladder,
-#           CSRF exempt prefix, XFF helper)
+#           CSRF exempt prefix, XFF helper) — EXPANDED 2026-05-24 to
+#           include permission_matrix + lead static-route collision +
+#           fee auth + diamond inheritance because PR #329 reconciled
+#           those risk surfaces and the gate must verify them on every
+#           PR going forward.
 #   Tier 3: Notification reliability (parity + dispatcher + bundle +
 #           outbox + event coverage)
 #   Tier 4: Admission + lead workflow contract (state machine, milestone
@@ -49,11 +63,16 @@ name: Backend Test (PR Gate)
 #   Tier 5: Phase 2 engine prereqs (3-tier resolution, quota chain,
 #           snapshot, UNIQUE constraints)
 #
-# Net coverage: ~310-360 tests across ~25 files, ~5-8 phút wall-clock on
-# pip cache hit. ~5× coverage vs the deploy.yml legacy 6-test subset.
-# Excluded categories: known-flaky e2e workflow, debug-only, Zalo, heavy
-# admission_workflow/calculation services. Restore full suite via
-# follow-up PR after test-debt resolution.
+# What this gate does NOT cover (intentional — moved to nightly):
+#   - Full backend tests/ (~1500+ tests, broad service/repo unit sweeps)
+#   - Playwright E2E
+#   - Heavy historical regression suites
+#   - debug-only modules (tests/integration/test_debug*.py)
+#   - Zalo external-dep tests
+#
+# When a new release-blocker test surface lands, ADD it to the right
+# tier here (not a separate workflow) so the per-PR gate stays the
+# canonical risk truth.
 
 on:
   pull_request:
@@ -154,10 +173,18 @@ jobs:
           tests/api/test_phase3_pr3e_magic_link.py
           tests/services/test_phase3_create_profile_inherits_multi_nv.py
           tests/unit/test_admission_path_service_field_drift.py
-          -q --tb=short
+          -q --tb=short --timeout=60
 
       # =====================================================================
       # Tier 2: RBAC + security + CCCD lock + CSRF
+      #
+      # PR-1.6 (2026-05-24) — added 4 surfaces that PR #329 reconciled and
+      # the prior allowlist did not execute (memory
+      # ``auto-merge-requires-full-ci-not-just-green`` flagged this gap):
+      #   * test_permissions_matrix.py — role/route assertion matrix
+      #   * test_casbin_lead_static_route_collision.py — keyMatch4 leak guard
+      #   * test_fees_calculate_authorization.py — officer scoped fee auth
+      #   * test_finance_api.py::TestDiamondInheritance — allow/deny semantics
       # =====================================================================
       - name: pytest — RBAC + security + CCCD lock
         working-directory: Backend_FastAPI
@@ -173,7 +200,11 @@ jobs:
           tests/unit/test_admission_confirmation_cooldown.py
           tests/unit/test_magic_link_rate_limit_key_hashing.py
           tests/api/test_admin_v2_admission_round_phase3_flags.py
-          -q --tb=short
+          tests/security/test_permissions_matrix.py
+          tests/integration/test_casbin_lead_static_route_collision.py
+          tests/api/test_fees_calculate_authorization.py
+          tests/api/test_finance_api.py::TestDiamondInheritance
+          -q --tb=short --timeout=60
 
       # =====================================================================
       # Tier 3: Notification reliability (legacy deploy.yml subset)
@@ -191,7 +222,7 @@ jobs:
           tests/unit/test_outbox_worker.py
           tests/unit/test_outbox_skeleton.py
           tests/unit/test_check_notification_event_coverage_deferred.py
-          -q --tb=short
+          -q --tb=short --timeout=60
 
       - name: pytest — Notification event coverage script
         working-directory: Backend_FastAPI
@@ -213,7 +244,7 @@ jobs:
           tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
           tests/unit/test_admission_state_machine.py
           tests/unit/test_b2_1_admission_milestone_events.py
-          -q --tb=short
+          -q --tb=short --timeout=60
 
       # =====================================================================
       # Tier 5: Phase 2 engine prereqs (Phase 3 builds laterally on these)
@@ -226,4 +257,4 @@ jobs:
           tests/unit/test_phase2_engine_quota_chain_v8.py
           tests/unit/test_phase2_engine_snapshot_integrity.py
           tests/unit/test_phase2_pr2c_three_col_unique.py
-          -q --tb=short
+          -q --tb=short --timeout=60

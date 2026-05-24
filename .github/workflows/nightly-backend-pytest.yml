@@ -1,0 +1,118 @@
+name: Nightly Backend Pytest
+
+# PR-1.6 (2026-05-24) — Full BACKEND pytest suite as nightly + manual,
+# NOT a required PR gate. Distinct from ``nightly-regression.yml`` which
+# runs Playwright E2E (frontend integration) at a different cron slot;
+# this workflow covers the backend pytest layer only.
+#
+# The per-PR gate (``backend-test.yml``) is intentionally a bounded
+# curated risk gate optimised for solo-dev velocity (memory
+# ``solo-dev-batch-prs-to-reduce-ci-overhead`` — 30-60 phút CI overhead
+# per PR is the real cost driver). This nightly workflow runs the FULL
+# backend suite so broad service/repo/unit drift surfaces every day
+# instead of waiting for a release-prep moment, without blocking any
+# PR's merge time.
+#
+# Triggers:
+#   schedule: 18:00 UTC daily (= 01:00 ICT next-day, off-hours for dev)
+#   workflow_dispatch: manual run for pre-release verification
+#
+# Failure mode: GitHub Actions email/UI notification. NOT a PR gate, so
+# a red nightly does NOT block ongoing PRs — it surfaces drift to the
+# solo dev for the next morning's triage.
+#
+# Cross-file sync (memory ``ci-workflow-flag-cross-file-sync``):
+#   python-version, cache, postgres + redis services, env vars all
+#   mirror ``backend-test.yml`` so the nightly's environment matches
+#   what the PR gate verifies (no env drift = no false nightly red).
+
+on:
+  schedule:
+    # 18:00 UTC daily. Cron is in UTC; this lands ~01:00 ICT = pre-dawn
+    # local, so the result is in the inbox by morning standup.
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+    # Manual trigger for pre-release runs ("ship Phase 4? run nightly
+    # first") or when investigating a suspected drift surface.
+
+concurrency:
+  # Multiple workflow_dispatch back-to-back collapse to the latest. The
+  # scheduled cron rarely overlaps with a manual run; if they do, the
+  # manual run wins (newer SHA / more intent).
+  group: nightly-backend-pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest-full:
+    name: pytest (full suite)
+    runs-on: ubuntu-latest
+    # Wall-clock ceiling — full suite at QLTS scale runs ~30-60 phút
+    # under sequential execution. 90 minutes covers worst-case slow
+    # fixture chains + leaves margin without burning a full job hour.
+    timeout-minutes: 90
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
+      MAIL_USERNAME: ci-test@example.com
+      MAIL_PASSWORD: ci-test-placeholder
+      MAIL_FROM: ci-test@example.com
+      MAIL_SERVER: smtp.example.com
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: Backend_FastAPI/requirements-dev.txt
+
+      - name: Install backend dependencies (dev)
+        working-directory: Backend_FastAPI
+        run: pip install -r requirements-dev.txt
+
+      # Full backend pytest suite. ``--timeout=60`` (pytest-timeout) aborts
+      # any single test that hangs — without this, a future regression
+      # that re-introduces a deadlock would consume the full 90-min job
+      # ceiling and lose all log context. ``--ignore-glob`` excludes the
+      # debug-only modules under ``tests/integration/test_debug*.py``
+      # (interactive Casbin/role investigation tools, ``print``-driven —
+      # they collect under the default ``test_*.py`` pattern but contribute
+      # zero gate value).
+      - name: pytest — full suite
+        working-directory: Backend_FastAPI
+        run: >-
+          python -m pytest tests/
+          -q --tb=short
+          --timeout=60
+          --ignore-glob='tests/integration/test_debug*.py'
