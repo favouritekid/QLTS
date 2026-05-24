@@ -859,13 +859,20 @@ class TestDiamondInheritance:
 
         manager_actions = [(p["object"], p["action"]) for p in MANAGER_TEMPLATE["policies"]]
 
-        # Manager should NOT have these accountant-specific operations
+        # Manager should NOT have these accountant-specific operations.
+        # PR-1.5 Commit 3 (2026-05-24) — refund routes dropped from the
+        # list: ``/api/refunds*`` was intentionally removed from
+        # ACCOUNTANT_TEMPLATE on 2026-05-16 (policy_templates.py:352-355
+        # comment) — the refunds router does not exist (``/api/refunds``
+        # live probe returns 404) and ``REFUND_PROCESSED`` is tagged
+        # ``internal_future`` per memory ``finance-event-decisions``. The
+        # routes are no longer accountant-specific live permissions, so
+        # asserting manager doesn't have them is meaningless until the
+        # refunds module is re-introduced.
         accountant_only_permissions = [
             ("/api/payments", "POST"),              # Record payment
             ("/api/fees/calculate", "POST"),        # Calculate fee
             ("/api/invoices/{id}/issue", "PUT"),    # Issue invoice
-            ("/api/refunds/request", "POST"),       # Request refund
-            ("/api/refunds/{id}/process", "PUT"),   # Process refund
         ]
 
         for obj, action in accountant_only_permissions:
@@ -876,12 +883,30 @@ class TestDiamondInheritance:
         """
         Accountant should NOT have manager-specific user management permissions.
         These are defined in MANAGER_TEMPLATE only.
+
+        PR-1.5 Commit 3 (2026-05-24) — allow-only filter on the policy
+        enumeration. ACCOUNTANT_TEMPLATE since the B1 deny-first design
+        carries explicit ``eft="deny"`` rows for lead-management routes
+        (``/api/leads/bulk-assign``, ``/api/leads/bulk-delete``,
+        ``/api/leads/distribution-preview``) so accountant inherits
+        officer but is denied those routes at enforce time. The naive
+        ``(obj, action) for p in policies`` enumeration treated those
+        deny rows as grants and flipped the test result. The correct
+        semantic is "what does the accountant role get GRANTED" —
+        filter ``eft == "allow"``. Memory:
+        ``casbin-deny-parent-role-propagates-to-children``.
         """
         from app.casbin_config.policy_templates import ACCOUNTANT_TEMPLATE
 
-        accountant_actions = [(p["object"], p["action"]) for p in ACCOUNTANT_TEMPLATE["policies"]]
+        accountant_grants = [
+            (p["object"], p["action"])
+            for p in ACCOUNTANT_TEMPLATE["policies"]
+            if p.get("eft", "allow") == "allow"
+        ]
 
-        # Accountant should NOT have these manager-specific operations
+        # Accountant should NOT be GRANTED these manager-specific operations.
+        # A deny row on the same (object, action) is the intended outcome,
+        # not a grant — filter above ignores deny rows.
         manager_only_permissions = [
             ("/api/admin/users", ".*"),                    # User management
             ("/api/leads/bulk-assign", "POST"),            # Bulk assign leads
@@ -891,8 +916,8 @@ class TestDiamondInheritance:
         ]
 
         for obj, action in manager_only_permissions:
-            assert (obj, action) not in accountant_actions, \
-                f"Accountant should NOT have {action} {obj} (manager-only operation)"
+            assert (obj, action) not in accountant_grants, \
+                f"Accountant should NOT have {action} {obj} granted (manager-only operation)"
 
     def test_role_priority_reflects_diamond_structure(self):
         """Verify ROLE_PRIORITY correctly handles diamond inheritance."""
@@ -943,14 +968,29 @@ class TestDiamondInheritance:
     def test_separation_of_duties_summary(self):
         """
         Summary test: Verify complete separation between Manager and Accountant.
+
+        PR-1.5 Commit 3 (2026-05-24) — allow-only filter, same reasoning
+        as ``test_accountant_does_not_have_user_management``. The naive
+        ``{p["object"] for p in policies}`` enumeration counted explicit
+        deny rows as "objects the role has access to", which is the
+        opposite of what the assertion wants. Filter ``eft == "allow"``
+        so the object set reflects actual grants only.
         """
         from app.casbin_config.policy_templates import (
             MANAGER_TEMPLATE,
             ACCOUNTANT_TEMPLATE,
         )
 
-        manager_objects = {p["object"] for p in MANAGER_TEMPLATE["policies"]}
-        accountant_objects = {p["object"] for p in ACCOUNTANT_TEMPLATE["policies"]}
+        manager_objects = {
+            p["object"]
+            for p in MANAGER_TEMPLATE["policies"]
+            if p.get("eft", "allow") == "allow"
+        }
+        accountant_objects = {
+            p["object"]
+            for p in ACCOUNTANT_TEMPLATE["policies"]
+            if p.get("eft", "allow") == "allow"
+        }
 
         # Manager-exclusive objects (user management, admission workflow)
         manager_exclusive = {
@@ -964,17 +1004,19 @@ class TestDiamondInheritance:
             "/api/admission-config/paths/{path_id}",
         }
 
-        # Accountant-exclusive objects (finance operations)
+        # Accountant-exclusive objects (finance operations).
+        # PR-1.5 Commit 3 (2026-05-24) — refund routes dropped (intentionally
+        # removed from ACCOUNTANT_TEMPLATE on 2026-05-16 per
+        # ``policy_templates.py:352-355``; live probe ``/api/refunds`` → 404;
+        # memory ``finance-event-decisions`` tags ``REFUND_PROCESSED`` as
+        # ``internal_future``). Re-add when the refunds router ships.
         accountant_exclusive = {
             "/api/fees/calculate",
             "/api/invoices/{id}/issue",
-            "/api/refunds",
-            "/api/refunds/{id}",
-            "/api/refunds/request",
-            "/api/refunds/{id}/process",
         }
 
-        # Verify separation
+        # Verify separation — both sides intersect only the GRANT sets,
+        # never the deny-row presence.
         for obj in manager_exclusive:
             assert obj in manager_objects, f"Manager should have access to {obj}"
             assert obj not in accountant_objects, f"Accountant should NOT have access to {obj}"
