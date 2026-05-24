@@ -161,6 +161,32 @@ docker compose exec backend pytest -m unit                             # By mark
 docker compose exec backend pytest -m security
 ```
 
+**Heavy / destructive backend pytest suites — use a throwaway container.**
+``docker compose exec backend`` is fine for one-off, low-RAM unit tests, but for
+suites that DROP/CREATE the ``qlts_test`` schema or fan out many fixture chains
+(Casbin matrix, permission_matrix, fee auth, full Tier 2+), run them in a
+one-off backend container instead. The live ``qlts-backend-1`` (uvicorn
+``--reload``, celery sidecars, connection pool churn) contaminates the
+``qlts_test`` lifecycle and surfaces non-deterministic deadlocks / UNIQUE
+races that vanish in CI (which uses a fresh runner per job).
+
+```bash
+# Stop the live dev backend + celery while pytest runs against qlts_test
+docker compose stop backend celery-worker celery-beat
+
+# Run pytest in a fresh, throwaway backend container
+docker compose run --rm --no-deps backend bash -c "\
+  pip install -r requirements-dev.txt -q && \
+  python -m pytest <tests> -q --tb=short"
+
+# Restore normal dev services after the run
+docker compose start backend celery-worker celery-beat
+```
+
+Reference: memory ``local-test-oneoff-container-pattern``. Same principle as
+the frontend ``scripts/fe-check.sh`` wrapper (memory
+``type-check-container-isolation``).
+
 ### Backend Other
 
 ```bash

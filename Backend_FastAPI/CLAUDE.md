@@ -158,6 +158,26 @@ docker compose exec backend python -m pytest tests/api/test_leads.py::test_creat
 - NEVER add test deps to `requirements.txt` -- production image must stay clean
 - After `docker compose down && up`, reinstall test deps
 
+### Heavy / destructive suites — throwaway container required
+
+`docker compose exec backend python -m pytest ...` is fine for one-off
+low-RAM unit tests, BUT for suites that DROP/CREATE the `qlts_test` schema
+or fan out many fixture chains (Casbin matrix, permission_matrix, fee auth,
+full Tier 2+), the live `qlts-backend-1` (uvicorn `--reload` + celery +
+shared connection pool) contaminates the test lifecycle and surfaces
+non-deterministic deadlocks / UNIQUE races that vanish in CI.
+
+```bash
+docker compose stop backend celery-worker celery-beat
+docker compose run --rm --no-deps backend bash -c "\
+  pip install -r requirements-dev.txt -q && \
+  python -m pytest <tests> -q --tb=short"
+docker compose start backend celery-worker celery-beat
+```
+
+Memory: `local-test-oneoff-container-pattern` (verified evidence 2026-05-24
+— 4-path PR-1.5 went from 31 errors via `exec` to 41 pass via one-off).
+
 ---
 
 ## Admission Workflows (Source of Truth)
