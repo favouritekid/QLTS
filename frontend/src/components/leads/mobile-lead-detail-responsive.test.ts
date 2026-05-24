@@ -40,6 +40,14 @@ const detailClient = read("../../app/(dashboard)/leads/[id]/_components/LeadDeta
 const infoTabs = read("../../app/(dashboard)/leads/[id]/_components/LeadInfoTabs.tsx");
 const sidebar = read("../../app/(dashboard)/leads/[id]/_components/LeadSidebar.tsx");
 
+// Round 3 — broader /leads mobile sweep (#10-#12)
+const leadsTable = read("./command-center/LeadsTable.tsx");
+const kanbanCard = read("./LeadKanbanCard.tsx");
+const multiOffering = read("../common/selectors/MultiOfferingSelector.tsx");
+const readinessChecklist = read("./AdmissionReadinessChecklist.tsx");
+const timelineTab = read("./LeadTimelineTab.tsx");
+const scoringCollapsible = read("./LeadScoringCollapsible.tsx");
+
 describe("Bug #2 — consultation method toggle wraps on mobile", () => {
   it("method ToggleGroup uses flex-wrap (no horizontal overflow @375px)", () => {
     // The method selector row must wrap; pre-fix it was `flex justify-start
@@ -142,5 +150,48 @@ describe("Round 2 #9 — direct /leads/[id] detail", () => {
   it("LeadSidebar call button 44px + stats off micro-px token", () => {
     expect(sidebar).toMatch(/h-11 sm:h-6 px-2 text-xs/);
     expect(sidebar).not.toMatch(/text-\[10px\]/); // normalized to text-xs token
+  });
+});
+
+describe("Round 3 #10 — /leads list + pipeline touch targets", () => {
+  it("LeadsTable mobile pagination prev/next are 44px on mobile", () => {
+    const hits = leadsTable.match(/h-11 w-11 md:h-8 md:w-8/g) ?? [];
+    expect(hits.length).toBeGreaterThanOrEqual(2); // prev + next
+  });
+
+  it("LeadKanbanCard detail button is 44px on mobile", () => {
+    expect(kanbanCard).toMatch(/h-11 w-11 sm:h-6 sm:w-6/);
+  });
+});
+
+describe("Round 3 #11 — filter bar + multi-offering selector mobile controls", () => {
+  it("LeadFilterBar mobile controls bump to 44px (compact on md+)", () => {
+    expect(filterBar).toMatch(/h-11 pl-9 pr-8 text-base sm:text-sm md:h-8/); // search
+    expect(filterBar).toMatch(/h-11 gap-1\.5 md:hidden/);                    // filter toggle / add-lead
+    expect(filterBar).toMatch(/h-11 md:h-8 gap-1/);                          // unit trigger
+  });
+
+  it("MultiOfferingSelector mobile search + header + badges", () => {
+    expect(multiOffering).toMatch(/h-11 sm:h-8 pl-8 pr-8 text-base sm:text-sm/);
+    expect(multiOffering).toMatch(/min-h-11 sm:min-h-0/);   // group header tap area
+    expect(multiOffering).not.toMatch(/text-\[10px\]/);     // badges normalized
+  });
+});
+
+describe("Round 3 #12 — lead-detail readiness CTA + timeline menu + scoring", () => {
+  it("AdmissionReadinessChecklist both CTAs 44px on mobile", () => {
+    const hits = readinessChecklist.match(/h-11 sm:h-7 text-xs/g) ?? [];
+    expect(hits.length).toBeGreaterThanOrEqual(2); // Tạo hồ sơ + Xem hồ sơ
+  });
+
+  it("LeadTimelineTab action menu visible on touch + 44px", () => {
+    // was opacity-0 hover-only (undiscoverable on touch) + sub-44px
+    expect(timelineTab).toMatch(/opacity-100 sm:opacity-0 sm:group-hover:opacity-100/);
+    expect(timelineTab).toMatch(/h-11 w-11 sm:h-7 sm:w-7/);
+    expect(timelineTab).not.toMatch(/h-7 w-7 p-0 opacity-0 group-hover/); // old hover-only chip gone
+  });
+
+  it("LeadScoringCollapsible off micro-px token", () => {
+    expect(scoringCollapsible).not.toMatch(/text-\[10px\]/);
   });
 });
