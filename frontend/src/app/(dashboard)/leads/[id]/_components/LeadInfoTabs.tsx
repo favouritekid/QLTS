@@ -353,7 +353,7 @@ export function LeadInfoTabs({
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-7 text-xs"
+                      className="h-11 sm:h-7 text-xs"
                       onClick={onAssign}
                     >
                       <UserPlus className="mr-1 h-3 w-3" />
