@@ -183,7 +183,7 @@ export function AdmissionReadinessChecklist({
               <Button
                 size="sm"
                 variant="default"
-                className="h-7 text-xs"
+                className="h-11 sm:h-7 text-xs"
                 onClick={onCreateProfile}
               >
                 Tạo hồ sơ
@@ -193,7 +193,7 @@ export function AdmissionReadinessChecklist({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 text-xs"
+                className="h-11 sm:h-7 text-xs"
                 onClick={onViewProfile}
               >
                 Xem hồ sơ
