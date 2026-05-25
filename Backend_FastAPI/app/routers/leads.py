@@ -798,7 +798,7 @@ async def restore_lead(
         event=SystemEvents.LEAD_RESTORED,
         payload=EventPayload.for_lead_restored(restored_lead, current_user),
         dedupe_key=EventPayload.dedupe_key("lead_restored", restored_lead.id),
-        rooms=rooms_for_lead(lead),
+        rooms=rooms_for_lead(restored_lead),
     )
 
     return restored_lead
