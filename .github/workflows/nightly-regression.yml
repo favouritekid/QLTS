@@ -87,7 +87,7 @@ jobs:
       # before phase3_01's pre-flight assertion runs.
       - name: Start services
         run: |
-          docker compose -f docker-compose.yml up -d postgres redis backend frontend
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis backend frontend
           # Wait for services
           timeout 90 bash -c 'until curl -sf http://localhost:8000/docs > /dev/null; do sleep 2; done'
           timeout 90 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
@@ -96,9 +96,9 @@ jobs:
       # Seed data (required for E2E tests)
       - name: Seed database
         run: |
-          docker compose -f docker-compose.yml exec -T backend pip install -r requirements-dev.txt -q
-          docker compose -f docker-compose.yml exec -T backend python -m scripts.seed_from_xlsx
-          docker compose -f docker-compose.yml exec -T backend python -m app.scripts.seed_notification_rules
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend pip install -r requirements-dev.txt -q
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow
@@ -165,15 +165,15 @@ jobs:
         if: failure()
         run: |
           echo "::group::backend logs"
-          docker compose -f docker-compose.yml logs backend --tail=200 || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs backend --tail=200 || true
           echo "::endgroup::"
           echo "::group::frontend logs"
-          docker compose -f docker-compose.yml logs frontend --tail=100 || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs frontend --tail=100 || true
           echo "::endgroup::"
           echo "::group::postgres logs"
-          docker compose -f docker-compose.yml logs postgres --tail=50 || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs postgres --tail=50 || true
           echo "::endgroup::"
 
       - name: Stop services
         if: always()
-        run: docker compose -f docker-compose.yml down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
