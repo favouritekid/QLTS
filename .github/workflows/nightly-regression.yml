@@ -76,39 +76,14 @@ jobs:
       # ``-f docker-compose.yml`` bypasses the auto-loaded
       # ``docker-compose.override.yml`` (dev mode) which requires
       # ``Backend_FastAPI/.env`` that doesn't exist in CI. We want the
-      # production-like stack here anyway.
-      #
-      # Split-alembic bootstrap (memory ``worktree-stack-bootstrap``):
-      # phase3_01 has a pre-flight assertion requiring 5 LOWERCASE
-      # admission_* events in ``notification_rule``. ``phase1_19c`` seeds
-      # those events in UPPERCASE; the LOWERCASE rows that satisfy
-      # phase3_01 are produced by ``sync_notification_rules`` (reads
-      # EVENT_CATALOG lowercase enum names). Production accumulates both
-      # cases across deploys; a fresh CI DB does not, so a single
-      # ``alembic upgrade head`` crashes mid-chain at phase3_01.
-      # Workaround: upgrade to ``phase2_06`` (last revision before
-      # phase3_01), run sync to seed lowercase events, then continue to
-      # ``head``. Final sync covers phase3+ new events too.
-      # Backend container started with both ``RUN_*=false`` flags so the
-      # entrypoint does not re-run alembic / sync after we've already
-      # bootstrapped manually.
-      - name: Bootstrap DB schema via split alembic
+      # production-like stack here anyway. Entrypoint runs alembic
+      # upgrade head + sync_notification_rules normally — the chain
+      # is now self-contained for fresh DB after phase1_19c5 migration
+      # (this PR) converts phase1_19c's UPPERCASE seed to lowercase
+      # before phase3_01's pre-flight assertion runs.
+      - name: Start services
         run: |
-          docker compose -f docker-compose.yml up -d postgres redis
-          timeout 60 bash -c 'until docker compose -f docker-compose.yml exec -T postgres pg_isready -U qlts -d qlts_test; do sleep 2; done'
-          docker compose -f docker-compose.yml run --rm backend bash -c "
-            alembic upgrade phase2_06 &&
-            python -m app.scripts.sync_notification_rules &&
-            alembic upgrade head &&
-            python -m app.scripts.sync_notification_rules
-          "
-
-      - name: Start backend + frontend (entrypoint bootstrap skipped)
-        env:
-          RUN_MIGRATIONS_ON_STARTUP: "false"
-          RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
-        run: |
-          docker compose -f docker-compose.yml up -d backend frontend
+          docker compose -f docker-compose.yml up -d postgres redis backend frontend
           # Wait for services
           timeout 90 bash -c 'until curl -sf http://localhost:8000/docs > /dev/null; do sleep 2; done'
           timeout 90 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
