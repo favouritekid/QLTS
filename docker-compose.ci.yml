@@ -1,0 +1,30 @@
+# =============================================================================
+# QLTS CI Override (nightly-regression workflow only)
+# =============================================================================
+# Production ``docker-compose.yml`` does NOT bind backend / frontend ports to
+# the host — nginx (production profile) is the canonical ingress and proxies
+# 80/443 to backend:8000 / frontend:3000 over the internal compose network.
+# Dev ``docker-compose.override.yml`` adds the bindings + dev tooling
+# (uvicorn --reload, ``Backend_FastAPI/.env`` env_file, bind mounts) — but
+# the CI workflow explicitly bypasses the override via ``-f docker-compose.yml``
+# because the override demands ``Backend_FastAPI/.env`` which CI has no
+# secret store path to populate.
+#
+# This file fills the narrow gap: bind only the ports Playwright + the
+# health-wait curl loop need to reach from the GitHub Actions runner, without
+# pulling in any dev-only side effects.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d ...
+#
+# Memory reference: ``worktree-stack-bootstrap`` — same port-conflict reality
+# applies when running multiple stacks side-by-side.
+# =============================================================================
+
+services:
+  backend:
+    ports:
+      - "8000:8000"
+  frontend:
+    ports:
+      - "3000:3000"
