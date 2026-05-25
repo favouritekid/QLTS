@@ -1710,7 +1710,7 @@ async def update_lead(
                             notify_user_ids=[old_officer_id] if old_officer_id else [],
                         ),
                         dedupe_key=f"lead_reassigned:{lead_id}",
-                        rooms=rooms_for_lead(lead),
+                        rooms=rooms_for_lead(db_lead),
                     )
             except Exception as e:
                 log.error(
@@ -3850,7 +3850,7 @@ async def bulk_assign_leads(
     lead_ids: List[int],
     officer_id: int,
     assigner: models.User
-) -> dict:
+) -> Tuple[dict, Callable]:
     """
     Bulk assign multiple leads to a single officer (Admin/Manager only).
 
@@ -3861,13 +3861,16 @@ async def bulk_assign_leads(
         assigner: User performing the assignment
 
     Returns:
-        dict: {
+        Tuple[dict, Callable]: (result, post_commit)
+        result: {
             "total": int,
             "successful": int,
             "failed": int,
             "assigned_lead_ids": List[int],
             "errors": List[dict]
         }
+        post_commit: async callback the router MUST await AFTER db.commit() to
+        fire the gathered per-lead LEAD_ASSIGNED notifications/socket emits.
 
     Business Rules:
     - All leads must exist and not be deleted
@@ -3906,6 +3909,11 @@ async def bulk_assign_leads(
 
     assigned_lead_ids = []
     errors = []
+    # Collect the per-lead LEAD_ASSIGNED post-commit callbacks. The single-assign
+    # path (assign_lead_manually) returns one; bulk previously discarded them, so
+    # no socket emit / notification ever fired for bulk assignments. We gather the
+    # successful ones and await them AFTER the router commits (see post_commit).
+    assign_callbacks: List[Callable] = []
 
     for lead_id in lead_ids:
         try:
@@ -3918,6 +3926,9 @@ async def bulk_assign_leads(
             # Assign lead using existing service function
             lead, _cb = await assign_lead_manually(db, lead_id, officer_id, assigner)
             assigned_lead_ids.append(lead.id)
+            # Only collect callbacks for successful assignments (not skipped/failed).
+            if _cb:
+                assign_callbacks.append(_cb)
 
         except (ResourceNotFoundError, PermissionDeniedError, BadRequest) as e:
             errors.append({
@@ -3952,7 +3963,7 @@ async def bulk_assign_leads(
         assigner_id=assigner.id
     )
 
-    return {
+    result = {
         "total": len(lead_ids),
         "successful": len(assigned_lead_ids),
         "failed": len(errors),
@@ -3960,13 +3971,31 @@ async def bulk_assign_leads(
         "errors": errors
     }
 
+    async def _post_commit():
+        """Fire the gathered LEAD_ASSIGNED notifications/socket emits after the
+        router commits. Run sequentially; a single callback failure is logged but
+        does NOT roll back the already-committed assignments (mirrors single-assign
+        where the dispatch is best-effort post-commit)."""
+        for cb in assign_callbacks:
+            try:
+                await cb()
+            except Exception as e:  # noqa: BLE001 — best-effort post-commit fanout
+                log.error(
+                    "Bulk assign: notification callback failed (leads already committed)",
+                    officer_id=officer_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+
+    return result, _post_commit
+
 
 async def bulk_update_pipeline_stage(
     db: AsyncSession,
     lead_ids: List[int],
     pipeline_stage_id: str,
     updated_by: models.User
-) -> dict:
+) -> Tuple[dict, Callable]:
     """
     Bulk update pipeline_stage_id for multiple leads (Admin only).
 
@@ -3980,11 +4009,14 @@ async def bulk_update_pipeline_stage(
         updated_by: User performing the update
 
     Returns:
-        dict: {
+        Tuple[dict, Callable]: (result, post_commit)
+        result: {
             "message": str,
             "updated_count": int,
             "skipped": [{"lead_id": int, "reason": str}, ...]
         }
+        post_commit: async callback the router MUST await AFTER db.commit() to
+        emit the LEAD_UPDATED (broadcast_only) realtime events per updated lead.
 
     Business Rules:
     - Only Admin can perform bulk updates
@@ -4017,10 +4049,70 @@ async def bulk_update_pipeline_stage(
         else:
             updatable_ids.append(lid)
 
+    # Capture each updatable lead's current (pre-update) stage now, while the
+    # ORM objects are fresh — the repo bulk UPDATE is raw SQL and does NOT sync
+    # the session, so found_leads[*].pipeline_stage_id stays at the old value.
+    old_stage_by_id: dict[int, object] = {
+        lid: found_leads[lid].pipeline_stage_id for lid in updatable_ids
+    }
+
     # Update only qualifying leads
     updated_count = 0
+    update_callbacks: List[Callable] = []
     if updatable_ids:
+        # FAIL-FAST GUARD: the realtime emit below calls dispatch() BEFORE the
+        # router commits. That is only safe because LEAD_UPDATED is a
+        # broadcast_only event — dispatch() returns the emit callback without
+        # resolving recipients or persisting a notification row. If LEAD_UPDATED
+        # is ever promoted to a user-class event, this path would dispatch on
+        # uncommitted data; assert so that change is caught loudly here instead
+        # of silently violating the dispatch-before-commit rule.
+        from app.core.event_catalog import get_event
+        _lu_def = get_event(SystemEvents.LEAD_UPDATED)
+        assert _lu_def is not None and _lu_def.notification_class == "broadcast_only", (
+            "LEAD_UPDATED must stay broadcast_only for pre-commit bulk dispatch; "
+            f"got notification_class={getattr(_lu_def, 'notification_class', None)}"
+        )
+
         updated_count = await repo.bulk_update_pipeline_stage(updatable_ids, pipeline_stage_id)
+
+        # Realtime sync (no notification spam): emit LEAD_UPDATED — a
+        # broadcast_only event — per updated lead so other tabs/sessions
+        # refresh their list + pipeline. We deliberately do NOT use
+        # LEAD_STATUS_CHANGED here: it is a user-class event (resolver
+        # lead_owner) and would push one inbox notification per lead to the
+        # owning officer — spam for an admin bulk action. status_changed=True
+        # makes the FE handler invalidate the pipeline board.
+        # Build payloads/rooms NOW (pre-commit, objects fresh) so the
+        # post-commit callbacks never lazy-load an expired instance.
+        from app.services.notification_dispatcher import rooms_for_lead
+        for lid in updatable_ids:
+            lead = found_leads.get(lid)
+            if lead is None:
+                continue
+            try:
+                _, _u_cb = await dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_UPDATED,
+                    payload=EventPayload.for_lead_updated(
+                        lead,
+                        updated_by,
+                        updated_fields=["pipeline_stage_id"],
+                        status_changed=True,
+                        updated_summary=f"pipeline_stage: {old_stage_by_id.get(lid)} → {pipeline_stage_id}",
+                    ),
+                    dedupe_key=f"lead_updated:{lead.id}:stage:{pipeline_stage_id}",
+                    rooms=rooms_for_lead(lead),
+                )
+                if _u_cb:
+                    update_callbacks.append(_u_cb)
+            except Exception as e:  # noqa: BLE001 — broadcast prep is best-effort
+                log.error(
+                    "Bulk stage update: failed to prepare realtime broadcast",
+                    lead_id=lid,
+                    error=str(e),
+                    exc_info=True,
+                )
 
     log.info(
         "Bulk pipeline stage update completed",
@@ -4031,11 +4123,27 @@ async def bulk_update_pipeline_stage(
         updated_by_id=updated_by.id
     )
 
-    return {
+    result = {
         "message": f"Updated {updated_count} leads",
         "updated_count": updated_count,
         "skipped": skipped,
     }
+
+    async def _post_commit():
+        """Fire the LEAD_UPDATED broadcasts after the router commits. Best-effort:
+        a failed emit is logged but never rolls back the committed stage changes."""
+        for cb in update_callbacks:
+            try:
+                await cb()
+            except Exception as e:  # noqa: BLE001 — best-effort post-commit fanout
+                log.error(
+                    "Bulk stage update: broadcast callback failed (leads already committed)",
+                    pipeline_stage_id=pipeline_stage_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+
+    return result, _post_commit
 
 
 # =============================================================================

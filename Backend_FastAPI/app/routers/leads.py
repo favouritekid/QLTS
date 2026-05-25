@@ -1359,13 +1359,16 @@ async def bulk_assign_leads(
     - Updates lead status to "assigned"
     - Updates officer's last_assigned_at timestamp
     """
-    result = await lead_service.bulk_assign_leads(
+    result, post_commit = await lead_service.bulk_assign_leads(
         db,
         lead_ids=bulk_assign_data.lead_ids,
         officer_id=officer_id,
         assigner=current_user
     )
     await db.commit()
+    # Fire the per-lead LEAD_ASSIGNED notifications/socket emits AFTER commit
+    # (mirrors single-assign). MUST NOT be skipped — else bulk assign is silent.
+    await post_commit()
     return result
 
 
@@ -1391,13 +1394,16 @@ async def bulk_update_leads_stage(
     {"lead_ids": [1, 2, 3], "pipeline_stage_id": "stage_2"}
     ```
     """
-    result = await lead_service.bulk_update_pipeline_stage(
+    result, post_commit = await lead_service.bulk_update_pipeline_stage(
         db,
         lead_ids=bulk_data.lead_ids,
         pipeline_stage_id=bulk_data.pipeline_stage_id,
         updated_by=current_user
     )
     await db.commit()
+    # Emit LEAD_UPDATED (broadcast_only) per updated lead so other sessions'
+    # list + pipeline refresh in realtime. No notification is sent.
+    await post_commit()
     return result
 
 
@@ -1423,17 +1429,39 @@ async def bulk_delete_leads(
     """
     deleted_count = 0
     skipped = []
+    # Snapshot the LEAD_DELETED payload + scoped rooms for each successful delete
+    # BEFORE commit, while the lead instance is still fresh. Dispatching after
+    # commit on an expired object would otherwise lazy-load and fail.
+    delete_events: list[tuple[dict, list, int]] = []
 
     for lead_id in bulk_data.lead_ids:
         try:
             deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
             if deleted_lead:
                 deleted_count += 1
+                delete_events.append((
+                    EventPayload.for_lead_deleted(deleted_lead, current_user),
+                    rooms_for_lead(deleted_lead),
+                    deleted_lead.id,
+                ))
         except Exception as e:
             log.warning(f"Failed to delete lead {lead_id}: {e}")
             skipped.append({"lead_id": lead_id, "reason": str(e)})
 
     await db.commit()
+
+    # Post-commit fanout — restores single-delete semantics for bulk: emit
+    # LEAD_DELETED per successfully deleted lead (socket realtime + whatever the
+    # current notification rule resolves, same as DELETE /leads/{id}).
+    for payload, rooms, lid in delete_events:
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.LEAD_DELETED,
+            payload=payload,
+            dedupe_key=f"lead_deleted:{lid}",
+            rooms=rooms,
+        )
+
     return {
         "message": f"Deleted {deleted_count} leads",
         "deleted_count": deleted_count,
