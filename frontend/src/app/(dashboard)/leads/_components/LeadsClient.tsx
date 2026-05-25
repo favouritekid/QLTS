@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useUIStore } from "@/lib/stores/ui.store";
 
 import { useLeads, useDeleteLead, useExportLeads, useImportLeads, useDownloadImportTemplate, leadsKeys } from "@/hooks/useLeads";
 import { leadsApi } from "@/lib/api/leads";
@@ -91,6 +92,11 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
 
   // Mobile detail sheet state
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+
+  // Global "close mobile overlays" signal (bumped by MobileBottomNav taps).
+  // The bottom nav is rendered above the modal sheet but can't reach this
+  // local state directly, so it broadcasts via the UI store instead.
+  const mobileOverlayCloseNonce = useUIStore((s) => s.mobileOverlayCloseNonce);
 
   // Selection & Dialog states
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -160,9 +166,25 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
       const leadStillExists = filteredLeads.some((lead) => lead.id === selectedLeadId);
       if (!leadStillExists) {
         queueMicrotask(() => setSelectedLeadId(null));
+        // Also dismiss the mobile sheet — otherwise it lingers open showing
+        // an empty-state panel (e.g. when the open lead is deleted from
+        // another session via the `lead_deleted` socket event).
+        setMobileDetailOpen(false);
       }
     }
   }, [filteredLeads, selectedLeadId]);
+
+  // Close the mobile detail sheet when the bottom nav broadcasts a close
+  // request. Tapping a tab while the (modal) sheet is open should return the
+  // user to the list — the bottom nav can't toggle this local state directly,
+  // so it signals through the UI store nonce. Skip the initial mount (nonce 0)
+  // is implicit: the sheet is already closed then. We intentionally do NOT
+  // clear selectedLeadId here — closing the drawer is enough.
+  useEffect(() => {
+    if (mobileOverlayCloseNonce > 0) {
+      setMobileDetailOpen(false);
+    }
+  }, [mobileOverlayCloseNonce]);
 
   // ✅ Phase 1: Prefetch next page for instant pagination
   useEffect(() => {

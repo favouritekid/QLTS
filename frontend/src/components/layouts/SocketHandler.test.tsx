@@ -370,6 +370,48 @@ describe("SocketHandler — admission event scoping (P2 anchor)", () => {
   })
 
   // =========================================================================
+  // lead_created → list + pipeline + dashboard refresh (realtime gap fix)
+  // =========================================================================
+  describe("lead_created → invalidates lists + pipeline + dashboard", () => {
+    it("schedules a pipeline invalidation (so an open Pipeline Board refreshes)", async () => {
+      const { invalidateSpy, queryClient } = renderHandler()
+      await fireConnect()
+
+      act(() => {
+        socketStub.fire("lead_created", {
+          lead_id: 321,
+          lead_name: "Realtime New Lead",
+          lead_phone: "0900000000",
+          lead_email: "rt@example.com",
+          offering_name: "X",
+          unit_id: 1,
+          unit_name: "U",
+          created_by: "admin",
+          created_at: new Date().toISOString(),
+          assignment_status: "pending",
+          message: "m",
+        })
+      })
+
+      await flushDebounce()
+
+      // Pipeline must refresh — a brand-new lead enters the board at its
+      // initial stage. This is the gap this fix closes (previously only
+      // lists + dashboard were invalidated).
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: ["pipeline"] }),
+      )
+      // List still refreshes too.
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: leadsKeys.lists() }),
+      )
+
+      invalidateSpy.mockRestore()
+      queryClient.clear()
+    })
+  })
+
+  // =========================================================================
   // Option-B Commit 8 — suspicious_login real-time banner bump
   // =========================================================================
   describe("suspicious_login event → banner bump + loginHistory invalidate", () => {
