@@ -26,8 +26,11 @@ from sqlalchemy.orm import selectinload
 
 from app import database, models, schemas
 from app.core.deps import CasbinAuth, require_admin_or_manager
+from app.core.events import SystemEvents
 from app.core.rate_limits import limiter, RateLimits
 from app.services import lead_service
+from app.services.notification_dispatcher import rooms_for_lead, safe_dispatch
+from app.services.notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
 
@@ -244,6 +247,20 @@ async def restore_deleted_lead(
         )
     )
     lead = result.scalar_one()
+
+    # ✅ NOTIFICATION: Dispatch LEAD_RESTORED — mirror leads.py:796 pattern.
+    # Without this, restoring via "Deleted Items" admin screen skips
+    # realtime/notification sync — other tabs viewing lead list never
+    # see the restored lead reappear until manual reload (UX inconsistency
+    # vs the /leads/{id}/restore path which does emit). Filed as task #42
+    # in 2026-05-25 session triage.
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.LEAD_RESTORED,
+        payload=EventPayload.for_lead_restored(lead, current_user),
+        dedupe_key=EventPayload.dedupe_key("lead_restored", lead.id),
+        rooms=rooms_for_lead(lead),
+    )
 
     log.info(
         "Lead restored via admin API",
