@@ -176,39 +176,10 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
     
-    async def get_path_by_offering_and_method(
-        self,
-        academic_info_id: int,
-        admission_method_id: int
-    ) -> Optional[AdmissionPath]:
-        """
-        Check if a path already exists for this offering + method combination.
-
-        Used for unique constraint validation and profile creation.
-
-        ✅ FIX: Eager load admission_method to prevent MissingGreenlet error
-        when service code accesses admission_path.admission_method.status.
-
-        Phase 3 close-out 2026-05-14: also eager-load ``admission_round`` so
-        ``admission_service.create_profile`` can read
-        ``admission_path.admission_round.allow_multi_nv`` without a separate
-        SELECT when deciding ``new_profile.uses_choice_engine``. Adds one
-        IN-clause query (selectinload), not a JOIN — keeps the existing
-        FOR UPDATE-friendly shape used by callers.
-        """
-        query = (
-            select(AdmissionPath)
-            .where(
-                AdmissionPath.academic_info_id == academic_info_id,
-                AdmissionPath.admission_method_id == admission_method_id
-            )
-            .options(
-                selectinload(AdmissionPath.admission_method),  # ← FIX: Eager load
-                selectinload(AdmissionPath.admission_round),   # Phase 3 close-out
-            )
-        )
-        result = await self.db.execute(query)
-        return result.scalars().first()
+    # get_path_by_offering_and_method (2-col) removed — round contract
+    # hardening (plan v4): create_profile now binds via the 3-col
+    # get_path_by_round_and_method below; the 2-col lookup + ``.first()``
+    # (which silently picked an arbitrary round) had no remaining caller.
 
     async def get_path_by_round_and_method(
         self,
@@ -227,8 +198,8 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         reads ``admission_path.admission_round.allow_multi_nv`` for the
         ``uses_choice_engine`` decision without a lazy load (MissingGreenlet
         in async context) or a separate SELECT. Adds one IN-clause query
-        (selectinload), not a JOIN — mirrors the eager-load shape of
-        ``get_path_by_offering_and_method``.
+        (selectinload), not a JOIN — keeps the FOR UPDATE-friendly shape
+        used by callers.
         """
         query = (
             select(AdmissionPath)

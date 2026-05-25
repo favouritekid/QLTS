@@ -105,10 +105,11 @@ def _make_service():
     service.db.execute = AsyncMock(return_value=_fake_result)
 
     service.repo = MagicMock()
-    service.repo.get_path_by_offering_and_method = AsyncMock(return_value=None)
-    service.repo.get_path_by_round_offering_method = AsyncMock(return_value=None)
     # Phase 2 PR-2C v2 duplicate check via 3-col UNIQUE — mock to return
     # None (no existing path) so create proceeds past the duplicate guard.
+    # (Dead mocks for the removed 2-col get_path_by_offering_and_method +
+    # a never-existent get_path_by_round_offering_method dropped — round
+    # contract hardening plan v4.)
     service.repo.get_path_by_round_and_method = AsyncMock(return_value=None)
 
     persisted: dict = {}
