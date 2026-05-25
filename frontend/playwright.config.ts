@@ -126,11 +126,22 @@ export default defineConfig({
     },
   ],
 
-  /* Run your local dev server before starting the tests */
+  /* Run your local dev server before starting the tests.
+   *
+   * ``reuseExistingServer: true`` always — the prior ``!process.env.CI``
+   * setting forced Playwright to start its own ``npm run dev`` on CI,
+   * which conflicts with the Docker frontend container that
+   * nightly-regression.yml binds to ``localhost:3000`` via
+   * docker-compose.ci.yml. The semantics of ``true`` are correct for
+   * BOTH local + CI: probe the URL first, reuse if reachable, otherwise
+   * run the command — covers local dev (Docker frontend running),
+   * nightly-regression (Docker frontend running), and a hypothetical
+   * vacuum CI (no Docker, command starts dev server).
+   */
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:3000',
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: true,
     timeout: 120 * 1000,
   },
 })

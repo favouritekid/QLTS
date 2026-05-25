@@ -17,6 +17,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Inject all env vars referenced by ``docker-compose.yml`` interpolation
+    # (root cause of 10/10 fail runs through 2026-05-24 — see PR #332 body).
+    # CI test creds are intentionally unsafe placeholders; the stack only
+    # binds to localhost inside this runner and is torn down on job end.
+    env:
+      POSTGRES_USER: qlts
+      POSTGRES_PASSWORD: ci-test-postgres-pw
+      POSTGRES_DB: qlts_test
+      DOMAIN: localhost
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Match credentials actually seeded by ``seed_from_xlsx.py`` (sheet
+      # ``2_TaiKhoan``). Doc default ``vothuhien``/``@Matkhau123!`` in
+      # ``Documents/TESTING_GUIDE.md`` + ``auth.setup.ts:27`` is stale —
+      # the xlsx workbook seeds ``vothithuthuhien`` / ``Abc@123456789``.
+      # Setting env here lets Playwright (auth.setup.ts:27-28 reads
+      # TEST_USERNAME / TEST_PASSWORD env) login successfully.
+      TEST_USERNAME: vothithuthuhien
+      TEST_PASSWORD: Abc@123456789
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,22 +54,59 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium --with-deps
 
-      # Start full stack via docker compose
+      # Generate ``.env.production`` (compose ``env_file:`` directive
+      # requires the file to exist; values become container env vars).
+      # Backend uses ``APP_ENV=test`` here — NOT ``production`` — because
+      # two production-hardening validators reject CI placeholder values:
+      #
+      #   1. ``_validate_production_secrets()`` (app/config.py:245) demands
+      #      SECRET_KEY/JWT_SECRET_KEY ≥32 chars + non-weak,
+      #      DEVICE_FINGERPRINT_SALT != default, no localhost DB URL,
+      #      sslmode=require unless ALLOW_DOCKER_INTERNAL_NETWORK=true.
+      #   2. ``main.py:651`` rejects any CORS origin not on HTTPS — but
+      #      CI frontend serves at http://localhost:3000 (Playwright
+      #      target), so the realistic test origin is HTTP.
+      #
+      # APP_ENV=test skips both validators (config.py:222 + main.py:630
+      # both gate on ``APP_ENV == "production"``) and the CORS middleware
+      # auto-populates test origins (main.py:667-668). Other runtime
+      # behavior — alembic, dispatch pipeline, route registration, Casbin,
+      # JWT signing — is unaffected; those validators are CI-vs-prod
+      # hardening gates, not feature gates.
+      - name: Generate .env.production for backend env_file load
+        run: |
+          cat > .env.production <<EOF
+          APP_ENV=test
+          SECRET_KEY=ci-test-secret-key-for-nightly-regression-only
+          JWT_SECRET_KEY=ci-test-jwt-secret-for-nightly-regression-only
+          MAIL_USERNAME=ci-test@example.com
+          MAIL_PASSWORD=ci-test-placeholder
+          MAIL_FROM=ci-test@example.com
+          MAIL_SERVER=smtp.example.com
+          EOF
+
+      # ``-f docker-compose.yml`` bypasses the auto-loaded
+      # ``docker-compose.override.yml`` (dev mode) which requires
+      # ``Backend_FastAPI/.env`` that doesn't exist in CI. We want the
+      # production-like stack here anyway. Entrypoint runs alembic
+      # upgrade head + sync_notification_rules normally — the chain
+      # is now self-contained for fresh DB after phase1_19c5 migration
+      # (this PR) converts phase1_19c's UPPERCASE seed to lowercase
+      # before phase3_01's pre-flight assertion runs.
       - name: Start services
         run: |
-          docker compose up -d postgres redis backend frontend
-          docker compose exec -T backend alembic upgrade head
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d postgres redis backend frontend
           # Wait for services
-          timeout 60 bash -c 'until curl -sf http://localhost:8000/docs > /dev/null; do sleep 2; done'
-          timeout 60 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
+          timeout 90 bash -c 'until curl -sf http://localhost:8000/docs > /dev/null; do sleep 2; done'
+          timeout 90 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
           echo "Services ready"
 
       # Seed data (required for E2E tests)
       - name: Seed database
         run: |
-          docker compose exec -T backend pip install -r requirements-dev.txt -q
-          docker compose exec -T backend python -m scripts.seed_from_xlsx
-          docker compose exec -T backend python -m app.scripts.seed_notification_rules
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend pip install -r requirements-dev.txt -q
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow
@@ -109,6 +165,23 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
 
+      # Capture container logs BEFORE teardown when anything failed —
+      # backend/frontend crash signature isn't visible in compose up output
+      # (only "container Error / dependency failed to start"). Log dump gives
+      # the real cause (entrypoint exception, alembic mismatch, env reject).
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "::group::backend logs"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs backend --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::frontend logs"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs frontend --tail=100 || true
+          echo "::endgroup::"
+          echo "::group::postgres logs"
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml logs postgres --tail=50 || true
+          echo "::endgroup::"
+
       - name: Stop services
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml down -v
