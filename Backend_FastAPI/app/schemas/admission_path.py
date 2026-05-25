@@ -201,14 +201,20 @@ class AdmissionPathCreate(BaseModel):
     """Request schema for creating a new AdmissionPath."""
     academic_info_id: int
     admission_method_id: int
-    # Phase 2 v8.2 PR-2B v2 — optional admission_round_id; nếu None,
-    # service layer auto-resolve DOT_1 của academic_info's year (year-
-    # level lookup, Option A). NOT NULL post PR-2C v2 swap.
-    admission_round_id: Optional[int] = Field(
-        default=None,
+    # Round contract hardening (plan v4 Section B, 2026-05-25):
+    # admission_round_id is now REQUIRED. The auto-resolve DOT_1 shim is
+    # removed from the service, so omitting the round now 422s here rather
+    # than silently binding the path to DOT_1. The service still validates
+    # the explicit round (exists + same year + active + not archived).
+    admission_round_id: int = Field(
+        ...,
+        gt=0,
         description=(
-            "Round FK. NULL = auto-resolve DOT_1 của academic_info's "
-            "academic_year tại service layer."
+            "Round FK (REQUIRED). Path identity is the 3-col UNIQUE "
+            "(admission_round_id, academic_info_id, admission_method_id); "
+            "the service validates the round exists, matches academic_info's "
+            "year, is active and not archived. FE wizard/quick-create must "
+            "always send it."
         ),
     )
     round_quota: Optional[int] = Field(
@@ -434,6 +440,38 @@ class AdmissionPathResponse(BaseModel):
     submission_count: int = Field(
         default=0,
         description="Atomic submission counter; incremented on profile create.",
+    )
+
+    # Round contract hardening (plan v4 Section D — Finding #3): flat round
+    # metadata, eager-loaded via ``admission_round`` on the common response
+    # queries and populated in ``build_path_response``. FLAT (not a nested
+    # ``round`` object) + default None: ``model_validate(path)`` would touch
+    # an unloaded lazy relationship on endpoints that don't eager-load →
+    # MissingGreenlet; flat + default None is safe (Pydantic uses the
+    # default when the attribute is absent). The officer create page derives
+    # its round dropdown from these fields on the for-offering paths.
+    round_code: Optional[str] = Field(
+        default=None, description="Round code (e.g. DOT_1). NULL if not loaded."
+    )
+    round_name: Optional[str] = Field(
+        default=None, description="Round display name (e.g. 'Đợt 1 - 2026')."
+    )
+    round_start_date: Optional[date] = Field(
+        default=None, description="Round window start (date-only). NULL allowed."
+    )
+    round_end_date: Optional[date] = Field(
+        default=None, description="Round window end (date-only). NULL allowed."
+    )
+    round_archived_at: Optional[datetime] = Field(
+        default=None,
+        description="Round soft-archive marker (tz-aware). NULL = not archived.",
+    )
+    round_is_active: Optional[bool] = Field(
+        default=None, description="Round active flag. NULL if not loaded."
+    )
+    round_allow_multi_nv: Optional[bool] = Field(
+        default=None,
+        description="Round multi-NV (Phase 3 choice engine) flag.",
     )
 
     # Application Fee

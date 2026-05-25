@@ -144,6 +144,7 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
             path={path}
             methods={methods}
             academicInfoId={context.academicInfoId}
+            academicYear={context.academicYear}
             onFinish={handleBasicInfoFinish}
           />
         )

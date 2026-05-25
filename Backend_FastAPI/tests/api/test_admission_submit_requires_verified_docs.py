@@ -120,6 +120,9 @@ async def strict_path_config(seed_lead_dependencies: dict):
         "method_id": am.id,
         "path_id": ap.id,
         "doc_code": dt.code,
+        # Round contract hardening (plan v4): expose seeded round for the
+        # now-required admission_round_id on create-profile.
+        "round_id": round_id,
     }
 
 
@@ -148,6 +151,8 @@ async def _create_draft(client, admin_token_headers, officer_user_in_db, cfg, *,
     prof_resp = await client.post(ADMISSIONS, json={
         "lead_id": lead["id"],
         "admission_method_id": cfg["method_id"],
+        "admission_round_id": cfg["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)
     assert prof_resp.status_code in (200, 201), (
         f"Create profile failed ({prof_resp.status_code}): {prof_resp.text}\n"

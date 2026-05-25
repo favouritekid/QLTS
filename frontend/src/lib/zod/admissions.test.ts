@@ -17,11 +17,45 @@
 import { describe, it, expect } from "vitest"
 
 import {
+  admissionProfileCreateSchema,
   admissionProfileUpdateSchema,
   appliedRulesSchema,
   priorityObjectEvidenceEntrySchema,
   subjectGroupSnapshotSchema,
 } from "./admissions"
+
+describe("admissionProfileCreateSchema — round contract hardening (plan v4)", () => {
+  const base = {
+    lead_id: 1,
+    admission_method_id: 2,
+    admission_round_id: 3,
+    academic_year: 2026,
+  }
+
+  it("parses a complete payload with admission_round_id + academic_year", () => {
+    const parsed = admissionProfileCreateSchema.parse(base)
+    expect(parsed.admission_round_id).toBe(3)
+    expect(parsed.academic_year).toBe(2026)
+  })
+
+  it("rejects a payload missing admission_round_id (now REQUIRED)", () => {
+    const { admission_round_id: _omit, ...withoutRound } = base
+    void _omit
+    expect(() => admissionProfileCreateSchema.parse(withoutRound)).toThrow()
+  })
+
+  it("rejects a payload missing academic_year (fallback removed, REQUIRED)", () => {
+    const { academic_year: _omit, ...withoutYear } = base
+    void _omit
+    expect(() => admissionProfileCreateSchema.parse(withoutYear)).toThrow()
+  })
+
+  it("rejects a non-positive admission_round_id", () => {
+    expect(() =>
+      admissionProfileCreateSchema.parse({ ...base, admission_round_id: 0 }),
+    ).toThrow()
+  })
+})
 
 describe("subjectGroupSnapshotSchema (nested weights)", () => {
   it("parses a group with weights", () => {

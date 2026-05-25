@@ -105,6 +105,20 @@ async def build_path_response(
     """
     response = AdmissionPathResponse.model_validate(path)
     response.criteria = build_criteria_nested(path)
+    # Round contract hardening (plan v4 Section D — Finding #3): populate
+    # flat round metadata from the eager-loaded ``admission_round``
+    # relationship. ``__dict__.get`` avoids triggering a lazy load
+    # (MissingGreenlet in async context) when a query didn't eager-load the
+    # relationship — the flat fields then stay None (schema default).
+    _round = path.__dict__.get("admission_round")
+    if _round is not None:
+        response.round_code = _round.round_code
+        response.round_name = _round.round_name
+        response.round_start_date = _round.start_date
+        response.round_end_date = _round.end_date
+        response.round_archived_at = _round.archived_at
+        response.round_is_active = _round.is_active
+        response.round_allow_multi_nv = _round.allow_multi_nv
     response.available_actions = service.compute_available_actions(path, current_user)
     response.can_edit = service.compute_can_edit(path, current_user)
     response.can_activate = await service.compute_can_activate(path, current_user)

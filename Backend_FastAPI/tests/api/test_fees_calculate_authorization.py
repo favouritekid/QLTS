@@ -162,6 +162,8 @@ async def fee_calc_config(seed_lead_dependencies: dict):
         "offering_id": po.id,
         "method_id": am.id,
         "school_id": school_id,
+        # Round contract hardening (plan v4): now-required admission_round_id.
+        "round_id": round_id,
     }
 
 
@@ -194,6 +196,8 @@ async def _create_approved_profile(
     prof = (await client.post(ADMISSIONS, json={
         "lead_id": lead["id"],
         "admission_method_id": cfg["method_id"],
+        "admission_round_id": cfg["round_id"],
+        "academic_year": 2026,
     }, headers=admin_headers)).json()
 
     # Minimal fill so submit passes validation (PR #6 lax mode → only docs).
@@ -315,6 +319,8 @@ async def test_calculate_fee_hidden_for_officer_on_draft(
     prof = (await client.post(ADMISSIONS, json={
         "lead_id": lead["id"],
         "admission_method_id": fee_calc_config["method_id"],
+        "admission_round_id": fee_calc_config["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)).json()
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])

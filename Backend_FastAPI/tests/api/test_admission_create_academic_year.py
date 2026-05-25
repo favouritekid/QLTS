@@ -2,15 +2,13 @@
 ``OfferingAcademicInfo`` row when client passes ``academic_year``.
 
 Q8=b decision (memory ``project_admission_audit_2026-04-27_wave_status``):
-client must pass academic_year on profile creation. This BE phase
-makes the field optional for backward compat — strict-required will
-flip in a follow-up after FE catches up — but **when passed it must
-be honoured strictly**: lookup the matching
-``(offering_id, academic_year)`` ``OfferingAcademicInfo`` row, reject
-if not found, reject if not published.
-
-When ``academic_year`` is omitted, fall back to "first published" so
-legacy FE callers don't break mid-rollout.
+client must pass academic_year on profile creation. Round contract
+hardening (plan v4 — F30) FLIPPED the field to strict-required and
+REMOVED the "first published" fallback: ``academic_year`` (and
+``admission_round_id``) are now mandatory. When passed they are honoured
+strictly — lookup the matching ``(offering_id, academic_year)``
+``OfferingAcademicInfo`` row, reject if not found / not published, and
+validate the round belongs to that year (active, not archived).
 """
 from __future__ import annotations
 
@@ -162,6 +160,10 @@ async def multi_year_offering(seed_lead_dependencies: dict):
         "academic_info_2025_id": ai_2025.id,
         "academic_info_2026_id": ai_2026.id,
         "academic_info_2027_id": ai_2027.id,
+        # Round contract hardening (plan v4): expose the per-year DOT_1
+        # rounds so create-profile can pass the now-required admission_round_id.
+        "round_2025_id": round_2025_id,
+        "round_2026_id": round_2026_id,
     }
 
 
@@ -201,10 +203,13 @@ async def _create_profile_request(
     lead_id: int,
     method_id: int,
     academic_year: Optional[int] = None,
+    admission_round_id: Optional[int] = None,
 ):
     body: dict = {"lead_id": lead_id, "admission_method_id": method_id}
     if academic_year is not None:
         body["academic_year"] = academic_year
+    if admission_round_id is not None:
+        body["admission_round_id"] = admission_round_id
     return await client.post(ADMISSIONS, json=body, headers=headers)
 
 
@@ -230,6 +235,7 @@ async def test_create_profile_binds_to_explicit_academic_year(
         lead_id,
         multi_year_offering["method_id"],
         academic_year=2025,
+        admission_round_id=multi_year_offering["round_2025_id"],
     )
     assert resp.status_code in (200, 201), resp.text
     body = resp.json()
@@ -267,6 +273,10 @@ async def test_create_profile_rejects_unknown_academic_year(
         lead_id,
         multi_year_offering["method_id"],
         academic_year=2099,
+        # Pass a valid round; the academic_info lookup for year 2099 fails
+        # FIRST (Step 6) with a 400 mentioning 2099, before the round
+        # validation (Step 6b) is ever reached.
+        admission_round_id=multi_year_offering["round_2025_id"],
     )
     assert resp.status_code == 400, resp.text
     body = resp.json()
@@ -293,6 +303,9 @@ async def test_create_profile_rejects_unpublished_academic_year(
         lead_id,
         multi_year_offering["method_id"],
         academic_year=2027,
+        # Valid round; the published-check on year 2027 (Step 6) fails
+        # before round validation (Step 6b).
+        admission_round_id=multi_year_offering["round_2025_id"],
     )
     assert resp.status_code == 400, resp.text
     body = resp.json()
@@ -303,33 +316,71 @@ async def test_create_profile_rejects_unpublished_academic_year(
 
 
 @pytest.mark.asyncio
-async def test_create_profile_legacy_callers_still_work_without_year(
+async def test_create_profile_requires_academic_year_and_round(
     client: AsyncClient,
     admin_token_headers: dict,
     officer_user_in_db: dict,
     multi_year_offering: dict,
 ):
-    """Backward compat: omitting ``academic_year`` falls back to the
-    first published OfferingAcademicInfo. FE callers that haven't
-    been updated yet must keep working — the strict-required flip
-    happens in a follow-up after FE catches up.
+    """Round contract hardening (plan v4 — F30): the legacy "omit
+    academic_year → first published" fallback is REMOVED. ``academic_year``
+    and ``admission_round_id`` are now both REQUIRED; a round whose year
+    doesn't match is rejected. The first three probes fail validation (no
+    profile written), so the happy path on the same lead still succeeds.
     """
     lead_id = await _seed_lead(
-        client, admin_token_headers, officer_user_in_db, multi_year_offering, "legacy"
+        client, admin_token_headers, officer_user_in_db, multi_year_offering, "strict"
     )
 
-    resp = await _create_profile_request(
+    # Missing academic_year → 422 (Pydantic required field; no fallback).
+    resp_no_year = await _create_profile_request(
         client,
         admin_token_headers,
         lead_id,
         multi_year_offering["method_id"],
-        academic_year=None,  # omitted
+        academic_year=None,
+        admission_round_id=multi_year_offering["round_2026_id"],
     )
-    assert resp.status_code in (200, 201), resp.text
-    body = resp.json()
-    # First published academic_info — order from get_academic_info_history
-    # is implementation-defined; we just assert the result is one of the
-    # two published years (2025 / 2026), NOT the unpublished 2027.
-    assert body["academic_year"] in (2025, 2026), (
-        f"Legacy fallback bound to unexpected year {body['academic_year']}"
+    assert resp_no_year.status_code == 422, resp_no_year.text
+
+    # Missing admission_round_id → 422.
+    resp_no_round = await _create_profile_request(
+        client,
+        admin_token_headers,
+        lead_id,
+        multi_year_offering["method_id"],
+        academic_year=2026,
+        admission_round_id=None,
+    )
+    assert resp_no_round.status_code == 422, resp_no_round.text
+
+    # Round whose year (2025) doesn't match academic_year (2026) → 400.
+    resp_mismatch = await _create_profile_request(
+        client,
+        admin_token_headers,
+        lead_id,
+        multi_year_offering["method_id"],
+        academic_year=2026,
+        admission_round_id=multi_year_offering["round_2025_id"],
+    )
+    assert resp_mismatch.status_code == 400, resp_mismatch.text
+    assert "không khớp" in resp_mismatch.json().get("detail", ""), resp_mismatch.text
+
+    # Both present + matching → 201, bound to the explicit (year, round).
+    resp_ok = await _create_profile_request(
+        client,
+        admin_token_headers,
+        lead_id,
+        multi_year_offering["method_id"],
+        academic_year=2026,
+        admission_round_id=multi_year_offering["round_2026_id"],
+    )
+    assert resp_ok.status_code in (200, 201), resp_ok.text
+    body = resp_ok.json()
+    assert body["academic_year"] == 2026
+    applied = body.get("applied_rules") or {}
+    assert applied.get("admission_round_id") == multi_year_offering["round_2026_id"], (
+        f"applied_rules.admission_round_id mismatch: got "
+        f"{applied.get('admission_round_id')}, expected "
+        f"{multi_year_offering['round_2026_id']}"
     )

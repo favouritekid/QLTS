@@ -95,22 +95,20 @@ async def path_seed(seed_lead_dependencies: dict) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_create_path_auto_resolves_dot1_when_round_id_null(
+async def test_create_path_rejects_null_round_id(
     path_seed: dict,
 ):
-    """Service auto-resolve DOT_1 của academic_info's year khi
-    admission_round_id None (Option A year-level lookup)."""
-    async with AsyncSessionLocal() as s:
-        admin = await s.get(models.User, path_seed["admin_id"])
-        svc = AdmissionPathService(s)
-        data = AdmissionPathCreate(
+    """Round contract hardening (plan v4 Section B): the auto-resolve DOT_1
+    shim is removed — admission_round_id is REQUIRED, so omitting it (None)
+    is rejected by Pydantic at AdmissionPathCreate construction time."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        AdmissionPathCreate(
             academic_info_id=path_seed["academic_info_id"],
             admission_method_id=path_seed["method_id"],
-            admission_round_id=None,  # auto-resolve
+            admission_round_id=None,
         )
-        path, _cb = await svc.create_path(data, admin)
-        await s.commit()
-        assert path.admission_round_id == path_seed["round_id"]
 
 
 @pytest.mark.asyncio
@@ -132,62 +130,11 @@ async def test_create_path_uses_explicit_round_id_when_provided(
         assert path.admission_round_id == path_seed["round_id"]
 
 
-@pytest.mark.asyncio
-async def test_create_path_raises_when_no_dot1_for_year(
-    seed_lead_dependencies: dict,
-):
-    """Service raise BusinessRuleViolation nếu không có DOT_1 round
-    cho academic_info's year."""
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
-    async with AsyncSessionLocal() as s:
-        async with s.begin():
-            from app.security import get_password_hash
-            admin = models.User(
-                username=f"admin_no_{ts}",
-                email=f"admin_no_{ts}@test.local",
-                full_name="Test",
-                password_hash=get_password_hash("test"),
-                role="admin",
-                status="active",
-            )
-            s.add(admin)
-            await s.flush()
-            offering = models.ProgramOffering(
-                program_id=seed_lead_dependencies["major_program_id"],
-                offering_type="full_time",
-                duration_semesters=8,
-            )
-            s.add(offering)
-            await s.flush()
-            # Year 2099 — KHÔNG có DOT_1 seeded
-            ai = models.OfferingAcademicInfo(
-                offering_id=offering.id,
-                academic_year=2099,
-                annual_admission_quota=10,
-                tuition_fee_per_year=1_000_000,
-            )
-            s.add(ai)
-            await s.flush()
-            method = models.AdmissionMethod(
-                code=f"M_{ts}",
-                name=f"Method {ts}",
-                requires_subject_scores=True,
-                is_active=True,
-            )
-            s.add(method)
-            await s.flush()
-            ai_id, method_id, admin_id = ai.id, method.id, admin.id
-
-    async with AsyncSessionLocal() as s:
-        admin = await s.get(models.User, admin_id)
-        svc = AdmissionPathService(s)
-        data = AdmissionPathCreate(
-            academic_info_id=ai_id,
-            admission_method_id=method_id,
-            admission_round_id=None,
-        )
-        with pytest.raises(BusinessRuleViolation, match="DOT_1 round không tồn tại"):
-            await svc.create_path(data, admin)
+# test_create_path_raises_when_no_dot1_for_year removed — round contract
+# hardening (plan v4 Section B): the "no DOT_1 → auto-resolve fails" path is
+# gone (admission_round_id is REQUIRED, never auto-resolved). The explicit
+# non-existent-round → ResourceNotFoundError contract is covered by
+# test_create_path_raises_when_round_not_found below (BUG #6 anchor).
 
 
 @pytest.mark.asyncio
@@ -388,6 +335,7 @@ async def test_create_profile_snapshot_includes_admission_round_id(
                 db=s,
                 lead_id=lead_id,
                 admission_method_id=method_id,
+                admission_round_id=path_seed["round_id"],
                 current_user=admin,
                 academic_year=2026,
             )

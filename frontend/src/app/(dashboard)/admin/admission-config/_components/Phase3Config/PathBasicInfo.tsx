@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Loader2, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { useCreateAdmissionPath, useUpdateAdmissionPath } from "@/hooks/admissions/useAdmissionPaths";
+import { useAdmissionRounds } from "@/hooks/admissions/useAdmissionRounds";
 import { useAuth } from "@/hooks/useAuth";
 import {
   AUDIENCE_LABELS_VI,
@@ -29,13 +30,30 @@ interface PathBasicInfoProps {
   path?: AdmissionPathResponse;
   methods: AdmissionMethod[];
   academicInfoId: number;
+  // Round contract hardening (plan v4 Section B-FE) — the wizard passes the
+  // context's academicYear so we can fetch this year's rounds for the
+  // (now REQUIRED) round dropdown on create.
+  academicYear: number;
   onFinish: (pathId: number) => void;
 }
 
-export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathBasicInfoProps) {
+export function PathBasicInfo({ path, methods, academicInfoId, academicYear, onFinish }: PathBasicInfoProps) {
   // Initialize state directly from props (Key-based remount ensures fresh init)
   const [displayName, setDisplayName] = useState(path?.display_name || "");
   const [selectedMethodId, setSelectedMethodId] = useState<number | null>(path?.admission_method?.id || null);
+  // Round contract hardening (plan v4 Section B-FE) — REQUIRED on create.
+  // Edit mode pre-fills the existing round but renders it read-only
+  // (transfer-round is deferred). Only fetch rounds in create mode; in edit
+  // mode we display the path's already-loaded round metadata.
+  const [selectedRoundId, setSelectedRoundId] = useState<number | null>(
+    path?.admission_round_id ?? null
+  );
+  const { data: roundsData, isLoading: loadingRounds } = useAdmissionRounds(
+    path ? null : academicYear
+  );
+  const availableRounds = (roundsData?.items ?? []).filter(
+    (r) => r.is_active && r.archived_at == null
+  );
   const [displayOrder, setDisplayOrder] = useState(path?.display_order || 1);
   const [visibility, setVisibility] = useState<"public" | "internal">(path?.visibility || "internal");
   // PR #6 — path-level submit strictness. Default strict (false) for new paths;
@@ -222,10 +240,17 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
         savedId = path.id;
         toast.success("Cập nhật thông tin cơ bản thành công");
       } else {
-        // Create new
+        // Create new — round is REQUIRED (round contract hardening, plan v4
+        // Section B). The BE auto-resolve DOT_1 shim is removed; omitting the
+        // round now 422s. Guard here narrows selectedRoundId to number.
+        if (selectedRoundId === null) {
+          toast.error("Vui lòng chọn đợt tuyển sinh");
+          return;
+        }
         const newPath = await createMutation.mutateAsync({
           academic_info_id: academicInfoId,
           admission_method_id: selectedMethodId,
+          admission_round_id: selectedRoundId,
           display_name: displayName || undefined,
           display_order: displayOrder,
           visibility: visibility,
@@ -288,6 +313,62 @@ export function PathBasicInfo({ path, methods, academicInfoId, onFinish }: PathB
               <p className="text-xs text-muted-foreground">
                 Không thể thay đổi phương thức sau khi tạo
               </p>
+            )}
+          </div>
+
+          {/* Round selection (round contract hardening, plan v4 Section B-FE).
+              Create: pick an active, non-archived round for this year — the BE
+              auto-DOT_1 shim is removed, so omitting it 422s. Edit: read-only
+              (transfer-round deferred). */}
+          <div className="space-y-2">
+            <Label htmlFor="admission-round">
+              Đợt tuyển sinh <span className="text-destructive">*</span>
+            </Label>
+            {path ? (
+              <>
+                <Input
+                  id="admission-round"
+                  value={
+                    path.round_name ??
+                    path.round_code ??
+                    `Đợt #${path.admission_round_id}`
+                  }
+                  disabled
+                  readOnly
+                />
+                <p className="text-xs text-muted-foreground">
+                  Không thể đổi đợt tuyển sinh sau khi tạo.
+                </p>
+              </>
+            ) : loadingRounds ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Đang tải đợt tuyển sinh...
+              </div>
+            ) : availableRounds.length === 0 ? (
+              <p className="text-sm text-destructive">
+                Năm {academicYear} chưa có đợt tuyển sinh khả dụng. Vui lòng tạo
+                đợt ở bước &quot;Đợt tuyển sinh&quot; trước.
+              </p>
+            ) : (
+              <Select
+                value={selectedRoundId?.toString() || ""}
+                onValueChange={(value) => setSelectedRoundId(parseInt(value))}
+              >
+                <SelectTrigger id="admission-round">
+                  <SelectValue placeholder="Chọn đợt tuyển sinh" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableRounds.map((r) => (
+                    <SelectItem key={r.id} value={r.id.toString()}>
+                      {r.round_name}
+                      <span className="text-muted-foreground ml-2">
+                        ({r.round_code})
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
           </div>
 

@@ -93,6 +93,19 @@ class PathCloneService:
                 "source_round_id và target_round_id phải khác nhau"
             )
 
+        # Round contract hardening (plan v4 Section C — Finding #4): block
+        # cloning INTO an archived or inactive target round. Cloned paths
+        # would be inert (create_path + validate_activation also reject such
+        # rounds) and only confuse admins. The SOURCE round may be in any
+        # state — we copy its config forward — but the destination must be
+        # usable.
+        if target_round.archived_at is not None or not target_round.is_active:
+            raise BusinessRuleViolation(
+                f"Không thể clone đường tuyển sinh vào đợt "
+                f"'{target_round.round_code}' đã lưu trữ hoặc đang tạm dừng. "
+                "Chọn đợt đích đang hoạt động."
+            )
+
         # Eager-load source paths với criteria + criteria_subject_group +
         # path_subject_group_configs + items
         stmt = (

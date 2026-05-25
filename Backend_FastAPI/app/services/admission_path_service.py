@@ -148,20 +148,23 @@ class AdmissionPathService:
         """
         Create a new AdmissionPath.
 
-        Phase 2 v8.2 PR-2B v2: auto-resolve DOT_1 shim. If
-        ``data.admission_round_id`` is None, lookup DOT_1 của
-        academic_info's academic_year (year-level Option A). Validate
-        Tier 1 chain trên admit_quota change.
+        Round contract hardening (plan v4 Section B, 2026-05-25):
+        ``data.admission_round_id`` is REQUIRED (the auto-resolve DOT_1
+        shim is removed). The explicit round is validated: must exist,
+        match academic_info's academic_year, be active and not archived.
+        Tier 1/2 quota chain validated on admit_quota/round_quota change.
 
         Raises:
-            DuplicateResourceError: If path already exists for offering + method
-            BusinessRuleViolation: Tier 1 chain violated, Tier 2 invariant violated, or DOT_1 not found
+            ResourceNotFoundError: academic_info or round not found
+            DuplicateResourceError: path already exists for (round, acad, method)
+            BusinessRuleViolation: round archived/inactive/cross-year, or Tier 1/2 violated
         """
-        # Phase 2 v8.2 PR-2B v2 — auto-resolve admission_round_id.
-        # PR-2C v2 đã ship 3-col UNIQUE (round, acad, method); duplicate check
-        # bên dưới dùng 3-col helper tương ứng.
-        # Pass 2 hard-review BM-4: lookup academic_info upfront (cả 2 nhánh
-        # auto-resolve + explicit cần academic_year cho cross-check).
+        # Round contract hardening (plan v4 Section B) — admission_round_id
+        # is REQUIRED (schema enforces gt=0); always validate the explicit
+        # round. PR-2C v2 ships the 3-col UNIQUE (round, acad, method);
+        # duplicate check below uses the matching 3-col helper.
+        # Pass 2 hard-review BM-4: lookup academic_info upfront (need
+        # academic_year for the round cross-check).
         from app.models.offering_academic_info import OfferingAcademicInfo
 
         academic_info = await self.db.get(
@@ -173,68 +176,54 @@ class AdmissionPathService:
             )
 
         admission_round_id = data.admission_round_id
-        if admission_round_id is None:
-            from app.repositories.admission_round_repository import (
-                AdmissionRoundRepository,
+        # Pre-validate explicit round_id exists để tránh IntegrityError
+        # bùng FK constraint mid-INSERT (no response → CORS error ở FE).
+        from app.models.offering_admission_round import (
+            OfferingAdmissionRound,
+        )
+        round_obj = await self.db.get(
+            OfferingAdmissionRound, admission_round_id
+        )
+        if round_obj is None:
+            raise ResourceNotFoundError(
+                f"OfferingAdmissionRound {admission_round_id} not found"
             )
-            round_repo = AdmissionRoundRepository(self.db)
-            default_round = await round_repo.get_default_dot1(
-                academic_info.academic_year
+        # Pass 2 hard-review B-2-1: chặn tạo path trên round đã archive.
+        # Path tạo trên archived round = inert path (không activate được vì
+        # validate_activation cũng chặn) → wasted DB row + admin confusion.
+        # Catch sớm tại create để FE hiển thị error message thân thiện.
+        if round_obj.archived_at is not None:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_obj.round_code}' đã lưu trữ "
+                f"({round_obj.archived_at.date().isoformat()}); "
+                f"khôi phục đợt trước khi tạo đường tuyển sinh."
             )
-            if default_round is None:
-                raise BusinessRuleViolation(
-                    f"DOT_1 round không tồn tại cho năm "
-                    f"{academic_info.academic_year}; admin tạo round trước "
-                    f"hoặc truyền explicit admission_round_id."
-                )
-            admission_round_id = default_round.id
-            log.info(
-                "admission_path_create_auto_resolved_round",
-                academic_info_id=data.academic_info_id,
-                academic_year=academic_info.academic_year,
-                resolved_round_id=admission_round_id,
-                auto_resolved=True,
+        # Round contract hardening (plan v4 Section B): also block creating
+        # a path on an inactive round. Like archived rounds, an inactive
+        # round yields an inert path; reject early for a friendly message
+        # instead of letting an unusable path accumulate.
+        if not round_obj.is_active:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_obj.round_code}' đang tạm dừng "
+                f"(inactive); kích hoạt lại đợt trước khi tạo đường tuyển sinh."
             )
-        else:
-            # Pre-validate explicit round_id exists để tránh IntegrityError
-            # bùng FK constraint mid-INSERT (no response → CORS error ở FE).
-            from app.models.offering_admission_round import (
-                OfferingAdmissionRound,
+        # Pass 2 hard-review BM-4: cross-check academic_year giữa round
+        # và academic_info. Round là year-level (Q1 Option A); tạo path
+        # với round năm 2025 trên academic_info năm 2026 = cross-year
+        # configuration sai semantic, reporting "Đợt 1 năm X" sẽ confuse.
+        if round_obj.academic_year != academic_info.academic_year:
+            raise BusinessRuleViolation(
+                f"Đợt tuyển sinh '{round_obj.round_code}' thuộc năm "
+                f"{round_obj.academic_year}, không khớp năm "
+                f"{academic_info.academic_year} của ngành. Chọn đợt "
+                f"cùng năm với ngành."
             )
-            round_obj = await self.db.get(
-                OfferingAdmissionRound, admission_round_id
-            )
-            if round_obj is None:
-                raise ResourceNotFoundError(
-                    f"OfferingAdmissionRound {admission_round_id} not found"
-                )
-            # Pass 2 hard-review B-2-1: chặn tạo path trên round đã archive.
-            # Path tạo trên archived round = inert path (không activate được vì
-            # validate_activation cũng chặn) → wasted DB row + admin confusion.
-            # Catch sớm tại create để FE hiển thị error message thân thiện.
-            if round_obj.archived_at is not None:
-                raise BusinessRuleViolation(
-                    f"Đợt tuyển sinh '{round_obj.round_code}' đã lưu trữ "
-                    f"({round_obj.archived_at.date().isoformat()}); "
-                    f"khôi phục đợt trước khi tạo đường tuyển sinh."
-                )
-            # Pass 2 hard-review BM-4: cross-check academic_year giữa round
-            # và academic_info. Round là year-level (Q1 Option A); tạo path
-            # với round năm 2025 trên academic_info năm 2026 = cross-year
-            # configuration sai semantic, reporting "Đợt 1 năm X" sẽ confuse.
-            if round_obj.academic_year != academic_info.academic_year:
-                raise BusinessRuleViolation(
-                    f"Đợt tuyển sinh '{round_obj.round_code}' thuộc năm "
-                    f"{round_obj.academic_year}, không khớp năm "
-                    f"{academic_info.academic_year} của ngành. Chọn đợt "
-                    f"cùng năm với ngành."
-                )
-            log.debug(
-                "admission_path_create_explicit_round",
-                academic_info_id=data.academic_info_id,
-                round_id=admission_round_id,
-                auto_resolved=False,
-            )
+        log.debug(
+            "admission_path_create_explicit_round",
+            academic_info_id=data.academic_info_id,
+            round_id=admission_round_id,
+            auto_resolved=False,
+        )
 
         # Tier 1+2 chain validation — admit_quota Tier 1 chain check
         # if admit_quota provided; Tier 2 invariant check both fields.

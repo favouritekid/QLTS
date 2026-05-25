@@ -118,6 +118,9 @@ async def setup_admission_api_data(
         "lead_id": lead.id,
         "admission_method_id": method.id,
         "offering_id": offering.id,
+        # Round contract hardening (plan v4): now-required round + year.
+        "admission_round_id": round_id,
+        "academic_year": academic_info.academic_year,
     }
 
 
@@ -154,6 +157,8 @@ class TestStrictAdmissionCompliance:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -199,6 +204,8 @@ class TestStrictAdmissionCompliance:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )

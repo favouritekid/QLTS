@@ -163,6 +163,8 @@ async def realtime_config(seed_lead_dependencies: dict):
         "method_id": am.id,
         "upload_doc_code": dt_upload.code,
         "paper_doc_code": dt_paper.code,
+        # Round contract hardening (plan v4): now-required admission_round_id.
+        "round_id": round_id,
     }
 
 
@@ -199,6 +201,8 @@ async def _create_profile(client, admin_token_headers, officer_user_in_db, cfg, 
             json={
                 "lead_id": lead["id"],
                 "admission_method_id": cfg["method_id"],
+                "admission_round_id": cfg["round_id"],
+                "academic_year": 2026,
             },
             headers=admin_token_headers,
         )

@@ -94,7 +94,7 @@ async def doc_perm_config(seed_lead_dependencies: dict):
                 display_order=1,
             )
             s.add(dgi); await s.flush()
-    return {"unit_id": uid, "offering_id": po.id, "method_id": am.id}
+    return {"unit_id": uid, "offering_id": po.id, "method_id": am.id, "round_id": round_id}
 
 
 async def _create_profile(client, admin_token_headers, officer_user_in_db, cfg):
@@ -115,6 +115,8 @@ async def _create_profile(client, admin_token_headers, officer_user_in_db, cfg):
     prof = (await client.post(ADMISSIONS, json={
         "lead_id": lead["id"],
         "admission_method_id": cfg["method_id"],
+        "admission_round_id": cfg["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)).json()
     return prof
 

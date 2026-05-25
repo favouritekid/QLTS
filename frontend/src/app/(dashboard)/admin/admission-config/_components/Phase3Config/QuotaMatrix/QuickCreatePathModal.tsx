@@ -38,7 +38,10 @@ import type { AdmissionMethod } from "../../shared/types"
 
 interface Props {
   academicInfoId: number
-  /** Preset round (cell vị trí). Optional — null → BE auto-resolve DOT_1 */
+  /** Preset round (cell vị trí). Round contract hardening (plan v4): the BE
+   *  auto-resolve DOT_1 shim is removed, so a null round can no longer be
+   *  quick-created here — submit is blocked and the admin is sent to the
+   *  step-by-step wizard (which has a round picker). */
   admissionRoundId?: number | null
   /** Preset method nếu cell là vị trí (method × round) cụ thể */
   admissionMethodId?: number | null
@@ -67,11 +70,21 @@ export function QuickCreatePathModal({
       toast.error("Vui lòng chọn phương thức trước khi tạo.")
       return
     }
+    // Round contract hardening (plan v4 Section B-FE): the round is REQUIRED
+    // and the BE auto-DOT_1 shim is removed. This minimal modal has no round
+    // picker, so when the cell didn't preset a round, block and route to the
+    // wizard. Guard also narrows admissionRoundId to number for the payload.
+    if (!admissionRoundId) {
+      toast.error(
+        "Thiếu đợt tuyển sinh — không thể tạo nhanh. Dùng trình tạo từng bước để chọn đợt.",
+      )
+      return
+    }
     try {
       const created = await createMutation.mutateAsync({
         academic_info_id: academicInfoId,
         admission_method_id: methodId,
-        admission_round_id: admissionRoundId ?? null,
+        admission_round_id: admissionRoundId,
         display_name: displayName.trim() || null,
         display_order: Number(displayOrder) || 1,
         visibility: "internal",
@@ -159,8 +172,9 @@ export function QuickCreatePathModal({
           </div>
 
           {!admissionRoundId && (
-            <div className="rounded-md border bg-muted/40 p-2 text-[11px] text-muted-foreground">
-              Đợt không chọn trước — máy chủ tự gán Đợt 1 của năm tương ứng.
+            <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive">
+              Chưa chọn đợt tuyển sinh — không thể tạo nhanh. Vui lòng dùng
+              trình tạo từng bước (wizard) để chọn đợt.
             </div>
           )}
         </div>
@@ -175,7 +189,7 @@ export function QuickCreatePathModal({
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || !admissionRoundId}
             aria-busy={createMutation.isPending}
           >
             {createMutation.isPending && (

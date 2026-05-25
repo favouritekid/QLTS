@@ -6,7 +6,6 @@ Covers:
 * Bulk-create atomic per academic_year (Q1 v8.2)
 * Concern γ v6 — soft-archive admin discretion
 * Concern A v4 — extend writes audit fields
-* Repository ``get_default_dot1(academic_year)`` helper
 
 Anchor tests per memory pattern-change-impact-audit (P3-2 v8.2).
 """
@@ -20,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.database import AsyncSessionLocal
-from app.repositories.admission_round_repository import AdmissionRoundRepository
 from app.schemas.admission_round import (
     AdmissionRoundBulkCreate,
     AdmissionRoundBulkCreateItem,
@@ -362,33 +360,9 @@ async def test_round_extend_rejects_earlier_or_same_date(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_admission_round_repository_get_default_dot1(
-    round_test_seed: dict,
-) -> None:
-    """Service shim auto-resolve target — used by PR-2B v2
-    create_admission_path khi caller omits round_id (year-level lookup)."""
-    async with AsyncSessionLocal() as db:
-        admin = await _get_admin(db, round_test_seed["admin_user_id"])
-        service = AdmissionRoundService(db)
-        await service.create(
-            2026,
-            AdmissionRoundCreate(round_code="DOT_1", round_name="Đợt 1 - 2026"),
-            admin,
-        )
-        await service.create(
-            2026,
-            AdmissionRoundCreate(round_code="DOT_2", round_name="Đợt 2 - 2026"),
-            admin,
-        )
-        await db.commit()
-
-    async with AsyncSessionLocal() as db:
-        repo = AdmissionRoundRepository(db)
-        dot1 = await repo.get_default_dot1(academic_year=2026)
-        assert dot1 is not None
-        assert dot1.round_code == "DOT_1"
-        assert dot1.academic_year == 2026
+# test_admission_round_repository_get_default_dot1 removed — round contract
+# hardening (plan v4 Section B): the get_default_dot1 helper is deleted along
+# with the create_path auto-resolve DOT_1 shim it was the only caller for.
 
 
 @pytest.mark.asyncio

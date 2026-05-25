@@ -191,6 +191,7 @@ async def test_create_profile_inherits_multi_nv_true_when_round_enabled(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )
@@ -227,6 +228,7 @@ async def test_create_profile_inherits_multi_nv_false_when_round_legacy(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )
@@ -259,6 +261,7 @@ async def test_submit_blocked_when_multi_nv_profile_has_no_choices(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )
@@ -280,3 +283,168 @@ async def test_submit_blocked_when_multi_nv_profile_has_no_choices(
         f"Submit guard message should mention 'nguyện vọng'; "
         f"got: {exc_info.value!s}"
     )
+
+
+# ---------------------------------------------------------------------
+# Anchor 4 — 3-col lookup binds to the EXACT round among two sharing
+# (offering, year, method). Round contract hardening (plan v4 Section A /
+# Blocker-2): the core bug was the 2-col ``.first()`` picking an arbitrary
+# round (DOT_1 vs DOT_2). This is the durable CI proof of the fix
+# (smoke E2E covered it manually; this keeps it regression-locked).
+# ---------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def seed_two_round_two_lead(admin_user_in_db, seed_lead_dependencies):
+    """One offering+method with TWO active paths in TWO rounds (DOT_1
+    allow_multi_nv=False, DOT_2 allow_multi_nv=True) + two leads. The two
+    paths share (academic_info, method) and differ only by round — exactly
+    the prod shape that broke the 2-col ``.first()`` lookup."""
+    suffix = uuid.uuid4().hex[:8]
+    unit_id = seed_lead_dependencies["unit_id"]
+    program_id = seed_lead_dependencies["major_program_id"]
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ot = models.ConfigOfferingType(
+                code=f"p3_2r_{suffix}", name=f"2round {suffix}", is_active=True
+            )
+            s.add(ot)
+            await s.flush()
+            offering = models.ProgramOffering(
+                offering_type=f"p3_2r_{suffix}",
+                program_id=program_id,
+                offering_type_id=ot.id,
+            )
+            s.add(offering)
+            await s.flush()
+            ai = models.OfferingAcademicInfo(
+                offering_id=offering.id, academic_year=2026, is_published=True
+            )
+            s.add(ai)
+            await s.flush()
+            method = models.AdmissionMethod(
+                code=f"p3_2r_m_{suffix}", name="2round method", is_active=True
+            )
+            s.add(method)
+            await s.flush()
+            # ADM-003: AdmissionPath.criteria_id is UNIQUE → one criteria per path.
+            crit1 = models.AdmissionCriteria(
+                method_id=method.id, code=f"p3_2r_c1_{suffix}",
+                name="c1", min_gpa=0, is_active=True,
+            )
+            crit2 = models.AdmissionCriteria(
+                method_id=method.id, code=f"p3_2r_c2_{suffix}",
+                name="c2", min_gpa=0, is_active=True,
+            )
+            s.add_all([crit1, crit2])
+            await s.flush()
+            r1 = models.OfferingAdmissionRound(
+                academic_year=2026, round_code=f"D1_{suffix}",
+                round_name=f"Dot 1 {suffix}", is_active=True, allow_multi_nv=False,
+            )
+            r2 = models.OfferingAdmissionRound(
+                academic_year=2026, round_code=f"D2_{suffix}",
+                round_name=f"Dot 2 {suffix}", is_active=True, allow_multi_nv=True,
+            )
+            s.add_all([r1, r2])
+            await s.flush()
+            p1 = models.AdmissionPath(
+                academic_info_id=ai.id, admission_method_id=method.id,
+                admission_round_id=r1.id, criteria_id=crit1.id, status="active",
+            )
+            p2 = models.AdmissionPath(
+                academic_info_id=ai.id, admission_method_id=method.id,
+                admission_round_id=r2.id, criteria_id=crit2.id, status="active",
+            )
+            s.add_all([p1, p2])
+            await s.flush()
+            leads = []
+            for tag in ("A", "B"):
+                lead = models.Lead(
+                    full_name=f"2round {tag} {suffix}",
+                    phone=f"090{random.randint(1000000, 9999999)}",
+                    email=f"p3_2r_{tag}_{suffix}@test.com",
+                    source="website", unit_id=unit_id, offering_id=offering.id,
+                )
+                s.add(lead)
+                await s.flush()
+                s.add(models.Consultation(
+                    lead_id=lead.id, method="phone", notes="2round setup",
+                    officer_id=admin_user_in_db["id"], consultation_status_id="sts06",
+                ))
+                leads.append(lead.id)
+            return {
+                "lead_a_id": leads[0],
+                "lead_b_id": leads[1],
+                "round_dot1_id": r1.id,
+                "round_dot2_id": r2.id,
+                "admission_method_id": method.id,
+                "academic_year": 2026,
+                "admin_user_id": admin_user_in_db["id"],
+            }
+
+
+async def test_create_profile_3col_binds_to_exact_round_among_two(
+    seed_two_round_two_lead,
+) -> None:
+    """ANCHOR (plan v4 Blocker-2): with two active paths sharing (offering,
+    year, method) but different rounds, create_profile binds each profile to
+    the round its caller passed — NOT an arbitrary ``.first()``.
+
+    lead_A + DOT_1 → applied_rules.admission_round_id == DOT_1 + uses_choice_
+    engine False; lead_B + DOT_2 → DOT_2 + True. A regression reverting to the
+    2-col lookup would bind BOTH to the same (arbitrary) round → the distinct-
+    round assert (or one engine assert) fails. Re-fetched in a fresh session
+    so the assertion exercises the persisted column, not the in-memory object.
+    """
+    seed = seed_two_round_two_lead
+
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, seed["admin_user_id"])
+        prof_a = await admission_service.create_profile(
+            db=s,
+            lead_id=seed["lead_a_id"],
+            admission_method_id=seed["admission_method_id"],
+            admission_round_id=seed["round_dot1_id"],
+            current_user=admin,
+            academic_year=2026,
+        )
+        pid_a = prof_a.id
+        await s.commit()
+
+    async with AsyncSessionLocal() as s:
+        admin = await s.get(models.User, seed["admin_user_id"])
+        prof_b = await admission_service.create_profile(
+            db=s,
+            lead_id=seed["lead_b_id"],
+            admission_method_id=seed["admission_method_id"],
+            admission_round_id=seed["round_dot2_id"],
+            current_user=admin,
+            academic_year=2026,
+        )
+        pid_b = prof_b.id
+        await s.commit()
+
+    async with AsyncSessionLocal() as s:
+        pa = await s.get(models.AdmissionProfile, pid_a)
+        pb = await s.get(models.AdmissionProfile, pid_b)
+        assert pa.applied_rules["admission_round_id"] == seed["round_dot1_id"], (
+            f"lead_A bound to {pa.applied_rules.get('admission_round_id')}, "
+            f"expected DOT_1 {seed['round_dot1_id']}"
+        )
+        assert pb.applied_rules["admission_round_id"] == seed["round_dot2_id"], (
+            f"lead_B bound to {pb.applied_rules.get('admission_round_id')}, "
+            f"expected DOT_2 {seed['round_dot2_id']}"
+        )
+        assert pa.applied_rules["admission_round_id"] != pb.applied_rules["admission_round_id"], (
+            "two profiles must bind to DISTINCT rounds — 3-col disambiguation "
+            "(2-col .first() regression would collapse them to one round)"
+        )
+        assert pa.uses_choice_engine is False, (
+            f"DOT_1 allow_multi_nv=False → uses_choice_engine False, got "
+            f"{pa.uses_choice_engine!r}"
+        )
+        assert pb.uses_choice_engine is True, (
+            f"DOT_2 allow_multi_nv=True → uses_choice_engine True, got "
+            f"{pb.uses_choice_engine!r}"
+        )

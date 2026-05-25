@@ -68,7 +68,7 @@ async def adm_config(seed_lead_dependencies: dict):
                 status="active", display_name="Test", display_order=0, visibility="public",
             )
             s.add(ap); await s.flush()
-    return {"unit_id": uid, "offering_id": po.id, "method_id": am.id}
+    return {"unit_id": uid, "offering_id": po.id, "method_id": am.id, "round_id": round_id}
 
 
 async def _login(client: AsyncClient, username: str, password: str) -> dict:
@@ -121,6 +121,8 @@ async def test_assign_officer_action_role_matrix(
     prof = await client.post(ADMISSIONS, json={
         "lead_id": lead_id,
         "admission_method_id": adm_config["method_id"],
+        "admission_round_id": adm_config["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)
     assert prof.status_code in (200, 201), prof.text
     pid = prof.json()["id"]
@@ -189,6 +191,8 @@ async def test_bulk_assign_rejects_non_officer_target(
     prof = (await client.post(ADMISSIONS, json={
         "lead_id": lead["id"],
         "admission_method_id": adm_config["method_id"],
+        "admission_round_id": adm_config["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)).json()
 
     # Attempt to assign the manager (not an officer) → 400.

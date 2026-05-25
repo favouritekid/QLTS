@@ -417,23 +417,37 @@ class AdmissionProfileCreate(BaseModel):
         gt=0,
         description="Admission method ID (required for AdmissionPath lookup)"
     )
-    # ADM-017: client SHOULD pass academic_year so the service binds
-    # the profile to a specific OfferingAcademicInfo row deterministically.
-    # Optional in this BE phase for backward compatibility — if omitted,
-    # the service falls back to "first published academic_info for the
-    # offering" (legacy behaviour). A follow-up PR will add the FE field
-    # and flip this to required. See memory ``project_admission_audit_2026-04-27_wave_status``
-    # (Q8=b decision) and the ADM-017 ship note.
-    academic_year: Optional[int] = Field(
-        default=None,
+    # Round contract hardening (plan v4 Section A, 2026-05-25): the
+    # admission round is now REQUIRED. AdmissionPath is identified by the
+    # 3-col UNIQUE (admission_round_id, academic_info_id, admission_method_id),
+    # so binding the profile needs an explicit round — the old 2-col
+    # ``.first()`` lookup silently picked an arbitrary round (DOT_1 vs
+    # DOT_2) when both existed for the same (offering, year, method).
+    admission_round_id: int = Field(
+        ...,
+        gt=0,
+        description=(
+            "Admission round ID (REQUIRED). Binds the profile to the exact "
+            "(round, offering, method) AdmissionPath. Validated server-side: "
+            "must exist, match academic_year, be active and not archived."
+        ),
+    )
+    # Round contract hardening (plan v4): academic_year is now REQUIRED.
+    # The legacy "first published OfferingAcademicInfo" fallback and the
+    # ``current_intake_year`` race-check fallback have both been removed
+    # from ``create_profile``, so the year must be explicit to validate
+    # the selected round (round.academic_year == academic_year)
+    # deterministically. FE already always sends academic_year (ADM-017).
+    academic_year: int = Field(
+        ...,
         ge=2000,
         le=2100,
         description=(
-            "Academic year for the profile (e.g., 2026). Service "
-            "validates a published OfferingAcademicInfo row exists "
-            "for ``(lead.offering_id, academic_year)``; if omitted, "
-            "falls back to the offering's first published year."
-        )
+            "Academic year for the profile (e.g., 2026). Service validates "
+            "a published OfferingAcademicInfo row exists for "
+            "``(lead.offering_id, academic_year)`` AND that "
+            "admission_round_id belongs to this year."
+        ),
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)

@@ -517,6 +517,13 @@ export const admissionProfileCreateSchema = z.object({
     .number()
     .int("Admission Method ID phải là số nguyên")
     .positive("Admission Method ID phải là số dương"),
+  // Round contract hardening (plan v4): REQUIRED. Binds the profile to the
+  // exact (round, offering, method) AdmissionPath; BE validates it exists,
+  // matches academic_year, is active and not archived.
+  admission_round_id: z
+    .number()
+    .int("Đợt tuyển sinh phải là số nguyên")
+    .positive("Đợt tuyển sinh phải là số dương"),
   academic_year: z
     .number()
     .int("Năm học phải là số nguyên")
