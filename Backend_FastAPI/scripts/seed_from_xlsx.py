@@ -929,19 +929,23 @@ async def seed_16_duong_dan(db: AsyncSession, wb, dry_run: bool) -> int:
         # NOT NULL and changed the UNIQUE constraint from 2 columns to
         # ``(admission_round_id, academic_info_id, admission_method_id)``.
         # The xlsx workbook predates this change and has no admission_round_id
-        # column, so we derive it: pick the earliest round for the year
-        # (deterministic, matches the historical convention where DOT_1 is the
-        # first round of an academic year). Without this, INSERT fails twice:
+        # column, so we derive it: explicitly pick ``DOT_1`` to match the
+        # contract service auto-resolve convention (admission_path_service
+        # uses ``get_default_dot1``). Earlier draft used
+        # ``ORDER BY start_date ASC NULLS LAST`` but DOT_1's backfill row has
+        # ``start_date = NULL`` while DOT_2/DOT_3 have real dates, which
+        # would mis-route the seed into a non-default round in any DB with
+        # multiple rounds. Without this fix, INSERT fails twice:
         # (1) NOT NULL violation on admission_round_id, and (2) ON CONFLICT
         # references a constraint shape that no longer exists.
         round_row = (await db.execute(
             text('''SELECT id FROM offering_admission_round
-                 WHERE academic_year = :year
-                 ORDER BY start_date ASC NULLS LAST, id ASC LIMIT 1'''),
+                 WHERE academic_year = :year AND round_code = 'DOT_1'
+                 LIMIT 1'''),
             {"year": nam_hoc}
         )).fetchone()
         if not round_row:
-            # Year has no rounds seeded yet — skip this path (idempotent).
+            # Year has no DOT_1 round seeded yet — skip this path (idempotent).
             continue
         admission_round_id = round_row[0]
 
