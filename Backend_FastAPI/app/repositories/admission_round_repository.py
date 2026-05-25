@@ -29,21 +29,11 @@ class AdmissionRoundRepository:
         )
         return list(result.scalars().all())
 
-    async def get_default_dot1(
-        self, academic_year: int
-    ) -> Optional[OfferingAdmissionRound]:
-        """Service shim auto-resolve target — used by PR-2B v2
-        ``create_admission_path`` when caller omits round_id.
-
-        Q1 v8.2 year-level lookup: 1 DOT_1 row per academic_year (cho cả trường).
-        """
-        result = await self.db.execute(
-            select(OfferingAdmissionRound).where(
-                OfferingAdmissionRound.academic_year == academic_year,
-                OfferingAdmissionRound.round_code == "DOT_1",
-            )
-        )
-        return result.scalar_one_or_none()
+    # get_default_dot1() removed (round contract hardening, plan v4
+    # Section B, 2026-05-25). It only ever served the auto-resolve DOT_1
+    # shim in admission_path_service.create_path, which is now removed —
+    # admission_round_id is REQUIRED. Path-create always binds an explicit
+    # round. (seed_from_xlsx.py derives DOT_1 via its own raw SQL.)
 
     async def get_by_year_and_code(
         self, academic_year: int, round_code: str

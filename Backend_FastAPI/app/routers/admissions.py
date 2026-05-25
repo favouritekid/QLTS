@@ -285,12 +285,12 @@ async def create_admission_profile(
         profile = await admission_service.create_profile(
             db=db,
             lead_id=data.lead_id,
-            admission_method_id=data.admission_method_id,  # NEW: Required for AdmissionPath lookup
+            admission_method_id=data.admission_method_id,  # Required for AdmissionPath lookup
+            admission_round_id=data.admission_round_id,  # Round contract hardening (plan v4)
             current_user=current_user,
-            # ADM-017: forward optional academic_year. Service binds to
-            # the specific (offering, year) OfferingAcademicInfo when
-            # provided; falls back to first-published when omitted
-            # (legacy contract for backward-compat during FE rollout).
+            # Round contract hardening (plan v4): academic_year is now
+            # REQUIRED — the service validates the selected round belongs
+            # to this year (no first-published / current_intake fallback).
             academic_year=data.academic_year,
         )
 

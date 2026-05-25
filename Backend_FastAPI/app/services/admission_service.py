@@ -2855,9 +2855,10 @@ def _merge_subject_weights(admission_path) -> Dict[str, float]:
 async def create_profile(
     db: AsyncSession,
     lead_id: int,
-    admission_method_id: int,  # NEW: Required parameter for relational lookup
+    admission_method_id: int,  # Required for relational AdmissionPath lookup
+    admission_round_id: int,  # Round contract hardening (plan v4) — REQUIRED
     current_user: models.User,
-    academic_year: Optional[int] = None,
+    academic_year: int,  # Round contract hardening (plan v4) — REQUIRED
 ) -> models.AdmissionProfile:
     """
     Create new AdmissionProfile for a Lead.
@@ -2951,27 +2952,19 @@ async def create_profile(
         # race-safe check must scope to the target year. Using the
         # deprecated ``get_profile_by_lead_id`` (which returns the latest
         # year regardless) would falsely block creating a profile for
-        # year N+1 when the lead has a profile for year N. Scope to the
-        # requested ``academic_year`` (or current_intake_year fallback,
-        # mirroring eligibility check at line 2497) so multi-year
-        # creates work as intended by the composite UNIQUE swap.
-        race_check_year = academic_year
-        if race_check_year is None:
-            from app.services.system_config_service import SystemConfigService
-
-            cfg_year = await SystemConfigService(db).get_value(
-                "current_intake_year", 2026
-            )
-            race_check_year = (
-                int(cfg_year) if isinstance(cfg_year, str) else cfg_year
-            )
+        # year N+1 when the lead has a profile for year N.
+        #
+        # Round contract hardening (plan v4, 2026-05-25 — F30): academic_year
+        # is now a REQUIRED parameter, so the race-safe check scopes directly
+        # to it. The old ``current_intake_year`` SystemConfig fallback (used
+        # when academic_year was Optional/None) is removed.
         existing_profile = await admission_repo.get_profile_by_lead_year(
-            lead_id, race_check_year
+            lead_id, academic_year
         )
         if existing_profile:
             raise ConflictError(
                 f"Lead {lead_id} already has an admission profile for "
-                f"academic year {race_check_year}"
+                f"academic year {academic_year}"
             )
 
     # Lead-level eligibility gate (SINGLE SOURCE OF TRUTH shared with GET /leads/{id}).
@@ -3019,91 +3012,133 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    # Step 6: Get published OfferingAcademicInfo for this offering.
+    # Step 6: Get published OfferingAcademicInfo for the (offering, year).
     #
-    # ADM-017: when ``academic_year`` is provided, bind to the
-    # specific (offering, year) row and require it to be published.
-    # When omitted (legacy callers), fall back to "first published"
-    # — same behaviour as before, with a deprecation warning so we
-    # can track FE rollout. After all callers pass academic_year,
-    # a follow-up PR removes this fallback and flips the schema
-    # field to required.
+    # Round contract hardening (plan v4, 2026-05-25 — F30): academic_year
+    # is now REQUIRED, so we always bind to the specific (offering, year)
+    # row and require it to be published. The legacy "first published"
+    # fallback (the old ``else`` branch when academic_year was None) is
+    # removed — a deterministic year is needed to validate the selected
+    # round below (round.academic_year == academic_year).
     academic_info_list = await org_repo.get_academic_info_history(
         lead.offering_id,
         published_only=False,
     )
 
-    if academic_year is not None:
-        academic_info = next(
-            (
-                info
-                for info in academic_info_list
-                if info.academic_year == academic_year
-            ),
-            None,
-        )
-        if not academic_info:
-            log.warning(
-                "No academic info found for offering+academic_year",
-                offering_id=lead.offering_id,
-                academic_year=academic_year,
-            )
-            raise BadRequest(
-                f"Không tìm thấy năm học {academic_year} cho chương trình "
-                f"này (offering {lead.offering_id}). Vui lòng kiểm tra "
-                "cấu hình năm học hoặc chọn năm khác."
-            )
-        if not academic_info.is_published:
-            log.warning(
-                "academic_year requested but not published",
-                offering_id=lead.offering_id,
-                academic_year=academic_year,
-                academic_info_id=academic_info.id,
-            )
-            raise BadRequest(
-                f"Năm học {academic_year} của chương trình này chưa "
-                "được công bố tuyển sinh. Vui lòng chọn năm khác hoặc "
-                "liên hệ admin để công bố."
-            )
-    else:
-        # Legacy fallback — first published, else first row of history.
-        log.warning(
-            "create_profile called without academic_year (deprecated). "
-            "Falling back to first published OfferingAcademicInfo. "
-            "FE callers should migrate to passing academic_year.",
-            lead_id=lead_id,
-            offering_id=lead.offering_id,
-        )
-        academic_info = next(
-            (info for info in academic_info_list if info.is_published),
-            academic_info_list[0] if academic_info_list else None,
-        )
-
+    academic_info = next(
+        (
+            info
+            for info in academic_info_list
+            if info.academic_year == academic_year
+        ),
+        None,
+    )
     if not academic_info:
         log.warning(
-            "No academic info found for offering",
+            "No academic info found for offering+academic_year",
             offering_id=lead.offering_id,
+            academic_year=academic_year,
         )
         raise BadRequest(
-            f"No published academic info found for offering {lead.offering_id}. "
-            "Please configure academic year info before creating profiles."
+            f"Không tìm thấy năm học {academic_year} cho chương trình "
+            f"này (offering {lead.offering_id}). Vui lòng kiểm tra "
+            "cấu hình năm học hoặc chọn năm khác."
+        )
+    if not academic_info.is_published:
+        log.warning(
+            "academic_year requested but not published",
+            offering_id=lead.offering_id,
+            academic_year=academic_year,
+            academic_info_id=academic_info.id,
+        )
+        raise BadRequest(
+            f"Năm học {academic_year} của chương trình này chưa "
+            "được công bố tuyển sinh. Vui lòng chọn năm khác hoặc "
+            "liên hệ admin để công bố."
         )
 
-    # Step 7: Find AdmissionPath for this offering + method (NEW: Relational)
-    admission_path = await path_repo.get_path_by_offering_and_method(
+    # Step 6b: Validate the explicitly-selected admission round.
+    #
+    # Round contract hardening (plan v4 Section A): the round is now
+    # REQUIRED + validated up front, BEFORE building applied_rules, so the
+    # 3-col path lookup binds the profile to the exact (round, offering,
+    # method) tuple — no silent fallback to DOT_1 via ``.first()``.
+    # Validate (in order): exists → matches the requested academic_year →
+    # active → not archived. INSERT happens later so this runs before the
+    # applied_rules immutability trigger ever sees the row (F46 — safe).
+    from app.repositories.admission_round_repository import (
+        AdmissionRoundRepository,
+    )
+
+    round_repo = AdmissionRoundRepository(db)
+    admission_round = await round_repo.get_by_id(admission_round_id)
+    if admission_round is None:
+        log.warning(
+            "Admission round not found",
+            admission_round_id=admission_round_id,
+            lead_id=lead_id,
+        )
+        raise BadRequest(
+            f"Đợt tuyển sinh (round_id={admission_round_id}) không tồn tại."
+        )
+    if admission_round.academic_year != academic_year:
+        log.warning(
+            "Admission round academic_year mismatch",
+            admission_round_id=admission_round_id,
+            round_year=admission_round.academic_year,
+            requested_year=academic_year,
+        )
+        raise BadRequest(
+            f"Đợt tuyển sinh '{admission_round.round_code}' thuộc năm "
+            f"{admission_round.academic_year}, không khớp năm {academic_year} "
+            "đã chọn. Vui lòng chọn đợt đúng năm."
+        )
+    if not admission_round.is_active:
+        log.warning(
+            "Admission round is inactive",
+            admission_round_id=admission_round_id,
+        )
+        raise BadRequest(
+            f"Đợt tuyển sinh '{admission_round.round_code}' đang tạm dừng "
+            "(inactive). Vui lòng chọn đợt khác."
+        )
+    if admission_round.archived_at is not None:
+        log.warning(
+            "Admission round is archived",
+            admission_round_id=admission_round_id,
+            archived_at=str(admission_round.archived_at),
+        )
+        raise BadRequest(
+            f"Đợt tuyển sinh '{admission_round.round_code}' đã lưu trữ. "
+            "Vui lòng chọn đợt khác."
+        )
+
+    # Step 7: Find AdmissionPath for this (round, offering, method).
+    #
+    # Round contract hardening (plan v4 Section A): 3-col lookup replaces
+    # the old 2-col ``get_path_by_offering_and_method`` + ``.first()``,
+    # which silently picked an arbitrary round (DOT_1 vs DOT_2) when both
+    # existed for the same (offering, year, method). The helper eager-loads
+    # admission_round so ``uses_choice_engine`` below reads
+    # ``allow_multi_nv`` deterministically.
+    admission_path = await path_repo.get_path_by_round_and_method(
+        admission_round_id=admission_round_id,
         academic_info_id=academic_info.id,
-        admission_method_id=admission_method_id
+        admission_method_id=admission_method_id,
     )
 
     if not admission_path:
         log.warning(
-            "No admission path configured for offering + method",
+            "No admission path configured for round + offering + method",
+            admission_round_id=admission_round_id,
             academic_info_id=academic_info.id,
             admission_method_id=admission_method_id,
         )
         raise BadRequest(
-            f"No admission path configured for this offering and method (method_id={admission_method_id}). "
-            "Please configure admission paths in the Config Console before creating profiles."
+            f"Không có đường tuyển sinh (path) cấu hình cho đợt "
+            f"'{admission_round.round_code}', năm {academic_year}, "
+            f"phương thức (method_id={admission_method_id}). Vui lòng cấu "
+            "hình đường tuyển sinh ở Admission Config trước khi tạo hồ sơ."
         )
 
     # ✅ FIX Finding 1.2: Check if Admission Method is Active
@@ -3111,7 +3146,7 @@ async def create_profile(
     # Assuming path.admission_method is eager loaded in repository or exists
     # If not loaded, we rely on the repository ensuring it returns valid paths,
     # but explicit check is safer.
-    # Since get_path_by_offering_and_method likely joins admission_method, we check here.
+    # Since get_path_by_round_and_method eager-loads admission_method, we check here.
     if admission_path.admission_method and not admission_path.admission_method.is_active:
          log.warning(
             "Attempt to create profile with inactive admission method",
