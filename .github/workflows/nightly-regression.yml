@@ -27,6 +27,14 @@ jobs:
       POSTGRES_DB: qlts_test
       DOMAIN: localhost
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      # Match credentials actually seeded by ``seed_from_xlsx.py`` (sheet
+      # ``2_TaiKhoan``). Doc default ``vothuhien``/``@Matkhau123!`` in
+      # ``Documents/TESTING_GUIDE.md`` + ``auth.setup.ts:27`` is stale —
+      # the xlsx workbook seeds ``vothithuthuhien`` / ``Abc@123456789``.
+      # Setting env here lets Playwright (auth.setup.ts:27-28 reads
+      # TEST_USERNAME / TEST_PASSWORD env) login successfully.
+      TEST_USERNAME: vothithuthuhien
+      TEST_PASSWORD: Abc@123456789
 
     steps:
       - uses: actions/checkout@v4
