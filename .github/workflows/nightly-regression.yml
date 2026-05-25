@@ -47,15 +47,26 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       # Generate ``.env.production`` so the backend service's ``env_file:``
-      # directive resolves (it's referenced unconditionally in
-      # docker-compose.yml). Values are CI-only placeholders mirroring the
-      # pattern used by backend-test.yml + nightly-backend-pytest.yml.
+      # directive resolves. ``_validate_production_secrets()`` in
+      # app/config.py enforces in APP_ENV=production:
+      #   * SECRET_KEY + JWT_SECRET_KEY ≥32 chars + not in weak-list
+      #   * DEVICE_FINGERPRINT_SALT != "CHANGE_ME_IN_PRODUCTION"
+      #   * LOG_LEVEL != DEBUG
+      #   * DATABASE_URL not localhost + sslmode=require unless
+      #     ALLOW_DOCKER_INTERNAL_NETWORK=true (postgres/redis are on the
+      #     same compose bridge here — internal network = true is correct).
+      # All values are CI-only placeholders; the runner is destroyed at
+      # job end. ``openssl rand -base64 32`` generates fresh salt per run
+      # to keep the secret out of repo history.
       - name: Generate .env.production for backend env_file load
         run: |
           cat > .env.production <<EOF
           APP_ENV=production
-          SECRET_KEY=ci-test-secret-key-for-nightly-only
-          JWT_SECRET_KEY=ci-test-jwt-secret-for-nightly-only
+          SECRET_KEY=ci-test-secret-key-with-32-chars-or-more-for-nightly-regression-only-not-real-prod
+          JWT_SECRET_KEY=ci-test-jwt-secret-with-32-chars-or-more-for-nightly-regression-only-not-real-prod
+          DEVICE_FINGERPRINT_SALT=$(openssl rand -base64 32)
+          ALLOW_DOCKER_INTERNAL_NETWORK=true
+          LOG_LEVEL=INFO
           MAIL_USERNAME=ci-test@example.com
           MAIL_PASSWORD=ci-test-placeholder
           MAIL_FROM=ci-test@example.com
