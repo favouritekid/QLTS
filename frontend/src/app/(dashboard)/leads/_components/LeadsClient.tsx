@@ -165,11 +165,15 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
     if (selectedLeadId) {
       const leadStillExists = filteredLeads.some((lead) => lead.id === selectedLeadId);
       if (!leadStillExists) {
-        queueMicrotask(() => setSelectedLeadId(null));
+        // Defer both setState calls off the effect's synchronous path
+        // (queueMicrotask) to avoid cascading-render lint/runtime warnings.
         // Also dismiss the mobile sheet — otherwise it lingers open showing
         // an empty-state panel (e.g. when the open lead is deleted from
         // another session via the `lead_deleted` socket event).
-        setMobileDetailOpen(false);
+        queueMicrotask(() => {
+          setSelectedLeadId(null);
+          setMobileDetailOpen(false);
+        });
       }
     }
   }, [filteredLeads, selectedLeadId]);
@@ -182,7 +186,8 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
   // clear selectedLeadId here — closing the drawer is enough.
   useEffect(() => {
     if (mobileOverlayCloseNonce > 0) {
-      setMobileDetailOpen(false);
+      // Defer off the effect's synchronous path to avoid cascading renders.
+      queueMicrotask(() => setMobileDetailOpen(false));
     }
   }, [mobileOverlayCloseNonce]);
 
