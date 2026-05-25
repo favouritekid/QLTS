@@ -24,6 +24,7 @@ import { api } from "@/lib/api/client"
 import { getPathsForOffering } from "@/lib/api/admission-paths"
 import { toast } from "sonner"
 import { PageContainer } from "@/components/layouts/PageContainer"
+import { todayVN } from "@/lib/utils/vn-date"
 import type { LeadAdmissionBlocker } from "@/types/lead.types"
 
 // Blocker code → user-facing VN message. Source of truth lives in backend
@@ -58,6 +59,18 @@ interface AdmissionMethod {
 interface AdmissionMethodListResponse {
   methods: AdmissionMethod[]
   total: number
+}
+
+// Round contract hardening (plan v4): a distinct, usable admission round
+// derived from the offering's active paths (``round_*`` flat fields on the
+// for-offering response). ``isOpen`` = today within [start, end] in VN time.
+interface RoundOption {
+  id: number
+  code: string | null
+  name: string | null
+  startDate: string | null
+  endDate: string | null
+  isOpen: boolean
 }
 
 // Hook to fetch admission methods
@@ -103,6 +116,7 @@ export default function CreateAdmissionPage() {
   // would otherwise fire on a "useEffect → setState" auto-select
   // pattern.
   const [pickedYear, setPickedYear] = useState<number | null>(null)
+  const [pickedRoundId, setPickedRoundId] = useState<number | null>(null)
   const [pickedMethodId, setPickedMethodId] = useState<number | null>(null)
 
   const { data: lead, isLoading: isLoadingLead } = useLead(
@@ -163,15 +177,75 @@ export default function CreateAdmissionPage() {
   const academicYear: number | null =
     pickedYear ?? (eligibleYears.length === 1 ? eligibleYears[0] : null)
 
-  // Methods filtered by selected year's paths. ``useAdmissionMethods``
-  // still drives display name lookup; the gate is path-membership.
-  const methodsForYear: AdmissionMethod[] =
+  // Round contract hardening (plan v4): derive the usable round options for
+  // the selected year from the offering's active paths. Surface a distinct
+  // round per ``admission_round_id`` and FILTER OUT archived / explicitly
+  // inactive rounds (N4 — BE guard is final; FE just doesn't offer them).
+  // ``isOpen`` uses a VN-local YYYY-MM-DD string compare (F39 — never
+  // ``new Date("YYYY-MM-DD")``, which parses UTC midnight → off-by-one at
+  // GMT+7).
+  const today = todayVN()
+  const roundsForYear: RoundOption[] =
     academicYear === null
       ? []
       : (() => {
           const yearPaths = pathsByYear.get(academicYear) ?? []
-          const idsInYear = new Set(yearPaths.map((p) => p.admission_method_id))
-          return methods.filter((m) => m.is_active && idsInYear.has(m.id))
+          const byId = new Map<number, RoundOption>()
+          for (const p of yearPaths) {
+            if (p.round_archived_at != null) continue
+            if (p.round_is_active === false) continue
+            if (byId.has(p.admission_round_id)) continue
+            const startDate = p.round_start_date ?? null
+            const endDate = p.round_end_date ?? null
+            const isOpen =
+              startDate != null &&
+              endDate != null &&
+              startDate <= today &&
+              today <= endDate
+            byId.set(p.admission_round_id, {
+              id: p.admission_round_id,
+              code: p.round_code ?? null,
+              name: p.round_name ?? null,
+              startDate,
+              endDate,
+              isOpen,
+            })
+          }
+          return Array.from(byId.values()).sort((a, b) => {
+            if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1
+            return (a.code ?? "").localeCompare(b.code ?? "")
+          })
+        })()
+
+  // Default round (derived): auto-select ONLY when exactly one round is
+  // currently open (today within its window). If multiple overlap (N7) or
+  // none is open, leave null so the officer picks explicitly.
+  const openRounds = roundsForYear.filter((r) => r.isOpen)
+  const defaultRoundId: number | null =
+    openRounds.length === 1 ? openRounds[0].id : null
+
+  // Effective round (derived) — invalidates a picked id that's no longer in
+  // the eligible set (e.g. after a year change). Mirrors the selectedMethodId
+  // pattern below; no setState-in-effect.
+  const selectedRoundId: number | null =
+    pickedRoundId !== null && roundsForYear.some((r) => r.id === pickedRoundId)
+      ? pickedRoundId
+      : defaultRoundId
+
+  // Methods filtered by the selected (year, round) paths.
+  // ``useAdmissionMethods`` still drives display name lookup; the gate is
+  // path-membership in the chosen round.
+  const methodsForYear: AdmissionMethod[] =
+    academicYear === null || selectedRoundId === null
+      ? []
+      : (() => {
+          const yearPaths = pathsByYear.get(academicYear) ?? []
+          const idsInRound = new Set(
+            yearPaths
+              .filter((p) => p.admission_round_id === selectedRoundId)
+              .map((p) => p.admission_method_id)
+          )
+          return methods.filter((m) => m.is_active && idsInRound.has(m.id))
         })()
 
   // Effective method (derived) — invalidates the picked id if the
@@ -186,15 +260,24 @@ export default function CreateAdmissionPage() {
   
   const handleCreate = async () => {
     // Submit guard mirrors the disabled state on the button below —
-    // both year and method are required. This double-check guards
+    // year, round and method are all required. This double-check guards
     // against a future change that loosens the disabled prop.
-    if (!leadId || !selectedMethodId || academicYear === null) return
+    if (
+      !leadId ||
+      !selectedMethodId ||
+      academicYear === null ||
+      selectedRoundId === null
+    )
+      return
 
     // Note: useCreateAdmission hook already handles success toast and navigation
     // Error is also handled via handleApiError() in the hook
     await createMutation.mutateAsync({
       lead_id: parseInt(leadId),
       admission_method_id: selectedMethodId,
+      // Round contract hardening (plan v4): bind to the explicit round so
+      // BE selects the exact (round, offering, method) AdmissionPath.
+      admission_round_id: selectedRoundId,
       // ADM-017: bind to the selected recruitment year so BE can
       // resolve the right ``OfferingAcademicInfo`` deterministically.
       academic_year: academicYear,
@@ -343,10 +426,85 @@ export default function CreateAdmissionPage() {
             </p>
           </div>
 
-          {/* Admission Method Selection — filtered by selected year's
-              active paths (review-fix). Dropdown is empty until a
-              year is chosen, so officer can't pick a method that has
-              no path for that year. */}
+          {/* Round selection (round contract hardening, plan v4). Options
+              derive from the offering's active paths for the selected year
+              (``round_*`` flat fields) — the SAME source the backend
+              validates at create_profile time. Archived / inactive rounds
+              are filtered out (N4). Auto-default only when exactly one round
+              is currently open; multiple overlapping open rounds (N7) require
+              a manual pick. Window badges are advisory only — the backend
+              does NOT hard-gate on dates (Hybrid). */}
+          <div className="space-y-2">
+            <Label htmlFor="admission-round">
+              Đợt tuyển sinh <span className="text-destructive">*</span>
+            </Label>
+            {academicYear === null ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <AlertCircle className="h-4 w-4" />
+                Chọn năm học trước để hiện danh sách đợt tuyển sinh.
+              </div>
+            ) : isLoadingPaths ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Đang tải đợt tuyển sinh...
+              </div>
+            ) : roundsForYear.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                Năm {academicYear} chưa có đợt tuyển sinh khả dụng cho
+                chương trình này.
+              </div>
+            ) : (
+              <Select
+                value={selectedRoundId?.toString() ?? ""}
+                onValueChange={(value) =>
+                  setPickedRoundId(value ? parseInt(value, 10) : null)
+                }
+              >
+                <SelectTrigger id="admission-round">
+                  <SelectValue placeholder="Chọn đợt tuyển sinh" />
+                </SelectTrigger>
+                <SelectContent>
+                  {roundsForYear.map((r) => {
+                    const windowLabel =
+                      r.startDate == null || r.endDate == null
+                        ? null
+                        : today < r.startDate
+                          ? "Chưa mở"
+                          : today > r.endDate
+                            ? "Đã hết hạn"
+                            : null
+                    return (
+                      <SelectItem key={r.id} value={r.id.toString()}>
+                        <span className="flex items-center gap-2">
+                          <span>{r.name ?? r.code ?? `Đợt #${r.id}`}</span>
+                          {windowLabel && (
+                            <span className="text-xs text-muted-foreground">
+                              ({windowLabel})
+                            </span>
+                          )}
+                        </span>
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            )}
+            {openRounds.length > 1 ? (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                Có nhiều đợt đang mở — vui lòng chọn đợt thủ công.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Đợt tuyển sinh xác định chỉ tiêu, lệ phí và quy tắc xét của hồ sơ.
+              </p>
+            )}
+          </div>
+
+          {/* Admission Method Selection — filtered by the selected
+              (year, round) active paths. Dropdown is empty until a year
+              and round are chosen, so officer can't pick a method that has
+              no path for that round. */}
           <div className="space-y-2">
             <Label htmlFor="admission-method">
               Phương thức xét tuyển <span className="text-destructive">*</span>
@@ -355,6 +513,11 @@ export default function CreateAdmissionPage() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <AlertCircle className="h-4 w-4" />
                 Chọn năm học trước để hiện danh sách phương thức.
+              </div>
+            ) : selectedRoundId === null ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <AlertCircle className="h-4 w-4" />
+                Chọn đợt tuyển sinh trước để hiện danh sách phương thức.
               </div>
             ) : isLoadingMethods || isLoadingPaths ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -407,7 +570,8 @@ export default function CreateAdmissionPage() {
                 !lead ||
                 !canCreateAdmission ||
                 !selectedMethodId ||
-                academicYear === null
+                academicYear === null ||
+                selectedRoundId === null
               }
             >
               {createMutation.isPending ? (

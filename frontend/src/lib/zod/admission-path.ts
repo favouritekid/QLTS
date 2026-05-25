@@ -174,8 +174,13 @@ export type AdmissionCriteriaNested = z.infer<typeof admissionCriteriaNestedSche
 export const admissionPathCreateSchema = z.object({
   academic_info_id: z.number().int().positive("Academic Info ID phải là số dương"),
   admission_method_id: z.number().int().positive("Admission Method ID phải là số dương"),
-  // Phase 2 v8.2 PR-2B v2 — optional; BE auto-resolves DOT_1 nếu null.
-  admission_round_id: z.number().int().positive().optional().nullable(),
+  // Round contract hardening (plan v4 Section B): REQUIRED. The BE
+  // auto-resolve DOT_1 shim is removed — wizard / quick-create must always
+  // send the round. Mirrors the BE Pydantic ``int = Field(..., gt=0)``.
+  admission_round_id: z
+    .number()
+    .int()
+    .positive("Đợt tuyển sinh phải là số dương"),
   // Phase 2 v8.2 PR-2B v2 — per-path quota fields (admit chain Tier 1, submit chain Tier 2).
   round_quota: z.number().int().min(0).optional().nullable(),
   admit_quota: z.number().int().min(0).optional().nullable(),
@@ -308,6 +313,20 @@ export const admissionPathResponseSchema = z.object({
   round_quota: z.number().nullable(),
   admit_quota: z.number().nullable(),
   submission_count: z.number().default(0),
+  // Round contract hardening (plan v4 Section D — Finding #3): flat round
+  // metadata, eager-loaded by the common response queries + populated in
+  // build_path_response. ``.nullable().optional()`` mirrors the BE
+  // ``Optional[...] = None`` defaults (None when a query didn't eager-load
+  // the relationship). The officer create page derives its round dropdown
+  // from these fields. date-only fields (start/end) come as YYYY-MM-DD
+  // strings; archived_at is a tz-aware ISO datetime.
+  round_code: z.string().nullable().optional(),
+  round_name: z.string().nullable().optional(),
+  round_start_date: z.string().nullable().optional(),
+  round_end_date: z.string().nullable().optional(),
+  round_archived_at: z.string().datetime({ offset: true }).nullable().optional(),
+  round_is_active: z.boolean().nullable().optional(),
+  round_allow_multi_nv: z.boolean().nullable().optional(),
   // Phase 2 v8.2 — application fee (VND).
   application_fee: z.number().nullable(),
   // BE Pydantic field default=False (admission_path.py:440), FE phải mirror.
