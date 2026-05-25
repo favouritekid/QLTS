@@ -67,7 +67,11 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "phase1_16"
-down_revision: Union[str, None] = "phase1_19c"
+# Chain link updated 2026-05-25: insert phase1_19c5 between phase1_19c
+# (UPPERCASE seed) and this migration so the lowercase conversion runs
+# before phase3_01's pre-flight check. See phase1_19c5 module docstring
+# for root cause + memory references.
+down_revision: Union[str, None] = "phase1_19c5"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
