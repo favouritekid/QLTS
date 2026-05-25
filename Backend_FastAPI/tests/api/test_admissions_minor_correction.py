@@ -91,6 +91,7 @@ async def adm_config(seed_lead_dependencies: dict):
         "offering_id": po.id,
         "method_id": am.id,
         "path_id": path_id,
+        "round_id": round_id,
     }
 
 
@@ -181,6 +182,8 @@ async def _create_seed_profile(
     prof = await client.post(ADMISSIONS, json={
         "lead_id": lead_id,
         "admission_method_id": adm_config["method_id"],
+        "admission_round_id": adm_config["round_id"],
+        "academic_year": 2026,
     }, headers=admin_token_headers)
     assert prof.status_code in (200, 201), prof.text
     return prof.json()["id"], lead_id
@@ -811,6 +814,12 @@ async def test_admission_path_create_persists_allowlist_for_admin(
                 requires_gpa=True, requires_subject_scores=False, is_active=True,
             )
             s.add(am); await s.flush()
+            # Round contract hardening (plan v4): path-create now requires
+            # admission_round_id (auto-DOT_1 shim removed).
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                s, academic_year=2026
+            )
             ai_id = ai.id
             am_id = am.id
 
@@ -819,6 +828,7 @@ async def test_admission_path_create_persists_allowlist_for_admin(
         json={
             "academic_info_id": ai_id,
             "admission_method_id": am_id,
+            "admission_round_id": round_id,
             "display_name": "AllowlistOnCreate",
             "display_order": 1,
             "visibility": "internal",

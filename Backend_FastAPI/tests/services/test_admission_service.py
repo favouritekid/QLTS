@@ -167,6 +167,10 @@ async def setup_admission_api_data(
         "offering_id": offering.id,
         "academic_info_id": academic_info.id,
         "criteria_id": criteria.id,
+        # Round contract hardening (plan v4): expose the seeded round + year
+        # so create-profile callers can pass the now-required fields.
+        "admission_round_id": round_id,
+        "academic_year": academic_info.academic_year,
     }
 
 
@@ -286,6 +290,8 @@ class TestCreateProfile:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -296,15 +302,17 @@ class TestCreateProfile:
         # Verify academic_year was snapshotted
         assert result["academic_year"] == 2026, f"Expected 2026, got {result['academic_year']}"
 
-    async def test_create_profile_fallback_to_current_year(
+    async def test_create_profile_binds_to_current_year_when_passed(
         self,
         client: AsyncClient,
         officer_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
         """
-        When offering has no published academic info for future year,
-        academic_year should fallback to current year.
+        Round contract hardening (plan v4 — F30): the legacy "omit
+        academic_year → fallback to current year" behaviour is REMOVED.
+        Passing the current year explicitly binds the profile to it (no
+        implicit fallback).
         """
         unit_id = seed_lead_dependencies["unit_id"]
         major_id = seed_lead_dependencies["major_program_id"]
@@ -325,6 +333,8 @@ class TestCreateProfile:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -360,6 +370,11 @@ class TestCreateProfile:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": 99999,  # Non-existent method
+                # Round contract hardening: pass valid round+year so the
+                # request clears Pydantic and the service runs → the method
+                # lookup fails with 400 (not a 422 masking the real path).
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -408,7 +423,7 @@ class TestUpdateProfileCitizenId:
         # Create profile 1
         response1 = await client.post(
             "/api/admissions",
-            json={"lead_id": data1["lead_id"], "admission_method_id": data1["admission_method_id"]},
+            json={"lead_id": data1["lead_id"], "admission_method_id": data1["admission_method_id"], "admission_round_id": data1["admission_round_id"], "academic_year": data1["academic_year"]},
             headers=headers,
         )
         assert response1.status_code == 201, f"Create 1 failed: {response1.text}"
@@ -424,7 +439,7 @@ class TestUpdateProfileCitizenId:
         # Create profile 2
         response2 = await client.post(
             "/api/admissions",
-            json={"lead_id": data2["lead_id"], "admission_method_id": data2["admission_method_id"]},
+            json={"lead_id": data2["lead_id"], "admission_method_id": data2["admission_method_id"], "admission_round_id": data2["admission_round_id"], "academic_year": data2["academic_year"]},
             headers=headers,
         )
         assert response2.status_code == 201, f"Create 2 failed: {response2.text}"
@@ -491,6 +506,8 @@ class TestUpdateProfileLazyLoadRegression:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -565,6 +582,8 @@ class TestUpdateProfileLazyLoadRegression:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -633,6 +652,8 @@ class TestUpdateProfileDocumentsInResponse:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -1108,6 +1129,8 @@ class TestAutoAssignOfficer:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -1182,6 +1205,8 @@ async def _create_profile_with_state(
         json={
             "lead_id": data["lead_id"],
             "admission_method_id": data["admission_method_id"],
+            "admission_round_id": data["admission_round_id"],
+            "academic_year": data["academic_year"],
         },
         headers=headers,
     )
@@ -1676,6 +1701,8 @@ class TestCreateProfileResponseFields:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )
@@ -1711,6 +1738,8 @@ class TestCreateProfileResponseFields:
             json={
                 "lead_id": data["lead_id"],
                 "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
             },
             headers=headers,
         )

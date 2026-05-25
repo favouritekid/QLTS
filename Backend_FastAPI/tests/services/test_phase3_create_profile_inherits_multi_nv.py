@@ -191,6 +191,7 @@ async def test_create_profile_inherits_multi_nv_true_when_round_enabled(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )
@@ -227,6 +228,7 @@ async def test_create_profile_inherits_multi_nv_false_when_round_legacy(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )
@@ -259,6 +261,7 @@ async def test_submit_blocked_when_multi_nv_profile_has_no_choices(
             db=s,
             lead_id=seed_round_path_lead["lead_id"],
             admission_method_id=seed_round_path_lead["admission_method_id"],
+            admission_round_id=seed_round_path_lead["round_id"],
             current_user=admin,
             academic_year=seed_round_path_lead["academic_year"],
         )

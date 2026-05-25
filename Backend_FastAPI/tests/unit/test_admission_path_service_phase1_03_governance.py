@@ -59,13 +59,14 @@ def _make_service():
     the persisted column dict.
 
     W11-T.2 fix (Q9 #07 PR1 bundle per memory test-fixture-drift-after-
-    policy-refactor): ``create_path`` Phase 2 PR-2B v2 now calls
-    ``self.db.get(OfferingAcademicInfo, ...)`` upfront to resolve
-    academic_year for the DOT_1 auto-resolution shim, AND calls
-    ``self.db.get(OfferingAdmissionRound, ...)`` when admission_round_id
-    is explicit. Both `db.get` calls must be AsyncMock or `await` raises
-    TypeError. Side-effect dispatches by model class so a single mock
-    handles both lookups.
+    policy-refactor), updated for round contract hardening (plan v4): the
+    DOT_1 auto-resolve shim is removed, so ``create_path`` now ALWAYS calls
+    ``self.db.get(OfferingAcademicInfo, ...)`` (resolve academic_year) AND
+    ``self.db.get(OfferingAdmissionRound, ...)`` (validate the explicit,
+    now-REQUIRED round). Both `db.get` calls must be AsyncMock or `await`
+    raises TypeError. Side-effect dispatches by model class so a single mock
+    handles both lookups; the round stub carries is_active / archived_at /
+    round_code so the new validation guards pass.
     """
     service = AdmissionPathService.__new__(AdmissionPathService)
     service.db = MagicMock()
@@ -80,17 +81,27 @@ def _make_service():
         if model_cls is OfferingAcademicInfo:
             return SimpleNamespace(id=obj_id, academic_year=2026)
         if model_cls is OfferingAdmissionRound:
-            return SimpleNamespace(id=obj_id, academic_year=2026)
+            # Round contract hardening (plan v4): create_path now reads
+            # round_code / is_active / archived_at for the explicit-round
+            # validation. academic_year=2026 matches academic_info so the
+            # cross-year guard passes.
+            return SimpleNamespace(
+                id=obj_id,
+                academic_year=2026,
+                round_code="DOT_1",
+                is_active=True,
+                archived_at=None,
+            )
         return None
 
     service.db.get = AsyncMock(side_effect=_fake_db_get)
 
-    # AdmissionRoundRepository.get_default_dot1 calls self.db.execute(...)
-    # then .scalar_one_or_none(). Mock returns a SimpleNamespace round so
-    # the auto-resolve branch in create_path doesn't BusinessRuleViolation.
-    _fake_round = SimpleNamespace(id=1, academic_year=2026, round_code="DOT_1")
+    # Round contract hardening (plan v4): create_path no longer calls
+    # db.execute for round resolution (the get_default_dot1 auto-resolve
+    # shim is removed — the round is explicit via db.get). Keep a harmless
+    # generic execute mock for any incidental query.
     _fake_result = MagicMock()
-    _fake_result.scalar_one_or_none = MagicMock(return_value=_fake_round)
+    _fake_result.scalar_one_or_none = MagicMock(return_value=None)
     service.db.execute = AsyncMock(return_value=_fake_result)
 
     service.repo = MagicMock()
@@ -131,6 +142,7 @@ def _admin_create_payload(**overrides) -> AdmissionPathCreate:
     base = {
         "academic_info_id": 1,
         "admission_method_id": 1,
+        "admission_round_id": 1,
         "applicable_to": ["POST_THPT", "LIEN_THONG_TC"],
         "method_quota": 50,
         "bonus_rule_override": {
@@ -183,6 +195,7 @@ class TestCreatePathAdminCanSetGovernance:
             {
                 "academic_info_id": 1,
                 "admission_method_id": 1,
+                "admission_round_id": 1,
             }
         )
         await service.create_path(payload, _user(UserRole.ADMIN))
@@ -219,6 +232,7 @@ class TestCreatePathManagerGovernanceGuard:
             {
                 "academic_info_id": 1,
                 "admission_method_id": 1,
+                "admission_round_id": 1,
                 **field_kwarg,
             }
         )
@@ -234,6 +248,7 @@ class TestCreatePathManagerGovernanceGuard:
             {
                 "academic_info_id": 1,
                 "admission_method_id": 1,
+                "admission_round_id": 1,
                 "minor_correction_allowed_fields": ["gender"],
             }
         )
@@ -248,6 +263,7 @@ class TestCreatePathManagerGovernanceGuard:
             {
                 "academic_info_id": 1,
                 "admission_method_id": 1,
+                "admission_round_id": 1,
                 "display_name": "Manager-created draft",
             }
         )

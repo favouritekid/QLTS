@@ -73,6 +73,8 @@ async def _submit(
     lead_id: int,
     method_id: int,
     *,
+    admission_round_id: int,
+    academic_year: int = 2026,
     school_id: int | None = None,
 ) -> dict:
     """Add consultation + create profile + fill + upload docs + submit.
@@ -91,7 +93,12 @@ async def _submit(
         "status_id": status_id, "method": "phone", "notes": "Pre-admission consultation",
     }, headers=h)
 
-    r = await client.post(ADMISSIONS, json={"lead_id": lead_id, "admission_method_id": method_id}, headers=h)
+    r = await client.post(ADMISSIONS, json={
+        "lead_id": lead_id,
+        "admission_method_id": method_id,
+        "admission_round_id": admission_round_id,
+        "academic_year": academic_year,
+    }, headers=h)
     assert r.status_code in [200, 201], f"Create: {r.text}"
     p = r.json()
     pid, v = p["id"], p["version"]
@@ -313,6 +320,10 @@ async def adm_config(seed_lead_dependencies: dict):
         "offering_id": po.id,
         "method_id": am.id,
         "school_id": school_id,
+        # Round contract hardening (plan v4): create-profile now requires
+        # admission_round_id; expose the seeded DOT_1 round so _submit can
+        # thread it into the POST payload.
+        "round_id": round_id,
     }
 
 
@@ -335,7 +346,7 @@ async def adm_lead(client: AsyncClient, admin_token_headers: dict, officer_user_
 @pytest.mark.asyncio
 async def test_submit_approve_override_finalize_enrolled(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     assert p["status"] == "submitted"
     pid = p["id"]
 
@@ -358,7 +369,7 @@ async def test_submit_approve_override_finalize_enrolled(client, officer_user_in
 @pytest.mark.asyncio
 async def test_submit_reject_resubmit_revision_resubmit_approve(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     pid = p["id"]
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
@@ -380,7 +391,7 @@ async def test_submit_reject_resubmit_revision_resubmit_approve(client, officer_
 @pytest.mark.asyncio
 async def test_finalize_from_approved_returns_400(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     pid = p["id"]
 
     ah = await _admin(client); v = await _ver(client, ah, pid)
@@ -396,7 +407,7 @@ async def test_finalize_from_approved_returns_400(client, officer_user_in_db, ad
 @pytest.mark.asyncio
 async def test_officer_cannot_approve(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
     assert (await client.post(ACT(p["id"], "approve"), json={"notes": "No", "version": v}, headers=oh)).status_code == 403
 
@@ -404,7 +415,7 @@ async def test_officer_cannot_approve(client, officer_user_in_db, adm_lead, adm_
 @pytest.mark.asyncio
 async def test_officer_cannot_request_revision(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
     assert (await client.post(ACT(p["id"], "request-revision"), json={"reason": "Officer trying revision test reason", "version": v}, headers=oh)).status_code == 403
 
@@ -412,7 +423,7 @@ async def test_officer_cannot_request_revision(client, officer_user_in_db, adm_l
 @pytest.mark.asyncio
 async def test_officer_cannot_override(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     oh = await _officer(client, officer_user_in_db); v = await _ver(client, oh, p["id"])
@@ -422,7 +433,7 @@ async def test_officer_cannot_override(client, officer_user_in_db, adm_lead, adm
 @pytest.mark.asyncio
 async def test_officer_cannot_finalize(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
@@ -435,7 +446,7 @@ async def test_officer_cannot_finalize(client, officer_user_in_db, adm_lead, adm
 async def test_approve_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     """Approve with stale version returns 409 (ConflictError)."""
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     ah = await _admin(client); stale = await _ver(client, ah, p["id"])
     # Reject to change version while keeping profile in a state where approve is valid later
     await client.post(ACT(p["id"], "reject"), json={"reason": "Reject to bump version for test", "version": stale}, headers=ah)
@@ -451,7 +462,7 @@ async def test_approve_stale_version(client, officer_user_in_db, adm_lead, adm_c
 @pytest.mark.asyncio
 async def test_request_revision_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     # Get stale version at submitted state
     ah = await _admin(client); stale = await _ver(client, ah, p["id"])
     # Reject to change version (submitted → rejected is valid)
@@ -468,7 +479,7 @@ async def test_request_revision_stale_version(client, officer_user_in_db, adm_le
 @pytest.mark.asyncio
 async def test_resubmit_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     # Reject first
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "reject"), json={"reason": "Documents insufficient for admission", "version": v}, headers=ah)
@@ -488,7 +499,7 @@ async def test_resubmit_stale_version(client, officer_user_in_db, adm_lead, adm_
 @pytest.mark.asyncio
 async def test_drop_stale_version(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     await _fast_enroll(client, p["id"])
     ah = await _admin(client); stale = await _ver(client, ah, p["id"])
     async with AsyncSessionLocal() as s:
@@ -503,7 +514,7 @@ async def test_drop_stale_version(client, officer_user_in_db, adm_lead, adm_conf
 @pytest.mark.asyncio
 async def test_drop_enrolled_sets_is_dropped(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     await _fast_enroll(client, p["id"])
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     r = await client.post(ACT(p["id"], "drop"), json={"reason": "Student left for personal reasons text", "version": v}, headers=ah)
@@ -516,7 +527,7 @@ async def test_drop_enrolled_sets_is_dropped(client, officer_user_in_db, adm_lea
 @pytest.mark.asyncio
 async def test_drop_before_enrolled_returns_400(client, officer_user_in_db, adm_lead, adm_config):
     oh = await _officer(client, officer_user_in_db)
-    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], school_id=adm_config["school_id"])
+    p = await _submit(client, oh, adm_lead["id"], adm_config["method_id"], admission_round_id=adm_config["round_id"], school_id=adm_config["school_id"])
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     ah = await _admin(client); v = await _ver(client, ah, p["id"])

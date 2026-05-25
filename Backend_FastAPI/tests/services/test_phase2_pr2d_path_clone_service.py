@@ -307,3 +307,75 @@ async def test_clone_skip_existing_does_not_corrupt_session(
         "Iter sau khi skip phải clone OK — nếu MissingGreenlet thì test fail "
         "với exception khác. Pre-check pattern không phá session state."
     )
+
+
+# ---------------------------------------------------------------------------
+# Round contract hardening (plan v4 Section C — Finding #4) — clone guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clone_rejects_archived_target_round(clone_seed: dict):
+    """ANCHOR F40: cloning INTO an archived round → BusinessRuleViolation.
+
+    Seeds a REAL archived target round (not a mock) and asserts the guard
+    fires before any path is copied — cloned paths would be inert (the round
+    can't activate them) so the destination must be usable.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            archived_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"AR{ts}"[:20],
+                round_name=f"Archived {ts}",
+                is_active=True,
+                archived_at=datetime.now(timezone.utc),
+            )
+            s.add(archived_round)
+            await s.flush()
+            archived_id = archived_round.id
+
+    async with AsyncSessionLocal() as s:
+        svc = PathCloneService(s)
+        with pytest.raises(
+            BusinessRuleViolation, match="lưu trữ hoặc đang tạm dừng"
+        ):
+            await svc.clone_paths_from_round(
+                target_round_id=archived_id,
+                source_round_id=clone_seed["source_round_id"],
+                payload=ClonePathsRequest(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_clone_rejects_inactive_target_round(clone_seed: dict):
+    """ANCHOR F40: cloning INTO an inactive round → BusinessRuleViolation.
+
+    Companion to the archived-round anchor; covers the ``not is_active``
+    branch of the same guard.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            inactive_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"IR{ts}"[:20],
+                round_name=f"Inactive {ts}",
+                is_active=False,
+                archived_at=None,
+            )
+            s.add(inactive_round)
+            await s.flush()
+            inactive_id = inactive_round.id
+
+    async with AsyncSessionLocal() as s:
+        svc = PathCloneService(s)
+        with pytest.raises(
+            BusinessRuleViolation, match="lưu trữ hoặc đang tạm dừng"
+        ):
+            await svc.clone_paths_from_round(
+                target_round_id=inactive_id,
+                source_round_id=clone_seed["source_round_id"],
+                payload=ClonePathsRequest(),
+            )
