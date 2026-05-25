@@ -453,6 +453,10 @@ export function SocketHandler() {
           break;
 
         case "lead":
+          // Forward-compatible branch: the backend does NOT currently emit
+          // `data_updated` for leads (it uses the dedicated `lead_*` events
+          // handled below). Kept so that if a future backend path ever falls
+          // back to the generic channel, lead lists still refresh.
           // ✅ PERFORMANCE FIX: Use debounced invalidation instead of immediate
           scheduleInvalidation({ leadsLists: true });
           break;
@@ -886,6 +890,11 @@ export function SocketHandler() {
       scheduleInvalidation({
         leadsLists: true,
         dashboard: true,
+        // A newly created lead enters the pipeline at its initial stage, so the
+        // Pipeline Board must refresh too — matches `lead_updated`/`lead_deleted`
+        // which already invalidate pipeline. Without this, a lead created in
+        // another tab/session never appears on an open Pipeline Board.
+        pipeline: true,
       });
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };

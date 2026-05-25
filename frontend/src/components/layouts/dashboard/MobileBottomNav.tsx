@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { User } from "lucide-react";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useAppNavigation } from "@/hooks/useAppNavigation";
+import { useUIStore } from "@/lib/stores/ui.store";
 
 /**
  * Priority-ordered hrefs to show on mobile bottom nav.
@@ -36,6 +37,7 @@ const MOBILE_PRIORITY_HREFS = [
 export function MobileBottomNav() {
   const pathname = usePathname();
   const { navigation } = useAppNavigation();
+  const requestCloseMobileOverlays = useUIStore((s) => s.requestCloseMobileOverlays);
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({
@@ -90,7 +92,11 @@ export function MobileBottomNav() {
     <nav
       className={cn(
         // Base styles
-        "fixed bottom-0 left-0 right-0 z-50",
+        // z-[60] + pointer-events-auto keep the bar tappable ABOVE an open
+        // Radix modal drawer (overlay/content sit at z-50 and set the rest of
+        // the page to pointer-events:none). Without this, tapping a tab while
+        // a mobile detail drawer is open does nothing — see LeadsClient sheet.
+        "fixed bottom-0 left-0 right-0 z-[60] pointer-events-auto",
         "bg-background border-t",
         "safe-area-pb", // For iPhone notch
         // Only show on mobile (hide on lg and up)
@@ -106,6 +112,10 @@ export function MobileBottomNav() {
             <Link
               key={item.href}
               href={item.href}
+              // Tapping any tab dismisses any open mobile drawer/sheet. This
+              // also covers re-tapping the already-active tab (same-route nav
+              // does NOT change pathname, so a route-based close never fires).
+              onClick={() => requestCloseMobileOverlays()}
               className={cn(
                 // Base styles - 44px touch target
                 "flex flex-col items-center justify-center",
