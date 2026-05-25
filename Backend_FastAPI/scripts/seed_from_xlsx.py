@@ -925,6 +925,30 @@ async def seed_16_duong_dan(db: AsyncSession, wb, dry_run: bool) -> int:
         if not method_id:
             continue
 
+        # Phase 2 PR-2C v2 (2026-05-10) made ``admission_path.admission_round_id``
+        # NOT NULL and changed the UNIQUE constraint from 2 columns to
+        # ``(admission_round_id, academic_info_id, admission_method_id)``.
+        # The xlsx workbook predates this change and has no admission_round_id
+        # column, so we derive it: explicitly pick ``DOT_1`` to match the
+        # contract service auto-resolve convention (admission_path_service
+        # uses ``get_default_dot1``). Earlier draft used
+        # ``ORDER BY start_date ASC NULLS LAST`` but DOT_1's backfill row has
+        # ``start_date = NULL`` while DOT_2/DOT_3 have real dates, which
+        # would mis-route the seed into a non-default round in any DB with
+        # multiple rounds. Without this fix, INSERT fails twice:
+        # (1) NOT NULL violation on admission_round_id, and (2) ON CONFLICT
+        # references a constraint shape that no longer exists.
+        round_row = (await db.execute(
+            text('''SELECT id FROM offering_admission_round
+                 WHERE academic_year = :year AND round_code = 'DOT_1'
+                 LIMIT 1'''),
+            {"year": nam_hoc}
+        )).fetchone()
+        if not round_row:
+            # Year has no DOT_1 round seeded yet — skip this path (idempotent).
+            continue
+        admission_round_id = round_row[0]
+
         # ADM-003: Insert path WITHOUT criteria_id first, then resolve
         # the effective criteria_id (possibly cloning) and UPDATE.
         # The xlsx data set deliberately has multiple paths referencing
@@ -938,11 +962,12 @@ async def seed_16_duong_dan(db: AsyncSession, wb, dry_run: bool) -> int:
         # alembic adm003path001 migration.
         result = await db.execute(
             text('''INSERT INTO admission_path
-                 (academic_info_id, admission_method_id, status,
+                 (admission_round_id, academic_info_id, admission_method_id, status,
                   display_name, display_order, visibility, application_fee, created_at, updated_at)
-                 VALUES (:aiid, :mid, :status, :dn, 0, :vis, :fee, NOW(), NOW())
-                 ON CONFLICT (academic_info_id, admission_method_id) DO NOTHING RETURNING id'''),
-            {"aiid": academic_info_id, "mid": method_id,
+                 VALUES (:rid, :aiid, :mid, :status, :dn, 0, :vis, :fee, NOW(), NOW())
+                 ON CONFLICT (admission_round_id, academic_info_id, admission_method_id)
+                     DO NOTHING RETURNING id'''),
+            {"rid": admission_round_id, "aiid": academic_info_id, "mid": method_id,
              "status": status, "dn": display_name, "vis": visibility, "fee": app_fee}
         )
         path_row = result.fetchone()
