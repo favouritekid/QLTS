@@ -42,16 +42,24 @@ Verified prod state 2026-05-25 via SSH read-only:
 Predicate is strict (full string match) per ``migration-predicate-safety``
 memory. Idempotent — re-run matches 0 rows.
 
-Revision ID: null_orphan_admission_reminder_tpl
+Revision ID: null_orphan_admin_reminder_tpl
 Revises: sl20260524_canonical
 Create Date: 2026-05-25
+
+⚠ HOTFIX 2026-05-25: revision id renamed từ
+``null_orphan_admission_reminder_tpl`` (34 chars) → ``null_orphan_admin_reminder_tpl``
+(30 chars) vì ``alembic_version.version_num`` là ``VARCHAR(32)`` →
+``StringDataRightTruncationError`` khi commit migration row. Deploy
+trước (PR #335 run 26396035967) đã auto-rollback từ Step 5 backup;
+prod alembic head giữ ở ``sl20260524_canonical``. Hotfix này rename
+revision + redeploy. Migration body unchanged.
 """
 from typing import Sequence, Union
 
 from alembic import op
 
 
-revision: str = "null_orphan_admission_reminder_tpl"
+revision: str = "null_orphan_admin_reminder_tpl"
 down_revision: Union[str, None] = "sl20260524_canonical"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
