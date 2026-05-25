@@ -139,6 +139,23 @@ jobs:
           path: frontend/test-results/
           retention-days: 7
 
+      # Capture container logs BEFORE teardown when anything failed —
+      # backend/frontend crash signature isn't visible in compose up output
+      # (only "container Error / dependency failed to start"). Log dump gives
+      # the real cause (entrypoint exception, alembic mismatch, env reject).
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          echo "::group::backend logs"
+          docker compose -f docker-compose.yml logs backend --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::frontend logs"
+          docker compose -f docker-compose.yml logs frontend --tail=100 || true
+          echo "::endgroup::"
+          echo "::group::postgres logs"
+          docker compose -f docker-compose.yml logs postgres --tail=50 || true
+          echo "::endgroup::"
+
       - name: Stop services
         if: always()
         run: docker compose -f docker-compose.yml down -v
