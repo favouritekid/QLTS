@@ -46,27 +46,31 @@ jobs:
         working-directory: frontend
         run: npx playwright install chromium --with-deps
 
-      # Generate ``.env.production`` so the backend service's ``env_file:``
-      # directive resolves. ``_validate_production_secrets()`` in
-      # app/config.py enforces in APP_ENV=production:
-      #   * SECRET_KEY + JWT_SECRET_KEY ≥32 chars + not in weak-list
-      #   * DEVICE_FINGERPRINT_SALT != "CHANGE_ME_IN_PRODUCTION"
-      #   * LOG_LEVEL != DEBUG
-      #   * DATABASE_URL not localhost + sslmode=require unless
-      #     ALLOW_DOCKER_INTERNAL_NETWORK=true (postgres/redis are on the
-      #     same compose bridge here — internal network = true is correct).
-      # All values are CI-only placeholders; the runner is destroyed at
-      # job end. ``openssl rand -base64 32`` generates fresh salt per run
-      # to keep the secret out of repo history.
+      # Generate ``.env.production`` (compose ``env_file:`` directive
+      # requires the file to exist; values become container env vars).
+      # Backend uses ``APP_ENV=test`` here — NOT ``production`` — because
+      # two production-hardening validators reject CI placeholder values:
+      #
+      #   1. ``_validate_production_secrets()`` (app/config.py:245) demands
+      #      SECRET_KEY/JWT_SECRET_KEY ≥32 chars + non-weak,
+      #      DEVICE_FINGERPRINT_SALT != default, no localhost DB URL,
+      #      sslmode=require unless ALLOW_DOCKER_INTERNAL_NETWORK=true.
+      #   2. ``main.py:651`` rejects any CORS origin not on HTTPS — but
+      #      CI frontend serves at http://localhost:3000 (Playwright
+      #      target), so the realistic test origin is HTTP.
+      #
+      # APP_ENV=test skips both validators (config.py:222 + main.py:630
+      # both gate on ``APP_ENV == "production"``) and the CORS middleware
+      # auto-populates test origins (main.py:667-668). Other runtime
+      # behavior — alembic, dispatch pipeline, route registration, Casbin,
+      # JWT signing — is unaffected; those validators are CI-vs-prod
+      # hardening gates, not feature gates.
       - name: Generate .env.production for backend env_file load
         run: |
           cat > .env.production <<EOF
-          APP_ENV=production
-          SECRET_KEY=ci-test-secret-key-with-32-chars-or-more-for-nightly-regression-only-not-real-prod
-          JWT_SECRET_KEY=ci-test-jwt-secret-with-32-chars-or-more-for-nightly-regression-only-not-real-prod
-          DEVICE_FINGERPRINT_SALT=$(openssl rand -base64 32)
-          ALLOW_DOCKER_INTERNAL_NETWORK=true
-          LOG_LEVEL=INFO
+          APP_ENV=test
+          SECRET_KEY=ci-test-secret-key-for-nightly-regression-only
+          JWT_SECRET_KEY=ci-test-jwt-secret-for-nightly-regression-only
           MAIL_USERNAME=ci-test@example.com
           MAIL_PASSWORD=ci-test-placeholder
           MAIL_FROM=ci-test@example.com
