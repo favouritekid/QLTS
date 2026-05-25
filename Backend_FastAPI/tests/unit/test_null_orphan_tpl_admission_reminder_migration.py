@@ -29,8 +29,25 @@ def migration_source() -> str:
 
 def test_revision_id(migration_source: str) -> None:
     assert re.search(
-        r'^revision: str = "null_orphan_admission_reminder_tpl"',
+        r'^revision: str = "null_orphan_admin_reminder_tpl"',
         migration_source, re.M,
+    )
+
+
+def test_revision_id_within_alembic_version_column_limit(
+    migration_source: str,
+) -> None:
+    """``alembic_version.version_num`` is ``VARCHAR(32)`` — revision id
+    longer than 32 chars triggers ``StringDataRightTruncationError`` at
+    migration commit + auto-rollback. Lesson from prod deploy run
+    ``26396035967`` 2026-05-25: original id was 34 chars and crashed.
+    """
+    match = re.search(r'^revision: str = "([^"]+)"', migration_source, re.M)
+    assert match is not None, "revision id literal not found"
+    revision_value = match.group(1)
+    assert len(revision_value) <= 32, (
+        f"revision id {revision_value!r} is {len(revision_value)} chars; "
+        "alembic_version.version_num is VARCHAR(32)."
     )
 
 
