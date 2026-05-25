@@ -1710,7 +1710,7 @@ async def update_lead(
                             notify_user_ids=[old_officer_id] if old_officer_id else [],
                         ),
                         dedupe_key=f"lead_reassigned:{lead_id}",
-                        rooms=rooms_for_lead(lead),
+                        rooms=rooms_for_lead(db_lead),
                     )
             except Exception as e:
                 log.error(
