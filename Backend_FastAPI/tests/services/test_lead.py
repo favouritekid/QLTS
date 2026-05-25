@@ -1728,7 +1728,7 @@ class TestBulkAssign:
         
         # Act
         with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
-            result = await lead_service.bulk_assign_leads(
+            result, _post_commit = await lead_service.bulk_assign_leads(
                 db, 
                 lead_ids, 
                 officer_user.id, 
@@ -1767,7 +1767,7 @@ class TestBulkAssign:
     ):
         """Test bulk_assign_leads with empty list returns zero results."""
         # Act
-        result = await lead_service.bulk_assign_leads(
+        result, _post_commit = await lead_service.bulk_assign_leads(
             db, [], officer_user.id, assigner=admin_user
         )
         
@@ -1788,7 +1788,7 @@ class TestBulkAssign:
         
         # Act
         with patch("app.services.notification_dispatcher.dispatch", new_callable=AsyncMock, return_value=([], None)):
-            result = await lead_service.bulk_assign_leads(
+            result, _post_commit = await lead_service.bulk_assign_leads(
                 db, lead_ids, officer_user.id, assigner=admin_user
             )
             await db.commit()
@@ -1828,6 +1828,89 @@ class TestBulkAssign:
             await lead_service.bulk_assign_leads(
                 db, lead_ids, inactive_officer.id, assigner=admin_user
             )
+
+    async def test_bulk_assign_returns_post_commit_and_fires_callbacks(
+        self,
+        db: AsyncSession,
+        multiple_leads: list,
+        officer_user: models.User,
+        admin_user: models.User,
+    ):
+        """Realtime fix: bulk assign must gather the per-lead LEAD_ASSIGNED
+        callbacks (single-assign returns one each) and expose a post_commit that
+        fires them. Previously the callbacks were dropped → bulk assign was
+        silent (no socket emit / notification for other sessions)."""
+        lead_ids = [lead.id for lead in multiple_leads[:3]]
+        fired: list[int] = []
+
+        async def _fake_cb():
+            fired.append(1)
+
+        # assign_lead_manually() calls dispatch() internally; stub it so each
+        # successful assignment yields our fake post-commit callback.
+        with patch(
+            "app.services.lead_service.dispatch",
+            new_callable=AsyncMock,
+            return_value=([], _fake_cb),
+        ):
+            result, post_commit = await lead_service.bulk_assign_leads(
+                db, lead_ids, officer_user.id, assigner=admin_user
+            )
+            await db.commit()
+
+            assert result["successful"] == 3
+            # Callbacks must NOT fire until the router runs post_commit.
+            assert fired == []
+            await post_commit()
+
+        assert len(fired) == 3
+
+
+# =============================================================================
+# BULK UPDATE PIPELINE STAGE — REALTIME (gap fix)
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestBulkUpdatePipelineStageRealtime:
+    """POST /leads/bulk-update-stage realtime broadcast."""
+
+    async def test_emits_lead_updated_broadcast_per_updated_lead(
+        self,
+        db: AsyncSession,
+        multiple_leads: list,
+        admin_user: models.User,
+    ):
+        """Bulk stage update emits LEAD_UPDATED (broadcast_only) once per updated
+        lead — NEVER LEAD_STATUS_CHANGED, which is a user-class event that would
+        push one inbox notification per lead to the owning officer (spam)."""
+        from app.core.events import SystemEvents
+
+        lead_ids = [lead.id for lead in multiple_leads]  # all currently at stg01
+        captured_cb = AsyncMock()
+
+        with patch(
+            "app.services.lead_service.dispatch",
+            new_callable=AsyncMock,
+            return_value=([], captured_cb),
+        ) as mock_dispatch:
+            result, post_commit = await lead_service.bulk_update_pipeline_stage(
+                db,
+                lead_ids=lead_ids,
+                pipeline_stage_id="stg02",  # different from stg01 → all updatable
+                updated_by=admin_user,
+            )
+            await db.commit()
+            await post_commit()
+
+        assert result["updated_count"] == len(lead_ids)
+        # One broadcast per updated lead.
+        assert mock_dispatch.call_count == len(lead_ids)
+        events = [c.kwargs["event"] for c in mock_dispatch.call_args_list]
+        assert all(e == SystemEvents.LEAD_UPDATED for e in events)
+        assert SystemEvents.LEAD_STATUS_CHANGED not in events
+        # Broadcast callbacks fire only on post_commit (after the router commits).
+        assert captured_cb.await_count == len(lead_ids)
 
 
 # =============================================================================
@@ -2195,7 +2278,7 @@ class TestBulkAssignBugFixes:
         await db.refresh(unassigned_lead)
         
         # Act
-        result = await lead_service.bulk_assign_leads(
+        result, _post_commit = await lead_service.bulk_assign_leads(
             db, 
             lead_ids=[unassigned_lead.id], 
             officer_id=available_officer.id, 

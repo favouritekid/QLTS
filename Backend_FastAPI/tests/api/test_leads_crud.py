@@ -7,7 +7,7 @@ from datetime import (  # <-- THÊM timedelta VÀO ĐÂY; Import datetime, timez
     timedelta,
     timezone,
 )
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.config import settings
+from app.core.events import SystemEvents
 
 # Import app components
 from app.database import AsyncSessionLocal
@@ -533,3 +534,73 @@ async def test_get_lead_timeline_success(
 
     log.info(f"Get timeline successful. Found {len(data)} items with expected types.")
     log.info("--- Finished: test_get_lead_timeline_success ---")
+
+
+# =============================================================================
+# BULK DELETE — REALTIME DISPATCH (PR2 2C, router-level safe_dispatch)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_dispatches_lead_deleted_per_deleted_lead(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    seed_lead_dependencies: dict,
+):
+    """POST /leads/bulk-delete must safe_dispatch LEAD_DELETED exactly once per
+    SUCCESSFULLY deleted lead, and never for a skipped (non-existent) id.
+
+    The dispatch lives in the router (post-commit fanout), so this API-level
+    test is the only thing that catches a regression there — the service-layer
+    bulk tests do not exercise it.
+    """
+    log.info("--- Running: test_bulk_delete_dispatches_lead_deleted_per_deleted_lead ---")
+    unit_id = seed_lead_dependencies["unit_id"]
+    initial = seed_lead_dependencies["initial_status_id"]
+    stage = seed_lead_dependencies["stage_id"]
+
+    # Seed 2 deletable leads (no admission profile attached → eligible).
+    lead_ids: list[int] = []
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            for i in range(2):
+                lead = models.Lead(
+                    full_name=f"Bulk Delete Lead {i}",
+                    phone=f"090111000{i}",
+                    email=f"bulk_delete_rt_{i}@test.com",
+                    source="test",
+                    unit_id=unit_id,
+                    status=initial,
+                    consultation_status_id=initial,
+                    pipeline_stage_id=stage,
+                )
+                session.add(lead)
+                await session.flush()
+                lead_ids.append(lead.id)
+
+    missing_id = 99_999_999  # non-existent → skipped, must NOT dispatch
+
+    # Patch the router's safe_dispatch so we can assert the post-commit fanout.
+    with patch(
+        "app.routers.leads.safe_dispatch", new_callable=AsyncMock
+    ) as mock_dispatch:
+        resp = await client.post(
+            f"{LeadsURLs.LEADS}/bulk-delete",
+            json={"lead_ids": lead_ids + [missing_id]},
+            headers=admin_token_headers,
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deleted_count"] == 2, body
+    assert len(body["skipped"]) == 1, body
+
+    # One LEAD_DELETED dispatch per deleted lead; none for the skipped id.
+    assert mock_dispatch.call_count == 2, mock_dispatch.call_args_list
+    dispatched_ids = set()
+    for c in mock_dispatch.call_args_list:
+        assert c.kwargs["event"] == SystemEvents.LEAD_DELETED
+        dispatched_ids.add(c.kwargs["payload"]["lead_id"])
+    assert dispatched_ids == set(lead_ids)
+    assert missing_id not in dispatched_ids
+    log.info("--- Finished: test_bulk_delete_dispatches_lead_deleted_per_deleted_lead ---")
