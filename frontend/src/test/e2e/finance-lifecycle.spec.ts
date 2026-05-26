@@ -267,6 +267,10 @@ async function setupApprovedProfile(
         { relationship: "Cha", full_name: "Nguyen Van X", phone: "0912345670", occupation: "Ky su", is_primary_guardian: true },
         { relationship: "Me", full_name: "Le Thi Y", phone: "0912345671", occupation: "Bac si", is_primary_guardian: false },
       ],
+      // Eligibility check (priority_service.py:1029) requires
+      // ``cultural_education_level`` per 2026-05-21 spec; without it the
+      // cao đẳng chính quy submit returns ``ELIGIBILITY_FAIL``.
+      cultural_education_level: "graduated_thpt",
       academic_history: [
         { school_name: "THPT Le Quy Don", year_from: 2018, year_to: 2021, gpa: 8.0, graduation_type: "THPT" },
       ],

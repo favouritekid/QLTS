@@ -297,6 +297,12 @@ async function createLeadAndProfile(
           { relationship: "Cha", full_name: "Nguyen Van A", phone: "0901234567", occupation: "Kinh doanh", is_primary_guardian: true },
           { relationship: "Me", full_name: "Tran Thi B", phone: "0901234568", occupation: "Giao vien", is_primary_guardian: false },
         ],
+        // priority_service.py:1029 eligibility check reads
+        // ``profile.cultural_education_level`` against ``_THPT_KNOWLEDGE``
+        // tuple ``(completed_thpt, graduated_thpt, graduated_gdtx)`` per
+        // 2026-05-21 spec. Without this, cao đẳng chính quy submit returns
+        // ``ELIGIBILITY_FAIL: cd_chinh_quy_requires_thpt_or_completed_thpt``.
+        cultural_education_level: "graduated_thpt",
         academic_history: [
           { school_name: "THPT Nguyen Du", year_from: 2019, year_to: 2022, gpa: 8.5, graduation_type: "THPT" },
         ],

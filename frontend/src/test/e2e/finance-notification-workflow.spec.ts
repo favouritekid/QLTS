@@ -258,6 +258,7 @@ async function setupApprovedProfileWithFee(
       version: fresh.version, citizen_id: citizenId, gender: "male", dob: "2001-01-15",
       nationality: "Viet Nam", ethnicity: "Kinh", place_of_birth: "Ha Noi",
       family_info: [{ relationship: "Cha", full_name: "PW Parent", phone: "0901234567", occupation: "Kỹ sư", is_primary_guardian: true }],
+      cultural_education_level: "graduated_thpt",
       academic_history: [{ school_name: "THPT Test", year_from: 2019, year_to: 2022, gpa: 8.0, graduation_type: "THPT" }],
       admission_scores: { subject_scores: subjects, gpa: 8.0 },
     },

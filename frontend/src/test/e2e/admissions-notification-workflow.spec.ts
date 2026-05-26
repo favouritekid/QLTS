@@ -520,6 +520,7 @@ async function hydrateAdmissionProfileForSubmit(
           is_primary_guardian: false,
         },
       ],
+      cultural_education_level: "graduated_thpt",
       academic_history: [
         {
           school_name: "THPT Nguyen Du",

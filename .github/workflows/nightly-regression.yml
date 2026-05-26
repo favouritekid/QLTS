@@ -129,6 +129,14 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend pip install -r requirements-dev.txt -q
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
+          # CI-only post-seed backfill: the shared xlsx template has an
+          # empty 12_CauHinhTrinhDo sheet, so config_degree_level ends up
+          # 0 rows → major_program.degree_level_id NULL → admission submit
+          # 400 CONFIG_GAP_TARGET_LEVEL. Script idempotently inserts the
+          # 3 canonical degree levels (cao_dang/trung_cap/so_cap) and
+          # backfills the FK on major_program. Prod is unaffected — runs
+          # only in this workflow.
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.ci_post_seed_backfill
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
 
       # --- Regression Suites ---

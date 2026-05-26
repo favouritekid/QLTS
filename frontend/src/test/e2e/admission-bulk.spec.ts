@@ -236,6 +236,7 @@ async function createAndSubmitProfile(
           is_primary_guardian: true,
         },
       ],
+      cultural_education_level: "graduated_thpt",
       academic_history: [
         { school_name: "THPT Le Hong Phong", year_from: 2020, year_to: 2023, gpa: 8.0, graduation_type: "THPT" },
       ],

@@ -826,11 +826,18 @@ test.describe("Lead Management Workflow", () => {
     await test.step("Admin PATCH /leads/{lead4}/status → secondStatusId (valid)", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
+      // PATCH /status now requires optimistic-lock ``version`` (BE contract
+      // tightening 2026-05). Fetch fresh lead version first.
+      const leadResp = await page.request.get(
+        `${API_URL}/api/leads/${leadId4}`,
+        { headers: adminHeaders }
+      );
+      const currentVersion = (await leadResp.json()).version;
       const resp = await page.request.patch(
         `${API_URL}/api/leads/${leadId4}/status`,
         {
           headers: adminHeaders,
-          data: { consultation_status_id: secondStatusId },
+          data: { consultation_status_id: secondStatusId, version: currentVersion },
         }
       );
       if (!resp.ok()) {
@@ -844,11 +851,17 @@ test.describe("Lead Management Workflow", () => {
 
     // --- Step 7: PATCH with non-existent status ID → 404 or 400 ---
     await test.step("PATCH with invalid status ID → rejected (404/400)", async () => {
+      // Read fresh version since step 6 bumped it via the valid PATCH.
+      const leadResp = await page.request.get(
+        `${API_URL}/api/leads/${leadId4}`,
+        { headers: adminHeaders }
+      );
+      const currentVersion = (await leadResp.json()).version;
       const resp = await page.request.patch(
         `${API_URL}/api/leads/${leadId4}/status`,
         {
           headers: adminHeaders,
-          data: { consultation_status_id: "sts_nonexistent_xyz" },
+          data: { consultation_status_id: "sts_nonexistent_xyz", version: currentVersion },
         }
       );
       expect(resp.ok()).toBeFalsy();
