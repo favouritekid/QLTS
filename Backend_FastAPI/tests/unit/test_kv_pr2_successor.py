@@ -85,3 +85,16 @@ async def test_identity_backfill_predicate(db) -> None:
     assert by[("C", True)] == "C"    # current C → self
     assert by[("C", False)] == "C"   # legacy survived → C
     assert by[("M", False)] is None  # merged away → still NULL (needs merger CSV)
+
+
+async def test_get_current_ward_name(db) -> None:
+    """PR-3 resolve endpoint helper: name of a CURRENT-era ward by code;
+    legacy/unknown → None."""
+    db.add(_ward("CURX", current=True, successor="CURX"))
+    db.add(_ward("LEGX", current=False, successor="CURX", dist="99_1"))
+    await db.flush()
+    repo = AdministrativeRepository(db)
+    assert await repo.get_current_ward_name("CURX") == "Ward CURX"
+    assert await repo.get_current_ward_name("LEGX") is None  # legacy, not current
+    assert await repo.get_current_ward_name("NOPE") is None
+    assert await repo.get_current_ward_name("") is None

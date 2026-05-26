@@ -152,6 +152,25 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_current_ward_name(self, code: str) -> Optional[str]:
+        """Name of a CURRENT-era (valid_to IS NULL) ward by code — for the
+        resolve-ward endpoint to display the canonical commune to the officer."""
+        code = (code or "").strip()
+        if not code:
+            return None
+        stmt = (
+            select(AdministrativeNode.name)
+            .where(
+                AdministrativeNode.code == code,
+                AdministrativeNode.level == AdministrativeLevel.WARD,
+                AdministrativeNode.valid_to.is_(None),
+                AdministrativeNode.is_active == True,
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     # ------------------------------------------------------------------
     # GENERIC FILTERED (admin panel)
     # ------------------------------------------------------------------

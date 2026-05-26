@@ -29,6 +29,13 @@ export interface Ward {
   district_code: string | null
 }
 
+export interface ResolvedWard {
+  input_code: string
+  current_code: string | null
+  current_name: string | null
+  resolved: boolean
+}
+
 export const administrativeApi = {
   getProvinces: async (mode: AddressMode = "current"): Promise<Province[]> => {
     const { data } = await api.get<Province[]>("/api/administrative/provinces", {
@@ -58,6 +65,19 @@ export const administrativeApi = {
       params.district_code = districtCode
     }
     const { data } = await api.get<Ward[]>("/api/administrative/wards", { params })
+    return data
+  },
+
+  /**
+   * PR-3: resolve any ward code (current or legacy 3-tier) → canonical CURRENT
+   * commune. Used when an officer picks an address (esp. from an old document)
+   * so the UI can show the current commune; the BE also canonicalizes on save.
+   */
+  resolveWard: async (code: string): Promise<ResolvedWard> => {
+    const { data } = await api.get<ResolvedWard>(
+      "/api/administrative/resolve-ward",
+      { params: { code } },
+    )
     return data
   },
 }

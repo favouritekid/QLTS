@@ -4047,7 +4047,22 @@ async def update_profile(
     if "vocational_qualification" in data and data["vocational_qualification"] is not None:
         profile.vocational_qualification = data["vocational_qualification"]
     if "permanent_commune_code" in data:
-        profile.permanent_commune_code = data["permanent_commune_code"]
+        _raw_cc = data["permanent_commune_code"]
+        if _raw_cc:
+            # PR-3: canonicalize to the CURRENT commune code. An officer may
+            # enter an old (3-tier) code from a legacy document; store the
+            # resolved current code so KV + records always use the canonical
+            # commune. Unresolvable → keep raw (submit gate fail-closes on a
+            # non-current code, forcing a current-mode re-pick).
+            from app.repositories.administrative_repository import (
+                AdministrativeRepository,
+            )
+            _resolved_cc = await AdministrativeRepository(db).resolve_current_ward_code(
+                _raw_cc
+            )
+            profile.permanent_commune_code = _resolved_cc or _raw_cc
+        else:
+            profile.permanent_commune_code = _raw_cc
     if "area_resolution_basis" in data:
         profile.area_resolution_basis = data["area_resolution_basis"]
     if "priority_object_codes" in data and data["priority_object_codes"] is not None:
