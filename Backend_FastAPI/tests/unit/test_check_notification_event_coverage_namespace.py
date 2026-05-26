@@ -207,28 +207,38 @@ async def other(db):
 # ---------------------------------------------------------------------------
 
 
-def test_live_scan_finds_submit_router_dual_dispatch() -> None:
-    """End-to-end: walks the actual codebase and confirms the
-    ``submit_admission_profile`` router (where #16 added the
-    ADMISSION_PROFILE_SUBMITTED dispatch alongside the existing
-    APPLICATION_STATUS_CHANGED bundle) shows up in the report.
+def test_live_scan_finds_submit_service_dual_dispatch() -> None:
+    """End-to-end: walks the actual codebase and confirms the submit
+    flow (where #16 added the ADMISSION_PROFILE_SUBMITTED dispatch
+    alongside the existing APPLICATION_STATUS_CHANGED bundle) shows up
+    in the report.
+
+    NOTE 2026-05-26: the magic-link refactor (commit 5fca4d4b, vintage
+    PR #279) extracted both ``safe_dispatch()`` calls from the router
+    ``submit_admission_profile`` (admissions.py:711-770 historical) into
+    a ``_post_commit_dispatch`` nested closure inside the service
+    ``submit_and_evaluate`` (admission_service.py:5126-5154 today). The
+    router now just calls the service + awaits the returned post_commit
+    callback — no ``SystemEvents.*`` reference left in the router body.
+    Scanner therefore attributes the pair to the SERVICE function name.
+    Test filter updated to match.
 
     This is the canonical Phase 1 cohabitation pair — the lint MUST
     keep finding it until Phase 4 retires the legacy bundle. If this
     test fails, either:
-    * the router stopped firing one of the two events (check what
-      changed in admissions.py); or
+    * the service stopped firing one of the two events (check what
+      changed in admission_service.py); or
     * the namespace detector regressed.
     """
     pairs = coverage._scan_dual_namespace_pairs()
-    # At least one pair exists post-#16 — the router-level submit
-    # flow that emits both bundles side-by-side.
+    # At least one pair exists post-#16 — the submit flow that emits
+    # both bundles side-by-side from the service-level closure.
     submit_pairs = [
         p for p in pairs
-        if "submit_admission_profile" in p.function
+        if "submit_and_evaluate" in p.function
     ]
     assert len(submit_pairs) >= 1, (
-        f"Expected at least one dual-namespace pair from submit router; "
+        f"Expected at least one dual-namespace pair from submit service; "
         f"got: {[p.function for p in pairs]}"
     )
     pair = submit_pairs[0]
