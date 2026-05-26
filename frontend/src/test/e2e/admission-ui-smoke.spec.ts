@@ -56,20 +56,38 @@ test.beforeAll(async ({ browser }) => {
 
     // We need to call the backend API using the officer session.
     // Use page.request which shares the context's cookies.
+    //
+    // ⚠ FAIL-LOUD assertions (2026-05-26): each request asserts
+    // ``resp.ok()`` so any 4xx/5xx surfaces immediately with the failing
+    // step name + status code, instead of silently producing
+    // ``undefined`` IDs that cascade into "List page loads — table not
+    // found" 15s later. Audit task #54 root cause.
     const pipelineResp = await page.request.get(`${API_URL}/api/pipeline/all`);
     if (!pipelineResp.ok()) {
-      throw new Error("Cannot reach backend — is it running?");
+      throw new Error(
+        `beforeAll: GET /api/pipeline/all returned ${pipelineResp.status()}`,
+      );
     }
     const initialStatusId = (await pipelineResp.json()).statuses[0].id;
 
     const offeringsResp = await page.request.get(
-      `${API_URL}/api/program-offerings?is_active=true&limit=1`
+      `${API_URL}/api/program-offerings?is_active=true&limit=1`,
     );
+    if (!offeringsResp.ok()) {
+      throw new Error(
+        `beforeAll: GET /api/program-offerings returned ${offeringsResp.status()}`,
+      );
+    }
     const offeringId = (await offeringsResp.json())[0].id;
 
     const methodsResp = await page.request.get(
-      `${API_URL}/api/admission-config/methods?active_only=true`
+      `${API_URL}/api/admission-config/methods?active_only=true`,
     );
+    if (!methodsResp.ok()) {
+      throw new Error(
+        `beforeAll: GET /api/admission-config/methods returned ${methodsResp.status()}`,
+      );
+    }
     const methodsBody = await methodsResp.json();
     const methods = methodsBody.methods || methodsBody;
     const admissionMethodId = methods[0].id;
@@ -83,15 +101,34 @@ test.beforeAll(async ({ browser }) => {
         offering_id: offeringId,
       },
     });
+    if (!leadResp.ok()) {
+      const body = await leadResp.text();
+      throw new Error(
+        `beforeAll: POST /api/leads returned ${leadResp.status()} — ${body.slice(0, 200)}`,
+      );
+    }
     const leadId = (await leadResp.json()).id;
 
-    await page.request.post(`${API_URL}/api/leads/${leadId}/consultations`, {
-      data: { status_id: initialStatusId, method: "phone", notes: "UI smoke test" },
-    });
+    const consultResp = await page.request.post(
+      `${API_URL}/api/leads/${leadId}/consultations`,
+      { data: { status_id: initialStatusId, method: "phone", notes: "UI smoke test" } },
+    );
+    if (!consultResp.ok()) {
+      const body = await consultResp.text();
+      throw new Error(
+        `beforeAll: POST /api/leads/${leadId}/consultations returned ${consultResp.status()} — ${body.slice(0, 200)}`,
+      );
+    }
 
     const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
       data: { lead_id: leadId, admission_method_id: admissionMethodId },
     });
+    if (!profileResp.ok()) {
+      const body = await profileResp.text();
+      throw new Error(
+        `beforeAll: POST /api/admissions returned ${profileResp.status()} — ${body.slice(0, 200)}`,
+      );
+    }
     smokeProfileId = (await profileResp.json()).id;
     console.log(`UI smoke profile created: id=${smokeProfileId}`);
   } finally {
