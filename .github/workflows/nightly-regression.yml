@@ -100,6 +100,14 @@ jobs:
           # smoke run 26426142805 fail với "No 'Access-Control-Allow-Origin'
           # header is present on the requested resource" (vs prior mismatch).
           CORS_ORIGINS=http://localhost:3000
+          # Trigger Casbin policy auto-sync at backend startup so DB
+          # casbin_rule rows match policy_templates.py before Playwright
+          # auth.setup begins (audit task #51 root cause: fresh CI DB
+          # lagged policy_templates.py → officer 403 on /api/pipeline/all
+          # + /api/notifications/preferences). main.py:431 gates on
+          # APP_ENV in {"development", "test"} so prod stays opt-out
+          # (manual POST /api/admin/roles/sync-all-from-templates).
+          AUTO_SYNC_TEMPLATES=true
           EOF
 
       # ``-f docker-compose.yml`` bypasses the auto-loaded
