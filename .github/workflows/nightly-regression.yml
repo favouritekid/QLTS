@@ -27,14 +27,12 @@ jobs:
       POSTGRES_DB: qlts_test
       DOMAIN: localhost
       NEXT_PUBLIC_API_URL: http://localhost:8000
-      # Match credentials actually seeded by ``seed_from_xlsx.py`` (sheet
-      # ``2_TaiKhoan``). Doc default ``vothuhien``/``@Matkhau123!`` in
-      # ``Documents/TESTING_GUIDE.md`` + ``auth.setup.ts:27`` is stale —
-      # the xlsx workbook seeds ``vothithuthuhien`` / ``Abc@123456789``.
-      # Setting env here lets Playwright (auth.setup.ts:27-28 reads
-      # TEST_USERNAME / TEST_PASSWORD env) login successfully.
-      TEST_USERNAME: vothithuthuhien
-      TEST_PASSWORD: Abc@123456789
+      # NOTE 2026-05-26: TEST_USERNAME / TEST_PASSWORD env vars removed —
+      # auth.setup.ts fallback defaults (+ all spec defaults) are now in
+      # sync with seed xlsx ``2_TaiKhoan`` per hotfix
+      # ``a5f06966 fix(e2e): align test credential fallbacks to seed xlsx``.
+      # Parity guard ``frontend/src/test/seed-credentials-parity.test.ts``
+      # blocks future drift at PR CI gate.
       # NOTE: CORS_ORIGINS moved to ``.env.production`` (Generate step
       # below) per hotfix 2026-05-26 — docker-compose backend service
       # ``environment:`` block does NOT forward arbitrary host env vars
