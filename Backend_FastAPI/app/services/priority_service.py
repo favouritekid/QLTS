@@ -35,7 +35,7 @@ Compliance source (TT 05/2021/TT-BLĐTBXH Phụ lục 01)
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -436,21 +436,31 @@ def _derive_kv_basis_level(
 
 
 async def _lookup_commune_kv(
-    db: "AsyncSession", commune_code: str
+    db: "AsyncSession", commune_code: str, year: int
 ) -> Optional[str]:
-    """Lookup active KV for a commune_code from vn_commune_area_map.
+    """Lookup KV for a commune_code from vn_commune_area_map, AS-OF the given
+    academic year (temporal — mirrors ``lookup_kv_for_school_year`` semantics).
 
-    Active row = effective_to IS NULL. Returns None if commune not in table
-    (graceful — Phase B.2 may not have full coverage yet).
+    A KV row is effective for ``year`` when it is the active policy at the end
+    of that academic year (half-open interval): ``effective_from <= Dec-31-year``
+    AND ``effective_to`` is NULL or strictly after Dec-31-year. So a mid-year KV
+    reclassification (xã hết khó khăn → KV đổi), recorded as expire-old +
+    insert-new, resolves to the correct row per year instead of always taking
+    the "now" row — which would silently mis-score historical/future cycles.
+    Returns None if commune not in table (graceful — coverage may be partial).
     """
     from app.models.vn_locality import VnCommuneAreaMap
 
+    as_of = date(year, 12, 31)
     stmt = (
         select(VnCommuneAreaMap.area_code)
         .where(
             VnCommuneAreaMap.commune_code == commune_code,
-            VnCommuneAreaMap.effective_to.is_(None),
+            VnCommuneAreaMap.effective_from <= as_of,
+            (VnCommuneAreaMap.effective_to.is_(None))
+            | (VnCommuneAreaMap.effective_to > as_of),
         )
+        .order_by(VnCommuneAreaMap.effective_from.desc())
         .limit(1)
     )
     result = await db.execute(stmt)
@@ -533,6 +543,11 @@ async def resolve_kv_for_profile(
     vocational = getattr(profile, "vocational_qualification", "none") or "none"
     area_basis = getattr(profile, "area_resolution_basis", None)
     academic_history = getattr(profile, "academic_history", None) or []
+    # Temporal KV: resolve commune KV as-of the profile's admission year so a
+    # mid-year KV reclassification doesn't silently mis-score. Mirrors the
+    # academic_year semantics of lookup_kv_for_school_year. Fallback to current
+    # year for drafts without academic_year set.
+    kv_year = getattr(profile, "academic_year", None) or date.today().year
 
     basis, basis_reason = _derive_kv_basis_level(
         cultural=cultural,
@@ -560,7 +575,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="special_case_no_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code)
+        kv = await _lookup_commune_kv(db, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",
@@ -614,7 +629,7 @@ async def resolve_kv_for_profile(
                 requires_manual_override=True,
                 reason="profile_missing_permanent_commune_code",
             )
-        kv = await _lookup_commune_kv(db, commune_code)
+        kv = await _lookup_commune_kv(db, commune_code, kv_year)
         if kv is None:
             return None, _meta_base(
                 rule_applied="catalog_gap_commune",

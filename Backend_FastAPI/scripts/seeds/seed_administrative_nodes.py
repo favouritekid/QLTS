@@ -233,7 +233,12 @@ def build_trees(records: list[dict], mapping: dict) -> tuple:
             if rec["old_ward_code"]:
                 wards = tree_old[old_norm]["districts"][dist_name]["wards"]
                 if not any(w["code"] == rec["old_ward_code"] for w in wards):
-                    wards.append({"code": rec["old_ward_code"], "name": rec["old_ward_name"]})
+                    # PR-2: carry the authoritative successor (new_ward_code) so
+                    # the legacy ward node resolves cross-era to its current commune.
+                    wards.append({
+                        "code": rec["old_ward_code"], "name": rec["old_ward_name"],
+                        "successor": rec["new_ward_code"] or None,
+                    })
         else:
             unmapped.add(old_prov_raw)
         
@@ -326,6 +331,8 @@ async def seed_wards_3level(db: AsyncSession, tree_old: dict, dist_map: dict) ->
                     parent_id=dist_id, path=path,
                     province_code=prov_code, district_code=dist_code, ward_code=ward["code"],
                     valid_from=LEGACY_VALID_FROM, valid_to=LEGACY_VALID_TO, is_active=True,
+                    # PR-2 cross-era lineage: legacy ward → current commune code.
+                    successor_ward_code=ward.get("successor"),
                 )
                 db.add(node)
                 count += 1
@@ -386,6 +393,8 @@ async def seed_wards_2level(db: AsyncSession, tree_new: dict, prov_map: dict) ->
                 parent_id=prov_id, path=path,
                 province_code=prov_code, district_code=None, ward_code=ward["code"],
                 valid_from=NEW_VALID_FROM, valid_to=None, is_active=True,
+                # PR-2: current ward → itself (identity).
+                successor_ward_code=ward["code"],
             )
             db.add(node)
             count += 1

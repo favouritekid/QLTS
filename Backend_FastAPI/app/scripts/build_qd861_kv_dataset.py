@@ -15,8 +15,13 @@ Output:
 CSV columns match vn_locality_service.import_commune_csv:
     commune_code, province, district, ward, area_code
 
-Convention (locked 2026-05-18, [[q9-07-pr5-phase-a-shipped-2026-05-18]]):
-- commune_code = "{province_code}_{ward_code}"  e.g. "01_00025"
+Convention (revised 2026-05-26 — see commune_code note):
+- commune_code = ward.code (raw, e.g. "00025"). administrative_nodes.code is
+  nationally-unique for current-era wards, and the FE stores that raw code in
+  profile.permanent_commune_code. The earlier "{province_code}_{ward_code}"
+  composed form was dropped because the province prefix only desynced the KV
+  catalog key from the FE-stored code (commune KV never resolved). Engine
+  lookup is opaque equality, so raw is safe everywhere.
 - district = ""  (post-sáp nhập 2025 không còn cấp huyện)
 - area_code regex `^KV[1-9](-NT)?$` (CHECK constraint phase1_08b)
 
@@ -184,7 +189,7 @@ def build_rows(
             )
         rows.append(
             {
-                "commune_code": f"{p.code}_{w.code}",
+                "commune_code": w.code,  # raw ward.code (matches FE permanent_commune_code)
                 "province": p.name,
                 "district": "",
                 "ward": w.name,

@@ -19,6 +19,7 @@ from app.repositories.administrative_repository import AdministrativeRepository
 from app.schemas.administrative import (
     ProvinceResponse,
     DistrictResponse,
+    ResolveWardResponse,
     WardResponse,
 )
 
@@ -107,3 +108,30 @@ async def get_wards(
         )
         for w in wards
     ]
+
+
+@router.get("/resolve-ward", response_model=ResolveWardResponse)
+async def resolve_ward(
+    code: str = Query(..., description="Ward code (current or legacy) to canonicalize"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+):
+    """PR-3: resolve a ward code (current OR legacy 3-tier) to its canonical
+    CURRENT-era commune (code + name).
+
+    The FE calls this when an officer picks an address — esp. from an old
+    (3-tier) document — so the profile stores the current commune code and the
+    UI can show "→ Xã X (hiện hành)". ``resolved=false`` → officer must pick a
+    current-mode commune (the submit gate also fail-closes).
+    """
+    repo = AdministrativeRepository(db)
+    current_code = await repo.resolve_current_ward_code(code)
+    current_name = (
+        await repo.get_current_ward_name(current_code) if current_code else None
+    )
+    return ResolveWardResponse(
+        input_code=code,
+        current_code=current_code,
+        current_name=current_name,
+        resolved=current_code is not None,
+    )

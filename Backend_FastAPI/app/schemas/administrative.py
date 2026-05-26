@@ -37,3 +37,15 @@ class WardDetailResponse(WardResponse):
     valid_from: date
     valid_to: Optional[date] = None
     old_district_name: Optional[str] = None
+
+
+class ResolveWardResponse(BaseModel):
+    """PR-3: resolve any ward code (current or legacy) → canonical current commune.
+
+    ``resolved=False`` (current_code=None) means the input couldn't be mapped to a
+    current-era commune → FE keeps the officer on a current-mode pick (submit gate
+    also fail-closes)."""
+    input_code: str
+    current_code: Optional[str] = None
+    current_name: Optional[str] = None
+    resolved: bool
