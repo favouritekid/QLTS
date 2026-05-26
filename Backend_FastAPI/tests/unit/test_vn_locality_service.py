@@ -46,6 +46,24 @@ async def test_commune_import_inserts_valid_rows(db) -> None:
     assert result["error_rows"] == []
 
 
+async def test_commune_import_accepts_empty_district_2tier(db) -> None:
+    """2-tier model (post-2025 sáp nhập): current-era communes have NO
+    district, so the importer MUST accept district="". This was rejected by
+    a stale ``min_length=1`` on ``VnCommuneAreaMapRow.district`` which blocked
+    100% of real rows (anchor for the 2026-05-26 relax). commune_code = raw
+    ward.code (e.g. '21609') — matches FE ``permanent_commune_code``."""
+    csv = (
+        b"commune_code,province,district,ward,area_code\n"
+        b"21609,Tinh Gia Lai,,Xa An Lao,KV1\n"
+    )
+    service = VnLocalityService(db)
+    result, _ = await service.import_commune_csv(csv)
+    assert result["inserted"] == 1, result["error_rows"]
+    assert result["error_rows"] == []
+    # raw commune_code resolves through the same opaque-equality lookup
+    assert await service.lookup_commune_kv("21609") == "KV1"
+
+
 async def test_commune_import_skips_duplicate_active_row(db) -> None:
     csv = (
         b"commune_code,province,district,ward,area_code\n"

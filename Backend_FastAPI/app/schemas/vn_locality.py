@@ -16,7 +16,10 @@ class VnCommuneAreaMapRow(BaseModel):
     """Single CSV row payload for commune import (BNV format)."""
     commune_code: str = Field(min_length=1, max_length=20)
     province: str = Field(min_length=1, max_length=100)
-    district: str = Field(min_length=1, max_length=100)
+    # district allows empty: the post-2025 2-tier model (Tỉnh → Xã) drops the
+    # district level, so current-era commune rows carry district="". The DB
+    # column is NOT NULL but accepts ''. (Legacy 3-tier rows still populate it.)
+    district: str = Field(default="", max_length=100)
     ward: str = Field(min_length=1, max_length=100)
     area_code: str = Field(pattern=r"^KV[1-9](-NT)?$")
 

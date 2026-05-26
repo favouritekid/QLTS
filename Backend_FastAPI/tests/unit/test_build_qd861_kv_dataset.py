@@ -112,9 +112,10 @@ def test_build_rows_full_pipeline(seed_files):
 
     by_code = {r["commune_code"]: r for r in rows}
 
-    # commune_code = {province_code}_{ward_code}
-    assert "01_00004" in by_code
-    assert "68_24829" in by_code
+    # commune_code = raw ward.code (revised 2026-05-26 — dropped province prefix;
+    # ward.code is nationally-unique + matches FE permanent_commune_code)
+    assert "00004" in by_code
+    assert "24829" in by_code
 
     # district always empty (post-sáp nhập 2025)
     assert all(r["district"] == "" for r in rows)
@@ -124,14 +125,14 @@ def test_build_rows_full_pipeline(seed_files):
     assert all(re.match(r"^KV[1-9](-NT)?$", r["area_code"]) for r in rows)
 
     # KV mapping spot checks
-    assert by_code["01_00004"]["area_code"] == "KV3"  # HN Phường
-    assert by_code["01_00376"]["area_code"] == "KV2"  # HN Xã
-    assert by_code["01_06994"]["area_code"] == "KV1"  # Đặc khu (any province)
-    assert by_code["68_24829"]["area_code"] == "KV2"  # Lâm Đồng Phường
-    assert by_code["68_24934"]["area_code"] == "KV2-NT"  # Lâm Đồng Xã
+    assert by_code["00004"]["area_code"] == "KV3"  # HN Phường
+    assert by_code["00376"]["area_code"] == "KV2"  # HN Xã
+    assert by_code["06994"]["area_code"] == "KV1"  # Đặc khu (any province)
+    assert by_code["24829"]["area_code"] == "KV2"  # Lâm Đồng Phường
+    assert by_code["24934"]["area_code"] == "KV2-NT"  # Lâm Đồng Xã
 
     # Apostrophe preserved end-to-end
-    assert by_code["68_24829"]["ward"] == "Phường B'Lao"
+    assert by_code["24829"]["ward"] == "Phường B'Lao"
 
 
 def test_build_rows_rejects_unknown_province(tmp_path):
