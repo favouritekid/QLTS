@@ -4641,6 +4641,36 @@ async def _audit_warning_dismissed_if_missing(
         )
 
 
+async def _is_current_era_ward(db: AsyncSession, commune_code: Optional[str]) -> bool:
+    """True iff ``commune_code`` is a CURRENT-era (2-tier, ``valid_to IS NULL``)
+    ward node in ``administrative_nodes``.
+
+    Gap #3 submit gate uses this: a legacy / stale / missing code → False, so
+    submit fail-closes and forces re-selecting the post-2025 commune. This
+    guarantees the stored ``permanent_commune_code`` is the canonical current
+    code KV resolution + records rely on (never a deprecated 3-tier code).
+    """
+    code = (commune_code or "").strip()
+    if not code:
+        return False
+    from sqlalchemy import select as _sel
+    from app.models.administrative_node import (
+        AdministrativeLevel,
+        AdministrativeNode,
+    )
+    result = await db.execute(
+        _sel(AdministrativeNode.id)
+        .where(
+            AdministrativeNode.code == code,
+            AdministrativeNode.level == AdministrativeLevel.WARD,
+            AdministrativeNode.valid_to.is_(None),
+            AdministrativeNode.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
@@ -5011,6 +5041,29 @@ async def submit_and_evaluate(
     )
     if kv_error:
         errors.append(kv_error)
+
+    # Gap #3 — applicant identity + permanent-address completeness (production
+    # scope, locked 2026-05-26). Submit already gates citizen_id / family_info /
+    # academic_history / docs / scores / KV but NOT name / phone / permanent
+    # address. Scope: full_name + phone + permanent_province + permanent_ward.
+    # NOT district (the 2025 2-tier reform dropped the district level — FE mode
+    # "current" doesn't collect it, prod rows leave it empty). The ward must be a
+    # CURRENT-era commune node (administrative_nodes valid_to IS NULL), not merely
+    # present: a legacy-era code can't resolve KV and is a deprecated address, so
+    # submit fail-closes and forces re-selecting the current commune.
+    if not (profile.full_name or "").strip():
+        errors.append("Chưa nhập họ tên thí sinh (full_name)")
+    if not (profile.phone or "").strip():
+        errors.append("Chưa nhập số điện thoại (phone)")
+    if not (profile.permanent_province or "").strip():
+        errors.append("Thiếu địa chỉ thường trú: Tỉnh/Thành phố")
+    if not (profile.permanent_ward or "").strip():
+        errors.append("Thiếu địa chỉ thường trú: Phường/Xã")
+    elif not await _is_current_era_ward(db, profile.permanent_commune_code):
+        errors.append(
+            "Phường/Xã thường trú phải theo địa giới hiện hành (2 cấp, sau "
+            "01/07/2025). Vui lòng chọn lại Phường/Xã hiện tại."
+        )
 
     # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
     # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
