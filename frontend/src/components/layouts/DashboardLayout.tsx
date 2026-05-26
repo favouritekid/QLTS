@@ -84,10 +84,17 @@ export function DashboardLayout({
   const { isSidebarCollapsed, setSidebarCollapsed } = useUIStore();
   const showSecurityBanner = useShouldShowSecurityBanner();
 
-  // ✅ SECURITY FIX: Removed client-side auth guard
-  // Authentication is now enforced by server-side middleware
+  // ✅ SECURITY FIX: Removed client-side auth guard.
+  // Authentication is enforced by:
+  //   1. Server Component fetches via ``lib/api/server.ts:174-176`` which
+  //      redirect to ``/login?force_login=true`` on 401 (the primary gate)
+  //   2. Axios interceptor in ``lib/api/client.ts:259`` which clears auth
+  //      store + redirects to /login on 401 for client-side requests
+  // (Earlier comment said "server-side middleware" — there is no
+  // ``frontend/middleware.ts``; the doc was stale. Updated 2026-05-26
+  // alongside nightly-regression CORS unblock.)
   // This prevents the security vulnerability where HTML/data was sent
-  // to the client before redirect
+  // to the client before redirect.
 
   useEffect(() => {
     const handleResize = () => {

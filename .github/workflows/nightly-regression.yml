@@ -35,6 +35,26 @@ jobs:
       # TEST_USERNAME / TEST_PASSWORD env) login successfully.
       TEST_USERNAME: vothithuthuhien
       TEST_PASSWORD: Abc@123456789
+      # ROOT CAUSE FIX for nightly-regression P1 #39 — Playwright login
+      # succeeded server-side but browser stayed at /login because CORS
+      # blocked the response from reaching axios. The APP_ENV=test
+      # fallback in ``Backend_FastAPI/app/main.py:667-669`` populates::
+      #
+      #   _cors_origins = ["http://testserver", "http://localhost"]
+      #
+      # Per RFC 6454 + Fetch spec, origin = ``scheme://host:port``. With
+      # ``allow_credentials=True`` (auth cookie flow), Starlette CORSMiddleware
+      # enforces strict EXACT match — ``http://localhost`` (implicit port 80)
+      # ≠ ``http://localhost:3000``. Browser saw no matching
+      # Access-Control-Allow-Origin → blocked JS from reading the body →
+      # axios ``loginMutation.mutationFn`` rejected with Network Error →
+      # ``onSuccess`` never fired → ``router.push('/dashboard/officer')``
+      # never called. Backend logged "Authentication successful" × 3 because
+      # auth DID complete server-side; the response just never reached JS.
+      #
+      # Explicit env var here overrides the fallback so the dispatcher
+      # whitelists the exact origin Playwright reaches from.
+      CORS_ORIGINS: http://localhost:3000
 
     steps:
       - uses: actions/checkout@v4
