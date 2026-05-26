@@ -103,11 +103,11 @@ E2E tests are NOT in PR gate because they require full stack (backend + frontend
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `E2E_ADMIN_USERNAME` | `admin` | Admin username |
-| `E2E_ADMIN_PASSWORD` | `Admin@12345` | Admin password |
+| `E2E_ADMIN_PASSWORD` | `Admin@123` | Admin password (matches xlsx 2_TaiKhoan) |
 | `E2E_ADMIN_TOTP_SECRET` | (hardcoded) | TOTP secret for MFA |
-| `E2E_OFFICER_USERNAME` | `vothuhien` | Officer username |
-| `E2E_OFFICER_PASSWORD` | `@Matkhau123!` | Officer password |
+| `E2E_OFFICER_USERNAME` | `vothithuthuhien` | Officer username (matches xlsx 2_TaiKhoan) |
+| `E2E_OFFICER_PASSWORD` | `Abc@123456789` | Officer password (matches xlsx 2_TaiKhoan) |
 | `E2E_API_URL` | `http://localhost:8000` | Backend API URL |
 | `PLAYWRIGHT_BASE_URL` | `http://localhost:3000` | Frontend URL |
 
-**Note**: Defaults are for the demo seed migration. If using workbook seed data, override with workbook credentials.
+**Source of truth**: ``Backend_FastAPI/seed_data_template.xlsx`` sheet ``2_TaiKhoan``. Spec fallback defaults are synced to that workbook and locked by the parity guard at ``frontend/src/test/seed-credentials-parity.test.ts`` (runs in CI). If the workbook rotates a credential, update the spec defaults + this doc in the same PR — the parity guard will fail otherwise.
