@@ -76,6 +76,7 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+let admissionRoundId: number;
 let initialStatusId: string;
 let secondStatusId: string;
 let officerUserId: number;
@@ -332,8 +333,24 @@ test.describe("Lead to Admission Workflow", () => {
       );
     }
 
+    // Plan B contract (PR #338): admission_round_id + academic_year required
+    // on AdmissionProfileCreate. Derive round_id from paths-for-offering
+    // (CI seeds DOT_1/2026 via phase2_round_per_year_dot1_backfill).
+    const pathsResp = await page.request.get(
+      `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`
+    );
+    expect(pathsResp.ok()).toBeTruthy();
+    const pathsBody = await pathsResp.json();
+    const paths = pathsBody.items || [];
+    if (!paths.length) {
+      throw new Error(
+        `Setup FAILED: No admission paths for offering ${offeringId}.`
+      );
+    }
+    admissionRoundId = paths[0].admission_round_id;
+
     console.log(
-      `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} status=${initialStatusId}→${secondStatusId} officer=${officerUserId}(${officerFullName})`
+      `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} round=${admissionRoundId} status=${initialStatusId}→${secondStatusId} officer=${officerUserId}(${officerFullName})`
     );
   });
 
@@ -607,6 +624,8 @@ test.describe("Lead to Admission Workflow", () => {
           data: {
             lead_id: leadId1,
             admission_method_id: admissionMethodId,
+            admission_round_id: admissionRoundId,
+            academic_year: 2026,
           },
         }
       );
@@ -909,6 +928,8 @@ test.describe("Lead to Admission Workflow", () => {
           data: {
             lead_id: leadId2,
             admission_method_id: admissionMethodId,
+            admission_round_id: admissionRoundId,
+            academic_year: 2026,
           },
         }
       );

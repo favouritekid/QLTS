@@ -43,6 +43,7 @@ let officerCookies: Cookie[] = [];
 // Discovery
 let offeringId: number;
 let admissionMethodId: number;
+let admissionRoundId: number;
 let initialStatusId: string;
 
 // Test 1: Happy path
@@ -198,6 +199,7 @@ async function setupApprovedProfile(
   opts: {
     offeringId: number;
     admissionMethodId: number;
+    admissionRoundId: number;
     initialStatusId: string;
   }
 ): Promise<{ leadId: number; profileId: number }> {
@@ -230,9 +232,15 @@ async function setupApprovedProfile(
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
   // Officer: create admission profile
+  // Plan B contract (PR #338): admission_round_id + academic_year required.
   const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
     headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
+    data: {
+      lead_id: leadId,
+      admission_method_id: opts.admissionMethodId,
+      admission_round_id: opts.admissionRoundId,
+      academic_year: 2026,
+    },
   });
   expect(profileResp.ok() || profileResp.status() === 201).toBeTruthy();
   const profile = await profileResp.json();
@@ -359,7 +367,21 @@ test.describe("Finance Lifecycle", () => {
       const methodsBody = await methodsResp.json();
       admissionMethodId = (methodsBody.methods || methodsBody)[0].id;
 
-      console.log(`Config: offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}`);
+      // Plan B: derive admission_round_id from paths-for-offering (first
+      // active path). CI seed has DOT_1/2026 backfilled by phase2_round_per_
+      // year_dot1_backfill.
+      const pathsResp = await page.request.get(
+        `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`
+      );
+      expect(pathsResp.ok()).toBeTruthy();
+      const pathsBody = await pathsResp.json();
+      const paths = pathsBody.items || [];
+      if (!paths.length) {
+        throw new Error(`No admission paths for offering ${offeringId}`);
+      }
+      admissionRoundId = paths[0].admission_round_id;
+
+      console.log(`Config: offering=${offeringId}, method=${admissionMethodId}, round=${admissionRoundId}, status=${initialStatusId}`);
     });
 
     // --- Step 2: Officer login ---
@@ -377,7 +399,7 @@ test.describe("Finance Lifecycle", () => {
         adminCookies,
         officerHeaders,
         officerCookies,
-        { offeringId, admissionMethodId, initialStatusId }
+        { offeringId, admissionMethodId, admissionRoundId, initialStatusId }
       );
       approvedLeadId = result.leadId;
       approvedProfileId = result.profileId;
@@ -711,7 +733,7 @@ test.describe("Finance Lifecycle", () => {
           adminCookies,
           officerHeaders,
           officerCookies,
-          { offeringId, admissionMethodId, initialStatusId }
+          { offeringId, admissionMethodId, admissionRoundId, initialStatusId }
         );
         adminHeaders = await restoreCookies(page, adminCookies);
 

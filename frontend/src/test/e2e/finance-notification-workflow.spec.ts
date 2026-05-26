@@ -38,6 +38,7 @@ type AuthResult = {
 type TempUser = { id: number; username: string; password: string; fullName: string; unitId: number };
 
 type DiscoveryConfig = {
+  admissionRoundId: number;
   offeringId: number;
   unitId: number;
   admissionMethodId: number;
@@ -233,7 +234,12 @@ async function setupApprovedProfileWithFee(
   // 3. Create admission profile
   const profileResp = await officerPage.request.post(`${API_URL}/api/admissions`, {
     headers: officerHeaders,
-    data: { lead_id: lead.id, admission_method_id: config.admissionMethodId },
+    data: {
+      lead_id: lead.id,
+      admission_method_id: config.admissionMethodId,
+      admission_round_id: config.admissionRoundId,
+      academic_year: 2026,
+    },
   });
   if (!profileResp.ok() && profileResp.status() !== 201) {
     throw new Error(`Admission profile creation failed: ${profileResp.status()} ${(await profileResp.text()).slice(0, 300)}`);
@@ -372,7 +378,16 @@ test.describe("Finance Notification Runtime Workflow", () => {
     const methodsBody = await methodsResp.json();
     const methods = methodsBody.methods || methodsBody;
 
-    discovery = { offeringId, unitId, admissionMethodId: methods[0].id, initialStatusId };
+    // Plan B contract: admission_round_id required on profile create.
+    const pathsResp = await adminPage.request.get(
+      `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`,
+    );
+    const pathsBody = await pathsResp.json();
+    const paths = pathsBody.items || [];
+    if (!paths.length) throw new Error(`No paths for offering ${offeringId}`);
+    const admissionRoundId = paths[0].admission_round_id as number;
+
+    discovery = { offeringId, unitId, admissionMethodId: methods[0].id, admissionRoundId, initialStatusId };
 
     // Temp officer (owns lead, receives notification)
     tempOfficer = await createTempUser(adminPage, adminAuth.headers, "officer", discovery.unitId, "e2e_fin_off");

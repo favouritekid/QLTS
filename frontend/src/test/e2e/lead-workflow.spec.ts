@@ -796,7 +796,16 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
-      expect(body.consultation_status_id ?? body.lead?.consultation_status_id).toBe(initialStatusId);
+      // POST /consultations returns ``ConsultationCreateResult`` —
+      // ``{consultation: {...consultation_status_id...}, status_updated,
+      // terminal_guard_reason}`` (schemas/lead.py:80). Old asserts read
+      // top-level or body.lead — neither matches. Read nested + keep legacy
+      // fallbacks defensive.
+      const status =
+        body.consultation?.consultation_status_id ??
+        body.consultation_status_id ??
+        body.lead?.consultation_status_id;
+      expect(status).toBe(initialStatusId);
       console.log(`Lead4 consultation set to ${initialStatusId}`);
     });
 

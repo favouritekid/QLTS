@@ -43,6 +43,7 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+let admissionRoundId: number;
 let initialStatusId: string;
 let officerId: number;
 
@@ -177,7 +178,7 @@ async function restoreCookies(
 async function createAndSubmitProfile(
   page: Page,
   headers: Record<string, string>,
-  opts: { offeringId: number; admissionMethodId: number; initialStatusId: string }
+  opts: { offeringId: number; admissionMethodId: number; admissionRoundId: number; initialStatusId: string }
 ): Promise<number> {
   const phone = generatePhone();
   const citizenId = generateCitizenId();
@@ -196,10 +197,15 @@ async function createAndSubmitProfile(
     data: { status_id: opts.initialStatusId, method: "phone", notes: "Bulk E2E test" },
   });
 
-  // Create profile
+  // Create profile (Plan B contract: round + year required)
   const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
     headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
+    data: {
+      lead_id: leadId,
+      admission_method_id: opts.admissionMethodId,
+      admission_round_id: opts.admissionRoundId,
+      academic_year: 2026,
+    },
   });
   const profile = await profileResp.json();
   const profileId = profile.id;
@@ -325,6 +331,17 @@ test.describe("Admission Bulk Actions + Export", () => {
       const methods = methodsBody.methods || methodsBody;
       admissionMethodId = methods[0].id;
 
+      // Plan B contract (PR #338): admission_round_id required.
+      const pathsResp = await page.request.get(
+        `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`
+      );
+      const pathsBody = await pathsResp.json();
+      const paths = pathsBody.items || [];
+      if (!paths.length) {
+        throw new Error(`No admission paths for offering ${offeringId}`);
+      }
+      admissionRoundId = paths[0].admission_round_id;
+
       // Discover officer's user ID for bulk assign test
       const usersResp = await page.request.get(
         `${API_URL}/api/users?role=officer&limit=5`,
@@ -351,6 +368,7 @@ test.describe("Admission Bulk Actions + Export", () => {
         const pid = await createAndSubmitProfile(page, officerHeaders, {
           offeringId,
           admissionMethodId,
+          admissionRoundId,
           initialStatusId,
         });
         profileIds.push(pid);
@@ -448,6 +466,7 @@ test.describe("Admission Bulk Actions + Export", () => {
     const assignPid = await createAndSubmitProfile(page, officerHeaders, {
       offeringId,
       admissionMethodId,
+      admissionRoundId,
       initialStatusId,
     });
     adminHeaders = await restoreCookies(page, adminCookies);

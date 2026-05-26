@@ -48,6 +48,7 @@ type AuthResult = {
 
 type DiscoveryConfig = {
   offeringId: number;
+  admissionRoundId: number;
   unitId: number;
   admissionMethodId: number;
   initialStatusId: string;
@@ -285,10 +286,23 @@ async function discoverAdmissionsConfig(page: Page): Promise<DiscoveryConfig> {
   const methods = methodsBody.methods || methodsBody;
   expect(Array.isArray(methods) && methods.length > 0).toBeTruthy();
 
+  // Plan B contract (PR #338): admission_round_id required.
+  const pathsResp = await page.request.get(
+    `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`,
+  );
+  expect(pathsResp.ok()).toBeTruthy();
+  const pathsBody = await pathsResp.json();
+  const paths = pathsBody.items || [];
+  if (!paths.length) {
+    throw new Error(`No admission paths for offering ${offeringId}`);
+  }
+  const admissionRoundId = paths[0].admission_round_id as number;
+
   return {
     offeringId,
     unitId,
     admissionMethodId: methods[0].id,
+    admissionRoundId,
     initialStatusId,
   };
 }
@@ -441,6 +455,8 @@ async function createMinimalDraftAdmission(
     data: {
       lead_id: leadId,
       admission_method_id: config.admissionMethodId,
+      admission_round_id: config.admissionRoundId,
+      academic_year: 2026,
     },
   });
   if (!profileResp.ok() && profileResp.status() !== 201) {

@@ -48,6 +48,7 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+let admissionRoundId: number;
 let initialStatusId: string;
 
 // Test data - each test creates its own lead+profile
@@ -220,6 +221,7 @@ async function createLeadAndProfile(
   opts: {
     offeringId: number;
     admissionMethodId: number;
+    admissionRoundId: number;
     initialStatusId: string;
     citizenId?: string;
   }
@@ -252,11 +254,16 @@ async function createLeadAndProfile(
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
   // 3. Create admission profile
+  // Plan B contract (PR #338 ``3c3bacec``) requires admission_round_id +
+  // academic_year. Both resolved in discovery; year hardcoded to 2026 (only
+  // intake year seeded in CI fixture per phase2_round_per_year_dot1_backfill).
   const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
     headers,
     data: {
       lead_id: leadId,
       admission_method_id: opts.admissionMethodId,
+      admission_round_id: opts.admissionRoundId,
+      academic_year: 2026,
     },
   });
   if (!profileResp.ok() && profileResp.status() !== 201) {
@@ -338,7 +345,7 @@ async function createLeadAndProfile(
 async function createMinimalDraftProfile(
   page: Page,
   headers: Record<string, string>,
-  opts: { offeringId: number; admissionMethodId: number; initialStatusId: string }
+  opts: { offeringId: number; admissionMethodId: number; admissionRoundId: number; initialStatusId: string }
 ): Promise<{ leadId: number; profileId: number }> {
   const phone = generatePhone();
 
@@ -361,9 +368,15 @@ async function createMinimalDraftProfile(
   });
 
   // Create profile — intentionally do NOT fill personal info or upload docs
+  // Plan B contract: admission_round_id + academic_year required.
   const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
     headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
+    data: {
+      lead_id: leadId,
+      admission_method_id: opts.admissionMethodId,
+      admission_round_id: opts.admissionRoundId,
+      academic_year: 2026,
+    },
   });
   const profileId = (await profileResp.json()).id;
   return { leadId, profileId };
@@ -421,7 +434,25 @@ test.describe("Admission Profile Lifecycle", () => {
       admissionMethodId = methodWithPaperDoc?.id || methods[0].id;
       hasPaperDoc = !!methodWithPaperDoc;
 
-      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`);
+      // Admission round (Plan B contract — PR #338). Derive from paths-for-
+      // offering: AdmissionPathListResponse returns ``{total, items}`` with
+      // each item carrying ``admission_round_id``. CI seed backfills DOT_1
+      // for 2026 via phase2_round_per_year_dot1_backfill, so the first
+      // active path's round_id IS the intake round.
+      const pathsResp = await page.request.get(
+        `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`
+      );
+      expect(pathsResp.ok()).toBeTruthy();
+      const pathsBody = await pathsResp.json();
+      const paths = pathsBody.items || [];
+      if (!paths.length) {
+        throw new Error(
+          `No admission paths for offering ${offeringId} — seed incomplete?`
+        );
+      }
+      admissionRoundId = paths[0].admission_round_id;
+
+      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, round=${admissionRoundId}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`);
     });
 
     // --- Step 2: Officer login ---
@@ -436,6 +467,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId1 = result.leadId;
@@ -621,6 +653,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId2 = result.leadId;
@@ -751,6 +784,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
         citizenId: citizenId3,
       });
@@ -892,6 +926,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const exhaustResult = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
         citizenId: exhaustCitizenId,
       });
@@ -983,6 +1018,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId4 = result.leadId;
@@ -1128,6 +1164,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId5 = result.leadId;
@@ -1223,6 +1260,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId6 = result.leadId;
@@ -1290,7 +1328,12 @@ test.describe("Admission Profile Lifecycle", () => {
 
       const otherProfileResp = await page.request.post(`${API_URL}/api/admissions`, {
         headers: adminHeaders,
-        data: { lead_id: otherLeadId, admission_method_id: admissionMethodId },
+        data: {
+          lead_id: otherLeadId,
+          admission_method_id: admissionMethodId,
+          admission_round_id: admissionRoundId,
+          academic_year: 2026,
+        },
       });
       const otherProfileId = (await otherProfileResp.json()).id;
       console.log(`Created out-of-scope profile: id=${otherProfileId}, unit=${otherUnit.id}`);
@@ -1357,6 +1400,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
       leadId7A = result.leadId;
@@ -1483,6 +1527,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
         citizenId: citizenId7B,
       });
@@ -1606,6 +1651,7 @@ test.describe("Admission Profile Lifecycle", () => {
       const { profileId } = await createMinimalDraftProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
+        admissionRoundId,
         initialStatusId,
       });
 
