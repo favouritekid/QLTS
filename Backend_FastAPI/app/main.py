@@ -428,7 +428,16 @@ async def lifespan(app: FastAPI):
         # DEV mode with AUTO_SYNC_TEMPLATES=True: auto-sync to fix drift
         # Otherwise: just log warnings for manual review
         #
-        if settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV == "development":
+        # Extended 2026-05-26: include APP_ENV=test so CI nightly-regression
+        # gets the same drift auto-correction as local dev. Without this, a
+        # fresh CI DB only has casbin_rule rows seeded by alembic migrations
+        # (which lag policy_templates.py); officer hit 403 on
+        # /api/pipeline/all + /api/notifications/preferences even though the
+        # template grants them, because the alembic seed predates those
+        # entries. Production explicitly stays opt-out per safety branch
+        # below (line 458-462) — manual POST /api/admin/roles/sync-all-from-
+        # templates is the prod path.
+        if settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV in {"development", "test"}:
             from app.services.casbin_service import CasbinPolicyService
             
             # Need a DB session for the service
@@ -459,6 +468,17 @@ async def lifespan(app: FastAPI):
             log.warning(
                 "⚠️ AUTO_SYNC_TEMPLATES is enabled but ignored in production. "
                 "Use POST /api/admin/roles/sync-all-from-templates for manual sync."
+            )
+        elif settings.AUTO_SYNC_TEMPLATES:
+            # APP_ENV is some non-canonical value (e.g., 'staging', 'qa'). Auto-sync
+            # is gated to {"development", "test"} only (see line 437 above) so
+            # nothing fires here — log INFO so ops can diagnose why drift remains
+            # uncorrected in this env.
+            log.info(
+                "AUTO_SYNC_TEMPLATES enabled but APP_ENV=%s is outside the "
+                "auto-sync allowlist {development, test}; skipping. Use the "
+                "manual admin endpoint if drift correction is desired.",
+                settings.APP_ENV,
             )
 
     except Exception as e:
