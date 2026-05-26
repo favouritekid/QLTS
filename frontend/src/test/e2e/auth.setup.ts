@@ -14,6 +14,35 @@ import path from "path";
 const authFile = path.join(__dirname, "..", ".auth", "user.json");
 
 setup("authenticate", async ({ page }) => {
+  // Self-diagnose listeners — when login fails the next time, the failure
+  // mode (CORS strip / 401 / 500 / cookie reject) shows up in the
+  // playwright-report immediately instead of only the timeout message.
+  // Lesson from 2026-05-25 nightly-regression debug cycle: original
+  // failure was CORS strip (P1 #39); without these listeners, multiple
+  // diagnostic rounds were needed to surface "Authentication successful"
+  // on server + Network Error on client. The listeners attach BEFORE any
+  // navigation so the first /login request is also captured.
+  page.on("console", (msg) => {
+    if (msg.type() === "error" || msg.type() === "warning") {
+      // eslint-disable-next-line no-console
+      console.log(`[browser ${msg.type()}]`, msg.text());
+    }
+  });
+  page.on("pageerror", (err) => {
+    // eslint-disable-next-line no-console
+    console.log("[browser pageerror]", err.message);
+  });
+  page.on("response", (resp) => {
+    const url = resp.url();
+    if (url.includes("/auth/login") || url.includes("/api/auth/")) {
+      const corsHeader = resp.headers()["access-control-allow-origin"] || "(none)";
+      // eslint-disable-next-line no-console
+      console.log(
+        `[auth ${resp.status()}] ${url} | CORS allow-origin: ${corsHeader}`,
+      );
+    }
+  });
+
   // Navigate to login page
   await page.goto("/login");
 
