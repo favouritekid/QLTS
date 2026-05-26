@@ -746,7 +746,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
       </div>
 
       {/* Content */}
-      <div className="mt-4">
+      <div className="mt-4" data-testid="admissions-list">
         {/* Loading state */}
         {isLoading && (
           <div className="space-y-3">
