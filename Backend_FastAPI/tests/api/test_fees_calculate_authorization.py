@@ -25,6 +25,10 @@ from sqlalchemy import select
 from app import models
 from app.database import AsyncSessionLocal
 from tests.fixtures.constants import AuthURLs, LeadsURLs
+from tests.fixtures.builders import (
+    SUBMITTABLE_PERMANENT_ADDRESS,
+    ensure_submittable_ward,
+)
 
 
 ADMISSIONS = "/api/admissions"
@@ -210,8 +214,12 @@ async def _create_approved_profile(
     #     CĐ chính quy eligibility gate (priority_service.validate_eligibility)
     #   * academic_history entry carries level + grade_to + school_id so the
     #     LICH_SU_THPT branch resolves a KV via vn_school_kv_assignment
+    # Gap #3 submit gate: seed a current-era ward + fill permanent address so
+    # submit transitions to 'submitted' (not draft with "Thiếu địa chỉ thường trú").
+    await ensure_submittable_ward()
     await client.put(f"{ADMISSIONS}/{prof['id']}", json={
         "version": v,
+        **SUBMITTABLE_PERMANENT_ADDRESS,
         "citizen_id": cccd,
         "gender": "male",
         "dob": "2001-01-01",

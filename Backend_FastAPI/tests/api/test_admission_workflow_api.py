@@ -24,6 +24,10 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import (
+    SUBMITTABLE_PERMANENT_ADDRESS,
+    ensure_submittable_ward,
+)
 
 try:
     from tests.fixtures.constants import AuthURLs, LeadsURLs, TestUsers
@@ -119,8 +123,11 @@ async def _submit(
     if school_id is not None:
         academic_entry["school_id"] = school_id
 
+    # Gap #3 submit gate: seed current-era ward + fill permanent address.
+    await ensure_submittable_ward()
     ur = await client.put(ADM(pid), json={
         "version": v, "citizen_id": cid, "gender": "male", "dob": "2001-01-01",
+        **SUBMITTABLE_PERMANENT_ADDRESS,
         "nationality": "Viet Nam", "ethnicity": "Kinh", "place_of_birth": "Test",
         "family_info": [{"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}],
         "academic_history": [academic_entry],
@@ -342,6 +349,52 @@ async def adm_lead(client: AsyncClient, admin_token_headers: dict, officer_user_
 # =============================================================================
 # TESTS
 # =============================================================================
+
+@pytest.mark.asyncio
+async def test_submit_without_permanent_address_stays_draft_gap3(client, officer_user_in_db, adm_lead, adm_config):
+    """Gap #3 INTEGRATION anchor (KV PR): a config-complete, eligible profile
+    missing the permanent address must NOT submit — submit returns 200 with
+    status='draft' + the 'Thiếu địa chỉ thường trú' validation errors. This
+    locks the full submit→Gap#3 wiring (the regression this PR's fixtures fix),
+    beyond the direct unit test of ``_is_current_era_ward``.
+    """
+    oh = await _officer(client, officer_user_in_db)
+    lead_id = adm_lead["id"]
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    await client.post(f"{LeadsURLs.LEADS}/{lead_id}/consultations", json={
+        "status_id": INITIAL_LEAD_STATUS_ID, "method": "phone", "notes": "pre-admission",
+    }, headers=oh)
+    r = await client.post(ADMISSIONS, json={
+        "lead_id": lead_id, "admission_method_id": adm_config["method_id"],
+        "admission_round_id": adm_config["round_id"], "academic_year": 2026,
+    }, headers=oh)
+    assert r.status_code in (200, 201), r.text
+    pid, v = r.json()["id"], r.json()["version"]
+    cid = f"{int(datetime.now().timestamp()) % 10**12:012d}"
+    # Fill everything EXCEPT permanent address (passes CONFIG_GAP, reaches Gap #3).
+    await client.put(ADM(pid), json={
+        "version": v, "citizen_id": cid, "gender": "male", "dob": "2001-01-01",
+        "nationality": "Viet Nam", "ethnicity": "Kinh", "place_of_birth": "Test",
+        "family_info": [{"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}],
+        "academic_history": [{"school_name": "THPT", "year_from": 2019, "year_to": 2022,
+            "gpa": 8.0, "graduation_type": "THPT", "level": "THPT", "grade_to": 12,
+            "school_id": adm_config["school_id"]}],
+        "admission_scores": {"gpa": 8.0, "subject_scores": {}},
+        "cultural_education_level": "graduated_thpt", "vocational_qualification": "none",
+    }, headers=oh)
+    fresh = (await client.get(ADM(pid), headers=oh)).json()
+    for doc in fresh.get("documents_checklist", []):
+        if doc.get("is_mandatory") and doc.get("status") == "missing":
+            await client.post(f"{ADM(pid)}/documents/{doc['code']}/upload", headers=oh,
+                files={"file": (f"{doc['code']}.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+                data={"actual_submission_format": "photo"})
+    v = (await client.get(ADM(pid), headers=oh)).json()["version"]
+    sr = await client.post(ACT(pid, "submit"), json={"version": v}, headers=oh)
+    assert sr.status_code == 200, sr.text
+    body = sr.json()
+    assert body["status"] == "draft", body
+    assert "thường trú" in " ".join(body.get("validation_errors") or []), body
+
 
 @pytest.mark.asyncio
 async def test_submit_approve_override_finalize_enrolled(client, officer_user_in_db, adm_lead, adm_config):

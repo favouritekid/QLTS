@@ -27,6 +27,69 @@ def reset_id_counter(start: int = 10000):
     _id_counter = start
 
 
+# ---------------------------------------------------------------------------
+# Gap #3 submit gate (KV PR) — permanent address + current-era ward.
+# ``submit_and_evaluate`` now requires full_name + phone + permanent_province +
+# permanent_ward AND ``permanent_commune_code`` to be a CURRENT-era WARD
+# (administrative_nodes valid_to IS NULL). Any test that submits a profile for
+# SUCCESS must (1) seed this ward via ``ensure_submittable_ward()`` and (2) fill
+# ``**SUBMITTABLE_PERMANENT_ADDRESS`` in the profile update payload.
+# ---------------------------------------------------------------------------
+SUBMITTABLE_WARD_CODE = "99TESTKV"
+SUBMITTABLE_PERMANENT_ADDRESS = {
+    "permanent_province": "Tỉnh Test KV",
+    "permanent_ward": "Phường Test KV",
+    "permanent_commune_code": SUBMITTABLE_WARD_CODE,
+}
+
+
+async def ensure_submittable_ward() -> str:
+    """Idempotently seed one CURRENT-era WARD node so the Gap #3 submit gate
+    (`_is_current_era_ward`) accepts ``SUBMITTABLE_PERMANENT_ADDRESS``.
+
+    Returns the ward code. Safe to call repeatedly (per-test) — re-running on an
+    already-seeded DB is a no-op.
+    """
+    from datetime import date
+
+    from sqlalchemy import select
+
+    from app.database import AsyncSessionLocal
+    from app.models.administrative_node import (
+        AdministrativeLevel,
+        AdministrativeNode,
+    )
+
+    async with AsyncSessionLocal() as s:
+        exists = (
+            await s.execute(
+                select(AdministrativeNode.id)
+                .where(
+                    AdministrativeNode.code == SUBMITTABLE_WARD_CODE,
+                    AdministrativeNode.level == AdministrativeLevel.WARD,
+                    AdministrativeNode.valid_to.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            s.add(
+                AdministrativeNode(
+                    code=SUBMITTABLE_WARD_CODE,
+                    name="Phường Test KV",
+                    level=AdministrativeLevel.WARD,
+                    path=f"99/{SUBMITTABLE_WARD_CODE}",
+                    province_code="99",
+                    ward_code=SUBMITTABLE_WARD_CODE,
+                    valid_from=date(2025, 7, 1),
+                    valid_to=None,
+                    is_active=True,
+                )
+            )
+            await s.commit()
+    return SUBMITTABLE_WARD_CODE
+
+
 class SeedDependenciesBuilder:
     """
     Builder for seeding unit/stage/status dependencies.
