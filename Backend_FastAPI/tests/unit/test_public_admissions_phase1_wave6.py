@@ -136,7 +136,7 @@ class TestAudienceFilterPropagation:
         async def fake_snapshot(db):
             return [], {}, set()
 
-        async def fake_load_paths(db, ids, audience=None):
+        async def fake_load_paths(db, ids, audience=None, admission_round_id=None):
             captured["audience"] = audience
             return []
 
@@ -166,7 +166,7 @@ class TestAudienceFilterPropagation:
         async def fake_snapshot(db):
             return [], {}, set()
 
-        async def fake_load_paths(db, ids, audience=None):
+        async def fake_load_paths(db, ids, audience=None, admission_round_id=None):
             captured["audience"] = audience
             return []
 
@@ -196,7 +196,7 @@ class TestAudienceFilterPropagation:
         async def fake_snapshot(db):
             return [], {}, set()
 
-        async def fake_load_paths(db, ids, audience=None):
+        async def fake_load_paths(db, ids, audience=None, admission_round_id=None):
             captured["audience"] = audience
             return []
 
@@ -289,7 +289,7 @@ class TestDocumentsCatalogTierAggregation:
         offering_type_models,
         method_models,
     ) -> PublicAdmissionsDocumentsResponse:
-        async def fake_load_paths(db, ids, audience=None):
+        async def fake_load_paths(db, ids, audience=None, admission_round_id=None):
             return paths
 
         async def fake_load_tiers(db, _paths):

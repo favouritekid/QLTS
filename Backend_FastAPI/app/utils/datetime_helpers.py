@@ -26,6 +26,18 @@ def _to_display(dt: datetime) -> datetime:
     return dt.astimezone(_VN_TZ)
 
 
+def today_vn() -> date:
+    """Current calendar day in ``Asia/Ho_Chi_Minh``.
+
+    Use when comparing against ``Date`` columns (admission-round windows,
+    due dates) so the day boundary doesn't drift by one around UTC
+    midnight on a container running in UTC. ``date.today()`` reads the
+    container clock (UTC in prod) and would flip a day early/late near
+    midnight VN time. See the public-admissions round-eligibility filter.
+    """
+    return datetime.now(_VN_TZ).date()
+
+
 def format_vn_date(dt: Optional[Union[date, datetime]]) -> str:
     """Return ``DD/MM/YYYY`` (10 chars). Empty string if None.
 

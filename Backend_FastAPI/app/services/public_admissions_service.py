@@ -38,6 +38,7 @@ from app.schemas.public_admissions import (
     PublicAdmissionsTuitionOffering,
     PublicAdmissionsTuitionResponse,
 )
+from app.utils.datetime_helpers import today_vn
 
 
 # Tier source precedence for #17 Wave 6 (Phase 1 portion). Higher index =
@@ -152,14 +153,34 @@ async def _load_public_paths(
     if not academic_info_ids:
         return []
 
+    today = today_vn()
     conditions = [
         models.AdmissionPath.academic_info_id.in_(sorted(academic_info_ids)),
         models.AdmissionPath.status == PUBLIC_PATH_STATUS,
         models.AdmissionPath.visibility == PUBLIC_PATH_VISIBILITY,
+        # F43 — storefront only serves paths whose round is *public-eligible*.
+        # We ALWAYS join + filter OfferingAdmissionRound, even when the
+        # caller passes no admission_round_id. Public-eligible round =
+        # active + not soft-archived + within its [start_date, end_date]
+        # window (NULL bound = open-ended). This closes the leak where an
+        # expired round (e.g. DOT_1 past its end_date) kept serving its
+        # active+public paths alongside the open round under round=None.
+        # admission_round_id is NOT NULL on AdmissionPath (PR-2C v2), so
+        # the inner join never drops a legitimate path.
+        models.OfferingAdmissionRound.is_active.is_(True),
+        models.OfferingAdmissionRound.archived_at.is_(None),
+        or_(
+            models.OfferingAdmissionRound.start_date.is_(None),
+            models.OfferingAdmissionRound.start_date <= today,
+        ),
+        or_(
+            models.OfferingAdmissionRound.end_date.is_(None),
+            models.OfferingAdmissionRound.end_date >= today,
+        ),
     ]
-    # Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — storefront round filter.
-    # Khi caller specify admission_round_id, only paths thuộc round đó
-    # được serve. NULL filter = backward-compat (return all paths).
+    # When the caller pins a specific round we still apply the
+    # public-eligible guard above — an explicit expired/archived/future
+    # admission_round_id therefore returns zero paths (no stale data).
     if admission_round_id is not None:
         conditions.append(
             models.AdmissionPath.admission_round_id == admission_round_id
@@ -180,6 +201,11 @@ async def _load_public_paths(
 
     query = (
         select(models.AdmissionPath)
+        .join(
+            models.OfferingAdmissionRound,
+            models.AdmissionPath.admission_round_id
+            == models.OfferingAdmissionRound.id,
+        )
         .where(*conditions)
         .options(
             selectinload(models.AdmissionPath.academic_info)

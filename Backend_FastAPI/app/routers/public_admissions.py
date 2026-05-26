@@ -39,7 +39,10 @@ _ADMISSION_ROUND_QUERY = Query(
     description=(
         "Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — optional admission_round_id "
         "filter. Khi set, chỉ trả về paths thuộc round đó (storefront switch "
-        "by đợt). NULL = backward-compat: return all paths across all rounds."
+        "by đợt). NULL = trả paths của TẤT CẢ round public-eligible "
+        "(active + chưa archive + trong cửa sổ start/end). F43: round hết "
+        "hạn/archived/tương lai luôn bị loại, kể cả khi set admission_round_id "
+        "trỏ vào nó."
     ),
 )
 _AUDIENCE_QUERY = Query(

@@ -280,6 +280,121 @@ async def test_storefront_round_filter_returns_only_paths_in_round(
 
 
 @pytest.mark.asyncio
+async def test_storefront_excludes_ineligible_rounds(path_seed: dict):
+    """F43 anchor: ``_load_public_paths`` serves only paths whose round is
+    *public-eligible* — is_active + archived_at IS NULL + within the
+    [start_date, end_date] window (NULL bound = open-ended).
+
+    Must-haves:
+    * round=None excludes expired / future / archived / inactive rounds
+      (the storefront leak: an expired round kept serving its active+public
+      paths alongside the open round).
+    * an explicit ``admission_round_id`` pointing at an ineligible round
+      returns ``[]`` (no stale single-round serve either).
+
+    Non-tautological: builds real rounds with concrete windows relative to
+    today_vn() and asserts the SQL filter result, not a mock.
+    """
+    from datetime import timedelta
+
+    from app.utils.datetime_helpers import today_vn
+
+    today = today_vn()
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    ai_id = path_seed["academic_info_id"]
+
+    # Wide ±10/20/40/60-day margins so the UTC-container vs VN-tz day
+    # boundary (≤7h skew) can never flip an assertion near midnight.
+    specs = {
+        "open": dict(
+            start=today - timedelta(days=10), end=today + timedelta(days=20),
+            active=True, archived=None,
+        ),
+        "expired": dict(
+            start=today - timedelta(days=60), end=today - timedelta(days=10),
+            active=True, archived=None,
+        ),
+        "future": dict(
+            start=today + timedelta(days=10), end=today + timedelta(days=40),
+            active=True, archived=None,
+        ),
+        "archived": dict(
+            start=None, end=None,
+            active=True, archived=datetime.now(timezone.utc),
+        ),
+        "inactive": dict(
+            start=None, end=None,
+            active=False, archived=None,
+        ),
+    }
+    round_ids: dict[str, int] = {}
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            # One method reused across rounds — the 3-col UNIQUE
+            # (round, academic_info, method) is satisfied because each
+            # path lands in a distinct round.
+            method = models.AdmissionMethod(
+                code=f"MF43_{ts}",
+                name=f"MethodF43 {ts}",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(method)
+            await s.flush()
+            for key, sp in specs.items():
+                rnd = models.OfferingAdmissionRound(
+                    academic_year=2026,
+                    round_code=f"F43_{key[:3].upper()}_{ts}",
+                    round_name=f"F43 {key} {ts}",
+                    is_active=sp["active"],
+                    archived_at=sp["archived"],
+                    start_date=sp["start"],
+                    end_date=sp["end"],
+                )
+                s.add(rnd)
+                await s.flush()
+                round_ids[key] = rnd.id
+                s.add(
+                    models.AdmissionPath(
+                        academic_info_id=ai_id,
+                        admission_method_id=method.id,
+                        admission_round_id=rnd.id,
+                        status="active",
+                        visibility="public",
+                    )
+                )
+            await s.flush()
+
+    async with AsyncSessionLocal() as s:
+        # round=None → only the OPEN round's path among our specs
+        got = {
+            p.admission_round_id
+            for p in await _load_public_paths(s, {ai_id})
+        }
+        assert round_ids["open"] in got
+        for key in ("expired", "future", "archived", "inactive"):
+            assert round_ids[key] not in got, (
+                f"{key} round leaked into round=None storefront"
+            )
+
+        # explicit ineligible round → empty (no single-round stale serve)
+        for key in ("expired", "future", "archived", "inactive"):
+            pinned = await _load_public_paths(
+                s, {ai_id}, admission_round_id=round_ids[key]
+            )
+            assert pinned == [], f"{key} round must serve zero paths"
+
+        # explicit OPEN round → its path only
+        open_paths = await _load_public_paths(
+            s, {ai_id}, admission_round_id=round_ids["open"]
+        )
+        assert open_paths
+        assert all(
+            p.admission_round_id == round_ids["open"] for p in open_paths
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_profile_snapshot_includes_admission_round_id(
     path_seed: dict, seed_lead_dependencies: dict
 ):
