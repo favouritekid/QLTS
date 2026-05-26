@@ -97,10 +97,14 @@ test.beforeAll(async ({ browser }) => {
       );
     }
     const pathsBody = await pathsResp.json();
-    const paths = pathsBody.paths || pathsBody;
+    // ``AdmissionPathListResponse`` returns ``{total, items}`` (schemas/
+    // admission_path.py:573). Earlier draft read ``pathsBody.paths`` which
+    // silently fell back to the whole envelope object → ``.length`` undefined
+    // → fail-loud throw even when items existed. Fix: read ``items``.
+    const paths = pathsBody.items || pathsBody.paths || [];
     if (!paths.length) {
       throw new Error(
-        `beforeAll: no admission paths for offering ${offeringId} — seed incomplete?`,
+        `beforeAll: no admission paths for offering ${offeringId} — seed incomplete? (response keys: ${Object.keys(pathsBody).join(",")})`,
       );
     }
     const seedPath = paths[0];
