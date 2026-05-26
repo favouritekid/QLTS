@@ -2431,13 +2431,22 @@ class TestLeadAdmissionEligibility:
         """Lead đã có admission profile → already_has_profile (priority over other checks)."""
         from app.services import admission_service
 
-        # Directly attach profile to model's __dict__ to simulate eager-loaded state
+        # Directly attach profile to model's __dict__ to simulate eager-loaded state.
+        #
+        # NOTE 2026-05-26: Wave 4 #15b (PR #224 / commit 966d5f5f) renamed the
+        # ORM relationship ``Lead.admission_profile`` (singular) →
+        # ``Lead.admission_profiles`` (collection, one-to-many). The eligibility
+        # check at ``admission_service.py:1244`` reads ``admission_profiles``
+        # (plural). Test previously wrote to the legacy singular key →
+        # ``__dict__.get("admission_profiles")`` returned empty → fall-through
+        # to "missing_offering" instead of "already_has_profile". Rename to
+        # the collection key to match the current contract.
         fake_profile = models.AdmissionProfile(
             lead_id=seeded_lead.id,
             status="draft",
             version=1,
         )
-        seeded_lead.__dict__["admission_profile"] = fake_profile
+        seeded_lead.__dict__["admission_profiles"] = [fake_profile]
 
         result = await admission_service.check_lead_level_admission_eligibility(
             db, seeded_lead, admin_user
