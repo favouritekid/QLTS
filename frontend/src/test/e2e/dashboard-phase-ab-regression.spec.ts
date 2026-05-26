@@ -7,7 +7,7 @@ import {
 import * as OTPAuth from "otpauth";
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@123";
 const ADMIN_TOTP_SECRET =
   process.env.E2E_ADMIN_TOTP_SECRET || "WUUT7KVVWRFVMVPZ7K6NGOKL2VYPPFH5";
 
@@ -18,17 +18,17 @@ const OFFICER_18_USERNAME =
 const OFFICER_18_PASSWORD =
   process.env.E2E_OFFICER18_PASSWORD ||
   process.env.E2E_OFFICER_PASSWORD ||
-  "@Matkhau123!";
+  "Abc@123456789";
 
 const OFFICER_16_USERNAME =
   process.env.E2E_OFFICER16_USERNAME || "nguyenhuuhieu";
 const OFFICER_16_PASSWORD =
-  process.env.E2E_OFFICER16_PASSWORD || "Officer@12345";
+  process.env.E2E_OFFICER16_PASSWORD || "Abc@123456789";
 
 const MANAGER_22_USERNAME =
   process.env.E2E_MANAGER_USERNAME || "phanthithuyvan";
 const MANAGER_22_PASSWORD =
-  process.env.E2E_MANAGER_PASSWORD || "Manager@12345";
+  process.env.E2E_MANAGER_PASSWORD || "Abc@123456789";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 const FRONTEND_URL = process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000";

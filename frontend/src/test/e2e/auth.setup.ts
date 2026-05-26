@@ -52,8 +52,8 @@ setup("authenticate", async ({ page }) => {
   // Fill in credentials
   // Use environment variables or defaults for testing
   // Officer account (no MFA) — admin credentials only used in e2e-workflow + Mobile_Admin projects
-  const username = process.env.TEST_USERNAME || "vothuhien";
-  const password = process.env.TEST_PASSWORD || "@Matkhau123!";
+  const username = process.env.TEST_USERNAME || "vothithuthuhien";
+  const password = process.env.TEST_PASSWORD || "Abc@123456789";
 
   // Fill username
   await page.fill('input[placeholder="Tên đăng nhập"]', username);

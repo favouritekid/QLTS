@@ -20,7 +20,7 @@ test.describe('Mobile verification for Sidebar Fix', () => {
     
     console.log('Filling credentials...');
     await page.fill('input[name="username"]', 'admin');
-    await page.fill('input[name="password"]', 'Admin@12345');
+    await page.fill('input[name="password"]', 'Admin@123');
     await page.click('button[type="submit"]');
     
     await page.waitForURL('**/dashboard', { timeout: 30000 });

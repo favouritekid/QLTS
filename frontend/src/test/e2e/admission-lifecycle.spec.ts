@@ -26,12 +26,12 @@ import * as OTPAuth from "otpauth";
 // ---------------------------------------------------------------------------
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@123";
 const ADMIN_TOTP_SECRET =
   process.env.E2E_ADMIN_TOTP_SECRET || "WUUT7KVVWRFVMVPZ7K6NGOKL2VYPPFH5";
 
-const OFFICER_USERNAME = process.env.E2E_OFFICER_USERNAME || "vothuhien";
-const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "@Matkhau123!";
+const OFFICER_USERNAME = process.env.E2E_OFFICER_USERNAME || "vothithuthuhien";
+const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "Abc@123456789";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 

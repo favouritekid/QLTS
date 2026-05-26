@@ -21,13 +21,13 @@ import * as OTPAuth from "otpauth";
 // ---------------------------------------------------------------------------
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@12345";
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Admin@123";
 // Prefer TOTP secret (reusable) over backup code (single-use)
 const ADMIN_TOTP_SECRET = process.env.E2E_ADMIN_TOTP_SECRET || "WUUT7KVVWRFVMVPZ7K6NGOKL2VYPPFH5";
 const ADMIN_MFA_CODE = process.env.E2E_ADMIN_MFA_CODE || "";
 
-const OFFICER_USERNAME = process.env.E2E_OFFICER_USERNAME || "vothuhien";
-const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "@Matkhau123!";
+const OFFICER_USERNAME = process.env.E2E_OFFICER_USERNAME || "vothithuthuhien";
+const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "Abc@123456789";
 
 const CTV_USERNAME = process.env.E2E_CTV_USERNAME || "";
 const CTV_PASSWORD = process.env.E2E_CTV_PASSWORD || "";
