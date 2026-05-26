@@ -469,6 +469,17 @@ async def lifespan(app: FastAPI):
                 "⚠️ AUTO_SYNC_TEMPLATES is enabled but ignored in production. "
                 "Use POST /api/admin/roles/sync-all-from-templates for manual sync."
             )
+        elif settings.AUTO_SYNC_TEMPLATES:
+            # APP_ENV is some non-canonical value (e.g., 'staging', 'qa'). Auto-sync
+            # is gated to {"development", "test"} only (see line 437 above) so
+            # nothing fires here — log INFO so ops can diagnose why drift remains
+            # uncorrected in this env.
+            log.info(
+                "AUTO_SYNC_TEMPLATES enabled but APP_ENV=%s is outside the "
+                "auto-sync allowlist {development, test}; skipping. Use the "
+                "manual admin endpoint if drift correction is desired.",
+                settings.APP_ENV,
+            )
 
     except Exception as e:
         log.critical(

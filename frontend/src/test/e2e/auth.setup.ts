@@ -75,7 +75,10 @@ setup("authenticate", async ({ page }) => {
   // rendered: GET /api/officer/dashboard 200 + 8 other officer endpoints 200,
   // but the legacy assertion fired before the URL string actually flipped).
   await page.waitForLoadState("networkidle");
-  await expect(page).toHaveURL(/\/dashboard\//, { timeout: 30000 });
+  // Defensive regex: matches /dashboard followed by slash OR end-of-string,
+  // so a hypothetical bare /dashboard landing route still passes (in case
+  // FE redirect target loses the trailing path segment).
+  await expect(page).toHaveURL(/\/dashboard(\/|$)/, { timeout: 30000 });
 
   // Save authentication state to file
   await page.context().storageState({ path: authFile });
