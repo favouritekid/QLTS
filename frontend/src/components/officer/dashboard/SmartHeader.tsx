@@ -95,6 +95,19 @@ export function SmartHeader({
         ? ["unit"]
         : ["personal"];
 
+  // Show officer selector when:
+  // - Admin: always (can drill down to any officer)
+  // - Manager: when scope is "unit" (can drill down to unit members)
+  // Computed BEFORE the fetch hook so we can gate the API call. Officer
+  // role never sees this selector → never needs the /api/admin/users
+  // call → eliminates one spurious Casbin 403 in CI/prod logs.
+  // (Audit 2026-05-26 task #51: officer role nightly smoke logged
+  // ``GET /api/admin/users 403`` because hook fired unconditionally
+  // regardless of `showOfficerSelector` gate.)
+  const showOfficerSelector =
+    (isAdmin && (scope === "personal" || scope === "unit" || scope === "organization")) ||
+    (isManager && scope === "unit");
+
   // Fetch officers for officer selector based on scope:
   // - "unit" scope: ALWAYS filter by user's own unit (unit = user's unit)
   // - "organization" scope (admin): filter by selectedUnitId (any level in hierarchy)
@@ -106,12 +119,15 @@ export function SmartHeader({
         ? (selectedUnitId ?? undefined) // Organization = selected unit or all
         : undefined; // Personal = no filter (admin can pick any officer)
 
-  const { data: usersData } = useAdminUsersList({
-    role: "officer",
-    unit_id: filterUnitId,
-    include_children: true,
-    page_size: 500,
-  });
+  const { data: usersData } = useAdminUsersList(
+    {
+      role: "officer",
+      unit_id: filterUnitId,
+      include_children: true,
+      page_size: 500,
+    },
+    { enabled: showOfficerSelector },
+  );
   const officers: UserType[] = usersData?.users ?? [];
 
   const currentScopeInfo = SCOPE_LABELS[scope];
@@ -124,12 +140,8 @@ export function SmartHeader({
     return officer?.full_name || officer?.username || `ID: ${id}`;
   };
 
-  // Show officer selector when:
-  // - Admin: always (can drill down to any officer)
-  // - Manager: when scope is "unit" (can drill down to unit members)
-  const showOfficerSelector =
-    (isAdmin && (scope === "personal" || scope === "unit" || scope === "organization")) ||
-    (isManager && scope === "unit");
+  // ``showOfficerSelector`` is computed earlier (above the
+  // ``useAdminUsersList`` call) so it can gate the API request.
 
   // Show unit selector when:
   // - Admin and scope is "organization"

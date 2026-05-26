@@ -64,13 +64,21 @@ setup("authenticate", async ({ page }) => {
   // Click login button
   await page.click('button[type="submit"]:has-text("Đăng nhập")');
 
-  // Wait for successful login - should redirect away from login page
-  // We wait for either dashboard or leads page to load
-  await expect(page).not.toHaveURL(/\/login/, { timeout: 30000 });
-
-  // Additional verification - wait for authenticated content
-  // This ensures cookies/tokens are properly set
+  // Wait for successful login. Per memory
+  // ``nextjs16-router-replace-eventual-consistency``, Next.js 16 router.push
+  // is async ~100-500ms. Asserting *absence* of /login substring is race-prone
+  // when client-side bootstrap fetches (4+ React Query hooks) are still
+  // settling. Switch to: wait networkidle FIRST so router.push resolves +
+  // dashboard hydrates, THEN assert *presence* of /dashboard/ destination.
+  // This pattern matches what audit agent identified as the root-cause race
+  // 2026-05-26 (nightly smoke run 26427220989 — backend logs confirm dashboard
+  // rendered: GET /api/officer/dashboard 200 + 8 other officer endpoints 200,
+  // but the legacy assertion fired before the URL string actually flipped).
   await page.waitForLoadState("networkidle");
+  // Defensive regex: matches /dashboard followed by slash OR end-of-string,
+  // so a hypothetical bare /dashboard landing route still passes (in case
+  // FE redirect target loses the trailing path segment).
+  await expect(page).toHaveURL(/\/dashboard(\/|$)/, { timeout: 30000 });
 
   // Save authentication state to file
   await page.context().storageState({ path: authFile });
