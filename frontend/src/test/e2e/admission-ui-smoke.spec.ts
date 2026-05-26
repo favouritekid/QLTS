@@ -80,17 +80,32 @@ test.beforeAll(async ({ browser }) => {
     }
     const offeringId = (await offeringsResp.json())[0].id;
 
-    const methodsResp = await page.request.get(
-      `${API_URL}/api/admission-config/methods?active_only=true`,
+    // Fetch admission paths for this offering. Per Plan B round contract
+    // hardening (PR #338 ``3c3bacec``), ``AdmissionProfileCreate`` requires
+    // BOTH ``admission_round_id`` AND ``academic_year``. The
+    // ``/admission-config/paths/for-offering/{id}`` endpoint returns active
+    // paths with both ``admission_round_id`` and ``admission_method_id``
+    // attached, so a single fetch covers both prerequisites. Fall back to
+    // the methods endpoint only if no paths exist (shouldn't happen on a
+    // seeded CI DB).
+    const pathsResp = await page.request.get(
+      `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`,
     );
-    if (!methodsResp.ok()) {
+    if (!pathsResp.ok()) {
       throw new Error(
-        `beforeAll: GET /api/admission-config/methods returned ${methodsResp.status()}`,
+        `beforeAll: GET /api/admission-config/paths/for-offering/${offeringId} returned ${pathsResp.status()}`,
       );
     }
-    const methodsBody = await methodsResp.json();
-    const methods = methodsBody.methods || methodsBody;
-    const admissionMethodId = methods[0].id;
+    const pathsBody = await pathsResp.json();
+    const paths = pathsBody.paths || pathsBody;
+    if (!paths.length) {
+      throw new Error(
+        `beforeAll: no admission paths for offering ${offeringId} — seed incomplete?`,
+      );
+    }
+    const seedPath = paths[0];
+    const admissionMethodId = seedPath.admission_method_id;
+    const admissionRoundId = seedPath.admission_round_id;
 
     // Create lead + draft profile
     const leadResp = await page.request.post(`${API_URL}/api/leads`, {
@@ -120,8 +135,17 @@ test.beforeAll(async ({ browser }) => {
       );
     }
 
+    // Plan B (PR #338) made ``admission_round_id`` + ``academic_year``
+    // REQUIRED on ``AdmissionProfileCreate``. Pass both, derived from the
+    // path fetched above. Hardcode current intake year 2026 to avoid an
+    // extra round-lookup hop; smoke test scope only needs ONE valid year.
     const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-      data: { lead_id: leadId, admission_method_id: admissionMethodId },
+      data: {
+        lead_id: leadId,
+        admission_method_id: admissionMethodId,
+        admission_round_id: admissionRoundId,
+        academic_year: 2026,
+      },
     });
     if (!profileResp.ok()) {
       const body = await profileResp.text();
