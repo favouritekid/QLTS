@@ -26,7 +26,13 @@ class AdministrativeNode(Base):
     province_code = Column(String(20), nullable=False)
     district_code = Column(String(20), nullable=True)
     ward_code = Column(String(20), nullable=True)
-    
+
+    # PR-2 cross-era lineage: for a WARD node, the CURRENT-era commune code it
+    # resolves to. Current/survived wards → own code (identity); legacy wards
+    # merged into a new commune → the new commune code; NULL = unresolved (the
+    # resolver fail-closes so the officer must re-pick the current commune).
+    successor_ward_code = Column(String(20), nullable=True)
+
     valid_from = Column(Date, nullable=False)
     valid_to = Column(Date, nullable=True)
     
@@ -41,4 +47,5 @@ class AdministrativeNode(Base):
         Index("idx_province", "province_code"),
         Index("idx_district", "district_code"),
         Index("idx_valid_time", "valid_from", "valid_to"),
+        Index("idx_successor_ward_code", "successor_ward_code"),
     )

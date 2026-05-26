@@ -126,6 +126,32 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def resolve_current_ward_code(self, ward_code: str) -> Optional[str]:
+        """Resolve ANY ward code (current or legacy) to its CURRENT-era commune
+        code via ``successor_ward_code`` (PR-2 cross-era lineage).
+
+        * current / survived ward → its own code (identity backfill)
+        * legacy ward merged into a new commune → the new commune code
+        * unknown code, or legacy ward with no successor mapped yet → ``None``
+
+        Caller fail-closes on ``None`` (officer re-picks current commune), so a
+        profile never persists a stale legacy code.
+        """
+        code = (ward_code or "").strip()
+        if not code:
+            return None
+        stmt = (
+            select(AdministrativeNode.successor_ward_code)
+            .where(
+                AdministrativeNode.code == code,
+                AdministrativeNode.level == AdministrativeLevel.WARD,
+                AdministrativeNode.successor_ward_code.isnot(None),
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     # ------------------------------------------------------------------
     # GENERIC FILTERED (admin panel)
     # ------------------------------------------------------------------
