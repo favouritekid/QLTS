@@ -76,7 +76,10 @@ export function AdmissionLayout({
              />
           </aside>
 
-          <main className="flex-1 pb-20">
+          {/* Mobile pb clears BOTH the bottom nav (--bottom-nav-height-safe)
+              AND the sticky AdmissionActions bar (h-16) now stacked above it.
+              Desktop keeps pb-20: nav hidden, action bar at bottom-0. */}
+          <main className="flex-1 pb-[calc(var(--bottom-nav-height-safe)_+_4rem)] lg:pb-20">
              {children}
           </main>
        </div>

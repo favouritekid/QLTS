@@ -11,7 +11,7 @@
  * Uses useAppNavigation() for role-based filtering (consistent with AppSidebar).
  */
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,22 @@ export function MobileBottomNav() {
   const pathname = usePathname();
   const { navigation } = useAppNavigation();
   const requestCloseMobileOverlays = useUIStore((s) => s.requestCloseMobileOverlays);
+  const isSidebarCollapsed = useUIStore((s) => s.isSidebarCollapsed);
+
+  // Track whether ANY Radix sheet/dialog is open. Radix locks body scroll by
+  // adding `data-scroll-locked` to <body> whenever a modal overlay mounts
+  // (verified across Sheet + Dialog). Watching that single attribute lets the
+  // bar hide for EVERY overlay — bottom sheets (filter/action/issue drawers),
+  // side sheets (lead/kpi detail, admin nav), and centered dialogs — without
+  // per-sheet wiring, and matches Material 3 (a sheet replaces the nav bar).
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  useEffect(() => {
+    const sync = () => setIsOverlayOpen(document.body.hasAttribute("data-scroll-locked"));
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-scroll-locked"] });
+    return () => observer.disconnect();
+  }, []);
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({
@@ -87,6 +103,14 @@ export function MobileBottomNav() {
     }
     return pathname.startsWith(href);
   };
+
+  // Hide the bar while ANY full-screen overlay owns the screen: the main
+  // sidebar drawer (!isSidebarCollapsed) OR any Radix sheet/dialog
+  // (isOverlayOpen). The bar sits at z-[60] — above every overlay (z-50) — so
+  // keeping it visible paints it OVER the overlay's lowest content (drawer's
+  // "Settings" item, a bottom sheet's footer, a sheet's last fields). The open
+  // overlay already owns navigation/actions, so the bar is redundant there.
+  if (!isSidebarCollapsed || isOverlayOpen) return null;
 
   return (
     <nav
