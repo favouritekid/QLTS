@@ -43,15 +43,35 @@ from app.repositories.admission_profile_choice_repository import (
 from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
+from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
     ResourceNotFoundError,
+    RoundClosedError,
 )
 
 
 # Status whitelist cho add_choice retroactive (P1 fix #5 v2.12)
 ADD_CHOICE_ALLOWED_STATUSES = ("draft", "revision_requested")
+
+
+def _assert_round_open(round_obj: OfferingAdmissionRound) -> None:
+    """Raise RoundClosedError nếu round.end_date < today_vn().
+
+    PR-2 (2026-05-28) — strict cutoff enforcement cho modification ops
+    (POST/PATCH). KHÔNG gọi từ delete_choice — candidate retains right
+    to withdraw a NV sau round closed (no seat added → no risk).
+
+    Mirror helper trong admission_service.py:_assert_round_open. Local
+    copy ở đây để tránh circular import (admission_service → choice_service).
+    """
+    if round_obj.end_date is not None and round_obj.end_date < today_vn():
+        raise RoundClosedError(
+            f"Đợt tuyển sinh '{round_obj.round_code}' đã đóng "
+            f"(hạn cuối: {round_obj.end_date}). "
+            f"Không thể thêm/sửa nguyện vọng (rút NV vẫn cho phép)."
+        )
 
 
 async def _noop_callback() -> None:
@@ -129,6 +149,12 @@ class AdmissionChoiceService:
             raise ResourceNotFoundError(
                 f"Path {admission_path_id} không tồn tại hoặc đã archive."
             )
+
+        # PR-2 (2026-05-28) — Round cutoff: block add_choice (POST) sau
+        # round.end_date. Per locked decision: POST + PATCH gate, DELETE
+        # vẫn allow. Reuse round_obj đã load ngay trên cho allow_multi_nv
+        # check — không thêm query.
+        _assert_round_open(round_obj)
 
         # First choice luôn cho phép (Wave A single-NV vẫn ship 1 choice
         # via this path). Chỉ block ADD-NV-2-trở-lên khi flag tắt.
@@ -384,8 +410,17 @@ class AdmissionChoiceService:
         - new_display_order != current (no-op short-circuit)
         - new_display_order ≤ system_config.max_choices_per_profile (Q-P3-01
           allows ≤10 by DB CHECK, but service narrows per system_config)
+        - PR-2 (2026-05-28): round.end_date not in the past (RoundClosedError
+          410). Load round qua choice.admission_path_id (lazy add — single
+          extra query, paths này low-traffic vs add_choice).
         """
         self._assert_choice_editable(profile, action="đổi thứ tự nguyện vọng")
+
+        round_obj = await self.choice_repo.get_round_by_path_id(
+            choice.admission_path_id
+        )
+        if round_obj is not None:
+            _assert_round_open(round_obj)
 
         if new_display_order == choice.display_order:
             return choice, _noop_callback
@@ -434,8 +469,18 @@ class AdmissionChoiceService:
 
         Note: empty scores list is a valid "clear all" intent — DB UNIQUE
         constraint allows zero rows per choice.
+
+        PR-2 (2026-05-28): round.end_date enforcement same pattern as
+        update_choice_display_order — load round qua admission_path_id
+        + assert open. RoundClosedError → 410.
         """
         self._assert_choice_editable(profile, action="cập nhật điểm nguyện vọng")
+
+        round_obj = await self.choice_repo.get_round_by_path_id(
+            choice.admission_path_id
+        )
+        if round_obj is not None:
+            _assert_round_open(round_obj)
 
         # Clear existing scores via direct delete (FK CASCADE would only fire
         # on choice delete, not score replace — use bulk delete here).

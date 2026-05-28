@@ -159,6 +159,43 @@ class ConflictError(BaseAppException):
 
 
 # ============================================================================
+# GONE / CLOSED RESOURCES (410)
+# ============================================================================
+
+
+class GoneError(BaseAppException):
+    """Resource is no longer available (HTTP 410).
+
+    Used for hard-deadline cutoffs: round closed, archived offers, etc.
+    Subclass BaseAppException directly (NOT ValidationError) so the
+    global ``base_app_exception_handler`` (middleware/exception_handlers.py)
+    picks up ``status_code=410`` correctly. Subclassing ValidationError
+    would map to 400 via the inheritance chain.
+
+    Strict fail-closed semantic — no implicit override. Admin extends
+    a closed round via a separate explicit endpoint, NOT by bypassing
+    this gate (per plan v4 locked decision 2026-05-28).
+    """
+
+    status_code = status.HTTP_410_GONE
+    detail = "This resource is no longer available."
+    error_code = "GONE"
+
+
+class RoundClosedError(GoneError):
+    """Admission round end_date has passed.
+
+    Raised by create_profile, submit_and_evaluate, and choice CRUD
+    modification endpoints (POST/PATCH; DELETE intentionally allowed
+    per plan v4 — candidate retains right to withdraw a choice after
+    the round closes, but cannot create/modify).
+    """
+
+    detail = "Đợt tuyển sinh đã đóng."
+    error_code = "ROUND_CLOSED"
+
+
+# ============================================================================
 # VALIDATION EXCEPTIONS (400)
 # ============================================================================
 
@@ -422,6 +459,9 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 409 Conflict
     DuplicateResourceError: 409,
     ConflictError: 409,
+    # 410 Gone
+    GoneError: 410,
+    RoundClosedError: 410,
     # 500 Internal Server Error
     BaseAppException: 500,
     ServiceError: 500,

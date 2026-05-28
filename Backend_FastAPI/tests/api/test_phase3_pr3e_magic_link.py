@@ -468,3 +468,152 @@ async def test_consume_confirm_dispatches_status_changed_event(
     assert payload["new_status"] == "confirmed"
     assert payload["old_status"] == "approved"
     assert kwargs["dedupe_key"] == f"admission_profile_confirmed:{magic_link_seed['profile_id']}"
+
+
+# ============================================================================
+# PR-2 (2026-05-28) — Magic-link submit round cutoff enforcement
+#
+# magic_link_service._handle_submit() delegates to
+# admission_service.submit_and_evaluate(current_user=None) → cutoff gate
+# trong submit_and_evaluate (PR-2 Step 3) tự fire cho magic-link path.
+# Anchor end-to-end through magic-link router để khẳng định gate KHÔNG bị
+# bypass khi candidate self-service submit qua link.
+# ============================================================================
+
+
+@pytest_asyncio.fixture
+async def magic_link_submit_seed_closed_round(seed_lead_dependencies: dict) -> dict:
+    """Profile draft + submit-action token + round đã đóng (end_date yesterday).
+
+    Mô phỏng candidate fill form trong ngày cuối, click submit hôm sau —
+    middleware không re-check round trước khi route, gate phải fire ở
+    submit_and_evaluate.
+    """
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    citizen_id = f"7{ts:08d}1"[:12]
+    last4 = citizen_id[-4:]
+    token_value = secrets.token_urlsafe(32)
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            # Seed minimal admission config chain so applied_rules.admission_path_id
+            # resolves to a real path → round (gate load path).
+            offering = models.ProgramOffering(
+                program_id=seed_lead_dependencies["major_program_id"],
+                offering_type="full_time",
+                duration_semesters=8,
+                is_active=True,
+            )
+            s.add(offering); await s.flush()
+            ai = models.OfferingAcademicInfo(
+                offering_id=offering.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=Decimal("1000000"),
+                is_published=True,
+            )
+            s.add(ai); await s.flush()
+
+            from tests.fixtures.builders import AdmissionRoundBuilder
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                s, academic_year=2026,
+            )
+
+            method = models.AdmissionMethod(
+                code=f"PR2ML_{ts}",
+                name=f"PR2 ML method {ts}",
+                requires_subject_scores=False,
+                requires_gpa=False,
+                is_active=True,
+            )
+            s.add(method); await s.flush()
+
+            path = models.AdmissionPath(
+                academic_info_id=ai.id,
+                admission_method_id=method.id,
+                admission_round_id=round_id,
+                status="active",
+            )
+            s.add(path); await s.flush()
+
+            # Close the round AFTER path setup so all FKs resolve cleanly
+            round_obj = await s.get(models.OfferingAdmissionRound, round_id)
+            round_obj.end_date = date.today() - timedelta(days=1)
+            await s.flush()
+
+            lead = models.Lead(
+                full_name=f"PR-2 ML Lead {ts}",
+                phone=f"097{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead); await s.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=citizen_id,
+                status="draft",
+                applied_rules={"admission_path_id": path.id},
+                academic_year=2026,
+            )
+            s.add(profile); await s.flush()
+
+            token = models.AdmissionConfirmationToken(
+                profile_id=profile.id,
+                action_type="submit",
+                token=token_value,
+                expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+                confirmed_at=None,
+                attempt_count=0,
+            )
+            s.add(token); await s.flush()
+
+            return {
+                "profile_id": profile.id,
+                "lead_id": lead.id,
+                "token": token_value,
+                "last4": last4,
+                "round_id": round_id,
+                "path_id": path.id,
+            }
+
+
+@pytest.mark.asyncio
+async def test_magic_link_submit_410_when_round_closed(
+    client: AsyncClient,
+    magic_link_submit_seed_closed_round: dict,
+):
+    """Candidate self-service magic-link submit sau round closed → 410.
+
+    Anchor PR-2 cutoff gate fire qua magic_link_service._handle_submit
+    → admission_service.submit_and_evaluate. Verify candidate KHÔNG bypass
+    được cutoff qua link path (sự cố tiềm tàng nếu gate chỉ ở officer
+    UI route).
+    """
+    response = await client.post(
+        f"/api/v2/admissions/magic-link/submit/{magic_link_submit_seed_closed_round['token']}",
+        json={"cccd": magic_link_submit_seed_closed_round["last4"]},
+    )
+    assert response.status_code == 410, (
+        f"Magic-link submit sau round closed phải 410 Gone; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    body = response.json()
+    assert "đã đóng" in (body.get("detail") or "").lower(), (
+        f"Detail phải mention 'đã đóng'; got: {body}"
+    )
+
+    # Token must NOT be marked consumed (gate fired before _handle_submit body)
+    async with AsyncSessionLocal() as s:
+        token = (await s.execute(
+            select(models.AdmissionConfirmationToken).where(
+                models.AdmissionConfirmationToken.token == magic_link_submit_seed_closed_round["token"]
+            )
+        )).scalar_one()
+        assert token.confirmed_at is None, (
+            "Token must NOT be marked consumed when cutoff blocks submit"
+        )
