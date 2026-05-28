@@ -57,6 +57,7 @@ __all__ = [
 
     # Admission State Machine IDOR (State Machine Implementation)
     "get_admission_for_manager",  # Manager approve/reject
+    "get_admission_for_admin_locked",  # Admin rollback — SELECT FOR UPDATE
     "get_admission_for_user",  # Officer resubmit
     "get_admission_for_user_read",  # Read-only fee-status / detail (no lock)
 
@@ -2239,6 +2240,49 @@ async def get_admission_for_manager(
                     assigned_officer_id=profile.lead.assigned_officer_id,
                 )
                 raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+async def get_admission_for_admin_locked(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_admin: models.User = Depends(require_admin),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """SELECT FOR UPDATE admin-scope dependency cho admin-rollback (T17).
+
+    Trước đây admissions_v2.py admin_rollback dùng ``db.get()`` không lock
+    → race với confirm/finalize/publish có thể tạo last-write-wins +
+    status_history sai thứ tự. Pattern mirror ``get_admission_for_manager``
+    (line 2166) nhưng KHÔNG có IDOR check vì admin có global scope (đã
+    enforce qua ``require_admin`` dep).
+
+    Eager-load (cùng shape với manager dep): lead.assigned_officer +
+    assigned_reviewer — _populate_response_fields() và post-commit
+    notification helper expect các relation này có sẵn.
+
+    Raises:
+        ResourceNotFoundError: profile_id không tồn tại (anti-enumeration
+        404 — KHÔNG 403 để khớp IDOR convention chung).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
 

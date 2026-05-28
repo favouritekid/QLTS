@@ -18,6 +18,7 @@ this file is test-debt follow-up extending integration coverage.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -1492,3 +1493,170 @@ async def test_admin_rollback_response_schema_locked(
     assert body["profile_id"] == profile_id
     # New idempotent marker default False (this rollback was real, not no-op)
     assert body.get("already_at_target") is False
+
+
+# ============================================================================
+# PR-4 (2026-05-28) — Admin rollback row-lock anchors
+#
+# Trước: router dùng ``db.get(profile_id)`` không lock → race với confirm/
+# finalize/publish có thể tạo last-write-wins + status_history sai thứ tự.
+# Sau: dependency ``get_admission_for_admin_locked`` (deps.py) emit
+# SELECT ... FOR UPDATE serialize concurrent state-changing ops cùng
+# profile_id.
+#
+# Anchor tests dưới đây bảo vệ chống regression nếu ai accidentally:
+#   * Revert dep injection (router quay về db.get)
+#   * Bỏ ``.with_for_update()`` trong dep
+# Theo memory ``pattern-change-impact-audit``: anchor là business-reality,
+# KHÔNG mock SQL — concurrent test sẽ break audit/state chain nếu lock
+# bị bỏ, hệt như bulk_assign concurrency test (ADM-011).
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_404_via_locked_dependency(
+    client: AsyncClient,
+    admin_token_headers: dict,
+):
+    """T17 + PR-4: non-existent profile_id → 404 từ dependency.
+
+    Anchor regression: ``get_admission_for_admin_locked`` raise
+    ResourceNotFoundError khi profile không tồn tại (anti-enumeration).
+    Trước PR-4, router dùng ``db.get()`` cũng trả 404, nhưng test này
+    đảm bảo path lock-dep cũng cover 404 case (không silently 500).
+    """
+    response = await client.post(
+        "/api/v2/admissions/999999999/admin-rollback",
+        headers=admin_token_headers,
+        json={"reason": "Test 404 path via locked dependency"},
+    )
+    assert response.status_code == 404, (
+        f"Non-existent profile via locked dep must 404 anti-enumeration; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+async def _admin_rollback_in_own_session(
+    profile_id: int, admin_user_id: int, reason: str
+) -> dict:
+    """Helper: gọi service admin_rollback_profile() từ session độc lập,
+    qua REAL production dependency ``get_admission_for_admin_locked``.
+
+    QUAN TRỌNG (PR-4 review 2026-05-28): helper PHẢI dùng dep thật để
+    test concurrent là non-tautological. Nếu helper tự build
+    ``select(...).with_for_update()``, test sẽ pass kể cả khi production
+    dep bị revert (test kiểm tra lock của test, không phải của code).
+    Dùng dep trực tiếp đảm bảo: production lock biến mất → test break.
+
+    Mô phỏng request thực: dep emit SELECT FOR UPDATE → service
+    transition → commit. Dùng cho test concurrent (gather 2 caller cùng
+    profile_id).
+    """
+    from app.core.deps import get_admission_for_admin_locked
+    from app.services import admission_choice_engine_service as choice_engine
+
+    async with AsyncSessionLocal() as session:
+        try:
+            admin = await session.get(models.User, admin_user_id)
+            # Call production dep — same lock semantic as live request
+            profile = await get_admission_for_admin_locked(
+                profile_id=profile_id,
+                current_admin=admin,
+                db=session,
+            )
+            result, post_commit = await choice_engine.admin_rollback_profile(
+                db=session,
+                profile=profile,
+                reason=reason,
+                actor=admin,
+            )
+            await session.commit()
+            if post_commit:
+                await post_commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@pytest.mark.asyncio
+async def test_admin_rollback_serializes_with_concurrent_attempts(
+    pr3c_seed_choices: dict,
+    admin_user_in_db: dict,
+):
+    """⭐ Concurrent anchor: 2 admin_rollback gọi đồng thời cùng profile_id
+    (start state='submitted') PHẢI serialize qua row lock (PR-4 fix).
+
+    With lock (PR-4 ship):
+      - Caller 1: 'submitted' → 'draft', rolled_back_from='submitted',
+        already_at_target=False
+      - Caller 2: blocks until 1 commits, then sees state='draft' →
+        no-op branch (choice_engine.admin_rollback_profile line 919) →
+        rolled_back_from='draft', already_at_target=True
+      - Cả 2 đều succeed (200/non-exception); business invariant: chỉ
+        1 transition entry trong status_history (real rollback)
+      - Profile final state='draft' deterministic
+
+    Without lock (regression):
+      - Cả 2 caller cùng đọc state='submitted', cùng transition →
+        BusinessRuleViolation cho caller chậm (state machine raise vì
+        version mismatch OR invalid 'draft'→'draft' transition không qua
+        idempotent guard), HOẶC 2 status_history entries từ cùng source
+        state (chain integrity broken)
+
+    Test asserts business reality (final state + at-most-1 real
+    transition), KHÔNG mock SQL — chain breaks naturally nếu lock removed.
+    Mirror pattern test_bulk_assign_locks_and_writes_accurate_audit_chain.
+    """
+    profile_id = pr3c_seed_choices["profile_id"]
+    admin_user_id = admin_user_in_db["id"]
+
+    # Setup: profile bắt đầu ở 'submitted' để rollback có meaningful source
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(models.AdmissionProfile, profile_id)
+            profile.status = "submitted"
+            profile.version += 1
+
+    # Gather 2 concurrent rollback. PostgreSQL FOR UPDATE serialise — caller 2
+    # block until caller 1 commits, rồi đọc state='draft' (no-op).
+    results = await asyncio.gather(
+        _admin_rollback_in_own_session(
+            profile_id, admin_user_id, "Concurrent rollback A — 10+ chars"
+        ),
+        _admin_rollback_in_own_session(
+            profile_id, admin_user_id, "Concurrent rollback B — 10+ chars"
+        ),
+        return_exceptions=True,
+    )
+
+    # Both calls must return (no exception). With lock: 1 real + 1 no-op.
+    # Without lock: caller B có thể raise BusinessRuleViolation từ state
+    # machine (transition 'draft'→'draft' không hợp lệ).
+    exceptions = [r for r in results if isinstance(r, Exception)]
+    assert not exceptions, (
+        f"Concurrent admin_rollback must serialize (no exceptions); "
+        f"got {len(exceptions)} exception(s). FIRST: {exceptions[0]!r}. "
+        f"This indicates the FOR UPDATE lock was bypassed (PR-4 regression)."
+    )
+
+    # Verify business reality: chỉ 1 real rollback happened (one
+    # already_at_target=True, one False), final state='draft'
+    successes = [r for r in results if not isinstance(r, Exception)]
+    assert len(successes) == 2, f"Expected 2 results; got {len(successes)}: {results}"
+
+    target_markers = sorted(
+        bool(r.get("already_at_target", False)) for r in successes
+    )
+    assert target_markers == [False, True], (
+        f"Lock invariant: exactly 1 real rollback + 1 no-op (already_at_target=True). "
+        f"Got markers={target_markers}, results={results}. Without lock both could "
+        f"transition from 'submitted' (both False) — that's the race PR-4 fixes."
+    )
+
+    # Final state deterministic
+    async with AsyncSessionLocal() as s:
+        profile_after = await s.get(models.AdmissionProfile, profile_id)
+        assert profile_after.status == "draft", (
+            f"Expected final state='draft'; got {profile_after.status}"
+        )

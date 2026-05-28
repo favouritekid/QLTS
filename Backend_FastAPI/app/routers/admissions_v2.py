@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import database, models, schemas
 from app.core.deps import (
     CasbinAuth,
+    get_admission_for_admin_locked,
     get_admission_for_manager,
     get_admission_for_user,
     get_choice_for_user,
@@ -347,6 +348,7 @@ async def admin_rollback_admission(
     profile_id: int,
     payload: schemas.AdmissionAdminRollbackRequest,
     db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_admin_locked),
     current_admin: models.User = Depends(require_admin),
 ):
     """T17 admin rollback — force any non-final profile state → draft.
@@ -364,8 +366,11 @@ async def admin_rollback_admission(
       cannot rollback per state machine ALLOWED_TRANSITIONS (Sub-3.5 extension)
 
     **Security**:
-    - No IDOR gate — admin has global scope (require_admin dep enforces)
-    - `db.get(profile_id)` direct → 404 if not found (anti-enumeration)
+    - No IDOR gate — admin has global scope (require_admin dep enforces).
+    - ``get_admission_for_admin_locked`` SELECT FOR UPDATE serializes với
+      concurrent confirm/finalize/publish (PR-4 hardening 2026-05-28 —
+      replaced legacy db.get() race). Dependency also handles 404
+      anti-enumeration.
 
     **Dispatches** (via state_service.transition() + PAIR map):
     - ADMISSION_ROLLED_BACK (T17 source-aware via TRANSITION_PAIR_TO_EVENT
@@ -375,13 +380,9 @@ async def admin_rollback_admission(
     Returns AdmissionAdminRollbackResponse với `rolled_back_from` capture
     cho audit response.
     """
-    # Admin global scope — direct db.get (no IDOR gate needed)
-    profile = await db.get(models.AdmissionProfile, profile_id)
-    if profile is None:
-        raise ResourceNotFoundError(f"Hồ sơ {profile_id} không tồn tại")
-
     # Service helper (Sub-3.2) — pre-checks (terminal state, reason min 10)
-    # + state machine transition (source-aware PAIR → ROLLED_BACK)
+    # + state machine transition (source-aware PAIR → ROLLED_BACK).
+    # Profile is row-locked by get_admission_for_admin_locked dep above.
     result, post_commit_cb = await choice_engine.admin_rollback_profile(
         db,
         profile=profile,
