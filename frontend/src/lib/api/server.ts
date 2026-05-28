@@ -549,21 +549,26 @@ const admissions = {
 // PUBLIC ADMISSIONS API (SERVER-SIDE)
 // ============================================
 
+type PublicAdmissionsCatalogParams = {
+  audience?: string;
+  admission_round_id?: number;
+};
+
 const publicAdmissions = {
-  async getProgramsCatalog(): Promise<PublicAdmissionsProgramsResponse> {
-    return serverFetch<PublicAdmissionsProgramsResponse>('/api/public/admissions/programs');
+  async getProgramsCatalog(params?: PublicAdmissionsCatalogParams): Promise<PublicAdmissionsProgramsResponse> {
+    return serverFetch<PublicAdmissionsProgramsResponse>('/api/public/admissions/programs', { params });
   },
 
-  async getMethodsCatalog(): Promise<PublicAdmissionsMethodsResponse> {
-    return serverFetch<PublicAdmissionsMethodsResponse>('/api/public/admissions/methods');
+  async getMethodsCatalog(params?: PublicAdmissionsCatalogParams): Promise<PublicAdmissionsMethodsResponse> {
+    return serverFetch<PublicAdmissionsMethodsResponse>('/api/public/admissions/methods', { params });
   },
 
-  async getDocumentsCatalog(): Promise<PublicAdmissionsDocumentsResponse> {
-    return serverFetch<PublicAdmissionsDocumentsResponse>('/api/public/admissions/documents');
+  async getDocumentsCatalog(params?: PublicAdmissionsCatalogParams): Promise<PublicAdmissionsDocumentsResponse> {
+    return serverFetch<PublicAdmissionsDocumentsResponse>('/api/public/admissions/documents', { params });
   },
 
-  async getTuitionCatalog(): Promise<PublicAdmissionsTuitionResponse> {
-    return serverFetch<PublicAdmissionsTuitionResponse>('/api/public/admissions/tuition');
+  async getTuitionCatalog(params?: PublicAdmissionsCatalogParams): Promise<PublicAdmissionsTuitionResponse> {
+    return serverFetch<PublicAdmissionsTuitionResponse>('/api/public/admissions/tuition', { params });
   },
 };
 

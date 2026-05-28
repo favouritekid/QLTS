@@ -111,11 +111,20 @@ def _extract_semester_data(
 
 async def _load_public_program_snapshot(
     db: AsyncSession,
+    eligible_offering_ids: Optional[Set[int]] = None,
 ) -> Tuple[
     List[models.MajorProgram],
     Dict[int, models.OfferingAcademicInfo],
     Set[int],
 ]:
+    """Load public programs/offering academic_info snapshot.
+
+    When ``eligible_offering_ids`` is provided, only offerings with at
+    least one public-eligible admission path are kept. This lets
+    path-scoped endpoints fail closed instead of exposing tuition/program
+    data for offerings that have no active public path in the selected
+    round/audience window.
+    """
     repo = OrganizationRepository(db)
     programs = await repo.get_all_major_programs(is_active=True)
 
@@ -127,6 +136,8 @@ async def _load_public_program_snapshot(
         public_offerings = []
         for offering in program.offerings:
             if not offering.is_active:
+                continue
+            if eligible_offering_ids is not None and offering.id not in eligible_offering_ids:
                 continue
 
             public_info = _latest_public_academic_info(offering)
@@ -142,6 +153,69 @@ async def _load_public_program_snapshot(
 
     public_programs.sort(key=lambda program: (_sort_degree_level(program.degree_level), program.name.lower(), program.id))
     return public_programs, latest_info_by_offering_id, academic_info_ids
+
+
+def _eligible_offering_ids_from_paths(
+    paths: List[models.AdmissionPath],
+) -> Set[int]:
+    """Return offering IDs represented by public-eligible paths."""
+    return {
+        path.academic_info.offering_id
+        for path in paths
+        if path.academic_info is not None
+        and path.academic_info.offering_id is not None
+    }
+
+
+def _filter_snapshot_by_eligible_offerings(
+    programs: List[models.MajorProgram],
+    latest_info_by_offering_id: Dict[int, models.OfferingAcademicInfo],
+    eligible_offering_ids: Set[int],
+) -> Tuple[
+    List[models.MajorProgram],
+    Dict[int, models.OfferingAcademicInfo],
+]:
+    """In-memory filter of pre-loaded snapshot by eligible offering IDs.
+
+    PR-3 review fix #1 (2026-05-28): replaces the original 2× DB query
+    pattern in `get_public_programs_catalog` + `get_public_tuition_catalog`
+    (load full snapshot → load paths → derive eligible set → RE-LOAD
+    snapshot with filter) with a single in-memory pass.
+
+    Saves 1 DB round-trip + 1 SQL scan per request. Storefront cached
+    via CDN so prod impact is small, but cold-miss + crawler traffic
+    sees direct DB pressure.
+
+    Does NOT mutate input models — returns a filtered VIEW. Drops:
+      - offerings whose offering.id not in eligible_offering_ids
+      - programs with zero remaining eligible offerings
+
+    The downstream caller iterates ``program.offerings`` and checks
+    ``latest_info_by_offering_id.get(offering.id)``; offerings with
+    ``None`` lookup result are skipped naturally. We therefore filter
+    the dict (drop non-eligible offerings) but leave ``program.offerings``
+    untouched (no relationship mutation risk) — non-eligible offerings
+    on a kept program simply get `None` from the dict and are skipped.
+    """
+    filtered_info_by_offering_id = {
+        offering_id: academic_info
+        for offering_id, academic_info in latest_info_by_offering_id.items()
+        if offering_id in eligible_offering_ids
+    }
+
+    # Keep a program if at least one of its offerings is in the eligible
+    # set AND was originally accepted by the snapshot (i.e. still in
+    # latest_info_by_offering_id — passed is_active + is_published).
+    filtered_programs: List[models.MajorProgram] = [
+        program
+        for program in programs
+        if any(
+            offering.id in filtered_info_by_offering_id
+            for offering in program.offerings
+        )
+    ]
+
+    return filtered_programs, filtered_info_by_offering_id
 
 
 async def _load_public_paths(
@@ -429,16 +503,27 @@ async def get_public_programs_catalog(
     audience: Optional[PublicAdmissionsAudience] = None,
     admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsProgramsResponse:
-    """Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — `admission_round_id`
-    optional filter. NULL = backward-compat (return all paths, all
-    rounds). Set = scope to specific round (storefront switch by đợt)."""
+    """Public programs catalog, fail-closed by public-eligible paths.
+
+    ``admission_round_id=None`` means union of public-eligible active
+    rounds only (not historical rounds). Explicit round IDs are still
+    filtered through the same eligibility guard.
+    """
     programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
+    public_paths = await _load_public_paths(
+        db, academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
+    eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
+    # PR-3 review fix #1 (2026-05-28): in-memory filter instead of
+    # second _load_public_program_snapshot call — saves 1 DB round-trip
+    # per request (storefront cold-miss + crawler traffic benefit).
+    programs, latest_info_by_offering_id = _filter_snapshot_by_eligible_offerings(
+        programs, latest_info_by_offering_id, eligible_offering_ids,
+    )
     method_tags_by_info_id = _build_method_lookup(
-        await _load_public_paths(
-            db, academic_info_ids,
-            audience=audience,
-            admission_round_id=admission_round_id,
-        )
+        public_paths
     )
 
     degree_groups: Dict[str, List[PublicAdmissionsProgramSummary]] = defaultdict(list)
@@ -874,13 +959,24 @@ async def get_public_documents_catalog(
 async def get_public_tuition_catalog(
     db: AsyncSession,
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsTuitionResponse:
-    # audience param accepted for API uniformity but no-op on tuition:
-    # tuition data is offering-keyed (not path-keyed) so audience filter
-    # has no semantic effect here. Phase 2 storefront PR will narrow
-    # offerings to those with at least one round+audience match.
-    del audience  # unused
-    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(db)
+    # Tuition is offering-keyed, but public exposure is still path-gated:
+    # only offerings with at least one public-eligible path for the selected
+    # round/audience are allowed to surface tuition data.
+    programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
+    public_paths = await _load_public_paths(
+        db,
+        academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
+    eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
+    # PR-3 review fix #1 (2026-05-28): same in-memory filter as
+    # get_public_programs_catalog — avoids 2× snapshot query per request.
+    programs, latest_info_by_offering_id = _filter_snapshot_by_eligible_offerings(
+        programs, latest_info_by_offering_id, eligible_offering_ids,
+    )
 
     tuition_offerings: List[PublicAdmissionsTuitionOffering] = []
     degree_level_bands: Dict[str, List[PublicAdmissionsTuitionOffering]] = defaultdict(list)
