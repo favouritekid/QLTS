@@ -40,15 +40,26 @@ export function MobileBottomNav() {
   const requestCloseMobileOverlays = useUIStore((s) => s.requestCloseMobileOverlays);
   const isSidebarCollapsed = useUIStore((s) => s.isSidebarCollapsed);
 
-  // Track whether ANY Radix sheet/dialog is open. Radix locks body scroll by
-  // adding `data-scroll-locked` to <body> whenever a modal overlay mounts
-  // (verified across Sheet + Dialog). Watching that single attribute lets the
-  // bar hide for EVERY overlay — bottom sheets (filter/action/issue drawers),
-  // side sheets (lead/kpi detail, admin nav), and centered dialogs — without
-  // per-sheet wiring, and matches Material 3 (a sheet replaces the nav bar).
+  // Track whether a dialog/sheet overlay is open, so the bar can hide for it
+  // (bottom sheets, side sheets, centered dialogs) — matching Material 3 where
+  // an overlay replaces the nav bar.
+  //
+  // Radix sets `data-scroll-locked` on <body> for ANY modal overlay — but that
+  // INCLUDES <Select> (listbox) and <DropdownMenu> (menu), which do NOT occlude
+  // the bar and must not hide it (else the bar flickers on every dropdown). So
+  // we use the cheap attribute as the trigger but gate it on an actually-open
+  // dialog/sheet (role=dialog|alertdialog). react-remove-scroll renders INSIDE
+  // the overlay content, so the role node is already mounted when the attribute
+  // appears — no ordering race.
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   useEffect(() => {
-    const sync = () => setIsOverlayOpen(document.body.hasAttribute("data-scroll-locked"));
+    const sync = () =>
+      setIsOverlayOpen(
+        document.body.hasAttribute("data-scroll-locked") &&
+          document.querySelector(
+            '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
+          ) !== null
+      );
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(document.body, { attributes: true, attributeFilter: ["data-scroll-locked"] });
