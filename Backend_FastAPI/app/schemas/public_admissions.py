@@ -25,6 +25,27 @@ class PublicAdmissionsAudience(str, Enum):
     LIEN_THONG_CD = "LIEN_THONG_CD"
     VLVH = "VLVH"
 
+    @classmethod
+    def _missing_(cls, value):
+        """Case-insensitive match for storefront query params.
+
+        PR #348 review C1 (2026-05-28): default strict Enum rejects
+        `?audience=post_thpt` lowercase → BE 422 → FE silent empty
+        fallback. User typing wrong case got "Danh mục đang được cập
+        nhật" without knowing why.
+
+        Now `post_thpt`, `Post_Thpt`, `POST_THPT` all resolve to
+        POST_THPT. Pure case-variant only — KHÔNG alias short-form
+        (e.g. `thpt` ≠ POST_THPT); that's a separate UX product decision.
+        """
+        if not isinstance(value, str):
+            return None
+        upper = value.upper()
+        for member in cls:
+            if member.value.upper() == upper:
+                return member
+        return None
+
 
 class PublicAdmissionsMethodTag(BaseModel):
     id: int
