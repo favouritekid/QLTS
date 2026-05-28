@@ -697,6 +697,51 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_round_for_profile_cutoff(
+        self,
+        profile: models.AdmissionProfile,
+    ) -> Optional[models.OfferingAdmissionRound]:
+        """Resolve OfferingAdmissionRound từ ``profile.applied_rules`` snapshot.
+
+        Used by ``admission_service.submit_and_evaluate`` round-cutoff gate
+        (PR-2 ship 2026-05-28). Profile snapshot stores ``admission_path_id``
+        tại create-time → repo lookup path → round.
+
+        Returns None nếu:
+        - ``applied_rules`` rỗng hoặc thiếu ``admission_path_id`` (legacy
+          profile, pre-snapshot era — caller should log + skip gate)
+        - path không tồn tại (FK orphan; defensive, should not happen)
+
+        Caller responsibility:
+        - Handle None → skip cutoff gate + emit observability warning so ops
+          can find legacy profiles bypassing the round-cutoff fail-closed.
+        - Call ``assert_round_open(round)`` (utils.admission_round_guards)
+          on non-None return to enforce 410 Gone.
+
+        Extracted via PR #346 review nit #2: removes the inline 20-line
+        block in submit_and_evaluate + ugly ``sa_select_cutoff`` aliases
+        which existed to dodge top-level ``select``/``selectinload`` name
+        collisions inside the function-local scope.
+        """
+        applied_rules = profile.applied_rules or {}
+        path_id_raw = applied_rules.get("admission_path_id")
+        if path_id_raw is None:
+            return None
+        try:
+            path_id = int(path_id_raw)
+        except (TypeError, ValueError):
+            return None
+
+        stmt = (
+            select(AdmissionPath)
+            .where(AdmissionPath.id == path_id)
+            .options(selectinload(AdmissionPath.admission_round))
+        )
+        path = (await self.db.execute(stmt)).scalar_one_or_none()
+        if path is None:
+            return None
+        return path.admission_round
+
     async def reload_profile_with_lead(
         self,
         profile_id: int

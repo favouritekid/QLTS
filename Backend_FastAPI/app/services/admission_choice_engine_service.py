@@ -63,8 +63,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TYPE_C
 from decimal import Decimal
 
 import structlog
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import models
 from ..core.events import SystemEvents
 from ..utils.exceptions import BusinessRuleViolation
 from .admission_scoring_service import (
@@ -82,6 +84,222 @@ if TYPE_CHECKING:
     )
 
 log = structlog.get_logger(__name__)
+
+
+# ============================================================================
+# PR-1 (2026-05-28) — Capacity check helper for T6 cascade + T10 promote
+# ============================================================================
+#
+# Engine pre-PR-1: marked decision='admitted' purely from eligibility +
+# score, with NO check against admit_quota (per-path admit cap) or
+# annual_admission_quota (per-academic_info cap). Legacy single-NV approve
+# path enforced these via `_assert_quota_or_bypass` (admission_service.py)
+# but multi-NV cascade silently bypassed → over-admit risk if quota tight.
+#
+# This helper is the engine-internal counterpart. Differences vs the
+# legacy bypass-aware service helper:
+#   * No admin bypass contract — engine is a system trigger, not a human
+#     decision; falling back to waitlist is the right answer when capacity
+#     is exhausted (manager then makes a separate explicit override call).
+#   * Returns CapacityCheck instead of raising — caller threads the
+#     reason_code into `eligibility_check_result` so FE renders the
+#     waitlist explanation per choice.
+#   * Lock order: OfferingAcademicInfo FIRST (matches
+#     `admission_quota_service.py` Tier 1 pattern + admin update flow),
+#     AdmissionPath SECOND. Mismatched order vs the admin config flow
+#     would deadlock under concurrent edit + cascade.
+
+# Statuses that occupy a quota seat. Duplicated from
+# `admission_service.QUOTA_OCCUPYING_STATUSES` deliberately: importing
+# admission_service would create a circular dep (admission_service already
+# imports state_service which imports event mapping which imports engine
+# in some legacy call paths). Keep both lists in sync if either is
+# extended; the set has been stable since #15/#16 (admitted forward-compat).
+_QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = (
+    "approved",
+    "overridden",
+    "admitted",
+    "confirmed",
+    "enrolled",
+)
+
+
+@dataclass(frozen=True)
+class CapacityCheck:
+    """Result of `check_choice_admit_capacity()` — capacity probe outcome.
+
+    Frozen so callers cannot mutate the verdict between check and act.
+
+    Fields:
+        allowed: True ⇒ admit safe; False ⇒ must waitlist/reject.
+        reason_code: Identifier matched by FE label map. One of
+            ``PATH_QUOTA_EXHAUSTED``, ``OFFERING_ANNUAL_QUOTA_EXHAUSTED``,
+            or ``None`` when allowed.
+        detail: Observability payload (path_id, current_count, cap) —
+            written to ``eligibility_check_result.capacity_detail`` so
+            FE/audit can show "X/Y seats taken". ``None`` when allowed.
+    """
+
+    allowed: bool
+    reason_code: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
+
+
+async def check_choice_admit_capacity(
+    db: AsyncSession,
+    *,
+    path: "AdmissionPath",
+    admission_profile_id: int,
+) -> CapacityCheck:
+    """Probe whether ``admission_profile_id`` can still admit on ``path``.
+
+    Two-tier check (both must pass for ``allowed=True``):
+
+    **Tier 1 — Annual academic_info cap** (when configured):
+        Count profiles in ``_QUOTA_OCCUPYING_STATUSES`` for the same
+        (offering, academic_year) as ``path.academic_info``. Excludes
+        ``admission_profile_id`` itself so re-publishing the same profile
+        does not double-count.
+
+    **Tier 2 — Per-path admit cap** (when configured):
+        Count seats consumed on the path from TWO sources:
+          (a) Multi-NV via ``AdmissionProfileChoice.decision='admitted'``
+              with the same ``admission_path_id``, joined to profile
+              status in ``_QUOTA_OCCUPYING_STATUSES``.
+          (b) Legacy single-NV via ``AdmissionProfile.applied_rules
+              ->>'admission_path_id'`` filter, restricted to
+              ``uses_choice_engine = FALSE`` to avoid double-counting
+              with the choice rows above.
+
+    NULL ``admit_quota`` / ``annual_admission_quota`` → unbounded, skip
+    that tier (callers configure cap explicitly to opt-in to enforcement).
+
+    **Lock order (deadlock prevention)**:
+        1. ``SELECT ... FOR UPDATE`` on ``OfferingAcademicInfo`` first
+           (when annual cap configured). Matches the order
+           `admission_quota_service.validate_tier1_chain_on_path_quota_change`
+           uses for admin quota config edits — concurrent cascade +
+           admin update will not deadlock.
+        2. ``SELECT ... FOR UPDATE`` on ``AdmissionPath`` second. Path
+           row is the per-choice serialization point.
+
+    Args:
+        db: Active session. Caller wraps in ``begin_nested()`` per memory
+            `dispatch-bundle-strict-required` so per-profile rollback
+            does not nuke the batch.
+        path: Eager-loaded ``AdmissionPath`` (with ``academic_info`` for
+            Tier 1 lookup). Caller obtains via cascade choice eager-load
+            chain. Pass the in-memory row; helper re-fetches WITH lock
+            so the input ref is just a key carrier.
+        admission_profile_id: Profile being evaluated. Excluded from
+            counts so re-publishing the same profile is idempotent.
+
+    Returns:
+        CapacityCheck. On ``allowed=False`` the ``detail`` dict shape is:
+          - Tier 1: ``{"academic_info_id": int, "current_count": int,
+                       "cap": int}``
+          - Tier 2: ``{"path_id": int, "current_count": int, "cap": int}``
+
+    Raises:
+        Nothing under normal flow — capacity exhaustion is a valid
+        business outcome (→ waitlist), not an exception. SQLAlchemy DB
+        errors propagate (caller-savepoint catches).
+    """
+    # Tier 1 — annual academic_info cap (lock FIRST).
+    academic_info = getattr(path, "academic_info", None)
+    if academic_info is not None and academic_info.annual_admission_quota is not None:
+        ai_locked = (
+            await db.execute(
+                select(models.OfferingAcademicInfo)
+                .where(models.OfferingAcademicInfo.id == academic_info.id)
+                .with_for_update()
+            )
+        ).scalar_one()
+        annual_cap = ai_locked.annual_admission_quota
+        annual_count_stmt = (
+            select(func.count(models.AdmissionProfile.id))
+            .join(
+                models.Lead,
+                models.AdmissionProfile.lead_id == models.Lead.id,
+            )
+            .where(
+                models.Lead.offering_id == ai_locked.offering_id,
+                models.AdmissionProfile.academic_year == ai_locked.academic_year,
+                models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
+                models.AdmissionProfile.id != admission_profile_id,
+            )
+        )
+        annual_count = int(
+            (await db.execute(annual_count_stmt)).scalar_one() or 0
+        )
+        if annual_count + 1 > annual_cap:
+            return CapacityCheck(
+                allowed=False,
+                reason_code="OFFERING_ANNUAL_QUOTA_EXHAUSTED",
+                detail={
+                    "academic_info_id": ai_locked.id,
+                    "current_count": annual_count,
+                    "cap": annual_cap,
+                },
+            )
+
+    # Tier 2 — per-path admit cap (lock SECOND).
+    path_locked = (
+        await db.execute(
+            select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == path.id)
+            .with_for_update()
+        )
+    ).scalar_one()
+    admit_quota = path_locked.admit_quota
+    if admit_quota is None:
+        return CapacityCheck(allowed=True)
+
+    # (a) Multi-NV count via choice rows.
+    multi_nv_stmt = (
+        select(func.count(models.AdmissionProfileChoice.id))
+        .join(
+            models.AdmissionProfile,
+            models.AdmissionProfile.id
+            == models.AdmissionProfileChoice.admission_profile_id,
+        )
+        .where(
+            models.AdmissionProfileChoice.admission_path_id == path_locked.id,
+            models.AdmissionProfileChoice.decision == "admitted",
+            models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
+            models.AdmissionProfile.id != admission_profile_id,
+        )
+    )
+    multi_nv_count = int((await db.execute(multi_nv_stmt)).scalar_one() or 0)
+
+    # (b) Legacy single-NV count via applied_rules snapshot. Restrict to
+    # uses_choice_engine=False so multi-NV profiles aren't double-counted
+    # (their seats are already in (a) via the choice row).
+    legacy_stmt = (
+        select(func.count(models.AdmissionProfile.id))
+        .where(
+            models.AdmissionProfile.uses_choice_engine.is_(False),
+            models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
+            models.AdmissionProfile.applied_rules["admission_path_id"]
+            .astext.cast(Integer) == path_locked.id,
+            models.AdmissionProfile.id != admission_profile_id,
+        )
+    )
+    legacy_count = int((await db.execute(legacy_stmt)).scalar_one() or 0)
+
+    current_count = multi_nv_count + legacy_count
+    if current_count + 1 > admit_quota:
+        return CapacityCheck(
+            allowed=False,
+            reason_code="PATH_QUOTA_EXHAUSTED",
+            detail={
+                "path_id": path_locked.id,
+                "current_count": current_count,
+                "cap": admit_quota,
+            },
+        )
+
+    return CapacityCheck(allowed=True)
 
 
 # ============================================================================
@@ -511,12 +729,36 @@ async def evaluate_cascade(
         decision, score_result, reason_codes = _evaluate_single_choice(
             profile, choice, priority_bonus=priority_bonus_total,
         )
+
+        # PR-1 (2026-05-28) — Capacity gate per choice. Engine pre-PR-1
+        # never checked admit_quota / annual_admission_quota → silently
+        # over-admit on tight quotas. Now: if eligibility+score pass,
+        # re-check capacity. Capacity exhausted ⇒ degrade to 'waitlisted'
+        # + append reason_code to audit; fallthrough so the loop tries
+        # the next NV (lower priority). This matches plan v4 locked
+        # semantic: lower NV gets seat when higher NV's quota is full.
+        capacity_detail: Optional[Dict[str, Any]] = None
+        if decision == "admitted":
+            capacity = await check_choice_admit_capacity(
+                db,
+                path=choice.admission_path,
+                admission_profile_id=profile.id,
+            )
+            if not capacity.allowed:
+                decision = "waitlisted"
+                if capacity.reason_code:
+                    reason_codes.append(capacity.reason_code)
+                capacity_detail = capacity.detail
+
         choice.decision = decision
 
-        # Record eligibility check result for audit trail
+        # Record eligibility check result for audit trail. capacity_detail
+        # is additive (None when no capacity probe ran or capacity OK) so
+        # FE consumers ignoring the field stay forward-compat.
         choice.eligibility_check_result = {
             "decision": decision,
             "reason_codes": reason_codes,
+            "capacity_detail": capacity_detail,
             "score": (
                 {
                     "final_score": (
@@ -551,8 +793,17 @@ async def evaluate_cascade(
             result.admitted_choice_id = choice.id
             result.admitted_display_order = choice.display_order
 
-    # Final profile status — admitted if any choice admitted, else rejected
-    final_status = "admitted" if admitted_found else "rejected"
+    # Final profile status (PR-1 ship — 3-way decision):
+    #   any admit  → admitted (highest priority — first admit wins)
+    #   no admit but ≥1 waitlist (quota-induced) → waitlisted
+    #   all rejected (eligibility/score fail) → rejected
+    has_waitlist = any(c.decision == "waitlisted" for c in sorted_choices)
+    if admitted_found:
+        final_status = "admitted"
+    elif has_waitlist:
+        final_status = "waitlisted"
+    else:
+        final_status = "rejected"
     result.final_status = final_status
 
     await db.flush()
@@ -738,6 +989,27 @@ async def promote_waitlisted_choice(
     if profile.status != "waitlisted":
         raise BusinessRuleViolation(
             f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
+        )
+
+    # PR-1 (2026-05-28) — Re-check capacity AT promote-time. Cascade
+    # capacity gate only fires at T6; between T6 and T10 (admin click)
+    # other profiles may have admitted into the same path/academic_info
+    # and exhausted the quota. Without this gate, T10 silently
+    # over-admits beyond admit_quota / annual_admission_quota.
+    # Raise BusinessRuleViolation (NOT waitlist again) — admin must
+    # see the error, evaluate seat-freeing options (reject another
+    # admit, or wait for cancellation), then retry explicitly.
+    capacity = await check_choice_admit_capacity(
+        db,
+        path=choice.admission_path,
+        admission_profile_id=profile.id,
+    )
+    if not capacity.allowed:
+        raise BusinessRuleViolation(
+            f"Không thể promote — chỉ tiêu đã hết "
+            f"(reason={capacity.reason_code}, detail={capacity.detail}). "
+            f"Cần giải phóng ghế trước khi promote (reject hồ sơ khác "
+            f"hoặc đợi candidate cancel)."
         )
 
     # Update choice decision FIRST so audit trail captures the source

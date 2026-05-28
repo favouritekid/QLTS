@@ -222,8 +222,22 @@ async def waitlist_promote_choice(
     **Dispatches** (via state_service.transition() + PAIR map):
     - ADMISSION_WAITLIST_PROMOTED (T10 source-aware, NOT generic ADMITTED)
     """
-    # Fetch choice + verify ownership (router thin lookup)
-    choice = await db.get(models.AdmissionProfileChoice, payload.choice_id)
+    # Fetch choice with eager-load chain for capacity check.
+    # PR-1 (2026-05-28): promote_waitlisted_choice now calls
+    # check_choice_admit_capacity which reads choice.admission_path.
+    # academic_info — without eager-load, lazy access in async context
+    # raises MissingGreenlet. Mirror engine cascade eager-load shape.
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    choice_stmt = (
+        select(models.AdmissionProfileChoice)
+        .where(models.AdmissionProfileChoice.id == payload.choice_id)
+        .options(
+            selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info),
+        )
+    )
+    choice = (await db.execute(choice_stmt)).scalar_one_or_none()
     if choice is None or choice.admission_profile_id != profile.id:
         # 404 anti-enumeration per IDOR pattern (memory deps.py precedent)
         raise ResourceNotFoundError(

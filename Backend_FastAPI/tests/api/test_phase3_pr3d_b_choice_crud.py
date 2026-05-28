@@ -696,8 +696,10 @@ async def test_create_choice_410_when_round_closed(
         f"got {response.status_code}: {response.text[:200]}"
     )
     body = response.json()
-    assert "đã đóng" in (body.get("detail") or "").lower(), (
-        f"Detail phải mention 'đã đóng'; got: {body}"
+    # Assert via stable error_code (i18n-safe) per PR #346 review nit #4.
+    # Trước: substring "đã đóng" — fragile khi tinh chỉnh wording/i18n.
+    assert body.get("error_code") == "ROUND_CLOSED", (
+        f"Error code phải 'ROUND_CLOSED'; got: {body}"
     )
 
 

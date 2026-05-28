@@ -603,8 +603,9 @@ async def test_magic_link_submit_410_when_round_closed(
         f"got {response.status_code}: {response.text[:200]}"
     )
     body = response.json()
-    assert "đã đóng" in (body.get("detail") or "").lower(), (
-        f"Detail phải mention 'đã đóng'; got: {body}"
+    # Assert via stable error_code (i18n-safe) per PR #346 review nit #4.
+    assert body.get("error_code") == "ROUND_CLOSED", (
+        f"Error code phải 'ROUND_CLOSED'; got: {body}"
     )
 
     # Token must NOT be marked consumed (gate fired before _handle_submit body)

@@ -148,6 +148,11 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
                 "subject_id": subj.id,
                 "round_id": round_id,
                 "lead_id": lead.id,
+                # PR-1 (2026-05-28): expose offering_id so quota helper tests
+                # can seed leads with matching offering_id for annual cap
+                # COUNT(*) JOIN on Lead.offering_id.
+                "offering_id": offering.id,
+                "academic_info_id": ai.id,
             }
 
 
@@ -1660,3 +1665,682 @@ async def test_admin_rollback_serializes_with_concurrent_attempts(
         assert profile_after.status == "draft", (
             f"Expected final state='draft'; got {profile_after.status}"
         )
+
+
+# ============================================================================
+# PR-1 (2026-05-28) — Choice engine quota guard tests
+#
+# Capacity helper (check_choice_admit_capacity) + cascade waitlist fallthrough
+# + T10 promote re-check. All real-DB (capacity helper queries
+# AdmissionProfileChoice + AdmissionProfile.applied_rules across rows —
+# pure mocks would be tautological).
+#
+# Test placement: same Tier 1 file (backend-test.yml:170) cùng với cascade
+# integration tests. Keeps allowlist single-source-of-truth.
+# ============================================================================
+
+
+@pytest_asyncio.fixture
+async def pr1_seed_with_quota(pr3a_seed: dict) -> dict:
+    """Extend pr3a_seed: set path.admit_quota=1, annual_admission_quota=2.
+
+    Tight quotas so capacity tests can exercise both Tier 1 (annual) and
+    Tier 2 (path) caps with minimal seed data.
+    """
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(models.AdmissionPath, pr3a_seed["path_id"])
+            path.admit_quota = 1
+            path.round_quota = 5  # plenty for submit gate (not under test)
+            ai = await s.get(
+                models.OfferingAcademicInfo, path.academic_info_id
+            )
+            ai.annual_admission_quota = 2
+    return pr3a_seed
+
+
+async def _seed_admitted_choice_for_path(
+    path_id: int,
+    config_id: int,
+    unit_id: int,
+    pipeline_stage_id: int,
+    offering_id: int,
+) -> dict:
+    """Seed an extra profile + choice already in admitted state on the path.
+
+    Used to push path admit count up before testing capacity helper. Mimics
+    a previous successful cascade. Returns {profile_id, choice_id}.
+
+    Reuses the same path_subject_group_config_id (NOT NULL FK) across all
+    seed profiles — fine for capacity counting; uniqueness constraint is
+    on (profile_id, path_id, config_id) so different profiles can share.
+
+    `offering_id` MUST match the path's academic_info.offering_id so the
+    Tier 1 annual cap COUNT(*) JOIN on Lead.offering_id picks up the
+    seeded profile (annual count = COUNT WHERE Lead.offering_id matches
+    AND profile.academic_year matches AND status in occupying set).
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    # Add a small random offset to avoid collisions when called in tight loop
+    import random
+    ts = (ts + random.randint(0, 999)) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = models.Lead(
+                full_name=f"Quota seed lead {ts}",
+                phone=f"099{ts:07d}"[:10],
+                unit_id=unit_id,
+                pipeline_stage_id=pipeline_stage_id,
+                source="walkin",
+                offering_id=offering_id,
+            )
+            s.add(lead); await s.flush()
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=f"7{ts:08d}9"[:12],
+                status="admitted",
+                applied_rules={"admission_path_id": path_id},
+                academic_year=2026,
+                uses_choice_engine=True,
+            )
+            s.add(profile); await s.flush()
+            choice = models.AdmissionProfileChoice(
+                admission_profile_id=profile.id,
+                admission_path_id=path_id,
+                path_subject_group_config_id=config_id,
+                display_order=1,
+                decision="admitted",
+            )
+            s.add(choice); await s.flush()
+            return {"profile_id": profile.id, "choice_id": choice.id}
+
+
+# --- 7 capacity helper unit-ish tests (real DB, isolated helper call) ---
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_path_quota_allows_under_cap(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """admit_quota=1, 0 admitted seats → allowed=True."""
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is True, f"Should allow under cap; got {check}"
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_path_quota_blocks_at_cap(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """admit_quota=1, 1 admitted seat already → allowed=False
+    PATH_QUOTA_EXHAUSTED. Annual cap=2 with 1 used → Tier 1 still OK,
+    so reason must be path-tier (NOT annual)."""
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    await _seed_admitted_choice_for_path(
+        pr1_seed_with_quota["path_id"],
+        pr1_seed_with_quota["config_id"],
+        seed_lead_dependencies["unit_id"],
+        seed_lead_dependencies["stage_id"],
+        pr1_seed_with_quota["offering_id"],
+    )
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is False
+    assert check.reason_code == "PATH_QUOTA_EXHAUSTED", (
+        f"Path quota fills first (1/1 vs annual 1/2); got {check.reason_code}"
+    )
+    assert check.detail["cap"] == 1 and check.detail["current_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_annual_quota_blocks_across_methods(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """annual_admission_quota=2 reached via 2 admitted profiles on SAME
+    offering (even though path admit_quota itself only sees 1) →
+    OFFERING_ANNUAL_QUOTA_EXHAUSTED. Verify Tier 1 fires BEFORE Tier 2
+    when both would block — proves lock order + check order correct.
+    """
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    # Bump path admit_quota high so Tier 2 doesn't fire first
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(
+                models.AdmissionPath, pr1_seed_with_quota["path_id"]
+            )
+            path.admit_quota = 100
+
+    # Seed 2 admitted on this same offering/year → annual count = 2 = cap
+    for _ in range(2):
+        await _seed_admitted_choice_for_path(
+            pr1_seed_with_quota["path_id"],
+            pr1_seed_with_quota["config_id"],
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            pr1_seed_with_quota["offering_id"],
+        )
+
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is False
+    assert check.reason_code == "OFFERING_ANNUAL_QUOTA_EXHAUSTED", (
+        f"Annual cap fires first (2/2); got {check.reason_code}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_excludes_self_profile(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """Re-publishing the SAME profile (already admitted) must NOT
+    double-count itself → still allowed=True even when admit_quota=1.
+    Anchor: idempotent re-cascade does not exhaust own seat.
+    """
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    # Make the seed profile itself admitted on the path so we test
+    # self-exclusion. Use applied_rules path so legacy-count branch hits.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            p = await s.get(
+                models.AdmissionProfile, pr1_seed_with_quota["profile_id"]
+            )
+            p.status = "admitted"
+            p.uses_choice_engine = False
+            p.applied_rules = {
+                "admission_path_id": pr1_seed_with_quota["path_id"]
+            }
+
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is True, (
+        f"Self must be excluded from count; got {check}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_mixes_multi_nv_and_legacy_counts(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """admit_quota=2. Seed 1 admitted via multi-NV (choice row) + 1 via
+    legacy (applied_rules) → count = 2 → next admit blocked.
+    Anchor: count branches sum correctly (not one OR the other).
+    """
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(
+                models.AdmissionPath, pr1_seed_with_quota["path_id"]
+            )
+            path.admit_quota = 2
+            ai = await s.get(
+                models.OfferingAcademicInfo, path.academic_info_id
+            )
+            ai.annual_admission_quota = 100  # take Tier 1 out of equation
+
+    # Branch (a) — multi-NV admitted choice
+    await _seed_admitted_choice_for_path(
+        pr1_seed_with_quota["path_id"],
+        pr1_seed_with_quota["config_id"],
+        seed_lead_dependencies["unit_id"],
+        seed_lead_dependencies["stage_id"],
+        pr1_seed_with_quota["offering_id"],
+    )
+    # Branch (b) — legacy single-NV via applied_rules
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = models.Lead(
+                full_name=f"Legacy quota lead {ts}",
+                phone=f"098{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+            )
+            s.add(lead); await s.flush()
+            legacy = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=f"7{ts:08d}5"[:12],
+                status="admitted",
+                uses_choice_engine=False,
+                applied_rules={
+                    "admission_path_id": pr1_seed_with_quota["path_id"]
+                },
+                academic_year=2026,
+            )
+            s.add(legacy); await s.flush()
+
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is False, (
+        f"2 seats (1 multi-NV + 1 legacy) must reach cap; got {check}"
+    )
+    assert check.reason_code == "PATH_QUOTA_EXHAUSTED"
+    assert check.detail["current_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_null_admit_quota_pass_through(
+    pr3a_seed: dict, seed_lead_dependencies: dict,
+):
+    """admit_quota=NULL (unbounded) + annual cap NULL → always allowed.
+    Anchor: opt-in semantic — quotas only enforced when admin sets cap."""
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    # Default seed already has admit_quota=NULL + annual_admission_quota=20.
+    # Drop annual cap too so we exercise the pure pass-through branch.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(models.AdmissionPath, pr3a_seed["path_id"])
+            path.admit_quota = None
+            ai = await s.get(
+                models.OfferingAcademicInfo, path.academic_info_id
+            )
+            ai.annual_admission_quota = None
+
+    # Seed 10 admitted — still allowed because no cap
+    for _ in range(3):
+        await _seed_admitted_choice_for_path(
+            pr3a_seed["path_id"],
+            pr3a_seed["config_id"],
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            pr3a_seed["offering_id"],
+        )
+
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr3a_seed["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path, admission_profile_id=pr3a_seed["profile_id"],
+        )
+    assert check.allowed is True, f"NULL caps → always allow; got {check}"
+
+
+@pytest.mark.asyncio
+async def test_capacity_check_null_annual_quota_pass_through(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """annual_admission_quota=NULL but admit_quota set → only Tier 2 active.
+    Annual count above arbitrary number must not block."""
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(
+                models.AdmissionPath, pr1_seed_with_quota["path_id"]
+            )
+            path.admit_quota = 10  # plenty for this test
+            ai = await s.get(
+                models.OfferingAcademicInfo, path.academic_info_id
+            )
+            ai.annual_admission_quota = None  # disable Tier 1
+
+    # Seed 5 admitted — Tier 1 would block at 2, but it's NULL → ignored
+    for _ in range(5):
+        await _seed_admitted_choice_for_path(
+            pr1_seed_with_quota["path_id"],
+            pr1_seed_with_quota["config_id"],
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            pr1_seed_with_quota["offering_id"],
+        )
+
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is True, (
+        f"NULL annual cap + plenty path cap → allow; got {check}"
+    )
+
+
+# --- 4 cascade/promote integration tests (HTTP-driven, full flow) ---
+
+
+@pytest_asyncio.fixture
+async def pr1_seed_multi_nv_two_choices_quota_one(
+    pr1_seed_with_quota: dict,
+) -> dict:
+    """pr1_seed_with_quota + 1 AdmissionProfileChoice on the path with
+    admit_quota=1. Profile starts 'reviewing' for direct publish_result T6
+    trigger. Single choice is enough to anchor the capacity-induced
+    waitlist outcome (UNIQUE(profile_id, path_id, config_id) blocks
+    seeding 2 NV on the same path+config in this minimal fixture).
+    """
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ch = models.AdmissionProfileChoice(
+                admission_profile_id=pr1_seed_with_quota["profile_id"],
+                admission_path_id=pr1_seed_with_quota["path_id"],
+                path_subject_group_config_id=pr1_seed_with_quota["config_id"],
+                display_order=1,
+                decision="pending",
+            )
+            s.add(ch)
+            profile = await s.get(
+                models.AdmissionProfile, pr1_seed_with_quota["profile_id"]
+            )
+            profile.status = "reviewing"
+            profile.version += 1
+    return pr1_seed_with_quota
+
+
+@pytest.mark.asyncio
+async def test_cascade_waitlist_when_path_quota_exhausted(
+    monkeypatch,
+    pr1_seed_multi_nv_two_choices_quota_one: dict,
+    seed_lead_dependencies: dict,
+):
+    """T6 cascade: admit_quota=1 + 1 prior admitted seat → capacity gate
+    must degrade decision='admitted' → 'waitlisted' với capacity_detail
+    captured.
+
+    Test isolates the PR-1 NEW behavior: monkeypatch the per-choice
+    eligibility/score eval so cascade always proposes 'admitted'. Only
+    the capacity gate then decides outcome. Without PR-1 quota guard:
+    engine would silently admit beyond cap.
+
+    Anchor: profile.status='waitlisted', choice.decision='waitlisted',
+    eligibility_check_result.capacity_detail.cap=1 +
+    PATH_QUOTA_EXHAUSTED in reason_codes.
+    """
+    from app.services import admission_choice_engine_service as engine_mod
+    seed = pr1_seed_multi_nv_two_choices_quota_one
+
+    # Push admit count to 1/1 (cap)
+    await _seed_admitted_choice_for_path(
+        seed["path_id"], seed["config_id"],
+        seed_lead_dependencies["unit_id"],
+        seed_lead_dependencies["stage_id"],
+        seed["offering_id"],
+    )
+
+    # Force every NV to evaluate as 'admitted' so only capacity gate decides
+    def _force_admit(profile, choice, priority_bonus=None):
+        return "admitted", None, []
+    monkeypatch.setattr(engine_mod, "_evaluate_single_choice", _force_admit)
+
+    # Load profile via direct service call (engine cascade) — eager-load
+    # chain mirror PR-3C router signature.
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import selectinload as sa_sl
+    async with AsyncSessionLocal() as s:
+        stmt = (
+            sa_select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == seed["profile_id"])
+            .options(
+                sa_sl(models.AdmissionProfile.lead),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.admission_method),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.admission_round),
+            )
+        )
+        profile = (await s.execute(stmt)).scalar_one()
+
+        result, _cb = await engine_mod.evaluate_cascade(s, profile)
+        await s.commit()
+
+    assert result.final_status == "waitlisted", (
+        f"Capacity-exhausted cascade must produce waitlisted final_status; "
+        f"got {result.final_status}; per_choice={result.per_choice_decisions}"
+    )
+
+    # DB invariant: profile + choice waitlisted + capacity_detail captured
+    async with AsyncSessionLocal() as s:
+        profile_after = await s.get(
+            models.AdmissionProfile, seed["profile_id"]
+        )
+        assert profile_after.status == "waitlisted"
+
+        choices = (await s.execute(
+            sa_select(models.AdmissionProfileChoice).where(
+                models.AdmissionProfileChoice.admission_profile_id
+                == seed["profile_id"]
+            )
+        )).scalars().all()
+        wl = [c for c in choices if c.decision == "waitlisted"]
+        assert wl, (
+            f"Choice must be waitlisted; got "
+            f"{[(c.display_order, c.decision) for c in choices]}"
+        )
+        elig = wl[0].eligibility_check_result or {}
+        assert elig.get("capacity_detail") is not None, (
+            f"capacity_detail must populate; got eligibility_check_result={elig}"
+        )
+        assert "PATH_QUOTA_EXHAUSTED" in (elig.get("reason_codes") or []), (
+            f"reason_codes must include PATH_QUOTA_EXHAUSTED; got "
+            f"{elig.get('reason_codes')}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_cascade_admits_when_no_quota_pressure(
+    monkeypatch,
+    pr1_seed_multi_nv_two_choices_quota_one: dict,
+):
+    """Inverse anchor: 1 choice + 0 prior seats + admit_quota=1 →
+    capacity gate ALLOWS, cascade transitions to admitted.
+
+    Proves capacity gate doesn't false-positive when seat is available,
+    just because the cap exists. Pairs with quota-exhausted test above.
+    """
+    from app.services import admission_choice_engine_service as engine_mod
+    seed = pr1_seed_multi_nv_two_choices_quota_one
+
+    def _force_admit(profile, choice, priority_bonus=None):
+        return "admitted", None, []
+    monkeypatch.setattr(engine_mod, "_evaluate_single_choice", _force_admit)
+
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import selectinload as sa_sl
+    async with AsyncSessionLocal() as s:
+        stmt = (
+            sa_select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == seed["profile_id"])
+            .options(
+                sa_sl(models.AdmissionProfile.lead),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.academic_info),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.admission_method),
+                sa_sl(models.AdmissionProfile.choices)
+                .selectinload(models.AdmissionProfileChoice.admission_path)
+                .selectinload(models.AdmissionPath.admission_round),
+            )
+        )
+        profile = (await s.execute(stmt)).scalar_one()
+        result, _cb = await engine_mod.evaluate_cascade(s, profile)
+        await s.commit()
+
+    assert result.final_status == "admitted", (
+        f"With seat available + force-admit eval, cascade must admit; "
+        f"got {result.final_status}: {result.per_choice_decisions}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_waitlist_blocked_when_quota_filled_after_engine(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr1_seed_with_quota: dict,
+    seed_lead_dependencies: dict,
+):
+    """T10 anchor: profile waitlisted via cascade earlier; admin tries to
+    promote, but in the meantime another admit consumed the seat → promote
+    must raise BusinessRuleViolation (400), NOT silently over-admit.
+
+    Without PR-1 promote guard: choice.decision='admitted' would be set
+    blindly, blowing the cap.
+    """
+    seed = pr1_seed_with_quota
+    # Setup: 1 choice waitlisted + 1 admitted seat already on path → cap = 1
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ch = models.AdmissionProfileChoice(
+                admission_profile_id=seed["profile_id"],
+                admission_path_id=seed["path_id"],
+                path_subject_group_config_id=seed["config_id"],
+                display_order=1,
+                decision="waitlisted",
+            )
+            s.add(ch); await s.flush()
+            choice_id = ch.id
+            profile = await s.get(models.AdmissionProfile, seed["profile_id"])
+            profile.status = "waitlisted"
+            profile.version += 1
+
+    await _seed_admitted_choice_for_path(
+        seed["path_id"], seed["config_id"],
+        seed_lead_dependencies["unit_id"],
+        seed_lead_dependencies["stage_id"],
+        seed["offering_id"],
+    )
+
+    response = await client.post(
+        f"/api/v2/admissions/{seed['profile_id']}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": choice_id, "reason": "Manual promote attempt"},
+    )
+    assert response.status_code == 400, (
+        f"Promote with no seat must 400 BusinessRuleViolation; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    body = response.json()
+    detail = (body.get("detail") or "").lower()
+    assert "chỉ tiêu" in detail or "quota" in detail, (
+        f"Detail must mention quota exhaustion; got: {body}"
+    )
+
+    # DB invariant: choice still waitlisted (no silent state mutation)
+    async with AsyncSessionLocal() as s:
+        ch_after = await s.get(models.AdmissionProfileChoice, choice_id)
+        assert ch_after.decision == "waitlisted", (
+            f"Choice must stay waitlisted after blocked promote; "
+            f"got {ch_after.decision}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_promote_waitlist_succeeds_when_seat_freed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr1_seed_with_quota: dict,
+):
+    """Inverse anchor: profile waitlisted, NO competing admit on path →
+    promote must succeed (200). Proves T10 capacity check doesn't
+    false-positive when seat is actually available.
+    """
+    seed = pr1_seed_with_quota
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ch = models.AdmissionProfileChoice(
+                admission_profile_id=seed["profile_id"],
+                admission_path_id=seed["path_id"],
+                path_subject_group_config_id=seed["config_id"],
+                display_order=1,
+                decision="waitlisted",
+            )
+            s.add(ch); await s.flush()
+            choice_id = ch.id
+            profile = await s.get(models.AdmissionProfile, seed["profile_id"])
+            profile.status = "waitlisted"
+            profile.version += 1
+
+    response = await client.post(
+        f"/api/v2/admissions/{seed['profile_id']}/waitlist-promote",
+        headers=manager_token_headers,
+        json={"choice_id": choice_id, "reason": "Seat available — promote"},
+    )
+    assert response.status_code == 200, (
+        f"Promote with available seat must succeed; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    async with AsyncSessionLocal() as s:
+        ch_after = await s.get(models.AdmissionProfileChoice, choice_id)
+        assert ch_after.decision == "admitted"
+        profile_after = await s.get(models.AdmissionProfile, seed["profile_id"])
+        assert profile_after.status == "admitted"
