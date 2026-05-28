@@ -4,6 +4,10 @@ import { connection } from "next/server"
 
 import PublicTuitionAidPage from "@/components/public/PublicTuitionAidPage"
 import { serverApi } from "@/lib/api/server"
+import {
+  publicAdmissionsCatalogParams,
+  type PublicAdmissionsSearchParams,
+} from "@/lib/public-admissions/query"
 
 export const metadata: Metadata = {
   title: "Học phí và học bổng | QLTS",
@@ -11,13 +15,14 @@ export const metadata: Metadata = {
     "Xem khung học phí tham chiếu, học bổng đầu vào và lộ trình thanh toán trên cổng tuyển sinh QLTS.",
 }
 
-async function TuitionContent() {
+async function TuitionContent({ searchParams }: { searchParams: PublicAdmissionsSearchParams }) {
   await connection()
 
   let catalog = null
+  const params = publicAdmissionsCatalogParams(await searchParams)
 
   try {
-    catalog = await serverApi.publicAdmissions.getTuitionCatalog()
+    catalog = await serverApi.publicAdmissions.getTuitionCatalog(params)
   } catch (error) {
     console.error("Failed to load public admissions tuition catalog", error)
   }
@@ -25,10 +30,14 @@ async function TuitionContent() {
   return <PublicTuitionAidPage catalog={catalog} />
 }
 
-export default function AdmissionsTuitionPage() {
+export default function AdmissionsTuitionPage({
+  searchParams,
+}: {
+  searchParams: PublicAdmissionsSearchParams
+}) {
   return (
     <Suspense fallback={<div className="container mx-auto px-4 py-8 animate-pulse" />}>
-      <TuitionContent />
+      <TuitionContent searchParams={searchParams} />
     </Suspense>
   )
 }

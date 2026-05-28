@@ -111,11 +111,20 @@ def _extract_semester_data(
 
 async def _load_public_program_snapshot(
     db: AsyncSession,
+    eligible_offering_ids: Optional[Set[int]] = None,
 ) -> Tuple[
     List[models.MajorProgram],
     Dict[int, models.OfferingAcademicInfo],
     Set[int],
 ]:
+    """Load public programs/offering academic_info snapshot.
+
+    When ``eligible_offering_ids`` is provided, only offerings with at
+    least one public-eligible admission path are kept. This lets
+    path-scoped endpoints fail closed instead of exposing tuition/program
+    data for offerings that have no active public path in the selected
+    round/audience window.
+    """
     repo = OrganizationRepository(db)
     programs = await repo.get_all_major_programs(is_active=True)
 
@@ -127,6 +136,8 @@ async def _load_public_program_snapshot(
         public_offerings = []
         for offering in program.offerings:
             if not offering.is_active:
+                continue
+            if eligible_offering_ids is not None and offering.id not in eligible_offering_ids:
                 continue
 
             public_info = _latest_public_academic_info(offering)
@@ -142,6 +153,18 @@ async def _load_public_program_snapshot(
 
     public_programs.sort(key=lambda program: (_sort_degree_level(program.degree_level), program.name.lower(), program.id))
     return public_programs, latest_info_by_offering_id, academic_info_ids
+
+
+def _eligible_offering_ids_from_paths(
+    paths: List[models.AdmissionPath],
+) -> Set[int]:
+    """Return offering IDs represented by public-eligible paths."""
+    return {
+        path.academic_info.offering_id
+        for path in paths
+        if path.academic_info is not None
+        and path.academic_info.offering_id is not None
+    }
 
 
 async def _load_public_paths(
@@ -429,16 +452,25 @@ async def get_public_programs_catalog(
     audience: Optional[PublicAdmissionsAudience] = None,
     admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsProgramsResponse:
-    """Phase 2 v8.2 PR-2B v2 (Wave 6 #17 P2) — `admission_round_id`
-    optional filter. NULL = backward-compat (return all paths, all
-    rounds). Set = scope to specific round (storefront switch by đợt)."""
+    """Public programs catalog, fail-closed by public-eligible paths.
+
+    ``admission_round_id=None`` means union of public-eligible active
+    rounds only (not historical rounds). Explicit round IDs are still
+    filtered through the same eligibility guard.
+    """
     programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
+    public_paths = await _load_public_paths(
+        db, academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
+    eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
+    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(
+        db,
+        eligible_offering_ids=eligible_offering_ids,
+    )
     method_tags_by_info_id = _build_method_lookup(
-        await _load_public_paths(
-            db, academic_info_ids,
-            audience=audience,
-            admission_round_id=admission_round_id,
-        )
+        public_paths
     )
 
     degree_groups: Dict[str, List[PublicAdmissionsProgramSummary]] = defaultdict(list)
@@ -874,13 +906,23 @@ async def get_public_documents_catalog(
 async def get_public_tuition_catalog(
     db: AsyncSession,
     audience: Optional[PublicAdmissionsAudience] = None,
+    admission_round_id: Optional[int] = None,
 ) -> PublicAdmissionsTuitionResponse:
-    # audience param accepted for API uniformity but no-op on tuition:
-    # tuition data is offering-keyed (not path-keyed) so audience filter
-    # has no semantic effect here. Phase 2 storefront PR will narrow
-    # offerings to those with at least one round+audience match.
-    del audience  # unused
-    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(db)
+    # Tuition is offering-keyed, but public exposure is still path-gated:
+    # only offerings with at least one public-eligible path for the selected
+    # round/audience are allowed to surface tuition data.
+    programs, latest_info_by_offering_id, academic_info_ids = await _load_public_program_snapshot(db)
+    public_paths = await _load_public_paths(
+        db,
+        academic_info_ids,
+        audience=audience,
+        admission_round_id=admission_round_id,
+    )
+    eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
+    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(
+        db,
+        eligible_offering_ids=eligible_offering_ids,
+    )
 
     tuition_offerings: List[PublicAdmissionsTuitionOffering] = []
     degree_level_bands: Dict[str, List[PublicAdmissionsTuitionOffering]] = defaultdict(list)

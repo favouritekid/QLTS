@@ -140,6 +140,7 @@ async def get_public_tuition_catalog(
     request: Request,
     response: Response,
     audience: Optional[PublicAdmissionsAudience] = _AUDIENCE_QUERY,
+    admission_round_id: Optional[int] = _ADMISSION_ROUND_QUERY,
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -150,12 +151,11 @@ async def get_public_tuition_catalog(
     - tuition ranges by degree level
     - active tuition discount policies referenced by published offerings
 
-    ``audience`` is accepted for API uniformity. Tuition data is
-    offering-keyed (not path-keyed), so the parameter is currently a
-    no-op here; Phase 2 storefront PR will narrow offerings via
-    round+audience joins.
+    Tuition data is offering-keyed, but public exposure is path-gated:
+    ``audience`` and ``admission_round_id`` narrow the offering set to
+    those with at least one public-eligible path.
     """
     _set_public_cache_headers(response)
     return await public_admissions_service.get_public_tuition_catalog(
-        db, audience=audience
+        db, audience=audience, admission_round_id=admission_round_id,
     )

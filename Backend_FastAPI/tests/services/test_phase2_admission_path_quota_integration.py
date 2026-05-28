@@ -23,7 +23,12 @@ from app.utils.exceptions import (
     DuplicateResourceError,
     ResourceNotFoundError,
 )
-from app.services.public_admissions_service import _load_public_paths
+from app.schemas.public_admissions import PublicAdmissionsAudience
+from app.services.public_admissions_service import (
+    _load_public_paths,
+    get_public_programs_catalog,
+    get_public_tuition_catalog,
+)
 from app.utils.exceptions import BusinessRuleViolation
 
 
@@ -392,6 +397,236 @@ async def test_storefront_excludes_ineligible_rounds(path_seed: dict):
         assert all(
             p.admission_round_id == round_ids["open"] for p in open_paths
         )
+
+
+def _program_catalog_offering_ids(response) -> set[int]:
+    return {
+        offering.id
+        for group in response.degree_levels
+        for program in group.programs
+        for offering in program.offerings
+    }
+
+
+def _tuition_catalog_offering_ids(response) -> set[int]:
+    return {offering.offering_id for offering in response.offerings}
+
+
+@pytest.mark.asyncio
+async def test_programs_catalog_excludes_offering_without_public_eligible_path(
+    path_seed: dict,
+):
+    """PR-3 anchor: /programs must fail-closed at the snapshot layer.
+
+    A published active offering with no public-eligible path must not leak
+    into the programs catalog as an offering with an empty method list.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_ai = await s.get(
+                models.OfferingAcademicInfo,
+                path_seed["academic_info_id"],
+            )
+            base_offering = await s.get(
+                models.ProgramOffering,
+                base_ai.offering_id,
+            )
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=base_ai.id,
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                )
+            )
+
+            hidden_offering = models.ProgramOffering(
+                program_id=base_offering.program_id,
+                offering_type=f"no_path_{ts}",
+                duration_semesters=8,
+                is_active=True,
+            )
+            s.add(hidden_offering)
+            await s.flush()
+            hidden_ai = models.OfferingAcademicInfo(
+                offering_id=hidden_offering.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=2_000_000,
+                is_published=True,
+            )
+            s.add(hidden_ai)
+            await s.flush()
+            base_offering_id = base_offering.id
+            hidden_offering_id = hidden_offering.id
+
+    async with AsyncSessionLocal() as s:
+        response = await get_public_programs_catalog(s)
+
+    offering_ids = _program_catalog_offering_ids(response)
+    assert base_offering_id in offering_ids
+    assert hidden_offering_id not in offering_ids
+
+
+@pytest.mark.asyncio
+async def test_tuition_excludes_offering_when_round_filter_set(path_seed: dict):
+    """PR-3 anchor: /tuition is round-aware, not just published-info aware."""
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_ai = await s.get(
+                models.OfferingAcademicInfo,
+                path_seed["academic_info_id"],
+            )
+            base_offering = await s.get(
+                models.ProgramOffering,
+                base_ai.offering_id,
+            )
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=base_ai.id,
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                )
+            )
+
+            other_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_TUI_{ts}",
+                round_name=f"PR3 tuition round {ts}",
+                is_active=True,
+            )
+            s.add(other_round)
+            await s.flush()
+
+            other_method = models.AdmissionMethod(
+                code=f"PR3MT_{ts}",
+                name=f"PR3 method tuition {ts}",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(other_method)
+            await s.flush()
+
+            other_offering = models.ProgramOffering(
+                program_id=base_offering.program_id,
+                offering_type=f"other_round_{ts}",
+                duration_semesters=8,
+                is_active=True,
+            )
+            s.add(other_offering)
+            await s.flush()
+            other_ai = models.OfferingAcademicInfo(
+                offering_id=other_offering.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=3_000_000,
+                is_published=True,
+            )
+            s.add(other_ai)
+            await s.flush()
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=other_ai.id,
+                    admission_method_id=other_method.id,
+                    admission_round_id=other_round.id,
+                    status="active",
+                    visibility="public",
+                )
+            )
+            await s.flush()
+            base_offering_id = base_offering.id
+            other_offering_id = other_offering.id
+            round_id = path_seed["round_id"]
+
+    async with AsyncSessionLocal() as s:
+        response = await get_public_tuition_catalog(
+            s,
+            admission_round_id=round_id,
+        )
+
+    offering_ids = _tuition_catalog_offering_ids(response)
+    assert base_offering_id in offering_ids
+    assert other_offering_id not in offering_ids
+
+
+@pytest.mark.asyncio
+async def test_tuition_audience_filter_now_active(path_seed: dict):
+    """PR-3 anchor: /tuition must honor audience via eligible paths."""
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_ai = await s.get(
+                models.OfferingAcademicInfo,
+                path_seed["academic_info_id"],
+            )
+            base_offering = await s.get(
+                models.ProgramOffering,
+                base_ai.offering_id,
+            )
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=base_ai.id,
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                    applicable_to=[PublicAdmissionsAudience.POST_THPT.value],
+                )
+            )
+
+            vlvh_method = models.AdmissionMethod(
+                code=f"PR3AU_{ts}",
+                name=f"PR3 audience method {ts}",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(vlvh_method)
+            await s.flush()
+            vlvh_offering = models.ProgramOffering(
+                program_id=base_offering.program_id,
+                offering_type=f"vlvh_{ts}",
+                duration_semesters=8,
+                is_active=True,
+            )
+            s.add(vlvh_offering)
+            await s.flush()
+            vlvh_ai = models.OfferingAcademicInfo(
+                offering_id=vlvh_offering.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=4_000_000,
+                is_published=True,
+            )
+            s.add(vlvh_ai)
+            await s.flush()
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=vlvh_ai.id,
+                    admission_method_id=vlvh_method.id,
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                    applicable_to=[PublicAdmissionsAudience.VLVH.value],
+                )
+            )
+            await s.flush()
+            base_offering_id = base_offering.id
+            vlvh_offering_id = vlvh_offering.id
+
+    async with AsyncSessionLocal() as s:
+        response = await get_public_tuition_catalog(
+            s,
+            audience=PublicAdmissionsAudience.POST_THPT,
+        )
+
+    offering_ids = _tuition_catalog_offering_ids(response)
+    assert base_offering_id in offering_ids
+    assert vlvh_offering_id not in offering_ids
 
 
 @pytest.mark.asyncio
