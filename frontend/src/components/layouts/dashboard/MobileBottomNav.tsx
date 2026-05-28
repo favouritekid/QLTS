@@ -11,7 +11,7 @@
  * Uses useAppNavigation() for role-based filtering (consistent with AppSidebar).
  */
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,33 @@ export function MobileBottomNav() {
   const pathname = usePathname();
   const { navigation } = useAppNavigation();
   const requestCloseMobileOverlays = useUIStore((s) => s.requestCloseMobileOverlays);
+  const isSidebarCollapsed = useUIStore((s) => s.isSidebarCollapsed);
+
+  // Track whether a dialog/sheet overlay is open, so the bar can hide for it
+  // (bottom sheets, side sheets, centered dialogs) — matching Material 3 where
+  // an overlay replaces the nav bar.
+  //
+  // Radix sets `data-scroll-locked` on <body> for ANY modal overlay — but that
+  // INCLUDES <Select> (listbox) and <DropdownMenu> (menu), which do NOT occlude
+  // the bar and must not hide it (else the bar flickers on every dropdown). So
+  // we use the cheap attribute as the trigger but gate it on an actually-open
+  // dialog/sheet (role=dialog|alertdialog). react-remove-scroll renders INSIDE
+  // the overlay content, so the role node is already mounted when the attribute
+  // appears — no ordering race.
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  useEffect(() => {
+    const sync = () =>
+      setIsOverlayOpen(
+        document.body.hasAttribute("data-scroll-locked") &&
+          document.querySelector(
+            '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]'
+          ) !== null
+      );
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(document.body, { attributes: true, attributeFilter: ["data-scroll-locked"] });
+    return () => observer.disconnect();
+  }, []);
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({
@@ -87,6 +114,14 @@ export function MobileBottomNav() {
     }
     return pathname.startsWith(href);
   };
+
+  // Hide the bar while ANY full-screen overlay owns the screen: the main
+  // sidebar drawer (!isSidebarCollapsed) OR any Radix sheet/dialog
+  // (isOverlayOpen). The bar sits at z-[60] — above every overlay (z-50) — so
+  // keeping it visible paints it OVER the overlay's lowest content (drawer's
+  // "Settings" item, a bottom sheet's footer, a sheet's last fields). The open
+  // overlay already owns navigation/actions, so the bar is redundant there.
+  if (!isSidebarCollapsed || isOverlayOpen) return null;
 
   return (
     <nav

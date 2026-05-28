@@ -54,7 +54,7 @@ export function AdmissionActions({
   const showNextButton = currentStep < 8 && !(currentStep === 7 && !decide)
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
+    <div className="fixed bottom-[var(--bottom-nav-height-safe)] left-0 right-0 lg:bottom-0 border-t bg-background z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
       {/* Mobile (<640px): allow horizontal scroll inside bar so wide
           action sets stay reachable without forcing page scroll. */}
       <div className="container max-w-7xl mx-auto h-16 px-3 sm:px-6 flex items-center justify-between gap-2 overflow-x-auto">
