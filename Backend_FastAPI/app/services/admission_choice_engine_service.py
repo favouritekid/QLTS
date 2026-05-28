@@ -206,6 +206,21 @@ async def check_choice_admit_capacity(
         errors propagate (caller-savepoint catches).
     """
     # Tier 1 — annual academic_info cap (lock FIRST).
+    #
+    # Count attribution post-PR-1 review (BLOCKER #1 fix 2026-05-28):
+    # Multi-NV permits cross-offering choices (no constraint enforces
+    # same offering across NV). Lead.offering_id reflects ONLY the
+    # candidate's initial intent — they may admit via NV-N into a
+    # completely different academic_info. Counting via Lead.offering_id
+    # under-counts when admit target differs from intent → over-admit.
+    #
+    # Fix: count seats by what each profile is ACTUALLY admitted to:
+    #   (a) Multi-NV: AdmissionProfileChoice WHERE decision='admitted'
+    #       JOIN AdmissionPath WHERE academic_info_id = X
+    #   (b) Legacy single-NV: AdmissionProfile WHERE applied_rules
+    #       ->>admission_path_id ∈ {paths under academic_info X},
+    #       restricted to uses_choice_engine=FALSE to avoid double-counting
+    #       with (a).
     academic_info = getattr(path, "academic_info", None)
     if academic_info is not None and academic_info.annual_admission_quota is not None:
         ai_locked = (
@@ -216,22 +231,54 @@ async def check_choice_admit_capacity(
             )
         ).scalar_one()
         annual_cap = ai_locked.annual_admission_quota
-        annual_count_stmt = (
-            select(func.count(models.AdmissionProfile.id))
+
+        # (a) Multi-NV seats consumed in this academic_info.
+        annual_multi_nv_stmt = (
+            select(func.count(models.AdmissionProfileChoice.id))
             .join(
-                models.Lead,
-                models.AdmissionProfile.lead_id == models.Lead.id,
+                models.AdmissionProfile,
+                models.AdmissionProfile.id
+                == models.AdmissionProfileChoice.admission_profile_id,
+            )
+            .join(
+                models.AdmissionPath,
+                models.AdmissionPath.id
+                == models.AdmissionProfileChoice.admission_path_id,
             )
             .where(
-                models.Lead.offering_id == ai_locked.offering_id,
-                models.AdmissionProfile.academic_year == ai_locked.academic_year,
+                models.AdmissionPath.academic_info_id == ai_locked.id,
+                models.AdmissionProfileChoice.decision == "admitted",
                 models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
                 models.AdmissionProfile.id != admission_profile_id,
             )
         )
-        annual_count = int(
-            (await db.execute(annual_count_stmt)).scalar_one() or 0
+        annual_multi_nv_count = int(
+            (await db.execute(annual_multi_nv_stmt)).scalar_one() or 0
         )
+
+        # (b) Legacy seats consumed (applied_rules.admission_path_id points
+        # into a path under this academic_info). Restrict to
+        # uses_choice_engine=FALSE so multi-NV profiles aren't double-counted.
+        annual_legacy_stmt = (
+            select(func.count(models.AdmissionProfile.id))
+            .where(
+                models.AdmissionProfile.uses_choice_engine.is_(False),
+                models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
+                models.AdmissionProfile.id != admission_profile_id,
+                models.AdmissionProfile.applied_rules["admission_path_id"]
+                .astext.cast(Integer)
+                .in_(
+                    select(models.AdmissionPath.id).where(
+                        models.AdmissionPath.academic_info_id == ai_locked.id,
+                    )
+                ),
+            )
+        )
+        annual_legacy_count = int(
+            (await db.execute(annual_legacy_stmt)).scalar_one() or 0
+        )
+
+        annual_count = annual_multi_nv_count + annual_legacy_count
         if annual_count + 1 > annual_cap:
             return CapacityCheck(
                 allowed=False,

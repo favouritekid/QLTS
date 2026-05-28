@@ -2070,6 +2070,114 @@ async def test_capacity_check_null_annual_quota_pass_through(
     )
 
 
+@pytest.mark.asyncio
+async def test_capacity_check_annual_count_attributes_to_admitted_path_not_lead_intent(
+    pr1_seed_with_quota: dict, seed_lead_dependencies: dict,
+):
+    """⭐ BLOCKER #1 anchor (PR-1 review 2026-05-28): multi-NV admit on
+    path X must count toward academic_info(X) cap, NOT academic_info of
+    Lead.offering_id (which may be different intent).
+
+    Pre-fix bug: Tier 1 count JOINs ``Lead.offering_id`` which reflects
+    only initial intent. Candidate via NV-3 admits into a DIFFERENT
+    offering than Lead.offering_id → under-counts that offering's annual
+    cap → over-admit possible.
+
+    Scenario:
+      - academic_info A (capped 1) belongs to offering Y_A
+      - Lead L1 has offering_id = Y_B (DIFFERENT offering, picked
+        initially); profile P1 admitted via NV into path on A
+      - When evaluating new profile against A's annual cap: must count
+        P1 (consumes A's seat) regardless of L1's offering_id
+
+    Anchor: capacity_check returns allowed=False with
+    OFFERING_ANNUAL_QUOTA_EXHAUSTED. Pre-fix would silently allow
+    (count via Lead.offering_id=Y_B wouldn't match Y_A).
+    """
+    from app.services.admission_choice_engine_service import (
+        check_choice_admit_capacity,
+    )
+    # Setup A: set seed academic_info annual cap = 1; clear path admit_quota
+    # so only Tier 1 fires
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path = await s.get(
+                models.AdmissionPath, pr1_seed_with_quota["path_id"]
+            )
+            path.admit_quota = None  # disable Tier 2
+            ai = await s.get(
+                models.OfferingAcademicInfo, path.academic_info_id
+            )
+            ai.annual_admission_quota = 1
+
+    # Seed a "different intent" offering Y_B → lead points there but
+    # profile admits via NV into path X (which belongs to Y_A = seed offering)
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            # Different offering (Y_B) — distinct offering_type to dodge
+            # UNIQUE(program_id, offering_type) from pr3a_seed
+            offering_b = models.ProgramOffering(
+                program_id=seed_lead_dependencies["major_program_id"],
+                offering_type=f"part_time_{ts}",
+                duration_semesters=8,
+                is_active=True,
+            )
+            s.add(offering_b); await s.flush()
+
+            lead = models.Lead(
+                full_name=f"Cross-offering intent lead {ts}",
+                phone=f"097{ts:07d}"[:10],
+                unit_id=seed_lead_dependencies["unit_id"],
+                pipeline_stage_id=seed_lead_dependencies["stage_id"],
+                source="walkin",
+                offering_id=offering_b.id,  # KEY: Lead.offering_id ≠ admit path's offering
+            )
+            s.add(lead); await s.flush()
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=f"7{ts:08d}3"[:12],
+                status="admitted",
+                applied_rules={"admission_path_id": pr1_seed_with_quota["path_id"]},
+                academic_year=2026,
+                uses_choice_engine=True,
+            )
+            s.add(profile); await s.flush()
+            # Admit choice into SEED path (academic_info A, offering Y_A)
+            s.add(models.AdmissionProfileChoice(
+                admission_profile_id=profile.id,
+                admission_path_id=pr1_seed_with_quota["path_id"],
+                path_subject_group_config_id=pr1_seed_with_quota["config_id"],
+                display_order=1,
+                decision="admitted",
+            )); await s.flush()
+
+    # Now check capacity for a NEW candidate trying to admit to same path.
+    # Annual cap=1 already consumed by cross-offering profile above →
+    # must block. Pre-fix (Lead.offering_id JOIN) would count 0 because
+    # Lead.offering_id = Y_B ≠ Y_A.
+    async with AsyncSessionLocal() as s:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import selectinload as sa_sl
+        path = (await s.execute(
+            sa_select(models.AdmissionPath)
+            .where(models.AdmissionPath.id == pr1_seed_with_quota["path_id"])
+            .options(sa_sl(models.AdmissionPath.academic_info))
+        )).scalar_one()
+        check = await check_choice_admit_capacity(
+            s, path=path,
+            admission_profile_id=pr1_seed_with_quota["profile_id"],
+        )
+    assert check.allowed is False, (
+        f"BLOCKER #1: annual cap MUST count cross-offering admits via "
+        f"path.academic_info_id (not Lead.offering_id). Pre-fix bug would "
+        f"under-count → allow → over-admit. Got {check}"
+    )
+    assert check.reason_code == "OFFERING_ANNUAL_QUOTA_EXHAUSTED"
+    assert check.detail["current_count"] == 1
+    assert check.detail["cap"] == 1
+
+
 # --- 4 cascade/promote integration tests (HTTP-driven, full flow) ---
 
 
