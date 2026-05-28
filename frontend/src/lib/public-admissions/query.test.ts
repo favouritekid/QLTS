@@ -37,34 +37,41 @@ describe("publicAdmissionsCatalogParams", () => {
   // ============================================================
   // Invalid round ID → strict fail-closed sentinel (post review #2)
   // ============================================================
-  it("invalid non-numeric → sentinel 0 (strict fail-closed)", () => {
+  it("invalid non-numeric → sentinel INT_MAX (strict fail-closed)", () => {
     // Plan v4 locked contract: explicit intent → strict. Even when
     // user-supplied value is syntactically garbage, we preserve the
-    // intent by passing sentinel 0 (non-existent round PK) → BE serves
-    // empty 200.
+    // intent by passing the sentinel — engineered to pass BE Pydantic
+    // ge=1 Query validator AND never match any real OfferingAdmissionRound
+    // PK (autoincrement from 1; realistic growth ~thousands forever).
+    // → BE returns 0 paths → empty 200.
+    //
+    // PR #348 review fix (Finding A): sentinel was 0 originally but
+    // failed BE ge=1 → 422 leaking Pydantic detail. Bumped to PostgreSQL
+    // INTEGER max (2147483647) to satisfy validator + preserve
+    // fail-closed contract end-to-end.
     expect(
       publicAdmissionsCatalogParams({ admission_round_id: "abc" }),
-    ).toEqual({ admission_round_id: 0 })
+    ).toEqual({ admission_round_id: 2147483647 })
   })
 
-  it("invalid zero → sentinel 0", () => {
+  it("invalid zero → sentinel INT_MAX", () => {
     expect(publicAdmissionsCatalogParams({ admission_round_id: "0" })).toEqual({
-      admission_round_id: 0,
+      admission_round_id: 2147483647,
     })
   })
 
-  it("invalid negative → sentinel 0", () => {
+  it("invalid negative → sentinel INT_MAX", () => {
     expect(
       publicAdmissionsCatalogParams({ admission_round_id: "-5" }),
-    ).toEqual({ admission_round_id: 0 })
+    ).toEqual({ admission_round_id: 2147483647 })
   })
 
-  it("invalid decimal → sentinel 0 (parseInt would strip silently)", () => {
+  it("invalid decimal → sentinel INT_MAX (parseInt would strip silently)", () => {
     // parseInt("3.5", 10) === 3 — preserving that as "round 3" would
     // silently corrupt user intent. Match-string guard rejects.
     expect(
       publicAdmissionsCatalogParams({ admission_round_id: "3.5" }),
-    ).toEqual({ admission_round_id: 0 })
+    ).toEqual({ admission_round_id: 2147483647 })
   })
 
   it("empty string → no admission_round_id (not sentinel)", () => {
@@ -77,7 +84,7 @@ describe("publicAdmissionsCatalogParams", () => {
 
   it("invalid alias round → sentinel via same path", () => {
     expect(publicAdmissionsCatalogParams({ round: "garbage" })).toEqual({
-      admission_round_id: 0,
+      admission_round_id: 2147483647,
     })
   })
 

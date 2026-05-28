@@ -1,17 +1,35 @@
 export type PublicAdmissionsSearchParams = Promise<Record<string, string | string[] | undefined>>
 
 /**
- * Sentinel round ID for invalid syntactic input. BE schema treats this as
- * a non-existent round (auto-increment PK starts at 1) → 0 matches 0 paths
- * → eligible offering set is empty → response 200 empty.
+ * Sentinel round ID for invalid syntactic input. Engineered to:
  *
- * Preserves the plan v4 locked contract: explicit `admission_round_id`
- * intent → strict fail-closed, even when the user-supplied value is
- * syntactically invalid (e.g. `?round=abc`). Previously, invalid values
- * silently fell back to "default eligible-active union" which contradicts
- * the explicit-intent semantic.
+ *   1. Pass BE Pydantic Query validator (router declares
+ *      `_ADMISSION_ROUND_QUERY = Query(None, ge=1, ...)` —
+ *      public_admissions.py line 36). Sentinel must satisfy `ge=1` to
+ *      avoid HTTP 422 leaking Pydantic constraint detail to the user.
+ *      Using 0 here would have produced 422 instead of the intended 200
+ *      empty — caught in PR #348 review.
+ *
+ *   2. Never match a real `OfferingAdmissionRound.id`. The PK column is
+ *      `Integer` (PostgreSQL INTEGER, max 2147483647) and autoincrements
+ *      from 1. 2147483647 is the upper bound; realistic round_id growth
+ *      stays in the low thousands forever, so collision is theoretical
+ *      only. If anyone seeds an explicit id=2147483647 row in the future
+ *      this sentinel would unintentionally match — defensive note for
+ *      future migration authors.
+ *
+ *   3. BE path-eligibility filter `AdmissionPath.admission_round_id == X`
+ *      returns 0 rows for the sentinel → eligible offering set is empty
+ *      → snapshot filter returns empty → response 200 empty. Matches the
+ *      plan v4 locked contract: explicit `admission_round_id` intent →
+ *      strict fail-closed, even when the user-supplied value is
+ *      syntactically invalid (e.g. `?round=abc`).
+ *
+ * Anchor test for the end-to-end sentinel contract:
+ *   tests/services/test_phase2_admission_path_quota_integration.py
+ *   ::test_invalid_round_sentinel_returns_empty_200_not_422
  */
-const INVALID_ROUND_SENTINEL = 0
+const INVALID_ROUND_SENTINEL = 2147483647
 
 function firstValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value

@@ -1290,3 +1290,82 @@ async def test_create_path_rejects_invalid_round_id(path_seed: dict):
                 ),
                 admin,
             )
+
+
+# ============================================================================
+# PR-3 Finding A anchor (review post-fix dfb755d1) — sentinel contract
+# end-to-end. FE helper publicAdmissionsCatalogParams maps invalid round
+# input to INVALID_ROUND_SENTINEL=2147483647. The sentinel value must:
+#   1. Pass BE Pydantic Query(None, ge=1) validator (NOT 422)
+#   2. Return 200 with empty data (BE filter finds 0 paths)
+#
+# This test routes through the FastAPI router (httpx AsyncClient) so the
+# Pydantic validator actually runs. Previous service-level tests bypass
+# the router → catch nothing. Without this anchor, future tightening like
+# `ge=2147483648` or sentinel value mismatch would silently leak 422.
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_invalid_round_sentinel_returns_empty_200_not_422(
+    client,
+):
+    """End-to-end anchor: FE sentinel value (INT_MAX) on the public
+    programs endpoint must produce 200 empty, NOT 422 from BE Pydantic
+    ge=1 validator.
+
+    Reproduces PR #348 review Finding A: original sentinel 0 silently
+    triggered 422 leaking Pydantic constraint detail. Bumped to 2147483647
+    (PostgreSQL INTEGER max) to satisfy ge=1 while staying unmatched
+    (autoincrement starts at 1; realistic round_id growth ~thousands).
+
+    Asserts:
+      - status 200 (NOT 422; NOT 500)
+      - response body shape valid (degree_levels key present, may be empty)
+      - empty data (no eligible round matches sentinel) — degree_levels
+        is the union container that should be [] when no eligible offering
+    """
+    response = await client.get(
+        "/api/public/admissions/programs",
+        params={"admission_round_id": 2147483647},
+    )
+    assert response.status_code == 200, (
+        f"FE sentinel must pass BE ge=1 validator. Got "
+        f"status={response.status_code}: {response.text[:300]}. "
+        f"If 422 → sentinel value broken (review fix #2 regression). "
+        f"If 500 → BE missed empty-set handling."
+    )
+    body = response.json()
+    # Shape check: PublicAdmissionsProgramsResponse has summary +
+    # degree_levels keys per schema.
+    assert "degree_levels" in body, (
+        f"Response shape missing degree_levels; got keys: {list(body.keys())}"
+    )
+    assert body["degree_levels"] == [], (
+        f"Sentinel must return empty degree_levels (no path matches "
+        f"id={2147483647}); got {body['degree_levels']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_round_sentinel_tuition_returns_empty_200_not_422(
+    client,
+):
+    """Same anchor as above but for /tuition endpoint — both endpoints
+    share _ADMISSION_ROUND_QUERY validator, so both must honor sentinel.
+    """
+    response = await client.get(
+        "/api/public/admissions/tuition",
+        params={"admission_round_id": 2147483647},
+    )
+    assert response.status_code == 200, (
+        f"/tuition with FE sentinel must 200; got {response.status_code}: "
+        f"{response.text[:300]}"
+    )
+    body = response.json()
+    assert "offerings" in body, (
+        f"Response missing offerings key; got: {list(body.keys())}"
+    )
+    assert body["offerings"] == [], (
+        f"Sentinel must produce empty tuition offerings; got {body['offerings']}"
+    )
