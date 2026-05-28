@@ -65,36 +65,12 @@ from ..utils.exceptions import (
     BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
-    RoundClosedError,
     ValidationError,
 )
-from ..utils.datetime_helpers import today_vn
+from ..utils.admission_round_guards import assert_round_open
 from ..utils.masking import mask_citizen_id
 
 log = structlog.get_logger(__name__)
-
-
-def _assert_round_open(round_obj: "models.OfferingAdmissionRound") -> None:
-    """Raise RoundClosedError nếu round.end_date < today_vn().
-
-    PR-2 (2026-05-28) — strict fail-closed enforcement của
-    OfferingAdmissionRound SPEC §2.1.a Rule 1 (model docstring nói 410
-    Gone nhưng pre-PR-2 không enforce ở runtime).
-
-    NULL end_date → open-ended round, pass-through (admin có thể set
-    explicit end_date sau). Strict semantic — KHÔNG có grace period,
-    KHÔNG admin override ngầm (plan v4 locked decision: admin extends
-    qua POST /rounds/{id}/extend, KHÔNG bypass gate này).
-
-    Caller: create_profile, submit_and_evaluate, choice CRUD POST/PATCH.
-    NOT called from choice DELETE (candidate retains right to withdraw).
-    """
-    if round_obj.end_date is not None and round_obj.end_date < today_vn():
-        raise RoundClosedError(
-            f"Đợt tuyển sinh '{round_obj.round_code}' đã đóng "
-            f"(hạn cuối: {round_obj.end_date}). "
-            f"Liên hệ admin nếu cần extend đợt."
-        )
 
 
 # ADM-012: Safe domain exceptions whose ``str()`` is user-facing copy.
@@ -3141,9 +3117,11 @@ async def create_profile(
     # PR-2 (2026-05-28) — Round cutoff enforcement (SPEC §2.1.a Rule 1).
     # Block create_profile khi end_date đã qua. Raise RoundClosedError → 410
     # Gone. Strict: KHÔNG grace period, KHÔNG admin override ngầm; admin
-    # extends qua POST /rounds/{id}/extend (helper inline để readers thấy
-    # rõ semantic ngay tại site).
-    _assert_round_open(admission_round)
+    # extends qua POST /rounds/{id}/extend separate endpoint.
+    assert_round_open(
+        admission_round,
+        context_hint="Liên hệ admin nếu cần extend đợt.",
+    )
 
     # Step 7: Find AdmissionPath for this (round, offering, method).
     #
@@ -4824,29 +4802,34 @@ async def submit_and_evaluate(
     # PR-2 (2026-05-28) — Round cutoff enforcement (SPEC §2.1.a Rule 1).
     # Block submit khi round.end_date đã qua. create_profile() đã gate
     # tại create-time, nhưng candidate có thể create rồi đợi qua end_date
-    # mới submit → second gate ở đây bảo vệ. Load round qua applied_rules
-    # snapshot (path_id → path → round). Fail-fast trước eligibility/doc/
-    # score validation để tiết kiệm cycles + clear 410 error message.
-    applied_rules_for_cutoff = profile.applied_rules or {}
-    path_id_for_cutoff = applied_rules_for_cutoff.get("admission_path_id")
-    if path_id_for_cutoff is not None:
-        try:
-            path_id_int_cutoff = int(path_id_for_cutoff)
-        except (TypeError, ValueError):
-            path_id_int_cutoff = None
-        if path_id_int_cutoff is not None:
-            from sqlalchemy import select as sa_select_cutoff
-            from sqlalchemy.orm import selectinload as sa_selectinload_cutoff
-            cutoff_stmt = (
-                sa_select_cutoff(models.AdmissionPath)
-                .where(models.AdmissionPath.id == path_id_int_cutoff)
-                .options(
-                    sa_selectinload_cutoff(models.AdmissionPath.admission_round)
-                )
-            )
-            cutoff_path = (await db.execute(cutoff_stmt)).scalar_one_or_none()
-            if cutoff_path is not None and cutoff_path.admission_round is not None:
-                _assert_round_open(cutoff_path.admission_round)
+    # mới submit → second gate ở đây bảo vệ. Fail-fast trước eligibility/
+    # doc/score validation để tiết kiệm cycles + clear 410 error message.
+    #
+    # PR review nit #2: extracted inline 20-line lookup → admission_repo
+    # helper. Removes ugly sa_select_cutoff aliases (function-local name
+    # collision dodge against top-level select/selectinload imports).
+    #
+    # PR review nit #3: legacy profile mà applied_rules thiếu
+    # admission_path_id bypass gate (silent skip). Per memory
+    # phase3-multi-nv-partial-enablement-2026-05-14 còn ~10 legacy profile
+    # — log warning để ops grep + backfill manual nếu cần.
+    cutoff_round = await admission_repo.get_round_for_profile_cutoff(profile)
+    if cutoff_round is not None:
+        assert_round_open(
+            cutoff_round,
+            context_hint="Liên hệ admin nếu cần extend đợt.",
+        )
+    else:
+        log.warning(
+            "submit_cutoff_skipped_missing_path_in_applied_rules",
+            profile_id=profile.id,
+            applied_rules_keys=sorted((profile.applied_rules or {}).keys()),
+            reason=(
+                "applied_rules thiếu admission_path_id → cutoff gate skip "
+                "(legacy profile pre-snapshot era). Ops: grep log để backfill "
+                "manual nếu round đã đóng."
+            ),
+        )
 
     # Q9 #07 Phase E.4 — eligibility gate per yêu cầu nghiệp vụ #5: chặn TOÀN BỘ
     # hồ sơ submit không match cultural + vocational vs target_level/admission_type

@@ -27,6 +27,12 @@ export type EligibilityReasonCode =
   | "NO_VALID_SCORES"
   | "INVALID_SUBJECT_GROUP"
   | "GRADUATION_YEAR_OUT_OF_RANGE"
+  // PR-1 (2026-05-28) — capacity gate codes appended bởi
+  // admission_choice_engine_service.check_choice_admit_capacity khi NV
+  // pass eligibility/score nhưng quota path/academic_info đã hết. Engine
+  // degrade decision='admitted' → 'waitlisted' và append code này.
+  | "PATH_QUOTA_EXHAUSTED"
+  | "OFFERING_ANNUAL_QUOTA_EXHAUSTED"
 
 export interface EligibilityScoreResult {
   final_score: number | null
@@ -34,9 +40,30 @@ export interface EligibilityScoreResult {
   selected_subjects: string[]
 }
 
+/**
+ * Capacity detail payload (PR-1 2026-05-28). Additive JSONB field —
+ * only present khi engine waitlist NV vì quota exhausted. Shape mirror
+ * BE CapacityCheck.detail:
+ *   - PATH_QUOTA_EXHAUSTED: { path_id, current_count, cap }
+ *   - OFFERING_ANNUAL_QUOTA_EXHAUSTED: { academic_info_id, current_count, cap }
+ */
+export interface EligibilityCapacityDetail {
+  path_id?: number
+  academic_info_id?: number
+  current_count: number
+  cap: number
+}
+
 export interface EligibilityCheckResult {
   decision: "admitted" | "waitlisted" | "rejected" | "skip" | "pending"
   reason_codes: string[]
+  /**
+   * PR-1 (2026-05-28) — Capacity probe detail. Only present when
+   * decision='waitlisted' due to quota exhaustion (reason_codes contains
+   * PATH_QUOTA_EXHAUSTED or OFFERING_ANNUAL_QUOTA_EXHAUSTED). Allows FE
+   * to render "X/Y seats taken" alongside the reason label.
+   */
+  capacity_detail?: EligibilityCapacityDetail | null
   score: EligibilityScoreResult | null
 }
 
@@ -53,6 +80,9 @@ export const REASON_CODE_LABELS: Record<EligibilityReasonCode, string> = {
   NO_VALID_SCORES: "Chưa có điểm xét tuyển hợp lệ",
   INVALID_SUBJECT_GROUP: "Tổ hợp môn không hợp lệ",
   GRADUATION_YEAR_OUT_OF_RANGE: "Năm tốt nghiệp ngoài phạm vi cho phép",
+  // PR-1 (2026-05-28) — capacity-gate codes (plan v4 locked decision #2).
+  PATH_QUOTA_EXHAUSTED: "Hết chỉ tiêu cho đường tuyển sinh",
+  OFFERING_ANNUAL_QUOTA_EXHAUSTED: "Hết chỉ tiêu năm học cho ngành",
 }
 
 export function getReasonLabel(code: string): string {

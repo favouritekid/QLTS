@@ -35,7 +35,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     AdmissionProfile,
     AdmissionProfileChoice,
-    OfferingAdmissionRound,
 )
 from app.repositories.admission_profile_choice_repository import (
     AdmissionProfileChoiceRepository,
@@ -43,35 +42,21 @@ from app.repositories.admission_profile_choice_repository import (
 from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
-from app.utils.datetime_helpers import today_vn
+from app.utils.admission_round_guards import assert_round_open
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
     ResourceNotFoundError,
-    RoundClosedError,
 )
 
 
 # Status whitelist cho add_choice retroactive (P1 fix #5 v2.12)
 ADD_CHOICE_ALLOWED_STATUSES = ("draft", "revision_requested")
 
-
-def _assert_round_open(round_obj: OfferingAdmissionRound) -> None:
-    """Raise RoundClosedError nếu round.end_date < today_vn().
-
-    PR-2 (2026-05-28) — strict cutoff enforcement cho modification ops
-    (POST/PATCH). KHÔNG gọi từ delete_choice — candidate retains right
-    to withdraw a NV sau round closed (no seat added → no risk).
-
-    Mirror helper trong admission_service.py:_assert_round_open. Local
-    copy ở đây để tránh circular import (admission_service → choice_service).
-    """
-    if round_obj.end_date is not None and round_obj.end_date < today_vn():
-        raise RoundClosedError(
-            f"Đợt tuyển sinh '{round_obj.round_code}' đã đóng "
-            f"(hạn cuối: {round_obj.end_date}). "
-            f"Không thể thêm/sửa nguyện vọng (rút NV vẫn cho phép)."
-        )
+# Context hint passed to assert_round_open for choice CRUD modification ops.
+# DELETE flow does NOT call assert_round_open (candidate retains withdraw right
+# per plan v4 locked decision — no seat added, no over-admit risk).
+_CHOICE_CRUD_HINT = "Không thể thêm/sửa nguyện vọng (rút NV vẫn cho phép)."
 
 
 async def _noop_callback() -> None:
@@ -154,7 +139,7 @@ class AdmissionChoiceService:
         # round.end_date. Per locked decision: POST + PATCH gate, DELETE
         # vẫn allow. Reuse round_obj đã load ngay trên cho allow_multi_nv
         # check — không thêm query.
-        _assert_round_open(round_obj)
+        assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         # First choice luôn cho phép (Wave A single-NV vẫn ship 1 choice
         # via this path). Chỉ block ADD-NV-2-trở-lên khi flag tắt.
@@ -420,7 +405,7 @@ class AdmissionChoiceService:
             choice.admission_path_id
         )
         if round_obj is not None:
-            _assert_round_open(round_obj)
+            assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         if new_display_order == choice.display_order:
             return choice, _noop_callback
@@ -480,7 +465,7 @@ class AdmissionChoiceService:
             choice.admission_path_id
         )
         if round_obj is not None:
-            _assert_round_open(round_obj)
+            assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         # Clear existing scores via direct delete (FK CASCADE would only fire
         # on choice delete, not score replace — use bulk delete here).

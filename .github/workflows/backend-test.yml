@@ -168,6 +168,7 @@ jobs:
           tests/unit/test_phase3_pr3c_sub2b_router_helpers.py
           tests/unit/test_phase3_pr3c_sub3_router_registration.py
           tests/api/test_phase3_pr3c_routers_integration.py
+          tests/integration/test_choice_engine_quota_concurrent.py
           tests/api/test_phase3_pr3d_b_choice_crud.py
           tests/api/test_phase3_pr3d_b_admin_backfill.py
           tests/api/test_phase3_pr3e_magic_link.py

@@ -656,8 +656,9 @@ async def test_create_profile_410_when_round_end_date_passed(
         f"got {r.status_code}: {r.text[:200]}"
     )
     body = r.json()
-    assert "đã đóng" in (body.get("detail") or "").lower(), (
-        f"Detail phải mention 'đã đóng'; got: {body}"
+    # Assert via stable error_code (i18n-safe) per PR #346 review nit #4.
+    assert body.get("error_code") == "ROUND_CLOSED", (
+        f"Error code phải 'ROUND_CLOSED'; got: {body}"
     )
 
 
