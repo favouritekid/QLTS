@@ -167,6 +167,57 @@ def _eligible_offering_ids_from_paths(
     }
 
 
+def _filter_snapshot_by_eligible_offerings(
+    programs: List[models.MajorProgram],
+    latest_info_by_offering_id: Dict[int, models.OfferingAcademicInfo],
+    eligible_offering_ids: Set[int],
+) -> Tuple[
+    List[models.MajorProgram],
+    Dict[int, models.OfferingAcademicInfo],
+]:
+    """In-memory filter of pre-loaded snapshot by eligible offering IDs.
+
+    PR-3 review fix #1 (2026-05-28): replaces the original 2× DB query
+    pattern in `get_public_programs_catalog` + `get_public_tuition_catalog`
+    (load full snapshot → load paths → derive eligible set → RE-LOAD
+    snapshot with filter) with a single in-memory pass.
+
+    Saves 1 DB round-trip + 1 SQL scan per request. Storefront cached
+    via CDN so prod impact is small, but cold-miss + crawler traffic
+    sees direct DB pressure.
+
+    Does NOT mutate input models — returns a filtered VIEW. Drops:
+      - offerings whose offering.id not in eligible_offering_ids
+      - programs with zero remaining eligible offerings
+
+    The downstream caller iterates ``program.offerings`` and checks
+    ``latest_info_by_offering_id.get(offering.id)``; offerings with
+    ``None`` lookup result are skipped naturally. We therefore filter
+    the dict (drop non-eligible offerings) but leave ``program.offerings``
+    untouched (no relationship mutation risk) — non-eligible offerings
+    on a kept program simply get `None` from the dict and are skipped.
+    """
+    filtered_info_by_offering_id = {
+        offering_id: academic_info
+        for offering_id, academic_info in latest_info_by_offering_id.items()
+        if offering_id in eligible_offering_ids
+    }
+
+    # Keep a program if at least one of its offerings is in the eligible
+    # set AND was originally accepted by the snapshot (i.e. still in
+    # latest_info_by_offering_id — passed is_active + is_published).
+    filtered_programs: List[models.MajorProgram] = [
+        program
+        for program in programs
+        if any(
+            offering.id in filtered_info_by_offering_id
+            for offering in program.offerings
+        )
+    ]
+
+    return filtered_programs, filtered_info_by_offering_id
+
+
 async def _load_public_paths(
     db: AsyncSession,
     academic_info_ids: Set[int],
@@ -465,9 +516,11 @@ async def get_public_programs_catalog(
         admission_round_id=admission_round_id,
     )
     eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
-    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(
-        db,
-        eligible_offering_ids=eligible_offering_ids,
+    # PR-3 review fix #1 (2026-05-28): in-memory filter instead of
+    # second _load_public_program_snapshot call — saves 1 DB round-trip
+    # per request (storefront cold-miss + crawler traffic benefit).
+    programs, latest_info_by_offering_id = _filter_snapshot_by_eligible_offerings(
+        programs, latest_info_by_offering_id, eligible_offering_ids,
     )
     method_tags_by_info_id = _build_method_lookup(
         public_paths
@@ -919,9 +972,10 @@ async def get_public_tuition_catalog(
         admission_round_id=admission_round_id,
     )
     eligible_offering_ids = _eligible_offering_ids_from_paths(public_paths)
-    programs, latest_info_by_offering_id, _ = await _load_public_program_snapshot(
-        db,
-        eligible_offering_ids=eligible_offering_ids,
+    # PR-3 review fix #1 (2026-05-28): same in-memory filter as
+    # get_public_programs_catalog — avoids 2× snapshot query per request.
+    programs, latest_info_by_offering_id = _filter_snapshot_by_eligible_offerings(
+        programs, latest_info_by_offering_id, eligible_offering_ids,
     )
 
     tuition_offerings: List[PublicAdmissionsTuitionOffering] = []
