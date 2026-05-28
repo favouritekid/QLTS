@@ -647,3 +647,140 @@ async def test_update_display_order_extra_fields_rejected_422(
         json={"display_order": 2, "decision": "admitted"},  # decision NOT allowed
     )
     assert response.status_code == 422, response.text
+
+
+# ============================================================================
+# PR-2 (2026-05-28) — Round cutoff enforcement: 410 Gone for POST/PATCH;
+# DELETE intentionally allowed (candidate retains withdraw right per locked
+# decision). Tests close the round's end_date by direct DB update — admin
+# extend endpoint is out of scope here (tested separately at workflow level).
+# ============================================================================
+
+
+async def _close_round(round_id: int) -> None:
+    """Helper: set round.end_date to yesterday (closes the round)."""
+    from datetime import date, timedelta
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            round_obj = await s.get(models.OfferingAdmissionRound, round_id)
+            round_obj.end_date = date.today() - timedelta(days=1)
+
+
+@pytest.mark.asyncio
+async def test_create_choice_410_when_round_closed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3a_seed: dict,
+):
+    """POST /choices MUST return 410 RoundClosedError khi round.end_date đã qua.
+
+    Anchor cho PR-2 gate trong admission_choice_service.add_choice
+    (line 157). Strict — KHÔNG admin override ngầm.
+    """
+    await _close_round(pr3a_seed["round_id"])
+
+    response = await client.post(
+        f"/api/v2/admissions/{pr3a_seed['profile_id']}/choices",
+        headers=manager_token_headers,
+        json={
+            "admission_path_id": pr3a_seed["path_id"],
+            "path_subject_group_config_id": pr3a_seed["config_id"],
+            "display_order": 1,
+            "scores": [
+                {"subject_id": pr3a_seed["subject_id"], "score": "8.50"}
+            ],
+        },
+    )
+    assert response.status_code == 410, (
+        f"POST /choices sau round closed phải 410 Gone; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+    body = response.json()
+    assert "đã đóng" in (body.get("detail") or "").lower(), (
+        f"Detail phải mention 'đã đóng'; got: {body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_choice_410_when_round_closed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """PATCH /choices/{cid} (display_order) MUST return 410 khi round closed.
+
+    Anchor cho gate trong update_choice_display_order (choice_service:423).
+    """
+    await _close_round(pr3d_b_seed_with_choice["round_id"])
+
+    response = await client.patch(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+        json={"display_order": 2},
+    )
+    assert response.status_code == 410, (
+        f"PATCH /choices/{{cid}} sau round closed phải 410; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_choice_scores_410_when_round_closed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """PATCH /choices/{cid}/scores MUST return 410 khi round closed.
+
+    Anchor cho gate trong replace_choice_scores (choice_service:483).
+    """
+    await _close_round(pr3d_b_seed_with_choice["round_id"])
+
+    response = await client.patch(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}/choices/{pr3d_b_seed_with_choice['choice_id']}/scores",
+        headers=manager_token_headers,
+        json={
+            "scores": [
+                {"subject_id": pr3d_b_seed_with_choice["subject_id"], "score": "9.00"}
+            ]
+        },
+    )
+    assert response.status_code == 410, (
+        f"PATCH /scores sau round closed phải 410; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_choice_allowed_when_round_closed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """⭐ DELETE /choices/{cid} MUST succeed (200) khi round closed.
+
+    Per plan v4 locked decision #3 (2026-05-28): candidate retains right
+    to withdraw a NV sau round closed — không thêm seat, không tăng risk
+    over-admit. Anchor: nếu ai accidentally thêm cutoff gate vào
+    delete_choice() service helper, test này break.
+
+    Inverse anchor cho 3 tests cutoff-410 trên — proves DELETE intentionally
+    KHÔNG gate, không phải miss.
+    """
+    await _close_round(pr3d_b_seed_with_choice["round_id"])
+
+    response = await client.delete(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+    )
+    assert response.status_code == 200, (
+        f"DELETE /choices sau round closed PHẢI 200 (candidate withdraw right); "
+        f"got {response.status_code}: {response.text[:200]}. "
+        f"Nếu got 410 → cutoff gate đã accidentally add vào delete_choice — revert."
+    )
+    # Verify DB state: choice gone
+    async with AsyncSessionLocal() as s:
+        gone = await s.get(
+            models.AdmissionProfileChoice, pr3d_b_seed_with_choice["choice_id"]
+        )
+        assert gone is None, "Choice phải bị xoá khỏi DB sau DELETE thành công"

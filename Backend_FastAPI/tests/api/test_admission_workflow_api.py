@@ -585,3 +585,173 @@ async def test_drop_before_enrolled_returns_400(client, officer_user_in_db, adm_
     await client.post(ACT(p["id"], "approve"), json={"notes": "OK", "version": v}, headers=ah)
     ah = await _admin(client); v = await _ver(client, ah, p["id"])
     assert (await client.post(ACT(p["id"], "drop"), json={"reason": "Should fail not enrolled reason", "version": v}, headers=ah)).status_code == 400
+
+
+# =============================================================================
+# PR-2 (2026-05-28) — Round cutoff enforcement (RoundClosedError 410)
+#
+# admission_service:
+#   * create_profile() — gate ngay sau archived_at check (line ~3140)
+#   * submit_and_evaluate() — gate trước eligibility/doc validation
+#     (load round qua applied_rules.admission_path_id snapshot)
+# Magic-link submit tự dính qua submit_and_evaluate (test riêng trong
+# test_phase3_pr3e_magic_link.py).
+#
+# Strict semantic: KHÔNG grace, KHÔNG admin override ngầm. Admin extend
+# round qua POST /rounds/{id}/extend (kiểm dưới qua re-open flow).
+# =============================================================================
+
+
+async def _close_round(round_id: int) -> None:
+    """Helper: set round.end_date to yesterday."""
+    from datetime import date, timedelta
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            r = await s.get(models.OfferingAdmissionRound, round_id)
+            r.end_date = date.today() - timedelta(days=1)
+
+
+async def _extend_round(round_id: int, *, days_forward: int = 30) -> None:
+    """Helper: simulate admin extend by setting end_date forward."""
+    from datetime import date, timedelta
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            r = await s.get(models.OfferingAdmissionRound, round_id)
+            r.end_date = date.today() + timedelta(days=days_forward)
+
+
+@pytest.mark.asyncio
+async def test_create_profile_410_when_round_end_date_passed(
+    client, officer_user_in_db, adm_lead, adm_config
+):
+    """POST /api/admissions MUST return 410 khi admission_round.end_date < today.
+
+    Anchor PR-2 gate trong admission_service.create_profile (sau archived_at
+    check). Strict — admin extends qua endpoint riêng, KHÔNG bypass gate này.
+    """
+    oh = await _officer(client, officer_user_in_db)
+    # Close the round BEFORE create attempt
+    await _close_round(adm_config["round_id"])
+
+    # Consultation prerequisite (business rule preserved)
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    await client.post(
+        f"{LeadsURLs.LEADS}/{adm_lead['id']}/consultations",
+        json={"status_id": INITIAL_LEAD_STATUS_ID, "method": "phone", "notes": "pre"},
+        headers=oh,
+    )
+
+    r = await client.post(
+        ADMISSIONS,
+        json={
+            "lead_id": adm_lead["id"],
+            "admission_method_id": adm_config["method_id"],
+            "admission_round_id": adm_config["round_id"],
+            "academic_year": 2026,
+        },
+        headers=oh,
+    )
+    assert r.status_code == 410, (
+        f"POST /admissions sau round closed phải 410 Gone; "
+        f"got {r.status_code}: {r.text[:200]}"
+    )
+    body = r.json()
+    assert "đã đóng" in (body.get("detail") or "").lower(), (
+        f"Detail phải mention 'đã đóng'; got: {body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_410_when_round_closed_after_create(
+    client, officer_user_in_db, adm_lead, adm_config
+):
+    """Profile created khi round mở, sau đó round close trước khi submit →
+    submit phải 410. Anchor cho gate ở submit_and_evaluate.
+
+    Realistic scenario: candidate fills form ngày 30/6, hệ thống đóng đợt
+    đêm 30/6 (end_date=30/6), candidate click submit sáng 1/7 → 410.
+    """
+    oh = await _officer(client, officer_user_in_db)
+
+    # Step 1: create + fill + submit while round OPEN (use helper)
+    p = await _submit(
+        client, oh, adm_lead["id"], adm_config["method_id"],
+        admission_round_id=adm_config["round_id"],
+        school_id=adm_config["school_id"],
+    )
+    # _submit() ends with profile in 'submitted' state — rollback to 'draft'
+    # to retry submit sau khi close round. Reuse admin-rollback (T17 admin only).
+    ah = await _admin(client); v = await _ver(client, ah, p["id"])
+    # NOTE: legacy admission router doesn't have direct draft revert; instead
+    # we directly mutate DB to draft for this test (admin-rollback only on
+    # v2 multi-NV path). This isolates the cutoff gate semantic.
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            prof = await s.get(models.AdmissionProfile, p["id"])
+            prof.status = "draft"
+            prof.version += 1
+
+    # Step 2: close round
+    await _close_round(adm_config["round_id"])
+
+    # Step 3: re-submit must 410
+    v = (await client.get(ADM(p["id"]), headers=oh)).json()["version"]
+    sr = await client.post(ACT(p["id"], "submit"), json={"version": v}, headers=oh)
+    assert sr.status_code == 410, (
+        f"Re-submit sau round closed phải 410; "
+        f"got {sr.status_code}: {sr.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_round_extension_re_opens_submit_to_new_end_date(
+    client, officer_user_in_db, adm_lead, adm_config
+):
+    """Admin extend end_date forward → submit phải pass lại.
+
+    Anchor cho path EXTEND: gate KHÔNG cứng vĩnh viễn — admin có cơ chế
+    extend qua POST /rounds/{id}/extend (test direct DB mutation tương
+    đương). Sau extend, end_date >= today → submit lại OK.
+    """
+    oh = await _officer(client, officer_user_in_db)
+
+    # Step 1: create profile while round OPEN
+    from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    await client.post(
+        f"{LeadsURLs.LEADS}/{adm_lead['id']}/consultations",
+        json={"status_id": INITIAL_LEAD_STATUS_ID, "method": "phone", "notes": "pre"},
+        headers=oh,
+    )
+    r = await client.post(
+        ADMISSIONS,
+        json={
+            "lead_id": adm_lead["id"],
+            "admission_method_id": adm_config["method_id"],
+            "admission_round_id": adm_config["round_id"],
+            "academic_year": 2026,
+        },
+        headers=oh,
+    )
+    assert r.status_code in (200, 201), r.text
+    pid = r.json()["id"]
+
+    # Step 2: close round → verify submit attempt blocked (sanity check)
+    await _close_round(adm_config["round_id"])
+    v = (await client.get(ADM(pid), headers=oh)).json()["version"]
+    sr_closed = await client.post(ACT(pid, "submit"), json={"version": v}, headers=oh)
+    assert sr_closed.status_code == 410, (
+        f"Sanity: submit khi closed phải 410; got {sr_closed.status_code}"
+    )
+
+    # Step 3: admin extends round end_date 30 ngày tới
+    await _extend_round(adm_config["round_id"], days_forward=30)
+
+    # Step 4: submit lại — KHÔNG còn block ở cutoff gate (có thể fail validation
+    # khác như missing docs/permanent address vì test này không fill full —
+    # chỉ verify status code KHÔNG phải 410)
+    v = (await client.get(ADM(pid), headers=oh)).json()["version"]
+    sr_extended = await client.post(ACT(pid, "submit"), json={"version": v}, headers=oh)
+    assert sr_extended.status_code != 410, (
+        f"Sau extend, submit KHÔNG được trả 410 nữa; "
+        f"got {sr_extended.status_code}: {sr_extended.text[:200]}"
+    )
