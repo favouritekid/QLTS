@@ -412,6 +412,59 @@ def _tuition_catalog_offering_ids(response) -> set[int]:
     return {offering.offering_id for offering in response.offerings}
 
 
+async def _add_public_offering_path(
+    s: AsyncSession,
+    *,
+    program_id: int,
+    offering_type: str,
+    academic_year: int,
+    round_id: int,
+    method_code: str,
+    tuition_fee_per_year: int,
+    audience_values: list[str] | None = None,
+) -> int:
+    offering = models.ProgramOffering(
+        program_id=program_id,
+        offering_type=offering_type,
+        duration_semesters=8,
+        is_active=True,
+    )
+    s.add(offering)
+    await s.flush()
+
+    academic_info = models.OfferingAcademicInfo(
+        offering_id=offering.id,
+        academic_year=academic_year,
+        annual_admission_quota=20,
+        tuition_fee_per_year=tuition_fee_per_year,
+        is_published=True,
+    )
+    s.add(academic_info)
+    await s.flush()
+
+    method = models.AdmissionMethod(
+        code=method_code,
+        name=f"Method {method_code}",
+        requires_subject_scores=True,
+        is_active=True,
+    )
+    s.add(method)
+    await s.flush()
+
+    s.add(
+        models.AdmissionPath(
+            academic_info_id=academic_info.id,
+            admission_method_id=method.id,
+            admission_round_id=round_id,
+            status="active",
+            visibility="public",
+            applicable_to=audience_values,
+        )
+    )
+    await s.flush()
+    return offering.id
+
+
 @pytest.mark.asyncio
 async def test_programs_catalog_excludes_offering_without_public_eligible_path(
     path_seed: dict,
@@ -627,6 +680,290 @@ async def test_tuition_audience_filter_now_active(path_seed: dict):
     offering_ids = _tuition_catalog_offering_ids(response)
     assert base_offering_id in offering_ids
     assert vlvh_offering_id not in offering_ids
+
+
+@pytest.mark.asyncio
+async def test_programs_omitted_round_returns_eligible_active_union(
+    path_seed: dict,
+):
+    """PR-3 contract: omitted round means union of eligible active rounds."""
+    from datetime import timedelta
+
+    from app.utils.datetime_helpers import today_vn
+
+    today = today_vn()
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_ai = await s.get(
+                models.OfferingAcademicInfo,
+                path_seed["academic_info_id"],
+            )
+            base_offering = await s.get(
+                models.ProgramOffering,
+                base_ai.offering_id,
+            )
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=base_ai.id,
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                )
+            )
+
+            second_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_UNION_{ts}",
+                round_name=f"PR3 union round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=10),
+                end_date=today + timedelta(days=10),
+            )
+            expired_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_UNION_EXP_{ts}",
+                round_name=f"PR3 union expired round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=30),
+                end_date=today - timedelta(days=10),
+            )
+            s.add_all([second_round, expired_round])
+            await s.flush()
+
+            active_sibling_id = await _add_public_offering_path(
+                s,
+                program_id=base_offering.program_id,
+                offering_type=f"union_active_{ts}",
+                academic_year=2026,
+                round_id=second_round.id,
+                method_code=f"PR3UA_{ts}",
+                tuition_fee_per_year=2_000_000,
+            )
+            expired_sibling_id = await _add_public_offering_path(
+                s,
+                program_id=base_offering.program_id,
+                offering_type=f"union_expired_{ts}",
+                academic_year=2026,
+                round_id=expired_round.id,
+                method_code=f"PR3UE_{ts}",
+                tuition_fee_per_year=3_000_000,
+            )
+            base_offering_id = base_offering.id
+
+    async with AsyncSessionLocal() as s:
+        response = await get_public_programs_catalog(s)
+
+    offering_ids = _program_catalog_offering_ids(response)
+    assert base_offering_id in offering_ids
+    assert active_sibling_id in offering_ids
+    assert expired_sibling_id not in offering_ids
+
+
+@pytest.mark.asyncio
+async def test_programs_no_eligible_round_returns_empty_200(path_seed: dict):
+    """PR-3 contract: no public-eligible path returns an empty response."""
+    from datetime import timedelta
+
+    from app.utils.datetime_helpers import today_vn
+
+    today = today_vn()
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            expired_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_EMPTY_EXP_{ts}",
+                round_name=f"PR3 empty expired round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=30),
+                end_date=today - timedelta(days=10),
+            )
+            s.add(expired_round)
+            await s.flush()
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=path_seed["academic_info_id"],
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=expired_round.id,
+                    status="active",
+                    visibility="public",
+                )
+            )
+
+    async with AsyncSessionLocal() as s:
+        response = await get_public_programs_catalog(s)
+
+    assert response.summary.program_count == 0
+    assert response.summary.offering_count == 0
+    assert response.degree_levels == []
+
+
+@pytest.mark.asyncio
+async def test_tuition_omitted_round_matches_programs_union(path_seed: dict):
+    """PR-3 contract: /tuition default exposure mirrors /programs."""
+    from datetime import timedelta
+
+    from app.utils.datetime_helpers import today_vn
+
+    today = today_vn()
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            base_ai = await s.get(
+                models.OfferingAcademicInfo,
+                path_seed["academic_info_id"],
+            )
+            base_offering = await s.get(
+                models.ProgramOffering,
+                base_ai.offering_id,
+            )
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=base_ai.id,
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=path_seed["round_id"],
+                    status="active",
+                    visibility="public",
+                )
+            )
+
+            active_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_PARITY_{ts}",
+                round_name=f"PR3 parity active round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=10),
+                end_date=today + timedelta(days=10),
+            )
+            expired_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_PARX_{ts}",
+                round_name=f"PR3 parity expired round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=30),
+                end_date=today - timedelta(days=10),
+            )
+            s.add_all([active_round, expired_round])
+            await s.flush()
+
+            await _add_public_offering_path(
+                s,
+                program_id=base_offering.program_id,
+                offering_type=f"parity_active_{ts}",
+                academic_year=2026,
+                round_id=active_round.id,
+                method_code=f"PR3PA_{ts}",
+                tuition_fee_per_year=2_000_000,
+            )
+            await _add_public_offering_path(
+                s,
+                program_id=base_offering.program_id,
+                offering_type=f"parity_expired_{ts}",
+                academic_year=2026,
+                round_id=expired_round.id,
+                method_code=f"PR3PE_{ts}",
+                tuition_fee_per_year=3_000_000,
+            )
+
+    async with AsyncSessionLocal() as s:
+        programs = await get_public_programs_catalog(s)
+        tuition = await get_public_tuition_catalog(s)
+
+    assert _tuition_catalog_offering_ids(tuition) == _program_catalog_offering_ids(
+        programs
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_archived_round_returns_empty_200(path_seed: dict):
+    """PR-3 contract: pinned archived round serves no public catalog rows."""
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            archived_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_ARCH_{ts}",
+                round_name=f"PR3 archived round {ts}",
+                is_active=True,
+                archived_at=datetime.now(timezone.utc),
+            )
+            s.add(archived_round)
+            await s.flush()
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=path_seed["academic_info_id"],
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=archived_round.id,
+                    status="active",
+                    visibility="public",
+                )
+            )
+            round_id = archived_round.id
+
+    async with AsyncSessionLocal() as s:
+        programs = await get_public_programs_catalog(
+            s, admission_round_id=round_id
+        )
+        tuition = await get_public_tuition_catalog(
+            s, admission_round_id=round_id
+        )
+
+    assert programs.summary.program_count == 0
+    assert programs.summary.offering_count == 0
+    assert programs.degree_levels == []
+    assert tuition.summary.program_count == 0
+    assert tuition.summary.offering_count == 0
+    assert tuition.offerings == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_expired_round_returns_empty_200(path_seed: dict):
+    """PR-3 contract: pinned expired round serves no public catalog rows."""
+    from datetime import timedelta
+
+    from app.utils.datetime_helpers import today_vn
+
+    today = today_vn()
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            expired_round = models.OfferingAdmissionRound(
+                academic_year=2026,
+                round_code=f"PR3_EXP_{ts}",
+                round_name=f"PR3 expired round {ts}",
+                is_active=True,
+                start_date=today - timedelta(days=30),
+                end_date=today - timedelta(days=10),
+            )
+            s.add(expired_round)
+            await s.flush()
+            s.add(
+                models.AdmissionPath(
+                    academic_info_id=path_seed["academic_info_id"],
+                    admission_method_id=path_seed["method_id"],
+                    admission_round_id=expired_round.id,
+                    status="active",
+                    visibility="public",
+                )
+            )
+            round_id = expired_round.id
+
+    async with AsyncSessionLocal() as s:
+        programs = await get_public_programs_catalog(
+            s, admission_round_id=round_id
+        )
+        tuition = await get_public_tuition_catalog(
+            s, admission_round_id=round_id
+        )
+
+    assert programs.summary.program_count == 0
+    assert programs.summary.offering_count == 0
+    assert programs.degree_levels == []
+    assert tuition.summary.program_count == 0
+    assert tuition.summary.offering_count == 0
+    assert tuition.offerings == []
 
 
 @pytest.mark.asyncio
