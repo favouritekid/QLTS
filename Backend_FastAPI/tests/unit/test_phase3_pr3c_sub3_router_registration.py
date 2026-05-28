@@ -26,7 +26,11 @@ import pytest
 from fastapi import params as fastapi_params
 from pydantic import ValidationError
 
-from app.core.deps import require_admin, get_admission_for_manager
+from app.core.deps import (
+    get_admission_for_admin_locked,
+    get_admission_for_manager,
+    require_admin,
+)
 from app.routers.admissions_v2 import router as v2_router
 from app.schemas.admission import (
     AdmissionAdminRollbackRequest,
@@ -166,6 +170,27 @@ def test_admin_rollback_uses_require_admin():
     # Anti-pattern guard: get_admission_for_manager NOT in deps (admin global scope)
     assert get_admission_for_manager not in dep_calls, (
         "admin-rollback should NOT use IDOR gate (admin global scope)"
+    )
+
+
+def test_admin_rollback_uses_admin_locked_dep():
+    """⭐ PR-4 (2026-05-28) anchor: T17 MUST depend on
+    ``get_admission_for_admin_locked`` (SELECT FOR UPDATE).
+
+    Catches regression nếu ai revert dep injection để dùng lại
+    ``db.get(profile_id)`` race-prone pattern, hoặc swap sang dep khác
+    không có ``.with_for_update()``. Production lock được enforce TẠI
+    dependency function, nên route-level wiring là single source of truth.
+
+    Inverse guard: KHÔNG dùng manager IDOR dep (admin global scope) và
+    KHÔNG dùng officer/user dep (sai scope).
+    """
+    route = _get_route("admin-rollback")
+    dep_calls = [d.call for d in _get_dependants(route)]
+    assert get_admission_for_admin_locked in dep_calls, (
+        "admin-rollback MUST depend on get_admission_for_admin_locked — "
+        "PR-4 fix for race với confirm/finalize/publish. Revert sẽ tạo "
+        "last-write-wins + status_history sai thứ tự."
     )
 
 
