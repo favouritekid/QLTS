@@ -55,11 +55,14 @@ def _make_actor(user_id=7):
 
 
 def _make_choice(decision="waitlisted", profile_id=42):
+    academic_info = SimpleNamespace(id=1, annual_admission_quota=None)
+    path = SimpleNamespace(id=1, admit_quota=None, academic_info=academic_info)
     return SimpleNamespace(
         id=5,
         admission_profile_id=profile_id,
         display_order=2,
         decision=decision,
+        admission_path=path,
         bonus_rule_snapshot=None,
         eligibility_check_result=None,
     )

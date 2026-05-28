@@ -222,7 +222,16 @@ async def check_choice_admit_capacity(
     #       restricted to uses_choice_engine=FALSE to avoid double-counting
     #       with (a).
     academic_info = getattr(path, "academic_info", None)
-    if academic_info is not None and academic_info.annual_admission_quota is not None:
+    annual_cap_hint = (
+        getattr(academic_info, "annual_admission_quota", None)
+        if academic_info is not None
+        else None
+    )
+    admit_quota_hint = getattr(path, "admit_quota", None)
+    if annual_cap_hint is None and admit_quota_hint is None:
+        return CapacityCheck(allowed=True)
+
+    if academic_info is not None and annual_cap_hint is not None:
         ai_locked = (
             await db.execute(
                 select(models.OfferingAcademicInfo)
