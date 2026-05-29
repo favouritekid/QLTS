@@ -80,6 +80,23 @@ async def consume_token(
             the right status.
     """
     # Step 1 — Per-token rate limit. Fail-closed when Redis breaker open.
+    #
+    # STATUS-CODE CONTRACT (PR-5 2026-05-28): the two fail-closed branches
+    # below raise ``BadRequest`` → HTTP 400. This is INTENTIONALLY different
+    # from the legacy router endpoint ``POST /api/admissions/confirm/{token}``
+    # (``routers/admissions.py::confirm_admission_by_token``) which returns
+    # 503 (Redis breaker) / 429 (cap exceeded). The router can raise
+    # ``HTTPException`` directly with the semantically-correct status; this
+    # service-layer path cannot (services must never raise ``HTTPException``)
+    # and there is no domain exception mapping to 429/503 yet.
+    #
+    # 400 is the PRESERVED PROD CONTRACT for this already-deployed endpoint,
+    # NOT a claim that 400 is the correct HTTP semantics — it is not (the
+    # client request is fine; the server is rate-limiting / temporarily
+    # unavailable). Normalising magic-link to 429/503 needs new 429/503
+    # domain exceptions + a wire test and is deferred to a dedicated
+    # domain-exception PR so this hardening PR does not change a deployed
+    # contract. See the matching note in confirm_admission_by_token.
     count = await consume_attempt(token_value)
     if count is None:
         # Redis down; treat as rate-limited rather than open the door.

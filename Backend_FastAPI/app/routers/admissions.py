@@ -2099,6 +2099,15 @@ async def confirm_admission_by_token(
     # action magic-link consume namespace ``mlt:`` so a single token URL
     # used at both endpoints does NOT share quota — each surface gets its
     # own bucket. Fail-closed: Redis breaker → 503; cap exceeded → 429.
+    #
+    # STATUS-CODE NOTE (PR-5): 503/429 here are the semantically-correct
+    # codes — this router raises ``HTTPException`` directly. The v2
+    # magic-link consume path (``services/magic_link_service.py``) currently
+    # returns 400 for the SAME fail-closed conditions because it runs in the
+    # service layer (no ``HTTPException``) and lacks a 429/503 domain
+    # exception. That divergence is intentional and preserved for now;
+    # normalising magic-link to 429/503 is deferred to a dedicated
+    # domain-exception PR (with a magic-link wire test).
     count = await consume_attempt(token, key_namespace="cft:")
     if count is None:
         # Redis down → treat as rate-limited rather than open the door

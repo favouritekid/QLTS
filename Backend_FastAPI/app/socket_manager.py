@@ -8,6 +8,7 @@ from . import models, security
 from .core.constants import UserRole
 from .config import settings
 from .database import AsyncSessionLocal, redis_client, safe_redis_get
+from .utils.token_logging import token_fingerprint
 # NOTE: user_service import moved inside function to avoid circular import
 from .socket_metrics import track_event_latency  # ✅ Thêm latency tracker
 from .socket_metrics import (
@@ -153,9 +154,8 @@ async def check_rate_limit(client_ip: str) -> bool:
 # === ✅ CẢI TIẾN: Vấn đề #3 - Sanitize Token Log ===
 # PR-5 (2026-05-28): token[:8] leaked partial entropy into logs. Now use
 # SHA-256 fingerprint (one-way, stable for log correlation).
-from app.utils.token_logging import token_fingerprint  # noqa: E402
-
-
+# token_fingerprint is imported at the module top (relative import) —
+# token_logging only depends on hashlib so there is no circular-import risk.
 def sanitize_token(token: str) -> str:
     return token_fingerprint(token) if token else "None"
 

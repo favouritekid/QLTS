@@ -41,6 +41,10 @@ from sqlalchemy import select
 from app import models
 from app.database import AsyncSessionLocal
 from app.services import admission_service
+from tests.fixtures.builders import (
+    SUBMITTABLE_PERMANENT_ADDRESS,
+    ensure_submittable_ward,
+)
 
 
 log = logging.getLogger(__name__)
@@ -66,13 +70,53 @@ async def multi_nv_seed(admin_user_in_db, seed_lead_dependencies):
 
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            offering_type = models.ConfigOfferingType(
-                code=f"mlw_{suffix}",
-                name=f"MagicLink wire {suffix}",
-                is_active=True,
-            )
-            s.add(offering_type)
-            await s.flush()
+            # PR-5 (2026-05-29): GDNN-valid offering type + degree level so
+            # Phase E.4 ``derive_target_level_and_type`` resolves
+            # (target_level, admission_type) from the chain. The legacy
+            # ``mlw_<suffix>`` offering-type code fell OUTSIDE the GDNN scope
+            # ({chinh_quy, lien_thong, ...}) and MAJOR_1 only sets the legacy
+            # ``degree_level`` text column (no ``degree_level_id`` FK), so the
+            # legacy single-NV submit raised CONFIG_GAP_TARGET_LEVEL — the
+            # pre-existing test-debt tracked by #337. get-or-create guards the
+            # UNIQUE(code) columns in case a future conftest seeds these rows.
+            offering_type = (
+                await s.execute(
+                    select(models.ConfigOfferingType).where(
+                        models.ConfigOfferingType.code == "chinh_quy"
+                    )
+                )
+            ).scalar_one_or_none()
+            if offering_type is None:
+                offering_type = models.ConfigOfferingType(
+                    code="chinh_quy",
+                    name=f"Chính quy {suffix}",
+                    is_active=True,
+                )
+                s.add(offering_type)
+                await s.flush()
+
+            degree_level = (
+                await s.execute(
+                    select(models.ConfigDegreeLevel).where(
+                        models.ConfigDegreeLevel.code == "cao_dang"
+                    )
+                )
+            ).scalar_one_or_none()
+            if degree_level is None:
+                degree_level = models.ConfigDegreeLevel(
+                    code="cao_dang",
+                    name=f"Cao đẳng {suffix}",
+                    display_order=2,
+                    is_active=True,
+                )
+                s.add(degree_level)
+                await s.flush()
+
+            # MajorProgram.degree_level_ref (FK) is what derive reads — the
+            # shared MAJOR_1 fixture only populates the legacy text column.
+            major = await s.get(models.MajorProgram, program_id)
+            if major is not None and major.degree_level_id is None:
+                major.degree_level_id = degree_level.id
 
             offering = models.ProgramOffering(
                 offering_type=f"mlw_{suffix}",
@@ -106,6 +150,44 @@ async def multi_nv_seed(admin_user_in_db, seed_lead_dependencies):
                 is_active=True,
             )
             s.add(criteria)
+            await s.flush()
+
+            # Junction row so the legacy (uses_choice_engine=False) submit path
+            # can resolve target level via the offering_admission_config chain.
+            # Test #6 sets profile.offering_admission_config_id to this id.
+            offering_admission_config = models.OfferingAdmissionConfig(
+                academic_info_id=academic_info.id,
+                criteria_id=criteria.id,
+                is_active=True,
+            )
+            s.add(offering_admission_config)
+            await s.flush()
+
+            # Phase E.4 KV catalog: a VnSchool + KV assignment so the engine's
+            # LICH_SU_THPT branch (cultural=graduated_thpt + target=cao_dang)
+            # resolves the academic_history THPT entry (level='THPT' +
+            # school_id) to a KV code. Without it submit aggregates
+            # KV_UNRESOLVED (insufficient_data) into validation_errors and
+            # stays 'draft' — the second layer of test-debt #337.
+            school = models.VnSchool(
+                moet_school_code=f"S{suffix}",
+                moet_province_code="001",
+                name=f"THPT Test {suffix}",
+                province="Hà Nội",
+                district="Ba Đình",
+                level="THPT",
+            )
+            s.add(school)
+            await s.flush()
+            s.add(
+                models.VnSchoolKvAssignment(
+                    school_id=school.id,
+                    kv_code="KV3",
+                    effective_from_year=2020,
+                    effective_to_year=2024,
+                    source="manual_admin",
+                )
+            )
             await s.flush()
 
             round_obj = models.OfferingAdmissionRound(
@@ -148,6 +230,8 @@ async def multi_nv_seed(admin_user_in_db, seed_lead_dependencies):
                 "academic_year": 2026,
                 "unit_id": unit_id,
                 "admin_user_id": admin_user_in_db["id"],
+                "offering_admission_config_id": offering_admission_config.id,
+                "school_id": school.id,
             }
 
 
@@ -443,8 +527,18 @@ async def test_officer_submit_returns_tuple_with_callback_post_option_b(
     exercise the (result, callback) unpack contract without seeding a
     full subject-score chain. Item A multi-NV guard is bypassed by
     ``uses_choice_engine=False`` (legacy single-NV path).
+
+    Phase E.4 note (#337 fix, 2026-05-29): the legacy path resolves the
+    target level from ``offering_admission_config_id`` → academic_info →
+    offering chain (multi_nv_seed now seeds a GDNN-valid config), and
+    ``cultural_education_level='graduated_thpt'`` satisfies CĐ-chính-quy
+    eligibility. Without these the submit raised CONFIG_GAP_TARGET_LEVEL.
     """
     ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+
+    # Gap #3 submit gate: seed a current-era WARD so permanent_commune_code
+    # validates. Helper opens its own session + commits (idempotent per test).
+    await ensure_submittable_ward()
 
     # Set lead.gpa so the gpa_only validation branch passes.
     async with AsyncSessionLocal() as s:
@@ -456,6 +550,18 @@ async def test_officer_submit_returns_tuple_with_callback_post_option_b(
                 lead_id=multi_nv_seed["lead_id"],
                 citizen_id=f"7{ts:08d}6"[:12],
                 status="draft",
+                # Gap #3: applicant identity + permanent address live on the
+                # profile (submit reads profile fields, NOT the lead).
+                full_name="Officer Submit Candidate",
+                phone="0901234567",
+                **SUBMITTABLE_PERMANENT_ADDRESS,
+                # Legacy single-NV path resolves target level via this config.
+                offering_admission_config_id=multi_nv_seed[
+                    "offering_admission_config_id"
+                ],
+                # CĐ chính quy eligibility: cultural ∈ THPT_KNOWLEDGE.
+                cultural_education_level="graduated_thpt",
+                vocational_qualification="none",
                 applied_rules={
                     "admission_path_id": multi_nv_seed["path_id"],
                     "method_type": "gpa_only",  # ← skip subject scoring
@@ -468,7 +574,19 @@ async def test_officer_submit_returns_tuple_with_callback_post_option_b(
                 version=1,
                 uses_choice_engine=False,  # legacy single-NV — bypass Item A guard
                 family_info=[{"relationship": "Cha", "full_name": "X", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT X", "year_from": 2020, "year_to": 2024}],
+                # THPT entry with school_id + level so the KV engine resolves
+                # via vn_school_kv_assignment (seeded in multi_nv_seed). Years
+                # match the assignment's effective_from/to (2020-2024).
+                academic_history=[{
+                    "school_name": "THPT Test",
+                    "year_from": 2020,
+                    "year_to": 2024,
+                    "gpa": 8.0,
+                    "graduation_type": "THPT",
+                    "level": "THPT",
+                    "grade_to": 12,
+                    "school_id": multi_nv_seed["school_id"],
+                }],
             )
             s.add(profile)
             await s.flush()
