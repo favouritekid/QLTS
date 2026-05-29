@@ -618,3 +618,145 @@ async def test_magic_link_submit_410_when_round_closed(
         assert token.confirmed_at is None, (
             "Token must NOT be marked consumed when cutoff blocks submit"
         )
+
+
+# ============================================================================
+# PR-5 (2026-05-28) — Legacy /api/admissions/confirm/{token} per-token rate
+# limit anchors. consume_attempt(key_namespace='cft:') wired BEFORE the
+# verify_and_confirm service call. Fail-closed contract:
+#   - Redis breaker (consume_attempt returns None) → HTTP 503
+#   - count > ATTEMPTS_CAP_PER_WINDOW → HTTP 429
+#   - count within cap → proceeds to verify_and_confirm (404 here because
+#     no real token seeded — but proves rate gate was passed)
+# Each test patches consume_attempt at the routers.admissions import site
+# so we control the return value without standing up a Redis stub.
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_legacy_confirm_returns_503_when_redis_breaker_open(
+    client: AsyncClient,
+):
+    """⭐ PR-5: Redis breaker open (consume_attempt → None) MUST 503
+    BEFORE verify_and_confirm runs. Anchor against accidental
+    fail-open if someone treats ``None`` as ``0``.
+    """
+    with patch(
+        "app.routers.admissions.consume_attempt",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "app.routers.admissions.admission_service.verify_and_confirm",
+        new=AsyncMock(),
+    ) as fake_verify:
+        response = await client.post(
+            "/api/admissions/confirm/any-token-value-here",
+            json={"last_digits_citizen_id": "1234"},
+        )
+
+    assert response.status_code == 503, (
+        f"Redis breaker MUST 503 fail-closed; got {response.status_code}: "
+        f"{response.text[:200]}"
+    )
+    fake_verify.assert_not_called(), (
+        "verify_and_confirm MUST NOT be invoked when rate-limit pre-check "
+        "fails — would leak DB cycles + advance CCCD cooldown ladder."
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_confirm_returns_429_when_count_exceeds_cap(
+    client: AsyncClient,
+):
+    """⭐ PR-5: count > ATTEMPTS_CAP_PER_WINDOW MUST 429 with Vietnamese
+    error copy. verify_and_confirm MUST NOT be invoked.
+    """
+    from app.services.magic_link_rate_limit import ATTEMPTS_CAP_PER_WINDOW
+
+    with patch(
+        "app.routers.admissions.consume_attempt",
+        new=AsyncMock(return_value=ATTEMPTS_CAP_PER_WINDOW + 1),
+    ), patch(
+        "app.routers.admissions.admission_service.verify_and_confirm",
+        new=AsyncMock(),
+    ) as fake_verify:
+        response = await client.post(
+            "/api/admissions/confirm/spammed-token",
+            json={"last_digits_citizen_id": "1234"},
+        )
+
+    assert response.status_code == 429, (
+        f"Cap exceed MUST 429; got {response.status_code}: {response.text[:200]}"
+    )
+    body = response.json()
+    detail = (body.get("detail") or "")
+    assert "60 giây" in detail or "lần" in detail, (
+        f"429 detail should mention the 60s window or attempt count; got: {body}"
+    )
+    fake_verify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_confirm_within_cap_proceeds_to_service(
+    client: AsyncClient,
+):
+    """⭐ PR-5: count within cap MUST NOT short-circuit; rate gate
+    passes through and verify_and_confirm is invoked. Token here is
+    bogus so the service raises ResourceNotFoundError → router maps
+    to 404. That 404 (NOT 429/503) is the proof.
+    """
+    from app.utils.exceptions import ResourceNotFoundError
+
+    with patch(
+        "app.routers.admissions.consume_attempt",
+        new=AsyncMock(return_value=1),
+    ), patch(
+        "app.routers.admissions.admission_service.verify_and_confirm",
+        new=AsyncMock(side_effect=ResourceNotFoundError("Token not found")),
+    ) as fake_verify:
+        response = await client.post(
+            "/api/admissions/confirm/within-cap-token",
+            json={"last_digits_citizen_id": "1234"},
+        )
+
+    assert response.status_code == 404, (
+        f"Within-cap MUST forward to service (404 from stub); got "
+        f"{response.status_code}: {response.text[:200]}"
+    )
+    fake_verify.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_confirm_uses_cft_namespace_not_mlt(
+    client: AsyncClient,
+):
+    """⭐ PR-5: legacy /confirm/{token} MUST consume with namespace
+    'cft:' so it shares NO quota with the multi-action magic-link
+    consume (namespace 'mlt:'). Captures the kwarg the router passed.
+    """
+    captured_kwargs: dict = {}
+
+    async def capture(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return 1
+
+    from app.utils.exceptions import ResourceNotFoundError
+
+    with patch(
+        "app.routers.admissions.consume_attempt",
+        new=AsyncMock(side_effect=capture),
+    ), patch(
+        "app.routers.admissions.admission_service.verify_and_confirm",
+        new=AsyncMock(side_effect=ResourceNotFoundError("stub")),
+    ):
+        # We don't care about the 404 after rate-check; we just want to
+        # capture the consume_attempt call kwargs.
+        await client.post(
+            "/api/admissions/confirm/ns-anchor",
+            json={"last_digits_citizen_id": "1234"},
+        )
+
+    assert captured_kwargs.get("key_namespace") == "cft:", (
+        f"Legacy /confirm MUST consume_attempt(key_namespace='cft:'); "
+        f"got kwargs={captured_kwargs}. Wrong namespace = shared quota "
+        f"with magic-link multi-action = defeats defence-in-depth."
+    )

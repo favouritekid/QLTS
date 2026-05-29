@@ -34,6 +34,10 @@ from ..core.deps import (
     get_admission_for_user_read,
 )
 from ..services import admission_service
+from ..services.magic_link_rate_limit import (
+    ATTEMPTS_CAP_PER_WINDOW,
+    consume_attempt,
+)
 from ..services.notification_dispatcher import safe_dispatch, rooms_for_admission, rooms_for_lead
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
@@ -45,6 +49,7 @@ from ..utils.exceptions import (
     ConflictError,
     ValidationError,
 )
+from ..utils.token_logging import token_fingerprint
 from ..core.constants import UserRole
 from ..utils.csv_helpers import sanitize_csv_row
 
@@ -2088,6 +2093,44 @@ async def confirm_admission_by_token(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Confirm admission via magic link + CCCD verification."""
+    # PR-5 (2026-05-28): per-token Redis rate limit (5 attempts / 60s).
+    # Defence-in-depth alongside the existing global ``DATA_WRITE`` cap and
+    # per-IP 100/day cap. Namespace ``cft:`` is distinct from the multi-
+    # action magic-link consume namespace ``mlt:`` so a single token URL
+    # used at both endpoints does NOT share quota — each surface gets its
+    # own bucket. Fail-closed: Redis breaker → 503; cap exceeded → 429.
+    #
+    # STATUS-CODE NOTE (PR-5): 503/429 here are the semantically-correct
+    # codes — this router raises ``HTTPException`` directly. The v2
+    # magic-link consume path (``services/magic_link_service.py``) currently
+    # returns 400 for the SAME fail-closed conditions because it runs in the
+    # service layer (no ``HTTPException``) and lacks a 429/503 domain
+    # exception. That divergence is intentional and preserved for now;
+    # normalising magic-link to 429/503 is deferred to a dedicated
+    # domain-exception PR (with a magic-link wire test).
+    count = await consume_attempt(token, key_namespace="cft:")
+    if count is None:
+        # Redis down → treat as rate-limited rather than open the door
+        # (same defensive stance as the multi-action magic-link consume).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Hệ thống đang quá tải, vui lòng thử lại sau ít phút.",
+        )
+    if count > ATTEMPTS_CAP_PER_WINDOW:
+        log.warning(
+            "Legacy confirm blocked: per-token rate limit exceeded",
+            token_fp=token_fingerprint(token),
+            count=count,
+            cap=ATTEMPTS_CAP_PER_WINDOW,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Đã thử quá {ATTEMPTS_CAP_PER_WINDOW} lần trong 60 giây. "
+                "Vui lòng đợi và thử lại."
+            ),
+        )
+
     try:
         # 1. DELEGATE to Service
         profile, callback = await admission_service.verify_and_confirm(
