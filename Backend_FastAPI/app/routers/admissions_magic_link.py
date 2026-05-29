@@ -37,6 +37,7 @@ from ..services.notification_dispatcher import (
     safe_dispatch,
 )
 from ..utils.exceptions import BadRequest, ResourceNotFoundError
+from ..utils.token_logging import token_fingerprint
 
 log = structlog.get_logger(__name__)
 
@@ -156,7 +157,7 @@ async def consume_magic_link_token(
                 log.error(
                     "Magic-link post-commit callback failed (best-effort)",
                     error=str(cb_err),
-                    token_prefix=token[:8],
+                    token_fp=token_fingerprint(token),
                     action=action.value,
                 )
         raise HTTPException(

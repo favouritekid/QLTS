@@ -151,8 +151,13 @@ async def check_rate_limit(client_ip: str) -> bool:
 
 
 # === ✅ CẢI TIẾN: Vấn đề #3 - Sanitize Token Log ===
+# PR-5 (2026-05-28): token[:8] leaked partial entropy into logs. Now use
+# SHA-256 fingerprint (one-way, stable for log correlation).
+from app.utils.token_logging import token_fingerprint  # noqa: E402
+
+
 def sanitize_token(token: str) -> str:
-    return f"{token[:8]}..." if token and len(token) > 8 else "None"
+    return token_fingerprint(token) if token else "None"
 
 
 # === ✅ SECURITY FIX: Parse cookies from Socket.io environ ===

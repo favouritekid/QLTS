@@ -50,6 +50,7 @@ from ..security.hibp import check_password_breached
 from ..core.events import dispatcher, TransportEvents
 from ..socket_metrics import socket_emit_failures_total, socket_events_emitted_total
 from ..utils import file_helpers
+from ..utils.token_logging import token_fingerprint
 from . import activity_service
 
 # ✅ SỬA LỖI: Chuyển log sang đồng bộ (tương thích với main.py V5)
@@ -1091,13 +1092,13 @@ async def reset_password(
                       error=str(redis_err))
             raise InvalidToken(detail="Unable to process reset. Please try again.")
         if not claimed:
-            log.warning("Reset token reuse attempt blocked (SET NX)", token_prefix=token[:10])
+            log.warning("Reset token reuse attempt blocked (SET NX)", token_fp=token_fingerprint(token))
             raise InvalidToken(detail="This reset link has already been used")
 
         token_data = verify_password_reset_token(token)
         if not token_data:
             log.warning(
-                "Invalid reset token attempt", token_prefix=token[:10]
+                "Invalid reset token attempt", token_fp=token_fingerprint(token)
             )
             raise InvalidToken()
 

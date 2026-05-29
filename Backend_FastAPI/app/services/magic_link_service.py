@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..config import settings
+from ..utils.token_logging import token_fingerprint
 from ..utils.exceptions import (
     BadRequest,
     ResourceNotFoundError,
@@ -85,7 +86,7 @@ async def consume_token(
         # Same defensive stance as resend cap (memory `zalo-bot-audit-gap`).
         log.warning(
             "Magic-link consume blocked: rate-limit service unavailable",
-            token_prefix=token_value[:8],
+            token_fp=token_fingerprint(token_value),
             action=action,
         )
         raise BadRequest(
@@ -94,7 +95,7 @@ async def consume_token(
     if count > ATTEMPTS_CAP_PER_WINDOW:
         log.warning(
             "Magic-link consume blocked: per-token rate limit exceeded",
-            token_prefix=token_value[:8],
+            token_fp=token_fingerprint(token_value),
             action=action,
             count=count,
             cap=ATTEMPTS_CAP_PER_WINDOW,
@@ -122,7 +123,7 @@ async def consume_token(
     if token_obj.action_type != action:
         log.warning(
             "Magic-link action mismatch",
-            token_prefix=token_value[:8],
+            token_fp=token_fingerprint(token_value),
             url_action=action,
             token_action=token_obj.action_type,
         )
