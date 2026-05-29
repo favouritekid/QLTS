@@ -901,6 +901,67 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         await self.db.flush()  # Get IDs without committing
         return created_docs
 
+    async def add_path_documents_delta(
+        self,
+        profile_id: int,
+        document_type_codes: List[str],
+    ) -> List[models.ProfileDocument]:
+        """Idempotent DELTA INSERT cho re-resolve (feat audience — P0-B).
+
+        Khác ``initialize_documents_for_profile`` (add VÔ ĐIỀU KIỆN): chỉ tạo
+        ProfileDocument cho code CHƯA tồn tại trong tier ``category='path'``,
+        set ``category='path'`` tường minh → KHÔNG vi phạm partial-unique
+        ``uq_profile_document_path``. KHÔNG xóa / đụng row đã có upload.
+
+        Trả: list ProfileDocument mới tạo (rỗng nếu không có code thiếu).
+        """
+        if not document_type_codes:
+            return []
+
+        # Codes đã có (category='path') cho profile này.
+        existing_stmt = (
+            select(models.ConfigDocumentType.code)
+            .join(
+                models.ProfileDocument,
+                models.ProfileDocument.document_type_id
+                == models.ConfigDocumentType.id,
+            )
+            .where(
+                models.ProfileDocument.profile_id == profile_id,
+                models.ProfileDocument.category == "path",
+            )
+        )
+        existing_codes = set(
+            (await self.db.execute(existing_stmt)).scalars().all()
+        )
+
+        missing_codes = [
+            c for c in document_type_codes if c not in existing_codes
+        ]
+        if not missing_codes:
+            return []
+
+        dt_stmt = select(models.ConfigDocumentType).where(
+            models.ConfigDocumentType.code.in_(missing_codes)
+        )
+        doc_types = list((await self.db.execute(dt_stmt)).scalars().all())
+
+        created: List[models.ProfileDocument] = []
+        for dt in doc_types:
+            doc = models.ProfileDocument(
+                profile_id=profile_id,
+                document_type_id=dt.id,
+                category="path",
+                status="missing",
+                file_path=None,
+                uploaded_at=None,
+            )
+            self.db.add(doc)
+            created.append(doc)
+
+        await self.db.flush()
+        return created
+
     async def get_document_by_type(
         self,
         profile_id: int,

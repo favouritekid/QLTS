@@ -608,6 +608,17 @@ class ResolvedDocumentResponse(BaseModel):
     source: DocumentSource = Field(
         description="Where this doc requirement comes from: shared or method_override"
     )
+    # feat/document-group-audience-merge — KHÔNG overload source (round-2 P2).
+    applicable_audience: Optional[List[AdmissionAudience]] = Field(
+        default=None,
+        description="Audience của lớp giấy tờ ([POST_THPT,...]); None = lớp NỀN / override.",
+    )
+    layer_kind: Literal[
+        "shared_base", "shared_audience", "method_override", "path_override"
+    ] = Field(
+        default="shared_base",
+        description="Loại lớp: NỀN / theo audience / override method / override path.",
+    )
 
 
 class ResolvedDocumentListResponse(BaseModel):
