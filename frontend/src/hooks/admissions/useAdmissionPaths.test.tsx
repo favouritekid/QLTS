@@ -96,6 +96,8 @@ const mockDocumentsResponse: ResolvedDocumentListResponse = {
       submission_format: null,
       display_order: 1,
       source: "shared",
+      applicable_audience: null,
+      layer_kind: "shared_base",
     },
   ],
 };

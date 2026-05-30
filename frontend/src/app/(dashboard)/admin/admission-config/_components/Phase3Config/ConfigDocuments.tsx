@@ -12,9 +12,64 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useUpdatePathDocuments, usePathDocuments } from "@/hooks/admissions/useAdmissionPaths";
 import { useDocumentTypes } from "@/hooks/admissions/useMasterData";
-import { AdmissionPathResponse } from "@/lib/zod/admission-path";
+import {
+  AdmissionPathResponse,
+  AUDIENCE_LABELS,
+  type ResolvedDocumentResponse,
+} from "@/lib/zod/admission-path";
 import type { DocumentType } from "../shared/types";
 import type { PydanticValidationError } from "@/types/api.types";
+
+/**
+ * Badge lớp giấy tờ resolve (feat/document-group-audience-merge ĐỢT A).
+ * Render `layer_kind` + `applicable_audience` BE trả → admin thấy mỗi giấy
+ * thuộc lớp nào (NỀN luôn gộp / theo đối tượng / override). Thin-client:
+ * KHÔNG suy luận, chỉ map enum → nhãn.
+ */
+function LayerBadge({ doc }: { doc: ResolvedDocumentResponse }) {
+  switch (doc.layer_kind) {
+    case "shared_base":
+      return (
+        <Badge variant="secondary" className="text-[10px] h-5">
+          NỀN
+        </Badge>
+      );
+    case "shared_audience":
+      return (
+        <span className="flex flex-wrap gap-1">
+          {(doc.applicable_audience ?? []).map((aud) => (
+            <Badge
+              key={aud}
+              variant="outline"
+              className="text-[10px] h-5 border-info-100 bg-info-50 text-info-700"
+            >
+              {AUDIENCE_LABELS[aud] ?? aud}
+            </Badge>
+          ))}
+        </span>
+      );
+    case "method_override":
+      return (
+        <Badge
+          variant="outline"
+          className="text-[10px] h-5 border-warning-200 bg-warning-50 text-warning-800"
+        >
+          Theo phương thức
+        </Badge>
+      );
+    case "path_override":
+      return (
+        <Badge
+          variant="outline"
+          className="text-[10px] h-5 border-warning-200 bg-warning-50 text-warning-800"
+        >
+          Riêng đợt này
+        </Badge>
+      );
+    default:
+      return null;
+  }
+}
 
 interface ConfigDocumentsProps {
   path: AdmissionPathResponse;
@@ -52,6 +107,16 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
       };
     });
     return initialMap;
+  }, [resolvedDocs]);
+
+  // Lookup resolved doc theo document_type_id → render LayerBadge (layer_kind
+  // + applicable_audience). Read-only annotation, KHÔNG đụng save semantics.
+  const resolvedByTypeId = useMemo(() => {
+    const map: Record<number, ResolvedDocumentResponse> = {};
+    resolvedDocs?.forEach((d) => {
+      map[d.document_type_id] = d;
+    });
+    return map;
   }, [resolvedDocs]);
 
   // Local modifications state - starts empty, merged with initial on save
@@ -235,8 +300,8 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
                           </Label>
                           <span className="text-xs text-muted-foreground">{type.code}</span>
                         </div>
-                        {isSelected && resolvedDocs?.find(d => d.document_type_id === type.id)?.source === 'shared' && (
-                          <Badge variant="secondary" className="text-[10px] h-5">Mặc định</Badge>
+                        {isSelected && resolvedByTypeId[type.id] && (
+                          <LayerBadge doc={resolvedByTypeId[type.id]} />
                         )}
                       </div>
 
