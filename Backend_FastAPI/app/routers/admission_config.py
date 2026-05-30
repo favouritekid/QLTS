@@ -10,7 +10,7 @@ Scoring preview endpoint for testing.
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import (
@@ -24,6 +24,7 @@ from app.core.deps import (
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
 from app.schemas.organization import ConfigDegreeLevel, MajorProgramShallow
+from app.schemas.admission_path import AdmissionAudience, ResolvedDocumentResponse
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
 from app.services.admission_scoring_service import AdmissionScoringService
@@ -51,6 +52,7 @@ from app.schemas.admission_config import (
     ScoringPreviewResponse,
     SharedDocumentGroupResponse,
     SharedDocumentGroupUpdate,
+    SharedDocumentPreviewRequest,
     DocumentGroupItemResponse,
 )
 
@@ -818,25 +820,57 @@ def _build_doc_group_response(group) -> Optional[SharedDocumentGroupResponse]:
         offering_type_id=group.offering_type_id,
         code=group.code,
         name=group.name,
+        applicable_audience=group.applicable_audience,
         items=items
     )
+
+
+@router.get(
+    "/document-groups/shared/{offering_type_id}/layers",
+    response_model=list[SharedDocumentGroupResponse],
+)
+async def list_shared_document_group_layers(
+    offering_type_id: int,
+    active_only: bool = Depends(get_config_filter),
+    db: AsyncSession = Depends(get_db),
+):
+    """List TẤT CẢ shared layer (NỀN + lớp audience) của 1 offering type.
+
+    feat/document-group-audience-merge §10.17: panel enumerate lớp để admin
+    chọn lớp sửa (NỀN / Tốt nghiệp THPT / THCS / ...). Ordered NỀN trước.
+    Auth mirror GET shared (get_config_filter → current_user, KHÔNG Casbin — N2).
+    """
+    service = AdmissionConfigService(db)
+    groups = await service.list_shared_document_groups(offering_type_id)
+    return [
+        _build_doc_group_response(g)
+        for g in groups
+        if not (active_only and not g.is_active)
+    ]
 
 
 @router.get("/document-groups/shared/{offering_type_id}", response_model=Optional[SharedDocumentGroupResponse])
 async def get_shared_document_group(
     offering_type_id: int,
+    audience: Optional[AdmissionAudience] = Query(
+        None,
+        description="Lớp audience (POST_THPT/...); None = lớp NỀN. §10.8/§10.13.",
+    ),
     active_only: bool = Depends(get_config_filter),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Get shared document group configuration for an Offering Type.
 
+    feat/document-group-audience-merge §10.8: ``?audience=`` chọn lớp (None =
+    NỀN). Lookup CHÍNH XÁC theo (ot, audience) — fix R10 groups[0] nondeterministic.
+
     ADM-009: non-admin must not see inactive shared document groups.
     Returns ``None`` (the list-shape contract) when filtered out, same
     as when no group exists for the offering type.
     """
     service = AdmissionConfigService(db)
-    group = await service.get_shared_document_group(offering_type_id)
+    group = await service.get_shared_document_group(offering_type_id, audience)
 
     if not group or (active_only and not group.is_active):
         return None
@@ -848,17 +882,48 @@ async def get_shared_document_group(
 async def upsert_shared_document_group(
     offering_type_id: int,
     data: SharedDocumentGroupUpdate,
+    audience: Optional[AdmissionAudience] = Query(
+        None,
+        description="Lớp audience cần upsert; None = lớp NỀN. §10.8.",
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_or_manager),
 ):
     """
     Create or Update shared document group configuration.
-    Requires: Admin or Manager role.
+    feat/document-group-audience-merge §10.8: ``?audience=`` chọn lớp (None =
+    NỀN). Requires: Admin or Manager role.
     """
     service = AdmissionConfigService(db)
-    group, callback = await service.upsert_shared_document_group(offering_type_id, data, current_user)
+    group, callback = await service.upsert_shared_document_group(
+        offering_type_id, data, current_user, audience=audience
+    )
     await db.commit()
     await callback()
-    
+
     return _build_doc_group_response(group)
+
+
+@router.post(
+    "/document-groups/shared/{offering_type_id}/preview",
+    response_model=list[ResolvedDocumentResponse],
+)
+async def preview_shared_documents(
+    offering_type_id: int,
+    data: SharedDocumentPreviewRequest,
+    active_only: bool = Depends(get_config_filter),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview bộ hồ sơ shared theo TS giả định (§5b/G5 "Xem trước theo TS").
+
+    Thin-client: FE gửi raw cultural/vocational → BE derive audience + resolve
+    (NỀN + lớp khớp, loại bằng TN khi completed_*). Read-only, mirror auth GET
+    shared (get_config_filter → current_user, KHÔNG Casbin — N2).
+    """
+    service = AdmissionConfigService(db)
+    return await service.preview_shared_documents(
+        offering_type_id,
+        data.cultural_education_level,
+        data.vocational_qualification,
+    )
 

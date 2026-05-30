@@ -151,6 +151,28 @@ def derive_audience_set(profile, path) -> Set[str]:
     return audience
 
 
+def compute_preview_audience_set(
+    cultural: Optional[str],
+    offering_type_code: Optional[str],
+) -> Set[str]:
+    """Audience set cho PREVIEW config-level (§5b/G5 "Xem trước theo TS").
+
+    KHÔNG cần path/profile (admin chỉ nhập raw cultural/vocational/offering_type
+    → BE derive, thin-client). Chỉ suy:
+    - **Văn hóa**: ``cultural`` trực tiếp → POST_THCS/POST_THPT (nhu cầu gốc).
+    - **VLVH**: offering_type ``vua_lam_vua_hoc``.
+
+    LIEN_THONG_TC/CD cần degree level (program cụ thể) → KHÔNG suy được ở
+    tầng offering_type; defer known-limitation GĐ1 (lớp LIEN_THONG chưa tồn tại).
+    """
+    audience: Set[str] = set()
+    if cultural in _CULTURAL_TO_AUDIENCE:
+        audience.add(_CULTURAL_TO_AUDIENCE[cultural])
+    if offering_type_code == "vua_lam_vua_hoc":
+        audience.add("VLVH")
+    return audience
+
+
 def compute_completed_doc_codes(profile) -> Set[str]:
     """Mã bằng TN cần LOẠI khỏi bộ hồ sơ khi ``cultural='completed_*'``.
 
