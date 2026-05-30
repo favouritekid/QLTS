@@ -187,6 +187,23 @@ export function SharedDocumentConfigPanel() {
     isLoading: loadingSharedGroup,
   } = useSharedDocumentGroup(selectedOfferingTypeId, selectedAudience);
 
+  // Khi sửa lớp audience: fetch lớp NỀN để KHÓA giấy nền (đã kế thừa) — admin
+  // chỉ thêm giấy đặc thù theo đối tượng, KHÔNG ghi trùng giấy nền vào lớp
+  // (tránh redundancy: giấy nền ở 2 group → drift khi sửa NỀN sau này +
+  // storefront §9 over-list). Không fetch khi đang ở chính lớp NỀN.
+  const isLayerView = selectedAudience !== null;
+  const { data: nenGroup } = useSharedDocumentGroup(
+    isLayerView ? selectedOfferingTypeId : null,
+    null,
+  );
+  const nenItemsByType = useMemo(() => {
+    const map: Record<number, SharedDocItem> = {};
+    (nenGroup?.items ?? []).forEach((item: SharedDocItem) => {
+      map[item.document_type_id] = item;
+    });
+    return map;
+  }, [nenGroup]);
+
   const upsertMutation = useUpsertSharedDocumentGroup();
 
   // ✅ Section 2.6.8: Derive initial selections from API data using useMemo
@@ -232,6 +249,8 @@ export function SharedDocumentConfigPanel() {
 
   // Handlers
   const handleSelect = (typeId: number, checked: boolean) => {
+    // Giấy NỀN trong view lớp audience = khóa (kế thừa), không toggle.
+    if (isLayerView && nenItemsByType[typeId]) return;
     if (checked) {
       const existing = initialSelections[typeId];
       setModifications(prev => {
@@ -270,7 +289,11 @@ export function SharedDocumentConfigPanel() {
     if (!selectedOfferingTypeId) return;
 
     try {
-      const payload = Object.values(selections);
+      // Loại giấy NỀN khỏi payload lớp audience (chỉ giữ giấy đặc thù) — tránh
+      // ghi trùng giấy nền vào lớp + tự dọn nếu lớp từng lưu nhầm trước đây.
+      const payload = Object.values(selections).filter(
+        (s) => !(isLayerView && nenItemsByType[s.document_type_id]),
+      );
       await upsertMutation.mutateAsync({
         offeringTypeId: selectedOfferingTypeId,
         data: { items: payload },
@@ -365,7 +388,7 @@ export function SharedDocumentConfigPanel() {
             <CardDescription>
               {selectedAudience === null
                 ? "Lớp NỀN — luôn gộp cho MỌI thí sinh thuộc loại hình này."
-                : `Chỉ áp dụng cho thí sinh thuộc đối tượng "${audienceLabel}" (gộp thêm trên lớp NỀN).`}
+                : `Chỉ áp dụng cho thí sinh thuộc đối tượng "${audienceLabel}". Giấy NỀN hiển thị mờ + khóa (đã kế thừa) — chỉ cần chọn thêm giấy đặc thù.`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -385,49 +408,76 @@ export function SharedDocumentConfigPanel() {
 
                   <div className="max-h-[500px] overflow-y-auto">
                     {allDocTypes.map((type: DocumentType) => {
-                      const isSelected = !!selections[type.id];
+                      // Giấy NỀN khi đang sửa lớp audience = kế thừa, hiển thị
+                      // KHÓA (checked + disabled) để admin hiểu "đối tượng này
+                      // đã có giấy nền, chỉ chọn thêm giấy đặc thù".
+                      const nenItem = isLayerView ? nenItemsByType[type.id] : undefined;
+                      const isInheritedNen = !!nenItem;
+                      const isSelected = isInheritedNen || !!selections[type.id];
                       const current = selections[type.id];
+
+                      const mandatoryChecked = nenItem
+                        ? nenItem.is_mandatory
+                        : current?.is_mandatory || false;
+                      const uploadChecked = nenItem
+                        ? nenItem.requires_upload
+                        : current?.requires_upload || false;
+                      const orderText = nenItem
+                        ? nenItem.display_order
+                        : current?.display_order || "-";
 
                       return (
                         <div
                           key={type.id}
-                          className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-muted ${isSelected ? 'bg-info-50/50' : ''}`}
+                          className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-muted ${
+                            isInheritedNen
+                              ? 'bg-muted/40 opacity-75'
+                              : isSelected
+                                ? 'bg-info-50/50'
+                                : ''
+                          }`}
                         >
                           <div className="col-span-6 flex items-center gap-3">
                             <Checkbox
                               id={`doc-${type.id}`}
                               checked={isSelected}
+                              disabled={isInheritedNen}
                               onCheckedChange={(checked) => handleSelect(type.id, checked as boolean)}
                             />
                             <div className="grid gap-0.5">
                               <Label
                                 htmlFor={`doc-${type.id}`}
-                                className="text-sm font-medium cursor-pointer"
+                                className={`text-sm font-medium ${isInheritedNen ? '' : 'cursor-pointer'}`}
                               >
                                 {type.name}
                               </Label>
                               <span className="text-xs text-muted-foreground">{type.code}</span>
                             </div>
+                            {isInheritedNen && (
+                              <Badge variant="secondary" className="text-[10px] h-5">
+                                NỀN (kế thừa)
+                              </Badge>
+                            )}
                           </div>
 
                           <div className="col-span-2 flex justify-center">
                             <Checkbox
-                              checked={current?.is_mandatory || false}
-                              disabled={!isSelected}
+                              checked={mandatoryChecked}
+                              disabled={isInheritedNen || !isSelected}
                               onCheckedChange={(c) => handleUpdate(type.id, 'is_mandatory', c === true)}
                             />
                           </div>
 
                           <div className="col-span-2 flex justify-center">
                             <Checkbox
-                              checked={current?.requires_upload || false}
-                              disabled={!isSelected}
+                              checked={uploadChecked}
+                              disabled={isInheritedNen || !isSelected}
                               onCheckedChange={(c) => handleUpdate(type.id, 'requires_upload', c === true)}
                             />
                           </div>
 
                           <div className="col-span-2 flex justify-center text-xs text-muted-foreground">
-                             {current?.display_order || "-"}
+                             {orderText}
                           </div>
                         </div>
                       );
