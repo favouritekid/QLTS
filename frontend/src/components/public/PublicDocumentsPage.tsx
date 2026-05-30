@@ -104,6 +104,9 @@ export default function PublicDocumentsPage({ catalog }: PublicDocumentsPageProp
     ? dedupeDocuments(
         offeringTypes.flatMap((item) => [
           ...item.shared_documents,
+          // §9: gộp cả lớp audience để section "chuẩn bị theo nhóm việc" không
+          // bỏ sót giấy academic (đã tách khỏi shared_documents).
+          ...item.audience_layers.flatMap((layer) => layer.documents),
           ...item.method_documents.flatMap((method) => method.documents),
         ]),
       )
@@ -219,6 +222,22 @@ export default function PublicDocumentsPage({ catalog }: PublicDocumentsPageProp
                           Hệ đào tạo này hiện chưa có checklist mặc định public.
                         </div>
                       )}
+
+                      {/* §9: lớp giấy tờ theo đối tượng/trình độ (Tốt nghiệp
+                          THCS / THPT) — tách rõ để TS thấy đúng bộ mình cần. */}
+                      {checklist.audience_layers.map((layer) => (
+                        <div key={layer.audience} className="space-y-3 pt-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-info-50 px-3 py-1 text-xs font-semibold text-info-700">
+                              {layer.audience_label}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              Bổ sung cho thí sinh thuộc đối tượng này
+                            </span>
+                          </div>
+                          <DocumentRequirementList documents={layer.documents} />
+                        </div>
+                      ))}
                     </div>
 
                     <div className="space-y-4">

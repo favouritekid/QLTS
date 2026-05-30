@@ -29,6 +29,7 @@ from app.schemas.public_admissions import (
     PublicAdmissionsMethodUsage,
     PublicAdmissionsOfferingSummary,
     PublicAdmissionsOfferingTypeDocumentChecklist,
+    PublicAdmissionsAudienceDocumentLayer,
     PublicAdmissionsProgramsMeta,
     PublicAdmissionsProgramsResponse,
     PublicAdmissionsProgramSummary,
@@ -38,6 +39,7 @@ from app.schemas.public_admissions import (
     PublicAdmissionsTuitionOffering,
     PublicAdmissionsTuitionResponse,
 )
+from app.services.document_resolution_service import AUDIENCE_LABELS
 from app.utils.datetime_helpers import today_vn
 
 
@@ -833,16 +835,49 @@ async def get_public_documents_catalog(
         if offering_type_model is None or not offering_type_model.is_active:
             continue
 
-        # Tier 3 — offering-type-wide shared bucket. Mandatory-wins
-        # merge across DocumentGroup rows so multiple shared groups
-        # for the same offering_type collapse correctly.
+        # Tier 3 — offering-type-wide shared bucket. §9 (feat/document-group-
+        # audience-merge): sau ĐỢT B, group shared tách NỀN (applicable_audience
+        # NULL) + lớp audience. TÁCH hiển thị thay vì union (tránh trang công
+        # khai liệt kê dư cả THPT lẫn THCS cho 1 chương trình).
+        all_shared_groups = shared_groups_by_offering_type.get(offering_type_id, [])
+        # getattr default None (consistent mandatory_wins_merge ĐỢT A): group
+        # thiếu attr/applicable_audience NULL = lớp NỀN.
+        nen_groups = [
+            g for g in all_shared_groups
+            if not getattr(g, "applicable_audience", None)
+        ]
+        audience_groups = [
+            g for g in all_shared_groups
+            if getattr(g, "applicable_audience", None)
+        ]
+
+        # shared_documents = lớp NỀN (luôn gộp cho mọi TS) — backward-compat FE cũ.
         shared_items: Dict[int, "models.DocumentGroupItem"] = {}
-        _merge_items_with_mandatory_wins(
-            shared_items, shared_groups_by_offering_type.get(offering_type_id, [])
-        )
+        _merge_items_with_mandatory_wins(shared_items, nen_groups)
         shared_documents = _items_to_public_documents(
             shared_items.values(), source="shared"
         )
+
+        # audience_layers = 1 layer / audience (merge mandatory-wins trong lớp).
+        layers_by_audience: Dict[str, List[models.DocumentGroup]] = defaultdict(list)
+        for group in audience_groups:
+            for aud in (getattr(group, "applicable_audience", None) or []):
+                layers_by_audience[aud].append(group)
+        audience_layers: List[PublicAdmissionsAudienceDocumentLayer] = []
+        for aud in sorted(layers_by_audience):
+            layer_items: Dict[int, "models.DocumentGroupItem"] = {}
+            _merge_items_with_mandatory_wins(layer_items, layers_by_audience[aud])
+            layer_docs = _items_to_public_documents(
+                layer_items.values(), source="shared"
+            )
+            if layer_docs:
+                audience_layers.append(
+                    PublicAdmissionsAudienceDocumentLayer(
+                        audience=aud,
+                        audience_label=AUDIENCE_LABELS.get(aud, aud),
+                        documents=layer_docs,
+                    )
+                )
 
         method_documents: List[PublicAdmissionsMethodDocumentChecklist] = []
         for method_id in sorted(offering_type_method_ids.get(offering_type_id, set())):
@@ -866,7 +901,9 @@ async def get_public_documents_catalog(
             for path in scope_paths:
                 path_groups = path_groups_by_path.get(path.id, [])
                 method_groups = method_groups_by_scope.get(scope_key, [])
-                shared_groups = shared_groups_by_offering_type.get(offering_type_id, [])
+                # §9: tier shared fallback chỉ lấy NỀN (lớp audience hiển thị
+                # riêng ở audience_layers, KHÔNG union vào method docs).
+                shared_groups = nen_groups
 
                 if path_groups:
                     tier_groups, tier_source = path_groups, "path_override"
@@ -910,12 +947,16 @@ async def get_public_documents_catalog(
                 )
             )
 
-        if not shared_documents and not method_documents:
+        if not shared_documents and not audience_layers and not method_documents:
             continue
 
         resolved_document_type_ids.update(
             item.document_type_id for item in shared_documents
         )
+        for layer in audience_layers:
+            resolved_document_type_ids.update(
+                doc.document_type_id for doc in layer.documents
+            )
         sample_programs = sorted(offering_type_programs.get(offering_type_id, set()))[:4]
         offering_type_checklists.append(
             PublicAdmissionsOfferingTypeDocumentChecklist(
@@ -931,6 +972,7 @@ async def get_public_documents_catalog(
                 public_method_count=len({item.method_id for item in method_documents}),
                 sample_programs=sample_programs,
                 shared_documents=shared_documents,
+                audience_layers=audience_layers,
                 method_documents=sorted(
                     method_documents,
                     key=lambda item: (item.method_name.lower(), item.method_id),
