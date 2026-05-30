@@ -273,27 +273,19 @@ async def test_preview_no_cultural_returns_nen_only():
 # ---------------------------------------------------------------------------
 
 
-async def _setup_with_path_override() -> dict:
+async def _setup_with_path_override(major_id: int) -> dict:
     """ot + NỀN group + 1 admission_path + path-override group (method NULL,
     path SET, item marker). Path-override ĐƯỢC PHÉP method NULL (invariant) →
-    phải bị get_shared_groups loại khỏi tier shared."""
+    phải bị get_shared_groups loại khỏi tier shared.
+
+    ``major_id`` từ fixture ``seed_lead_dependencies`` (tránh tự tạo
+    OrganizationUnit/MajorProgram → collision id=1 với seed test khác trong CI).
+    """
     from tests.fixtures.builders import AdmissionRoundBuilder
 
     suffix = random.randint(100000, 999999)
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            unit = models.OrganizationUnit(
-                name=f"Unit {suffix}", type="Khoa"
-            )
-            session.add(unit)
-            await session.flush()
-            major = models.MajorProgram(
-                name=f"Major {suffix}", code=f"M{suffix}",
-                degree_level="Cao đẳng", unit_id=unit.id,
-            )
-            session.add(major)
-            await session.flush()
-
             ot = models.ConfigOfferingType(
                 code=f"cfgpath_{suffix}", name=f"Path OT {suffix}", is_active=True
             )
@@ -302,7 +294,7 @@ async def _setup_with_path_override() -> dict:
 
             offering = models.ProgramOffering(
                 offering_type=f"PathTest_{suffix}",
-                program_id=major.id,
+                program_id=major_id,
                 offering_type_id=ot.id,
             )
             session.add(offering)
@@ -372,8 +364,8 @@ async def _setup_with_path_override() -> dict:
             return {"ot_id": ot.id, "nen_id": g_nen.id, "path_id": g_path.id}
 
 
-async def test_list_layers_excludes_path_override():
-    d = await _setup_with_path_override()
+async def test_list_layers_excludes_path_override(seed_lead_dependencies):
+    d = await _setup_with_path_override(seed_lead_dependencies["major_program_id"])
     async with AsyncSessionLocal() as s:
         svc = AdmissionConfigService(s)
         groups = await svc.list_shared_document_groups(d["ot_id"])
@@ -382,8 +374,8 @@ async def test_list_layers_excludes_path_override():
         assert d["path_id"] not in ids  # path-override KHÔNG phải shared layer
 
 
-async def test_preview_excludes_path_override():
-    d = await _setup_with_path_override()
+async def test_preview_excludes_path_override(seed_lead_dependencies):
+    d = await _setup_with_path_override(seed_lead_dependencies["major_program_id"])
     async with AsyncSessionLocal() as s:
         svc = AdmissionConfigService(s)
         docs = await svc.preview_shared_documents(d["ot_id"], "graduated_thpt", None)
