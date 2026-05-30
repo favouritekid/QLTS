@@ -31,7 +31,14 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         self,
         group_id: int
     ) -> Optional[DocumentGroup]:
-        """Get group by ID with items and document types loaded."""
+        """Get group by ID with items and document types loaded.
+
+        ``populate_existing`` (feat/document-group-audience-merge): upsert
+        làm bulk DELETE items + add → object trong identity map còn giữ
+        collection ``.items`` CŨ (bulk delete KHÔNG sync ORM). Refetch phải
+        OVERWRITE state cũ bằng DB truth, nếu không response trả item stale
+        (bug pre-existing: upsert refetch hiện old+new).
+        """
         query = (
             select(DocumentGroup)
             .where(DocumentGroup.id == group_id)
@@ -41,6 +48,7 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
                 selectinload(DocumentGroup.items)
                 .selectinload(DocumentGroupItem.document_type),
             )
+            .execution_options(populate_existing=True)
         )
         result = await self.db.execute(query)
         return result.scalars().first()
@@ -83,21 +91,80 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         self,
         offering_type_id: int
     ) -> List[DocumentGroup]:
-        """Get shared groups (admission_method_id = NULL)."""
+        """Get shared groups (tier shared = method + path đều NULL).
+
+        ``admission_path_id IS NULL`` (review P1): path-level override group
+        ĐƯỢC PHÉP có ``admission_method_id=NULL`` (invariant document_group_
+        service) → nếu thiếu filter này, path-override lẫn vào "shared" layer
+        (list/preview/can-activate hiển thị/merge nhầm). Khớp canonical resolver
+        ``admission_path_repository`` shared query.
+        """
         query = (
             select(DocumentGroup)
             .where(
                 DocumentGroup.offering_type_id == offering_type_id,
                 DocumentGroup.admission_method_id.is_(None),
+                DocumentGroup.admission_path_id.is_(None),
                 DocumentGroup.is_active == True,
             )
             .options(
                 selectinload(DocumentGroup.items)
                 .selectinload(DocumentGroupItem.document_type),
             )
+            # Deterministic order (feat/document-group-audience-merge config
+            # panel): sau ĐỢT B mỗi offering_type có nhiều shared group (NỀN +
+            # lớp audience). Resolve merge order-independent, nhưng config
+            # lookup/list cần thứ tự ổn định — id ASC ⇒ group NỀN (tạo trước)
+            # luôn đứng đầu. KHÔNG đổi tập trả về (resolve giữ nguyên).
+            .order_by(DocumentGroup.id)
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_shared_group_by_audience(
+        self,
+        offering_type_id: int,
+        audience: Optional[str],
+    ) -> Optional[DocumentGroup]:
+        """Lookup CHÍNH XÁC 1 shared group theo (offering_type, audience).
+
+        feat/document-group-audience-merge §10.8 (fix R10 ``groups[0]`` +
+        G4 NỀN-theo-code). Tier shared = ``admission_method_id`` +
+        ``admission_path_id`` đều NULL.
+
+        - ``audience=None`` → group NỀN (``applicable_audience`` NULL/rỗng).
+          G4: match THEO ``(ot, audience IS NULL)``, KHÔNG theo code (seed dùng
+          ``HS_CHINH_QUY`` còn upsert sinh ``SHARED_DOC_OT_{id}`` → tránh tạo
+          2 NỀN/ot).
+        - ``audience=<X>`` → group có X trong ``applicable_audience``.
+
+        Filter audience trong Python trên ``get_shared_groups`` (≤6 group/ot,
+        low-freq config) → tránh SQL enum-array ``&&``. ``get_shared_groups`` đã
+        lọc tier shared (method + path đều NULL) + ORDER BY id ⇒ deterministic.
+        """
+        groups = await self.get_shared_groups(offering_type_id)
+        for group in groups:
+            aud = group.applicable_audience
+            if audience is None:
+                if not aud:  # NULL hoặc [] = lớp NỀN
+                    return group
+            elif aud and audience in aud:
+                return group
+        return None
+
+    async def get_offering_type_code(
+        self,
+        offering_type_id: int,
+    ) -> Optional[str]:
+        """Lấy ``code`` của offering type (cho preview chiều VLVH §5b)."""
+        from app.models.config import ConfigOfferingType
+
+        result = await self.db.execute(
+            select(ConfigOfferingType.code).where(
+                ConfigOfferingType.id == offering_type_id
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def get_method_specific_group(
         self,
@@ -133,8 +200,13 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         admission_method_id: int | None = None,
         admission_path_id: int | None = None,
         is_active: bool = True,
+        applicable_audience: list[str] | None = None,
     ) -> DocumentGroup:
-        """Create new document group."""
+        """Create new document group.
+
+        ``applicable_audience`` (feat/document-group-audience-merge): NULL = lớp
+        NỀN tier shared; ``[..]`` = lớp theo đối tượng/trình độ.
+        """
         group = DocumentGroup(
             offering_type_id=offering_type_id,
             admission_method_id=admission_method_id,
@@ -143,6 +215,7 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
             name=name,
             description=description,
             is_active=is_active,
+            applicable_audience=applicable_audience,
         )
         self.db.add(group)
         await self.db.flush()

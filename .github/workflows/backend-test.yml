@@ -263,4 +263,5 @@ jobs:
           tests/unit/test_document_resolution_service.py
           tests/integration/test_document_audience_reresolve.py
           tests/unit/test_docgrp_audience_backfill_migration.py
+          tests/integration/test_document_audience_config_panel.py
           -q --tb=short --timeout=60

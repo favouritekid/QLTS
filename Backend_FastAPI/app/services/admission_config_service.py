@@ -9,7 +9,7 @@ Follows MASTER_ARCHITECTURE.md:
 - Returns (result, callback) tuple
 """
 
-from typing import Callable, Any
+from typing import Callable, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import User
@@ -25,6 +25,7 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     DuplicateResourceError,
     BusinessRuleViolation,
+    ValidationError,
 )
 
 
@@ -468,46 +469,81 @@ class AdmissionConfigService:
     async def get_shared_document_group(
         self,
         offering_type_id: int,
+        audience: Optional[str] = None,
     ):
-        """Get shared document group for offering type."""
-        from app.models.admission_config import DocumentGroup
-        groups = await self.document_group_repo.get_shared_groups(offering_type_id)
-        return groups[0] if groups else None
+        """Get shared document group cho ``(offering_type, audience)``.
+
+        feat/document-group-audience-merge §10.8: ``audience=None`` → lớp NỀN
+        (``applicable_audience`` NULL); ``audience=<X>`` → lớp theo đối tượng.
+        Lookup CHÍNH XÁC (fix R10 ``groups[0]`` nondeterministic sau ĐỢT B).
+        """
+        return await self.document_group_repo.get_shared_group_by_audience(
+            offering_type_id, audience
+        )
+
+    async def list_shared_document_groups(self, offering_type_id: int):
+        """List TẤT CẢ shared group (NỀN + lớp audience) — panel enumerate lớp
+        để admin chọn lớp sửa (§10.17). Ordered by id (NỀN trước)."""
+        return await self.document_group_repo.get_shared_groups(offering_type_id)
 
     async def upsert_shared_document_group(
         self,
         offering_type_id: int,
         data: SharedDocumentGroupUpdate,
         user: User,
+        audience: Optional[str] = None,
     ) -> tuple["DocumentGroup", Callable[[], Any]]:
+        """Create/Update shared document group cho ``(offering_type, audience)``.
+
+        Replaces all items. feat/document-group-audience-merge §10.8/G4:
+        lookup theo ``(ot, audience)`` (KHÔNG ``groups[0]``); tạo mới nếu chưa
+        có với code deterministic + set ``applicable_audience``.
         """
-        Create or Update Shared Document Group for Offering Type.
-        
-        Replaces all items in the group.
-        """
-        # Find existing shared group
-        groups = await self.document_group_repo.get_shared_groups(offering_type_id)
-        group = groups[0] if groups else None
+        from app.services.document_resolution_service import AUDIENCE_LABELS
+
+        if audience is not None and audience not in AUDIENCE_LABELS:
+            raise ValidationError(
+                f"audience '{audience}' không hợp lệ "
+                f"(phải thuộc {sorted(AUDIENCE_LABELS)})"
+            )
+
+        group = await self.document_group_repo.get_shared_group_by_audience(
+            offering_type_id, audience
+        )
 
         if not group:
-            # Create new shared group
-            # Generate code/name
-            # Note: offering_type_id is int, we assume it exists. 
-            # Ideally we check offering type existence but we trust FK constraint for now.
-            # Code: SHARED_DOC_{offering_type_id}
-            
+            if audience is None:
+                code = f"SHARED_DOC_OT_{offering_type_id}"
+                name = f"Hồ sơ chung (OT-{offering_type_id})"
+                description = "Lớp NỀN — giấy tờ chung cho mọi thí sinh."
+                applicable = None
+            else:
+                code = f"SHARED_DOC_OT_{offering_type_id}_{audience}"
+                label = AUDIENCE_LABELS[audience]
+                name = f"Hồ sơ {label} (OT-{offering_type_id})"
+                description = f"Lớp theo đối tượng: {label}."
+                applicable = [audience]
+            # code UNIQUE VARCHAR(50) — fail-loud nếu vượt (thực tế ≤ ~30;
+            # raise thật, KHÔNG assert — tránh bị strip với python -O).
+            if len(code) > 50:
+                raise ValueError(
+                    f"group code '{code}' ({len(code)}) > 50 — đổi scheme hậu tố"
+                )
+
             group = await self.document_group_repo.create_group(
                 offering_type_id=offering_type_id,
-                admission_method_id=None, # Shared
-                code=f"SHARED_DOC_OT_{offering_type_id}",
-                name=f"Hồ sơ chung (OT-{offering_type_id})",
-                description="Cấu hình hồ sơ mặc định cho loại hình đào tạo này",
-                is_active=True
+                admission_method_id=None,  # tier shared
+                admission_path_id=None,
+                code=code,
+                name=name,
+                description=description,
+                is_active=True,
+                applicable_audience=applicable,
             )
-        
+
         # Replace items
         await self.document_group_repo.remove_all_items_from_group(group.id)
-        
+
         for item in data.items:
             await self.document_group_repo.add_item_to_group(
                 group_id=group.id,
@@ -517,9 +553,59 @@ class AdmissionConfigService:
                 submission_format=item.submission_format,
                 display_order=item.display_order,
             )
-            
+
         # Refetch with items
         updated = await self.document_group_repo.get_by_id_with_items(group.id)
         return updated, _noop_callback
+
+    async def preview_shared_documents(
+        self,
+        offering_type_id: int,
+        cultural_education_level: Optional[str],
+        vocational_qualification: Optional[str],
+    ):
+        """Preview bộ hồ sơ shared cho 1 thí sinh giả định (§5b/G5).
+
+        Thin-client: admin nhập raw cultural/vocational → BE derive audience +
+        resolve (NỀN + lớp khớp) + loại bằng TN khi completed_* (§6). Tái dùng
+        nguyên machinery ĐỢT A (filter_shared_by_audience + mandatory_wins_merge
+        + build_resolved_response) để preview KHỚP resolve thật.
+
+        Chỉ tier shared (config panel không gắn path/method) → đủ cho nhu cầu
+        gốc THCS↔THPT. LIEN_THONG/VLVH layer chưa tồn tại GĐ1 (known-limitation).
+        """
+        from types import SimpleNamespace
+
+        from app.services.document_resolution_service import (
+            build_resolved_response,
+            compute_completed_doc_codes,
+            compute_preview_audience_set,
+            filter_shared_by_audience,
+            mandatory_wins_merge,
+        )
+
+        # offering_type code cho chiều VLVH (cultural là chính cho THCS/THPT).
+        ot_code = await self.document_group_repo.get_offering_type_code(
+            offering_type_id
+        )
+        audience_set = compute_preview_audience_set(
+            cultural_education_level, ot_code
+        )
+
+        shared_groups = await self.document_group_repo.get_shared_groups(
+            offering_type_id
+        )
+        layers = filter_shared_by_audience(
+            shared_groups, audience_set if audience_set else None
+        )
+
+        doc_map: dict = {}
+        # Config preview = snapshot-shape (KHÔNG exclude_inactive) khớp create.
+        mandatory_wins_merge(doc_map, layers, "shared", exclude_inactive=False)
+
+        completed = compute_completed_doc_codes(
+            SimpleNamespace(cultural_education_level=cultural_education_level)
+        )
+        return build_resolved_response(doc_map, completed)
 
 

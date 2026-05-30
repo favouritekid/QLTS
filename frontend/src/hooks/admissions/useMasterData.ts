@@ -406,10 +406,15 @@ export function useRemoveSubjectFromGroup() {
 // SHARED DOCUMENT GROUPS
 // ============================================
 
-export function useSharedDocumentGroup(offeringTypeId: number | null) {
+// feat/document-group-audience-merge §10.16: audience vào queryKey (NỀN=null).
+export function useSharedDocumentGroup(
+  offeringTypeId: number | null,
+  audience?: string | null,
+) {
   return useQuery({
-    queryKey: ["shared-document-group", offeringTypeId],
-    queryFn: () => masterDataApi.getSharedDocumentGroup(offeringTypeId!),
+    queryKey: ["shared-document-group", offeringTypeId, audience ?? null],
+    queryFn: () =>
+      masterDataApi.getSharedDocumentGroup(offeringTypeId!, audience),
     enabled: !!offeringTypeId, // Only fetch if offeringTypeId is present
   });
 }
@@ -418,14 +423,28 @@ export function useUpsertSharedDocumentGroup() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ offeringTypeId, data }: { offeringTypeId: number; data: import("@/app/(dashboard)/admin/admission-config/_components/shared/types").SharedDocumentGroupUpdate }) =>
-      masterDataApi.upsertSharedDocumentGroup(offeringTypeId, data),
+    mutationFn: ({ offeringTypeId, data, audience }: { offeringTypeId: number; data: import("@/app/(dashboard)/admin/admission-config/_components/shared/types").SharedDocumentGroupUpdate; audience?: string | null }) =>
+      masterDataApi.upsertSharedDocumentGroup(offeringTypeId, data, audience),
     onSuccess: (_, variables) => {
-      toast.success("Shared documents configuration saved successfully");
-      queryClient.invalidateQueries({ queryKey: ["shared-document-group", variables.offeringTypeId] });
+      toast.success("Đã lưu cấu hình lớp giấy tờ");
+      // Invalidate đúng key gồm audience (parity §10.16 — react-query-mutation-cache-parity).
+      queryClient.invalidateQueries({
+        queryKey: ["shared-document-group", variables.offeringTypeId, variables.audience ?? null],
+      });
     },
     onError: (error: ApiError) => {
-      toast.error(error.response?.data?.detail || "Failed to save shared documents configuration");
+      toast.error(error.response?.data?.detail || "Lưu cấu hình lớp giấy tờ thất bại");
+    },
+  });
+}
+
+// §5b/G5 preview — mutation (POST body), KHÔNG cache.
+export function usePreviewSharedDocuments() {
+  return useMutation({
+    mutationFn: ({ offeringTypeId, body }: { offeringTypeId: number; body: { cultural_education_level?: string | null; vocational_qualification?: string | null } }) =>
+      masterDataApi.previewSharedDocuments(offeringTypeId, body),
+    onError: (error: ApiError) => {
+      toast.error(error.response?.data?.detail || "Xem trước bộ hồ sơ thất bại");
     },
   });
 }

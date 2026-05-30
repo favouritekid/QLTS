@@ -5,9 +5,26 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Save } from "lucide-react";
-import { useOfferingTypes, useDocumentTypes, useSharedDocumentGroup, useUpsertSharedDocumentGroup } from "@/hooks/admissions/useMasterData";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Loader2, Save, Eye } from "lucide-react";
+import {
+  useOfferingTypes,
+  useDocumentTypes,
+  useSharedDocumentGroup,
+  useUpsertSharedDocumentGroup,
+  usePreviewSharedDocuments,
+} from "@/hooks/admissions/useMasterData";
+import { AUDIENCE_LABELS } from "@/lib/zod/admission-path";
 import { DocumentType, OfferingType } from "../shared/types";
 
 interface DocSelection {
@@ -26,20 +43,150 @@ interface SharedDocItem {
   display_order: number;
 }
 
+// Sentinel cho lớp NỀN trong Select (Radix value phải là string non-empty).
+const NEN = "__NEN__";
+
+// Nhãn trình độ văn hóa cho dialog Xem trước (display-only, mirror BE enum).
+const CULTURAL_LABELS: Record<string, string> = {
+  graduated_thpt: "Đã tốt nghiệp THPT",
+  completed_thpt: "Hoàn thành THPT (chưa có bằng)",
+  graduated_gdtx: "Tốt nghiệp GDTX",
+  graduated_thcs: "Đã tốt nghiệp THCS",
+  completed_thcs: "Hoàn thành THCS (chưa có bằng)",
+};
+
+interface PreviewDoc {
+  document_type_code: string;
+  document_type_name: string;
+  is_mandatory: boolean;
+  layer_kind: string;
+  applicable_audience: string[] | null;
+}
+
+/** Dialog "Xem trước theo TS" (§5b/G5) — thin-client: gửi raw cultural cho BE derive. */
+function PreviewDialog({ offeringTypeId }: { offeringTypeId: number }) {
+  const [open, setOpen] = useState(false);
+  const [cultural, setCultural] = useState<string | null>(null);
+  const previewMutation = usePreviewSharedDocuments();
+  const docs: PreviewDoc[] = previewMutation.data ?? [];
+
+  const handleCompute = () => {
+    previewMutation.mutate({
+      offeringTypeId,
+      body: { cultural_education_level: cultural },
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline">
+          <Eye className="h-4 w-4 mr-2" aria-hidden="true" />
+          Xem trước theo TS
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Xem trước bộ hồ sơ theo thí sinh</DialogTitle>
+          <DialogDescription>
+            Chọn trình độ văn hóa của thí sinh giả định — hệ thống tính bộ giấy
+            tờ thực tế (lớp NỀN + lớp theo đối tượng).
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex items-end gap-3">
+          <div className="flex-1 space-y-1">
+            <Label>Trình độ văn hóa</Label>
+            <Select
+              value={cultural ?? undefined}
+              onValueChange={(v) => setCultural(v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Chọn trình độ..." />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(CULTURAL_LABELS).map(([code, label]) => (
+                  <SelectItem key={code} value={code}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button onClick={handleCompute} disabled={previewMutation.isPending}>
+            {previewMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden="true" />
+            ) : null}
+            Tính bộ hồ sơ
+          </Button>
+        </div>
+
+        {previewMutation.isSuccess && (
+          <div className="border rounded-lg divide-y max-h-[300px] overflow-y-auto">
+            {docs.length === 0 ? (
+              <p className="p-3 text-sm text-muted-foreground">
+                Không có giấy tờ nào cho cấu hình này.
+              </p>
+            ) : (
+              docs.map((d) => (
+                <div
+                  key={d.document_type_code}
+                  className="flex items-center justify-between p-2.5 text-sm"
+                >
+                  <span>
+                    {d.document_type_name}
+                    {d.is_mandatory && (
+                      <span className="text-error-600 ml-1" aria-hidden="true">
+                        *
+                      </span>
+                    )}
+                  </span>
+                  {d.layer_kind === "shared_audience" && d.applicable_audience ? (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] h-5 border-info-100 bg-info-50 text-info-700"
+                    >
+                      {d.applicable_audience
+                        .map((a) => AUDIENCE_LABELS[a as keyof typeof AUDIENCE_LABELS] ?? a)
+                        .join(", ")}
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-[10px] h-5">
+                      NỀN
+                    </Badge>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <p className="text-xs text-muted-foreground mr-auto">
+            <span className="text-error-600">*</span> bắt buộc nộp.
+          </p>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function SharedDocumentConfigPanel() {
   // Queries
   const { data: offeringTypes = [], isLoading: loadingOfferingTypes } = useOfferingTypes();
   const { data: allDocTypes = [], isLoading: loadingDocTypes } = useDocumentTypes();
-  
+
   // State
   const [selectedOfferingTypeId, setSelectedOfferingTypeId] = useState<number | null>(null);
-  
-  // Dependent Query
-  const { 
-    data: sharedGroup, 
-    isLoading: loadingSharedGroup 
-  } = useSharedDocumentGroup(selectedOfferingTypeId);
-  
+  // feat/document-group-audience-merge §10.17: lớp đang sửa (null = NỀN).
+  const [selectedAudience, setSelectedAudience] = useState<string | null>(null);
+
+  // Dependent Query — theo (offering_type, audience).
+  const {
+    data: sharedGroup,
+    isLoading: loadingSharedGroup,
+  } = useSharedDocumentGroup(selectedOfferingTypeId, selectedAudience);
+
   const upsertMutation = useUpsertSharedDocumentGroup();
 
   // ✅ Section 2.6.8: Derive initial selections from API data using useMemo
@@ -60,11 +207,12 @@ export function SharedDocumentConfigPanel() {
 
   // Local modifications state - tracks user changes
   const [modifications, setModifications] = useState<Record<number, DocSelection | null>>({});
-  
-  // Reset modifications when offering type changes
-  const [lastOfferingTypeId, setLastOfferingTypeId] = useState<number | null>(null);
-  if (selectedOfferingTypeId !== lastOfferingTypeId) {
-    setLastOfferingTypeId(selectedOfferingTypeId);
+
+  // Reset modifications khi đổi offering type HOẶC audience (sửa lớp khác).
+  const ctxKey = `${selectedOfferingTypeId}|${selectedAudience ?? NEN}`;
+  const [lastCtxKey, setLastCtxKey] = useState<string | null>(null);
+  if (ctxKey !== lastCtxKey) {
+    setLastCtxKey(ctxKey);
     setModifications({});
   }
 
@@ -85,21 +233,19 @@ export function SharedDocumentConfigPanel() {
   // Handlers
   const handleSelect = (typeId: number, checked: boolean) => {
     if (checked) {
-      // Add new or restore from initial
       const existing = initialSelections[typeId];
       setModifications(prev => {
         if (existing) {
-          // Re-enable: delete the null marker so it falls back to initialSelections
-          const { [typeId]: _, ...rest } = prev;
+          // Omit key qua destructure (restore từ initialSelections).
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { [typeId]: _removed, ...rest } = prev;
           return rest;
         }
-        // New selection: compute display_order from prev + initialSelections
         const currentActiveCount = Object.keys(initialSelections).length
           + Object.values(prev).filter(v => v !== null).length;
         return { ...prev, [typeId]: { document_type_id: typeId, is_mandatory: true, requires_upload: true, submission_format: null, display_order: currentActiveCount + 1 } };
       });
     } else {
-      // Mark as removed
       setModifications(prev => ({
         ...prev,
         [typeId]: null
@@ -110,7 +256,7 @@ export function SharedDocumentConfigPanel() {
   const handleUpdate = <K extends keyof DocSelection>(typeId: number, field: K, value: DocSelection[K]) => {
     const current = selections[typeId];
     if (!current) return;
-    
+
     setModifications(prev => ({
       ...prev,
       [typeId]: {
@@ -122,12 +268,13 @@ export function SharedDocumentConfigPanel() {
 
   const handleSave = async () => {
     if (!selectedOfferingTypeId) return;
-    
+
     try {
       const payload = Object.values(selections);
       await upsertMutation.mutateAsync({
         offeringTypeId: selectedOfferingTypeId,
-        data: { items: payload }
+        data: { items: payload },
+        audience: selectedAudience,
       });
       setModifications({});
     } catch {
@@ -145,35 +292,80 @@ export function SharedDocumentConfigPanel() {
     );
   }
 
+  const audienceLabel =
+    selectedAudience === null
+      ? "NỀN (mọi thí sinh)"
+      : AUDIENCE_LABELS[selectedAudience as keyof typeof AUDIENCE_LABELS] ?? selectedAudience;
+
   return (
     <div className="space-y-6">
-      {/* 1. Select Offering Type */}
-      <div className="flex items-center gap-4 p-4 border rounded-lg bg-muted">
-        <Label className="w-32">Loại hình đào tạo:</Label>
-        <Select 
-          value={selectedOfferingTypeId?.toString()} 
-          onValueChange={(val) => setSelectedOfferingTypeId(Number(val))}
-        >
-          <SelectTrigger className="w-[300px]">
-            <SelectValue placeholder="Chọn loại hình đào tạo..." />
-          </SelectTrigger>
-          <SelectContent>
-            {offeringTypes.map((type: OfferingType) => (
-              <SelectItem key={type.id} value={type.id.toString()}>
-                {type.name} ({type.code})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      {/* 1. Bộ lọc lớp: Loại hình + Đối tượng + Xem trước */}
+      <div className="flex flex-wrap items-end gap-4 p-4 border rounded-lg bg-muted">
+        <div className="space-y-1">
+          <Label>Loại hình đào tạo</Label>
+          <Select
+            value={selectedOfferingTypeId?.toString()}
+            onValueChange={(val) => setSelectedOfferingTypeId(Number(val))}
+          >
+            <SelectTrigger className="w-[260px]">
+              <SelectValue placeholder="Chọn loại hình đào tạo..." />
+            </SelectTrigger>
+            <SelectContent>
+              {offeringTypes.map((type: OfferingType) => (
+                <SelectItem key={type.id} value={type.id.toString()}>
+                  {type.name} ({type.code})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label>Đối tượng / trình độ</Label>
+          <Select
+            value={selectedAudience ?? NEN}
+            onValueChange={(v) => setSelectedAudience(v === NEN ? null : v)}
+          >
+            <SelectTrigger className="w-[220px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NEN}>NỀN (mọi thí sinh)</SelectItem>
+              {Object.entries(AUDIENCE_LABELS).map(([code, label]) => (
+                <SelectItem key={code} value={code}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {selectedOfferingTypeId && (
+          <div className="ml-auto">
+            {/* key remount → reset mutation result + cultural khi đổi loại hình
+                (review P2: tránh giữ kết quả preview của loại hình trước). */}
+            <PreviewDialog
+              key={selectedOfferingTypeId}
+              offeringTypeId={selectedOfferingTypeId}
+            />
+          </div>
+        )}
       </div>
 
       {/* 2. Config Area */}
       {selectedOfferingTypeId ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Cấu hình hồ sơ dùng chung</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">
+              Cấu hình lớp giấy tờ
+              <Badge variant={selectedAudience === null ? "secondary" : "outline"}>
+                {audienceLabel}
+              </Badge>
+            </CardTitle>
             <CardDescription>
-              Các loại giấy tờ được chọn ở đây sẽ tự động áp dụng cho tất cả Phương thức xét tuyển thuộc loại hình đào tạo này.
+              {selectedAudience === null
+                ? "Lớp NỀN — luôn gộp cho MỌI thí sinh thuộc loại hình này."
+                : `Chỉ áp dụng cho thí sinh thuộc đối tượng "${audienceLabel}" (gộp thêm trên lớp NỀN).`}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -190,25 +382,25 @@ export function SharedDocumentConfigPanel() {
                     <div className="col-span-2 text-center">Yêu cầu up file</div>
                     <div className="col-span-2 text-center">Thứ tự</div>
                   </div>
-                  
+
                   <div className="max-h-[500px] overflow-y-auto">
                     {allDocTypes.map((type: DocumentType) => {
                       const isSelected = !!selections[type.id];
                       const current = selections[type.id];
 
                       return (
-                        <div 
-                          key={type.id} 
+                        <div
+                          key={type.id}
                           className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-muted ${isSelected ? 'bg-info-50/50' : ''}`}
                         >
                           <div className="col-span-6 flex items-center gap-3">
-                            <Checkbox 
+                            <Checkbox
                               id={`doc-${type.id}`}
                               checked={isSelected}
                               onCheckedChange={(checked) => handleSelect(type.id, checked as boolean)}
                             />
                             <div className="grid gap-0.5">
-                              <Label 
+                              <Label
                                 htmlFor={`doc-${type.id}`}
                                 className="text-sm font-medium cursor-pointer"
                               >
@@ -219,7 +411,7 @@ export function SharedDocumentConfigPanel() {
                           </div>
 
                           <div className="col-span-2 flex justify-center">
-                            <Checkbox 
+                            <Checkbox
                               checked={current?.is_mandatory || false}
                               disabled={!isSelected}
                               onCheckedChange={(c) => handleUpdate(type.id, 'is_mandatory', c === true)}
@@ -227,13 +419,13 @@ export function SharedDocumentConfigPanel() {
                           </div>
 
                           <div className="col-span-2 flex justify-center">
-                            <Checkbox 
+                            <Checkbox
                               checked={current?.requires_upload || false}
                               disabled={!isSelected}
                               onCheckedChange={(c) => handleUpdate(type.id, 'requires_upload', c === true)}
                             />
                           </div>
-                          
+
                           <div className="col-span-2 flex justify-center text-xs text-muted-foreground">
                              {current?.display_order || "-"}
                           </div>
@@ -250,7 +442,7 @@ export function SharedDocumentConfigPanel() {
                     ) : (
                       <Save className="h-4 w-4 mr-2" />
                     )}
-                    Lưu cấu hình
+                    Lưu lớp “{audienceLabel}”
                   </Button>
                 </div>
               </div>

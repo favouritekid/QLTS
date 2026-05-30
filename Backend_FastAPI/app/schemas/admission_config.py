@@ -8,7 +8,9 @@ Pydantic schemas for API responses.
 from decimal import Decimal
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.admission_path import AdmissionAudience
 
 
 # =============================================================================
@@ -297,6 +299,9 @@ class SharedDocumentGroupResponse(BaseModel):
     offering_type_id: int
     code: str
     name: str
+    # feat/document-group-audience-merge §10.10: lớp audience của group.
+    # NULL = lớp NỀN; [..] = lớp theo đối tượng/trình độ.
+    applicable_audience: Optional[list[AdmissionAudience]] = None
     items: list[DocumentGroupItemResponse] = []
 
 
@@ -315,4 +320,20 @@ class SharedDocumentGroupUpdate(BaseModel):
     Replaces ALL items in the group.
     """
     items: list[DocumentGroupItemCreate]
+
+
+class SharedDocumentPreviewRequest(BaseModel):
+    """Preview bộ hồ sơ theo TS giả định (§5b/G5).
+
+    Thin-client: FE gửi raw cultural/vocational → BE derive audience + resolve
+    (KHÔNG để FE tự tính audience). ``cultural`` constrain đúng enum BE.
+    """
+    cultural_education_level: Optional[str] = Field(
+        None,
+        pattern=(
+            r"^(completed_thcs|graduated_thcs|completed_thpt|"
+            r"graduated_thpt|graduated_gdtx)$"
+        ),
+    )
+    vocational_qualification: Optional[str] = None
 

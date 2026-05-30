@@ -18,9 +18,11 @@ Pure: chỉ import models + lazy ``priority_service`` (no FastAPI, no import cyc
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set
 
 import structlog
+
+from app.schemas.admission_path import ResolvedDocumentResponse
 
 log = structlog.get_logger(__name__)
 
@@ -151,6 +153,28 @@ def derive_audience_set(profile, path) -> Set[str]:
     return audience
 
 
+def compute_preview_audience_set(
+    cultural: Optional[str],
+    offering_type_code: Optional[str],
+) -> Set[str]:
+    """Audience set cho PREVIEW config-level (§5b/G5 "Xem trước theo TS").
+
+    KHÔNG cần path/profile (admin chỉ nhập raw cultural/vocational/offering_type
+    → BE derive, thin-client). Chỉ suy:
+    - **Văn hóa**: ``cultural`` trực tiếp → POST_THCS/POST_THPT (nhu cầu gốc).
+    - **VLVH**: offering_type ``vua_lam_vua_hoc``.
+
+    LIEN_THONG_TC/CD cần degree level (program cụ thể) → KHÔNG suy được ở
+    tầng offering_type; defer known-limitation GĐ1 (lớp LIEN_THONG chưa tồn tại).
+    """
+    audience: Set[str] = set()
+    if cultural in _CULTURAL_TO_AUDIENCE:
+        audience.add(_CULTURAL_TO_AUDIENCE[cultural])
+    if offering_type_code == "vua_lam_vua_hoc":
+        audience.add("VLVH")
+    return audience
+
+
 def compute_completed_doc_codes(profile) -> Set[str]:
     """Mã bằng TN cần LOẠI khỏi bộ hồ sơ khi ``cultural='completed_*'``.
 
@@ -160,3 +184,50 @@ def compute_completed_doc_codes(profile) -> Set[str]:
     cultural = getattr(profile, "cultural_education_level", None)
     code = _COMPLETED_DIPLOMA_TO_REMOVE.get(cultural)
     return {code} if code else set()
+
+
+def build_resolved_response(
+    doc_map: Dict[int, tuple],
+    completed_codes: Optional[Set[str]] = None,
+) -> List[ResolvedDocumentResponse]:
+    """``doc_map`` ``(item, source, group_audience)`` → list ResolvedDocumentResponse.
+
+    Builder canonical cho resolve (path/create) + preview config — cùng module
+    với ``mandatory_wins_merge`` (đúng layering, tránh caller reach vào private
+    của service khác). Loại item code ∈ ``completed_codes`` (cultural=completed_*
+    → bỏ bằng TN §6). ``layer_kind``: path_override / method_override /
+    shared_audience / shared_base. ``applicable_audience``: audience group thắng
+    (None cho NỀN/override).
+    """
+    completed = completed_codes or set()
+    resolved: List[ResolvedDocumentResponse] = []
+    for _doc_type_id, (item, source, grp_aud) in doc_map.items():
+        code = item.document_type.code if item.document_type else ""
+        if code in completed:
+            continue
+        if source == "path_override":
+            layer_kind = "path_override"
+        elif source == "method_override":
+            layer_kind = "method_override"
+        elif grp_aud:
+            layer_kind = "shared_audience"
+        else:
+            layer_kind = "shared_base"
+        resolved.append(
+            ResolvedDocumentResponse(
+                document_type_id=item.document_type_id,
+                document_type_code=code,
+                document_type_name=(
+                    item.document_type.name if item.document_type else ""
+                ),
+                is_mandatory=item.is_mandatory,
+                requires_upload=item.requires_upload,
+                submission_format=item.submission_format,
+                display_order=item.display_order,
+                source=source,
+                applicable_audience=list(grp_aud) if grp_aud else None,
+                layer_kind=layer_kind,
+            )
+        )
+    resolved.sort(key=lambda x: x.display_order)
+    return resolved
