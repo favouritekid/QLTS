@@ -45,6 +45,20 @@ export const admissionAudienceEnum = z.enum([
 
 export type AdmissionAudience = z.infer<typeof admissionAudienceEnum>
 
+/**
+ * Nhãn tiếng Việt cho từng audience — mirror BE
+ * `document_resolution_service.AUDIENCE_LABELS`. Dùng để render badge
+ * lớp giấy tờ (display-only formatting của enum, KHÔNG phải business
+ * logic — như `STATUS_CONFIG` labels). Đổi nhãn phải sync BE.
+ */
+export const AUDIENCE_LABELS: Record<AdmissionAudience, string> = {
+  POST_THCS: "Tốt nghiệp THCS",
+  POST_THPT: "Tốt nghiệp THPT",
+  LIEN_THONG_TC: "Liên thông Trung cấp",
+  LIEN_THONG_CD: "Liên thông Cao đẳng",
+  VLVH: "Vừa làm vừa học",
+}
+
 // ==============================================================================
 // BONUS RULE OVERRIDE (phase1_02 wired in PR-1B')
 // ==============================================================================
@@ -432,6 +446,17 @@ export const resolvedDocumentResponseSchema = z.object({
   submission_format: z.string().nullable(),
   display_order: z.number(),
   source: z.enum(["shared", "method_override", "path_override"]),
+  // feat/document-group-audience-merge (ĐỢT A) — audience layer metadata.
+  // applicable_audience: [POST_THPT,...] = lớp theo đối tượng/trình độ;
+  //   null = lớp NỀN (luôn gộp) hoặc override (method/path).
+  // layer_kind: phân loại lớp để render badge — KHÔNG overload `source`.
+  applicable_audience: admissionAudienceEnum.array().nullable(),
+  layer_kind: z.enum([
+    "shared_base",
+    "shared_audience",
+    "method_override",
+    "path_override",
+  ]),
 })
 
 export type ResolvedDocumentResponse = z.infer<typeof resolvedDocumentResponseSchema>
