@@ -840,8 +840,10 @@ async def get_public_documents_catalog(
         # NULL) + lớp audience. TÁCH hiển thị thay vì union (tránh trang công
         # khai liệt kê dư cả THPT lẫn THCS cho 1 chương trình).
         all_shared_groups = shared_groups_by_offering_type.get(offering_type_id, [])
-        # getattr default None (consistent mandatory_wins_merge ĐỢT A): group
-        # thiếu attr/applicable_audience NULL = lớp NỀN.
+        # getattr default None (consistent mandatory_wins_merge ĐỢT A): NULL —
+        # và cả ``[]`` rỗng (falsy) — = lớp NỀN (áp mọi TS). Migration §8.2 chỉ
+        # sinh lớp audience non-rỗng ([POST_THPT],...) nên [] không xảy ra thực
+        # tế; fold vào NỀN là default an toàn, khớp filter_shared_by_audience.
         nen_groups = [
             g for g in all_shared_groups
             if not getattr(g, "applicable_audience", None)

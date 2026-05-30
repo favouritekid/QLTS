@@ -647,6 +647,68 @@ class TestDocumentsCatalogTierAggregation:
         assert len(ot.audience_layers) == 1
         assert ot.audience_layers[0].audience == "POST_THCS"
 
+    @pytest.mark.asyncio
+    async def test_multi_audience_group_appears_in_both_layers(self, monkeypatch):
+        """Group applicable_audience nhiều giá trị → xuất hiện ở MỌI layer khớp
+        (review nit: loop trên array audience)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(
+                        _doc_item("SHARED_BOTH"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT", "POST_THCS"],
+                    )
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        ot = result.offering_types[0]
+        layers = {
+            l.audience: {d.document_type_code for d in l.documents}
+            for l in ot.audience_layers
+        }
+        assert layers == {"POST_THPT": {"SHARED_BOTH"}, "POST_THCS": {"SHARED_BOTH"}}
+
+    @pytest.mark.asyncio
+    async def test_layer_merge_mandatory_wins(self, monkeypatch):
+        """2 group cùng audience trùng doc-type (1 optional, 1 mandatory) → layer
+        chọn mandatory (mandatory-wins TRONG lớp — review nit)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(
+                        _doc_item("HB", is_mandatory=False),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                    _doc_group(
+                        _doc_item("HB", is_mandatory=True),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        layer = result.offering_types[0].audience_layers[0]
+        docs = {d.document_type_code: d.is_mandatory for d in layer.documents}
+        assert docs == {"HB": True}  # mandatory wins
+
 
 # =============================================================================
 # Audience enum surface
