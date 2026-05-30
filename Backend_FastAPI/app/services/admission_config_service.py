@@ -523,8 +523,12 @@ class AdmissionConfigService:
                 name = f"Hồ sơ {label} (OT-{offering_type_id})"
                 description = f"Lớp theo đối tượng: {label}."
                 applicable = [audience]
-            # code UNIQUE VARCHAR(50) — fail-loud nếu vượt (thực tế ≤ ~30).
-            assert len(code) <= 50, f"group code '{code}' ({len(code)}) > 50"
+            # code UNIQUE VARCHAR(50) — fail-loud nếu vượt (thực tế ≤ ~30;
+            # raise thật, KHÔNG assert — tránh bị strip với python -O).
+            if len(code) > 50:
+                raise ValueError(
+                    f"group code '{code}' ({len(code)}) > 50 — đổi scheme hậu tố"
+                )
 
             group = await self.document_group_repo.create_group(
                 offering_type_id=offering_type_id,
@@ -565,15 +569,15 @@ class AdmissionConfigService:
         Thin-client: admin nhập raw cultural/vocational → BE derive audience +
         resolve (NỀN + lớp khớp) + loại bằng TN khi completed_* (§6). Tái dùng
         nguyên machinery ĐỢT A (filter_shared_by_audience + mandatory_wins_merge
-        + _build_resolved_response) để preview KHỚP resolve thật.
+        + build_resolved_response) để preview KHỚP resolve thật.
 
         Chỉ tier shared (config panel không gắn path/method) → đủ cho nhu cầu
         gốc THCS↔THPT. LIEN_THONG/VLVH layer chưa tồn tại GĐ1 (known-limitation).
         """
         from types import SimpleNamespace
 
-        from app.services.admission_path_service import AdmissionPathService
         from app.services.document_resolution_service import (
+            build_resolved_response,
             compute_completed_doc_codes,
             compute_preview_audience_set,
             filter_shared_by_audience,
@@ -602,6 +606,6 @@ class AdmissionConfigService:
         completed = compute_completed_doc_codes(
             SimpleNamespace(cultural_education_level=cultural_education_level)
         )
-        return AdmissionPathService._build_resolved_response(doc_map, completed)
+        return build_resolved_response(doc_map, completed)
 
 

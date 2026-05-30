@@ -138,14 +138,12 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
           2 NỀN/ot).
         - ``audience=<X>`` → group có X trong ``applicable_audience``.
 
-        Filter trong Python trên ``get_shared_groups`` (≤6 group/ot, low-freq
-        config) → tránh SQL enum-array ``&&`` + tự lọc ``path IS NULL`` mà
-        KHÔNG đụng query resolve. Deterministic nhờ ORDER BY id.
+        Filter audience trong Python trên ``get_shared_groups`` (≤6 group/ot,
+        low-freq config) → tránh SQL enum-array ``&&``. ``get_shared_groups`` đã
+        lọc tier shared (method + path đều NULL) + ORDER BY id ⇒ deterministic.
         """
         groups = await self.get_shared_groups(offering_type_id)
         for group in groups:
-            if group.admission_path_id is not None:
-                continue  # path-override KHÔNG phải tier shared thuần
             aud = group.applicable_audience
             if audience is None:
                 if not aud:  # NULL hoặc [] = lớp NỀN

@@ -36,6 +36,7 @@ from app.schemas.admission_path import (
     ResolvedDocumentResponse,
 )
 from app.services.document_resolution_service import (
+    build_resolved_response,
     compute_completed_doc_codes,
     derive_audience_set,
     filter_shared_by_audience,
@@ -931,7 +932,7 @@ class AdmissionPathService:
             )
             mandatory_wins_merge(doc_map, layers, "shared")
 
-        resolved = self._build_resolved_response(doc_map, completed_codes)
+        resolved = build_resolved_response(doc_map, completed_codes)
         return resolved, _noop_callback
 
     async def resolve_documents_for_profile(
@@ -955,50 +956,6 @@ class AdmissionPathService:
             audience_set=audience_set,
             completed_codes=completed_codes,
         )
-
-    @staticmethod
-    def _build_resolved_response(
-        doc_map: dict,
-        completed_codes: Optional[set] = None,
-    ) -> List[ResolvedDocumentResponse]:
-        """doc_map ``(item, source, group_audience)`` → list response.
-
-        Loại item có code ∈ ``completed_codes`` (cultural=completed_* → bỏ bằng TN).
-        ``layer_kind``: path_override / method_override / shared_audience / shared_base.
-        ``applicable_audience``: audience của group thắng (None cho NỀN/override).
-        """
-        completed = completed_codes or set()
-        resolved: List[ResolvedDocumentResponse] = []
-        for _doc_type_id, (item, source, grp_aud) in doc_map.items():
-            code = item.document_type.code if item.document_type else ""
-            if code in completed:
-                continue
-            if source == "path_override":
-                layer_kind = "path_override"
-            elif source == "method_override":
-                layer_kind = "method_override"
-            elif grp_aud:
-                layer_kind = "shared_audience"
-            else:
-                layer_kind = "shared_base"
-            resolved.append(
-                ResolvedDocumentResponse(
-                    document_type_id=item.document_type_id,
-                    document_type_code=code,
-                    document_type_name=(
-                        item.document_type.name if item.document_type else ""
-                    ),
-                    is_mandatory=item.is_mandatory,
-                    requires_upload=item.requires_upload,
-                    submission_format=item.submission_format,
-                    display_order=item.display_order,
-                    source=source,
-                    applicable_audience=list(grp_aud) if grp_aud else None,
-                    layer_kind=layer_kind,
-                )
-            )
-        resolved.sort(key=lambda x: x.display_order)
-        return resolved
 
     # =========================================================================
     # CONTROL FIELD COMPUTATION (for response)

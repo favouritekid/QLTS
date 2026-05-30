@@ -911,14 +911,14 @@ async def upsert_shared_document_group(
 async def preview_shared_documents(
     offering_type_id: int,
     data: SharedDocumentPreviewRequest,
-    active_only: bool = Depends(get_config_filter),
+    _: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Preview bộ hồ sơ shared theo TS giả định (§5b/G5 "Xem trước theo TS").
 
     Thin-client: FE gửi raw cultural/vocational → BE derive audience + resolve
-    (NỀN + lớp khớp, loại bằng TN khi completed_*). Read-only, mirror auth GET
-    shared (get_config_filter → current_user, KHÔNG Casbin — N2).
+    (NỀN + lớp khớp, loại bằng TN khi completed_*). Read-only; auth active-user
+    (KHÔNG lọc active_only như GET list, KHÔNG Casbin — N2).
     """
     service = AdmissionConfigService(db)
     return await service.preview_shared_documents(
