@@ -91,12 +91,20 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         self,
         offering_type_id: int
     ) -> List[DocumentGroup]:
-        """Get shared groups (admission_method_id = NULL)."""
+        """Get shared groups (tier shared = method + path đều NULL).
+
+        ``admission_path_id IS NULL`` (review P1): path-level override group
+        ĐƯỢC PHÉP có ``admission_method_id=NULL`` (invariant document_group_
+        service) → nếu thiếu filter này, path-override lẫn vào "shared" layer
+        (list/preview/can-activate hiển thị/merge nhầm). Khớp canonical resolver
+        ``admission_path_repository`` shared query.
+        """
         query = (
             select(DocumentGroup)
             .where(
                 DocumentGroup.offering_type_id == offering_type_id,
                 DocumentGroup.admission_method_id.is_(None),
+                DocumentGroup.admission_path_id.is_(None),
                 DocumentGroup.is_active == True,
             )
             .options(

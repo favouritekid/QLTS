@@ -342,7 +342,12 @@ export function SharedDocumentConfigPanel() {
 
         {selectedOfferingTypeId && (
           <div className="ml-auto">
-            <PreviewDialog offeringTypeId={selectedOfferingTypeId} />
+            {/* key remount → reset mutation result + cultural khi đổi loại hình
+                (review P2: tránh giữ kết quả preview của loại hình trước). */}
+            <PreviewDialog
+              key={selectedOfferingTypeId}
+              offeringTypeId={selectedOfferingTypeId}
+            />
           </div>
         )}
       </div>

@@ -266,3 +266,127 @@ async def test_preview_no_cultural_returns_nen_only():
         docs = await svc.preview_shared_documents(d["ot_id"], None, None)
         codes = {x.document_type_code for x in docs}
         assert codes == {"cccd"}  # chỉ NỀN
+
+
+# ---------------------------------------------------------------------------
+# P1 review — path-override group (method NULL + path SET) KHÔNG lẫn shared
+# ---------------------------------------------------------------------------
+
+
+async def _setup_with_path_override() -> dict:
+    """ot + NỀN group + 1 admission_path + path-override group (method NULL,
+    path SET, item marker). Path-override ĐƯỢC PHÉP method NULL (invariant) →
+    phải bị get_shared_groups loại khỏi tier shared."""
+    from tests.fixtures.builders import AdmissionRoundBuilder
+
+    suffix = random.randint(100000, 999999)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            unit = models.OrganizationUnit(
+                name=f"Unit {suffix}", type="Khoa"
+            )
+            session.add(unit)
+            await session.flush()
+            major = models.MajorProgram(
+                name=f"Major {suffix}", code=f"M{suffix}",
+                degree_level="Cao đẳng", unit_id=unit.id,
+            )
+            session.add(major)
+            await session.flush()
+
+            ot = models.ConfigOfferingType(
+                code=f"cfgpath_{suffix}", name=f"Path OT {suffix}", is_active=True
+            )
+            session.add(ot)
+            await session.flush()
+
+            offering = models.ProgramOffering(
+                offering_type=f"PathTest_{suffix}",
+                program_id=major.id,
+                offering_type_id=ot.id,
+            )
+            session.add(offering)
+            await session.flush()
+
+            academic_info = models.OfferingAcademicInfo(
+                offering_id=offering.id, academic_year=2025, is_published=True
+            )
+            session.add(academic_info)
+            await session.flush()
+
+            method = models.AdmissionMethod(
+                code=f"pathm_{suffix}", name="Path Method", is_active=True
+            )
+            session.add(method)
+            await session.flush()
+
+            criteria = models.AdmissionCriteria(
+                method_id=method.id, code=f"pathc_{suffix}", name="C",
+                min_gpa=0, is_active=True,
+            )
+            session.add(criteria)
+            await session.flush()
+
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                session, academic_year=2025
+            )
+            path = models.AdmissionPath(
+                academic_info_id=academic_info.id,
+                admission_method_id=method.id,
+                admission_round_id=round_id,
+                criteria_id=criteria.id,
+                status="active",
+            )
+            session.add(path)
+            await session.flush()
+
+            cccd = await _get_or_create_doc_type(session, "cccd", "CCCD")
+            marker = await _get_or_create_doc_type(
+                session, "marker_path_doc", "Marker Path Doc"
+            )
+
+            # NỀN (method+path NULL).
+            g_nen = models.DocumentGroup(
+                offering_type_id=ot.id, admission_method_id=None,
+                admission_path_id=None, code=f"PNEN_{suffix}", name="nen",
+                is_active=True, applicable_audience=None,
+            )
+            # Path-override: method NULL NHƯNG path SET (invariant cho phép).
+            g_path = models.DocumentGroup(
+                offering_type_id=ot.id, admission_method_id=None,
+                admission_path_id=path.id, code=f"PPATH_{suffix}", name="path",
+                is_active=True, applicable_audience=None,
+            )
+            session.add_all([g_nen, g_path])
+            await session.flush()
+
+            session.add(models.DocumentGroupItem(
+                group_id=g_nen.id, document_type_id=cccd, is_mandatory=True,
+                requires_upload=True, display_order=1,
+            ))
+            session.add(models.DocumentGroupItem(
+                group_id=g_path.id, document_type_id=marker, is_mandatory=True,
+                requires_upload=True, display_order=1,
+            ))
+
+            return {"ot_id": ot.id, "nen_id": g_nen.id, "path_id": g_path.id}
+
+
+async def test_list_layers_excludes_path_override():
+    d = await _setup_with_path_override()
+    async with AsyncSessionLocal() as s:
+        svc = AdmissionConfigService(s)
+        groups = await svc.list_shared_document_groups(d["ot_id"])
+        ids = {g.id for g in groups}
+        assert d["nen_id"] in ids
+        assert d["path_id"] not in ids  # path-override KHÔNG phải shared layer
+
+
+async def test_preview_excludes_path_override():
+    d = await _setup_with_path_override()
+    async with AsyncSessionLocal() as s:
+        svc = AdmissionConfigService(s)
+        docs = await svc.preview_shared_documents(d["ot_id"], "graduated_thpt", None)
+        codes = {x.document_type_code for x in docs}
+        assert "cccd" in codes  # NỀN có
+        assert "marker_path_doc" not in codes  # path-override KHÔNG merge vào preview
