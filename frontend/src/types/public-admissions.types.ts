@@ -130,6 +130,13 @@ export interface PublicAdmissionsMethodDocumentChecklist {
   documents: PublicAdmissionsDocumentRequirement[]
 }
 
+// §9 (feat/document-group-audience-merge): lớp giấy tờ theo đối tượng/trình độ.
+export interface PublicAdmissionsAudienceDocumentLayer {
+  audience: string
+  audience_label: string
+  documents: PublicAdmissionsDocumentRequirement[]
+}
+
 export interface PublicAdmissionsOfferingTypeDocumentChecklist {
   offering_type_id: number
   offering_type_code: string
@@ -139,6 +146,8 @@ export interface PublicAdmissionsOfferingTypeDocumentChecklist {
   public_method_count: number
   sample_programs: string[]
   shared_documents: PublicAdmissionsDocumentRequirement[]
+  // §9: NỀN = shared_documents; audience_layers = lớp theo đối tượng.
+  audience_layers: PublicAdmissionsAudienceDocumentLayer[]
   method_documents: PublicAdmissionsMethodDocumentChecklist[]
 }
 
