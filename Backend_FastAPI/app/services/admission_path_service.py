@@ -35,6 +35,12 @@ from app.schemas.admission_path import (
     AdmissionPathDocumentUpsert,
     ResolvedDocumentResponse,
 )
+from app.services.document_resolution_service import (
+    compute_completed_doc_codes,
+    derive_audience_set,
+    filter_shared_by_audience,
+    mandatory_wins_merge,
+)
 from app.utils.exceptions import (
     ResourceNotFoundError,
     DuplicateResourceError,
@@ -656,8 +662,11 @@ class AdmissionPathService:
 
         await self.db.flush()
 
-        # Return resolved list
-        return await self.resolve_documents_for_path(path, offering_type_id)
+        # Return resolved list. round-6 G2: view admin no-audience → ALL layers
+        # (NỀN + mọi audience) để KHÔNG co lại sau backfill audience.
+        return await self.resolve_documents_for_path(
+            path, offering_type_id, all_audiences=True
+        )
 
     # =========================================================================
     # ACTIVATION LOGIC
@@ -868,31 +877,34 @@ class AdmissionPathService:
     # =========================================================================
 
     async def resolve_documents_for_path(
-        self, path: AdmissionPath, offering_type_id: int
+        self,
+        path: AdmissionPath,
+        offering_type_id: int,
+        *,
+        audience_set: Optional[set] = None,
+        all_audiences: bool = False,
+        completed_codes: Optional[set] = None,
     ) -> Tuple[List[ResolvedDocumentResponse], PostCommitCallback]:
         """
-        Resolve document requirements for a path.
+        Resolve document requirements for a path (3-tier + audience).
 
-        phase1_06 (#184 Wave 1 PR-1C') — 3-tier resolution rule
-        per PLAN line 619-623:
+        phase1_06 — 3-tier resolution (path > method > shared). Tier
+        precedence GIỮ NGUYÊN (fork không đụng audience). feat audience:
+        audience CHỈ áp trong tier shared (lớp NỀN + lớp khớp audience).
 
-        1. **Tier 1**: ``WHERE admission_path_id = path.id`` →
-           if any rows match, USE THIS TIER FULLY (ignore tier 2 + 3).
-        2. **Tier 2**: ``WHERE admission_method_id = path.method
-           AND admission_path_id IS NULL`` → if any rows match,
-           USE THIS TIER FULLY (ignore tier 3).
-        3. **Tier 3**: ``WHERE offering_type_id = X AND
-           admission_method_id IS NULL AND admission_path_id IS NULL``
-           → fallback shared bucket.
-
-        Within a tier, multiple groups merge with mandatory-wins
-        (existing precedence preserved). Source indicators on the
-        response surface which tier provided each document so the
-        FE / admin can debug drift.
+        Args:
+            audience_set: tập audience của thí sinh ({POST_THPT,...}). Trong tier
+                shared chỉ merge lớp NỀN + lớp ``&& audience_set``. ``None`` → CHỈ
+                NỀN (backward-compat: legacy / create chưa biết audience).
+            all_audiences: True → tier shared merge TẤT CẢ lớp (NỀN + mọi audience)
+                bất kể audience_set. Dùng cho view admin no-audience (round-6 G2 —
+                endpoint /paths/{id}/documents không ?audience= → thấy đủ bộ, KHÔNG
+                co lại sau backfill).
+            completed_codes: mã bằng TN LOẠI khỏi kết quả (cultural=completed_* §6).
 
         Returns:
-            List of resolved documents with source indicator
-            (``path_override`` / ``method_override`` / ``shared``).
+            (list resolved docs với source + layer_kind + applicable_audience,
+             noop callback).
         """
         path_groups, method_groups, shared_groups = (
             await self.repo.get_document_groups_for_path(
@@ -902,51 +914,77 @@ class AdmissionPathService:
             )
         )
 
-        # Build document map: document_type_id -> (item, source).
-        # Tier precedence: highest tier with non-empty groups wins
-        # FULLY; lower tiers are ignored (admin "deletes" default
-        # items by configuring a higher tier).
+        # doc_map: {document_type_id: (item, source, group_audience)}.
+        # Tier precedence: highest tier non-empty thắng FULLY (lower tiers
+        # ignored — admin "xóa" default item bằng cấu hình tier cao hơn).
         doc_map: dict = {}
-
         if path_groups:
-            # Tier 1 — path-specific (PR-1C' new). Mandatory-wins
-            # within the tier so two path groups can layer.
-            for group in path_groups:
-                for item in group.items:
-                    existing = doc_map.get(item.document_type_id)
-                    if existing is None:
-                        doc_map[item.document_type_id] = (item, "path_override")
-                    elif item.is_mandatory and not existing[0].is_mandatory:
-                        doc_map[item.document_type_id] = (item, "path_override")
+            mandatory_wins_merge(doc_map, path_groups, "path_override")
         elif method_groups:
-            # Tier 2 — method-specific. Existing legacy bucket;
-            # behavior unchanged from pre-PR-1C'.
-            for group in method_groups:
-                for item in group.items:
-                    existing = doc_map.get(item.document_type_id)
-                    if existing is None:
-                        doc_map[item.document_type_id] = (item, "method_override")
-                    elif item.is_mandatory and not existing[0].is_mandatory:
-                        doc_map[item.document_type_id] = (item, "method_override")
+            mandatory_wins_merge(doc_map, method_groups, "method_override")
         else:
-            # Tier 3 — shared offering-type fallback.
-            for group in shared_groups:
-                for item in group.items:
-                    existing = doc_map.get(item.document_type_id)
-                    if existing is None:
-                        doc_map[item.document_type_id] = (item, "shared")
-                    elif item.is_mandatory and not existing[0].is_mandatory:
-                        doc_map[item.document_type_id] = (item, "shared")
+            # Tier 3 — shared. Audience CHỈ áp ở đây.
+            layers = (
+                shared_groups
+                if all_audiences
+                else filter_shared_by_audience(shared_groups, audience_set)
+            )
+            mandatory_wins_merge(doc_map, layers, "shared")
 
-        # Step 3: Build response
+        resolved = self._build_resolved_response(doc_map, completed_codes)
+        return resolved, _noop_callback
+
+    async def resolve_documents_for_profile(
+        self,
+        profile,
+        path: AdmissionPath,
+        offering_type_id: int,
+    ) -> Tuple[List[ResolvedDocumentResponse], PostCommitCallback]:
+        """Resolve bộ hồ sơ THẬT của 1 thí sinh (audience suy từ profile).
+
+        Dùng cho create snapshot + re-resolve. ``derive_audience_set`` nuốt
+        CONFIG_GAP nội bộ → luôn ≥ tập văn hóa; ``compute_completed_doc_codes``
+        loại bằng TN khi cultural=completed_* (§6). Caller truyền ``path`` =
+        path primary để derive chiều loại hình (P1-A: chain phải eager-load).
+        """
+        audience_set = derive_audience_set(profile, path)
+        completed_codes = compute_completed_doc_codes(profile)
+        return await self.resolve_documents_for_path(
+            path,
+            offering_type_id,
+            audience_set=audience_set,
+            completed_codes=completed_codes,
+        )
+
+    @staticmethod
+    def _build_resolved_response(
+        doc_map: dict,
+        completed_codes: Optional[set] = None,
+    ) -> List[ResolvedDocumentResponse]:
+        """doc_map ``(item, source, group_audience)`` → list response.
+
+        Loại item có code ∈ ``completed_codes`` (cultural=completed_* → bỏ bằng TN).
+        ``layer_kind``: path_override / method_override / shared_audience / shared_base.
+        ``applicable_audience``: audience của group thắng (None cho NỀN/override).
+        """
+        completed = completed_codes or set()
         resolved: List[ResolvedDocumentResponse] = []
-        for doc_type_id, (item, source) in doc_map.items():
+        for _doc_type_id, (item, source, grp_aud) in doc_map.items():
+            code = item.document_type.code if item.document_type else ""
+            if code in completed:
+                continue
+            if source == "path_override":
+                layer_kind = "path_override"
+            elif source == "method_override":
+                layer_kind = "method_override"
+            elif grp_aud:
+                layer_kind = "shared_audience"
+            else:
+                layer_kind = "shared_base"
             resolved.append(
                 ResolvedDocumentResponse(
                     document_type_id=item.document_type_id,
-                    document_type_code=(
-                        item.document_type.code if item.document_type else ""
-                    ),
+                    document_type_code=code,
                     document_type_name=(
                         item.document_type.name if item.document_type else ""
                     ),
@@ -955,13 +993,12 @@ class AdmissionPathService:
                     submission_format=item.submission_format,
                     display_order=item.display_order,
                     source=source,
+                    applicable_audience=list(grp_aud) if grp_aud else None,
+                    layer_kind=layer_kind,
                 )
             )
-
-        # Sort by display_order
         resolved.sort(key=lambda x: x.display_order)
-
-        return resolved, _noop_callback
+        return resolved
 
     # =========================================================================
     # CONTROL FIELD COMPUTATION (for response)

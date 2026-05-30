@@ -3829,6 +3829,117 @@ async def get_profile(
     return profile
 
 
+async def _reresolve_documents_snapshot(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    admission_repo,
+    current_user: Optional["models.User"],
+) -> None:
+    """Re-resolve doc snapshot khi cultural/vocational đổi (feat audience).
+
+    Bối cảnh (round-2 P0-A): submit check ``mandatory_docs`` từ SNAPSHOT, không
+    re-resolve; cultural set qua update_profile vốn không re-resolve. Nếu không
+    re-resolve khi cultural đổi → snapshot stale (thiếu học bạ/bằng TN theo
+    audience) → submit qua eligibility (cultural đã set) nhưng doc không bắt buộc
+    = REGRESSION. Hook này đóng lỗ đó.
+
+    - CHỈ editable states {draft, rejected, revision_requested} (ngoài đó gate
+      chặn → đóng băng, không cần block riêng).
+    - INSERT-only DELTA qua ``add_path_documents_delta`` (P0-B: không vi phạm
+      ``uq_profile_document_path``; không xóa upload).
+    - MERGE applied_rules PER-KEY (round-3 invariant): chỉ ghi đè
+      ``mandatory_docs``/``doc_configs``, GIỮ ``schema_version``/
+      ``allow_unverified_submission``/``admission_path_id``/scoring (submit
+      :4974-4978 raise nếu thiếu). KHÔNG bump schema_version (round-4 N1).
+    - CONFIG_GAP đã nuốt nội bộ trong ``derive_audience_set`` (round-3 BLOCKER)
+      → luôn ≥ tập văn hóa. Lỗi BẤT NGỜ (DB...) PROPAGATE (loud-fail) — KHÔNG
+      im lặng giữ snapshot NỀN-only.
+    - N5: ghi audit entry ``documents_reresolved`` (mutate snapshot không vào
+      ``updated_fields`` của update_profile).
+    """
+    if profile.status not in ("draft", "rejected", "revision_requested"):
+        return
+    applied = profile.applied_rules or {}
+    path_id = applied.get("admission_path_id")
+    if path_id is None:
+        return  # legacy / hồ sơ không có path snapshot → bỏ qua
+
+    from .admission_path_service import AdmissionPathService
+    from ..repositories.admission_path_repository import AdmissionPathRepository
+
+    path = await AdmissionPathRepository(db).get_path_for_audience_reresolve(
+        int(path_id)
+    )
+    if path is None or path.academic_info is None or path.academic_info.offering is None:
+        return
+    offering_type_id = path.academic_info.offering.offering_type_id
+    if offering_type_id is None:
+        return
+
+    resolved, _ = await AdmissionPathService(db).resolve_documents_for_profile(
+        profile, path, offering_type_id
+    )
+    new_mandatory = [d.document_type_code for d in resolved if d.is_mandatory]
+    new_doc_configs = {
+        d.document_type_code: {
+            "requires_upload": d.requires_upload,
+            "submission_format": d.submission_format,
+            "is_mandatory": d.is_mandatory,
+            "label": d.document_type_name,
+        }
+        for d in resolved
+    }
+
+    # Micro-opt: snapshot KHÔNG đổi (PATCH cultural set lại cùng giá trị, hoặc
+    # audience không đổi bộ hồ sơ) → skip write/delta/audit. resolved.sort theo
+    # display_order → list deterministic, so sánh list/dict an toàn.
+    if new_mandatory == (applied.get("mandatory_docs") or []) and (
+        new_doc_configs == (applied.get("doc_configs") or {})
+    ):
+        return
+
+    old_mandatory = set(applied.get("mandatory_docs") or [])
+
+    # MERGE per-key (giữ mọi key khác — KHÔNG gán dict mới).
+    applied["mandatory_docs"] = new_mandatory
+    applied["doc_configs"] = new_doc_configs
+    profile.applied_rules = applied
+    flag_modified(profile, "applied_rules")
+
+    # DELTA INSERT ProfileDocument cho code mới (idempotent, không xóa upload).
+    await admission_repo.add_path_documents_delta(profile.id, new_mandatory)
+
+    # N5 — audit entry cho mutate snapshot.
+    added = sorted(set(new_mandatory) - old_mandatory)
+    removed = sorted(old_mandatory - set(new_mandatory))
+    if added or removed:
+        from ..services import audit_service
+
+        await audit_service.log_changes(
+            db,
+            "AdmissionProfile",
+            profile.id,
+            "documents_reresolved",
+            changes={
+                "reason": "audience_change",
+                "cultural_education_level": getattr(
+                    profile, "cultural_education_level", None
+                ),
+                "docs_added": added,
+                "docs_removed": removed,
+            },
+            actor_user_id=current_user.id if current_user else None,
+            source="system",
+        )
+    log.info(
+        "documents_reresolved",
+        profile_id=profile.id,
+        mandatory_count=len(new_mandatory),
+        added=added,
+        removed=removed,
+    )
+
+
 async def update_profile(
     db: AsyncSession,
     profile_id: int,
@@ -4120,6 +4231,13 @@ async def update_profile(
             if profile.lead:
                 profile.lead.gpa = gpa_value
 
+
+    # feat/document-group-audience-merge — re-resolve doc snapshot khi
+    # cultural/vocational đổi (audience phụ thuộc 2 field này). Đặt sau khi
+    # set cultural (:4055-4058) + scores, trước flush. CONFIG_GAP nuốt nội bộ
+    # trong derive_audience_set → luôn ≥ tập văn hóa (round-3 BLOCKER).
+    if ("cultural_education_level" in data) or ("vocational_qualification" in data):
+        await _reresolve_documents_snapshot(db, profile, admission_repo, current_user)
 
     # Update timestamp and increment version
     profile.updated_at = datetime.now(timezone.utc)

@@ -10,6 +10,7 @@ Tables:
 """
 
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint, Index
+from sqlalchemy.dialects.postgresql import ARRAY, ENUM
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -88,6 +89,30 @@ class DocumentGroup(Base):
         default=True,
         index=True
     )
+    # feat/document-group-audience-merge — audience layer filter.
+    # NULL = lớp NỀN tier shared (luôn merge cho mọi thí sinh).
+    # [..] = lớp theo đối tượng/trình độ, merge khi && audience_set của
+    # thí sinh (resolve qua document_resolution_service.filter_shared_by_audience).
+    # CHỈ có nghĩa trong tier shared (method/path override KHÔNG dùng audience).
+    # ENUM admission_audience tạo ở alembic phase1_03 (create_type=False
+    # mirrored). Query MUST dùng && overlap + cast ::admission_audience[],
+    # NEVER = ANY (không hit GIN ix_document_group_applicable_audience).
+    applicable_audience = Column(
+        ARRAY(
+            ENUM(
+                "POST_THCS",
+                "POST_THPT",
+                "LIEN_THONG_TC",
+                "LIEN_THONG_CD",
+                "VLVH",
+                name="admission_audience",
+                create_type=False,
+            )
+        ),
+        nullable=True,
+        comment="Audience layer filter ARRAY admission_audience. "
+                "NULL = lớp NỀN (luôn merge). Chỉ dùng trong tier shared.",
+    )
 
     # Relationships
     offering_type = relationship("ConfigOfferingType", back_populates="document_groups")
@@ -108,6 +133,12 @@ class DocumentGroup(Base):
         Index(
             "ix_document_group_offering_method",
             "offering_type_id", "admission_method_id"
+        ),
+        # GIN cho && overlap audience (feat/document-group-audience-merge).
+        Index(
+            "ix_document_group_applicable_audience",
+            "applicable_audience",
+            postgresql_using="gin",
         ),
     )
 

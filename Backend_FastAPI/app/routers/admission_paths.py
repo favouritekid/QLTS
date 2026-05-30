@@ -12,7 +12,7 @@ MASTER_ARCHITECTURE.md Compliance:
 """
 
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Path as PathParam
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,7 @@ from app.schemas.admission_path import (
     AdmissionCriteriaNested,
     SubjectGroupNested,
     CoverageMatrixResponse,
+    AdmissionAudience,
 )
 from app.services.admission_path_service import AdmissionPathService
 from app.repositories.admission_path_repository import AdmissionPathRepository
@@ -598,15 +599,23 @@ async def deactivate_admission_path(
     summary="Get resolved documents for path",
 )
 async def get_resolved_documents(
+    audience: Optional[AdmissionAudience] = Query(
+        None,
+        description=(
+            "Lọc bộ hồ sơ theo 1 diện thí sinh (POST_THPT, POST_THCS,...). "
+            "Bỏ trống → trả TẤT CẢ lớp (NỀN + mọi audience) cho view admin "
+            "(không co lại sau backfill audience)."
+        ),
+    ),
     path: models.AdmissionPath = Depends(get_admission_path_for_user),
     db: AsyncSession = Depends(database.get_db),
 ):
     """
     Get resolved document requirements for a path.
 
-    Override Rule:
-    - Shared docs (method_id = NULL) apply to all methods
-    - Method-specific docs override shared
+    3-tier override (path > method > shared). feat audience: trong tier shared,
+    ``?audience=`` lọc lớp theo diện thí sinh; bỏ trống → ALL layers (round-6 G2:
+    admin thấy đủ bộ, không co lại sau backfill audience).
 
     IDOR: Protected via get_admission_path_for_user dependency.
     """
@@ -614,9 +623,14 @@ async def get_resolved_documents(
     offering_type_id = path.academic_info.offering.offering_type_id
 
     service = AdmissionPathService(db)
-    documents, callback = await service.resolve_documents_for_path(
-        path, offering_type_id
-    )
+    if audience is None:
+        documents, callback = await service.resolve_documents_for_path(
+            path, offering_type_id, all_audiences=True
+        )
+    else:
+        documents, callback = await service.resolve_documents_for_path(
+            path, offering_type_id, audience_set={audience}
+        )
     await db.commit()
     await callback()
 

@@ -25,6 +25,7 @@ from app.models.admission_config import (
 )
 from app.models.offering_academic_info import OfferingAcademicInfo
 from app.models.program_offering import ProgramOffering
+from app.models.major_program import MajorProgram
 from app.repositories.base import BaseRepository
 
 
@@ -109,7 +110,37 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         )
         result = await self.db.execute(query)
         return result.scalars().first()
-    
+
+    async def get_path_for_audience_reresolve(
+        self,
+        path_id: int,
+    ) -> Optional[AdmissionPath]:
+        """Load path với CHAIN DERIVE đầy đủ cho re-resolve audience (P1-A).
+
+        ``derive_target_level_and_type`` (priority_service) cần eager-load
+        ``academic_info→offering→program→degree_level_ref`` +
+        ``offering→offering_type_config``; thiếu → CONFIG_GAP → audience rớt
+        chiều loại hình (LIEN_THONG/VLVH). ``MajorProgram.degree_level_ref``
+        lazy="raise" nên BẮT BUỘC eager-load. Cũng load offering để lấy
+        ``offering_type_id``.
+        """
+        query = (
+            select(AdmissionPath)
+            .where(AdmissionPath.id == path_id)
+            .options(
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program)
+                .selectinload(MajorProgram.degree_level_ref),
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.offering_type_config),
+                selectinload(AdmissionPath.admission_method),
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_paths_by_academic_info(
         self,
         academic_info_id: int

@@ -260,4 +260,6 @@ jobs:
           tests/unit/test_phase2_pr2c_three_col_unique.py
           tests/services/test_phase2_admission_path_quota_integration.py
           tests/unit/test_public_admissions_phase1_wave6.py
+          tests/unit/test_document_resolution_service.py
+          tests/integration/test_document_audience_reresolve.py
           -q --tb=short --timeout=60
