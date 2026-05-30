@@ -232,13 +232,43 @@ export async function updateSubjectPosition(groupId: number, subjectId: number, 
 // SHARED DOCUMENT GROUPS
 // ============================================
 
-export async function getSharedDocumentGroup(offeringTypeId: number) {
-  const response = await api.get(`/api/admission-config/document-groups/shared/${offeringTypeId}`);
+// feat/document-group-audience-merge §10.8/§10.16: lớp audience (NỀN = null).
+export async function getSharedDocumentGroup(
+  offeringTypeId: number,
+  audience?: string | null,
+) {
+  const response = await api.get(
+    `/api/admission-config/document-groups/shared/${offeringTypeId}`,
+    { params: audience ? { audience } : undefined },
+  );
   return response.data;
 }
 
-export async function upsertSharedDocumentGroup(offeringTypeId: number, data: SharedDocumentGroupUpdate) {
-  const response = await api.put(`/api/admission-config/document-groups/shared/${offeringTypeId}`, data);
+export async function upsertSharedDocumentGroup(
+  offeringTypeId: number,
+  data: SharedDocumentGroupUpdate,
+  audience?: string | null,
+) {
+  const response = await api.put(
+    `/api/admission-config/document-groups/shared/${offeringTypeId}`,
+    data,
+    { params: audience ? { audience } : undefined },
+  );
+  return response.data;
+}
+
+// §5b/G5 preview "Xem trước theo TS": gửi raw cultural/vocational → BE derive.
+export async function previewSharedDocuments(
+  offeringTypeId: number,
+  body: {
+    cultural_education_level?: string | null;
+    vocational_qualification?: string | null;
+  },
+) {
+  const response = await api.post(
+    `/api/admission-config/document-groups/shared/${offeringTypeId}/preview`,
+    body,
+  );
   return response.data;
 }
 
