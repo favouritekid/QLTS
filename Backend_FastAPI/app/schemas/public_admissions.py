@@ -179,6 +179,20 @@ class PublicAdmissionsMethodDocumentChecklist(BaseModel):
     documents: List[PublicAdmissionsDocumentRequirement] = Field(default_factory=list)
 
 
+class PublicAdmissionsAudienceDocumentLayer(BaseModel):
+    """§9 (feat/document-group-audience-merge): lớp giấy tờ theo đối tượng/trình
+    độ (``DocumentGroup.applicable_audience``) trong tier shared.
+
+    Sau ĐỢT B, group shared tách thành NỀN + lớp audience. Trang công khai
+    hiển thị TÁCH: ``shared_documents`` = NỀN (mọi TS), ``audience_layers`` =
+    từng lớp để TS thấy đúng bộ theo trình độ (vd Tốt nghiệp THCS → bộ THCS),
+    KHÔNG union tất cả (tránh liệt kê dư cả THPT lẫn THCS).
+    """
+    audience: PublicAdmissionsAudience
+    audience_label: str
+    documents: List[PublicAdmissionsDocumentRequirement] = Field(default_factory=list)
+
+
 class PublicAdmissionsOfferingTypeDocumentChecklist(BaseModel):
     offering_type_id: int
     offering_type_code: str
@@ -188,6 +202,9 @@ class PublicAdmissionsOfferingTypeDocumentChecklist(BaseModel):
     public_method_count: int = Field(default=0, ge=0)
     sample_programs: List[str] = Field(default_factory=list)
     shared_documents: List[PublicAdmissionsDocumentRequirement] = Field(default_factory=list)
+    # §9: lớp NỀN = shared_documents (backward-compat FE cũ); audience_layers =
+    # các lớp theo đối tượng (POST_THPT/POST_THCS/...).
+    audience_layers: List[PublicAdmissionsAudienceDocumentLayer] = Field(default_factory=list)
     method_documents: List[PublicAdmissionsMethodDocumentChecklist] = Field(default_factory=list)
 
 

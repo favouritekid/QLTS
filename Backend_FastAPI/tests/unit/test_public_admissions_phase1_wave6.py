@@ -66,12 +66,19 @@ def _doc_item(
     )
 
 
-def _doc_group(*items, offering_type_id=5, admission_method_id=10, admission_path_id=None):
+def _doc_group(
+    *items,
+    offering_type_id=5,
+    admission_method_id=10,
+    admission_path_id=None,
+    applicable_audience=None,
+):
     return SimpleNamespace(
         items=list(items),
         offering_type_id=offering_type_id,
         admission_method_id=admission_method_id,
         admission_path_id=admission_path_id,
+        applicable_audience=applicable_audience,
         offering_type=SimpleNamespace(
             id=offering_type_id,
             code="OT",
@@ -540,6 +547,167 @@ class TestDocumentsCatalogTierAggregation:
         ot = result.offering_types[0]
         assert {d.document_type_code for d in ot.shared_documents} == {"ANH3X4"}
         assert all(d.source == "shared" for d in ot.shared_documents)
+
+    # -------------------------------------------------------------------------
+    # §9 (feat/document-group-audience-merge): tách NỀN vs audience_layers
+    # -------------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_shared_splits_nen_vs_audience_layers(self, monkeypatch):
+        """Sau ĐỢT B: shared groups = NỀN + lớp audience. Catalog public TÁCH:
+        shared_documents=NỀN; audience_layers=từng lớp (KHÔNG union dư)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(_doc_item("CCCD"), admission_method_id=None),
+                    _doc_group(
+                        _doc_item("HB_THPT"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                    _doc_group(
+                        _doc_item("HB_THCS"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THCS"],
+                    ),
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        ot = result.offering_types[0]
+        # NỀN: chỉ base, KHÔNG academic.
+        assert {d.document_type_code for d in ot.shared_documents} == {"CCCD"}
+        # audience_layers: 2 lớp, mỗi lớp đúng giấy của nó.
+        layers = {l.audience: {d.document_type_code for d in l.documents} for l in ot.audience_layers}
+        assert layers == {"POST_THPT": {"HB_THPT"}, "POST_THCS": {"HB_THCS"}}
+        assert all(l.audience_label for l in ot.audience_layers)  # có nhãn
+
+    @pytest.mark.asyncio
+    async def test_method_fallback_uses_nen_not_audience_union(self, monkeypatch):
+        """Method fallback tier shared chỉ lấy NỀN — KHÔNG union lớp audience
+        (academic hiển thị riêng ở audience_layers)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(_doc_item("CCCD"), admission_method_id=None),
+                    _doc_group(
+                        _doc_item("HB_THPT"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        ot = result.offering_types[0]
+        method_doc = ot.method_documents[0]
+        # method shared-fallback = NỀN only (KHÔNG có HB_THPT).
+        assert {d.document_type_code for d in method_doc.documents} == {"CCCD"}
+
+    @pytest.mark.asyncio
+    async def test_offering_type_with_only_audience_layers_included(self, monkeypatch):
+        """Offering type chỉ có lớp audience (không NỀN) VẪN xuất hiện (skip
+        condition tính cả audience_layers)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(
+                        _doc_item("HB_THCS"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THCS"],
+                    )
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        assert len(result.offering_types) == 1
+        ot = result.offering_types[0]
+        assert ot.shared_documents == []
+        assert len(ot.audience_layers) == 1
+        assert ot.audience_layers[0].audience == "POST_THCS"
+
+    @pytest.mark.asyncio
+    async def test_multi_audience_group_appears_in_both_layers(self, monkeypatch):
+        """Group applicable_audience nhiều giá trị → xuất hiện ở MỌI layer khớp
+        (review nit: loop trên array audience)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(
+                        _doc_item("SHARED_BOTH"),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT", "POST_THCS"],
+                    )
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        ot = result.offering_types[0]
+        layers = {
+            l.audience: {d.document_type_code for d in l.documents}
+            for l in ot.audience_layers
+        }
+        assert layers == {"POST_THPT": {"SHARED_BOTH"}, "POST_THCS": {"SHARED_BOTH"}}
+
+    @pytest.mark.asyncio
+    async def test_layer_merge_mandatory_wins(self, monkeypatch):
+        """2 group cùng audience trùng doc-type (1 optional, 1 mandatory) → layer
+        chọn mandatory (mandatory-wins TRONG lớp — review nit)."""
+        path = _admission_path()
+        ot_model = SimpleNamespace(id=5, code="OT", name="Chính quy", is_active=True)
+        result = await self._run(
+            monkeypatch,
+            paths=[path],
+            path_groups_by_path={},
+            method_groups_by_scope={},
+            shared_groups_by_offering_type={
+                5: [
+                    _doc_group(
+                        _doc_item("HB", is_mandatory=False),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                    _doc_group(
+                        _doc_item("HB", is_mandatory=True),
+                        admission_method_id=None,
+                        applicable_audience=["POST_THPT"],
+                    ),
+                ]
+            },
+            offering_type_models={5: ot_model},
+            method_models={10: path.admission_method},
+        )
+        layer = result.offering_types[0].audience_layers[0]
+        docs = {d.document_type_code: d.is_mandatory for d in layer.documents}
+        assert docs == {"HB": True}  # mandatory wins
 
 
 # =============================================================================
