@@ -242,7 +242,7 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
         {!isLoading && (
           <div className="mb-4">
             {isDetached ? (
-              <Alert className="bg-info-50 text-info-900 border-info-200">
+              <Alert className="bg-info-50 text-info-700 border-info-100">
                 <Info className="h-4 w-4" />
                 <AlertTitle>Cấu hình riêng biệt (Forked)</AlertTitle>
                 <AlertDescription>
@@ -250,7 +250,7 @@ export function ConfigDocuments({ path, onFinish, onBack, embedded = false }: Co
                 </AlertDescription>
               </Alert>
             ) : (
-              <Alert className="bg-warning-50 text-warning-900 border-warning-200">
+              <Alert className="bg-warning-50 text-warning-800 border-warning-200">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Chú ý: Ghi đè cấu hình chung</AlertTitle>
                 <AlertDescription>
