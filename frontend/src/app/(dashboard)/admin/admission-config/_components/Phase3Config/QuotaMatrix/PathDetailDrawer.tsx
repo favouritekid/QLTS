@@ -61,11 +61,13 @@ import {
   quotaMatrixKeys,
   useUpdatePathQuota,
 } from "@/hooks/admissions/useQuotaMatrix"
+import { useAuth } from "@/hooks/useAuth"
 import { parseApiError } from "@/lib/utils/api-errors"
 import type { AdmissionPathResponse } from "@/lib/zod/admission-path"
 
 import { ConfigCriteria } from "../ConfigCriteria"
 import { ConfigDocuments } from "../ConfigDocuments"
+import { AdvancedTab } from "./AdvancedTab"
 import { pathStatusLabel } from "./labels"
 
 type PathLike = AdmissionPathResponse
@@ -75,11 +77,24 @@ interface Props {
   onClose: () => void
 }
 
-const VALID_TABS = ["quota", "identity", "criteria", "documents", "lifecycle"] as const
+const VALID_TABS = [
+  "quota",
+  "identity",
+  "criteria",
+  "documents",
+  "advanced",
+  "lifecycle",
+] as const
 type TabId = (typeof VALID_TABS)[number]
 
 export function PathDetailDrawer({ pathId, onClose }: Props) {
   const { data: path, isLoading } = useAdmissionPath(pathId)
+
+  // Thẻ "Nâng cao" (governance) chỉ-admin — cùng role gate như wizard cũ
+  // PathBasicInfo. Máy chủ cũng enforce (BusinessRuleViolation khi non-admin
+  // ghi governance); FE gate chỉ là UX, KHÔNG phải lớp bảo mật chính.
+  const { user } = useAuth()
+  const isAdmin = user?.role === "admin"
 
   // Pass 2 hard-review FM-2: tab active sync với ?tab= URL param.
   // Reload page giữ tab user đang xem; share link mở thẳng tab cụ thể.
@@ -89,10 +104,12 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
   const searchParams = useSearchParams()
   const tab: TabId = useMemo(() => {
     const raw = searchParams.get("tab")
-    return (VALID_TABS as readonly string[]).includes(raw ?? "")
+    const valid = (VALID_TABS as readonly string[]).includes(raw ?? "")
       ? (raw as TabId)
       : "quota"
-  }, [searchParams])
+    // Non-admin dán ?tab=advanced → fallback "quota" (tránh rơi vào thẻ ẩn).
+    return valid === "advanced" && !isAdmin ? "quota" : valid
+  }, [searchParams, isAdmin])
   const setTab = useCallback(
     (next: string) => {
       // Idempotent guard: Radix Tabs + React 19 effects có thể fire
@@ -153,11 +170,18 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
             onValueChange={setTab}
             className="flex-1 flex flex-col min-h-0"
           >
-            <TabsList className="grid grid-cols-5 shrink-0">
+            <TabsList
+              className={`flex w-full justify-start overflow-x-auto shrink-0 sm:grid sm:justify-center ${
+                isAdmin ? "sm:grid-cols-6" : "sm:grid-cols-5"
+              }`}
+            >
               <TabsTrigger value="quota">Chỉ tiêu</TabsTrigger>
               <TabsTrigger value="identity">Định danh</TabsTrigger>
               <TabsTrigger value="criteria">Tiêu chí</TabsTrigger>
               <TabsTrigger value="documents">Giấy tờ</TabsTrigger>
+              {isAdmin && (
+                <TabsTrigger value="advanced">Nâng cao</TabsTrigger>
+              )}
               <TabsTrigger value="lifecycle">Vòng đời</TabsTrigger>
             </TabsList>
 
@@ -184,6 +208,11 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
                   embedded
                 />
               </TabsContent>
+              {isAdmin && (
+                <TabsContent value="advanced">
+                  <AdvancedTab path={path} pathId={pathId} onClose={onClose} />
+                </TabsContent>
+              )}
               <TabsContent value="lifecycle">
                 <LifecycleTab path={path} pathId={pathId} onClose={onClose} />
               </TabsContent>
