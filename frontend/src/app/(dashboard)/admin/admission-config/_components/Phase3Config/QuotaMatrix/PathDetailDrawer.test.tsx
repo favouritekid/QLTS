@@ -1,11 +1,13 @@
 /**
- * Vitest tests cho PathDetailDrawer 5-tab (Phase 2 v8.2 PR-2D.1 v4a).
+ * Vitest tests cho PathDetailDrawer (Phase 2 v8.2 PR-2D.1 v4a).
  *
  * Anchor:
- * - 5 tabs render
+ * - 5 tab luôn-hiện render (+ tab "Nâng cao" chỉ-admin)
  * - Quota tab client guard (admit ≤ round)
  * - Identity tab can_edit gate
  * - Lifecycle tab can_activate gate (thin-client)
+ * - Tab "Nâng cao": admin thấy / non-admin ẩn / non-admin ?tab=advanced
+ *   fallback quota / payload MUTATE đúng 4 trường governance
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, waitFor } from "@testing-library/react"
@@ -43,9 +45,17 @@ const hoisted = vi.hoisted(() => {
     criteria: { id: 200, code: "HB2026_CNTT" },
     admission_method: { id: 1, code: "hoc_ba" },
     admission_method_id: 1,
+    // phase1_03 governance fields — null/empty default (AdvancedTab reads these).
+    applicable_to: null as string[] | null,
+    method_quota: null as number | null,
+    bonus_rule_override: null as Record<string, unknown> | null,
+    minor_correction_allowed_fields: [] as string[],
   }
   return {
     defaultPath,
+    // Mutable role for the admin-gate tests (default non-admin so the base
+    // suite sees exactly the 5 always-on tabs).
+    authState: { role: "manager" as string },
     mockUseAdmissionPath: vi.fn(() => ({ data: defaultPath, isLoading: false })),
     mockUpdateQuota: vi.fn(),
     mockUpdatePath: vi.fn(),
@@ -65,6 +75,11 @@ vi.mock("@/hooks/admissions/useAdmissionPaths", () => ({
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   quotaMatrixKeys: { all: ["quota-matrix"] },
   useUpdatePathQuota: () => ({ mutateAsync: hoisted.mockUpdateQuota, isPending: false }),
+}))
+
+// useAuth — controls user.role for the "Nâng cao" admin-gate tests.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ user: { id: 1, role: hoisted.authState.role } }),
 }))
 
 vi.mock("../ConfigCriteria", () => ({
@@ -98,6 +113,8 @@ beforeEach(() => {
   toastError.mockReset()
   toastSuccess.mockReset()
   tabReplaceMock.mockReset()
+  // Default non-admin; admin-gate tests opt in via hoisted.authState.role.
+  hoisted.authState.role = "manager"
   // Reset URL search params về default empty cho mỗi test; test có thể
   // override qua searchParamsMock.mockReturnValue(...) inside test body.
   searchParamsMock.mockImplementation(() => new URLSearchParams())
@@ -266,5 +283,228 @@ describe("PathDetailDrawer 5-tab", () => {
     // Default tab "quota" xóa ?tab= param khỏi URL — FM-2 contract line 99
     // `if (next === "quota") params.delete("tab")`.
     expect(url).not.toContain("tab=")
+  })
+})
+
+describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () => {
+  it("admin THẤY tab Nâng cao", () => {
+    hoisted.authState.role = "admin"
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    expect(screen.getByRole("tab", { name: "Nâng cao" })).toBeTruthy()
+  })
+
+  it("non-admin KHÔNG thấy tab Nâng cao (5 tab luôn-hiện vẫn render)", () => {
+    hoisted.authState.role = "manager"
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    expect(screen.getByRole("tab", { name: /Chỉ tiêu/ })).toBeTruthy()
+    expect(screen.queryByRole("tab", { name: "Nâng cao" })).toBeNull()
+  })
+
+  it("non-admin dán ?tab=advanced → fallback quota (không render drawer rỗng)", async () => {
+    hoisted.authState.role = "manager"
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    // Fallback về quota: nút "Lưu chỉ tiêu" hiện; KHÔNG có tab/nút Nâng cao.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Lưu chỉ tiêu/ })).toBeTruthy()
+    })
+    expect(screen.queryByRole("tab", { name: "Nâng cao" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Lưu nâng cao" })).toBeNull()
+  })
+
+  it("MUTATE: admin lưu → gửi đủ 4 trường governance với audience + method_quota đã sửa", async () => {
+    hoisted.authState.role = "admin"
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    // AdvancedTab active ngay khi render (admin + ?tab=advanced).
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    // Mutate 2 trường governance.
+    await user.click(screen.getByRole("checkbox", { name: /Sau THPT/ }))
+    await user.type(screen.getByLabelText("Chỉ tiêu phương thức"), "50")
+
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledTimes(1)
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledWith({
+      pathId: 109,
+      data: {
+        minor_correction_allowed_fields: [],
+        applicable_to: ["POST_THPT"],
+        method_quota: 50,
+        bonus_rule_override: null,
+      },
+    })
+  })
+
+  it("MUTATE: serialize bonus_rule_override + allowlist hiệu chỉnh khi sửa", async () => {
+    hoisted.authState.role = "admin"
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    // Bật override cộng điểm → tick cộng điểm khu vực → đặt trần 5.
+    await user.click(
+      screen.getByRole("switch", { name: "Bật quy tắc cộng điểm tùy chỉnh" }),
+    )
+    await user.click(screen.getByRole("checkbox", { name: "Cộng điểm khu vực" }))
+    await user.type(screen.getByLabelText("Trần tổng cộng điểm (0..10)"), "5")
+
+    // Tick 1 trường hiệu chỉnh hợp lệ (gender).
+    await user.click(screen.getByRole("checkbox", { name: "Giới tính" }))
+
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledWith({
+      pathId: 109,
+      data: {
+        minor_correction_allowed_fields: ["gender"],
+        applicable_to: null,
+        method_quota: null,
+        bonus_rule_override: {
+          apply_area_bonus: true,
+          apply_object_bonus: false,
+          max_total_bonus: 5,
+        },
+      },
+    })
+  })
+
+  it("MUTATE clear→null: admin xoá hết governance đang có → gửi null/[]", async () => {
+    hoisted.authState.role = "admin"
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: {
+        ...hoisted.defaultPath,
+        status: "draft", // draft → lưu thẳng, không dính dialog cảnh báo
+        applicable_to: ["POST_THPT"],
+        method_quota: 50,
+        bonus_rule_override: {
+          apply_area_bonus: true,
+          apply_object_bonus: false,
+          max_total_bonus: 5,
+        },
+        minor_correction_allowed_fields: ["gender"],
+      },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    // Bỏ chọn / xoá cả 4 trường đang có giá trị.
+    await user.click(screen.getByRole("checkbox", { name: /Sau THPT/ })) // audience → empty
+    await user.clear(screen.getByLabelText("Chỉ tiêu phương thức")) // quota → ""
+    await user.click(
+      screen.getByRole("switch", { name: "Bật quy tắc cộng điểm tùy chỉnh" }),
+    ) // bonus OFF
+    await user.click(screen.getByRole("checkbox", { name: "Giới tính" })) // allowlist → []
+
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledWith({
+      pathId: 109,
+      data: {
+        minor_correction_allowed_fields: [],
+        applicable_to: null,
+        method_quota: null,
+        bonus_rule_override: null,
+      },
+    })
+  })
+
+  it("WARN: path active + sửa applicable_to → hiện dialog cảnh báo; Huỷ → KHÔNG lưu", async () => {
+    hoisted.authState.role = "admin"
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: { ...hoisted.defaultPath, status: "active" },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole("checkbox", { name: /Sau THPT/ }))
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+
+    // Dialog hiện ("Vẫn lưu" chỉ có trong dialog) và CHƯA gọi mutation.
+    expect(screen.getByRole("button", { name: "Vẫn lưu" })).toBeTruthy()
+    expect(hoisted.mockUpdatePath).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("button", { name: "Huỷ" }))
+    expect(hoisted.mockUpdatePath).not.toHaveBeenCalled()
+  })
+
+  it("WARN: path active → dialog → Vẫn lưu → gửi payload", async () => {
+    hoisted.authState.role = "admin"
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: { ...hoisted.defaultPath, status: "active" },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole("checkbox", { name: /Sau THPT/ }))
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+    await user.click(screen.getByRole("button", { name: "Vẫn lưu" }))
+
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledWith({
+      pathId: 109,
+      data: {
+        minor_correction_allowed_fields: [],
+        applicable_to: ["POST_THPT"],
+        method_quota: null,
+        bonus_rule_override: null,
+      },
+    })
+  })
+
+  it("WARN scope: path active + chỉ sửa method_quota → KHÔNG dialog, lưu thẳng", async () => {
+    hoisted.authState.role = "admin"
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: { ...hoisted.defaultPath, status: "active" },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
+    const user = userEvent.setup()
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Lưu nâng cao" })).toBeTruthy()
+    })
+
+    await user.type(screen.getByLabelText("Chỉ tiêu phương thức"), "20")
+    await user.click(screen.getByRole("button", { name: "Lưu nâng cao" }))
+
+    // method_quota KHÔNG phải field high-impact → không dialog, gọi mutation luôn.
+    expect(screen.queryByRole("button", { name: "Vẫn lưu" })).toBeNull()
+    expect(hoisted.mockUpdatePath).toHaveBeenCalledWith({
+      pathId: 109,
+      data: {
+        minor_correction_allowed_fields: [],
+        applicable_to: null,
+        method_quota: 20,
+        bonus_rule_override: null,
+      },
+    })
   })
 })
