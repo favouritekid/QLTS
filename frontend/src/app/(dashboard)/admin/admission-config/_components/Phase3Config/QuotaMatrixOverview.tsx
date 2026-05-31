@@ -27,7 +27,6 @@ import { GlobalMatrixView } from "./QuotaMatrix/GlobalMatrixView"
 
 interface Props {
   academicYear: number
-  academicInfoId?: number
   onYearChange: (year: number) => void
   onBack: () => void
 }

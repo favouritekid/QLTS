@@ -16,6 +16,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   useUpdatePathDocuments,
   useCreateAdmissionPath,
+  useUpdateAdmissionPath,
   admissionPathKeys,
 } from "./useAdmissionPaths";
 import { quotaMatrixKeys } from "./useQuotaMatrix";
@@ -331,6 +332,47 @@ describe("useAdmissionPaths – BUG-01 regression", () => {
       invalidateSpy.mockRestore();
     });
 
+    it("invalidates admission-paths root and quota-matrix caches", async () => {
+      server.use(
+        http.put(
+          `${API_BASE_URL}/api/admission-config/paths/:pathId/documents`,
+          () => HttpResponse.json(mockDocumentsResponse),
+        ),
+      );
+
+      const { queryClient, Wrapper } = createWrapperWithClient();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+      const { result } = renderHook(() => useUpdatePathDocuments(), {
+        wrapper: Wrapper,
+      });
+
+      act(() => {
+        result.current.mutate({
+          pathId: MOCK_PATH_ID,
+          data: [
+            {
+              document_type_id: 10,
+              is_mandatory: true,
+              requires_upload: true,
+              display_order: 1,
+            },
+          ],
+        });
+      });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: admissionPathKeys.all }),
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+      );
+
+      invalidateSpy.mockRestore();
+    });
+
     it("should NOT call setQueryData for the detail key", async () => {
       server.use(
         http.put(
@@ -379,6 +421,76 @@ describe("useAdmissionPaths – BUG-01 regression", () => {
 
       setQueryDataSpy.mockRestore();
     });
+  });
+});
+
+describe("useUpdateAdmissionPath – matrix cache parity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function arrangeUpdateHandler() {
+    server.use(
+      http.put(`${API_BASE_URL}/api/admission-config/paths/:pathId`, () =>
+        HttpResponse.json(mockAdmissionPathResponse),
+      ),
+    );
+  }
+
+  it("keeps detail cache fresh and invalidates admission-paths root", async () => {
+    arrangeUpdateHandler();
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const setQueryDataSpy = vi.spyOn(queryClient, "setQueryData");
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useUpdateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+
+    act(() => {
+      result.current.mutate({
+        pathId: MOCK_PATH_ID,
+        data: { display_name: "Updated Path" },
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(setQueryDataSpy).toHaveBeenCalledWith(
+      admissionPathKeys.detail(MOCK_PATH_ID),
+      mockAdmissionPathResponse,
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: admissionPathKeys.all }),
+    );
+
+    setQueryDataSpy.mockRestore();
+    invalidateSpy.mockRestore();
+  });
+
+  it("invalidates the quota-matrix cache after identity/governance updates", async () => {
+    arrangeUpdateHandler();
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useUpdateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+
+    act(() => {
+      result.current.mutate({
+        pathId: MOCK_PATH_ID,
+        data: { visibility: "internal" },
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+
+    invalidateSpy.mockRestore();
   });
 });
 
