@@ -1853,30 +1853,28 @@ async def test_get_assignment_config_not_found_security(mock_config_repo_class, 
 
 @pytest.mark.asyncio
 @patch("app.services.config_service.DocumentTypeRepository")
-async def test_update_document_type_cascade(mock_repo_class, mock_db_session):
-    """Test forensic polish: Ensure document type code update cascades to ProgramOffering."""
+async def test_update_document_type_no_offering_cascade(mock_repo_class, mock_db_session):
+    """``update_document_type`` đổi code KHÔNG cascade ``ProgramOffering.
+    admission_rules`` — cascade cũ ĐÃ BỎ chủ đích (config_service:871; documents
+    giờ qua relational DocumentGroup). Guard giữ removal: nếu ai đó tái thêm
+    cascade (fetch offerings để rewrite mandatory_docs) → test này đỏ.
+    """
     mock_repo = AsyncMock()
     doc_model = models.ConfigDocumentType(id=1, code="old_doc", name="Old Doc")
     mock_repo.get_by_id.return_value = doc_model
     mock_repo.check_name_exists.return_value = False
     mock_repo.check_code_exists.return_value = False
-    
-    # Mock dependent offerings
-    mock_offering = MagicMock()
-    mock_offering.admission_rules = {
-        "mandatory_docs": ["old_doc", "other_doc"]
-    }
-    mock_repo.get_all_offerings_with_admission_rules.return_value = [mock_offering]
-    
+
     update_schema = schemas.ConfigDocumentTypeUpdate(code="new_doc")
-    
-    # Repo update returns the updated model
     updated_doc_model = models.ConfigDocumentType(id=1, code="new_doc", name="Old Doc")
     mock_repo.update.return_value = updated_doc_model
     mock_repo_class.return_value = mock_repo
-    
-    await config_service.update_document_type(mock_db_session, 1, update_schema)
-    
-    # Verify cascade update
-    assert mock_offering.admission_rules["mandatory_docs"] == ["new_doc", "other_doc"]
-    mock_repo.get_all_offerings_with_admission_rules.assert_awaited_once()
+
+    result, _callback = await config_service.update_document_type(
+        mock_db_session, 1, update_schema
+    )
+
+    # Doc type code được cập nhật.
+    assert result.code == "new_doc"
+    # KHÔNG fetch offerings để cascade (cascade đã bỏ).
+    mock_repo.get_all_offerings_with_admission_rules.assert_not_awaited()

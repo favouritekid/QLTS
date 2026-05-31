@@ -350,7 +350,8 @@ async def test_admin_skill_rules_crud_flow(
     ), f"DELETE Not Found Resp: {response_delete_404.text}"
     error_data_delete = response_delete_404.json()
     assert "detail" in error_data_delete
-    assert error_data_delete["detail"] == f"Skill rule with id {rule_id} not found."
+    # config_service:324 raise "...not found" (KHÔNG period — convention file).
+    assert error_data_delete["detail"] == f"Skill rule with id {rule_id} not found"
     log.info("DELETE (not found) successful (404) with correct detail message.")
 
     # --- 6. GET (Empty List Again) ---
