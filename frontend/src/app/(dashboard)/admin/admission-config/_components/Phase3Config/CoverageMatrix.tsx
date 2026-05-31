@@ -64,11 +64,21 @@ export function CoverageMatrix({ academicYear, onYearChange }: CoverageMatrixPro
     [updateSearchParam],
   );
 
+  // Validate ngành theo năm (academic_info year-bound). Đổi năm giữ academicInfo
+  // cũ → mismatch. Năm có ngành + selection không thuộc năm → ngành đầu; năm
+  // không có ngành nào → clear (tránh phantom matrix năm cũ).
   useEffect(() => {
-    if (globalData && globalData.rows.length > 0 && selectedAcademicInfoId === undefined) {
+    if (!globalData) return;
+    const exists = globalData.rows.some(
+      (r) => r.academic_info_id === selectedAcademicInfoId,
+    );
+    if (exists) return;
+    if (globalData.rows.length > 0) {
       setSelectedAcademicInfoId(globalData.rows[0].academic_info_id);
+    } else if (selectedAcademicInfoId !== undefined) {
+      updateSearchParam("academicInfo", null);
     }
-  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId]);
+  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId, updateSearchParam]);
 
   const { data: matrixData, isLoading } = useCoverageMatrix(selectedAcademicInfoId);
 

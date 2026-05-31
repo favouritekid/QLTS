@@ -15,8 +15,10 @@ import { createTestQueryClient } from "@/test/utils/test-utils";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   useUpdatePathDocuments,
+  useCreateAdmissionPath,
   admissionPathKeys,
 } from "./useAdmissionPaths";
+import { quotaMatrixKeys } from "./useQuotaMatrix";
 import type { AdmissionPathResponse, ResolvedDocumentListResponse } from "@/lib/zod/admission-path";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -377,5 +379,87 @@ describe("useAdmissionPaths – BUG-01 regression", () => {
 
       setQueryDataSpy.mockRestore();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// useCreateAdmissionPath — cache parity (PR-2 follow-up, finding P1 #2)
+//
+// Sau khi PR-2 gỡ lối cũ, màn Phase 3 sống bằng quotaMatrixKeys (ByMajor/Global)
+// + admissionPathKeys.coverageMatrix (readiness). Quick-create path PHẢI
+// invalidate cả 2 root, nếu không ô "+Tạo" / readiness vẫn stale tới 30s–5p
+// (coverageMatrix dùng global default staleTime 5 phút).
+// Đối chiếu useUpdatePathQuota đã invalidate quotaMatrixKeys.all — create bị sót.
+// Test này là anchor non-tautological: nếu ai gỡ invalidation → fail.
+// ---------------------------------------------------------------------------
+describe("useCreateAdmissionPath – matrix cache parity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function arrangeCreateHandler() {
+    server.use(
+      http.post(`${API_BASE_URL}/api/admission-config/paths`, () =>
+        HttpResponse.json(mockAdmissionPathResponse),
+      ),
+    );
+  }
+
+  // AdmissionPathCreate = z.infer OUTPUT type → 2 field có .default() trở thành
+  // required trong input type; khớp payload QuickCreatePathModal gửi thật.
+  const CREATE_PAYLOAD = {
+    academic_info_id: 1,
+    admission_method_id: 1,
+    admission_round_id: 1,
+    allow_unverified_submission: false,
+    minor_correction_allowed_fields: [] as string[],
+  };
+
+  it("invalidates the quota-matrix cache (by-major + by-year)", async () => {
+    arrangeCreateHandler();
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useCreateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+
+    act(() => {
+      result.current.mutate(CREATE_PAYLOAD);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Raw ["quota-matrix"] === quotaMatrixKeys.all — prefix invalidation phủ
+    // cả byMajor(id) lẫn byYear(year).
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+
+    invalidateSpy.mockRestore();
+  });
+
+  it("invalidates the admission-paths root (covers coverage-matrix)", async () => {
+    arrangeCreateHandler();
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useCreateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+
+    act(() => {
+      result.current.mutate(CREATE_PAYLOAD);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // admissionPathKeys.all = ["admission-paths"] — prefix phủ cả lists() lẫn
+    // coverageMatrix(id) (readiness mode). Lưu ý: .lists() KHÔNG phủ coverage.
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: admissionPathKeys.all }),
+    );
+
+    invalidateSpy.mockRestore();
   });
 });

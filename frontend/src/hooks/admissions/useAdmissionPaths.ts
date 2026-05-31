@@ -111,10 +111,15 @@ export function useCreateAdmissionPath() {
   return useMutation({
     mutationFn: (data: AdmissionPathCreate) => createAdmissionPath(data),
     onSuccess: () => {
-      // Invalidate list queries
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      // Invalidate toàn bộ admission-paths: list + coverage-matrix (readiness mode
+      // dùng admissionPathKeys.coverageMatrix, KHÔNG nằm dưới .lists()).
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
       // Invalidate academic infos to update admission_status (READY → CONFIGURED)
       queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
+      // Invalidate quota matrix (by-major + by-year) — màn chính của Phase 3 sau
+      // khi gỡ lối cũ. Raw literal = quotaMatrixKeys.all, tránh circular import
+      // (useQuotaMatrix đã import admissionPathKeys từ file này).
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
     },
   })
 }

@@ -92,12 +92,23 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     roundCode: string
   } | null>(null)
 
-  // Auto-select first ngành on year change — only if URL has no academicInfo.
+  // Validate ngành theo năm. academic_info là year-bound → đổi năm giữ
+  // academicInfo cũ (AdmissionConfigClient.onYearChange) sẽ mismatch: header năm
+  // mới nhưng matrix ngành năm cũ. Xử lý:
+  //   - năm có ngành + selection không thuộc năm (hoặc chưa chọn) → ngành đầu
+  //   - năm KHÔNG có ngành nào → clear selection (tránh phantom matrix năm cũ)
   useEffect(() => {
-    if (globalData && globalData.rows.length > 0 && selectedAcademicInfoId === undefined) {
+    if (!globalData) return // đang load năm mới — chờ data thật
+    const exists = globalData.rows.some(
+      (r) => r.academic_info_id === selectedAcademicInfoId,
+    )
+    if (exists) return
+    if (globalData.rows.length > 0) {
       setSelectedAcademicInfoId(globalData.rows[0].academic_info_id)
+    } else if (selectedAcademicInfoId !== undefined) {
+      updateSearchParam("academicInfo", null)
     }
-  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId])
+  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId, updateSearchParam])
 
   const isOver = matrix?.sum_remaining !== null && matrix !== undefined && matrix.sum_remaining! < 0
 
