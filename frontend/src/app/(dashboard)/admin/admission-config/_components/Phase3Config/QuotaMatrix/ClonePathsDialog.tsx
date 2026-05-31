@@ -74,7 +74,7 @@ export function ClonePathsDialog({ academicYear, onClose }: Props) {
         },
       })
       toast.success(
-        `Đã sao chép ${result.cloned_count} đường (bỏ qua ${result.skipped_count} đường đã tồn tại).`,
+        `Đã sao chép ${result.cloned_count} phương thức (bỏ qua ${result.skipped_count} phương thức đã tồn tại).`,
       )
       onClose()
     } catch (e: unknown) {
@@ -86,10 +86,10 @@ export function ClonePathsDialog({ academicYear, onClose }: Props) {
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-pretty">Sao chép đường tuyển sinh giữa các đợt</DialogTitle>
+          <DialogTitle className="text-pretty">Sao chép phương thức tuyển sinh giữa các đợt</DialogTitle>
           <DialogDescription>
-            Sao chép sâu toàn bộ đường tuyển sinh từ đợt nguồn sang đợt đích cùng năm {academicYear}.
-            Đường đã tồn tại ở đợt đích sẽ tự động bỏ qua (ràng buộc 3-cột duy nhất).
+            Sao chép sâu toàn bộ phương thức tuyển sinh từ đợt nguồn sang đợt đích cùng năm {academicYear}.
+            Phương thức đã tồn tại ở đợt đích sẽ tự động bỏ qua (ràng buộc 3-cột duy nhất).
           </DialogDescription>
         </DialogHeader>
 
@@ -169,7 +169,7 @@ export function ClonePathsDialog({ academicYear, onClose }: Props) {
             <div>
               <div className="font-medium">Sao chép sâu, nguyên vẹn</div>
               <p className="text-muted-foreground mt-0.5">
-                Máy chủ sao chép đầy đủ: tiêu chí, tổ hợp môn, cấu hình đường tuyển sinh.
+                Máy chủ sao chép đầy đủ: tiêu chí, tổ hợp môn, cấu hình phương thức tuyển sinh.
                 Chỉ tiêu (trần submit/admit) reset rỗng — admin tự đặt lại trên ma trận.
               </p>
             </div>

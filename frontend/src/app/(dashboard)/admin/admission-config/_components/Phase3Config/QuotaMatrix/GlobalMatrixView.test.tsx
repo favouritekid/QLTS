@@ -77,7 +77,7 @@ describe("GlobalMatrixView", () => {
     // Cell aggregate dòng 2: Submit cap
     expect(screen.getByText(/Submit 50/)).toBeTruthy()
     // Cell aggregate dòng 3: path_count
-    expect(screen.getByText(/2 đường/)).toBeTruthy()
+    expect(screen.getByText(/2 phương thức/)).toBeTruthy()
   })
 
   it("ANCHOR: shows ngành column với program_code", () => {

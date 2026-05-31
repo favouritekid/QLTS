@@ -197,13 +197,13 @@ describe("AggregateDrawer", () => {
         />,
       ),
     )
-    // ChevronRight button có aria-label "Mở chi tiết đường <method_name>".
-    const drillBtn = screen.getByLabelText(/Mở chi tiết đường Học bạ/)
+    // ChevronRight button có aria-label "Mở chi tiết phương thức <method_name>".
+    const drillBtn = screen.getByLabelText(/Mở chi tiết phương thức Học bạ/)
     await user.click(drillBtn)
-    // PathDetailDrawer hiển thị fallback title "Đường tuyển sinh #<pathId>"
+    // PathDetailDrawer hiển thị fallback title "Phương thức tuyển sinh #<pathId>"
     // khi data chưa load (mocked isLoading=true) — pathId=106 cho HB DOT_1.
     await waitFor(() => {
-      expect(screen.getByText(/Đường tuyển sinh #106/)).toBeTruthy()
+      expect(screen.getByText(/Phương thức tuyển sinh #106/)).toBeTruthy()
     })
   })
 })

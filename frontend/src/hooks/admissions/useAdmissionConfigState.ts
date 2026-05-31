@@ -7,15 +7,13 @@
 
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import type {
   AdmissionConfigState,
   Phase1Step,
   Phase2Step,
-  SelectionContext,
-  Phase3View,
 } from "@/app/(dashboard)/admin/admission-config/_components/shared/types";
 
 // ============================================
@@ -51,50 +49,6 @@ async function checkPhase2Complete(): Promise<boolean> {
 }
 
 /**
- * Parse selection context from URL params
- */
-function getContextFromParams(params: URLSearchParams): SelectionContext | null {
-  const year = params.get("year");
-  const major = params.get("major");
-  const offering = params.get("offering");
-  const academicInfo = params.get("academicInfo");
-
-  if (!year || !major || !offering || !academicInfo) {
-    return null;
-  }
-
-  return {
-    academicYear: parseInt(year),
-    majorProgramId: parseInt(major),
-    offeringId: parseInt(offering),
-    academicInfoId: parseInt(academicInfo),
-  };
-}
-
-/**
- * Parse Phase 3 view from URL params
- */
-function parsePhase3View(view: string | null, params: URLSearchParams): Phase3View {
-  if (view === "matrix") {
-    return { type: "matrix" };
-  }
-
-  if (view === "wizard") {
-    const pathId = params.get("pathId");
-    const wizardStep = params.get("wizardStep");
-
-    return {
-      type: "wizard",
-      pathId: pathId ? parseInt(pathId) : undefined,
-      wizardStep: wizardStep ? parseInt(wizardStep) : undefined,
-    };
-  }
-
-  // Default to list view
-  return { type: "list" };
-}
-
-/**
  * Convert state to URL string
  */
 function stateToUrl(state: AdmissionConfigState): string {
@@ -112,34 +66,14 @@ function stateToUrl(state: AdmissionConfigState): string {
     return `${base}?phase=2&step=${state.step}`;
   }
 
-  if (state.type === "select-context") {
-    return `${base}?phase=3`;
-  }
-
   if (state.type === "quota-matrix-overview") {
-    return `${base}?view=quota-matrix&year=${state.academicYear}`;
-  }
-
-  if (state.type === "phase3") {
-    const ctx = state.context;
     const params = new URLSearchParams({
-      phase: "3",
-      year: ctx.academicYear.toString(),
-      major: ctx.majorProgramId.toString(),
-      offering: ctx.offeringId.toString(),
-      academicInfo: ctx.academicInfoId.toString(),
-      view: state.view.type,
+      view: "quota-matrix",
+      year: state.academicYear.toString(),
     });
-
-    if (state.view.type === "wizard") {
-      if (state.view.pathId) {
-        params.set("pathId", state.view.pathId.toString());
-      }
-      if (state.view.wizardStep !== undefined) {
-        params.set("wizardStep", state.view.wizardStep.toString());
-      }
+    if (state.academicInfoId) {
+      params.set("academicInfo", state.academicInfoId.toString());
     }
-
     return `${base}?${params.toString()}`;
   }
 
@@ -173,7 +107,6 @@ export function useAdmissionConfigState() {
   const currentState: AdmissionConfigState = useMemo(() => {
     const phase = searchParams.get("phase");
     const step = searchParams.get("step");
-    const view = searchParams.get("view");
 
     // If checking data, stay in welcome state
     if (checkingPhase1 || checkingPhase2) {
@@ -195,19 +128,26 @@ export function useAdmissionConfigState() {
     if (viewParam === "quota-matrix") {
       const yearStr = searchParams.get("year");
       const year = yearStr ? parseInt(yearStr, 10) : new Date().getFullYear();
-      return { type: "quota-matrix-overview", academicYear: year };
+      const academicInfoStr = searchParams.get("academicInfo");
+      const academicInfoId = academicInfoStr ? parseInt(academicInfoStr, 10) : undefined;
+      return {
+        type: "quota-matrix-overview",
+        academicYear: year,
+        academicInfoId: academicInfoId && academicInfoId > 0 ? academicInfoId : undefined,
+      };
     }
 
-    // If Phase 3 URL param
+    // Legacy Phase 3 URLs now land on the unified quota matrix instead of the
+    // removed context/wizard route. A useEffect below replaces the URL.
     if (phase === "3") {
-      const context = getContextFromParams(searchParams);
-      if (!context) {
-        return { type: "select-context" };
-      }
+      const yearStr = searchParams.get("year");
+      const academicInfoStr = searchParams.get("academicInfo");
+      const year = yearStr ? parseInt(yearStr, 10) : new Date().getFullYear();
+      const academicInfoId = academicInfoStr ? parseInt(academicInfoStr, 10) : undefined;
       return {
-        type: "phase3",
-        context,
-        view: parsePhase3View(view, searchParams),
+        type: "quota-matrix-overview",
+        academicYear: year,
+        academicInfoId: academicInfoId && academicInfoId > 0 ? academicInfoId : undefined,
       };
     }
 
@@ -224,6 +164,12 @@ export function useAdmissionConfigState() {
     // Default to welcome
     return { type: "welcome" };
   }, [searchParams, hasPhase1Data, checkingPhase1, checkingPhase2]);
+
+  useEffect(() => {
+    if (searchParams.get("phase") !== "3") return;
+    if (checkingPhase1 || checkingPhase2) return;
+    router.replace(stateToUrl(currentState));
+  }, [checkingPhase1, checkingPhase2, currentState, router, searchParams]);
 
   // Navigate to a new state
   const navigate = (state: AdmissionConfigState, replace = false) => {

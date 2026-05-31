@@ -64,7 +64,7 @@ export function AggregateDrawer({
         <SheetHeader className="pr-8">
           <SheetTitle className="text-pretty">{programName}</SheetTitle>
           <SheetDescription className="sr-only">
-            Tổng hợp đường tuyển sinh theo phương thức cho ngành &amp; đợt đã chọn.
+            Tổng hợp phương thức tuyển sinh cho ngành &amp; đợt đã chọn.
           </SheetDescription>
           <div className="text-xs text-muted-foreground">
             Đợt <span translate="no">{roundCode}</span>
@@ -77,13 +77,13 @@ export function AggregateDrawer({
           {isLoading && (
             <div className="flex items-center justify-center py-8" aria-live="polite">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
-              <span className="sr-only">Đang tải tổng hợp đường tuyển sinh…</span>
+              <span className="sr-only">Đang tải tổng hợp phương thức tuyển sinh…</span>
             </div>
           )}
 
           {data && rowsInRound && rowsInRound.length === 0 && (
             <div className="text-sm text-muted-foreground py-4">
-              Chưa có đường tuyển sinh nào cho ngành &amp; đợt này.
+              Chưa có phương thức tuyển sinh nào cho ngành &amp; đợt này.
             </div>
           )}
 
@@ -158,7 +158,7 @@ export function AggregateDrawer({
                           variant="ghost"
                           size="sm"
                           onClick={() => setOpenPathId(cell!.path_id)}
-                          aria-label={`Mở chi tiết đường ${method.method_name}`}
+                          aria-label={`Mở chi tiết phương thức ${method.method_name}`}
                         >
                           <ChevronRight className="h-4 w-4" aria-hidden="true" />
                         </Button>

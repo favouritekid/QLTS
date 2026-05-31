@@ -140,20 +140,13 @@ export interface SelectionContext {
   academicInfoId: number;
 }
 
-export type Phase3View =
-  | { type: 'list' }
-  | { type: 'matrix' }
-  | { type: 'wizard'; pathId?: number; wizardStep?: number };
-
 export type AdmissionConfigState =
   | { type: 'welcome' }
   | { type: 'phase1'; step: Phase1Step }
   | { type: 'phase2'; step: Phase2Step }
-  | { type: 'select-context' }
-  | { type: 'phase3'; context: SelectionContext; view: Phase3View }
   // Phase 2 v8.2 PR-2D.1 v2 — global quota matrix overview (ALL ngành × đợt)
-  // KHÔNG cần SelectionContext vì matrix tổng quan all academic_info
-  | { type: 'quota-matrix-overview'; academicYear: number };
+  // ``academicInfoId`` is optional URL state for the by-major/readiness modes.
+  | { type: 'quota-matrix-overview'; academicYear: number; academicInfoId?: number };
 
 // ============================================
 // NAVIGATION TYPES

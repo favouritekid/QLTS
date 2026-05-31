@@ -294,19 +294,11 @@ export function AcademicInfoPanel() {
 
   const { navigate } = useAdmissionConfigState();
 
-  const handleNavigate = (item: OfferingAcademicInfo, action: 'view' | 'add') => {
-    const offering = offerings.find((o: ProgramOffering) => o.id === item.offering_id);
-    if (!offering) return;
-
+  const handleNavigate = (item: OfferingAcademicInfo) => {
     navigate({
-      type: 'phase3',
-      context: {
-        academicYear: item.academic_year,
-        majorProgramId: offering.program_id,
-        offeringId: item.offering_id,
-        academicInfoId: item.id
-      },
-      view: { type: action === 'view' ? 'list' : 'wizard' }
+      type: 'quota-matrix-overview',
+      academicYear: item.academic_year,
+      academicInfoId: item.id,
     });
   };
 
@@ -443,7 +435,7 @@ export function AcademicInfoPanel() {
                               variant="ghost"
                               size="sm"
                               className="text-info-600 hover:text-info-700 hover:bg-info-50"
-                              onClick={() => handleNavigate(item, 'view')}
+                              onClick={() => handleNavigate(item)}
                               title="Xem cấu hình tuyển sinh"
                             >
                               <Eye className="h-4 w-4" />
@@ -454,7 +446,7 @@ export function AcademicInfoPanel() {
                               variant="ghost"
                               size="sm"
                               className="text-success-600 hover:text-success-700 hover:bg-success-50"
-                              onClick={() => handleNavigate(item, 'add')}
+                              onClick={() => handleNavigate(item)}
                               title="Thêm cấu hình tuyển sinh"
                             >
                               <Plus className="h-4 w-4" />

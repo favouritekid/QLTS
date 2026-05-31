@@ -81,7 +81,7 @@ export const REASON_CODE_LABELS: Record<EligibilityReasonCode, string> = {
   INVALID_SUBJECT_GROUP: "Tổ hợp môn không hợp lệ",
   GRADUATION_YEAR_OUT_OF_RANGE: "Năm tốt nghiệp ngoài phạm vi cho phép",
   // PR-1 (2026-05-28) — capacity-gate codes (plan v4 locked decision #2).
-  PATH_QUOTA_EXHAUSTED: "Hết chỉ tiêu cho đường tuyển sinh",
+  PATH_QUOTA_EXHAUSTED: "Hết chỉ tiêu cho phương thức tuyển sinh",
   OFFERING_ANNUAL_QUOTA_EXHAUSTED: "Hết chỉ tiêu năm học cho ngành",
 }
 

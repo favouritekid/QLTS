@@ -232,7 +232,7 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
         {matrix && (
           <div className="mt-4 text-xs text-muted-foreground space-y-0.5">
             <p>Mỗi ô gồm 3 dòng: trần admit / cap năm · trần submit · trạng thái. Bấm ô để xem chi tiết &amp; chỉnh chỉ tiêu.</p>
-            <p>Dấu &quot;—&quot; = chưa có đường tuyển sinh cho (phương thức × đợt).</p>
+            <p>Dấu &quot;—&quot; = chưa có phương thức tuyển sinh cho ô này.</p>
           </div>
         )}
       </CardContent>
@@ -340,7 +340,7 @@ const EmptyCellButton = memo(function EmptyCellButton({
       <button
         onClick={handleClick}
         className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded px-2 py-1.5 w-full transition-colors"
-        aria-label={`Tạo đường tuyển sinh ${methodName} đợt ${roundCode}`}
+        aria-label={`Tạo phương thức tuyển sinh ${methodName} đợt ${roundCode}`}
       >
         + Tạo
       </button>
