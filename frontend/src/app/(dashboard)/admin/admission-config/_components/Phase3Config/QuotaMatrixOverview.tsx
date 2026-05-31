@@ -2,7 +2,7 @@
  * QuotaMatrixOverview — Phase 3 hub cấu hình quota (Phase 2 v8.2 PR-2D.1 v3).
  *
  * Architecture (locked design Pass 14):
- *   Toggle [Theo ngành (default)] | [Ma trận toàn cảnh]
+ *   Toggle [Theo ngành (default)] | [Ma trận toàn cảnh] | [Kiểm độ sẵn sàng]
  *     ├─ ByMajorView    : 1 ngành chọn → matrix [method × đợt], cell = path exact
  *     └─ GlobalMatrixView: all ngành × đợt, cell = aggregate
  *
@@ -15,24 +15,30 @@
  */
 "use client"
 
-import { ChevronLeft, Copy, LayoutGrid, List } from "lucide-react"
+import { ChevronLeft, ClipboardCheck, Copy, LayoutGrid, List } from "lucide-react"
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
 
 import { ByMajorView } from "./QuotaMatrix/ByMajorView"
 import { ClonePathsDialog } from "./QuotaMatrix/ClonePathsDialog"
+import { CoverageMatrix } from "./CoverageMatrix"
 import { GlobalMatrixView } from "./QuotaMatrix/GlobalMatrixView"
 
 interface Props {
   academicYear: number
+  academicInfoId?: number
   onYearChange: (year: number) => void
   onBack: () => void
 }
 
-type ViewMode = "by-major" | "global"
+type ViewMode = "by-major" | "global" | "readiness"
 
-export function QuotaMatrixOverview({ academicYear, onYearChange, onBack }: Props) {
+export function QuotaMatrixOverview({
+  academicYear,
+  onYearChange,
+  onBack,
+}: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>("by-major")
   const [cloneOpen, setCloneOpen] = useState(false)
 
@@ -61,7 +67,7 @@ export function QuotaMatrixOverview({ academicYear, onYearChange, onBack }: Prop
       <div
         role="tablist"
         aria-label="Chế độ xem ma trận"
-        className="flex items-center gap-1 bg-muted rounded-lg p-1 w-fit"
+        className="flex w-fit max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1 rounded-lg bg-muted p-1"
       >
         <Button
           role="tab"
@@ -83,6 +89,16 @@ export function QuotaMatrixOverview({ academicYear, onYearChange, onBack }: Prop
           <LayoutGrid className="h-4 w-4 mr-1.5" aria-hidden="true" />
           Ma trận toàn cảnh
         </Button>
+        <Button
+          role="tab"
+          aria-selected={viewMode === "readiness"}
+          variant={viewMode === "readiness" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setViewMode("readiness")}
+        >
+          <ClipboardCheck className="h-4 w-4 mr-1.5" aria-hidden="true" />
+          Kiểm độ sẵn sàng
+        </Button>
       </div>
 
       {cloneOpen && (
@@ -94,8 +110,10 @@ export function QuotaMatrixOverview({ academicYear, onYearChange, onBack }: Prop
 
       {viewMode === "by-major" ? (
         <ByMajorView academicYear={academicYear} onYearChange={onYearChange} />
-      ) : (
+      ) : viewMode === "global" ? (
         <GlobalMatrixView academicYear={academicYear} onYearChange={onYearChange} />
+      ) : (
+        <CoverageMatrix academicYear={academicYear} onYearChange={onYearChange} />
       )}
     </div>
   )

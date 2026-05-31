@@ -130,10 +130,10 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
       <SheetContent className="sm:max-w-3xl w-full flex flex-col overflow-hidden">
         <SheetHeader className="pr-8">
           <SheetTitle className="text-pretty">
-            {path?.display_name || `Đường tuyển sinh #${pathId}`}
+            {path?.display_name || `Phương thức tuyển sinh #${pathId}`}
           </SheetTitle>
           <SheetDescription className="sr-only">
-            Cấu hình chi tiết đường tuyển sinh: chỉ tiêu, định danh, tiêu chí, giấy tờ, vòng đời.
+            Cấu hình chi tiết phương thức tuyển sinh: chỉ tiêu, định danh, tiêu chí, giấy tờ, vòng đời.
           </SheetDescription>
           {path && (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -154,7 +154,7 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
         {isLoading && (
           <div className="flex items-center justify-center py-8" aria-live="polite">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden="true" />
-            <span className="sr-only">Đang tải chi tiết đường tuyển sinh…</span>
+            <span className="sr-only">Đang tải chi tiết phương thức tuyển sinh…</span>
           </div>
         )}
 
@@ -516,7 +516,7 @@ function LifecycleTab({
     try {
       await activateMutation.mutateAsync(pathId)
       queryClient.invalidateQueries({ queryKey: quotaMatrixKeys.all })
-      toast.success("Đã kích hoạt đường tuyển sinh")
+      toast.success("Đã kích hoạt phương thức tuyển sinh")
       onClose()
     } catch (e: unknown) {
       toast.error(parseApiError(e, "Lỗi kích hoạt — kiểm tra checklist và thử lại."))
@@ -528,7 +528,7 @@ function LifecycleTab({
     try {
       await deactivateMutation.mutateAsync(pathId)
       queryClient.invalidateQueries({ queryKey: quotaMatrixKeys.all })
-      toast.success("Đã vô hiệu hoá đường tuyển sinh")
+      toast.success("Đã vô hiệu hoá phương thức tuyển sinh")
       onClose()
     } catch (e: unknown) {
       toast.error(parseApiError(e, "Lỗi vô hiệu hoá — thử lại sau."))
@@ -631,9 +631,9 @@ function LifecycleTab({
       <Dialog open={confirmDeactivate} onOpenChange={setConfirmDeactivate}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Vô hiệu hoá đường tuyển sinh?</DialogTitle>
+            <DialogTitle>Vô hiệu hoá phương thức tuyển sinh?</DialogTitle>
             <DialogDescription>
-              Storefront sẽ ẩn ngay đường tuyển sinh này. Người dùng đã
+              Storefront sẽ ẩn ngay phương thức tuyển sinh này. Người dùng đã
               nộp hồ sơ vẫn giữ snapshot path; chỉ submission mới bị chặn.
             </DialogDescription>
           </DialogHeader>

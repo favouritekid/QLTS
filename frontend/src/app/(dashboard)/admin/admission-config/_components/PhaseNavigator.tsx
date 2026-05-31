@@ -46,7 +46,7 @@ interface StepConfig {
 const PHASE1_STEPS: StepConfig[] = [
   { id: "units", label: "Đơn vị Tổ chức" },
   { id: "offering-types", label: "Hệ Đào tạo" },
-  { id: "methods", label: "Phương thức Tuyển sinh" },
+  { id: "methods", label: "Phương thức Tuyển sinh (danh mục)" },
   { id: "document-types", label: "Loại Giấy tờ" },
   { id: "subject-groups", label: "Tổ hợp môn" },
   { id: "rounds", label: "Đợt Tuyển sinh" },  // Phase 2 v8.2 PR-2A v2 — year-level
@@ -70,7 +70,6 @@ export function PhaseNavigator({
 }: PhaseNavigatorProps) {
   const isPhase1Active = currentState.type === "phase1";
   const isPhase2Active = currentState.type === "phase2";
-  const isPhase3Active = currentState.type === "phase3" || currentState.type === "select-context";
   const isQuotaMatrixActive = currentState.type === "quota-matrix-overview";
 
   const currentPhase1Step = isPhase1Active ? currentState.step : null;
@@ -91,13 +90,6 @@ export function PhaseNavigator({
     } else {
       onNavigate({ type: "phase2", step: stepId as Phase2Step });
     }
-    // Close mobile sheet after navigation
-    onClose?.();
-  };
-
-  // Navigate to Phase 3
-  const handlePhase3Click = () => {
-    onNavigate({ type: "select-context" });
     // Close mobile sheet after navigation
     onClose?.();
   };
@@ -188,28 +180,19 @@ export function PhaseNavigator({
 
         </div>
         <Button
-          variant={isPhase3Active ? "default" : "outline"}
-          size="sm"
-          className="w-full justify-start"
-          onClick={handlePhase3Click}
-        >
-          <BarChart3 className="h-4 w-4 mr-2" />
-          Cấu hình Đường tuyển sinh
-        </Button>
-        <Button
           variant={isQuotaMatrixActive ? "default" : "outline"}
           size="sm"
-          className="w-full justify-start mt-2"
+          className="w-full justify-start"
           onClick={handleQuotaMatrixClick}
         >
           <BarChart3 className="h-4 w-4 mr-2" />
-          Ma trận Chỉ tiêu Theo Đợt
+          Cấu hình chỉ tiêu tuyển sinh
         </Button>
       </Card>
 
       {/* Help Text */}
       <div className="text-xs text-muted-foreground px-2">
-        <p>Hoàn thành Giai đoạn 1 và 2 trước khi cấu hình đường tuyển sinh.</p>
+        <p>Hoàn thành Giai đoạn 1 và 2 trước khi cấu hình phương thức tuyển sinh.</p>
       </div>
     </div>
   );

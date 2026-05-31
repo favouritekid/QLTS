@@ -40,8 +40,7 @@ interface Props {
   academicInfoId: number
   /** Preset round (cell vị trí). Round contract hardening (plan v4): the BE
    *  auto-resolve DOT_1 shim is removed, so a null round can no longer be
-   *  quick-created here — submit is blocked and the admin is sent to the
-   *  step-by-step wizard (which has a round picker). */
+   *  quick-created here — submit is blocked until the cell provides a round. */
   admissionRoundId?: number | null
   /** Preset method nếu cell là vị trí (method × round) cụ thể */
   admissionMethodId?: number | null
@@ -72,11 +71,11 @@ export function QuickCreatePathModal({
     }
     // Round contract hardening (plan v4 Section B-FE): the round is REQUIRED
     // and the BE auto-DOT_1 shim is removed. This minimal modal has no round
-    // picker, so when the cell didn't preset a round, block and route to the
-    // wizard. Guard also narrows admissionRoundId to number for the payload.
+    // picker, so when the cell didn't preset a round, block the quick create.
+    // Guard also narrows admissionRoundId to number for the payload.
     if (!admissionRoundId) {
       toast.error(
-        "Thiếu đợt tuyển sinh — không thể tạo nhanh. Dùng trình tạo từng bước để chọn đợt.",
+        "Thiếu đợt tuyển sinh — không thể tạo nhanh từ ô này.",
       )
       return
     }
@@ -91,7 +90,7 @@ export function QuickCreatePathModal({
         allow_unverified_submission: false,
         minor_correction_allowed_fields: [],
       })
-      toast.success("Đã tạo đường tuyển sinh. Mở chi tiết để cấu hình tiêu chí &amp; giấy tờ.")
+      toast.success("Đã tạo phương thức tuyển sinh. Mở chi tiết để cấu hình tiêu chí và giấy tờ.")
       onCreated(created.id)
     } catch (e: unknown) {
       toast.error(parseApiError(e, "Lỗi tạo — kiểm tra dữ liệu và thử lại."))
@@ -102,7 +101,7 @@ export function QuickCreatePathModal({
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-pretty">Tạo đường tuyển sinh mới</DialogTitle>
+          <DialogTitle className="text-pretty">Tạo phương thức tuyển sinh mới</DialogTitle>
           <DialogDescription>
             {contextLabel ?? "Tạo tối thiểu — cấu hình chi tiết sau ở trang chi tiết."}
           </DialogDescription>
@@ -173,8 +172,7 @@ export function QuickCreatePathModal({
 
           {!admissionRoundId && (
             <div className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-[11px] text-destructive">
-              Chưa chọn đợt tuyển sinh — không thể tạo nhanh. Vui lòng dùng
-              trình tạo từng bước (wizard) để chọn đợt.
+              Chưa chọn đợt tuyển sinh — không thể tạo nhanh từ ô này.
             </div>
           )}
         </div>
@@ -195,7 +193,7 @@ export function QuickCreatePathModal({
             {createMutation.isPending && (
               <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
             )}
-            Tạo đường tuyển sinh
+            Tạo phương thức tuyển sinh
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -6,8 +6,7 @@
  * - WelcomeScreen: First-time setup
  * - Phase1Content: Master data management
  * - Phase2Content: Program management
- * - ContextSelector: Context selection for Phase 3
- * - Phase3Content: Admission path configuration
+ * - QuotaMatrixOverview: unified Phase 3 admission path configuration
  *
  * Mobile Responsive:
  * - Desktop (lg+): Sidebar always visible
@@ -29,11 +28,7 @@ import { RoundsManagementTab } from "./Phase1Master/RoundsManagementTab";  // Ph
 import { MajorProgramPanel } from "./Phase2Program/MajorProgramPanel";
 import { ProgramOfferingPanel } from "./Phase2Program/ProgramOfferingPanel";
 import { AcademicInfoPanel } from "./Phase2Program/AcademicInfoPanel";
-import { ContextSelector } from "./Phase3Config/ContextSelector";
-import { PathsList } from "./Phase3Config/PathsList";
-import { CoverageMatrix } from "./Phase3Config/CoverageMatrix";
 import { QuotaMatrixOverview } from "./Phase3Config/QuotaMatrixOverview";  // Phase 2 v8.2 PR-2D.1 v2
-import { PathWizard } from "./Phase3Config/PathWizard";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -42,7 +37,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Loader2, Menu } from "lucide-react";
-import type { SelectionContext, Phase3View, AdmissionConfigState } from "./shared/types";
 
 // ============================================
 // COMPONENT
@@ -92,7 +86,7 @@ export function AdmissionConfigClient() {
           <p className="text-xs text-muted-foreground">
             {currentState.type === "phase1" && "Giai đoạn 1: Dữ liệu Danh mục"}
             {currentState.type === "phase2" && "Giai đoạn 2: Chương trình"}
-            {(currentState.type === "phase3" || currentState.type === "select-context") && "Giai đoạn 3: Cấu hình"}
+            {currentState.type === "quota-matrix-overview" && "Giai đoạn 3: Cấu hình"}
           </p>
         </div>
       </div>
@@ -133,34 +127,17 @@ export function AdmissionConfigClient() {
             <Phase2Content step={currentState.step} />
           )}
 
-          {/* Phase 3: Context Selection */}
-          {currentState.type === "select-context" && (
-            <ContextSelector
-              onContextSelected={(context) =>
-                navigate({
-                  type: "phase3",
-                  context,
-                  view: { type: "list" },
-                })
-              }
-            />
-          )}
-
-          {/* Phase 3: Configuration */}
-          {currentState.type === "phase3" && (
-            <Phase3Content
-              context={currentState.context}
-              view={currentState.view}
-              navigate={navigate}
-            />
-          )}
-
           {/* Phase 2 v8.2 PR-2D.1 v2 — Quota Matrix overview (no context) */}
           {currentState.type === "quota-matrix-overview" && (
             <QuotaMatrixOverview
               academicYear={currentState.academicYear}
+              academicInfoId={currentState.academicInfoId}
               onYearChange={(year) =>
-                navigate({ type: "quota-matrix-overview", academicYear: year })
+                navigate({
+                  type: "quota-matrix-overview",
+                  academicYear: year,
+                  academicInfoId: currentState.academicInfoId,
+                })
               }
               onBack={() => navigate({ type: "welcome" })}
             />
@@ -223,52 +200,4 @@ function Phase2Content({ step }: { step: string }) {
         </div>
       );
   }
-}
-
-function Phase3Content({
-  context,
-  view,
-  navigate,
-}: {
-  context: SelectionContext;
-  view: Phase3View;
-  navigate: (state: AdmissionConfigState) => void;
-}) {
-  const handleNavigateView = (newView: Phase3View) => {
-    navigate({ type: "phase3", context, view: newView });
-  };
-
-  const handleBackToContextSelector = () => {
-    navigate({ type: "select-context" });
-  };
-
-  if (view.type === "list") {
-    return (
-      <PathsList
-        context={context}
-        onNavigate={handleNavigateView}
-        onBack={handleBackToContextSelector}
-      />
-    );
-  }
-
-  if (view.type === "matrix") {
-    return (
-      <CoverageMatrix context={context} onNavigate={handleNavigateView} />
-    );
-  }
-
-  if (view.type === "wizard") {
-    return (
-      <PathWizard
-        key={view.pathId || "create"} // Remount when switching between paths or create/edit
-        context={context}
-        pathId={view.pathId}
-        onNavigate={handleNavigateView}
-        initialStep={(view.wizardStep as 1 | 2 | 3) || 1}
-      />
-    );
-  }
-
-  return null;
 }

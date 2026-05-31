@@ -10,7 +10,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { 
   getPathsForOffering, 
   getAdmissionPath,
-  listAdmissionPaths,
   createAdmissionPath,
   updateAdmissionPath,
   activateAdmissionPath,
@@ -18,7 +17,6 @@ import {
 
   updateCriteria,
   updatePathDocuments,
-  getAcademicYears,
   getCoverageMatrix,
   getPathDocuments,
 } from "@/lib/api/admission-paths"
@@ -36,11 +34,9 @@ import type {
 export const admissionPathKeys = {
   all: ["admission-paths"] as const,
   lists: () => [...admissionPathKeys.all, "list"] as const,
-  list: (academicInfoId: number) => [...admissionPathKeys.lists(), academicInfoId] as const,
   forOffering: (offeringId: number) => [...admissionPathKeys.all, "for-offering", offeringId] as const,
   details: () => [...admissionPathKeys.all, "detail"] as const,
   detail: (pathId: number) => [...admissionPathKeys.details(), pathId] as const,
-  years: () => [...admissionPathKeys.all, "years"] as const,
   coverageMatrix: (academicInfoId: number) => [...admissionPathKeys.all, "coverage-matrix", academicInfoId] as const,
   documents: (pathId: number) => [...admissionPathKeys.all, "documents", pathId] as const,
 }
@@ -66,18 +62,6 @@ export function useAdmissionPathsForOffering(offeringId: number | undefined) {
 }
 
 /**
- * Hook to list paths by academic info ID.
- * Used by Config Console's PathsList component.
- */
-export function useAdmissionPathsByAcademicInfo(academicInfoId: number | undefined) {
-  return useQuery({
-    queryKey: admissionPathKeys.list(academicInfoId ?? 0),
-    queryFn: () => listAdmissionPaths(academicInfoId!),
-    enabled: !!academicInfoId,
-  })
-}
-
-/**
  * Hook to fetch single path by ID.
  * staleTime: 0 ensures fresh data in wizard edit mode
  */
@@ -88,17 +72,6 @@ export function useAdmissionPath(pathId: number | undefined) {
     enabled: !!pathId,
     staleTime: 0, // Always fetch fresh data for wizard
     refetchOnMount: true, // Refetch when component mounts
-  })
-}
-
-/**
- * Hook to fetch academic years.
- */
-export function useAcademicYears() {
-  return useQuery({
-    queryKey: admissionPathKeys.years(),
-    queryFn: getAcademicYears,
-    staleTime: 30 * 60 * 1000, // 30 minutes (rarely changes)
   })
 }
 
@@ -138,10 +111,15 @@ export function useCreateAdmissionPath() {
   return useMutation({
     mutationFn: (data: AdmissionPathCreate) => createAdmissionPath(data),
     onSuccess: () => {
-      // Invalidate list queries
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      // Invalidate toàn bộ admission-paths: list + coverage-matrix (readiness mode
+      // dùng admissionPathKeys.coverageMatrix, KHÔNG nằm dưới .lists()).
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
       // Invalidate academic infos to update admission_status (READY → CONFIGURED)
       queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
+      // Invalidate quota matrix (by-major + by-year) — màn chính của Phase 3 sau
+      // khi gỡ lối cũ. Raw literal = quotaMatrixKeys.all, tránh circular import
+      // (useQuotaMatrix đã import admissionPathKeys từ file này).
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
     },
   })
 }

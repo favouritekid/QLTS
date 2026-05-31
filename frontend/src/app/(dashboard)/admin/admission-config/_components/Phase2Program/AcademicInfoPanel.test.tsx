@@ -31,8 +31,9 @@ vi.mock("sonner", () => ({
   },
 }));
 
+const mockNavigate = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/admissions/useAdmissionConfigState", () => ({
-  useAdmissionConfigState: () => ({ navigate: vi.fn() }),
+  useAdmissionConfigState: () => ({ navigate: mockNavigate }),
 }));
 
 describe("AcademicInfoPanel", () => {
@@ -78,6 +79,7 @@ describe("AcademicInfoPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockNavigate.mockReset();
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
     
     (UseProgramDataHooks.useOfferingAcademicInfos as any).mockReturnValue({
@@ -399,6 +401,33 @@ describe("AcademicInfoPanel", () => {
     // The dialog should close (finally block runs) even though mutation failed
     await waitFor(() => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("PR-2: phase 2 action deep-links to quota matrix with academicInfo", () => {
+    (UseProgramDataHooks.useOfferingAcademicInfos as any).mockReturnValue({
+      data: [
+        {
+          id: 21,
+          offering_id: 1,
+          academic_year: 2026,
+          tuition_fee_per_year: 10000000,
+          annual_admission_quota: 80,
+          is_published: true,
+          admission_status: "CONFIGURED",
+        },
+      ],
+      isLoading: false,
+    });
+
+    render(<AcademicInfoPanel />);
+
+    fireEvent.click(screen.getByTitle("Xem cấu hình tuyển sinh"));
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      type: "quota-matrix-overview",
+      academicYear: 2026,
+      academicInfoId: 21,
     });
   });
 });

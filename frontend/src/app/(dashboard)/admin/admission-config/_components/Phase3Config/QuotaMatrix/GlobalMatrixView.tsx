@@ -178,7 +178,7 @@ export function GlobalMatrixView({ academicYear, onYearChange }: Props) {
                                       })
                                     }
                                     className="w-full text-left bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-2 py-1.5 transition-colors"
-                                    aria-label={`Mở tổng hợp ${row.program_name} đợt ${r.round_code}: tổng admit ${cell.total_admit_quota}, tổng submit ${cell.total_round_quota}, ${cell.path_count} đường tuyển sinh`}
+                                    aria-label={`Mở tổng hợp ${row.program_name} đợt ${r.round_code}: tổng admit ${cell.total_admit_quota}, tổng submit ${cell.total_round_quota}, ${cell.path_count} phương thức tuyển sinh`}
                                   >
                                     <div className="text-xs font-semibold tabular-nums">
                                       {cell.total_admit_quota} / {row.annual_admission_quota ?? "∞"}
@@ -187,7 +187,7 @@ export function GlobalMatrixView({ academicYear, onYearChange }: Props) {
                                       Submit {cell.total_round_quota}
                                     </div>
                                     <div className="text-[11px] text-muted-foreground">
-                                      {cell.path_count} đường
+                                      {cell.path_count} phương thức
                                     </div>
                                   </button>
                                 </TooltipTrigger>

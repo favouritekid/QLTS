@@ -92,12 +92,23 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     roundCode: string
   } | null>(null)
 
-  // Auto-select first ngành on year change — only if URL has no academicInfo.
+  // Validate ngành theo năm. academic_info là year-bound → đổi năm giữ
+  // academicInfo cũ (AdmissionConfigClient.onYearChange) sẽ mismatch: header năm
+  // mới nhưng matrix ngành năm cũ. Xử lý:
+  //   - năm có ngành + selection không thuộc năm (hoặc chưa chọn) → ngành đầu
+  //   - năm KHÔNG có ngành nào → clear selection (tránh phantom matrix năm cũ)
   useEffect(() => {
-    if (globalData && globalData.rows.length > 0 && selectedAcademicInfoId === undefined) {
+    if (!globalData) return // đang load năm mới — chờ data thật
+    const exists = globalData.rows.some(
+      (r) => r.academic_info_id === selectedAcademicInfoId,
+    )
+    if (exists) return
+    if (globalData.rows.length > 0) {
       setSelectedAcademicInfoId(globalData.rows[0].academic_info_id)
+    } else if (selectedAcademicInfoId !== undefined) {
+      updateSearchParam("academicInfo", null)
     }
-  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId])
+  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId, updateSearchParam])
 
   const isOver = matrix?.sum_remaining !== null && matrix !== undefined && matrix.sum_remaining! < 0
 
@@ -232,7 +243,7 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
         {matrix && (
           <div className="mt-4 text-xs text-muted-foreground space-y-0.5">
             <p>Mỗi ô gồm 3 dòng: trần admit / cap năm · trần submit · trạng thái. Bấm ô để xem chi tiết &amp; chỉnh chỉ tiêu.</p>
-            <p>Dấu &quot;—&quot; = chưa có đường tuyển sinh cho (phương thức × đợt).</p>
+            <p>Dấu &quot;—&quot; = chưa có phương thức tuyển sinh cho ô này.</p>
           </div>
         )}
       </CardContent>
@@ -340,7 +351,7 @@ const EmptyCellButton = memo(function EmptyCellButton({
       <button
         onClick={handleClick}
         className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded px-2 py-1.5 w-full transition-colors"
-        aria-label={`Tạo đường tuyển sinh ${methodName} đợt ${roundCode}`}
+        aria-label={`Tạo phương thức tuyển sinh ${methodName} đợt ${roundCode}`}
       >
         + Tạo
       </button>
