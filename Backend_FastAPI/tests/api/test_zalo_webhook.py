@@ -2,12 +2,14 @@
 """
 API tests for Zalo webhook endpoint.
 
-Policy (commit bdd57f1f): the route is best-effort on signature for
-the read-only branches (oa_send_* / user_follow_oa) — missing or
-invalid signature still returns 200 so Zalo does not retry-storm
-the endpoint. Strict persistence gating now lives only on the
-``user_feedback`` branch (Phase E.5), tested in
-``tests/integration/test_admission_survey_webhook.py``.
+Policy: the route always returns 200 (even on missing/invalid signature) so
+Zalo does not retry-storm the endpoint. WRITE branches are signature-gated:
+``user_feedback`` (Phase E.5, tested in
+``tests/integration/test_admission_survey_webhook.py``) and — since PR1
+Commit 4 — the delivery-status branch (oa_send_* / ZBS
+user_received_message), whose no-mutation contract is tested in
+``tests/api/test_zalo_webhook_delivery_gate.py``. Read-only branches
+(user_follow_oa / user_unfollow_oa) remain best-effort log-only.
 """
 import json
 import pytest
@@ -21,9 +23,10 @@ class TestZaloWebhook:
     """Tests for POST /api/webhooks/zalo."""
 
     async def test_missing_signature_200_acks(self, client: AsyncClient):
-        """Read-only branches accept unsigned POSTs — 200 ack, logged as
-        signature_valid=false for observability. Persistence branches
-        (user_feedback) have their own gate tested separately."""
+        """Unsigned POSTs always 200-ack (no Zalo retry storm). The
+        delivery-status branch (oa_send_template) is signature-gated since PR1
+        Commit 4: no signature → 200 but NotificationDelivery is NOT mutated
+        (no-mutation contract in test_zalo_webhook_delivery_gate.py)."""
         response = await client.post(
             "/api/webhooks/zalo",
             json={"event_name": "oa_send_template"},
@@ -31,7 +34,8 @@ class TestZaloWebhook:
         assert response.status_code == 200
 
     async def test_invalid_signature_200_acks(self, client: AsyncClient):
-        """Wrong signature still returns 200 for the same retry-storm reason."""
+        """Wrong signature still returns 200 (retry-storm avoidance); the
+        delivery-status write is skipped by the Commit 4 gate."""
         response = await client.post(
             "/api/webhooks/zalo",
             json={"event_name": "oa_send_template"},
@@ -57,18 +61,21 @@ class TestZaloWebhook:
         assert response.status_code == 200
         assert response.json()["status"] == "ok"
 
+    @patch("app.gateways.zalo.zalo_gateway")
     async def test_zbs_user_received_routes_to_delivery_handler(
-        self, client: AsyncClient
+        self, mock_gw, client: AsyncClient
     ):
         """ZBS Template Message delivery confirmation arrives as
         ``user_received_message`` with header ``X-ZEvent-Server: ZNS``
         (per ZBS docs ``webhook-gui-tin-qua-sdt/su-kien-nguoi-dung-nhan-tin-qua-sdt``).
 
-        The endpoint must accept it as a delivery status event and 200-ack
-        even when no matching ``notification_delivery`` row exists (the
-        handler logs ``Delivery not found for Zalo callback`` in that case).
-        Without the routing wired, this would be a no-op silent miss.
+        With a valid signature (PR1 Commit 4 gate), the endpoint routes it to
+        the delivery handler and 200-acks even when no matching
+        ``notification_delivery`` row exists (the handler logs ``Delivery not
+        found for Zalo callback`` in that case). Signature is mocked valid so
+        the Commit 4 gate lets it through to the handler.
         """
+        mock_gw.verify_webhook_signature.return_value = True
         body = json.dumps({
             "event_name": "user_received_message",
             "app_id": "1860141329355019864",
@@ -86,7 +93,8 @@ class TestZaloWebhook:
             content=body.encode(),
             headers={
                 "Content-Type": "application/json",
-                "X-ZEvent-Server": "ZNS",  # marker that distinguishes ZBS from chat
+                "X-ZEvent-Server": "ZNS",  # ZBS marker (vs chat)
+                "X-ZEvent-Signature": "valid",  # gate mock True
             },
         )
         assert response.status_code == 200
