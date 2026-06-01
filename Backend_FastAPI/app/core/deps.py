@@ -161,6 +161,12 @@ async def get_current_user(
             )
             raise credentials_exception
 
+        # PR1 Commit 2: expose the live refresh jti (r_jti embedded in the
+        # access token) on request.state so /api/sessions can resolve
+        # is_current server-side without re-decoding the refresh cookie. Set
+        # here, after r_jti is validated non-None, on every authed request.
+        request.state.refresh_jti = refresh_jti
+
         # === STEP 2: CHECK ACCESS JTI BLACKLIST ===
         # (Kiểm tra xem chính Access Token này đã bị logout/xoay vòng chưa)
         try:
