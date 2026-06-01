@@ -569,8 +569,15 @@ describe("sibling mutations – by-major matrix cache parity", () => {
     act(() => {
       result.current.mutate({
         pathId: MOCK_PATH_ID,
-        // MSW intercepts → payload shape irrelevant; cast minimal.
-        data: { code: "C1", name: "Crit", subject_group_ids: [] } as never,
+        // Minimal valid AdmissionCriteriaCreate (4 defaulted fields required
+        // ở output type) — type-correct, không cast → bắt drift nếu BE/Zod
+        // thêm field required. MSW intercept nên giá trị cụ thể không quan trọng.
+        data: {
+          subject_selection_mode: "fixed",
+          scoring_method: "sum",
+          subject_groups: [],
+          policy_version: "2025.1",
+        },
       });
     });
 
