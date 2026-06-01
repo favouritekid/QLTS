@@ -161,6 +161,9 @@ export function useUpdateCriteria() {
       queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
       // Invalidate related queries — .all phủ coverage matrix (readiness).
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // criteria_code hiển thị trên by-major PathMatrixCell (key ["quota-matrix"],
+      // KHÔNG nằm dưới .all) → phải invalidate riêng nếu không ô by-major stale.
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
     },
   })
 }
@@ -200,6 +203,10 @@ export function useActivateAdmissionPath() {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
       // .all phủ forOffering + coverage matrix (activated paths xuất hiện ở đó)
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // status hiển thị trên by-major PathMatrixCell (chấm màu) — key
+      // ["quota-matrix"] KHÔNG nằm dưới .all → invalidate riêng ở hook để
+      // không phụ thuộc call-site (LifecycleTab) bù tay.
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
       // Invalidate academic infos to update path_count and admission_status
       queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
     },
@@ -217,6 +224,9 @@ export function useDeactivateAdmissionPath() {
     onSuccess: (updatedPath) => {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // status hiển thị trên by-major PathMatrixCell (chấm màu) — key
+      // ["quota-matrix"] KHÔNG nằm dưới .all → invalidate riêng ở hook.
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
       // Invalidate academic infos to update path_count and admission_status
       queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
     },

@@ -17,6 +17,9 @@ import {
   useUpdatePathDocuments,
   useCreateAdmissionPath,
   useUpdateAdmissionPath,
+  useUpdateCriteria,
+  useActivateAdmissionPath,
+  useDeactivateAdmissionPath,
   admissionPathKeys,
 } from "./useAdmissionPaths";
 import { quotaMatrixKeys } from "./useQuotaMatrix";
@@ -532,6 +535,87 @@ describe("useCreateAdmissionPath – matrix cache parity", () => {
       expect.objectContaining({ queryKey: admissionPathKeys.all }),
     );
 
+    invalidateSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling mutations — by-major matrix cache parity (PR matrix-funnel review)
+//
+// By-major PathMatrixCell (key ["quota-matrix"]) renders `status` (chấm màu)
+// + `criteria_code`. Mutations đổi 2 field này PHẢI invalidate ["quota-matrix"]
+// ở HOOK (không phụ thuộc call-site bù tay), nếu không ô by-major stale.
+// Anchor non-tautological: gỡ invalidation → fail.
+// ---------------------------------------------------------------------------
+describe("sibling mutations – by-major matrix cache parity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function arrange(path: string, method: "put" | "post") {
+    server.use(
+      http[method](`${API_BASE_URL}${path}`, () =>
+        HttpResponse.json(mockAdmissionPathResponse),
+      ),
+    );
+  }
+
+  it("useUpdateCriteria invalidates the quota-matrix cache (criteria_code)", async () => {
+    arrange("/api/admission-config/paths/:pathId/criteria", "put");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useUpdateCriteria(), { wrapper: Wrapper });
+    act(() => {
+      result.current.mutate({
+        pathId: MOCK_PATH_ID,
+        // MSW intercepts → payload shape irrelevant; cast minimal.
+        data: { code: "C1", name: "Crit", subject_group_ids: [] } as never,
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+    invalidateSpy.mockRestore();
+  });
+
+  it("useActivateAdmissionPath invalidates the quota-matrix cache (status dot)", async () => {
+    arrange("/api/admission-config/paths/:pathId/activate", "post");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useActivateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+    act(() => {
+      result.current.mutate(MOCK_PATH_ID);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+    invalidateSpy.mockRestore();
+  });
+
+  it("useDeactivateAdmissionPath invalidates the quota-matrix cache (status dot)", async () => {
+    arrange("/api/admission-config/paths/:pathId/deactivate", "post");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useDeactivateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+    act(() => {
+      result.current.mutate(MOCK_PATH_ID);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
     invalidateSpy.mockRestore();
   });
 });
