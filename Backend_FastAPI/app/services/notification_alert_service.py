@@ -2,7 +2,10 @@
 """
 Phase D3: Automated alerting for notification delivery health.
 
-4 check functions, Redis dedup to prevent alert storms, dispatches via SYSTEM_ALERT.
+4 check functions, Redis dedup to prevent alert storms. The fired alerts are
+dispatched by the ``check_notification_alerts`` Celery task via the admin-only
+``NOTIFICATION_HEALTH_ALERT`` event (browser + email, all_admins) — info-
+severity alerts are logged but not dispatched.
 """
 import structlog
 from typing import Dict, List, Optional
@@ -11,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
 from app.config import settings
+from app.core.events import SystemEvents
 from app.repositories.notification_delivery_repository import NotificationDeliveryRepository
 from app.services.notification_circuit_breaker import get_all_breaker_states
 
@@ -20,11 +24,21 @@ log = structlog.get_logger(__name__)
 _ALERT_DEDUP_KEY = "notif:alert:dedup:{alert_type}"
 _ALERT_DEDUP_TTL = 3600  # 1 hour
 
+# Operational events the health checks must NOT measure — the health task
+# itself dispatches NOTIFICATION_HEALTH_ALERT, so counting its own deliveries
+# in the failure-rate / backlog windows would let a single fan-out re-trigger
+# the failure_rate_high alert next cycle (self-feeding loop). We exclude ONLY
+# the self-referential event — NOT system_alert, which (after Approach Y) is a
+# real admin broadcast whose delivery failures we still want to surface.
+_OPERATIONAL_ALERT_EVENTS = [SystemEvents.NOTIFICATION_HEALTH_ALERT.value]
+
 
 async def check_failure_rate_alert(db: AsyncSession) -> Optional[Dict]:
     """Check if failure rate exceeds threshold in last 30 minutes."""
     repo = NotificationDeliveryRepository(db)
-    rate = await repo.get_failure_rate(minutes=30)
+    rate = await repo.get_failure_rate(
+        minutes=30, exclude_events=_OPERATIONAL_ALERT_EVENTS
+    )
 
     if rate is not None and rate > settings.ALERT_FAILURE_RATE_THRESHOLD:
         return {
@@ -39,7 +53,9 @@ async def check_failure_rate_alert(db: AsyncSession) -> Optional[Dict]:
 async def check_backlog_alert(db: AsyncSession) -> Optional[Dict]:
     """Check if queued backlog exceeds threshold."""
     repo = NotificationDeliveryRepository(db)
-    backlog = await repo.get_queued_backlog_count()
+    backlog = await repo.get_queued_backlog_count(
+        exclude_events=_OPERATIONAL_ALERT_EVENTS
+    )
 
     if backlog > settings.ALERT_BACKLOG_THRESHOLD:
         return {

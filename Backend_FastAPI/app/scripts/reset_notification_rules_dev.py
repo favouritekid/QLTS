@@ -237,6 +237,13 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         link_template="$action_url",
         groups=[_internal_group("all_users", ["browser", "email"])],
     ),
+    "notification_health_alert": _build_rule(
+        event="notification_health_alert",
+        title_template="[${severity}] Cảnh báo sức khỏe thông báo",
+        message_template="$message",
+        notification_type="warning",
+        groups=[_internal_group("all_admins", ["browser", "email"])],
+    ),
     "system_announcement": _build_rule(
         event="system_announcement",
         title_template="$title",

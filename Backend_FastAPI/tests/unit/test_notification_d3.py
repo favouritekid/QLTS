@@ -5,7 +5,7 @@ Covers: failure rate alert, backlog alert, webhook lag alert, breaker alert, ded
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 class TestFailureRateAlert:
@@ -360,3 +360,191 @@ class TestRunAllChecksSessionSafety:
             "Circuit breaker alert must still fire when all DB checks fail — "
             "it does not depend on the shared session."
         )
+
+
+# =============================================================================
+# fix/notification-alert-flood — F-metric: exclude self-referential event
+# =============================================================================
+
+
+class TestHealthChecksExcludeOperationalEvent:
+    """The failure-rate + backlog checks must exclude the operational
+    ``notification_health_alert`` event so the health task never measures
+    its own fan-out (self-feeding loop). See plan Finding 3."""
+
+    @pytest.mark.asyncio
+    async def test_failure_rate_passes_operational_exclude(self):
+        from app.services.notification_alert_service import (
+            check_failure_rate_alert,
+            _OPERATIONAL_ALERT_EVENTS,
+        )
+
+        # The exclude set must contain ONLY the self-referential event —
+        # NOT system_alert (a real admin broadcast post-Approach-Y).
+        assert _OPERATIONAL_ALERT_EVENTS == ["notification_health_alert"]
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_alert_service.NotificationDeliveryRepository"
+        ) as MockRepo, patch(
+            "app.services.notification_alert_service.settings"
+        ) as mock_settings:
+            mock_settings.ALERT_FAILURE_RATE_THRESHOLD = 0.20
+            repo = AsyncMock()
+            repo.get_failure_rate = AsyncMock(return_value=0.05)
+            MockRepo.return_value = repo
+
+            await check_failure_rate_alert(mock_db)
+            repo.get_failure_rate.assert_awaited_once_with(
+                minutes=30, exclude_events=_OPERATIONAL_ALERT_EVENTS
+            )
+
+    @pytest.mark.asyncio
+    async def test_backlog_passes_operational_exclude(self):
+        from app.services.notification_alert_service import (
+            check_backlog_alert,
+            _OPERATIONAL_ALERT_EVENTS,
+        )
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_alert_service.NotificationDeliveryRepository"
+        ) as MockRepo, patch(
+            "app.services.notification_alert_service.settings"
+        ) as mock_settings:
+            mock_settings.ALERT_BACKLOG_THRESHOLD = 500
+            repo = AsyncMock()
+            repo.get_queued_backlog_count = AsyncMock(return_value=10)
+            MockRepo.return_value = repo
+
+            await check_backlog_alert(mock_db)
+            repo.get_queued_backlog_count.assert_awaited_once_with(
+                exclude_events=_OPERATIONAL_ALERT_EVENTS
+            )
+
+
+# =============================================================================
+# fix/notification-alert-flood — task dispatch: event routing + F-info
+# =============================================================================
+
+
+class _FakeSessionCM:
+    """Minimal async-context-manager standing in for ``task_db_session()``."""
+
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class TestAlertTaskDispatch:
+    """``check_notification_alerts`` task: dispatches via NOTIFICATION_HEALTH_ALERT
+    (not SYSTEM_ALERT), skips info-severity, respects/skips preference by
+    severity, and counts only what it actually dispatched.
+
+    Invoked synchronously (``.apply().get()``) with the alert source and
+    dispatcher mocked — same celery-eager idiom as the reminder-task tests.
+    Sync test so ``run_async_task`` takes the ``run_until_complete`` branch.
+    """
+
+    def _run_task(self, alerts, dispatch_return=None):
+        from app.tasks import delivery_tasks
+
+        # Default: safe_dispatch created 1 notification (truthy). Pass [] to
+        # simulate "no enabled rule / no recipient / swallowed failure".
+        if dispatch_return is None:
+            dispatch_return = [1]
+        mock_session = AsyncMock()
+        dispatch_mock = AsyncMock(return_value=dispatch_return)
+        with patch.object(
+            delivery_tasks, "task_db_session",
+            return_value=_FakeSessionCM(mock_session),
+        ), patch(
+            "app.services.notification_alert_service.run_all_checks",
+            new=AsyncMock(return_value=alerts),
+        ), patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new=dispatch_mock,
+        ):
+            result = delivery_tasks.check_notification_alerts.apply().get()
+        return result, dispatch_mock
+
+    def test_warning_and_error_dispatched_info_skipped(self):
+        alerts = [
+            {"alert_type": "failure_rate_high", "severity": "warning", "message": "warn"},
+            {"alert_type": "webhook_lag", "severity": "info", "message": "lag"},
+            {"alert_type": "breaker_open", "severity": "error", "message": "breaker"},
+        ]
+        result, dispatch_mock = self._run_task(alerts)
+
+        assert dispatch_mock.await_count == 2, "info-severity alert must NOT dispatch"
+        assert result["fired"] == 2, "metric counts real dispatches, not len(alerts)"
+        assert result["skipped_info"] == 1
+        assert set(result["types"]) == {"failure_rate_high", "breaker_open"}
+
+    def test_dispatch_uses_health_alert_event_and_payload(self):
+        from app.core.events import SystemEvents
+
+        alerts = [
+            {"alert_type": "failure_rate_high", "severity": "warning", "message": "warn"}
+        ]
+        _, dispatch_mock = self._run_task(alerts)
+
+        kwargs = dispatch_mock.await_args.kwargs
+        assert kwargs["event"] == SystemEvents.NOTIFICATION_HEALTH_ALERT, (
+            "Health alert must dispatch via NOTIFICATION_HEALTH_ALERT, never "
+            "SYSTEM_ALERT (which fans out to all_users)."
+        )
+        assert kwargs["payload"]["alert_type"] == "failure_rate_high"
+        assert kwargs["payload"]["severity"] == "warning"
+        assert kwargs["payload"]["message"] == "warn"
+        assert kwargs["rooms"] == ["role_admin"]
+        # warning → respects operator preference (they may opt out)
+        assert kwargs["skip_preference_check"] is False
+
+    def test_error_severity_skips_preference_check(self):
+        alerts = [
+            {"alert_type": "breaker_open", "severity": "error", "message": "breaker"}
+        ]
+        _, dispatch_mock = self._run_task(alerts)
+
+        kwargs = dispatch_mock.await_args.kwargs
+        assert kwargs["skip_preference_check"] is True, (
+            "error severity (e.g. breaker_open) must reach operators even if "
+            "they muted system-group email."
+        )
+
+    def test_all_info_alerts_dispatch_nothing(self):
+        alerts = [
+            {"alert_type": "webhook_lag", "severity": "info", "message": "lag"}
+        ]
+        result, dispatch_mock = self._run_task(alerts)
+
+        assert dispatch_mock.await_count == 0
+        assert result["fired"] == 0
+        assert result["skipped_info"] == 1
+
+    def test_no_alerts_returns_zero(self):
+        result, dispatch_mock = self._run_task([])
+
+        assert dispatch_mock.await_count == 0
+        assert result["fired"] == 0
+
+    def test_empty_dispatch_result_not_counted_as_fired(self):
+        """safe_dispatch returning [] (no synced rule / no resolved recipient /
+        swallowed failure) must NOT inflate ``fired`` — otherwise the metric
+        masks exactly the fail-silent case the rollout gate watches for
+        (notification_health_alert rule not yet in the DB)."""
+        alerts = [
+            {"alert_type": "failure_rate_high", "severity": "warning", "message": "warn"},
+            {"alert_type": "breaker_open", "severity": "error", "message": "breaker"},
+        ]
+        result, dispatch_mock = self._run_task(alerts, dispatch_return=[])
+
+        assert dispatch_mock.await_count == 2, "dispatch is still attempted"
+        assert result["fired"] == 0, "empty dispatch result must not count as fired"
+        assert result["types"] == []

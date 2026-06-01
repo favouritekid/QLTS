@@ -477,6 +477,15 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "warning",
         "recipient_config": {"resolver_type": "all_users", "params": {}},
     },
+    # Admin-only operational health signal — recipient all_admins so the
+    # beat health task never fans out to all_users. See SystemEvents
+    # docstring + plan fix/notification-alert-flood.
+    SystemEvents.NOTIFICATION_HEALTH_ALERT: {
+        "title_template": "[${severity}] Cảnh báo sức khỏe thông báo",
+        "message_template": "${message}",
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "all_admins", "params": {}},
+    },
     SystemEvents.SYSTEM_ANNOUNCEMENT: {
         "title_template": "${title}",
         "message_template": "${message}",

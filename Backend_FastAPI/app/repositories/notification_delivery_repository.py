@@ -434,26 +434,48 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
 
     # --- D3: Alerting helper methods ---
 
-    async def get_failure_rate(self, minutes: int = 30) -> float | None:
-        """Get failure rate for last N minutes. None if no deliveries."""
+    async def get_failure_rate(
+        self,
+        minutes: int = 30,
+        exclude_events: list[str] | None = None,
+    ) -> float | None:
+        """Get failure rate for last N minutes. None if no deliveries.
+
+        ``exclude_events`` removes the listed event names from BOTH the
+        numerator (failures) and denominator (total) — used to keep the
+        operational ``notification_health_alert`` event from measuring its
+        own fan-out (self-reference loop). Default ``None`` preserves the
+        original behaviour exactly. Predicate is supported by the
+        ``ix_delivery_event_created`` index on ``(event, created_at)``.
+        """
         since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
-        where = NotificationDelivery.created_at >= since
-        total_q = select(func.count()).select_from(NotificationDelivery).where(where)
+        where = [NotificationDelivery.created_at >= since]
+        if exclude_events:
+            where.append(NotificationDelivery.event.notin_(exclude_events))
+        total_q = select(func.count()).select_from(NotificationDelivery).where(*where)
         total = (await self.db.execute(total_q)).scalar() or 0
         if total == 0:
             return None
         fail_q = (
             select(func.count()).select_from(NotificationDelivery)
-            .where(where, NotificationDelivery.status.in_(["failed", "dead_lettered"]))
+            .where(*where, NotificationDelivery.status.in_(["failed", "dead_lettered"]))
         )
         failures = (await self.db.execute(fail_q)).scalar() or 0
         return failures / total
 
-    async def get_queued_backlog_count(self) -> int:
-        """Count deliveries currently in queued status."""
-        q = select(func.count()).select_from(NotificationDelivery).where(
-            NotificationDelivery.status == "queued"
-        )
+    async def get_queued_backlog_count(
+        self, exclude_events: list[str] | None = None
+    ) -> int:
+        """Count deliveries currently in queued status.
+
+        ``exclude_events`` optionally excludes operational events (same
+        rationale as ``get_failure_rate``). Default ``None`` = original
+        behaviour.
+        """
+        where = [NotificationDelivery.status == "queued"]
+        if exclude_events:
+            where.append(NotificationDelivery.event.notin_(exclude_events))
+        q = select(func.count()).select_from(NotificationDelivery).where(*where)
         return (await self.db.execute(q)).scalar() or 0
 
     async def get_stale_sent_count(self, lag_minutes: int = 60) -> int:

@@ -140,6 +140,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
 
     # System events
     SystemEvents.SYSTEM_ALERT: NotificationEventGroup.SYSTEM,
+    SystemEvents.NOTIFICATION_HEALTH_ALERT: NotificationEventGroup.SYSTEM,
     SystemEvents.SYSTEM_ANNOUNCEMENT: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_ROLE_CHANGED: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_DEACTIVATED: NotificationEventGroup.SYSTEM,

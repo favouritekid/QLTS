@@ -447,6 +447,10 @@ class TestUserEventsHaveDispatchCallers:
         "user_deactivated", "user_profile_updated", "pipeline_config_updated",
         "officer_availability_changed", "suspicious_login",
         "holiday_calendar_incomplete",
+        # fix/notification-alert-flood (2026-06-01): admin-only operational
+        # health alert. Dispatched from app/tasks/delivery_tasks.py
+        # ``check_notification_alerts`` (replaced the SYSTEM_ALERT fan-out).
+        "notification_health_alert",
         # PR-Audit-1: dispatched from zalo_bot_link_service.verify_and_link
         # post_commit closure when chat_id displacement happens.
         "zalo_bot_link_displaced",
