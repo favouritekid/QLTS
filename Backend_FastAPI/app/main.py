@@ -917,67 +917,48 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
     """
     Kiểm tra sức khỏe chi tiết của API và các dịch vụ phụ thuộc.
     """
+    # PR1 Commit 6 (A02 Security Misconfiguration / A09): the RESPONSE is
+    # trimmed to a per-dependency up/down boolean — no exception class names,
+    # worker counts, or other internal detail that would aid reconnaissance
+    # from this public endpoint. Full diagnostics are still logged
+    # server-side; the overall 503 on any failure is kept for external uptime
+    # monitors. ``/health`` (the Docker/nginx healthcheck target) is unchanged.
     checks = {
-        "api": {"status": "ok", "message": "API is responsive"},
-        "database": {"status": "unknown", "message": ""},
-        "redis_cache": {"status": "unknown", "message": ""},
-        "celery_broker": {"status": "unknown", "message": ""},
+        "api": {"status": "up"},
+        "database": {"status": "down"},
+        "redis_cache": {"status": "down"},
+        "celery_broker": {"status": "down"},
     }
     is_healthy = True
 
-    # 1. Kiểm tra Database
+    # 1. Database
     try:
         await db.execute(text("SELECT 1"))
-        checks["database"]["status"] = "ok"
-        checks["database"]["message"] = "Database connection successful"
+        checks["database"]["status"] = "up"
     except Exception as e:
         is_healthy = False
-        checks["database"]["status"] = "error"
-        checks["database"][
-            "message"
-        ] = f"Database connection failed: {type(e).__name__}"
-        log.error(
-            "Health check failed (Database)", error=str(e)
-        )  # ✅ SỬA LỖI: Xóa `await`
+        log.error("Health check failed (Database)", error=str(e))
 
-    # 2. Kiểm tra Redis
+    # 2. Redis
     try:
         await safe_redis_ping()
-        checks["redis_cache"]["status"] = "ok"
-        checks["redis_cache"]["message"] = "Redis connection successful"
+        checks["redis_cache"]["status"] = "up"
     except Exception as e:
         is_healthy = False
-        checks["redis_cache"]["status"] = "error"
-        checks["redis_cache"][
-            "message"
-        ] = f"Redis connection failed: {type(e).__name__}"
-        log.error(
-            "Health check failed (Redis Cache)", error=str(e)
-        )  # ✅ SỬA LỖI: Xóa `await`
+        log.error("Health check failed (Redis Cache)", error=str(e))
 
-    # 3. Kiểm tra Celery
+    # 3. Celery
     try:
         inspect = celery_app.control.inspect(timeout=1.0)
         active_workers = await run_in_threadpool(inspect.active)
-
         if active_workers:
-            checks["celery_broker"]["status"] = "ok"
-            checks["celery_broker"][
-                "message"
-            ] = f"Found {len(active_workers)} active worker(s)."
+            checks["celery_broker"]["status"] = "up"
         else:
             is_healthy = False
-            checks["celery_broker"]["status"] = "error"
-            checks["celery_broker"]["message"] = "No active Celery workers found."
+            log.warning("Health check: no active Celery workers found")
     except Exception as e:
         is_healthy = False
-        checks["celery_broker"]["status"] = "error"
-        checks["celery_broker"][
-            "message"
-        ] = f"Celery check failed (broker down?): {type(e).__name__}"
-        log.error(
-            "Health check failed (Celery)", error=str(e)
-        )  # ✅ SỬA LỖI: Xóa `await`
+        log.error("Health check failed (Celery)", error=str(e))
 
     status_code = (
         status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE

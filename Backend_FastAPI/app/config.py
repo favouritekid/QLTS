@@ -261,6 +261,25 @@ class Settings(BaseSettings):
                 "CRITICAL: DEVICE_FINGERPRINT_SALT is still the default value. "
                 "Generate with: openssl rand -base64 32"
             )
+        # PR1 Commit 6: MFA TOTP secrets are encrypted at rest with this key
+        # via Fernet (mfa_service._get_fernet -> Fernet(key)). A missing OR
+        # malformed key passes a naive "is set" check but crashes MFA at
+        # runtime ("Fernet key must be 32 url-safe base64-encoded bytes"), so
+        # validate the actual Fernet format here.
+        if not self.MFA_ENCRYPTION_KEY:
+            raise RuntimeError(
+                "CRITICAL: MFA_ENCRYPTION_KEY must be set in production."
+            )
+        try:
+            from cryptography.fernet import Fernet
+
+            Fernet(self.MFA_ENCRYPTION_KEY.encode())
+        except Exception as exc:
+            raise RuntimeError(
+                "CRITICAL: MFA_ENCRYPTION_KEY is not a valid Fernet key "
+                "(32 url-safe base64 bytes). Generate with: "
+                "Fernet.generate_key().decode()"
+            ) from exc
         if self.LOG_LEVEL == "DEBUG":
             raise RuntimeError(
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
