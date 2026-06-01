@@ -1008,6 +1008,26 @@ class AdmissionPathService:
             return path.status == "draft"
         return False
 
+    def compute_can_edit_governance(
+        self,
+        path: AdmissionPath,
+        user: User | None = None,
+    ) -> bool:
+        """Determine if the current user can edit governance (Nâng cao) settings.
+
+        Mirrors EXACTLY the current FE gate (admin-only). Server-side
+        enforcement already raises ``BusinessRuleViolation`` for non-admin
+        governance edits; this flag lets the FE gate the 'Nâng cao' tab on a
+        computed permission instead of ``user.role`` (thin-client compliance).
+
+        Deliberately does NOT add ``status != 'archived'``: AdvancedTab is
+        intentionally not gated by ``can_edit`` (per PR-1), so admin CAN edit
+        governance on archived paths today. Adding an archived condition here
+        would silently change behavior (regression). Blocking archived
+        governance edits is a separate decision.
+        """
+        return bool(user and user.role == UserRole.ADMIN)
+
     async def compute_can_activate(
         self,
         path: AdmissionPath,
@@ -1098,12 +1118,25 @@ class AdmissionPathService:
                 method_name = path.admission_method.name
                 method_code = path.admission_method.code
 
+            # Round metadata for group-by-round readiness (PR matrix-funnel).
+            # ``get_paths_by_academic_info`` eager-loads ``admission_round``;
+            # ``__dict__.get`` avoids triggering a lazy load (MissingGreenlet
+            # in async) if a caller path didn't eager-load it.
+            _round = path.__dict__.get("admission_round")
+            round_code = _round.round_code if _round is not None else None
+            round_name = _round.round_name if _round is not None else None
+            round_is_active = _round.is_active if _round is not None else None
+
             rows.append(
                 CoverageRow(
                     path_id=path.id,
                     method_name=method_name,
                     method_code=method_code,
                     status=path.status,
+                    admission_round_id=path.admission_round_id,
+                    round_code=round_code,
+                    round_name=round_name,
+                    round_is_active=round_is_active,
                     has_criteria=has_criteria,
                     has_documents=has_documents,
                     has_quota=has_quota,

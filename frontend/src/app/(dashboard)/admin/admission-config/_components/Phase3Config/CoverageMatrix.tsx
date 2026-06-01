@@ -8,8 +8,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Fragment, useMemo } from "react";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -23,8 +22,8 @@ import {
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useCoverageMatrix } from "@/hooks/admissions/useAdmissionPaths";
-import { useQuotaMatrix } from "@/hooks/admissions/useQuotaMatrix";
 
+import { useAcademicInfoUrlSync } from "./useAcademicInfoUrlSync";
 import type { CoverageRow } from "../shared/types";
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -36,49 +35,10 @@ interface CoverageMatrixProps {
 }
 
 export function CoverageMatrix({ academicYear, onYearChange }: CoverageMatrixProps) {
-  const { data: globalData } = useQuotaMatrix(academicYear);
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  const selectedAcademicInfoId = useMemo<number | undefined>(() => {
-    const raw = searchParams.get("academicInfo");
-    if (!raw) return undefined;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : undefined;
-  }, [searchParams]);
-
-  const updateSearchParam = useCallback(
-    (key: string, value: string | null) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (value === null) params.delete(key);
-      else params.set(key, value);
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    },
-    [pathname, router, searchParams],
-  );
-
-  const setSelectedAcademicInfoId = useCallback(
-    (id: number) => updateSearchParam("academicInfo", id.toString()),
-    [updateSearchParam],
-  );
-
-  // Validate ngành theo năm (academic_info year-bound). Đổi năm giữ academicInfo
-  // cũ → mismatch. Năm có ngành + selection không thuộc năm → ngành đầu; năm
-  // không có ngành nào → clear (tránh phantom matrix năm cũ).
-  useEffect(() => {
-    if (!globalData) return;
-    const exists = globalData.rows.some(
-      (r) => r.academic_info_id === selectedAcademicInfoId,
-    );
-    if (exists) return;
-    if (globalData.rows.length > 0) {
-      setSelectedAcademicInfoId(globalData.rows[0].academic_info_id);
-    } else if (selectedAcademicInfoId !== undefined) {
-      updateSearchParam("academicInfo", null);
-    }
-  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId, updateSearchParam]);
+  // Hook chung: `?academicInfo` URL sync + validate-theo-năm + auto-select
+  // (gỡ trùng lặp với ByMajorView — logic Fix #1).
+  const { globalData, selectedAcademicInfoId, setSelectedAcademicInfoId } =
+    useAcademicInfoUrlSync(academicYear);
 
   const { data: matrixData, isLoading } = useCoverageMatrix(selectedAcademicInfoId);
 
@@ -86,6 +46,44 @@ export function CoverageMatrix({ academicYear, onYearChange }: CoverageMatrixPro
   const allReady = matrixData?.all_ready || false;
   const pathsReady = matrixData?.paths_ready || 0;
   const totalPaths = matrixData?.total_paths || 0;
+
+  // PR matrix-funnel — nhóm theo đợt. Cùng phương thức qua nhiều đợt
+  // (DOT_1/DOT_2/SMK_*) ra nhiều row trùng tên → gom theo đợt với section
+  // header để khỏi rối. Sort theo round_code. admission_round_id NOT NULL từ
+  // PR-2C nên fallback "Chưa gán đợt" gần như không xảy ra (defensive tối giản).
+  const groupedRows = useMemo(() => {
+    const groups = new Map<
+      number | string,
+      {
+        roundId: number | null;
+        roundCode: string | null;
+        roundName: string | null;
+        roundIsActive: boolean | null;
+        rows: CoverageRow[];
+      }
+    >();
+    for (const row of rows) {
+      const key = row.admission_round_id ?? "__none__";
+      let g = groups.get(key);
+      if (!g) {
+        g = {
+          roundId: row.admission_round_id ?? null,
+          roundCode: row.round_code ?? null,
+          roundName: row.round_name ?? null,
+          roundIsActive: row.round_is_active ?? null,
+          rows: [],
+        };
+        groups.set(key, g);
+      }
+      g.rows.push(row);
+    }
+    // Sort theo round_code asc; nhóm "Chưa gán đợt" (null) xuống cuối.
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.roundCode === null) return 1;
+      if (b.roundCode === null) return -1;
+      return a.roundCode.localeCompare(b.roundCode);
+    });
+  }, [rows]);
 
   const renderCheckIcon = (value: boolean) => {
     return value ? (
@@ -213,44 +211,78 @@ export function CoverageMatrix({ academicYear, onYearChange }: CoverageMatrixPro
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row: CoverageRow) => (
-                  <TableRow
-                    key={row.path_id}
-                    className={row.can_activate ? "bg-success-50/50" : ""}
-                  >
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">{row.method_name}</p>
-                        <p className="text-sm text-muted-foreground" translate="no">
-                          {row.method_code}
-                        </p>
-                      </div>
-                    </TableCell>
-                    <TableCell>{getStatusBadge(row.status)}</TableCell>
-                    <TableCell className="text-center">
-                      {renderCheckIcon(row.has_criteria)}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {renderCheckIcon(row.has_documents)}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {renderCheckIcon(row.has_quota)}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {renderCheckIcon(row.can_activate)}
-                    </TableCell>
-                    <TableCell>
-                      {row.validation_errors.length > 0 ? (
-                        <ul className="text-sm text-muted-foreground space-y-1">
-                          {row.validation_errors.map((error: string, idx: number) => (
-                            <li key={idx}>• {error}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="text-sm text-success-600">Không có lỗi</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
+                {groupedRows.map((group) => (
+                  <Fragment key={group.roundId ?? "__none__"}>
+                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                      <TableCell colSpan={7} className="py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold">
+                            {group.roundName ?? "Chưa gán đợt"}
+                          </span>
+                          {group.roundCode && (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              translate="no"
+                            >
+                              ({group.roundCode})
+                            </span>
+                          )}
+                          {group.roundIsActive === true && (
+                            <Badge className="bg-success-500 text-[10px]">
+                              Đang mở
+                            </Badge>
+                          )}
+                          {group.roundIsActive === false && (
+                            <Badge variant="outline" className="text-[10px]">
+                              Đã đóng
+                            </Badge>
+                          )}
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            {group.rows.length} phương thức
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    {group.rows.map((row: CoverageRow) => (
+                      <TableRow
+                        key={row.path_id}
+                        className={row.can_activate ? "bg-success-50/50" : ""}
+                      >
+                        <TableCell>
+                          <div>
+                            <p className="font-medium">{row.method_name}</p>
+                            <p className="text-sm text-muted-foreground" translate="no">
+                              {row.method_code}
+                            </p>
+                          </div>
+                        </TableCell>
+                        <TableCell>{getStatusBadge(row.status)}</TableCell>
+                        <TableCell className="text-center">
+                          {renderCheckIcon(row.has_criteria)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {renderCheckIcon(row.has_documents)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {renderCheckIcon(row.has_quota)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {renderCheckIcon(row.can_activate)}
+                        </TableCell>
+                        <TableCell>
+                          {row.validation_errors.length > 0 ? (
+                            <ul className="text-sm text-muted-foreground space-y-1">
+                              {row.validation_errors.map((error: string, idx: number) => (
+                                <li key={idx}>• {error}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="text-sm text-success-600">Không có lỗi</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </Fragment>
                 ))}
               </TableBody>
             </Table>

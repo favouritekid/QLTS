@@ -60,6 +60,9 @@ const mockAdmissionPathResponse = {
   available_actions: [] as string[],
   can_edit: true,
   can_activate: false,
+  // PR matrix-funnel — governance gate flag (admin-only). Default false
+  // mirrors BE for a fresh path created by a non-admin context.
+  can_edit_governance: false,
   validation_errors: [] as string[],
   // PR #6: strict submit gate per path; default False in the fixture
   // mirrors the backend default for newly-created paths.
@@ -282,50 +285,6 @@ describe("useAdmissionPaths – BUG-01 regression", () => {
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           queryKey: admissionPathKeys.documents(MOCK_PATH_ID),
-        })
-      );
-
-      invalidateSpy.mockRestore();
-    });
-
-    it("should invalidate the lists cache", async () => {
-      server.use(
-        http.put(
-          `${API_BASE_URL}/api/admission-config/paths/:pathId/documents`,
-          () => {
-            return HttpResponse.json(mockDocumentsResponse);
-          }
-        )
-      );
-
-      const { queryClient, Wrapper } = createWrapperWithClient();
-
-      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
-      const { result } = renderHook(() => useUpdatePathDocuments(), {
-        wrapper: Wrapper,
-      });
-
-      act(() => {
-        result.current.mutate({
-          pathId: MOCK_PATH_ID,
-          data: [
-            {
-              document_type_id: 10,
-              is_mandatory: true,
-              requires_upload: true,
-              display_order: 1,
-            },
-          ],
-        });
-      });
-
-      await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-      // lists cache should be invalidated
-      expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          queryKey: admissionPathKeys.lists(),
         })
       );
 
@@ -566,8 +525,9 @@ describe("useCreateAdmissionPath – matrix cache parity", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    // admissionPathKeys.all = ["admission-paths"] — prefix phủ cả lists() lẫn
-    // coverageMatrix(id) (readiness mode). Lưu ý: .lists() KHÔNG phủ coverage.
+    // admissionPathKeys.all = ["admission-paths"] — prefix phủ detail +
+    // coverageMatrix(id) (readiness mode) + documents. (`.lists()` đã gỡ —
+    // không còn query nào dưới prefix đó sau PR matrix-funnel cleanup.)
     expect(invalidateSpy).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: admissionPathKeys.all }),
     );

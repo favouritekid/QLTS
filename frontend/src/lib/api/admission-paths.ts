@@ -7,7 +7,6 @@
 
 import { api } from '@/lib/api/client'
 import type {
-  AcademicYearListResponse,
   AdmissionPathCreate,
   AdmissionPathResponse,
   AdmissionPathUpdate,
@@ -20,32 +19,11 @@ import type {
 import type { CoverageMatrixResponse } from '@/app/(dashboard)/admin/admission-config/_components/shared/types'
 
 // ============================================
-// ACADEMIC YEARS
-// ============================================
-
-/**
- * Get all distinct academic years
- */
-export async function getAcademicYears(): Promise<AcademicYearListResponse> {
-  const response = await api.get<AcademicYearListResponse>('/api/admission-config/years')
-  return response.data
-}
-
-// ============================================
 // ADMISSION PATHS CRUD
 // ============================================
-
-/**
- * List admission paths for a specific academic info
- */
-export async function listAdmissionPaths(
-  academicInfoId: number
-): Promise<{ total: number; items: AdmissionPathResponse[] }> {
-  const response = await api.get<{ total: number; items: AdmissionPathResponse[] }>('/api/admission-config/paths', {
-    params: { academic_info_id: academicInfoId }
-  })
-  return response.data
-}
+// NOTE (PR matrix-funnel cleanup): `getAcademicYears` + `listAdmissionPaths`
+// đã gỡ — 0 consumer sau khi PR-2 hợp nhất matrix flow (năm lấy từ
+// admissions.ts getAcademicYears; danh sách path lấy qua per-major matrix).
 
 /**
  * Get ACTIVE admission paths for a ProgramOffering
@@ -256,10 +234,7 @@ export async function getPathSubjectGroupConfigs(
 // ============================================
 
 export const admissionPathsApi = {
-  // Academic Years
-  getAcademicYears,
   // CRUD
-  listAdmissionPaths,
   getPathsForOffering,
   getAdmissionPath,
   createAdmissionPath,

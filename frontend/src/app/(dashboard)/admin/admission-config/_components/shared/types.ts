@@ -380,6 +380,12 @@ export interface CoverageRow {
   method_name: string;
   method_code: string;
   status: "draft" | "active" | "inactive" | "archived";
+  // Round metadata (PR matrix-funnel) — readiness nhóm-theo-đợt. Optional vì
+  // BE trả Optional (defensive), thực tế luôn có sau PR-2C (NOT NULL).
+  admission_round_id?: number | null;
+  round_code?: string | null;
+  round_name?: string | null;
+  round_is_active?: boolean | null;
   has_criteria: boolean;
   has_documents: boolean;
   has_quota: boolean;

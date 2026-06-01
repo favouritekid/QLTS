@@ -8,11 +8,13 @@ cells = aggregated quota.
 
 from typing import List
 
-from sqlalchemy import select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
+    AdmissionProfile,
+    AdmissionProfileChoice,
     OfferingAcademicInfo,
     OfferingAdmissionRound,
     ProgramOffering,
@@ -29,6 +31,9 @@ from app.schemas.quota_matrix import (
     QuotaMatrixRound,
     QuotaMatrixRow,
 )
+# Reuse canonical seat-occupying status tuple (single source of truth). Import
+# verified non-circular: admission_service does NOT import quota_matrix_service.
+from app.services.admission_service import QUOTA_OCCUPYING_STATUSES
 
 
 class QuotaMatrixService:
@@ -147,6 +152,124 @@ class QuotaMatrixService:
             total_rows=len(rows),
         )
 
+    async def _compute_funnel_counts(
+        self, path_ids: List[int]
+    ) -> dict[int, dict[str, int]]:
+        """Aggregate actual funnel counts per path (multi-NV + legacy).
+
+        Returns map ``path_id → {submitted, approved, enrolled, dropped}``,
+        default 0. **Read-only SELECT** — tách hẳn đường enforcement
+        (``check_choice_admit_capacity`` tự đếm có lock riêng). Hiển thị
+        sai chỉ ảnh hưởng UI cho admin, KHÔNG sai dữ liệu.
+
+        Tái dùng cấu trúc query canonical (``admission_choice_engine_service.
+        check_choice_admit_capacity``), cộng 2 nguồn:
+          M1 — multi-NV qua ``AdmissionProfileChoice``. Đếm
+               ``COUNT(DISTINCT profile_id)`` chống đếm trùng khi 1 profile
+               chọn CÙNG path với 2 tổ hợp môn (choice UNIQUE 3-cột, không
+               có UNIQUE trên ``(profile, path)``).
+          M2 — legacy single-NV qua ``applied_rules->>'admission_path_id'``,
+               lọc ``uses_choice_engine=FALSE`` để KHÔNG double-count với M1.
+
+        ⚠️ M2 so sánh **DẠNG TEXT** (``IN :path_ids_as_text``) — KHÔNG cast
+        cột JSON → int. ``.astext.cast(Integer)`` raise ``invalid input
+        syntax for integer`` nếu text là rác phi-số (NOT NULL không bảo vệ),
+        và né seq-scan cast toàn bảng.
+        """
+        counts: dict[int, dict[str, int]] = {
+            pid: {"submitted": 0, "approved": 0, "enrolled": 0, "dropped": 0}
+            for pid in path_ids
+        }
+        if not path_ids:
+            return counts
+
+        # M1 — multi-NV via choice rows. COUNT(DISTINCT profile_id) chống N2.
+        m1_stmt = (
+            select(
+                AdmissionProfileChoice.admission_path_id.label("path_id"),
+                func.count(distinct(AdmissionProfileChoice.admission_profile_id))
+                .filter(AdmissionProfile.status.not_in(("draft", "withdrawn")))
+                .label("submitted_cnt"),
+                func.count(distinct(AdmissionProfileChoice.admission_profile_id))
+                .filter(
+                    AdmissionProfileChoice.decision == "admitted",
+                    AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES),
+                )
+                .label("approved_cnt"),
+                func.count(distinct(AdmissionProfileChoice.admission_profile_id))
+                .filter(
+                    AdmissionProfileChoice.decision == "admitted",
+                    AdmissionProfile.status == "enrolled",
+                )
+                .label("enrolled_cnt"),
+                func.count(distinct(AdmissionProfileChoice.admission_profile_id))
+                .filter(
+                    AdmissionProfileChoice.decision == "admitted",
+                    AdmissionProfile.status == "enrolled",
+                    AdmissionProfile.is_dropped.is_(True),
+                )
+                .label("dropped_cnt"),
+            )
+            .join(
+                AdmissionProfile,
+                AdmissionProfile.id
+                == AdmissionProfileChoice.admission_profile_id,
+            )
+            .where(AdmissionProfileChoice.admission_path_id.in_(path_ids))
+            .group_by(AdmissionProfileChoice.admission_path_id)
+        )
+        for row in (await self.db.execute(m1_stmt)).all():
+            d = counts.get(row.path_id)
+            if d is None:
+                continue
+            d["submitted"] += int(row.submitted_cnt or 0)
+            d["approved"] += int(row.approved_cnt or 0)
+            d["enrolled"] += int(row.enrolled_cnt or 0)
+            d["dropped"] += int(row.dropped_cnt or 0)
+
+        # M2 — legacy single-NV via applied_rules JSON. So sánh DẠNG TEXT.
+        path_id_text = AdmissionProfile.applied_rules["admission_path_id"].astext
+        path_ids_as_text = [str(pid) for pid in path_ids]
+        m2_stmt = (
+            select(
+                path_id_text.label("path_id_text"),
+                func.count(AdmissionProfile.id)
+                .filter(AdmissionProfile.status.not_in(("draft", "withdrawn")))
+                .label("submitted_cnt"),
+                func.count(AdmissionProfile.id)
+                .filter(AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES))
+                .label("approved_cnt"),
+                func.count(AdmissionProfile.id)
+                .filter(AdmissionProfile.status == "enrolled")
+                .label("enrolled_cnt"),
+                func.count(AdmissionProfile.id)
+                .filter(
+                    AdmissionProfile.status == "enrolled",
+                    AdmissionProfile.is_dropped.is_(True),
+                )
+                .label("dropped_cnt"),
+            )
+            .where(
+                AdmissionProfile.uses_choice_engine.is_(False),
+                path_id_text.in_(path_ids_as_text),
+            )
+            .group_by(path_id_text)
+        )
+        for row in (await self.db.execute(m2_stmt)).all():
+            try:
+                pid = int(row.path_id_text)
+            except (TypeError, ValueError):
+                continue  # defensive; WHERE đã lọc nhưng giữ an toàn
+            d = counts.get(pid)
+            if d is None:
+                continue
+            d["submitted"] += int(row.submitted_cnt or 0)
+            d["approved"] += int(row.approved_cnt or 0)
+            d["enrolled"] += int(row.enrolled_cnt or 0)
+            d["dropped"] += int(row.dropped_cnt or 0)
+
+        return counts
+
     async def get_path_matrix_by_major(
         self, academic_info_id: int
     ) -> PathMatrixResponse:
@@ -200,6 +323,9 @@ class QuotaMatrixService:
         )
         paths = list((await self.db.execute(paths_stmt)).scalars().all())
 
+        # Funnel counts gom 1 lần cho TẤT CẢ path (tránh N+1).
+        funnel_counts = await self._compute_funnel_counts([p.id for p in paths])
+
         # Build cells map: (method_id, round_id) → path
         path_map: dict[tuple[int, int], AdmissionPath] = {}
         for p in paths:
@@ -217,6 +343,10 @@ class QuotaMatrixService:
                 if p is None:
                     cells[r.id] = None
                 else:
+                    fc = funnel_counts.get(
+                        p.id,
+                        {"submitted": 0, "approved": 0, "enrolled": 0, "dropped": 0},
+                    )
                     cells[r.id] = PathMatrixCell(
                         path_id=p.id,
                         admission_round_id=p.admission_round_id,
@@ -226,6 +356,10 @@ class QuotaMatrixService:
                         submission_count=int(p.submission_count or 0),
                         status=p.status,
                         criteria_code=p.criteria.code if p.criteria else None,
+                        submitted_count=fc["submitted"],
+                        approved_count=fc["approved"],
+                        enrolled_count=fc["enrolled"],
+                        dropped_count=fc["dropped"],
                     )
                     sum_admit += int(p.admit_quota or 0)
             method_rows.append(
