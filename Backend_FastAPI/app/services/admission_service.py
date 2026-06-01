@@ -87,6 +87,29 @@ _BULK_SAFE_DOMAIN_EXCEPTIONS = (
 )
 
 
+def _resolve_under(base_dir: str, candidate_path: str) -> Optional[str]:
+    """Path-traversal guard. Return the resolved absolute path iff
+    ``candidate_path`` stays under ``base_dir`` after normalizing ``..``,
+    else ``None``.
+
+    Mirrors ``file_helpers.py`` (``Path.resolve`` + ``os.path.commonpath``);
+    reused by the upload builders and the authed download endpoint so a
+    tampered/malformed path can never escape the profile's upload dir.
+    """
+    import os
+    from pathlib import Path
+
+    base = Path(base_dir).resolve(strict=False)
+    target = Path(candidate_path).resolve(strict=False)
+    try:
+        if os.path.commonpath([str(base), str(target)]) != str(base):
+            return None
+    except ValueError:
+        # commonpath raises on mixed drives / empty input — treat as unsafe.
+        return None
+    return str(target)
+
+
 def _sniff_document_signature(stream) -> Optional[str]:
     """ADM-019: detect a document upload's true type by magic bytes.
 
@@ -1924,6 +1947,11 @@ def _compute_frontend_fields(
                 _has_artifact = doc.status in _ARTIFACT_STATUSES
                 _is_verified = doc.status == "verified"
                 doc_by_code[doc.document_type.code] = {
+                    # PR1 Commit 1: ProfileDocument PK — surfaced as
+                    # ``document_id`` in the checklist projection so the FE
+                    # builds the authed download URL. The append blocks below
+                    # only expose it when a real file_path exists.
+                    "id": doc.id,
                     "status": doc.status,
                     "label_from_db": doc.document_type.name,
                     # rejection_reason is the only field that is meaningful
@@ -2047,6 +2075,9 @@ def _compute_frontend_fields(
             "verified_format": uploaded_doc.get("verified_format"),
             "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
+            # PR1 Commit 1: PK only when a real downloadable file exists, so
+            # the FE renders the "Xem PDF" button iff document_id is non-null.
+            "document_id": uploaded_doc.get("id") if uploaded_doc.get("file_path") else None,
             "uploaded_at": uploaded_doc.get("uploaded_at"),
             # ADM-031 round 7: paper-receipt timestamp
             "paper_submitted_at": uploaded_doc.get("paper_submitted_at"),
@@ -2080,6 +2111,8 @@ def _compute_frontend_fields(
             "verified_format": uploaded_doc.get("verified_format"),
             "status": _doc_status,
             "file_path": uploaded_doc.get("file_path"),
+            # PR1 Commit 1: PK only when a real downloadable file exists.
+            "document_id": uploaded_doc.get("id") if uploaded_doc.get("file_path") else None,
             "uploaded_at": uploaded_doc.get("uploaded_at"),
             "paper_submitted_at": uploaded_doc.get("paper_submitted_at"),
             "verified_at": uploaded_doc.get("verified_at"),
@@ -5426,6 +5459,82 @@ async def submit_and_evaluate(
         )
 
 
+async def get_document_file_for_download(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    document_id: int,
+    actor_user_id: int,
+    actor_ip: Optional[str] = None,
+    actor_user_agent: Optional[str] = None,
+) -> Tuple[str, str, str]:
+    """Resolve a downloadable file for a ProfileDocument under ``profile``.
+
+    PR1 Commit 1 (A01/A05/A09). IDOR is enforced upstream by the router dep
+    ``get_admission_for_user_read`` (3-tier scope, fake-404). Here we
+    additionally:
+
+    - bind the document to the authorized profile (``doc.profile_id ==
+      profile.id``) and require a real ``file_path`` — any miss raises
+      ``ResourceNotFoundError`` (→404) so existence is never leaked;
+    - apply a defense-in-depth path guard so a tampered ``file_path`` can
+      never escape ``uploads/admissions/{profile.id}/``;
+    - derive ``media_type`` from a server-controlled extension allowlist
+      (ProfileDocument persists no MIME type — never trust a stored/client
+      value);
+    - record a ``downloaded`` audit row (Gap 1 — A09). It is flushed here;
+      the router commits it before the FileResponse streams.
+
+    Returns ``(abs_path, safe_basename, media_type)``.
+    """
+    import os
+    from app.repositories import AdmissionRepository
+
+    repo = AdmissionRepository(db)
+    doc = await repo.get_document_by_id(document_id)
+    if doc is None or doc.profile_id != profile.id or not doc.file_path:
+        raise ResourceNotFoundError("Document not found")
+
+    base_dir = f"uploads/admissions/{profile.id}"
+    abs_path = _resolve_under(base_dir, doc.file_path)
+    if abs_path is None or not os.path.isfile(abs_path):
+        log.warning(
+            "admission document download: file missing or path invalid",
+            profile_id=profile.id,
+            document_id=document_id,
+            file_path=doc.file_path,
+        )
+        raise ResourceNotFoundError("Document not found")
+
+    # media_type from a server-controlled extension allowlist (Gap 3 —
+    # A05/A03). Extension is set from sniffed magic bytes at upload time, so
+    # it is trustworthy; no persisted/client MIME value is ever used.
+    ext = os.path.splitext(abs_path)[1].lower()
+    media_type = {
+        ".pdf": "application/pdf",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+    }.get(ext, "application/octet-stream")
+
+    # safe_basename: strip CR/LF so the filename can't smuggle header content
+    # (Starlette still applies RFC-compliant Content-Disposition encoding).
+    safe_basename = os.path.basename(abs_path).replace("\r", "").replace("\n", "")
+
+    # Audit (Gap 1 — A09): record who downloaded which document. db.flush is
+    # inside log_document_action; the router commits before streaming.
+    from .document_audit_service import log_document_action, DocumentAction
+    await log_document_action(
+        db=db,
+        profile_document_id=doc.id,
+        action=DocumentAction.DOWNLOADED,
+        actor_user_id=actor_user_id,
+        ip_address=actor_ip,
+        user_agent=actor_user_agent,
+    )
+
+    return abs_path, safe_basename, media_type
+
+
 async def upload_document(
     db: AsyncSession,
     profile_id: int,
@@ -5581,6 +5690,19 @@ async def upload_document(
     # same filesystem). Hidden by leading ``.staging.`` prefix so it
     # does not show up in casual ``ls`` of the uploads dir.
     staging_path = f"{upload_dir}/.staging.{unique_id}{file_extension}"
+
+    # PR1 Commit 1 (defense-in-depth — A05): doc_code is bound to a catalog
+    # ConfigDocumentType, but still guard the built paths so neither the final
+    # nor staging path can escape this profile's upload dir.
+    for _candidate in (final_path, staging_path):
+        if _resolve_under(upload_dir, _candidate) is None:
+            log.critical(
+                "🚨 PATH TRAVERSAL ATTEMPT (admission document upload)",
+                profile_id=profile_id,
+                doc_code=doc_code,
+                candidate=_candidate,
+            )
+            raise BadRequest("Invalid file path detected.")
 
     # Stage the file to the staging path. If this fails, clean up the
     # partially-written staging file before raising — we never let
@@ -5924,6 +6046,19 @@ async def upload_priority_evidence_document(
     unique_filename = f"priority_{sub_code}_{unique_id}{file_extension}"
     final_path = f"{upload_dir}/{unique_filename}"
     staging_path = f"{upload_dir}/.staging.{unique_id}{file_extension}"
+
+    # PR1 Commit 1 (defense-in-depth — A05): sub_code is constrained to the
+    # PriorityObjectConfig catalog above, but still guard the built paths so a
+    # malformed catalog sub_code can never escape the upload dir.
+    for _candidate in (final_path, staging_path):
+        if _resolve_under(upload_dir, _candidate) is None:
+            log.critical(
+                "🚨 PATH TRAVERSAL ATTEMPT (admission priority evidence upload)",
+                profile_id=profile_id,
+                sub_code=sub_code,
+                candidate=_candidate,
+            )
+            raise BadRequest("Invalid file path detected.")
 
     # Stage file
     try:

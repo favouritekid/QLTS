@@ -256,6 +256,16 @@ class DocumentItemSchema(BaseModel):
         default="missing",
         description="Upload status"
     )
+    # PR1 Commit 1: ProfileDocument PK, present only when a downloadable file
+    # artifact exists. The FE builds the authed download URL
+    # /api/admissions/{profile_id}/documents/{document_id}/download from it
+    # (file_path is no longer publicly servable). Null → no file to view, FE
+    # hides the "Xem PDF" button. Declared on the schema so the response_model
+    # doesn't silently drop it (Pydantic only serializes declared fields).
+    document_id: Optional[int] = Field(
+        None,
+        description="ProfileDocument PK for the authed download endpoint (null when no file artifact)",
+    )
     file_path: Optional[str] = Field(
         None,
         max_length=512,

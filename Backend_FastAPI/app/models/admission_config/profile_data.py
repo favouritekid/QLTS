@@ -282,7 +282,7 @@ class DocumentAuditLog(Base):
         String(50),
         nullable=False,
         index=True,
-        comment="uploaded | verified | rejected | reset | paper_submitted | deleted"
+        comment="uploaded | verified | rejected | reset | paper_submitted | deleted | downloaded"
     )
 
     # Actor
@@ -395,7 +395,7 @@ class DocumentAuditLog(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "action IN ('uploaded','verified','rejected','reset','paper_submitted','deleted')",
+            "action IN ('uploaded','verified','rejected','reset','paper_submitted','deleted','downloaded')",
             name="ck_document_audit_log_action"
         ),
     )

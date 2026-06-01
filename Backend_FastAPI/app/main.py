@@ -883,15 +883,14 @@ if STATIC_DIR.exists():
 else:
     log.warning(f"⚠️ Static directory not found at {STATIC_DIR}")
 
-# Mount uploads directory to serve uploaded documents (admissions, etc.)
-UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
-if UPLOADS_DIR.exists():
-    fastapi_app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
-    log.info(f"✅ Uploads files mounted at /uploads from {UPLOADS_DIR}")
-else:
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    fastapi_app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
-    log.info(f"✅ Uploads directory created and mounted at /uploads from {UPLOADS_DIR}")
+# SECURITY (PR1 Commit 1 — A01/A02): the public StaticFiles mount for
+# ``/uploads`` was REMOVED. Admission documents contain PII (CCCD, học bạ,
+# priority evidence) and must never be served unauthenticated. They are now
+# streamed through the authed, IDOR-scoped, audited endpoint
+#   GET /api/admissions/{profile_id}/documents/{document_id}/download
+# ``/static`` (avatars) stays public by design. The uploads directory itself
+# is still created on demand by the upload service (os.makedirs), so no mount
+# is needed here.
 
 
 # === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===
