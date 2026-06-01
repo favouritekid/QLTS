@@ -564,6 +564,14 @@ class AdmissionPathResponse(BaseModel):
         default=False,
         description="Whether the path can be activated"
     )
+    can_edit_governance: bool = Field(
+        default=False,
+        description=(
+            "Whether the current user can edit governance (Nâng cao) settings. "
+            "Server-side gate mirroring BusinessRuleViolation enforcement — FE "
+            "gates the 'Nâng cao' tab on this flag instead of user.role (thin-client)."
+        ),
+    )
     validation_errors: List[str] = Field(
         default_factory=list,
         description="Reasons why activation is blocked"
@@ -661,7 +669,16 @@ class CoverageRow(BaseModel):
     method_name: str
     method_code: str
     status: AdmissionPathStatus
-    
+
+    # Round metadata (PR matrix-funnel) — readiness nhóm-theo-đợt ở FE.
+    # Cùng phương thức qua nhiều đợt (DOT_1/DOT_2/SMK_*) ra nhiều row trùng
+    # tên phương thức; FE group theo đợt để khỏi rối. admission_round_id đã
+    # NOT NULL từ PR-2C nên thực tế luôn có; giữ Optional cho an toàn.
+    admission_round_id: Optional[int] = None
+    round_code: Optional[str] = None
+    round_name: Optional[str] = None
+    round_is_active: Optional[bool] = None
+
     # Readiness indicators
     has_criteria: bool = Field(
         description="Whether criteria_id is set"

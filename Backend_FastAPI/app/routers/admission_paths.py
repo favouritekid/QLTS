@@ -123,6 +123,9 @@ async def build_path_response(
     response.available_actions = service.compute_available_actions(path, current_user)
     response.can_edit = service.compute_can_edit(path, current_user)
     response.can_activate = await service.compute_can_activate(path, current_user)
+    response.can_edit_governance = service.compute_can_edit_governance(
+        path, current_user
+    )
     if include_validation_errors:
         _, errors = await service.validate_activation(path)
         response.validation_errors = errors

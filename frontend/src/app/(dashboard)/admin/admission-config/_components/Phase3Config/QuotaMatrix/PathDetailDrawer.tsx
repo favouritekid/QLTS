@@ -61,7 +61,6 @@ import {
   quotaMatrixKeys,
   useUpdatePathQuota,
 } from "@/hooks/admissions/useQuotaMatrix"
-import { useAuth } from "@/hooks/useAuth"
 import { parseApiError } from "@/lib/utils/api-errors"
 import type { AdmissionPathResponse } from "@/lib/zod/admission-path"
 
@@ -90,11 +89,11 @@ type TabId = (typeof VALID_TABS)[number]
 export function PathDetailDrawer({ pathId, onClose }: Props) {
   const { data: path, isLoading } = useAdmissionPath(pathId)
 
-  // Thẻ "Nâng cao" (governance) chỉ-admin — cùng role gate như wizard cũ
-  // PathBasicInfo. Máy chủ cũng enforce (BusinessRuleViolation khi non-admin
-  // ghi governance); FE gate chỉ là UX, KHÔNG phải lớp bảo mật chính.
-  const { user } = useAuth()
-  const isAdmin = user?.role === "admin"
+  // Thẻ "Nâng cao" (governance) gate theo computed flag `can_edit_governance`
+  // từ API (thin-client) thay vì `user.role === "admin"`. Máy chủ enforce
+  // server-side (BusinessRuleViolation khi non-admin ghi governance); flag
+  // này chỉ mirror cho UX. `path` async undefined → canGov=false an toàn.
+  const canGov = path?.can_edit_governance ?? false
 
   // Pass 2 hard-review FM-2: tab active sync với ?tab= URL param.
   // Reload page giữ tab user đang xem; share link mở thẳng tab cụ thể.
@@ -107,9 +106,9 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
     const valid = (VALID_TABS as readonly string[]).includes(raw ?? "")
       ? (raw as TabId)
       : "quota"
-    // Non-admin dán ?tab=advanced → fallback "quota" (tránh rơi vào thẻ ẩn).
-    return valid === "advanced" && !isAdmin ? "quota" : valid
-  }, [searchParams, isAdmin])
+    // Non-gov dán ?tab=advanced → fallback "quota" (tránh rơi vào thẻ ẩn).
+    return valid === "advanced" && !canGov ? "quota" : valid
+  }, [searchParams, canGov])
   const setTab = useCallback(
     (next: string) => {
       // Idempotent guard: Radix Tabs + React 19 effects có thể fire
@@ -172,14 +171,14 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
           >
             <TabsList
               className={`flex w-full justify-start overflow-x-auto shrink-0 sm:grid sm:justify-center ${
-                isAdmin ? "sm:grid-cols-6" : "sm:grid-cols-5"
+                canGov ? "sm:grid-cols-6" : "sm:grid-cols-5"
               }`}
             >
               <TabsTrigger value="quota">Chỉ tiêu</TabsTrigger>
               <TabsTrigger value="identity">Định danh</TabsTrigger>
               <TabsTrigger value="criteria">Tiêu chí</TabsTrigger>
               <TabsTrigger value="documents">Giấy tờ</TabsTrigger>
-              {isAdmin && (
+              {canGov && (
                 <TabsTrigger value="advanced">Nâng cao</TabsTrigger>
               )}
               <TabsTrigger value="lifecycle">Vòng đời</TabsTrigger>
@@ -208,7 +207,7 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
                   embedded
                 />
               </TabsContent>
-              {isAdmin && (
+              {canGov && (
                 <TabsContent value="advanced">
                   <AdvancedTab path={path} pathId={pathId} onClose={onClose} />
                 </TabsContent>
@@ -302,8 +301,17 @@ function QuotaTab({
       </div>
       <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
         <div className="flex justify-between">
-          <span className="text-muted-foreground">Đã nộp:</span>
+          <span
+            className="text-muted-foreground"
+            title="Bộ đếm cổng Tier-2 (đơn nguyện vọng). KHÔNG tăng cho hồ sơ multi-nguyện-vọng nên có thể lệch với số 'Hồ sơ' ở ô ma trận (đếm thực)."
+          >
+            Đã nộp (cổng Tier-2):
+          </span>
           <span className="font-medium tabular-nums">{path.submission_count}</span>
+        </div>
+        <div className="text-muted-foreground">
+          Bộ đếm cổng đơn-nguyện-vọng; số &quot;Hồ sơ&quot; ở ô ma trận đếm
+          thực (gồm multi-nguyện-vọng) nên có thể khác.
         </div>
         <div className="text-muted-foreground">
           Tier 1 (admit ≤ cap năm) &amp; Tier 2 (admit ≤ submit) sẽ kiểm tra ở máy chủ.

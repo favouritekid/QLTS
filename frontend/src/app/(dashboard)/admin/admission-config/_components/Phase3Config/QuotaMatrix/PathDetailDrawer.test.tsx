@@ -34,6 +34,10 @@ const hoisted = vi.hoisted(() => {
     status: "draft",
     can_edit: true,
     can_activate: false,
+    // PR matrix-funnel — governance gate flag (replaces user.role==="admin").
+    // Default false: base 5-tab suite sees NO "Nâng cao" tab. Governance
+    // tests override với can_edit_governance: true để hiện tab.
+    can_edit_governance: false,
     validation_errors: [] as string[],
     round_quota: 50,
     admit_quota: 30,
@@ -53,9 +57,6 @@ const hoisted = vi.hoisted(() => {
   }
   return {
     defaultPath,
-    // Mutable role for the admin-gate tests (default non-admin so the base
-    // suite sees exactly the 5 always-on tabs).
-    authState: { role: "manager" as string },
     mockUseAdmissionPath: vi.fn(() => ({ data: defaultPath, isLoading: false })),
     mockUpdateQuota: vi.fn(),
     mockUpdatePath: vi.fn(),
@@ -77,10 +78,9 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   useUpdatePathQuota: () => ({ mutateAsync: hoisted.mockUpdateQuota, isPending: false }),
 }))
 
-// useAuth — controls user.role for the "Nâng cao" admin-gate tests.
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: () => ({ user: { id: 1, role: hoisted.authState.role } }),
-}))
+// PR matrix-funnel — gate "Nâng cao" now reads path.can_edit_governance
+// (thin-client), NOT user.role. No useAuth mock needed; visibility is driven
+// purely by the path data returned from useAdmissionPath.
 
 vi.mock("../ConfigCriteria", () => ({
   ConfigCriteria: () => <div data-testid="config-criteria-stub">criteria form</div>,
@@ -113,8 +113,6 @@ beforeEach(() => {
   toastError.mockReset()
   toastSuccess.mockReset()
   tabReplaceMock.mockReset()
-  // Default non-admin; admin-gate tests opt in via hoisted.authState.role.
-  hoisted.authState.role = "manager"
   // Reset URL search params về default empty cho mỗi test; test có thể
   // override qua searchParamsMock.mockReturnValue(...) inside test body.
   searchParamsMock.mockImplementation(() => new URLSearchParams())
@@ -286,22 +284,28 @@ describe("PathDetailDrawer 5-tab", () => {
   })
 })
 
-describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () => {
-  it("admin THẤY tab Nâng cao", () => {
-    hoisted.authState.role = "admin"
+describe("PathDetailDrawer — thẻ Nâng cao (governance, gate theo can_edit_governance)", () => {
+  // Helper: path với governance flag bật (mirror BE compute_can_edit_governance
+  // = admin). Gate FE giờ đọc path.can_edit_governance, KHÔNG đọc user.role.
+  const govOn = (extra: Record<string, unknown> = {}) => ({
+    data: { ...hoisted.defaultPath, can_edit_governance: true, ...extra },
+    isLoading: false,
+  })
+
+  it("can_edit_governance=true → THẤY tab Nâng cao", () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn())
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
     expect(screen.getByRole("tab", { name: "Nâng cao" })).toBeTruthy()
   })
 
-  it("non-admin KHÔNG thấy tab Nâng cao (5 tab luôn-hiện vẫn render)", () => {
-    hoisted.authState.role = "manager"
+  it("can_edit_governance=false → KHÔNG thấy tab Nâng cao (5 tab luôn-hiện vẫn render)", () => {
+    // defaultPath.can_edit_governance = false (beforeEach reset).
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
     expect(screen.getByRole("tab", { name: /Chỉ tiêu/ })).toBeTruthy()
     expect(screen.queryByRole("tab", { name: "Nâng cao" })).toBeNull()
   })
 
-  it("non-admin dán ?tab=advanced → fallback quota (không render drawer rỗng)", async () => {
-    hoisted.authState.role = "manager"
+  it("can_edit_governance=false + dán ?tab=advanced → fallback quota (không render drawer rỗng)", async () => {
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
     // Fallback về quota: nút "Lưu chỉ tiêu" hiện; KHÔNG có tab/nút Nâng cao.
@@ -312,8 +316,8 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
     expect(screen.queryByRole("button", { name: "Lưu nâng cao" })).toBeNull()
   })
 
-  it("MUTATE: admin lưu → gửi đủ 4 trường governance với audience + method_quota đã sửa", async () => {
-    hoisted.authState.role = "admin"
+  it("MUTATE: gov lưu → gửi đủ 4 trường governance với audience + method_quota đã sửa", async () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn())
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     const user = userEvent.setup()
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
@@ -342,7 +346,7 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
   })
 
   it("MUTATE: serialize bonus_rule_override + allowlist hiệu chỉnh khi sửa", async () => {
-    hoisted.authState.role = "admin"
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn())
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     const user = userEvent.setup()
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
@@ -378,11 +382,11 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
     })
   })
 
-  it("MUTATE clear→null: admin xoá hết governance đang có → gửi null/[]", async () => {
-    hoisted.authState.role = "admin"
+  it("MUTATE clear→null: gov xoá hết governance đang có → gửi null/[]", async () => {
     hoisted.mockUseAdmissionPath.mockReturnValue({
       data: {
         ...hoisted.defaultPath,
+        can_edit_governance: true,
         status: "draft", // draft → lưu thẳng, không dính dialog cảnh báo
         applicable_to: ["POST_THPT"],
         method_quota: 50,
@@ -425,11 +429,7 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
   })
 
   it("WARN: path active + sửa applicable_to → hiện dialog cảnh báo; Huỷ → KHÔNG lưu", async () => {
-    hoisted.authState.role = "admin"
-    hoisted.mockUseAdmissionPath.mockReturnValue({
-      data: { ...hoisted.defaultPath, status: "active" },
-      isLoading: false,
-    })
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn({ status: "active" }))
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     const user = userEvent.setup()
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
@@ -450,11 +450,7 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
   })
 
   it("WARN: path active → dialog → Vẫn lưu → gửi payload", async () => {
-    hoisted.authState.role = "admin"
-    hoisted.mockUseAdmissionPath.mockReturnValue({
-      data: { ...hoisted.defaultPath, status: "active" },
-      isLoading: false,
-    })
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn({ status: "active" }))
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     const user = userEvent.setup()
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
@@ -479,11 +475,7 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, chỉ-admin)", () =>
   })
 
   it("WARN scope: path active + chỉ sửa method_quota → KHÔNG dialog, lưu thẳng", async () => {
-    hoisted.authState.role = "admin"
-    hoisted.mockUseAdmissionPath.mockReturnValue({
-      data: { ...hoisted.defaultPath, status: "active" },
-      isLoading: false,
-    })
+    hoisted.mockUseAdmissionPath.mockReturnValue(govOn({ status: "active" }))
     searchParamsMock.mockReturnValue(new URLSearchParams("tab=advanced"))
     const user = userEvent.setup()
     render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))

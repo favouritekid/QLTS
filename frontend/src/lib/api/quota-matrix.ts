@@ -56,6 +56,12 @@ export interface PathMatrixCell {
   // → ByMajorView pass cell.status xuống PathCellButton expected union → CI tsc fail.
   status: "draft" | "active" | "inactive" | "archived"
   criteria_code: string | null
+  // Funnel counts (PR matrix-funnel) — đếm thực nộp / trúng tuyển / nhập học.
+  // Required (mirror BE default 0) để bắt drift fixture nếu BE đổi contract.
+  submitted_count: number
+  approved_count: number
+  enrolled_count: number
+  dropped_count: number
 }
 
 export interface PathMatrixMethodRow {

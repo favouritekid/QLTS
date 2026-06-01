@@ -8,10 +8,9 @@
 "use client"
 
 import { AlertTriangle } from "lucide-react"
-import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { memo, useCallback, useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { memo, useCallback, useMemo, useState } from "react"
 
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
@@ -28,11 +27,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useQuotaMatrix, usePathMatrixByMajor } from "@/hooks/admissions/useQuotaMatrix"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { usePathMatrixByMajor } from "@/hooks/admissions/useQuotaMatrix"
 
+import { useAcademicInfoUrlSync } from "../useAcademicInfoUrlSync"
 import { PathDetailDrawer } from "./PathDetailDrawer"
 import { QuickCreatePathModal } from "./QuickCreatePathModal"
-import { pathStatusLabel } from "./labels"
+import { pathStatusDot, pathStatusLabel } from "./labels"
 
 const CURRENT_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = [CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1, CURRENT_YEAR + 2]
@@ -43,14 +49,16 @@ interface Props {
 }
 
 export function ByMajorView({ academicYear, onYearChange }: Props) {
-  // Reuse global quota-matrix endpoint to populate ngành dropdown options
-  const { data: globalData } = useQuotaMatrix(academicYear)
+  // Pass 2 hard-review F-2-1 + FM-3: URL state sync. Hook chung lo
+  // `?academicInfo` (đọc/ghi + validate-theo-năm + auto-select); `?pathId`
+  // (drawer detail) là state riêng của ByMajorView nên giữ local.
+  const {
+    globalData,
+    selectedAcademicInfoId,
+    setSelectedAcademicInfoId,
+    updateSearchParam,
+  } = useAcademicInfoUrlSync(academicYear)
 
-  // Pass 2 hard-review F-2-1 + FM-3: URL state sync cho openPathId +
-  // selectedAcademicInfoId. Share link reproduce đúng ngành + drawer
-  // path detail; browser back/forward navigate giữa các view.
-  const router = useRouter()
-  const pathname = usePathname()
   const searchParams = useSearchParams()
   const openPathId = useMemo(() => {
     const raw = searchParams.get("pathId")
@@ -58,28 +66,8 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     const n = Number(raw)
     return Number.isFinite(n) && n > 0 ? n : null
   }, [searchParams])
-  const selectedAcademicInfoId = useMemo<number | undefined>(() => {
-    const raw = searchParams.get("academicInfo")
-    if (!raw) return undefined
-    const n = Number(raw)
-    return Number.isFinite(n) && n > 0 ? n : undefined
-  }, [searchParams])
-  const updateSearchParam = useCallback(
-    (key: string, value: string | null) => {
-      const params = new URLSearchParams(searchParams.toString())
-      if (value === null) params.delete(key)
-      else params.set(key, value)
-      const qs = params.toString()
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
-    },
-    [pathname, router, searchParams],
-  )
   const setOpenPathId = useCallback(
     (id: number | null) => updateSearchParam("pathId", id === null ? null : id.toString()),
-    [updateSearchParam],
-  )
-  const setSelectedAcademicInfoId = useCallback(
-    (id: number) => updateSearchParam("academicInfo", id.toString()),
     [updateSearchParam],
   )
 
@@ -91,24 +79,6 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
     roundId: number
     roundCode: string
   } | null>(null)
-
-  // Validate ngành theo năm. academic_info là year-bound → đổi năm giữ
-  // academicInfo cũ (AdmissionConfigClient.onYearChange) sẽ mismatch: header năm
-  // mới nhưng matrix ngành năm cũ. Xử lý:
-  //   - năm có ngành + selection không thuộc năm (hoặc chưa chọn) → ngành đầu
-  //   - năm KHÔNG có ngành nào → clear selection (tránh phantom matrix năm cũ)
-  useEffect(() => {
-    if (!globalData) return // đang load năm mới — chờ data thật
-    const exists = globalData.rows.some(
-      (r) => r.academic_info_id === selectedAcademicInfoId,
-    )
-    if (exists) return
-    if (globalData.rows.length > 0) {
-      setSelectedAcademicInfoId(globalData.rows[0].academic_info_id)
-    } else if (selectedAcademicInfoId !== undefined) {
-      updateSearchParam("academicInfo", null)
-    }
-  }, [globalData, selectedAcademicInfoId, setSelectedAcademicInfoId, updateSearchParam])
 
   const isOver = matrix?.sum_remaining !== null && matrix !== undefined && matrix.sum_remaining! < 0
 
@@ -182,67 +152,72 @@ export function ByMajorView({ academicYear, onYearChange }: Props) {
           <div className="text-sm text-muted-foreground py-4">Đang tải...</div>
         )}
         {matrix && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Phương thức</TableHead>
-                {matrix.rounds.map((r) => (
-                  <TableHead key={r.id} className="text-center min-w-[120px]" translate="no">
-                    {r.round_code}
-                  </TableHead>
-                ))}
-                <TableHead className="text-right">Tổng phương thức</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {matrix.methods.map((m) => (
-                <TableRow key={m.admission_method_id}>
-                  <TableCell>
-                    <div className="font-medium">{m.method_name}</div>
-                    <div className="text-xs text-muted-foreground" translate="no">
-                      {m.method_code}
-                    </div>
-                  </TableCell>
-                  {matrix.rounds.map((r) => {
-                    const cell = m.cells_by_round_id[r.id]
-                    if (!cell) {
+          <TooltipProvider delayDuration={200}>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Phương thức</TableHead>
+                  {matrix.rounds.map((r) => (
+                    <TableHead key={r.id} className="text-center min-w-[140px]" translate="no">
+                      {r.round_code}
+                    </TableHead>
+                  ))}
+                  <TableHead className="text-right">Tổng phương thức</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {matrix.methods.map((m) => (
+                  <TableRow key={m.admission_method_id}>
+                    <TableCell>
+                      <div className="font-medium">{m.method_name}</div>
+                      <div className="text-xs text-muted-foreground" translate="no">
+                        {m.method_code}
+                      </div>
+                    </TableCell>
+                    {matrix.rounds.map((r) => {
+                      const cell = m.cells_by_round_id[r.id]
+                      if (!cell) {
+                        return (
+                          <EmptyCellButton
+                            key={r.id}
+                            methodId={m.admission_method_id}
+                            methodName={m.method_name}
+                            roundId={r.id}
+                            roundCode={r.round_code}
+                            onCreate={setCreateCell}
+                          />
+                        )
+                      }
                       return (
-                        <EmptyCellButton
+                        <PathCellButton
                           key={r.id}
-                          methodId={m.admission_method_id}
+                          pathId={cell.path_id}
+                          admitQuota={cell.admit_quota}
+                          roundQuota={cell.round_quota}
+                          submittedCount={cell.submitted_count}
+                          approvedCount={cell.approved_count}
+                          enrolledCount={cell.enrolled_count}
+                          droppedCount={cell.dropped_count}
+                          status={cell.status}
                           methodName={m.method_name}
-                          roundId={r.id}
                           roundCode={r.round_code}
-                          onCreate={setCreateCell}
+                          onOpen={setOpenPathId}
                         />
                       )
-                    }
-                    return (
-                      <PathCellButton
-                        key={r.id}
-                        pathId={cell.path_id}
-                        admitQuota={cell.admit_quota}
-                        roundQuota={cell.round_quota}
-                        status={cell.status}
-                        methodName={m.method_name}
-                        roundCode={r.round_code}
-                        annualCap={matrix.annual_admission_quota}
-                        onOpen={setOpenPathId}
-                      />
-                    )
-                  })}
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {m.sum_admit_quota}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                    })}
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {m.sum_admit_quota}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TooltipProvider>
         )}
 
         {matrix && (
           <div className="mt-4 text-xs text-muted-foreground space-y-0.5">
-            <p>Mỗi ô gồm 3 dòng: trần admit / cap năm · trần submit · trạng thái. Bấm ô để xem chi tiết &amp; chỉnh chỉ tiêu.</p>
+            <p>Mỗi ô là phễu tuyển sinh: Hồ sơ (đã nộp / trần submit) · Trúng tuyển (đã duyệt / trần admit) · Nhập học (đã ghi danh). Chấm màu = trạng thái path (rê chuột để xem). Bấm ô để xem chi tiết &amp; chỉnh chỉ tiêu.</p>
             <p>Dấu &quot;—&quot; = chưa có phương thức tuyển sinh cho ô này.</p>
           </div>
         )}
@@ -283,44 +258,78 @@ interface PathCellProps {
   pathId: number
   admitQuota: number | null | undefined
   roundQuota: number | null | undefined
+  submittedCount: number
+  approvedCount: number
+  enrolledCount: number
+  droppedCount: number
   status: "draft" | "active" | "inactive" | "archived"
   methodName: string
   roundCode: string
-  annualCap: number | null | undefined
   onOpen: (id: number) => void
+}
+
+// Trần (cap) null → hiển thị ∞ (unbounded); số đếm trống đã = 0 từ BE default.
+function fmtCap(cap: number | null | undefined): string {
+  return cap === null || cap === undefined ? "∞" : String(cap)
 }
 
 const PathCellButton = memo(function PathCellButton({
   pathId,
   admitQuota,
   roundQuota,
+  submittedCount,
+  approvedCount,
+  enrolledCount,
+  droppedCount,
   status,
   methodName,
   roundCode,
-  annualCap,
   onOpen,
 }: PathCellProps) {
   const handleClick = useCallback(() => onOpen(pathId), [onOpen, pathId])
+  const statusLabel = pathStatusLabel(status)
+  const droppedNote = droppedCount > 0 ? ` (${droppedCount} đã bỏ)` : ""
   return (
     <TableCell className="p-1">
       <button
         onClick={handleClick}
         className="w-full text-left bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-2 py-1.5 transition-colors"
-        aria-label={`Mở chi tiết ${methodName} đợt ${roundCode}: trần admit ${admitQuota ?? "chưa đặt"} trên cap năm ${annualCap ?? "không giới hạn"}, trạng thái ${pathStatusLabel(status)}`}
+        aria-label={`Mở chi tiết ${methodName} đợt ${roundCode}: hồ sơ ${submittedCount} trên ${fmtCap(roundQuota)}, trúng tuyển ${approvedCount} trên ${fmtCap(admitQuota)}, nhập học ${enrolledCount}${droppedNote}, trạng thái ${statusLabel}`}
       >
-        <div className="text-xs font-semibold tabular-nums">
-          {admitQuota ?? "—"} / {annualCap ?? "∞"}
+        <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+          <span className="text-muted-foreground">Hồ sơ</span>
+          <span className="font-semibold">
+            {submittedCount} / {fmtCap(roundQuota)}
+          </span>
         </div>
-        <div className="text-[11px] text-muted-foreground tabular-nums">
-          Submit {roundQuota ?? "—"}
+        <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+          <span className="text-muted-foreground">Trúng tuyển</span>
+          <span className="font-semibold">
+            {approvedCount} / {fmtCap(admitQuota)}
+          </span>
         </div>
-        <div className="text-[11px]">
-          <Badge
-            variant={status === "active" ? "default" : "outline"}
-            className="text-[10px] h-4 px-1"
-          >
-            {pathStatusLabel(status)}
-          </Badge>
+        <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+          <span className="text-muted-foreground">Nhập học</span>
+          <span className="font-semibold">
+            {enrolledCount}
+            {droppedCount > 0 && (
+              <span className="font-normal text-muted-foreground">
+                {" "}
+                ({droppedCount} đã bỏ)
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="mt-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={`inline-block h-2 w-2 rounded-full ${pathStatusDot(status)}`}
+                aria-hidden="true"
+              />
+            </TooltipTrigger>
+            <TooltipContent>{statusLabel}</TooltipContent>
+          </Tooltip>
         </div>
       </button>
     </TableCell>

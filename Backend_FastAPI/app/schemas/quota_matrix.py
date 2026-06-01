@@ -99,6 +99,25 @@ class PathMatrixCell(BaseModel):
     submission_count: int
     status: str  # active|draft|inactive|archived
     criteria_code: Optional[str] = None
+    # Funnel counts (PR matrix-funnel) — actual progress per path. Đếm thực
+    # nộp (multi-NV qua choice + legacy qua applied_rules), KHÔNG dùng
+    # submission_count (counter Tier-2 single-path). Default 0 = ô trống.
+    submitted_count: int = Field(
+        default=0,
+        description="Hồ sơ thực nộp (multi-NV distinct profile + legacy). status NOT IN draft/withdrawn.",
+    )
+    approved_count: int = Field(
+        default=0,
+        description="Trúng tuyển — QUOTA_OCCUPYING_STATUSES (choice.decision='admitted' + legacy).",
+    )
+    enrolled_count: int = Field(
+        default=0,
+        description="Nhập học — status='enrolled' GỒM cả is_dropped (seat đã tiêu thụ).",
+    )
+    dropped_count: int = Field(
+        default=0,
+        description="Trong số enrolled, bao nhiêu đã bỏ (is_dropped IS TRUE) — chú thích riêng.",
+    )
 
 
 class PathMatrixMethodRow(BaseModel):

@@ -25,6 +25,27 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/admin/admission-config",
 }))
 
+// cellRef.value cho phép từng test override cell (vd ∞/0) trước render.
+const hoisted = vi.hoisted(() => ({
+  cellRef: {
+    value: {
+      path_id: 106,
+      admission_round_id: 1,
+      admission_method_id: 1,
+      round_quota: 50,
+      admit_quota: 30,
+      submission_count: 5,
+      status: "active",
+      criteria_code: "HB2026_CNTT_DOT_1",
+      // PR matrix-funnel — funnel counts (đếm thực).
+      submitted_count: 12,
+      approved_count: 8,
+      enrolled_count: 3,
+      dropped_count: 1,
+    } as Record<string, unknown>,
+  },
+}))
+
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   useQuotaMatrix: () => ({
     data: {
@@ -67,16 +88,7 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
               method_name: "Học bạ",
               sum_admit_quota: 30,
               cells_by_round_id: {
-                1: {
-                  path_id: 106,
-                  admission_round_id: 1,
-                  admission_method_id: 1,
-                  round_quota: 50,
-                  admit_quota: 30,
-                  submission_count: 5,
-                  status: "active",
-                  criteria_code: "HB2026_CNTT_DOT_1",
-                },
+                1: hoisted.cellRef.value,
               },
             },
           ],
@@ -86,6 +98,22 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
   }),
 }))
 
+// Cell mặc định (rich) — dùng để reset cellRef giữa các test.
+const DEFAULT_CELL: Record<string, unknown> = {
+  path_id: 106,
+  admission_round_id: 1,
+  admission_method_id: 1,
+  round_quota: 50,
+  admit_quota: 30,
+  submission_count: 5,
+  status: "active",
+  criteria_code: "HB2026_CNTT_DOT_1",
+  submitted_count: 12,
+  approved_count: 8,
+  enrolled_count: 3,
+  dropped_count: 1,
+}
+
 function wrap(ui: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
@@ -94,6 +122,8 @@ function wrap(ui: ReactNode) {
 describe("ByMajorView", () => {
   beforeEach(() => {
     replaceMock.mockClear()
+    // Reset cell về rich default cho mỗi test (test ∞/0 override riêng).
+    hoisted.cellRef.value = { ...DEFAULT_CELL }
     // Reset to default initial: pre-selected academicInfo=70 để matrix
     // load (auto-select effect không trigger trong mock router stateless).
     searchParamsMock.mockImplementation(
@@ -107,11 +137,40 @@ describe("ByMajorView", () => {
     expect(screen.getByText("Học bạ")).toBeTruthy()
   })
 
-  it("renders cell with 3-line contract: admit/annual + Submit + status badge", () => {
+  it("renders cell as funnel: 3 dòng (Hồ sơ/Trúng tuyển/Nhập học) + dropped note + status dot", () => {
     render(wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />))
-    expect(screen.getByText(/30 \/ 100/)).toBeTruthy()
-    expect(screen.getByText(/Submit 50/)).toBeTruthy()
-    expect(screen.getByText(/Đang hoạt động/)).toBeTruthy()
+    // 3 nhãn dòng phễu hiển thị.
+    expect(screen.getByText("Hồ sơ")).toBeTruthy()
+    expect(screen.getByText("Trúng tuyển")).toBeTruthy()
+    expect(screen.getByText("Nhập học")).toBeTruthy()
+    // Số phễu + cap: submitted 12 / round_quota 50; approved 8 / admit_quota 30.
+    expect(screen.getByText("12 / 50")).toBeTruthy()
+    expect(screen.getByText("8 / 30")).toBeTruthy()
+    // Status giờ là chấm màu — nhãn nằm trong TooltipContent (chỉ render khi
+    // hover). aria-label của ô đọc đủ phễu + chú thích đã-bỏ + trạng thái.
+    expect(
+      screen.getByLabelText(
+        /hồ sơ 12 trên 50, trúng tuyển 8 trên 30, nhập học 3 \(1 đã bỏ\), trạng thái Đang hoạt động/,
+      ),
+    ).toBeTruthy()
+  })
+
+  it("ANCHOR (∞/0 + no dropped note): cap null → ∞, count 0, dropped=0 ẩn chú thích", () => {
+    // Override cell: cả 2 cap null (∞), mọi count = 0.
+    hoisted.cellRef.value = {
+      ...DEFAULT_CELL,
+      round_quota: null,
+      admit_quota: null,
+      submitted_count: 0,
+      approved_count: 0,
+      enrolled_count: 0,
+      dropped_count: 0,
+    }
+    render(wrap(<ByMajorView academicYear={2026} onYearChange={() => {}} />))
+    // Hồ sơ 0 / ∞ và Trúng tuyển 0 / ∞ → 2 lần "0 / ∞".
+    expect(screen.getAllByText("0 / ∞").length).toBe(2)
+    // dropped=0 → KHÔNG render chú thích "(N đã bỏ)".
+    expect(screen.queryByText(/đã bỏ/)).toBeNull()
   })
 
   it("ANCHOR (per-major header): shows cap năm + đã rải + còn lại", () => {

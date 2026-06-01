@@ -368,6 +368,11 @@ export const admissionPathResponseSchema = z.object({
   available_actions: z.array(z.string()).default([]),
   can_edit: z.boolean().default(true),
   can_activate: z.boolean().default(false),
+  // PR matrix-funnel — server-side governance (Nâng cao) gate. FE gates the
+  // 'Nâng cao' tab on this flag instead of user.role (thin-client). Default
+  // false mirrors BE default + keeps parse lenient for endpoints that return
+  // raw ORM without the computed field.
+  can_edit_governance: z.boolean().default(false),
   validation_errors: z.array(z.string()).default([]),
 
   // PR #6 — REQUIRED in the response so Zod fails loudly when the backend

@@ -17,6 +17,9 @@ import {
   useUpdatePathDocuments,
   useCreateAdmissionPath,
   useUpdateAdmissionPath,
+  useUpdateCriteria,
+  useActivateAdmissionPath,
+  useDeactivateAdmissionPath,
   admissionPathKeys,
 } from "./useAdmissionPaths";
 import { quotaMatrixKeys } from "./useQuotaMatrix";
@@ -60,6 +63,9 @@ const mockAdmissionPathResponse = {
   available_actions: [] as string[],
   can_edit: true,
   can_activate: false,
+  // PR matrix-funnel — governance gate flag (admin-only). Default false
+  // mirrors BE for a fresh path created by a non-admin context.
+  can_edit_governance: false,
   validation_errors: [] as string[],
   // PR #6: strict submit gate per path; default False in the fixture
   // mirrors the backend default for newly-created paths.
@@ -282,50 +288,6 @@ describe("useAdmissionPaths – BUG-01 regression", () => {
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           queryKey: admissionPathKeys.documents(MOCK_PATH_ID),
-        })
-      );
-
-      invalidateSpy.mockRestore();
-    });
-
-    it("should invalidate the lists cache", async () => {
-      server.use(
-        http.put(
-          `${API_BASE_URL}/api/admission-config/paths/:pathId/documents`,
-          () => {
-            return HttpResponse.json(mockDocumentsResponse);
-          }
-        )
-      );
-
-      const { queryClient, Wrapper } = createWrapperWithClient();
-
-      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
-      const { result } = renderHook(() => useUpdatePathDocuments(), {
-        wrapper: Wrapper,
-      });
-
-      act(() => {
-        result.current.mutate({
-          pathId: MOCK_PATH_ID,
-          data: [
-            {
-              document_type_id: 10,
-              is_mandatory: true,
-              requires_upload: true,
-              display_order: 1,
-            },
-          ],
-        });
-      });
-
-      await waitFor(() => expect(result.current.isSuccess).toBe(true));
-
-      // lists cache should be invalidated
-      expect(invalidateSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          queryKey: admissionPathKeys.lists(),
         })
       );
 
@@ -566,12 +528,101 @@ describe("useCreateAdmissionPath – matrix cache parity", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    // admissionPathKeys.all = ["admission-paths"] — prefix phủ cả lists() lẫn
-    // coverageMatrix(id) (readiness mode). Lưu ý: .lists() KHÔNG phủ coverage.
+    // admissionPathKeys.all = ["admission-paths"] — prefix phủ detail +
+    // coverageMatrix(id) (readiness mode) + documents. (`.lists()` đã gỡ —
+    // không còn query nào dưới prefix đó sau PR matrix-funnel cleanup.)
     expect(invalidateSpy).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: admissionPathKeys.all }),
     );
 
+    invalidateSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling mutations — by-major matrix cache parity (PR matrix-funnel review)
+//
+// By-major PathMatrixCell (key ["quota-matrix"]) renders `status` (chấm màu)
+// + `criteria_code`. Mutations đổi 2 field này PHẢI invalidate ["quota-matrix"]
+// ở HOOK (không phụ thuộc call-site bù tay), nếu không ô by-major stale.
+// Anchor non-tautological: gỡ invalidation → fail.
+// ---------------------------------------------------------------------------
+describe("sibling mutations – by-major matrix cache parity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function arrange(path: string, method: "put" | "post") {
+    server.use(
+      http[method](`${API_BASE_URL}${path}`, () =>
+        HttpResponse.json(mockAdmissionPathResponse),
+      ),
+    );
+  }
+
+  it("useUpdateCriteria invalidates the quota-matrix cache (criteria_code)", async () => {
+    arrange("/api/admission-config/paths/:pathId/criteria", "put");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useUpdateCriteria(), { wrapper: Wrapper });
+    act(() => {
+      result.current.mutate({
+        pathId: MOCK_PATH_ID,
+        // Minimal valid AdmissionCriteriaCreate (4 defaulted fields required
+        // ở output type) — type-correct, không cast → bắt drift nếu BE/Zod
+        // thêm field required. MSW intercept nên giá trị cụ thể không quan trọng.
+        data: {
+          subject_selection_mode: "fixed",
+          scoring_method: "sum",
+          subject_groups: [],
+          policy_version: "2025.1",
+        },
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+    invalidateSpy.mockRestore();
+  });
+
+  it("useActivateAdmissionPath invalidates the quota-matrix cache (status dot)", async () => {
+    arrange("/api/admission-config/paths/:pathId/activate", "post");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useActivateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+    act(() => {
+      result.current.mutate(MOCK_PATH_ID);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
+    invalidateSpy.mockRestore();
+  });
+
+  it("useDeactivateAdmissionPath invalidates the quota-matrix cache (status dot)", async () => {
+    arrange("/api/admission-config/paths/:pathId/deactivate", "post");
+    const { queryClient, Wrapper } = createWrapperWithClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useDeactivateAdmissionPath(), {
+      wrapper: Wrapper,
+    });
+    act(() => {
+      result.current.mutate(MOCK_PATH_ID);
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: quotaMatrixKeys.all }),
+    );
     invalidateSpy.mockRestore();
   });
 });

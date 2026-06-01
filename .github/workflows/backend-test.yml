@@ -259,6 +259,9 @@ jobs:
           tests/unit/test_phase2_engine_snapshot_integrity.py
           tests/unit/test_phase2_pr2c_three_col_unique.py
           tests/services/test_phase2_admission_path_quota_integration.py
+          tests/services/test_quota_matrix_funnel.py
+          tests/services/test_coverage_round_info.py
+          tests/services/test_can_edit_governance.py
           tests/unit/test_public_admissions_phase1_wave6.py
           tests/unit/test_document_resolution_service.py
           tests/integration/test_document_audience_reresolve.py
