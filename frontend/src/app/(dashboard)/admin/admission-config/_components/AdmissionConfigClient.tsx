@@ -131,7 +131,6 @@ export function AdmissionConfigClient() {
           {currentState.type === "quota-matrix-overview" && (
             <QuotaMatrixOverview
               academicYear={currentState.academicYear}
-              academicInfoId={currentState.academicInfoId}
               onYearChange={(year) =>
                 navigate({
                   type: "quota-matrix-overview",

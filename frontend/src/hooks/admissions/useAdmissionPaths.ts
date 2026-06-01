@@ -136,8 +136,11 @@ export function useUpdateAdmissionPath() {
     onSuccess: (updatedPath) => {
       // Immediately update cache with fresh data to avoid stale prop issue
       queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
-      // Invalidate list queries
+      // Invalidate admission-path derived views. After PR-2 removes the legacy
+      // list screen, readiness lives under coverageMatrix, not under lists().
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
     },
   })
 }
@@ -177,6 +180,8 @@ export function useUpdatePathDocuments() {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(variables.pathId) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.documents(variables.pathId) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
     },
     onError: (error) => {
       console.error("useUpdatePathDocuments: Mutation error:", error);
