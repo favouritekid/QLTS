@@ -46,6 +46,17 @@ Matrix expectations (4 routes × 4 roles = 16 cells):
 Plus 1 regression test: officer GET /api/leads/123 must STILL succeed
 (non-collision numeric ID — verifies we didn't accidentally break the
 legitimate /{id} lookup path).
+
+NOTE (PR1 Commit 3, 2026-06-01): the officer/accountant "leak" cells in
+EXPECTED below are CASBIN-LAYER truth ONLY. The 4 HTTP routes now carry an
+explicit ``Depends(require_admin_or_manager)`` hard gate (``require_admin``
+for bulk-delete) IN FRONT of CasbinAuth, so a direct API call by an
+officer/accountant now 403s regardless of the keyMatch4 collision — pinned
+by tests/api/test_lead_static_route_http_gate.py. This Casbin matrix is kept
+as the policy-table contract (e.g. accountant explicit deny); the
+custom-matcher cleanup (memory ``lead-keymatch4-collision-followup``)
+remains a separate follow-up. Assertions here are unchanged because the
+policy templates were not touched.
 """
 from __future__ import annotations
 
