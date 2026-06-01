@@ -1,5 +1,5 @@
 # app/routers/auth.py
-from typing import Annotated
+from typing import Annotated, List, Optional
 
 import structlog
 from fastapi import (
@@ -47,6 +47,24 @@ from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
+
+
+def _suspicious_login_only_channels(risk_score: int) -> Optional[List[str]]:
+    """Channel filter for a suspicious-login dispatch, by risk score.
+
+    Below ``SUSPICIOUS_LOGIN_EMAIL_RISK_THRESHOLD`` (a bare new-IP login =
+    30, or 24 on a trusted device — IP churn on mobile/dynamic ISPs) →
+    return ``["browser"]`` so only the in-app banner fires, no email/zalo.
+    At/above the threshold (new_device 40, new_location 50, impossible-travel
+    80, and any combination) → return ``None`` = all channels per the rule.
+
+    In-app banner + login_history are recorded for EVERY anomaly regardless —
+    only the email/zalo fan-out is risk-gated. Pure function so the decision
+    is unit-testable without a full login flow.
+    """
+    if risk_score >= settings.SUSPICIOUS_LOGIN_EMAIL_RISK_THRESHOLD:
+        return None
+    return ["browser"]
 
 
 # =============================================================================
@@ -185,6 +203,12 @@ async def _complete_login_flow(
                 "actor_id": _notif_user_id,
             }
 
+            # Phase 2 PR-B: risk-gate the EMAIL/zalo channels (see helper).
+            # Snapshot to a plain value (not ORM) for the post-commit closure.
+            _notif_only_channels = _suspicious_login_only_channels(
+                login_record.risk_score
+            )
+
             # Option-B Commit 7: DO NOT pass ``rooms_for_user`` for the
             # SUSPICIOUS_LOGIN event. The dispatcher computes the socket
             # rooms itself, gated by each user's ``browser`` notification
@@ -201,6 +225,7 @@ async def _complete_login_flow(
                             event=SystemEvents.SUSPICIOUS_LOGIN,
                             payload=_notif_payload,
                             rooms=None,
+                            only_channels=_notif_only_channels,
                         )
                 except Exception as notif_error:
                     log.error("Failed to dispatch suspicious login notification",
