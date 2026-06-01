@@ -624,3 +624,149 @@ async def test_officer_submit_returns_tuple_with_callback_post_option_b(
 
     # Awaiting the callback must not raise (safe_dispatch fail-soft).
     await post_commit()
+
+
+# ============================================================================
+# 7. Gap #2 — submit-sync fallback. When the milestone consultation SKIPS the
+#    lead pipeline update (no officer resolvable: magic-link actor=None + lead
+#    with assigned_officer_id=None), ``submit_and_evaluate`` must still floor
+#    the lead to sts07 via the officer-independent ``sync_lead_from_admission``
+#    fallback (mirrors approve/reject/enroll). When an officer IS resolvable
+#    the milestone handles it and the fallback must idempotent-skip.
+#
+#    Non-tautological: assertions key on the distinctive fallback ``reason``
+#    string. Removing the fallback from submit_and_evaluate makes test A leave
+#    the lead at NULL (red); a fallback that double-fires makes test B red.
+# ============================================================================
+
+_SYNC_FALLBACK_REASON = "Auto-sync on profile submit"
+
+
+async def _build_submittable_legacy_profile(
+    multi_nv_seed: dict, citizen_seed: int
+) -> int:
+    """Draft, fully-submittable legacy (single-NV) profile for the seed lead.
+
+    Mirrors test #6's known-good profile shape (gpa_only + Gap #3 permanent
+    address + KV-resolvable academic_history). ``uses_choice_engine=False``
+    bypasses the Item A multi-NV choice guard. Returns the profile id.
+    """
+    await ensure_submittable_ward()
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            lead = await s.get(models.Lead, multi_nv_seed["lead_id"])
+            lead.gpa = 8.0  # gpa_only validation branch
+
+            profile = models.AdmissionProfile(
+                lead_id=multi_nv_seed["lead_id"],
+                citizen_id=f"7{citizen_seed:08d}6"[:12],
+                status="draft",
+                full_name="Gap2 Submit Candidate",
+                phone="0901234567",
+                **SUBMITTABLE_PERMANENT_ADDRESS,
+                offering_admission_config_id=multi_nv_seed[
+                    "offering_admission_config_id"
+                ],
+                cultural_education_level="graduated_thpt",
+                vocational_qualification="none",
+                applied_rules={
+                    "admission_path_id": multi_nv_seed["path_id"],
+                    "method_type": "gpa_only",
+                    "min_gpa": 0,
+                    "mandatory_docs": [],
+                    "schema_version": 1,
+                    "allow_unverified_submission": True,
+                },
+                academic_year=2026,
+                version=1,
+                uses_choice_engine=False,
+                family_info=[
+                    {"relationship": "Cha", "full_name": "X", "phone": "0901234567"}
+                ],
+                academic_history=[{
+                    "school_name": "THPT Test",
+                    "year_from": 2020,
+                    "year_to": 2024,
+                    "gpa": 8.0,
+                    "graduation_type": "THPT",
+                    "level": "THPT",
+                    "grade_to": 12,
+                    "school_id": multi_nv_seed["school_id"],
+                }],
+            )
+            s.add(profile)
+            await s.flush()
+            return profile.id
+
+
+async def _fallback_history_rows(lead_id: int) -> list:
+    async with AsyncSessionLocal() as s:
+        rows = (await s.execute(
+            select(models.LeadStatusHistory).where(
+                models.LeadStatusHistory.lead_id == lead_id
+            )
+        )).scalars().all()
+    return [r for r in rows if r.reason and _SYNC_FALLBACK_REASON in r.reason]
+
+
+async def test_magic_link_submit_no_officer_syncs_lead_to_sts07(multi_nv_seed):
+    """Gap #2 regression anchor: magic-link submit (current_user=None) of a
+    lead with NO assigned officer must still land the lead at sts07.
+
+    The seed lead has ``assigned_officer_id=None`` + ``consultation_status_id
+    =None``. With actor=None the milestone consultation skips, so WITHOUT the
+    sync fallback the lead stays NULL (desynced from the submitted profile).
+    """
+    profile_id = await _build_submittable_legacy_profile(multi_nv_seed, 11111)
+
+    async with AsyncSessionLocal() as s:
+        result_dict, _ = await admission_service.submit_and_evaluate(
+            db=s, profile_id=profile_id, current_user=None,
+        )
+        await s.commit()
+
+    assert result_dict["status"] == "submitted", (
+        f"Magic-link submit must succeed; got {result_dict.get('status')!r} / "
+        f"errors={result_dict.get('validation_errors')}"
+    )
+
+    async with AsyncSessionLocal() as s:
+        lead = await s.get(models.Lead, multi_nv_seed["lead_id"])
+        assert lead.consultation_status_id == "sts07", (
+            "Gap #2 regression: no-officer magic-link submit left the lead "
+            f"desynced at {lead.consultation_status_id!r} instead of sts07 — "
+            "the sync_lead_from_admission fallback in submit_and_evaluate is gone."
+        )
+
+    sync_rows = await _fallback_history_rows(multi_nv_seed["lead_id"])
+    assert len(sync_rows) == 1, (
+        "Expected exactly one fallback sync history row when the milestone "
+        f"skipped (no officer); got {len(sync_rows)}."
+    )
+
+
+async def test_officer_submit_does_not_double_sync(multi_nv_seed):
+    """Idempotency anchor: officer submit (actor resolvable) lets the milestone
+    floor the lead to sts07, so the fallback must idempotent-skip — no
+    duplicate fallback history row.
+    """
+    profile_id = await _build_submittable_legacy_profile(multi_nv_seed, 22222)
+
+    async with AsyncSessionLocal() as s:
+        officer = await s.get(models.User, multi_nv_seed["admin_user_id"])
+        result_dict, _ = await admission_service.submit_and_evaluate(
+            db=s, profile_id=profile_id, current_user=officer,
+        )
+        await s.commit()
+
+    assert result_dict["status"] == "submitted"
+
+    async with AsyncSessionLocal() as s:
+        lead = await s.get(models.Lead, multi_nv_seed["lead_id"])
+        assert lead.consultation_status_id == "sts07"
+
+    sync_rows = await _fallback_history_rows(multi_nv_seed["lead_id"])
+    assert len(sync_rows) == 0, (
+        "Officer submit: milestone already synced the lead, so the fallback "
+        f"must idempotent-skip; found {len(sync_rows)} duplicate fallback row(s)."
+    )

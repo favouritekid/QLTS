@@ -5394,6 +5394,24 @@ async def submit_and_evaluate(
 
         await db.flush()
 
+        # Gap #2 fix — submit-sync fallback (mirror approve/reject/enroll).
+        # _create_admission_milestone_consultation above SKIPS the lead pipeline
+        # update when no officer is resolvable (magic-link submit → actor=None,
+        # of a lead whose assigned_officer_id is also None). sync_lead_from_admission
+        # is officer-independent, so it still floors the lead to sts07
+        # ("Đã tiếp nhận") in that case. When the milestone DID run (officer
+        # resolvable) the lead is already at sts07 and this is an idempotent
+        # no-op (sync skips when consultation_status_id already == target).
+        if profile.lead:
+            from .lead_admission_sync import sync_lead_from_admission
+
+            await sync_lead_from_admission(
+                db=db,
+                profile=profile,
+                changed_by_user_id=current_user.id if current_user else None,
+                reason="Auto-sync on profile submit (magic-link/no-officer fallback)",
+            )
+
         log.info(
             "Admission profile submitted successfully",
             profile_id=profile_id,
