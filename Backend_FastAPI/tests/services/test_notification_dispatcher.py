@@ -382,7 +382,139 @@ class TestNotificationDispatcher:
         
         # Act
         notification_ids, _ = await dispatch(db, event, {"user_id": user_id})
-        
+
         # Assert
         # Should be empty because preference filtered out the only channel
         assert len(notification_ids) == 0
+
+    # =====================================================================
+    # Phase 2 PR-B: only_channels filter (suspicious-login risk-gate)
+    # =====================================================================
+
+    async def _seed_browser_email_rule(self, db, event):
+        """Seed an enabled rule with BOTH a browser and an email action."""
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="T",
+            message_template="M",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True,
+        )
+        db.add(rule)
+        await db.flush()
+        await db.refresh(rule)
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=1, channel="browser",
+            content_mode="inherit_default",
+        ))
+        db.add(models.NotificationAction(
+            rule_id=rule.id, step=2, channel="email",
+            content_mode="inherit_default",
+        ))
+        await db.commit()
+        from app.services.notification_rule_loader import invalidate_rule_cache
+        await invalidate_rule_cache(event.value)
+
+    async def _delivery_channels(self, db, event):
+        result = await db.execute(
+            select(models.NotificationDelivery.channel)
+            .where(models.NotificationDelivery.event == event.value)
+        )
+        return set(result.scalars().all())
+
+    async def test_only_channels_browser_filters_out_email(
+        self, db: AsyncSession, officer_user_in_db: dict, clear_redis_keys, mocker
+    ):
+        """only_channels=['browser'] drops the email action entirely — only
+        a browser delivery row is created, and the email worker is never
+        enqueued."""
+        user_id = officer_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+        await self._seed_browser_email_rule(db, event)
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=1, failed_ids=[], success=True), None),
+        )
+        enqueue = mocker.patch(
+            "app.tasks.delivery_tasks.execute_notification_delivery.apply_async"
+        )
+
+        ids, cb = await dispatch(
+            db, event,
+            {"user_id": user_id, "severity": "warning", "message": "x"},
+            only_channels=["browser"],
+        )
+        if cb:
+            await cb()
+        await db.commit()
+
+        channels = await self._delivery_channels(db, event)
+        assert channels == {"browser"}, (
+            f"only_channels=['browser'] must drop email; got delivery channels {channels}"
+        )
+        enqueue.assert_not_called()  # email action filtered → no worker enqueue
+
+    async def test_default_none_dispatches_all_channels(
+        self, db: AsyncSession, officer_user_in_db: dict, clear_redis_keys, mocker
+    ):
+        """Regression: without only_channels, BOTH browser and email actions
+        produce delivery rows (default behaviour unchanged)."""
+        user_id = officer_user_in_db["id"]
+        event = SystemEvents.SYSTEM_ALERT
+        await self._seed_browser_email_rule(db, event)
+
+        mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event",
+            new_callable=AsyncMock,
+        )
+        mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel",
+            new_callable=AsyncMock,
+            return_value=("browser", MagicMock(sent_count=1, failed_ids=[], success=True), None),
+        )
+        mocker.patch(
+            "app.tasks.delivery_tasks.execute_notification_delivery.apply_async"
+        )
+
+        ids, cb = await dispatch(
+            db, event,
+            {"user_id": user_id, "severity": "warning", "message": "x"},
+        )
+        if cb:
+            await cb()
+        await db.commit()
+
+        channels = await self._delivery_channels(db, event)
+        assert {"browser", "email"} <= channels, (
+            f"default (only_channels=None) must dispatch all channels; got {channels}"
+        )
+
+    async def test_only_channels_typo_raises_value_error(
+        self, db: AsyncSession, officer_user_in_db: dict
+    ):
+        """A typo'd channel raises ValueError up front — it must NOT silently
+        filter everything out (which would swallow the notification)."""
+        with pytest.raises(ValueError):
+            await dispatch(
+                db, SystemEvents.SYSTEM_ALERT,
+                {"user_id": officer_user_in_db["id"]},
+                only_channels=["brower"],  # typo
+            )
+
+    async def test_only_channels_empty_raises_value_error(
+        self, db: AsyncSession, officer_user_in_db: dict
+    ):
+        """An empty list is rejected (deliberate raise, not no-op) so an
+        accidental [] can't silently drop a security notification."""
+        with pytest.raises(ValueError):
+            await dispatch(
+                db, SystemEvents.SYSTEM_ALERT,
+                {"user_id": officer_user_in_db["id"]},
+                only_channels=[],
+            )

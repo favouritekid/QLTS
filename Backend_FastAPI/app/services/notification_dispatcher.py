@@ -641,6 +641,28 @@ async def _apply_delivery_deduplication(
         return user_ids
 
 
+def _validate_only_channels(only_channels: Optional[List[str]]) -> None:
+    """Fail-fast validation for the ``only_channels`` dispatch filter.
+
+    ``None`` = no restriction (default). A non-empty list must contain only
+    canonical channels — ``validate_channels_for_write`` raises ``ValueError``
+    on a typo (e.g. ``["brower"]``) or legacy ``"socket"``. An EMPTY list also
+    raises: silently filtering every action out would swallow a security
+    notification (e.g. suspicious-login). MUST be called BEFORE
+    ``safe_dispatch``'s try/except, which absorbs all exceptions and would
+    otherwise turn a typo into a silent zero-notification dispatch.
+    """
+    if only_channels is None:
+        return
+    if not only_channels:
+        raise ValueError(
+            "only_channels must be a non-empty list of canonical channels; "
+            "use None for no restriction."
+        )
+    from app.services.notification_channels import validate_channels_for_write
+    validate_channels_for_write(only_channels)  # raises on unknown / 'socket'
+
+
 async def dispatch(
     db: AsyncSession,
     event: SystemEvents,
@@ -649,6 +671,7 @@ async def dispatch(
     skip_preference_check: bool = False,
     strict: bool = False,
     rooms: Optional[List[str]] = None,
+    only_channels: Optional[List[str]] = None,
 ) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event — caller-controlled transaction.
@@ -685,6 +708,12 @@ async def dispatch(
                events (org/pipeline config) may pass None and broadcast.
                Use ``rooms_for_admission(profile)`` / ``rooms_for_lead(lead)``
                / ``rooms_for_user(user_id)`` helpers at the call site.
+        only_channels: Optional whitelist of canonical channels. When set,
+                       only actions whose channel is in this list are
+                       dispatched (in-app + external alike); the rest are
+                       dropped. ``None`` (default) = all channels per the
+                       rule. Used to gate low-risk suspicious-login to
+                       browser-only without a per-action condition system.
 
     Returns:
         Tuple of (notification_ids, post_commit_callback)
@@ -714,6 +743,11 @@ async def dispatch(
         dedupe_key=dedupe_key,
         payload_keys=list(payload.keys())
     )
+
+    # Validate the channel filter up-front (fail-fast). Done here AND in
+    # safe_dispatch (before its swallowing try) so a typo never silently
+    # filters every action out.
+    _validate_only_channels(only_channels)
 
     # Step 1: PR1 single-path — catalog + DB rule, no registry fallback
     from app.utils.exceptions import NotificationConfigError
@@ -843,6 +877,13 @@ async def dispatch(
 
     rule_resolver = config.resolver
     action_configs = config.actions  # List[ActionConfig]
+    if only_channels is not None:
+        # Restrict to the requested channels (already validated above).
+        # Reassigning action_configs HERE — before has_external_actions and
+        # every downstream action loop (internal resolution, external
+        # resolver, enqueue) — propagates the filter to all paths, so no
+        # non-selected channel can leak a delivery through any branch.
+        action_configs = [a for a in action_configs if a.channel in only_channels]
     action_user_map: Dict[int, List[int]] = {}  # step -> user_ids
 
     # Pre-compute: does ANY non-browser action have external_resolver?
@@ -1972,6 +2013,7 @@ async def safe_dispatch(
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
     rooms: Optional[List[str]] = None,
+    only_channels: Optional[List[str]] = None,
 ) -> List[int]:
     """
     Fire-and-forget dispatch — commits + runs callback + swallows errors.
@@ -2000,12 +2042,20 @@ async def safe_dispatch(
         payload: Event payload with data for resolution and templates
         dedupe_key: Optional deduplication key
         skip_preference_check: Skip user preference filtering
+        only_channels: Optional whitelist of canonical channels — drop all
+            other actions. ``None`` = all channels. Validated before the
+            try/except so a typo raises instead of silently dropping.
 
     Returns:
         List of created notification IDs (empty on failure)
 
     See also: ``dispatch()`` for the caller-controlled transaction variant.
     """
+    # Validate the channel filter BEFORE the try/except below — that block
+    # swallows ALL exceptions and returns []. A typo inside dispatch() would
+    # be absorbed and silently drop the notification; validating here makes
+    # it raise loudly to the caller instead.
+    _validate_only_channels(only_channels)
     try:
         notif_ids, notif_cb = await dispatch(
             db=db,
@@ -2014,6 +2064,7 @@ async def safe_dispatch(
             dedupe_key=dedupe_key,
             skip_preference_check=skip_preference_check,
             rooms=rooms,
+            only_channels=only_channels,
         )
         await db.commit()
         if notif_cb:

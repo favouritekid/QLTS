@@ -171,6 +171,15 @@ class Settings(BaseSettings):
     ANOMALY_UNUSUAL_LOGIN_END_HOUR: int = Field(
         default=6, validation_alias="ANOMALY_UNUSUAL_LOGIN_END_HOUR"
     )  # End of unusual login hours (local time)
+    # Risk-gate for suspicious-login EMAIL/zalo dispatch. risk_score weights
+    # (login_history_service.RISK_WEIGHTS): new_ip 30 / new_device 40 /
+    # new_location 50 / impossible_travel 80 (−20% if trusted device). A
+    # bare new_ip (30, or 24 trusted) falls BELOW 40 → in-app banner only,
+    # no email; new_device (40) and above keep all channels. Tunable without
+    # code change.
+    SUSPICIOUS_LOGIN_EMAIL_RISK_THRESHOLD: int = Field(
+        default=40, validation_alias="SUSPICIOUS_LOGIN_EMAIL_RISK_THRESHOLD"
+    )
 
     # -- Security: Socket Rate Limiting --
     SOCKET_MAX_CONN_PER_MINUTE: int = Field(
