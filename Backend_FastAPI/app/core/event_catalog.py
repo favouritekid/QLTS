@@ -1621,7 +1621,7 @@ _CTV_FUTURE_EVENTS: tuple = (
 )
 
 # -------------------------------------------------------------------
-# 6. System + Security events (7 entries)
+# 6. System + Security events (8 entries)
 # -------------------------------------------------------------------
 
 _SYSTEM_EVENTS: tuple = (
@@ -1648,6 +1648,32 @@ _SYSTEM_EVENTS: tuple = (
         # matrix. Classifying as "public" would let a misuse at any
         # call site leak admin-authored payloads to connected clients
         # with no scope check.
+        privacy="sensitive",
+    ),
+    EventDefinition(
+        event=SystemEvents.NOTIFICATION_HEALTH_ALERT,
+        category="system",
+        display_name="Cảnh báo sức khỏe hệ thống thông báo",
+        description=(
+            "Tín hiệu vận hành dành riêng cho admin về sức khỏe phân phối "
+            "thông báo (failure rate, backlog, webhook lag, circuit breaker)"
+        ),
+        variables=(
+            _var("severity", "string", "Mức độ nghiêm trọng"),
+            _var("message", "string", "Nội dung cảnh báo"),
+            _var("alert_type", "string", "Loại cảnh báo", False),
+        ),
+        # Admin-only operational signal — NOT a user broadcast. Mirrors
+        # HOLIDAY_CALENDAR_INCOMPLETE's admin-scoped resolver set so the
+        # health task can never fan out to all_users.
+        default_resolver="all_admins",
+        allowed_resolvers=_ADMIN_RESOLVERS,
+        # browser + email (no zalo_bot — group SYSTEM defaults zalo_bot=False).
+        default_channels=("browser", "email"),
+        priority=10,
+        # Sensitive: the dispatch site passes explicit rooms=["role_admin"]
+        # so it clears the fail-closed socket guard. Classifying public would
+        # let any misuse leak operational payloads to all connected clients.
         privacy="sensitive",
     ),
     EventDefinition(

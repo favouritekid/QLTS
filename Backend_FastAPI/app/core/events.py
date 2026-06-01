@@ -664,6 +664,28 @@ class SystemEvents(str, Enum):
     Recipients: All active users or specified user_ids
     """
 
+    NOTIFICATION_HEALTH_ALERT = "notification_health_alert"
+    """
+    Operational health alert for the notification delivery subsystem.
+
+    Admin-only operational signal raised by the Celery beat task
+    ``check_notification_alerts`` (``app/tasks/delivery_tasks.py``). Kept
+    SEPARATE from ``SYSTEM_ALERT`` so the health task never fans out to the
+    full ``all_users`` broadcast audience (which previously flooded every
+    staff inbox + dead-lettered zalo_bot deliveries and self-fed the
+    failure-rate loop). Dispatched to ``all_admins`` over browser + email
+    only — never zalo_bot.
+
+    Payload Schema:
+        {
+            "severity": str,              # Required: "info" | "warning" | "error"
+            "message": str,               # Required: Alert message
+            "alert_type": str,            # e.g. "failure_rate_high", "breaker_open"
+        }
+
+    Recipients: Admin users only (operators who action pipeline health).
+    """
+
     HOLIDAY_CALENDAR_INCOMPLETE = "holiday_calendar_incomplete"
     """
     Holiday calendar missing lunar holidays for next year.

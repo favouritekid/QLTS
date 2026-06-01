@@ -591,8 +591,9 @@ def check_notification_alerts(self):
     """
     Celery Beat task: run all notification alert checks.
 
-    Runs every 5 minutes. Dispatches SYSTEM_ALERT for any fired alerts.
-    Redis dedup prevents alert storms (same alert type within 1 hour).
+    Runs every 5 minutes. Dispatches NOTIFICATION_HEALTH_ALERT (admin-only)
+    for warning/error alerts; info-severity alerts are logged but not
+    dispatched. Redis dedup prevents alert storms (same alert type within 1h).
     """
     task_name = "check_notification_alerts"
     task_log = logging.getLogger(task_name)
@@ -612,25 +613,70 @@ def check_notification_alerts(self):
 
             # Notification health alerts target operators — scope to admin
             # room only (the others are end-user roles that don't action
-            # pipeline health metrics).
+            # pipeline health metrics). Dispatched via NOTIFICATION_HEALTH_ALERT
+            # (admin-only, browser+email — never zalo_bot), NOT SYSTEM_ALERT,
+            # so the health check never fans out to the all_users broadcast
+            # audience (which flooded staff inboxes + self-fed the failure-rate
+            # loop via zalo_bot dead-letters).
             _alert_rooms = ["role_admin"]
+            dispatched_types: list[str] = []
+            skipped_info = 0
             for alert in alerts:
+                severity = alert.get("severity", "warning")
+                alert_type = alert.get("alert_type", "")
+                # F-info: info-severity alerts (e.g. webhook_lag) are
+                # observational only — log and skip, do NOT email operators.
+                # Done in the task loop (not run_all_checks) so the D3
+                # dedup/aggregation tests stay green.
+                if severity == "info":
+                    skipped_info += 1
+                    task_log.info(
+                        f"Skipping info-severity alert (no dispatch): {alert_type}"
+                    )
+                    continue
                 try:
-                    await safe_dispatch(
+                    notif_ids = await safe_dispatch(
                         db=session,
-                        event=SystemEvents.SYSTEM_ALERT,
+                        event=SystemEvents.NOTIFICATION_HEALTH_ALERT,
                         payload={
-                            "severity": alert.get("severity", "warning"),
+                            "severity": severity,
                             "message": alert["message"],
+                            "alert_type": alert_type,
                         },
                         rooms=_alert_rooms,
+                        # error (e.g. breaker_open) must reach operators even
+                        # if they muted system-group email; warning respects
+                        # the operator's preference (they may opt out).
+                        skip_preference_check=(severity == "error"),
                     )
                 except Exception as e:
                     task_log.error(f"Failed to dispatch alert: {e}")
+                    continue
+                # Count ONLY real deliveries. safe_dispatch returns [] when no
+                # enabled rule exists (e.g. notification_health_alert not yet
+                # synced into the DB), no recipient resolves, or a failure was
+                # swallowed — counting those as "fired" would mask exactly the
+                # fail-silent case the rollout gate watches for.
+                if notif_ids:
+                    dispatched_types.append(alert_type)
+                else:
+                    task_log.warning(
+                        "Alert dispatch produced 0 notifications — rule synced? "
+                        f"recipients resolved? alert_type={alert_type}"
+                    )
 
             await session.commit()
-            task_log.info(f"Notification alerts fired: {len(alerts)}")
-            return {"fired": len(alerts), "types": [a["alert_type"] for a in alerts]}
+            # Count what was ACTUALLY dispatched, not len(alerts) — info
+            # alerts are skipped above and must not inflate the metric.
+            task_log.info(
+                f"Notification alerts dispatched: {len(dispatched_types)} "
+                f"(info skipped: {skipped_info})"
+            )
+            return {
+                "fired": len(dispatched_types),
+                "skipped_info": skipped_info,
+                "types": dispatched_types,
+            }
 
     result = run_async_task(
         async_func=_run,
