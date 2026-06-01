@@ -53,8 +53,33 @@ from app.utils.exceptions import (
     ConflictError,
 )
 from app.config import settings
+from urllib.parse import urlparse
 
 log = structlog.get_logger(__name__)
+
+
+def build_safe_return_url(return_url: Optional[str]) -> str:
+    """Allowlist + normalize the client-supplied post-payment return URL
+    (open-redirect / SSRF guard — PR1 Commit 5).
+
+    - None/empty → canonical default ``{FRONTEND_URL}/finance/payments/return``
+      so callers that pass no return_url keep working (backward-compatible).
+    - Same scheme+host as ``settings.FRONTEND_URL`` → kept as-is.
+    - Any other origin → ``BusinessRuleViolation`` (mapped to HTTP 400 by the
+      payments router). The gateway echoes this URL back to the user, so an
+      attacker-controlled value would be an open redirect.
+    """
+    base = settings.FRONTEND_URL.rstrip("/")
+    default_url = f"{base}/finance/payments/return"
+    if not return_url:
+        return default_url
+    allowed = urlparse(settings.FRONTEND_URL)
+    candidate = urlparse(return_url)
+    allowed_origin = (allowed.scheme, allowed.netloc)
+    if (candidate.scheme, candidate.netloc) != allowed_origin:
+        raise BusinessRuleViolation("return_url is not an allowed origin")
+    return return_url
+
 
 # Default intent expiration (15 minutes)
 DEFAULT_INTENT_EXPIRATION_MINUTES = 15
@@ -187,7 +212,9 @@ class PaymentIntentService:
                 f"Payment method '{method.name}' is not an online payment method"
             )
 
-        # Create intent
+        # Create intent. PR1 Commit 5: allowlist/normalize the return_url
+        # before storing it or handing it to a gateway adapter.
+        safe_return_url = build_safe_return_url(return_url)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
 
         intent = PaymentIntent(
@@ -197,7 +224,7 @@ class PaymentIntentService:
             currency="VND",
             idempotency_key=idempotency_key,
             status=PaymentIntentStatusEnum.created.value,
-            return_url=return_url,
+            return_url=safe_return_url,
             expires_at=expires_at,
         )
 
@@ -209,7 +236,9 @@ class PaymentIntentService:
         gateway_code = method.code
         if gateway_code in self._gateway_adapters:
             adapter = self._gateway_adapters[gateway_code]
-            pay_url, gateway_ref = await adapter.create_payment_url(intent, return_url)
+            pay_url, gateway_ref = await adapter.create_payment_url(
+                intent, safe_return_url
+            )
             intent.pay_url = pay_url
             intent.gateway_ref = gateway_ref
             intent.status = PaymentIntentStatusEnum.pending.value
@@ -850,6 +879,10 @@ def register_default_gateways(service: PaymentIntentService) -> None:
             access_key=settings.MOMO_ACCESS_KEY,
             secret_key=settings.MOMO_SECRET_KEY,
             endpoint=settings.MOMO_ENDPOINT,
+            # PR1 Commit 5: wire the canonical backend base so the IPN URL is
+            # built from it, NOT the client return_url. This is the real
+            # runtime registration path (from_settings is a separate ctor).
+            public_backend_url=settings.PUBLIC_BACKEND_URL,
         )
         service.register_gateway("momo", momo)
         log.info("momo_gateway_registered")

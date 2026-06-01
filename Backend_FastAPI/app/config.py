@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = Field(
         default="http://localhost:5173", validation_alias="FRONTEND_URL"
     )
+    # PR1 Commit 5: canonical public base URL of THIS backend. Used to build
+    # the MoMo IPN (server callback) URL instead of deriving it from the
+    # client-supplied return_url. Prod fail-fast: https + non-localhost.
+    PUBLIC_BACKEND_URL: str = Field(
+        default="http://localhost:8000", validation_alias="PUBLIC_BACKEND_URL"
+    )
     CORS_ORIGINS: str = Field(
         default="http://localhost:5173", validation_alias="CORS_ORIGINS"
     )  # Mặc định lấy từ FRONTEND_URL không hoạt động tốt với pydantic-settings, nên đặt giá trị mặc định rõ ràng
@@ -259,6 +265,24 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
             )
+
+        # PR1 Commit 5: payment-facing URLs must be HTTPS + non-localhost in
+        # production. FRONTEND_URL is echoed back to the user by the payment
+        # gateway (open-redirect surface) and PUBLIC_BACKEND_URL is the MoMo
+        # IPN host — localhost/HTTP would break callbacks or leak plaintext.
+        for _name, _url in (
+            ("FRONTEND_URL", self.FRONTEND_URL),
+            ("PUBLIC_BACKEND_URL", self.PUBLIC_BACKEND_URL),
+        ):
+            _u = _url.lower()
+            if not _u.startswith("https://"):
+                raise RuntimeError(
+                    f"CRITICAL: {_name} must use https:// in production."
+                )
+            if "localhost" in _u or "127.0.0.1" in _u:
+                raise RuntimeError(
+                    f"CRITICAL: {_name} points to localhost in production."
+                )
 
         # ✅ C1: Reject localhost/default DB URLs in production
         db_url_lower = self.DATABASE_URL.lower()

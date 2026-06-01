@@ -92,6 +92,7 @@ class MoMoAdapter(BaseGatewayAdapter):
         endpoint: str = "https://test-payment.momo.vn/v2/gateway/api/create",
         request_type: str = "payWithMethod",
         auto_capture: bool = True,
+        public_backend_url: str = "",
     ):
         """
         Initialize MoMo adapter.
@@ -103,6 +104,7 @@ class MoMoAdapter(BaseGatewayAdapter):
             endpoint: MoMo API endpoint URL
             request_type: Payment type (payWithMethod, captureWallet, etc.)
             auto_capture: Whether to auto-capture payment
+            public_backend_url: Canonical backend base for the IPN URL
         """
         self.partner_code = partner_code
         self.access_key = access_key
@@ -110,6 +112,9 @@ class MoMoAdapter(BaseGatewayAdapter):
         self.endpoint = endpoint
         self.request_type = request_type
         self.auto_capture = auto_capture
+        # PR1 Commit 5: canonical backend base for the MoMo IPN URL (no longer
+        # derived from the client-supplied return_url).
+        self.public_backend_url = public_backend_url
 
     @property
     def gateway_code(self) -> str:
@@ -118,6 +123,13 @@ class MoMoAdapter(BaseGatewayAdapter):
     @property
     def gateway_name(self) -> str:
         return "MoMo"
+
+    def _build_ipn_url(self) -> str:
+        """Server-to-server IPN (callback) URL MoMo notifies. PR1 Commit 5:
+        built from the trusted PUBLIC_BACKEND_URL, never the client-supplied
+        return_url, so an attacker can't redirect MoMo's IPN to their host."""
+        base = self.public_backend_url.rstrip("/")
+        return f"{base}/api/payments/callback/momo"
 
     @classmethod
     def from_settings(cls, settings) -> "MoMoAdapter":
@@ -139,6 +151,7 @@ class MoMoAdapter(BaseGatewayAdapter):
                 "MOMO_ENDPOINT",
                 "https://test-payment.momo.vn/v2/gateway/api/create"
             ),
+            public_backend_url=getattr(settings, "PUBLIC_BACKEND_URL", ""),
         )
 
     async def create_payment_url(
@@ -181,9 +194,9 @@ class MoMoAdapter(BaseGatewayAdapter):
         if hasattr(intent, 'invoice') and intent.invoice:
             order_info = f"Thanh toan {intent.invoice.invoice_number}"
 
-        # Build IPN URL (callback URL for MoMo to notify)
-        # This should be configured in your application
-        ipn_url = return_url.replace("/return", "/callback/momo")
+        # IPN (server-to-server callback) URL — from PUBLIC_BACKEND_URL, never
+        # the client return_url (SSRF / redirect guard). See _build_ipn_url.
+        ipn_url = self._build_ipn_url()
 
         # Create raw signature string (MoMo format)
         raw_signature = (
