@@ -18,6 +18,11 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import (
+    ensure_submittable_ward,
+    seed_submittable_offering_config,
+    submittable_profile_fields,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -81,8 +86,16 @@ async def create_submittable_profile_direct(
     academic_year: int = 2025,
 ) -> models.AdmissionProfile:
     """Create a profile that can be submitted (with subject scores, family_info, etc.)."""
+    # Gap #3: a current-era ward so the permanent address validates.
+    await ensure_submittable_ward()
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            lead = await session.get(models.Lead, lead_id)
+            # #337: legacy config + KV chain so submit can derive the
+            # target level + resolve KV (else CONFIG_GAP / KV_UNRESOLVED).
+            seed = await seed_submittable_offering_config(
+                session, lead.unit_id
+            )
             subj = (await session.execute(
                 select(models.Subject).where(models.Subject.code == "TOAN")
             )).scalar_one_or_none()
@@ -95,7 +108,7 @@ async def create_submittable_profile_direct(
                 lead_id=lead_id,
                 status="draft",
                 citizen_id=citizen_id,
-                academic_year=academic_year,
+                academic_year=seed["academic_year"],
                 version=1,
                 applied_rules={
                     "min_gpa": 0,
@@ -106,7 +119,7 @@ async def create_submittable_profile_direct(
                     "subject_selection_mode": "fixed",
                 },
                 family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                **submittable_profile_fields(seed),
             )
             session.add(profile)
             await session.flush()
