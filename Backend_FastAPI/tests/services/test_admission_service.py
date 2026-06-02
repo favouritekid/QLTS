@@ -20,6 +20,11 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import (
+    ensure_submittable_ward,
+    seed_submittable_offering_config,
+    submittable_profile_fields,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -196,8 +201,19 @@ async def create_submittable_profile_direct(
             "subject_selection_mode": "fixed",
         }
 
+    # Gap #3: a current-era ward so the permanent address validates.
+    await ensure_submittable_ward()
+
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            lead = await session.get(models.Lead, lead_id)
+            # #337: seed the legacy config + KV chain so submit can derive the
+            # target level and resolve the applicant's KV (else
+            # CONFIG_GAP_TARGET_LEVEL / KV_UNRESOLVED keep the profile draft).
+            seed = await seed_submittable_offering_config(
+                session, lead.unit_id
+            )
+
             # Create subject if needed
             subj = (await session.execute(
                 select(models.Subject).where(models.Subject.code == "TOAN")
@@ -213,9 +229,9 @@ async def create_submittable_profile_direct(
                 citizen_id=citizen_id,
                 version=1,
                 applied_rules=applied_rules,
-                academic_year=2025,
+                academic_year=seed["academic_year"],
                 family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                **submittable_profile_fields(seed),
             )
             session.add(profile)
             await session.flush()
@@ -842,9 +858,13 @@ class TestSubmitAndEvaluate:
             unit_id, assigned_officer_id=officer_user_in_db["id"]
         )
 
-        # Create profile WITHOUT citizen_id (required for submit)
+        # Create profile WITHOUT citizen_id (required for submit). Everything
+        # else clears the submit gates (#337 seed) so the ONLY failure is the
+        # missing citizen_id → draft + validation_errors, not CONFIG_GAP 400.
+        await ensure_submittable_ward()
         async with AsyncSessionLocal() as session:
             async with session.begin():
+                seed = await seed_submittable_offering_config(session, unit_id)
                 subj = (await session.execute(
                     select(models.Subject).where(models.Subject.code == "TOAN")
                 )).scalar_one_or_none()
@@ -866,9 +886,13 @@ class TestSubmitAndEvaluate:
                         "required_subject_count": 1,
                         "subject_selection_mode": "fixed",
                     },
-                    academic_year=2025,
-                    family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                    academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                    academic_year=seed["academic_year"],
+                    family_info=[{
+                        "relationship": "Cha",
+                        "full_name": "Test Father",
+                        "phone": "0901234567",
+                    }],
+                    **submittable_profile_fields(seed),
                 )
                 session.add(profile)
                 await session.flush()
@@ -963,8 +987,11 @@ class TestSubmitAndEvaluate:
         )
 
         # Create profile with best_n selection (pick best 3 of 4)
+        await ensure_submittable_ward()
         async with AsyncSessionLocal() as session:
             async with session.begin():
+                # #337: legacy config + KV chain so submit can reach "submitted".
+                seed = await seed_submittable_offering_config(session, unit_id)
                 # Create subjects
                 subjects = {}
                 for code in ["MATH", "PHYSICS", "ENGLISH", "HISTORY"]:
@@ -990,9 +1017,13 @@ class TestSubmitAndEvaluate:
                         "required_subject_count": 3,
                         "subject_selection_mode": "best_n",
                     },
-                    academic_year=2025,
-                    family_info=[{"relation": "father", "name": "Test Father"}],
-                    academic_history=[{"school": "Test School", "year": 2024}],
+                    academic_year=seed["academic_year"],
+                    family_info=[{
+                        "relationship": "Cha",
+                        "full_name": "Test Father",
+                        "phone": "0901234567",
+                    }],
+                    **submittable_profile_fields(seed),
                 )
                 session.add(profile)
                 await session.flush()
