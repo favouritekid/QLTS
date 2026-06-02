@@ -138,6 +138,72 @@ describe("UtEvidenceCards — per-code render", () => {
   })
 })
 
+describe("UtEvidenceCards — PR2 authed download link", () => {
+  it("[Xem PDF] points at the authed download endpoint, not /uploads", () => {
+    const profile = makeProfile({
+      priority_object_codes: ["04"],
+      priority_object_evidence: { "04": { status: "verified", verified_by: 7 } },
+      priority_evidence_documents: [
+        {
+          sub_code: "04",
+          bonus_points: 1.0,
+          label: "Con thương binh",
+          document_id: 99,
+          document_file_path: "uploads/admissions/42/priority_04.pdf",
+          status: "verified",
+          verification_status: "verified",
+        },
+      ],
+    })
+    render(
+      wrap(
+        <UtEvidenceCards
+          profile={profile}
+          canVerify
+          isEditable
+          onNavigateToDocuments={() => {}}
+        />,
+      ),
+    )
+    const viewLink = screen.getByTestId("ut-evidence-view-04")
+    expect(viewLink.getAttribute("href")).toContain(
+      "/api/admissions/42/documents/99/download",
+    )
+    expect(viewLink.getAttribute("href")).not.toContain("/uploads")
+  })
+
+  it("hides [Xem PDF] when document_id is null (stale/rollback), keeps filename text", () => {
+    const profile = makeProfile({
+      priority_object_codes: ["04"],
+      priority_object_evidence: { "04": { status: "verified", verified_by: 7 } },
+      priority_evidence_documents: [
+        {
+          sub_code: "04",
+          bonus_points: 1.0,
+          label: "Con thương binh",
+          document_id: null,
+          document_file_path: "uploads/admissions/42/priority_04.pdf",
+          status: "verified",
+          verification_status: "verified",
+        },
+      ],
+    })
+    render(
+      wrap(
+        <UtEvidenceCards
+          profile={profile}
+          canVerify
+          isEditable
+          onNavigateToDocuments={() => {}}
+        />,
+      ),
+    )
+    expect(screen.queryByTestId("ut-evidence-view-04")).not.toBeInTheDocument()
+    // Filename info still rendered (block gated on document_file_path).
+    expect(screen.getByText(/Minh chứng:/)).toBeInTheDocument()
+  })
+})
+
 describe("UtEvidenceCards — Decision #2 inline warning", () => {
   it("renders missing-file warning when sub_code in missing_priority_evidence_codes", () => {
     const profile = makeProfile({

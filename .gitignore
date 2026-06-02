@@ -273,6 +273,12 @@ qa_org_selector_verified.png
 test-results/
 playwright-report/
 
+# E2E test secrets — never commit generated MFA backup codes (PR2 security
+# hardening, finding #9). The TOTP secret + backup codes come from env, not
+# the repo.
+frontend/src/test/e2e/.mfa-backup-codes.txt
+**/.mfa-backup-codes.txt
+
 # Working tree pollution from Claude Code sessions (PR drafts, smoke
 # screenshots, debug logs, plan drafts). Saved per-session for context but
 # không phải canonical artifacts — canonical = memory + Documents/ + DAILY_LOG.

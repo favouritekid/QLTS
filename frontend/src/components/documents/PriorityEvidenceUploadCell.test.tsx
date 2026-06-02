@@ -102,9 +102,41 @@ describe("PriorityEvidenceUploadCell — view mode (server has file)", () => {
     })
     render(wrap(<PriorityEvidenceUploadCell profile={profile} subCode="04" />))
 
-    expect(screen.getByTestId("priority-evidence-view-04")).toBeInTheDocument()
+    const viewLink = screen.getByTestId("priority-evidence-view-04")
+    expect(viewLink).toBeInTheDocument()
+    // PR2: [Xem PDF] points at the authed download endpoint (profile 42,
+    // document 99), NOT the raw /uploads path (now 404).
+    expect(viewLink.getAttribute("href")).toContain(
+      "/api/admissions/42/documents/99/download",
+    )
+    expect(viewLink.getAttribute("href")).not.toContain("/uploads")
     expect(screen.getByTestId("priority-evidence-replace-04")).toBeInTheDocument()
     expect(screen.getByText("priority_04_abc.pdf")).toBeInTheDocument()
+  })
+
+  it("hides [Xem PDF] but keeps [Tải lại] when document_id is null (stale/rollback)", () => {
+    // PR2: a file present in a cached/rolled-back response without a
+    // document_id has no authed download URL → hide the link (NO fallback to
+    // the raw path), but the [Tải lại] re-upload affordance must remain.
+    const profile = makeProfile({
+      priority_evidence_documents: [
+        {
+          sub_code: "04",
+          bonus_points: 1.0,
+          label: "Con thương binh",
+          document_id: null,
+          document_file_path: "uploads/admissions/42/priority_04_abc.pdf",
+          status: "verified",
+          verification_status: "verified",
+        },
+      ],
+    })
+    render(wrap(<PriorityEvidenceUploadCell profile={profile} subCode="04" />))
+
+    expect(
+      screen.queryByTestId("priority-evidence-view-04"),
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId("priority-evidence-replace-04")).toBeInTheDocument()
   })
 
   it("toggles to replace mode when [Tải lại] clicked", () => {

@@ -87,7 +87,7 @@ import {
 } from "@/hooks/admissions/useAdmissions"
 import { useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
-import { cn, isSafeFilePath } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import {
   DOCUMENT_FORMAT_OPTIONS,
   getFormatLabel,
@@ -344,8 +344,14 @@ function computeRowState(doc: DocumentItem) {
     }
   }
 
+  // PR2: a viewable file requires the ProfileDocument PK (document_id) so the
+  // FE can hit the authed download endpoint. NO fallback to file_path — the
+  // public /uploads mount was removed, so a raw path link would 404. A doc
+  // with a file but a missing document_id (rollback/stale cache) simply has
+  // no View button.
   const hasFile =
-    !!doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
+    doc.document_id != null &&
+    (doc.status === "uploaded" || doc.status === "verified")
   const canUpload = doc.can_upload ?? false
   const canMarkPaperSubmitted = doc.can_mark_paper_submitted ?? false
   const canReject = doc.can_reject ?? false
@@ -426,7 +432,7 @@ interface ActionsCellProps {
   isCurrentResetTarget: boolean
   isVerifyPending: boolean
   isCurrentVerifyTarget: boolean
-  onView: (filePath: string) => void
+  onView: (documentId: number) => void
   onUpload: (
     code: string,
     label: string,
@@ -534,7 +540,7 @@ function DocumentRowActions(props: ActionsCellProps) {
           <IconActionButton
             ariaLabel="Xem tài liệu"
             tooltip="Xem file đã tải lên"
-            onClick={() => doc.file_path && onView(doc.file_path)}
+            onClick={() => doc.document_id != null && onView(doc.document_id)}
           >
             <Eye className="h-4 w-4" />
           </IconActionButton>
@@ -898,12 +904,13 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     )
   }
 
-  const handleViewDocument = (filePath: string) => {
-    if (!isSafeFilePath(filePath)) return
-    const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
-    // Use canonical API_BASE_URL (Zod-validated in lib/config/env.ts) instead
-    // of raw process.env — single source of truth, fails fast on misconfig.
-    const url = `${API_BASE_URL}/${cleanPath}`
+  const handleViewDocument = (documentId: number) => {
+    // PR2: stream the document through the authed, IDOR-scoped, audited
+    // backend endpoint. This is a top-level GET on the same origin, so the
+    // access_token cookie (path "/", samesite "lax") is sent automatically.
+    // API_BASE_URL is the Zod-validated host (no /api suffix); the endpoint
+    // lives under /api.
+    const url = `${API_BASE_URL}/api/admissions/${profile.id}/documents/${documentId}/download`
     window.open(url, "_blank", "noopener,noreferrer")
   }
 

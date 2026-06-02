@@ -46,7 +46,6 @@ import {
 import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { API_BASE_URL } from "@/lib/api/client"
-import { isSafeFilePath } from "@/lib/utils"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -351,8 +350,9 @@ function DocumentRow({
 
         <TableCell className="text-right">
           <div className="flex justify-end gap-1">
-            {/* View Button - Always show if file exists */}
-            {doc.file_path && (
+            {/* View Button — show only when a downloadable document_id exists
+                (PR2: no fallback to file_path; /uploads is no longer public). */}
+            {doc.document_id != null && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -361,7 +361,7 @@ function DocumentRow({
                       variant="ghost"
                       className="h-8 w-8 text-info-600 hover:text-info-700 hover:bg-info-50"
                       onClick={() => {
-                        const url = getDocumentUrl(doc.file_path)
+                        const url = getDocumentUrl(profile.id, doc.document_id)
                         if (url) window.open(url, "_blank")
                       }}
                       aria-label="Xem tài liệu"
@@ -437,11 +437,11 @@ function DocumentRow({
   )
 }
 
-// Helper function to get document URL
-function getDocumentUrl(filePath?: string | null) {
-  if (!filePath) return null
-  // Only allow safe relative file paths — block external URLs and traversal
-  if (!isSafeFilePath(filePath)) return null
-  const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
-  return `${API_BASE_URL}/${cleanPath}`
+// Helper function to build the authed document download URL.
+// PR2: streams through the IDOR-scoped, audited backend endpoint instead of
+// the (now-removed) public /uploads mount. Returns null when there is no
+// downloadable artifact so the caller hides the View button.
+function getDocumentUrl(profileId: number, documentId?: number | null) {
+  if (documentId == null) return null
+  return `${API_BASE_URL}/api/admissions/${profileId}/documents/${documentId}/download`
 }

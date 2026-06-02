@@ -59,6 +59,7 @@ import {
   useVerifyObjectEvidence,
 } from "@/lib/hooks/use-priority-evidence"
 import { useUtCatalog } from "@/lib/hooks/use-priority-object-catalog"
+import { API_BASE_URL } from "@/lib/api/client"
 import type { PriorityObjectCatalogItem } from "@/lib/api/priority-objects"
 import {
   findEvidenceDocument,
@@ -291,15 +292,19 @@ function UtEvidenceCardItem({
       {docItem?.document_file_path && (
         <p className="text-xs text-muted-foreground">
           Minh chứng: {getDisplayFilename(docItem.document_file_path)}{" "}
-          <a
-            href={`/${docItem.document_file_path}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-primary hover:underline"
-            data-testid={`ut-evidence-view-${subCode}`}
-          >
-            [Xem PDF] <ExternalLink className="h-3 w-3" />
-          </a>
+          {/* PR2: stream through the authed download endpoint, gated on the
+              ProfileDocument PK. No fallback to the raw path (now 404). */}
+          {docItem.document_id != null && (
+            <a
+              href={`${API_BASE_URL}/api/admissions/${profile.id}/documents/${docItem.document_id}/download`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-primary hover:underline"
+              data-testid={`ut-evidence-view-${subCode}`}
+            >
+              [Xem PDF] <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
         </p>
       )}
 
