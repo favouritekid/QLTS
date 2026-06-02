@@ -463,6 +463,27 @@ class TestUserEventsHaveDispatchCallers:
         "admission_confirmation_reminder_24h",
         "admission_confirmation_reminder_6h",
         "admission_confirmation_hard_locked",
+        # T11 source-aware decision (Wave 5, 2026-05-16). Dispatched at
+        # runtime from app/services/admission_state_service.py::transition()
+        # which resolves the event from
+        # TRANSITION_PAIR_TO_EVENT[("waitlisted", "rejected")] and calls
+        # dispatch_event(event=event, ...). The literal enum lives in that
+        # module's _DISPATCH_ANCHORS docstring (the call reads `event=event`),
+        # so the plain `event=SystemEvents.` grep finds it there. Distinct
+        # from the 12 B2.1 milestones still on _PENDING_DISPATCH_EVENTS: this
+        # T11 pair edge post-dates that frozen set, has a live caller today,
+        # and was tripping the contract test as an un-listed user event.
+        "admission_waitlist_rejected",
+        # Q9 #07 Phase E priority overrides — dispatched via literal
+        # dispatch_event(event=SystemEvents.X, ...) in
+        # app/services/priority_override_service.py:
+        #   - PRIORITY_KV_OVERRIDDEN    → override_kv            (Wave 2, ~L484)
+        #   - PRIORITY_OBJECT_VERIFIED  → verify_object_evidence (Wave 3, ~L790)
+        #   - PRIORITY_OBJECT_REJECTED  → reject_object_evidence (Wave 3, ~L918)
+        # (all 2026-05-19). Real callers → belong here, not on the pending list.
+        "priority_kv_overridden",
+        "priority_object_verified",
+        "priority_object_rejected",
     })
 
     # Events that have a catalog entry + are notification_class="user" but
