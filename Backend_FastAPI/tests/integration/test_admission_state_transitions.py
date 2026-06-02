@@ -1915,6 +1915,14 @@ class TestDropStudentWorkflow:
         assert data["dropped_reason"] == "Sinh viên tự nguyện nghỉ học do hoàn cảnh gia đình"
         assert data["dropped_by_id"] == manager_user_in_db["id"]
         assert data["dropped_at"] is not None
+        # is_dropped is a terminal side-channel — no workflow/mutation action
+        # applies anymore, so available_actions collapses to read-only 'view'.
+        # Guards against stale buttons (calculate_fee, minor_correction, …) on a
+        # dropped seat whose status deliberately stays 'enrolled'.
+        assert data["available_actions"] == ["view"], (
+            f"Dropped profile must expose only 'view', got {data['available_actions']}"
+        )
+        assert data["permissions"].get("has_decision") is False
 
     async def test_drop_non_enrolled_fails(
         self,
