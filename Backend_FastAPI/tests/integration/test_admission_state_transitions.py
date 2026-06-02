@@ -27,23 +27,32 @@ from app.database import AsyncSessionLocal
 pytestmark = pytest.mark.asyncio
 
 
+async def _clear_resend_quota_keys(test_redis_client):
+    """Delete every ``admission:confirm:resend:*`` counter from fake Redis."""
+    async for key in test_redis_client.scan_iter("admission:confirm:resend:*"):
+        await test_redis_client.delete(key)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _isolate_resend_quota(test_redis_client):
-    """Reset per-profile magic-link resend counters before every test.
+    """Reset per-profile magic-link resend counters around every test.
 
     The 3/24h resend cap (``admission_confirmation_resend_limit``) keys Redis
     on ``profile_id`` with a 24h TTL. fakeredis's ``_fake_server`` is
     process-global and ``setup_test_database`` resets the profile-id identity
     sequence per test, so a counter left behind by an earlier
     ``send-confirmation`` test collides on a reused id and trips the cap in a
-    later test — surfacing as HTTP 429 on the setup send (``429 == 400``) or
-    ``NoResultFound`` when the suppressed resend never issues a token. Wiping
-    the ``admission:confirm:resend:*`` namespace at setup isolates each test's
-    quota without touching unrelated Redis state (Casbin / Socket.IO).
+    later test — surfacing as the resend block (``HTTP 400: Đã gửi lại liên
+    kết 3 lần trong 24 giờ qua``) or ``NoResultFound`` when the suppressed
+    resend never issues a token. Clear the namespace at BOTH setup and
+    teardown: setup guards this file against leakage from earlier files, and
+    teardown stops this file's last test from leaking into a later file in the
+    same pytest process. Touches only the resend namespace, never unrelated
+    Redis state (Casbin / Socket.IO).
     """
-    async for key in test_redis_client.scan_iter("admission:confirm:resend:*"):
-        await test_redis_client.delete(key)
+    await _clear_resend_quota_keys(test_redis_client)
     yield
+    await _clear_resend_quota_keys(test_redis_client)
 
 
 # ==============================================================================
@@ -2044,7 +2053,13 @@ class TestDropStudentWorkflow:
         manager_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        """After drop, available_actions should be empty."""
+        """After drop, available_actions collapses to read-only ['view'].
+
+        GET-path companion to test_manager_can_drop_enrolled_student (which
+        asserts the same on the drop mutation response). is_dropped is a
+        terminal side-channel, so NO action survives except `view` — including
+        assign_officer, which the route would otherwise permit at any status.
+        """
         unit_id = seed_lead_dependencies["unit_id"]
         lead_id = await create_test_lead(unit_id)
         profile = await create_admission_profile(lead_id, status="enrolled")
@@ -2062,21 +2077,16 @@ class TestDropStudentWorkflow:
         )
         assert drop_resp.status_code == 200
 
-        # Fetch profile and check no workflow actions remain (only view is allowed)
+        # Fetch profile and assert only read-only `view` remains.
         get_resp = await client.get(
             f"/api/admissions/{profile.id}",
             headers=headers,
         )
         assert get_resp.status_code == 200
         actions = get_resp.json()["available_actions"]
-        # No admission-workflow actions (approve, reject, drop, enroll, etc.)
-        # remain after drop. ``view`` is always allowed; ``assign_officer``
-        # targets the lead-officer relationship (lead.assigned_officer_id),
-        # not the admission lifecycle — the route permits it at any status,
-        # so it's excluded from the workflow-empty check.
-        non_workflow = {"view", "assign_officer"}
-        workflow_actions = [a for a in actions if a not in non_workflow]
-        assert workflow_actions == [], f"Dropped student should have no workflow actions, got: {actions}"
+        assert actions == ["view"], (
+            f"Dropped student should expose only read-only view, got: {actions}"
+        )
         assert get_resp.json()["is_dropped"] is True
 
     async def test_drop_dispatches_application_status_changed(
