@@ -12,6 +12,7 @@ These tests are CRITICAL for production safety - DO NOT SKIP.
 """
 
 import pytest
+import pytest_asyncio
 import asyncio
 from datetime import datetime, timezone
 from httpx import AsyncClient
@@ -24,6 +25,25 @@ from app.database import AsyncSessionLocal
 
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate_resend_quota(test_redis_client):
+    """Reset per-profile magic-link resend counters before every test.
+
+    The 3/24h resend cap (``admission_confirmation_resend_limit``) keys Redis
+    on ``profile_id`` with a 24h TTL. fakeredis's ``_fake_server`` is
+    process-global and ``setup_test_database`` resets the profile-id identity
+    sequence per test, so a counter left behind by an earlier
+    ``send-confirmation`` test collides on a reused id and trips the cap in a
+    later test — surfacing as HTTP 429 on the setup send (``429 == 400``) or
+    ``NoResultFound`` when the suppressed resend never issues a token. Wiping
+    the ``admission:confirm:resend:*`` namespace at setup isolates each test's
+    quota without touching unrelated Redis state (Casbin / Socket.IO).
+    """
+    async for key in test_redis_client.scan_iter("admission:confirm:resend:*"):
+        await test_redis_client.delete(key)
+    yield
 
 
 # ==============================================================================
