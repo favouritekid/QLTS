@@ -875,7 +875,19 @@ class TestTokenBasedConfirmation:
         manager_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        """Test token gets locked after 5 failed CCCD attempts."""
+        """One wrong CCCD attempt at the boundary triggers the hard lock.
+
+        The real contract is a 30-attempt hard lock
+        (admission_confirmation_cooldown.HARD_LOCK_THRESHOLD), not the
+        legacy 5. Hammering 30 live POSTs would trip the router's
+        per-token rate limit (5/60s -> 429) before the hard lock fires,
+        so seed attempt_count to one below the threshold and fire a
+        single wrong attempt to cross it — exercising the ladder without
+        the rate limiter shadowing it.
+        """
+        from app.services.admission_confirmation_cooldown import (
+            HARD_LOCK_THRESHOLD,
+        )
         unit_id = seed_lead_dependencies["unit_id"]
         citizen_id = "777766665555"
         
@@ -885,28 +897,39 @@ class TestTokenBasedConfirmation:
         headers = await get_auth_headers(client, manager_user_in_db)
         await client.post(f"/api/admissions/{profile.id}/send-confirmation", headers=headers)
         
+        # Seed one failed attempt below the threshold so a single wrong
+        # POST crosses it. lock_until stays NULL → the sliding-cooldown
+        # gate is open and the per-token 5/60s limiter never trips.
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(models.AdmissionConfirmationToken)
-                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
-            )
-            token_value = result.scalar_one().token
-        
-        # Make 5 wrong attempts
-        for i in range(5):
-            response = await client.post(
-                f"/api/admissions/confirm/{token_value}",
-                json={"last_digits_citizen_id": "0000"},
-            )
-            assert response.status_code == 400
+            async with session.begin():
+                stmt = select(models.AdmissionConfirmationToken).where(
+                    models.AdmissionConfirmationToken.profile_id == profile.id
+                )
+                token_obj = (await session.execute(stmt)).scalar_one()
+                token_obj.attempt_count = HARD_LOCK_THRESHOLD - 1
+                token_obj.lock_until = None
+                token_value = token_obj.token
 
-        # 6th attempt should show locked message
+        # One more wrong attempt → attempt_count hits HARD_LOCK_THRESHOLD.
         response = await client.post(
             f"/api/admissions/confirm/{token_value}",
-            json={"last_digits_citizen_id": "5555"},  # Even correct digits
+            json={"last_digits_citizen_id": "0000"},  # wrong digits
         )
         assert response.status_code == 400
-        assert "locked" in response.json()["detail"].lower()
+        detail = response.json()["detail"].lower()
+        assert "khóa" in detail or "locked" in detail, (
+            f"Expected hard-lock message, got: {detail}"
+        )
+
+        # DB reflects the hard lock (locked_at set, lock_count incremented).
+        async with AsyncSessionLocal() as session:
+            stmt = select(models.AdmissionConfirmationToken).where(
+                models.AdmissionConfirmationToken.profile_id == profile.id
+            )
+            locked = (await session.execute(stmt)).scalar_one()
+            assert locked.attempt_count == HARD_LOCK_THRESHOLD
+            assert locked.locked_at is not None
+            assert locked.lock_count >= 1
 
     async def test_expired_token_rejected(
         self,
