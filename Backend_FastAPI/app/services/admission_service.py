@@ -1638,6 +1638,16 @@ def _compute_frontend_fields(
         ),
         "view": True,
     }
+    # Dropped students (is_dropped=True; status deliberately stays "enrolled")
+    # are a terminal side-channel — no workflow/mutation action applies anymore.
+    # Status-based guards above can't catch this because the status is still
+    # "enrolled", so e.g. calculate_fee / minor_correction / verify_priority_object
+    # would otherwise stay True. Collapse every permission except read-only
+    # `view` to False so neither `permissions` nor the derived
+    # `available_actions` surface a stale button on a dropped seat. Runs BEFORE
+    # `has_decision` below so that aggregate flag also collapses to False.
+    if _is_dropped:
+        permissions = {key: (key == "view") for key in permissions}
     # Code review 2026-05-22 — aggregate `has_decision` flag để FE
     # PipelineSidebar (Step 8 unlock gate) + AdmissionActions (sticky Next
     # gate 7→8) check 1 flag thay vì OR 7 permission flags rời rạc. Nếu

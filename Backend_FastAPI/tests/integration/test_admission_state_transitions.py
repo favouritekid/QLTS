@@ -12,6 +12,7 @@ These tests are CRITICAL for production safety - DO NOT SKIP.
 """
 
 import pytest
+import pytest_asyncio
 import asyncio
 from datetime import datetime, timezone
 from httpx import AsyncClient
@@ -24,6 +25,34 @@ from app.database import AsyncSessionLocal
 
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _clear_resend_quota_keys(test_redis_client):
+    """Delete every ``admission:confirm:resend:*`` counter from fake Redis."""
+    async for key in test_redis_client.scan_iter("admission:confirm:resend:*"):
+        await test_redis_client.delete(key)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _isolate_resend_quota(test_redis_client):
+    """Reset per-profile magic-link resend counters around every test.
+
+    The 3/24h resend cap (``admission_confirmation_resend_limit``) keys Redis
+    on ``profile_id`` with a 24h TTL. fakeredis's ``_fake_server`` is
+    process-global and ``setup_test_database`` resets the profile-id identity
+    sequence per test, so a counter left behind by an earlier
+    ``send-confirmation`` test collides on a reused id and trips the cap in a
+    later test — surfacing as the resend block (``HTTP 400: Đã gửi lại liên
+    kết 3 lần trong 24 giờ qua``) or ``NoResultFound`` when the suppressed
+    resend never issues a token. Clear the namespace at BOTH setup and
+    teardown: setup guards this file against leakage from earlier files, and
+    teardown stops this file's last test from leaking into a later file in the
+    same pytest process. Touches only the resend namespace, never unrelated
+    Redis state (Casbin / Socket.IO).
+    """
+    await _clear_resend_quota_keys(test_redis_client)
+    yield
+    await _clear_resend_quota_keys(test_redis_client)
 
 
 # ==============================================================================
@@ -846,7 +875,19 @@ class TestTokenBasedConfirmation:
         manager_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        """Test token gets locked after 5 failed CCCD attempts."""
+        """One wrong CCCD attempt at the boundary triggers the hard lock.
+
+        The real contract is a 30-attempt hard lock
+        (admission_confirmation_cooldown.HARD_LOCK_THRESHOLD), not the
+        legacy 5. Hammering 30 live POSTs would trip the router's
+        per-token rate limit (5/60s -> 429) before the hard lock fires,
+        so seed attempt_count to one below the threshold and fire a
+        single wrong attempt to cross it — exercising the ladder without
+        the rate limiter shadowing it.
+        """
+        from app.services.admission_confirmation_cooldown import (
+            HARD_LOCK_THRESHOLD,
+        )
         unit_id = seed_lead_dependencies["unit_id"]
         citizen_id = "777766665555"
         
@@ -856,28 +897,39 @@ class TestTokenBasedConfirmation:
         headers = await get_auth_headers(client, manager_user_in_db)
         await client.post(f"/api/admissions/{profile.id}/send-confirmation", headers=headers)
         
+        # Seed one failed attempt below the threshold so a single wrong
+        # POST crosses it. lock_until stays NULL → the sliding-cooldown
+        # gate is open and the per-token 5/60s limiter never trips.
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(models.AdmissionConfirmationToken)
-                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
-            )
-            token_value = result.scalar_one().token
-        
-        # Make 5 wrong attempts
-        for i in range(5):
-            response = await client.post(
-                f"/api/admissions/confirm/{token_value}",
-                json={"last_digits_citizen_id": "0000"},
-            )
-            assert response.status_code == 400
+            async with session.begin():
+                stmt = select(models.AdmissionConfirmationToken).where(
+                    models.AdmissionConfirmationToken.profile_id == profile.id
+                )
+                token_obj = (await session.execute(stmt)).scalar_one()
+                token_obj.attempt_count = HARD_LOCK_THRESHOLD - 1
+                token_obj.lock_until = None
+                token_value = token_obj.token
 
-        # 6th attempt should show locked message
+        # One more wrong attempt → attempt_count hits HARD_LOCK_THRESHOLD.
         response = await client.post(
             f"/api/admissions/confirm/{token_value}",
-            json={"last_digits_citizen_id": "5555"},  # Even correct digits
+            json={"last_digits_citizen_id": "0000"},  # wrong digits
         )
         assert response.status_code == 400
-        assert "locked" in response.json()["detail"].lower()
+        detail = response.json()["detail"].lower()
+        assert "khóa" in detail or "locked" in detail, (
+            f"Expected hard-lock message, got: {detail}"
+        )
+
+        # DB reflects the hard lock (locked_at set, lock_count incremented).
+        async with AsyncSessionLocal() as session:
+            stmt = select(models.AdmissionConfirmationToken).where(
+                models.AdmissionConfirmationToken.profile_id == profile.id
+            )
+            locked = (await session.execute(stmt)).scalar_one()
+            assert locked.attempt_count == HARD_LOCK_THRESHOLD
+            assert locked.locked_at is not None
+            assert locked.lock_count >= 1
 
     async def test_expired_token_rejected(
         self,
@@ -1895,6 +1947,14 @@ class TestDropStudentWorkflow:
         assert data["dropped_reason"] == "Sinh viên tự nguyện nghỉ học do hoàn cảnh gia đình"
         assert data["dropped_by_id"] == manager_user_in_db["id"]
         assert data["dropped_at"] is not None
+        # is_dropped is a terminal side-channel — no workflow/mutation action
+        # applies anymore, so available_actions collapses to read-only 'view'.
+        # Guards against stale buttons (calculate_fee, minor_correction, …) on a
+        # dropped seat whose status deliberately stays 'enrolled'.
+        assert data["available_actions"] == ["view"], (
+            f"Dropped profile must expose only 'view', got {data['available_actions']}"
+        )
+        assert data["permissions"].get("has_decision") is False
 
     async def test_drop_non_enrolled_fails(
         self,
@@ -2016,7 +2076,13 @@ class TestDropStudentWorkflow:
         manager_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        """After drop, available_actions should be empty."""
+        """After drop, available_actions collapses to read-only ['view'].
+
+        GET-path companion to test_manager_can_drop_enrolled_student (which
+        asserts the same on the drop mutation response). is_dropped is a
+        terminal side-channel, so NO action survives except `view` — including
+        assign_officer, which the route would otherwise permit at any status.
+        """
         unit_id = seed_lead_dependencies["unit_id"]
         lead_id = await create_test_lead(unit_id)
         profile = await create_admission_profile(lead_id, status="enrolled")
@@ -2034,21 +2100,16 @@ class TestDropStudentWorkflow:
         )
         assert drop_resp.status_code == 200
 
-        # Fetch profile and check no workflow actions remain (only view is allowed)
+        # Fetch profile and assert only read-only `view` remains.
         get_resp = await client.get(
             f"/api/admissions/{profile.id}",
             headers=headers,
         )
         assert get_resp.status_code == 200
         actions = get_resp.json()["available_actions"]
-        # No admission-workflow actions (approve, reject, drop, enroll, etc.)
-        # remain after drop. ``view`` is always allowed; ``assign_officer``
-        # targets the lead-officer relationship (lead.assigned_officer_id),
-        # not the admission lifecycle — the route permits it at any status,
-        # so it's excluded from the workflow-empty check.
-        non_workflow = {"view", "assign_officer"}
-        workflow_actions = [a for a in actions if a not in non_workflow]
-        assert workflow_actions == [], f"Dropped student should have no workflow actions, got: {actions}"
+        assert actions == ["view"], (
+            f"Dropped student should expose only read-only view, got: {actions}"
+        )
         assert get_resp.json()["is_dropped"] is True
 
     async def test_drop_dispatches_application_status_changed(
