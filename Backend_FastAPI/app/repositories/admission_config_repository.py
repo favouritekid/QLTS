@@ -363,6 +363,42 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
         await self.db.flush()
         return await self.get_subject_group_by_id(group_id, with_subjects=True)
 
+    async def get_subject_group_subject(
+        self, group_id: int, subject_id: int
+    ) -> Optional[SubjectGroupSubject]:
+        """Get the join row linking a subject to a group (or None)."""
+        result = await self.db.execute(
+            select(SubjectGroupSubject).where(
+                SubjectGroupSubject.subject_group_id == group_id,
+                SubjectGroupSubject.subject_id == subject_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def add_subject_group_subject(
+        self, group_id: int, subject_id: int, position: int
+    ) -> SubjectGroupSubject:
+        """Insert one subject→group mapping at the given position."""
+        mapping = SubjectGroupSubject(
+            subject_group_id=group_id,
+            subject_id=subject_id,
+            position=position,
+        )
+        self.db.add(mapping)
+        await self.db.flush()
+        return mapping
+
+    async def delete_subject_group_subject(
+        self, group_id: int, subject_id: int
+    ) -> bool:
+        """Remove one subject→group mapping. Returns False if absent."""
+        mapping = await self.get_subject_group_subject(group_id, subject_id)
+        if not mapping:
+            return False
+        await self.db.delete(mapping)
+        await self.db.flush()
+        return True
+
     # =========================================================================
     # ADMISSION METHODS
     # =========================================================================

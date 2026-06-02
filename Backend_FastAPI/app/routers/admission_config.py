@@ -40,6 +40,8 @@ from app.schemas.admission_config import (
     SubjectGroupListResponse,
     SubjectGroupCreate,
     SubjectGroupUpdate,
+    SubjectGroupSubjectAdd,
+    SubjectPositionUpdate,
     AdmissionMethodResponse,
     AdmissionMethodListResponse,
     AdmissionMethodCreate,
@@ -346,6 +348,81 @@ async def delete_subject_group(
     await db.commit()
     await callback()
     return None
+
+
+# =============================================================================
+# SUBJECT GROUP ↔ SUBJECT (granular M2M sub-resource)
+# =============================================================================
+
+@router.post(
+    "/subject-groups/{group_id}/subjects",
+    response_model=SubjectGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_subject_to_group(
+    group_id: int,
+    data: SubjectGroupSubjectAdd,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Add a subject to a group at a position. Requires: Admin or Manager.
+
+    404 if group/subject missing; 409 if the subject is already in the group.
+    """
+    service = AdmissionConfigService(db)
+    group, callback = await service.add_subject_to_group(
+        group_id, data.subject_id, data.position, current_user
+    )
+    await db.commit()
+    await callback()
+    return _build_subject_group_response(group)
+
+
+@router.delete(
+    "/subject-groups/{group_id}/subjects/{subject_id}",
+    response_model=SubjectGroupResponse,
+)
+async def remove_subject_from_group(
+    group_id: int,
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Remove a subject from a group. Requires: Admin or Manager.
+
+    404 if the group is missing or the subject is not in the group.
+    """
+    service = AdmissionConfigService(db)
+    group, callback = await service.remove_subject_from_group(
+        group_id, subject_id, current_user
+    )
+    await db.commit()
+    await callback()
+    return _build_subject_group_response(group)
+
+
+@router.put(
+    "/subject-groups/{group_id}/subjects/{subject_id}",
+    response_model=SubjectGroupResponse,
+)
+async def update_subject_position(
+    group_id: int,
+    subject_id: int,
+    data: SubjectPositionUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Update a subject's position within a group. Requires: Admin or Manager.
+
+    404 if the group is missing or the subject is not in the group.
+    """
+    service = AdmissionConfigService(db)
+    group, callback = await service.update_subject_position(
+        group_id, subject_id, data.position, current_user
+    )
+    await db.commit()
+    await callback()
+    return _build_subject_group_response(group)
 
 
 # =============================================================================

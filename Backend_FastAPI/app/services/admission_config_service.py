@@ -374,6 +374,113 @@ class AdmissionConfigService:
         return success, _noop_callback
 
     # =========================================================================
+    # SUBJECT GROUP ↔ SUBJECT (granular M2M sub-resource)
+    # =========================================================================
+
+    async def _get_group_or_404(self, group_id: int) -> "SubjectGroup":
+        """Load a subject group (no mappings) or raise 404."""
+        group = await self.repo.get_subject_group_by_id(
+            group_id, with_subjects=False
+        )
+        if not group:
+            raise ResourceNotFoundError(
+                f"Subject group with ID {group_id} not found"
+            )
+        return group
+
+    async def _get_mapping_or_404(self, group_id: int, subject_id: int):
+        """Load the subject→group join row or raise 404."""
+        mapping = await self.repo.get_subject_group_subject(
+            group_id, subject_id
+        )
+        if not mapping:
+            raise ResourceNotFoundError(
+                f"Subject {subject_id} is not in subject group {group_id}"
+            )
+        return mapping
+
+    async def add_subject_to_group(
+        self,
+        group_id: int,
+        subject_id: int,
+        position: int,
+        user: User,
+    ) -> tuple["SubjectGroup", Callable[[], Any]]:
+        """Add one subject to a group at a position (granular M2M).
+
+        Raises ResourceNotFoundError (404) if the group or subject is missing,
+        DuplicateResourceError (409) if the subject is already in the group —
+        pre-checked so no raw DB IntegrityError leaks; the
+        ``uq_subject_group_subject`` UNIQUE constraint backstops races.
+        """
+        await self._get_group_or_404(group_id)
+        subject = await self.repo.get_subject_by_id(subject_id)
+        if not subject:
+            raise ResourceNotFoundError(
+                f"Subject with ID {subject_id} not found"
+            )
+        existing = await self.repo.get_subject_group_subject(
+            group_id, subject_id
+        )
+        if existing:
+            raise DuplicateResourceError(
+                f"Subject {subject_id} is already in subject group {group_id}"
+            )
+
+        await self.repo.add_subject_group_subject(
+            group_id, subject_id, position
+        )
+        group = await self.repo.get_subject_group_by_id(
+            group_id, with_subjects=True
+        )
+        return group, _noop_callback
+
+    async def remove_subject_from_group(
+        self,
+        group_id: int,
+        subject_id: int,
+        user: User,
+    ) -> tuple["SubjectGroup", Callable[[], Any]]:
+        """Remove one subject from a group (granular M2M).
+
+        Raises ResourceNotFoundError (404) if the group is missing or the
+        subject is not mapped to it.
+        """
+        await self._get_group_or_404(group_id)
+        deleted = await self.repo.delete_subject_group_subject(
+            group_id, subject_id
+        )
+        if not deleted:
+            raise ResourceNotFoundError(
+                f"Subject {subject_id} is not in subject group {group_id}"
+            )
+        group = await self.repo.get_subject_group_by_id(
+            group_id, with_subjects=True
+        )
+        return group, _noop_callback
+
+    async def update_subject_position(
+        self,
+        group_id: int,
+        subject_id: int,
+        position: int,
+        user: User,
+    ) -> tuple["SubjectGroup", Callable[[], Any]]:
+        """Update one subject's position within a group (granular M2M).
+
+        Raises ResourceNotFoundError (404) if the group is missing or the
+        subject is not mapped to it.
+        """
+        await self._get_group_or_404(group_id)
+        mapping = await self._get_mapping_or_404(group_id, subject_id)
+        mapping.position = position
+        await self.db.flush()
+        group = await self.repo.get_subject_group_by_id(
+            group_id, with_subjects=True
+        )
+        return group, _noop_callback
+
+    # =========================================================================
     # ADMISSION METHOD CRUD (Phase 1 Refactor)
     # =========================================================================
 
