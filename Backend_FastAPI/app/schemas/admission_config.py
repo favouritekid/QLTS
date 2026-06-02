@@ -97,6 +97,17 @@ class SubjectGroupUpdate(BaseModel):
     subject_ids: Optional[list[int]] = None  # Replace all subject mappings
 
 
+class SubjectGroupSubjectAdd(BaseModel):
+    """Add a single subject to a group at a position (granular M2M)."""
+    subject_id: int
+    position: int = Field(ge=1, description="1-based position in group")
+
+
+class SubjectPositionUpdate(BaseModel):
+    """Update one subject's position within a group (granular M2M)."""
+    position: int = Field(ge=1, description="1-based position in group")
+
+
 # =============================================================================
 # ADMISSION METHOD SCHEMAS
 # =============================================================================
