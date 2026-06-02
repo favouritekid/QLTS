@@ -659,7 +659,10 @@ class TestStateTransitionWorkflows:
         assert token_info_response.status_code == 200, f"Token info failed: {token_info_response.text}"
         token_info = token_info_response.json()
         assert token_info["valid"] is True
-        assert token_info["profile_name"] == "Test Applicant"
+        # PR1 Commit 7: profile_name is MASKED on this public, pre-verification
+        # endpoint (the full name is only revealed after CCCD verify).
+        assert token_info["profile_name"] == "T••• A•••"
+        assert token_info["profile_name"] != "Test Applicant"
 
         # 5. Lead confirms with wrong CCCD (should fail)
         wrong_confirm_response = await client.post(
@@ -824,7 +827,10 @@ class TestTokenBasedConfirmation:
         assert data["locked"] is False
         assert data["already_used"] is False
         assert data["attempts_remaining"] == 5
-        assert data["profile_name"] == "Test Applicant"
+        # PR1 Commit 7: profile_name is MASKED on this public, pre-verification
+        # endpoint (full name only after CCCD verify).
+        assert data["profile_name"] == "T••• A•••"
+        assert data["profile_name"] != "Test Applicant"
 
     async def test_invalid_token_returns_404(
         self,

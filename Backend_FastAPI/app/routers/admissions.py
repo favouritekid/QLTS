@@ -20,7 +20,7 @@ Endpoints:
 
 from datetime import datetime, timezone
 from typing import Dict, List, Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -2109,9 +2109,13 @@ async def finalize_enrollment(
 async def get_confirm_token_info(
     request: Request,
     token: str,
+    response: Response,
     db: AsyncSession = Depends(database.get_db),
 ):
     """Get token info for frontend to display confirmation form."""
+    # PR1 Commit 7: the token is in the URL — don't leak it via the Referer
+    # header to anything the public confirm page subsequently loads.
+    response.headers["Referrer-Policy"] = "no-referrer"
     try:
         token_info = await admission_service.get_token_info(db, token)
         return token_info

@@ -1966,6 +1966,17 @@ class ConfirmTokenResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def _mask_display_name(name: str) -> str:
+    """Mask a display name for the PUBLIC confirm-info endpoint so the full
+    name (PII) is not exposed before CCCD verification — the token sits in the
+    URL and anyone with the link can hit this endpoint. Keeps the first
+    character of each word and replaces the rest with a fixed mask (does not
+    leak the exact length)."""
+    parts = (name or "").split()
+    out = [p if len(p) <= 1 else p[0] + "•••" for p in parts]
+    return " ".join(out) if out else (name or "")
+
+
 class ConfirmTokenInfoResponse(BaseModel):
     """
     Info about token (for frontend to show confirmation form).
@@ -1980,8 +1991,21 @@ class ConfirmTokenInfoResponse(BaseModel):
     locked: bool
     already_used: bool
     attempts_remaining: int
-    profile_name: str = Field(description="Lead's full_name for display")
+    profile_name: str = Field(
+        description=(
+            "Lead's full_name MASKED (first letter of each word). The full "
+            "name is only revealed after CCCD verification via "
+            "POST /confirm/{token} — the token is public (in the URL)."
+        )
+    )
     expires_at: Optional[datetime] = None
+
+    @field_validator("profile_name")
+    @classmethod
+    def _mask_name(cls, v: str) -> str:
+        # PR1 Commit 7: never expose the full name from this public,
+        # pre-verification endpoint.
+        return _mask_display_name(v)
     
     model_config = ConfigDict(from_attributes=True)
 

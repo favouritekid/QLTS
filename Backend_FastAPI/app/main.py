@@ -777,8 +777,13 @@ async def add_security_headers(request: Request, call_next):
             "frame-ancestors 'none'"
         )
 
-    # ✅ Referrer Policy
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # ✅ Referrer Policy — global default. A sensitive route (token/URL in the
+    # path: confirm-info, document download) may have already set a STRICTER
+    # value (no-referrer); use setdefault so that route-level override wins
+    # instead of being clobbered here (PR1 Commit 7).
+    response.headers.setdefault(
+        "Referrer-Policy", "strict-origin-when-cross-origin"
+    )
 
     # ✅ Permissions Policy (restrict browser features)
     response.headers["Permissions-Policy"] = (
