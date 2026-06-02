@@ -94,7 +94,7 @@ async def create_submittable_profile_direct(
             # #337: legacy config + KV chain so submit can derive the
             # target level + resolve KV (else CONFIG_GAP / KV_UNRESOLVED).
             seed = await seed_submittable_offering_config(
-                session, lead.unit_id
+                session, lead.unit_id, academic_year
             )
             subj = (await session.execute(
                 select(models.Subject).where(models.Subject.code == "TOAN")

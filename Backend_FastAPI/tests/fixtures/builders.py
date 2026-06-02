@@ -90,11 +90,16 @@ async def ensure_submittable_ward() -> str:
     return SUBMITTABLE_WARD_CODE
 
 
-async def seed_submittable_offering_config(session, unit_id: int) -> dict:
+async def seed_submittable_offering_config(
+    session, unit_id: int, academic_year: int = 2026
+) -> dict:
     """Seed the full legacy single-NV submit chain (#337) and return its ids.
 
     ``unit_id`` is the owning OrganizationUnit for the MajorProgram (NOT NULL
     FK) — pass the lead's unit so the chain stays scope-consistent.
+    ``academic_year`` flows into ``OfferingAcademicInfo`` and is echoed back in
+    the result so the caller's profile honors the SAME year — avoids a silent
+    mismatch against the UNIQUE(lead_id/citizen_id, academic_year) constraints.
 
     ``submit_and_evaluate``'s legacy path (``uses_choice_engine=False``)
     derives the target level from ``offering_admission_config_id`` →
@@ -121,7 +126,6 @@ async def seed_submittable_offering_config(session, unit_id: int) -> dict:
     from app import models
 
     suffix = _next_id()
-    academic_year = 2026
 
     offering_type = (
         await session.execute(
