@@ -21,7 +21,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@/test/utils/test-utils";
-import { within } from "@testing-library/react";
+import { within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { DocumentsTab } from "./DocumentsTab";
@@ -47,6 +47,7 @@ type DocRow = {
   submission_format?: string | null;
   actual_submission_format?: string | null;
   verified_format?: string | null;
+  document_id?: number | null;
   file_path?: string | null;
   uploaded_at?: string | null;
   paper_submitted_at?: string | null;
@@ -197,6 +198,56 @@ describe("DocumentsTab — per-row permission flags", () => {
     render(<DocumentsTab profile={blocked as never} isEditable />);
     expect(
       screen.queryByRole("button", { name: /đánh dấu đã nhận giấy/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// PR2 — AUTHED DOCUMENT DOWNLOAD (View button)
+// =============================================================================
+
+describe("DocumentsTab — PR2 authed document download", () => {
+  it("View button opens the authed download endpoint when document_id present", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        document_id: 99,
+        file_path: "uploads/profile_1/hocba.pdf",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const table = screen.getByRole("table");
+    fireEvent.click(
+      within(table).getByRole("button", { name: /xem tài liệu/i }),
+    );
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    const url = String(openSpy.mock.calls[0][0]);
+    // profile.id = 1 (buildProfile), document_id = 99.
+    expect(url).toContain("/api/admissions/1/documents/99/download");
+    expect(url).not.toContain("/uploads");
+    openSpy.mockRestore();
+  });
+
+  it("hides the View button when document_id is null even if file_path present (stale/rollback)", () => {
+    const profile = buildProfile([
+      {
+        code: "HOC_BA",
+        label: "Học bạ THPT",
+        status: "verified",
+        is_mandatory: true,
+        requires_upload: true,
+        document_id: null,
+        file_path: "uploads/profile_1/hocba.pdf",
+      },
+    ]);
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(
+      screen.queryByRole("button", { name: /xem tài liệu/i }),
     ).not.toBeInTheDocument();
   });
 });

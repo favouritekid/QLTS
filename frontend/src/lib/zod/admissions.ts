@@ -430,6 +430,16 @@ export const documentItemSchema = z.object({
   submission_format_confirmed: z.boolean().optional(),
   // Status and upload info
   status: z.enum(["missing", "uploaded", "verified", "rejected", "paper_submitted"]),
+  /**
+   * PR1 Commit 1 — ProfileDocument PK. Present only when a downloadable
+   * file artifact exists; the FE builds the authed download URL
+   * /api/admissions/{profile_id}/documents/{document_id}/download from it
+   * (file_path is no longer publicly servable after /uploads was locked).
+   * Optional/nullable so a rollback or a stale cached response missing the
+   * field still parses; null → no file to view, FE hides the "Xem PDF"
+   * button (NO fallback to file_path, which would 404).
+   */
+  document_id: z.number().int().positive().nullable().optional(),
   file_path: z
     .string()
     .max(512, "Đường dẫn file không được quá 512 ký tự")

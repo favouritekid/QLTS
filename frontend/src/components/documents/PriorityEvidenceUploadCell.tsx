@@ -24,6 +24,7 @@ import { ExternalLink, Loader2, Upload } from "lucide-react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { FileUpload } from "@/components/common/upload/FileUpload"
+import { API_BASE_URL } from "@/lib/api/client"
 import { useUploadPriorityEvidence } from "@/lib/hooks/use-priority-evidence"
 import {
   findEvidenceDocument,
@@ -90,16 +91,20 @@ export function PriorityEvidenceUploadCell({
             </p>
           </div>
           <div className="flex items-center gap-1">
-            <a
-              href={`/${docItem.document_file_path}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
-              data-testid={`priority-evidence-view-${subCode}`}
-            >
-              <ExternalLink className="h-3 w-3" />
-              Xem PDF
-            </a>
+            {/* PR2: authed download endpoint, gated on the ProfileDocument PK.
+                No fallback to the raw path (now 404 after /uploads removal). */}
+            {docItem.document_id != null && (
+              <a
+                href={`${API_BASE_URL}/api/admissions/${profile.id}/documents/${docItem.document_id}/download`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent"
+                data-testid={`priority-evidence-view-${subCode}`}
+              >
+                <ExternalLink className="h-3 w-3" />
+                Xem PDF
+              </a>
+            )}
             <Button
               type="button"
               variant="outline"
