@@ -20,7 +20,7 @@ Endpoints:
 
 from datetime import datetime, timezone
 from typing import Dict, List, Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -881,6 +881,69 @@ async def upload_document(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/{profile_id}/documents/{document_id}/download",
+    summary="Download an admission document (authed, IDOR-scoped, audited)",
+)
+async def download_document(
+    request: Request,
+    document_id: int,
+    profile: models.AdmissionProfile = Depends(get_admission_for_user_read),
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Stream a ProfileDocument file for staff (admin / manager / officer).
+
+    PR1 Commit 1 (A01/A05/A09). Access is gated by
+    ``get_admission_for_user_read`` (3-tier IDOR scope; non-staff and
+    out-of-scope callers get a fake 404). The document must belong to the
+    authorized profile and have a real file, otherwise 404 (no existence
+    leak). A ``downloaded`` audit row is committed before the file streams.
+    The public ``/uploads`` static mount was removed in the same commit, so
+    this is the ONLY way to read an admission document.
+    """
+    from fastapi.responses import FileResponse
+
+    try:
+        abs_path, safe_basename, media_type = (
+            await admission_service.get_document_file_for_download(
+                db=db,
+                profile=profile,
+                document_id=document_id,
+                actor_user_id=current_user.id,
+                actor_ip=get_client_ip(request),
+                actor_user_agent=request.headers.get("user-agent"),
+            )
+        )
+        # Persist the ``downloaded`` audit row before the response streams.
+        await db.commit()
+    except ResourceNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    except PermissionDeniedError:
+        # IDOR protection: 404, never 403, to avoid resource enumeration.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+
+    return FileResponse(
+        abs_path,
+        media_type=media_type,
+        filename=safe_basename,
+        content_disposition_type="inline",
+        headers={
+            # PII document: never cache + don't leak the referrer + no MIME
+            # sniffing. nginx also sets nosniff globally; this keeps the
+            # contract correct when the backend is hit directly (dev/tests).
+            "Cache-Control": "private, no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @limiter.limit(RateLimits.DATA_WRITE)
@@ -2046,9 +2109,13 @@ async def finalize_enrollment(
 async def get_confirm_token_info(
     request: Request,
     token: str,
+    response: Response,
     db: AsyncSession = Depends(database.get_db),
 ):
     """Get token info for frontend to display confirmation form."""
+    # PR1 Commit 7: the token is in the URL — don't leak it via the Referer
+    # header to anything the public confirm page subsequently loads.
+    response.headers["Referrer-Policy"] = "no-referrer"
     try:
         token_info = await admission_service.get_token_info(db, token)
         return token_info

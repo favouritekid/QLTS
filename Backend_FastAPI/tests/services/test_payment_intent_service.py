@@ -32,6 +32,7 @@ from app.models.finance import (
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
 from app.services.payment_intent_service import PaymentIntentService
+from app.config import settings
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -39,6 +40,12 @@ from app.utils.exceptions import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+# PR1 Commit 5: create_intent now allowlists return_url against FRONTEND_URL.
+# Use a same-origin URL so these fixtures pass the new guard.
+VALID_RETURN_URL = (
+    f"{settings.FRONTEND_URL.rstrip('/')}/finance/payments/return"
+)
 
 
 # =============================================================================
@@ -147,7 +154,7 @@ class TestCreateIntent:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=key,
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -161,6 +168,26 @@ class TestCreateIntent:
         assert intent.pay_url is not None
         assert intent.expires_at is not None
 
+    async def test_create_intent_rejects_foreign_return_url(
+        self, db, intent_fixtures, admin_user
+    ):
+        """PR1 Commit 5: a return_url whose origin differs from FRONTEND_URL is
+        rejected (open-redirect guard) → BusinessRuleViolation (mapped to HTTP
+        400 by the payments router). Proves the guard is wired into
+        create_intent, not just the standalone helper."""
+        service = PaymentIntentService(db)
+        invoice = intent_fixtures["invoice"]
+        method = intent_fixtures["online_method"]
+        with pytest.raises(BusinessRuleViolation):
+            await service.create_intent(
+                invoice_id=invoice.id,
+                method_id=method.id,
+                amount=Decimal("1000000"),
+                idempotency_key=str(uuid.uuid4()),
+                return_url="https://attacker.evil/finance/payments/return",
+                unit_id=intent_fixtures["unit_id"],
+            )
+
     async def test_create_intent_idempotency_same_key(self, db, intent_fixtures, admin_user):
         """Same idempotency key + invoice returns existing non-terminal intent."""
         service = PaymentIntentService(db)
@@ -173,7 +200,7 @@ class TestCreateIntent:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=key,
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -183,7 +210,7 @@ class TestCreateIntent:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=key,
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
 
@@ -205,7 +232,7 @@ class TestCreateIntent:
                 method_id=method.id,
                 amount=Decimal("1000000"),
                 idempotency_key=str(uuid.uuid4()),
-                return_url="https://example.com/return",
+                return_url=VALID_RETURN_URL,
                 unit_id=intent_fixtures["unit_id"],
             )
 
@@ -223,7 +250,7 @@ class TestCreateIntent:
                 method_id=method.id,
                 amount=Decimal("1000000"),
                 idempotency_key=str(uuid.uuid4()),
-                return_url="https://example.com/return",
+                return_url=VALID_RETURN_URL,
                 unit_id=intent_fixtures["unit_id"],
             )
 
@@ -241,7 +268,7 @@ class TestCreateIntent:
                 method_id=method.id,
                 amount=Decimal("999999999"),
                 idempotency_key=str(uuid.uuid4()),
-                return_url="https://example.com/return",
+                return_url=VALID_RETURN_URL,
                 unit_id=intent_fixtures["unit_id"],
             )
 
@@ -259,7 +286,7 @@ class TestCreateIntent:
                 method_id=method.id,
                 amount=Decimal("1000000"),
                 idempotency_key=str(uuid.uuid4()),
-                return_url="https://example.com/return",
+                return_url=VALID_RETURN_URL,
                 unit_id=intent_fixtures["unit_id"],
             )
 
@@ -285,7 +312,7 @@ class TestProcessCallback:
             method_id=method.id,
             amount=amount,
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -319,7 +346,7 @@ class TestProcessCallback:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -353,7 +380,7 @@ class TestProcessCallback:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
             expiration_minutes=0,  # Already expired
         )
@@ -389,7 +416,7 @@ class TestProcessCallback:
             method_id=method.id,
             amount=amount,
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -428,7 +455,7 @@ class TestIntentLifecycle:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -454,7 +481,7 @@ class TestIntentLifecycle:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -490,7 +517,7 @@ class TestIntentLifecycle:
             method_id=method.id,
             amount=Decimal("1000000"),
             idempotency_key=str(uuid.uuid4()),
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=intent_fixtures["unit_id"],
         )
         await db.commit()
@@ -520,7 +547,7 @@ class TestIntentLifecycle:
                 method_id=method.id,
                 amount=Decimal("100000"),
                 idempotency_key=str(uuid.uuid4()),
-                return_url="https://example.com/return",
+                return_url=VALID_RETURN_URL,
                 unit_id=intent_fixtures["unit_id"],
             )
             intent.expires_at = datetime.now(timezone.utc) - timedelta(minutes=30)

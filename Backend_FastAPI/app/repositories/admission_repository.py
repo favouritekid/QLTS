@@ -991,6 +991,23 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_document_by_id(
+        self,
+        document_id: int,
+    ) -> Optional[models.ProfileDocument]:
+        """Lookup a ProfileDocument by primary key.
+
+        Used by the authed document-download endpoint (PR1 Commit 1). The
+        caller binds the result to an already IDOR-authorized profile
+        (``doc.profile_id == profile.id``) before serving the file, so no
+        join/eager-load is needed here — only ``file_path`` is read.
+        """
+        stmt = select(models.ProfileDocument).where(
+            models.ProfileDocument.id == document_id
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_document_status(
         self,
         profile_id: int,

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter, require_admin_or_manager  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter, require_admin, require_admin_or_manager  # ✅ Phase 2.2
 from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
@@ -91,7 +91,14 @@ async def get_my_reassign_quota(
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
-@router.get("/distribution-preview")
+@router.get(
+    "/distribution-preview",
+    # PR1 Commit 3: hard role gate IN FRONT of CasbinAuth so the keyMatch4
+    # static-vs-/{lead_id} collision can never leak this route to officers.
+    # Casbin is kept (defense-in-depth + policy-table consistency, e.g. the
+    # accountant explicit deny); this dependency is the authoritative gate.
+    dependencies=[Depends(require_admin_or_manager)],
+)
 async def get_distribution_preview(
     request: Request,
     offering_id: int = Query(..., description="Offering ID to preview distribution"),
@@ -316,7 +323,11 @@ async def get_all_leads(
 # ==============================================================================
 
 @limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
-@router.get("/export")
+@router.get(
+    "/export",
+    # PR1 Commit 3: admin/manager-only hard gate (keyMatch4 collision fix).
+    dependencies=[Depends(require_admin_or_manager)],
+)
 async def export_leads(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
@@ -1313,7 +1324,12 @@ async def download_import_template(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
-@router.post("/bulk-assign", status_code=status.HTTP_200_OK)
+@router.post(
+    "/bulk-assign",
+    status_code=status.HTTP_200_OK,
+    # PR1 Commit 3: admin/manager-only hard gate (keyMatch4 collision fix).
+    dependencies=[Depends(require_admin_or_manager)],
+)
 async def bulk_assign_leads(
     request: Request,
     bulk_assign_data: schemas.BulkAssignLeadsSchema,
@@ -1408,7 +1424,14 @@ async def bulk_update_leads_stage(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
-@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+@router.post(
+    "/bulk-delete",
+    status_code=status.HTTP_200_OK,
+    # PR1 Commit 3: ADMIN-ONLY hard gate. Manager has no bulk-delete policy
+    # (policy_templates), and the docstring says "Admin only" — enforce it in
+    # code, independent of the keyMatch4-prone Casbin static-route matching.
+    dependencies=[Depends(require_admin)],
+)
 async def bulk_delete_leads(
     request: Request,
     bulk_data: schemas.BulkDeleteSchema,

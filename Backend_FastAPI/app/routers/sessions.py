@@ -42,14 +42,20 @@ async def get_active_sessions(
     """
     log.info("Fetching active sessions", user_id=current_user.id)
 
-    # Identify current session from refresh token cookie
-    # This is intentional exception handling for token parsing
-    current_refresh_jti = None
-    if refresh_token:
+    # PR1 Commit 2: prefer the live refresh jti that get_current_user derived
+    # from the access token's r_jti (request.state.refresh_jti). This resolves
+    # is_current even when the refresh cookie isn't sent on this request, and is
+    # consistent with the DB session.refresh_jti now that /auth/refresh commits
+    # the rotation. Fall back to decoding the refresh cookie.
+    current_refresh_jti = getattr(request.state, "refresh_jti", None)
+    if not current_refresh_jti and refresh_token:
         try:
             payload = security.decode_token(refresh_token)
             current_refresh_jti = payload.get("jti")
-            log.info("Current session identified", refresh_jti=current_refresh_jti)
+            log.info(
+                "Current session identified (cookie fallback)",
+                refresh_jti=current_refresh_jti,
+            )
         except Exception as e:
             log.warning(
                 "Failed to decode refresh token for session identification",

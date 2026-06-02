@@ -36,6 +36,11 @@ class DocumentAction:
     RESET = "reset"
     PAPER_SUBMITTED = "paper_submitted"
     DELETED = "deleted"
+    # PR1 Commit 1 (Gap 1 — A09): authed PII document download. Paired with
+    # the ``ck_document_audit_log_action`` CHECK relax migration
+    # ``docdl_audit_001`` — inserting this value before the migration applies
+    # would violate the DB constraint.
+    DOWNLOADED = "downloaded"
 
 
 # =============================================================================

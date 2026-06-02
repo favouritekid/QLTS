@@ -123,7 +123,25 @@ async def zalo_webhook(
         and zevent_server == "ZNS"
     )
     if event_name in ("oa_send_text", "oa_send_template") or is_zbs_delivery:
-        await _handle_delivery_status(db, data)
+        # PR1 Commit 4 (A08 Integrity / A10 fail-closed):
+        # _handle_delivery_status mutates NotificationDelivery (status /
+        # sent_at / error_reason) and commits — a durable write reachable from
+        # this UNAUTHENTICATED public endpoint. Gate it on a valid signature
+        # exactly like the user_feedback branch below; without this, anyone
+        # could forge callbacks to flip any row's delivery status (lookup is
+        # by msg_id or delivery_{id}). Every Zalo OA webhook event carries
+        # X-ZEvent-Signature (sha256(appId+data+timeStamp+OAsecretKey)),
+        # verified across chat + ZBS docs, so legit callbacks pass; only
+        # forged/unsigned ones are dropped. Still 200-ack (no retry storm).
+        if not sig_ok:
+            log.warning(
+                "Zalo delivery-status callback rejected: signature missing or "
+                "invalid — 200-acked, NotificationDelivery NOT mutated",
+                event_name=event_name,
+                signature_present=bool(signature),
+            )
+        else:
+            await _handle_delivery_status(db, data)
 
     # 5. Handle follow/unfollow events (future: update consent)
     elif event_name == "user_follow_oa":

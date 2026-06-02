@@ -153,13 +153,11 @@ server {
     }
 
     # --- Static file uploads (served directly by Nginx) ---
-    location /uploads/ {
-        alias /app/uploads/;
-        expires 7d;
-        add_header Cache-Control "public, no-transform";
-        try_files $uri =404;
-    }
-
+    # SECURITY (PR1 Commit 1 — A01/A02): the public `location /uploads/` was
+    # REMOVED. Admission documents (PII: CCCD, học bạ, priority evidence) are
+    # now served ONLY via the authed, IDOR-scoped, audited FastAPI endpoint
+    #   GET /api/admissions/{id}/documents/{doc_id}/download
+    # (proxied under the `/api/` location). Avatars stay public below.
     location /static/uploads/ {
         alias /app/static/uploads/;
         expires 30d;

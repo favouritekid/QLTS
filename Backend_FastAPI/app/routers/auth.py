@@ -809,6 +809,15 @@ async def refresh_access_token(
     service_unavailable = HTTPException(
         status_code=503, detail="Auth service unavailable"
     )
+    # PR1 Commit 2: distinct 401 for session desync — the OLD jti is valid in
+    # Redis (the session:{jti} check passes) but has NO matching DB session row.
+    # That only happens for sessions frozen by the historical no-commit bug, so
+    # it is NOT abuse. A plain HTTPException (not the InvalidToken
+    # credentials_exception) routes to the ``except HTTPException`` arm and so
+    # bypasses the refresh-abuse counter / invalidate_all_sessions path below.
+    session_desync_exception = HTTPException(
+        status_code=401, detail="Session desynchronized. Please login again."
+    )
 
     # ✅ M4: Per-user rate limiting for failed refresh attempts
     # We extract username from token even on failure to track abuse
@@ -952,110 +961,164 @@ async def refresh_access_token(
 
                 # (Đã xóa logic active_jti)
 
-                # (STEP 6: Update Session - Giữ nguyên)
-                try:
-                    await session_service.update_session_activity(
-                        db=db,
-                        old_refresh_jti=old_refresh_jti,
-                        new_refresh_jti=new_refresh_jti,
-                        user_id=user.id,
-                    )
-                except Exception as session_error:
+                # (STEP 6: Update Session) — PR1 Commit 2
+                # Capture the return. ``None`` = the OLD jti has no matching DB
+                # session row. The Redis ``session:{jti}`` check already passed
+                # above, so a genuine reuse/forged token was already rejected;
+                # None here is a DESYNC from the historical no-commit bug. FATAL:
+                # force re-login instead of rotating a phantom session — this is
+                # the self-heal for FROZEN sessions (their next refresh 401s →
+                # clean re-login). Plain 401 so it does NOT feed the abuse
+                # counter. A real DB error PROPAGATES (fail-closed: never rotate
+                # Redis + return success on a half-written session).
+                session = await session_service.update_session_activity(
+                    db=db,
+                    old_refresh_jti=old_refresh_jti,
+                    new_refresh_jti=new_refresh_jti,
+                    user_id=user.id,
+                )
+                if session is None:
                     log.warning(
-                        "Failed to update session activity",
+                        "Refresh aborted: session desync (old jti not in DB) — "
+                        "forcing re-login",
                         user_id=user.id,
-                        error=str(session_error),
+                        old_jti=old_refresh_jti[:8],
                     )
+                    raise session_desync_exception
 
-                log.info("DB changes staged", user_id=user.id)
-
-                # (STEP 7: Update Redis - Giữ nguyên)
-                try:
-                    async with safe_redis_pipeline(transaction=True) as pipe:
-                        pipe.delete(f"session:{old_refresh_jti}")
-                        pipe.set(
-                            f"session:{new_refresh_jti}",
-                            str(user.id),
-                            ex=new_refresh_ttl,
-                        )
-
-                        # ✅ SỬA LỖI: Blacklist token cũ bằng đúng TTL của nó
-                        full_refresh_ttl = int(
-                            settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
-                        )
-                        safe_ttl = max(60, full_refresh_ttl)  # Đảm bảo TTL dương
-                        pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=safe_ttl)
-
-                        await pipe.execute()
-
-                    log.info(
-                        "✅ Redis update successful (session rotated)", user_id=user.id
-                    )
-                except Exception as e_redis:
-                    log.error(
-                        "❌ Redis pipeline failed, will rollback DB",
-                        user_id=user.id,
-                        error=str(e_redis),
-                        exc_info=True,
-                    )
-                    raise service_unavailable
-
-                log.info("✅ Token rotation completed successfully", user_id=user.id)
-
-                # ✅ FIX-4: Add user info to refresh response for auto-refresh mechanism
-                # ✅ FIX-5: Tokens are ONLY in httpOnly cookies (not in response body)
-                response = JSONResponse(
-                    content={
-                        # "access_token": new_access_token,  # REMOVED - httpOnly cookies only
-                        "token_type": "bearer",
-                        "user": {
-                            "id": user.id,
-                            "username": user.username,
-                            "email": user.email,
-                            "full_name": user.full_name,
-                            "role": user.role,
-                        },
-                    },
-                    status_code=200,
+                log.info(
+                    "DB changes staged (savepoint, not yet committed)",
+                    user_id=user.id,
                 )
-
-                # ✅ SECURITY FIX: Set new access_token in httpOnly cookie
-                new_access_ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-                response.set_cookie(
-                    key="access_token",
-                    value=new_access_token,
-                    httponly=True,
-                    secure=settings.APP_ENV == "production",
-                    samesite="lax",
-                    max_age=int(new_access_ttl),
-                    path="/",
-                )
-
-                response.set_cookie(
-                    key="refresh_token",
-                    value=new_refresh_token,
-                    httponly=True,
-                    secure=settings.APP_ENV == "production",
-                    samesite="strict",
-                    max_age=int(new_refresh_ttl),
-                    path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
-                )
-
-                # ✅ CSRF Protection: Refresh CSRF token on token refresh
-                set_csrf_cookie(response)
-
-                # ✅ M4: Clear failed refresh counter on success
-                try:
-                    await safe_redis_delete(f"refresh_fail:{username}")
-                except Exception:
-                    pass
-
-                return response
 
             except InvalidToken:
                 raise credentials_exception
             except HTTPException:
                 raise
+
+        # ── Savepoint released: the new refresh_jti is staged in the OUTER
+        #    transaction but NOT yet committed. Approach A ordering from here:
+        #    Redis rotate FIRST, then DB commit, with best-effort compensation
+        #    to OLD on either failure. Rationale: if we committed DB first and
+        #    Redis then failed, DB=new while cookie/Redis=old → the next refresh
+        #    would re-desync and blacklist the wrong jti. Redis-first +
+        #    compensate keeps both stores consistent without a DB compensation
+        #    transaction; the None-FATAL above stops the desync loop entirely.
+
+        async def _compensate_session_to_old() -> None:
+            """Best-effort: restore the OLD session to Redis (and drop the NEW
+            key + un-blacklist OLD) so the client's UNCHANGED old refresh cookie
+            still authenticates — no lockout. Uses the OLD token's REMAINING ttl
+            (never the full window) so compensation can't silently extend the
+            session."""
+            try:
+                _, _old_ttl = security.decode_token_for_invalidation(refresh_token)
+                comp_ttl = max(60, int(_old_ttl)) if _old_ttl else 60
+                async with safe_redis_pipeline(transaction=True) as pipe:
+                    pipe.set(f"session:{old_refresh_jti}", str(user.id), ex=comp_ttl)
+                    pipe.delete(f"session:{new_refresh_jti}")
+                    pipe.delete(f"blacklist:{old_refresh_jti}")
+                    await pipe.execute()
+            except Exception as e_comp:  # pragma: no cover — best-effort
+                log.error(
+                    "Refresh compensation to OLD failed (manual review needed)",
+                    user_id=getattr(user, "id", None),
+                    error=str(e_comp),
+                    exc_info=True,
+                )
+
+        # (STEP 7: Redis rotate — BEFORE commit)
+        try:
+            async with safe_redis_pipeline(transaction=True) as pipe:
+                pipe.delete(f"session:{old_refresh_jti}")
+                pipe.set(
+                    f"session:{new_refresh_jti}",
+                    str(user.id),
+                    ex=new_refresh_ttl,
+                )
+                # Blacklist the old token for its full remaining window.
+                full_refresh_ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
+                safe_ttl = max(60, full_refresh_ttl)
+                pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=safe_ttl)
+                await pipe.execute()
+            log.info("✅ Redis update successful (session rotated)", user_id=user.id)
+        except Exception as e_redis:
+            # The pipeline may have applied partially → undefined Redis state.
+            # Compensate to OLD, roll back the staged DB change, fail closed.
+            log.error(
+                "❌ Redis pipeline failed during rotate — compensating to OLD",
+                user_id=user.id,
+                error=str(e_redis),
+                exc_info=True,
+            )
+            await _compensate_session_to_old()
+            await db.rollback()
+            raise service_unavailable
+
+        # (STEP 8: Commit the DB refresh_jti rotation)
+        try:
+            await db.commit()
+        except Exception as e_commit:
+            # Redis already rotated to NEW; undo it so the client's still-held
+            # OLD cookie keeps working (no lockout), then roll back DB.
+            log.error(
+                "❌ DB commit failed after Redis rotate — compensating Redis to OLD",
+                user_id=user.id,
+                error=str(e_commit),
+                exc_info=True,
+            )
+            await _compensate_session_to_old()
+            await db.rollback()
+            raise service_unavailable
+
+        log.info("✅ Token rotation completed successfully", user_id=user.id)
+
+        # ✅ FIX-4/5: user info in body; tokens ONLY in httpOnly cookies.
+        response = JSONResponse(
+            content={
+                "token_type": "bearer",
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "full_name": user.full_name,
+                    "role": user.role,
+                },
+            },
+            status_code=200,
+        )
+
+        # ✅ SECURITY FIX: Set new access_token in httpOnly cookie
+        new_access_ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        response.set_cookie(
+            key="access_token",
+            value=new_access_token,
+            httponly=True,
+            secure=settings.APP_ENV == "production",
+            samesite="lax",
+            max_age=int(new_access_ttl),
+            path="/",
+        )
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            httponly=True,
+            secure=settings.APP_ENV == "production",
+            samesite="strict",
+            max_age=int(new_refresh_ttl),
+            path="/api",  # cookie sent to all /api/* endpoints
+        )
+
+        # ✅ CSRF Protection: refresh CSRF token on token refresh.
+        set_csrf_cookie(response)
+
+        # ✅ M4: clear failed refresh counter on success.
+        try:
+            await safe_redis_delete(f"refresh_fail:{username}")
+        except Exception:
+            pass
+
+        return response
 
     except (JWTError, InvalidToken):
         # ✅ M4: Increment failed refresh counter

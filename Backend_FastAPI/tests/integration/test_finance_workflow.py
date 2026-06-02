@@ -32,11 +32,17 @@ from app.services.invoice_service import InvoiceService
 from app.services.payment_service import PaymentService, RefundService
 from app.services.payment_intent_service import PaymentIntentService
 from app.services.accounting_service import AccountingPeriodService
+from app.config import settings
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
     ConflictError,
+)
+
+# PR1 Commit 5: create_intent now allowlists return_url against FRONTEND_URL.
+VALID_RETURN_URL = (
+    f"{settings.FRONTEND_URL.rstrip('/')}/finance/payments/return"
 )
 
 
@@ -737,7 +743,7 @@ class TestOnlinePayment:
             method_id=finance_fixtures["vnpay"].id,
             amount=Decimal("500000"),
             idempotency_key="test-uuid-123",
-            return_url="https://example.com/payment/return",
+            return_url=VALID_RETURN_URL,
             unit_id=finance_fixtures["unit_id"],
         )
         await db.commit()
@@ -787,7 +793,7 @@ class TestOnlinePayment:
             method_id=finance_fixtures["vnpay"].id,
             amount=Decimal("1000000"),
             idempotency_key="idempotency-test-456",
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=finance_fixtures["unit_id"],
         )
         await db.commit()
@@ -798,7 +804,7 @@ class TestOnlinePayment:
             method_id=finance_fixtures["vnpay"].id,
             amount=Decimal("1000000"),
             idempotency_key="idempotency-test-456",  # Same key
-            return_url="https://example.com/return",
+            return_url=VALID_RETURN_URL,
             unit_id=finance_fixtures["unit_id"],
         )
         await db.commit()

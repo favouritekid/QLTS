@@ -606,10 +606,14 @@ async def payment_callback(
         form = await request.form()
         callback_data = dict(form)
 
+    # PR1 Commit 5: do NOT log the raw, UNVERIFIED callback_data — it is
+    # attacker-influenced (public IPN endpoint) and may carry sensitive gateway
+    # fields or log-injection payloads. Signature verification + detailed
+    # logging happen inside the service after verify.
     log.info(
         "payment_callback_received",
         gateway_code=gateway_code,
-        callback_data=callback_data,
+        content_type=content_type,
     )
 
     intent_service = PaymentIntentService(db)
