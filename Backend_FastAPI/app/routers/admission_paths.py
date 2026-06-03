@@ -610,7 +610,8 @@ async def archive_admission_path(
 
     Lets admin retire an unused draft/inactive path through the API instead
     of raw SQL. Active paths return 400 (deactivate first); already-archived
-    return 400. Archived paths are terminal & immutable (``can_update``).
+    return 400. Archived is terminal — ``_check_lifecycle_guard`` blocks
+    edits and ``activate_path`` rejects re-activation.
 
     IDOR: Protected via get_admission_path_for_user dependency.
     """

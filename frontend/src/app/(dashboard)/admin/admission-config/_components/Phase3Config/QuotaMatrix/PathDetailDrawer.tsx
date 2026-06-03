@@ -64,7 +64,7 @@ import {
   useUpdatePathQuota,
 } from "@/hooks/admissions/useQuotaMatrix"
 import { parseApiError } from "@/lib/utils/api-errors"
-import type { AdmissionPathResponse } from "@/lib/zod/admission-path"
+import { canPerformAction, type AdmissionPathResponse } from "@/lib/zod/admission-path"
 
 import { ConfigCriteria } from "../ConfigCriteria"
 import { ConfigDocuments } from "../ConfigDocuments"
@@ -561,9 +561,12 @@ function LifecycleTab({
 
   const isActive = path.status === "active"
   const isArchived = path.status === "archived"
-  // Archive khả dụng cho draft/inactive (BE chặn active: phải deactivate
-  // trước; chặn archived: terminal). Cho admin retire path thừa qua UI.
-  const canArchive = !isActive && !isArchived
+  // Thin-client: đọc cờ role-aware từ BE (compute_available_actions),
+  // KHÔNG suy state từ status / KHÔNG check role. BE chỉ trả "archive"
+  // cho admin + draft/inactive → manager không thấy nút (tránh 403
+  // dead-end); active/archived cũng ẩn. isArchived vẫn dùng cho nhánh
+  // ẩn nút Kích hoạt bên dưới.
+  const canArchive = canPerformAction(path, "archive")
   const isPending =
     activateMutation.isPending ||
     deactivateMutation.isPending ||

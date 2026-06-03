@@ -98,6 +98,17 @@ class TestActivatePathAdminOnly:
         assert updated.status == "active"
         assert updated.activated_by == 1
 
+    async def test_cannot_activate_archived_path(self):
+        """``archived`` is terminal: re-activation rejected by the early
+        guard (before readiness/round-lock), so the terminal contract holds
+        even though ``archived`` is now reachable via the archive endpoint."""
+        service, doc_repo = _make_service()
+        with _patch_doc_repo(doc_repo):
+            with pytest.raises(BusinessRuleViolation, match="lưu trữ"):
+                await service.activate_path(
+                    _ready_path("archived"), _user(UserRole.ADMIN)
+                )
+
 
 class TestDeactivatePathAdminOnly:
     async def test_manager_cannot_deactivate(self):
