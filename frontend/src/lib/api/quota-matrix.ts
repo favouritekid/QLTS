@@ -13,9 +13,13 @@ export interface QuotaMatrixRound {
 export interface QuotaMatrixCell {
   admission_round_id: number
   round_code: string
-  total_admit_quota: number
-  total_round_quota: number
+  total_admit_quota: number | null
+  total_round_quota: number | null
   total_submission_count: number
+  total_submitted_count: number
+  total_approved_count: number
+  total_enrolled_count: number
+  total_dropped_count: number
   path_count: number
 }
 

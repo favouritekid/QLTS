@@ -34,9 +34,13 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
             1: {
               admission_round_id: 1,
               round_code: "DOT_1",
-              total_admit_quota: 30,
-              total_round_quota: 50,
+              total_admit_quota: null,
+              total_round_quota: null,
               total_submission_count: 5,
+              total_submitted_count: 12,
+              total_approved_count: 8,
+              total_enrolled_count: 3,
+              total_dropped_count: 1,
               path_count: 2,
             },
           },
@@ -68,15 +72,17 @@ describe("GlobalMatrixView", () => {
     expect(screen.getByText(/1 ngành × 1 đợt/)).toBeTruthy()
   })
 
-  it("renders aggregate cell theo contract 3-line: Admit/Annual + Submit + path_count", () => {
+  it("renders aggregate cell theo contract funnel parity với tab Theo ngành", () => {
     render(
       wrap(<GlobalMatrixView academicYear={2026} onYearChange={() => {}} />),
     )
-    // Cell aggregate dòng 1: total_admit_quota / annual_admission_quota
-    expect(screen.getByText(/30 \/ 100/)).toBeTruthy()
-    // Cell aggregate dòng 2: Submit cap
-    expect(screen.getByText(/Submit 50/)).toBeTruthy()
-    // Cell aggregate dòng 3: path_count
+    expect(screen.getByText("Hồ sơ")).toBeTruthy()
+    expect(screen.getByText(/12 \/ ∞/)).toBeTruthy()
+    expect(screen.getByText("Trúng tuyển")).toBeTruthy()
+    expect(screen.getByText(/8 \/ ∞/)).toBeTruthy()
+    expect(screen.getByText("Nhập học")).toBeTruthy()
+    expect(screen.getByLabelText(/nhập học 3/i)).toBeTruthy()
+    expect(screen.getByText(/đã bỏ/)).toBeTruthy()
     expect(screen.getByText(/2 phương thức/)).toBeTruthy()
   })
 
@@ -95,7 +101,7 @@ describe("GlobalMatrixView", () => {
     // Cell phải render như button drill-down — không có input cho inline edit
     const cellButtons = container.querySelectorAll("button")
     const hasCellButton = Array.from(cellButtons).some((b) =>
-      b.textContent?.includes("Submit"),
+      b.textContent?.includes("Hồ sơ"),
     )
     expect(hasCellButton).toBe(true)
     expect(container.querySelectorAll("input[type='number']").length).toBe(0)
