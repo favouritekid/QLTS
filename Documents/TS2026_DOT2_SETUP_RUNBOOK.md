@@ -3,12 +3,12 @@
 > **Thực thi qua Admin UI (Chrome MCP) trên `https://qlts.tnpc.edu.vn`, kiêm smoke test production.**
 > Soạn 2026-06-02. Tài khoản: `admin`. Round DOT_2 đang mở (01/04–30/06), 0 hồ sơ.
 
-## ⏸️ TRẠNG THÁI THỰC THI (cập nhật 2026-06-03 — GĐ1/2/3 DONE, còn GĐ4/5)
+## ✅ TRẠNG THÁI THỰC THI — DOT_2 TS2026 HOÀN TẤT TRỌN VẸN (GĐ1-5 DONE 2026-06-03)
 - ✅ **GĐ1 DONE (prod):** method `201 "Xét học bạ THCS"` đã tạo qua UI (Xét điểm môn ✓, GPA ✗). `default_bonus_rule` CHƯA set ở method — đã thay bằng per-path bonus override (xem GĐ3).
 - ✅ **GĐ2 DONE (prod, 2026-06-03):** 4 tổ hợp đã đủ môn (8 dòng `subject_group_subject` gán qua UI). BLOCKER route BE đã GỠ (PR #371 deploy 06-03). Verify UI: 1132 TV=math(1)+literature(2); 1133 VA=literature(1)+english(2); 1134 TT=math(1)+informatics(2); 1135 TK=math(1)+natural_science(2).
 - ✅ **GĐ3 DONE (prod, 2026-06-03):** 7 đường THCS active đã tạo qua ma trận chỉ tiêu (path id 210-216). Mỗi đường: Tiêu chí (Điểm trung bình, N=2, min GPA 5.0, thang 10, tổ hợp đúng) · Định danh (Phạm vi=**Công khai (storefront)**, fee **70000**) · Chỉ tiêu trống · Nâng cao (applicable_to=**POST_THCS** + bonus override khu vực+đối tượng, trần **2.75**) · Vòng đời=**Đang hoạt động**. Mapping: 210 Kế toán(oai86,TV) · 211 QTKD vận tải(87,TV) · 212 QL&KD du lịch(85,VA) · 213 CNTT ƯDPM(82,TT) · 214 Công nghệ ô tô(81,TK) · 215 Chăn nuôi-Thú y(84,TK) · 216 KT chế biến món ăn(83,TK). **Verify storefront** `?audience=POST_THCS`: 7/7 ngành TC trả admission_methods chứa code 201; Y sỹ đa khoa TC chỉ 200 (đúng). (Method 200 còn lẫn vào POST_THCS do applicable_to cũ NULL → dọn ở GĐ4.)
 - ✅ **GĐ4 DONE (prod, 2026-06-03):** 32 đường active cập nhật xong — fee=70000 + applicable_to=POST_THPT cho cả 32; 24 đường CĐ chia admit_quota 80:20 (verify quota khớp 100% bảng). **Verify storefront:** POST_THCS giờ chỉ trả 7 ngành TC (mỗi ngành chỉ method 201); POST_THPT trả 20 ngành (12 CĐ method 100+200 + 8 TC method 200), không lẫn 201 → phân luồng audience hoàn hảo. **Lưu ý cơ chế:** lưu tab Nâng cao trên path "Đang hoạt động" bật dialog "Lưu thay đổi trên phương thức đang hoạt động?" → BẮT BUỘC bấm "Vẫn lưu" (tab Chỉ tiêu/Định danh lưu thẳng, không dialog).
-- ⬜ **GĐ5:** CHƯA bắt đầu — xóa/deactivate 20 draft "Xét tuyển thẳng" (301). Chờ user duyệt.
+- ✅ **GĐ5 DONE (prod, 2026-06-03):** 20 draft 301 DOT_2 đã **archived** (verify path-matrix: 0 draft 301 còn lại). UI deactivate bất khả thi cho draft → wire endpoint archive (PR #372 merged main `c324348b` + deployed VPS). path 165 archive qua UI (verify nút "Lưu trữ" live); 19 path còn lại (168-178,179-186) qua endpoint `POST /paths/{id}/archive` + X-CSRF-Token (cookie csrf_token, tương đương axios FE — không phải SQL). Nợ archive: memory `admission-path-archive-endpoint-debt`.
 - **UI note:** dialog tạo path chỉ có Tên hiển thị + thứ tự; PathDetailDrawer mở sau đó với 6 tab, **mỗi nút "Lưu <tab>" đóng drawer** → mở lại path qua URL `...&tab=<criteria|identity|advanced|lifecycle>&pathId=<id>`. academicInfo param = oai id.
 - **Trạng thái prod an toàn:** 7 đường THCS active đã lên storefront cho thí sinh THCS; chưa ảnh hưởng các đường THPT đang chạy.
 
@@ -85,8 +85,11 @@ Môn dùng (đã có sẵn): `math` Toán, `literature` Ngữ văn, `english` Ng
 
 - [x] **8 đường TC học bạ THPT** (197,198,199,200,201*,202,203,204 — *path id 201, không nhầm với method code): admit_quota để trống (không chia); fee 70k; applicable_to `POST_THPT`. (Y sỹ TC = path 204, chỉ THPT.) ✅
 
-## GIAI ĐOẠN 5 — Xử lý 20 đường draft "Xét tuyển thẳng" (⏳ CHỜ PR ARCHIVE)
-> **Cập nhật 2026-06-03:** 20 draft 301 VÔ HẠI (verify storefront: cả POST_THCS lẫn POST_THPT đều KHÔNG chứa method 301). Phát hiện khi định dọn:
+## GIAI ĐOẠN 5 — Xử lý 20 đường draft "Xét tuyển thẳng" ✅ DONE 2026-06-03
+> **✅ HOÀN TẤT:** 20 draft 301 DOT_2 đã **archived** (verify path-matrix prod: 0 draft 301 còn lại). PR #372 (wire endpoint archive) merged main `c324348b` + deployed VPS. path 165 archive qua UI (nút "Lưu trữ"); 19 path còn lại (168-178, 179-186) qua endpoint `POST /paths/{id}/archive` + header X-CSRF-Token (cookie csrf_token — tương đương axios FE, KHÔNG phải SQL). **→ DOT_2 TS2026 setup HOÀN TẤT TRỌN VẸN.**
+>
+> --- (lịch sử quá trình) ---
+> 20 draft 301 VÔ HẠI (verify storefront: cả POST_THCS lẫn POST_THPT đều KHÔNG chứa method 301). Phát hiện khi định dọn:
 > - **(a) UI deactivate BẤT KHẢ THI cho draft**: tab Vòng đời path draft CHỈ có nút "Kích hoạt" (disabled), KHÔNG có "Vô hiệu hoá". BE `deactivate_path()` chỉ nhận `active→inactive`; draft không deactivate được.
 > - **Cách đúng = ARCHIVE** (`draft/inactive → archived`). BE `archive_path()` ĐÃ CÓ logic (chặn active/already-archived) nhưng CHƯA wire endpoint + FE + nút UI = **nợ tính năng**.
 > - **✅ Đã code PR wire archive** (branch `feat/admission-path-archive-draft`, commit `af2a1d99`, CHƯA push — chờ user review): `POST /paths/{id}/archive` (+require_admin) + FE client `archiveAdmissionPath` + hook + nút "Lưu trữ" trong LifecycleTab + 7 unit test. Test local PASS (7 archive + type-check tsc + flake8 net-zero). **Resume GĐ5 sau khi PR merge+deploy:** archive 20 draft 301 qua nút "Lưu trữ" (mở từng ô tuyển thẳng DOT_2 → Vòng đời → Lưu trữ). path id 301 DOT_2: 165,168-178 (CĐ 69-80) + 179-186 (TC 81-88).
