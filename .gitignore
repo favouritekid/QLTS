@@ -317,3 +317,11 @@ smoke-*.png
 # officer/lead activity reports — query exports chứa PII (tên, lead counts,
 # timestamps). KHÔNG commit; canonical metric = KPI dashboard.
 Documents/reports/officer_*.csv
+
+# TS2026 DOT_2 setup — working data artifacts (KHÔNG canonical, regenerate được).
+# _kv_templates/ : KV (khu vực) dump/export (administrative_nodes_full ~921KB,
+#   reconcile/inspect txt, successor_edges csv) — sinh ra khi build KV mapping.
+# admission_config_2026.xlsx : output workbook của scripts/build_admission_excel.py
+#   (build từ prod export). Build script ĐƯỢC version; output thì không.
+_kv_templates/
+admission_config_2026.xlsx
