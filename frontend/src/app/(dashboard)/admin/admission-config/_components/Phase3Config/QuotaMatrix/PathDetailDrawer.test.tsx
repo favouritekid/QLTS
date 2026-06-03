@@ -54,6 +54,9 @@ const hoisted = vi.hoisted(() => {
     method_quota: null as number | null,
     bonus_rule_override: null as Record<string, unknown> | null,
     minor_correction_allowed_fields: [] as string[],
+    // Thin-client: FE đọc cờ role-aware này (BE compute_available_actions).
+    // Default draft+admin → có "archive" (nút "Lưu trữ" hiện).
+    available_actions: ["save", "activate", "archive"] as string[],
   }
   return {
     defaultPath,
@@ -62,6 +65,7 @@ const hoisted = vi.hoisted(() => {
     mockUpdatePath: vi.fn(),
     mockActivate: vi.fn(),
     mockDeactivate: vi.fn(),
+    mockArchive: vi.fn(),
   }
 })
 
@@ -71,6 +75,7 @@ vi.mock("@/hooks/admissions/useAdmissionPaths", () => ({
   useUpdateAdmissionPath: () => ({ mutateAsync: hoisted.mockUpdatePath, isPending: false }),
   useActivateAdmissionPath: () => ({ mutateAsync: hoisted.mockActivate, isPending: false }),
   useDeactivateAdmissionPath: () => ({ mutateAsync: hoisted.mockDeactivate, isPending: false }),
+  useArchiveAdmissionPath: () => ({ mutateAsync: hoisted.mockArchive, isPending: false }),
 }))
 
 vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
@@ -188,6 +193,41 @@ describe("PathDetailDrawer 5-tab", () => {
       expect(activateBtn.disabled).toBe(true)
     })
     expect(screen.getByText(/Missing criteria/)).toBeTruthy()
+  })
+
+  it("ANCHOR (thin-client archive): nút 'Lưu trữ' hiện khi available_actions có 'archive'", async () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: {
+        ...hoisted.defaultPath,
+        status: "draft",
+        available_actions: ["save", "activate", "archive"],
+      },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=lifecycle"))
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Lưu trữ/ })).toBeTruthy()
+    })
+  })
+
+  it("ANCHOR (thin-client archive): nút 'Lưu trữ' ẨN khi available_actions không có 'archive' (vd manager) — không suy role", async () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue({
+      data: {
+        ...hoisted.defaultPath,
+        status: "draft",
+        available_actions: ["save"], // manager: BE không trả "archive"
+      },
+      isLoading: false,
+    })
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=lifecycle"))
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /Vòng đời/ })).toBeTruthy()
+    })
+    expect(screen.queryByRole("button", { name: /Lưu trữ/ })).toBeNull()
   })
 
   it("ANCHOR (status=active): shows Deactivate button, NOT Activate", async () => {
