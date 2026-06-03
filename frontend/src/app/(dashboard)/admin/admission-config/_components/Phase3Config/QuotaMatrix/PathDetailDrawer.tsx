@@ -12,6 +12,7 @@
 import { useQueryClient } from "@tanstack/react-query"
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   Loader2,
   Power,
@@ -54,6 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   useActivateAdmissionPath,
   useAdmissionPath,
+  useArchiveAdmissionPath,
   useDeactivateAdmissionPath,
   useUpdateAdmissionPath,
 } from "@/hooks/admissions/useAdmissionPaths"
@@ -62,7 +64,7 @@ import {
   useUpdatePathQuota,
 } from "@/hooks/admissions/useQuotaMatrix"
 import { parseApiError } from "@/lib/utils/api-errors"
-import type { AdmissionPathResponse } from "@/lib/zod/admission-path"
+import { canPerformAction, type AdmissionPathResponse } from "@/lib/zod/admission-path"
 
 import { ConfigCriteria } from "../ConfigCriteria"
 import { ConfigDocuments } from "../ConfigDocuments"
@@ -512,9 +514,11 @@ function LifecycleTab({
   const queryClient = useQueryClient()
   const activateMutation = useActivateAdmissionPath()
   const deactivateMutation = useDeactivateAdmissionPath()
+  const archiveMutation = useArchiveAdmissionPath()
   // Pass 2 hard-review FM-1: custom Dialog confirm thay JS confirm()
   // (mobile UX kém + a11y kém — không có focus trap, không styled).
   const [confirmDeactivate, setConfirmDeactivate] = useState(false)
+  const [confirmArchive, setConfirmArchive] = useState(false)
 
   const hasCriteria = path.criteria !== null
   const hasQuota = path.admit_quota !== null && path.admit_quota > 0
@@ -543,8 +547,30 @@ function LifecycleTab({
     }
   }
 
+  const performArchive = async () => {
+    setConfirmArchive(false)
+    try {
+      await archiveMutation.mutateAsync(pathId)
+      queryClient.invalidateQueries({ queryKey: quotaMatrixKeys.all })
+      toast.success("Đã lưu trữ phương thức tuyển sinh")
+      onClose()
+    } catch (e: unknown) {
+      toast.error(parseApiError(e, "Lỗi lưu trữ — thử lại sau."))
+    }
+  }
+
   const isActive = path.status === "active"
-  const isPending = activateMutation.isPending || deactivateMutation.isPending
+  const isArchived = path.status === "archived"
+  // Thin-client: đọc cờ role-aware từ BE (compute_available_actions),
+  // KHÔNG suy state từ status / KHÔNG check role. BE chỉ trả "archive"
+  // cho admin + draft/inactive → manager không thấy nút (tránh 403
+  // dead-end); active/archived cũng ẩn. isArchived vẫn dùng cho nhánh
+  // ẩn nút Kích hoạt bên dưới.
+  const canArchive = canPerformAction(path, "archive")
+  const isPending =
+    activateMutation.isPending ||
+    deactivateMutation.isPending ||
+    archiveMutation.isPending
 
   return (
     <div className="space-y-5">
@@ -619,18 +645,37 @@ function LifecycleTab({
             Vô hiệu hoá
           </Button>
         ) : (
-          <Button
-            onClick={handleActivate}
-            disabled={!path.can_activate || isPending}
-            aria-busy={isPending}
-          >
-            {isPending ? (
-              <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
-            ) : (
-              <Power className="h-4 w-4 mr-1" aria-hidden="true" />
+          <>
+            {canArchive && (
+              <Button
+                variant="outline"
+                onClick={() => setConfirmArchive(true)}
+                disabled={isPending}
+                aria-busy={isPending}
+              >
+                {isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Archive className="h-4 w-4 mr-1" aria-hidden="true" />
+                )}
+                Lưu trữ
+              </Button>
             )}
-            Kích hoạt
-          </Button>
+            {!isArchived && (
+              <Button
+                onClick={handleActivate}
+                disabled={!path.can_activate || isPending}
+                aria-busy={isPending}
+              >
+                {isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Power className="h-4 w-4 mr-1" aria-hidden="true" />
+                )}
+                Kích hoạt
+              </Button>
+            )}
+          </>
         )}
       </div>
 
@@ -661,6 +706,38 @@ function LifecycleTab({
                 <PowerOff className="h-4 w-4 mr-1" aria-hidden="true" />
               )}
               Vô hiệu hoá
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmArchive} onOpenChange={setConfirmArchive}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Lưu trữ phương thức tuyển sinh?</DialogTitle>
+            <DialogDescription>
+              Phương thức tuyển sinh sẽ chuyển sang trạng thái lưu trữ
+              (archived) — ẩn khỏi danh mục cấu hình và không thể chỉnh sửa
+              hay kích hoạt lại. Dùng để gỡ các đường nháp/đã vô hiệu không
+              còn dùng. Hồ sơ đã nộp (nếu có) giữ nguyên snapshot path.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmArchive(false)}>
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={performArchive}
+              disabled={isPending}
+              aria-busy={isPending}
+            >
+              {isPending ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" aria-hidden="true" />
+              ) : (
+                <Archive className="h-4 w-4 mr-1" aria-hidden="true" />
+              )}
+              Lưu trữ
             </Button>
           </DialogFooter>
         </DialogContent>

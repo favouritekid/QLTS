@@ -82,6 +82,22 @@ class TestAdmissionPathRoleAwareActionFlags:
             assert service.compute_can_edit(path, admin) is True
             assert await service.compute_can_activate(path, admin) is False
 
+    async def test_admin_inactive_lists_activate_and_archive(self):
+        """inactive (như draft) cho admin cả activate + archive — pin để
+        nút 'Lưu trữ' FE (canPerformAction archive) không regress thầm lặng
+        khi path ở trạng thái inactive, không chỉ draft."""
+        service, doc_repo = _make_service()
+        path = _path("inactive")
+        admin = _user(UserRole.ADMIN)
+
+        with _patch_doc_repo(doc_repo):
+            assert service.compute_available_actions(path, admin) == [
+                "save",
+                "activate",
+                "archive",
+            ]
+            assert service.compute_can_edit(path, admin) is True
+
     async def test_admin_archived_has_no_actions(self):
         service, doc_repo = _make_service()
         path = _path("archived")

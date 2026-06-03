@@ -14,6 +14,7 @@ import {
   updateAdmissionPath,
   activateAdmissionPath,
   deactivateAdmissionPath,
+  archiveAdmissionPath,
 
   updateCriteria,
   updatePathDocuments,
@@ -221,6 +222,27 @@ export function useDeactivateAdmissionPath() {
   
   return useMutation({
     mutationFn: (pathId: number) => deactivateAdmissionPath(pathId),
+    onSuccess: (updatedPath) => {
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // status hiển thị trên by-major PathMatrixCell (chấm màu) — key
+      // ["quota-matrix"] KHÔNG nằm dưới .all → invalidate riêng ở hook.
+      queryClient.invalidateQueries({ queryKey: ["quota-matrix"] })
+      // Invalidate academic infos to update path_count and admission_status
+      queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
+    },
+  })
+}
+
+/**
+ * Hook to archive (soft-delete) a draft/inactive admission path (Admin only).
+ * Active paths must be deactivated first; archived is terminal & immutable.
+ */
+export function useArchiveAdmissionPath() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (pathId: number) => archiveAdmissionPath(pathId),
     onSuccess: (updatedPath) => {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })

@@ -774,6 +774,15 @@ class AdmissionPathService:
                 "Manager tạo/sửa draft, admin duyệt = activate."
             )
 
+        # ``archived`` is terminal — make that explicit at the activate gate
+        # (validate_activation Check 1 also rejects it, but an early guard
+        # gives a clear message + keeps the terminal contract self-evident
+        # now that ``archived`` is reachable via the archive endpoint).
+        if path.status == "archived":
+            raise BusinessRuleViolation(
+                "Path đã lưu trữ; không hỗ trợ kích hoạt lại."
+            )
+
         can_activate, errors = await self.validate_activation(path)
 
         if not can_activate:
@@ -856,13 +865,31 @@ class AdmissionPathService:
         self, path: AdmissionPath, user: User
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
         """
-        Archive an AdmissionPath.
+        Archive (soft-delete) an AdmissionPath: ``draft``/``inactive`` →
+        ``archived``.
+
+        ADM-008 (Q3=a): admin-only, symmetric to activate/deactivate. Lets
+        admin retire an unused draft/inactive path without raw SQL. Active
+        paths must be deactivated first; ``archived`` is terminal —
+        ``_check_lifecycle_guard`` blocks every edit and ``activate_path``
+        rejects re-activation. Archived → archived rejected so the action is
+        explicit, not a silent no-op.
 
         Raises:
-            BusinessRuleViolation: If path is active
+            PermissionDeniedError: If caller is not admin
+            BusinessRuleViolation: If path is active or already archived
         """
+        if user.role != UserRole.ADMIN:
+            raise PermissionDeniedError(
+                "Chỉ admin được lưu trữ admission path."
+            )
+
         if path.status == "active":
-            raise BusinessRuleViolation("Cannot archive active path. Deactivate first.")
+            raise BusinessRuleViolation(
+                "Cannot archive active path. Deactivate first."
+            )
+        if path.status == "archived":
+            raise BusinessRuleViolation("Path is already archived.")
 
         path = await self.repo.update(
             path,
