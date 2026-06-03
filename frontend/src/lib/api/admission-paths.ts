@@ -128,6 +128,19 @@ export async function deactivateAdmissionPath(
   return response.data
 }
 
+/**
+ * Archive (soft-delete) a draft or inactive admission path → "archived".
+ * Active paths must be deactivated first. Archived is terminal & immutable.
+ */
+export async function archiveAdmissionPath(
+  pathId: number
+): Promise<AdmissionPathResponse> {
+  const response = await api.post<AdmissionPathResponse>(
+    `/api/admission-config/paths/${pathId}/archive`
+  )
+  return response.data
+}
+
 // ============================================
 // VALIDATION & DOCUMENTS
 // ============================================
@@ -244,6 +257,7 @@ export const admissionPathsApi = {
   // Actions (Admin only)
   activateAdmissionPath,
   deactivateAdmissionPath,
+  archiveAdmissionPath,
   // Validation & Documents
   validatePathActivation,
   getPathDocuments,

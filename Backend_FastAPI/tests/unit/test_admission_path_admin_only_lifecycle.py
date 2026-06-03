@@ -13,7 +13,7 @@ import pytest
 
 from app.core.constants import UserRole
 from app.services.admission_path_service import AdmissionPathService
-from app.utils.exceptions import PermissionDeniedError
+from app.utils.exceptions import BusinessRuleViolation, PermissionDeniedError
 
 
 pytestmark = pytest.mark.unit
@@ -133,4 +133,63 @@ class TestDeactivatePathAdminOnly:
         with pytest.raises(PermissionDeniedError, match="admin"):
             await service.deactivate_path(
                 _ready_path("draft"), _user(UserRole.MANAGER)
+            )
+
+
+class TestArchivePathAdminOnly:
+    """Archive (draft/inactive → archived) is admin-only, symmetric to
+    activate/deactivate. Wires the previously-unexposed ``archive_path``
+    service so admin can retire unused draft/inactive paths via API/UI
+    instead of raw SQL."""
+
+    async def test_manager_cannot_archive(self):
+        service, _doc_repo = _make_service()
+        with pytest.raises(PermissionDeniedError, match="admin"):
+            await service.archive_path(
+                _ready_path("draft"), _user(UserRole.MANAGER)
+            )
+
+    @pytest.mark.parametrize(
+        "role",
+        [UserRole.OFFICER, UserRole.ACCOUNTANT, UserRole.USER],
+    )
+    async def test_non_admin_cannot_archive(self, role):
+        service, _doc_repo = _make_service()
+        with pytest.raises(PermissionDeniedError, match="admin"):
+            await service.archive_path(_ready_path("draft"), _user(role))
+
+    async def test_admin_can_archive_draft(self):
+        service, _doc_repo = _make_service()
+        path = _ready_path("draft")
+        updated, _cb = await service.archive_path(path, _user(UserRole.ADMIN))
+        assert updated.status == "archived"
+
+    async def test_admin_can_archive_inactive(self):
+        service, _doc_repo = _make_service()
+        path = _ready_path("inactive")
+        updated, _cb = await service.archive_path(path, _user(UserRole.ADMIN))
+        assert updated.status == "archived"
+
+    async def test_cannot_archive_active_path(self):
+        """Active must be deactivated first (archived is terminal)."""
+        service, _doc_repo = _make_service()
+        with pytest.raises(BusinessRuleViolation, match="[Dd]eactivate"):
+            await service.archive_path(
+                _ready_path("active"), _user(UserRole.ADMIN)
+            )
+
+    async def test_cannot_archive_already_archived(self):
+        service, _doc_repo = _make_service()
+        with pytest.raises(BusinessRuleViolation, match="already archived"):
+            await service.archive_path(
+                _ready_path("archived"), _user(UserRole.ADMIN)
+            )
+
+    async def test_role_check_runs_before_status_check(self):
+        """Manager hitting archive on an active path still gets
+        PermissionDeniedError (role gate first), not a state-leak."""
+        service, _doc_repo = _make_service()
+        with pytest.raises(PermissionDeniedError, match="admin"):
+            await service.archive_path(
+                _ready_path("active"), _user(UserRole.MANAGER)
             )

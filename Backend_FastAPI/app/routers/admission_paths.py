@@ -591,6 +591,40 @@ async def deactivate_admission_path(
     return await build_path_response(path, service, current_user)
 
 
+@router.post(
+    "/paths/{path_id}/archive",
+    response_model=AdmissionPathResponse,
+    summary="Archive admission path (admin-only)",
+)
+async def archive_admission_path(
+    path: models.AdmissionPath = Depends(get_admission_path_for_user),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),  # ADM-008 admin-only
+):
+    """
+    Archive (soft-delete) a ``draft`` or ``inactive`` admission path →
+    ``archived``.
+
+    **Authorization (ADM-008 / Q3=a):** Admin only — symmetric to
+    activate/deactivate; service re-checks as defense-in-depth.
+
+    Lets admin retire an unused draft/inactive path through the API instead
+    of raw SQL. Active paths return 400 (deactivate first); already-archived
+    return 400. Archived paths are terminal & immutable (``can_update``).
+
+    IDOR: Protected via get_admission_path_for_user dependency.
+    """
+    service = AdmissionPathService(db)
+    path, callback = await service.archive_path(path, current_user)
+    await db.commit()
+    await callback()
+
+    # Reload
+    path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
+
+    return await build_path_response(path, service, current_user)
+
+
 # =============================================================================
 # DOCUMENT RESOLUTION ENDPOINTS
 # =============================================================================

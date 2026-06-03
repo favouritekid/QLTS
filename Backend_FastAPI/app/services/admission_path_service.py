@@ -856,13 +856,30 @@ class AdmissionPathService:
         self, path: AdmissionPath, user: User
     ) -> Tuple[AdmissionPath, PostCommitCallback]:
         """
-        Archive an AdmissionPath.
+        Archive (soft-delete) an AdmissionPath: ``draft``/``inactive`` →
+        ``archived``.
+
+        ADM-008 (Q3=a): admin-only, symmetric to activate/deactivate. Lets
+        admin retire an unused draft/inactive path without raw SQL. Active
+        paths must be deactivated first (``archived`` is terminal &
+        immutable per ``can_update`` guard). Archived → archived rejected so
+        the action is explicit, not a silent no-op.
 
         Raises:
-            BusinessRuleViolation: If path is active
+            PermissionDeniedError: If caller is not admin
+            BusinessRuleViolation: If path is active or already archived
         """
+        if user.role != UserRole.ADMIN:
+            raise PermissionDeniedError(
+                "Chỉ admin được lưu trữ admission path."
+            )
+
         if path.status == "active":
-            raise BusinessRuleViolation("Cannot archive active path. Deactivate first.")
+            raise BusinessRuleViolation(
+                "Cannot archive active path. Deactivate first."
+            )
+        if path.status == "archived":
+            raise BusinessRuleViolation("Path is already archived.")
 
         path = await self.repo.update(
             path,
