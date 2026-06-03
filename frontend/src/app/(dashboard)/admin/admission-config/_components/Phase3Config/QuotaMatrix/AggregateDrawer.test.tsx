@@ -68,7 +68,7 @@ vi.mock("@/hooks/admissions/useQuotaMatrix", () => ({
               submitted_count: 5,
               approved_count: 3,
               enrolled_count: 1,
-              dropped_count: 0,
+              dropped_count: 1,
             },
             2: {
               path_id: 107,
