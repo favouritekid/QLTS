@@ -25,17 +25,33 @@ class QuotaMatrixCell(BaseModel):
     """Sum aggregated cho (academic_info × round) cell."""
     admission_round_id: int
     round_code: str
-    total_admit_quota: int = Field(
+    total_admit_quota: Optional[int] = Field(
         default=0,
-        description="∑ admit_quota across paths trong cùng (academic_info × round). NULL paths counted as 0.",
+        description="∑ admit_quota across paths trong cùng (academic_info × round). NULL if any path is unbounded.",
     )
-    total_round_quota: int = Field(
+    total_round_quota: Optional[int] = Field(
         default=0,
-        description="∑ round_quota across paths.",
+        description="∑ round_quota across paths. NULL if any path is unbounded.",
     )
     total_submission_count: int = Field(
         default=0,
         description="∑ submission_count actual filed.",
+    )
+    total_submitted_count: int = Field(
+        default=0,
+        description="∑ actual submitted funnel count across paths.",
+    )
+    total_approved_count: int = Field(
+        default=0,
+        description="∑ actual approved/admitted funnel count across paths.",
+    )
+    total_enrolled_count: int = Field(
+        default=0,
+        description="∑ actual enrolled funnel count across paths.",
+    )
+    total_dropped_count: int = Field(
+        default=0,
+        description="∑ dropped count across paths.",
     )
     path_count: int = Field(
         default=0,

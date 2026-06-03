@@ -93,14 +93,23 @@ async def _seed_common(s, seed_lead_dependencies: dict, ts: int) -> dict:
     }
 
 
-async def _make_path(s, ai_id, method_id, round_id, *, status="active") -> int:
+async def _make_path(
+    s,
+    ai_id,
+    method_id,
+    round_id,
+    *,
+    status="active",
+    admit_quota=30,
+    round_quota=50,
+) -> int:
     path = models.AdmissionPath(
         academic_info_id=ai_id,
         admission_method_id=method_id,
         admission_round_id=round_id,
         status=status,
-        admit_quota=30,
-        round_quota=50,
+        admit_quota=admit_quota,
+        round_quota=round_quota,
     )
     s.add(path)
     await s.flush()
@@ -271,6 +280,55 @@ async def test_quota_matrix_funnel_multi_nv_and_legacy(funnel_seed: dict):
         0,
         0,
     )
+
+
+@pytest.mark.asyncio
+async def test_quota_matrix_global_cell_aggregates_funnel_counts(funnel_seed: dict):
+    """Global matrix cell stays in sync with per-major funnel totals."""
+    async with AsyncSessionLocal() as s:
+        resp = await QuotaMatrixService(s).get_matrix(2026)
+
+    row = next(
+        r for r in resp.rows if r.academic_info_id == funnel_seed["academic_info_id"]
+    )
+    cell = next(iter(row.cells_by_round_id.values()))
+
+    assert (
+        cell.total_submitted_count,
+        cell.total_approved_count,
+        cell.total_enrolled_count,
+        cell.total_dropped_count,
+    ) == (6, 3, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_quota_matrix_global_cell_preserves_unbounded_quota(
+    seed_lead_dependencies: dict,
+):
+    """NULL path caps aggregate to NULL so FE renders ∞, not 0."""
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            common = await _seed_common(s, seed_lead_dependencies, ts)
+            method_id = await _make_method(s, ts, "U")
+            await _make_path(
+                s,
+                common["ai"].id,
+                method_id,
+                common["round_id"],
+                admit_quota=None,
+                round_quota=None,
+            )
+            academic_info_id = common["ai"].id
+
+    async with AsyncSessionLocal() as s:
+        resp = await QuotaMatrixService(s).get_matrix(2026)
+
+    row = next(r for r in resp.rows if r.academic_info_id == academic_info_id)
+    cell = next(iter(row.cells_by_round_id.values()))
+
+    assert cell.total_admit_quota is None
+    assert cell.total_round_quota is None
 
 
 @pytest_asyncio.fixture

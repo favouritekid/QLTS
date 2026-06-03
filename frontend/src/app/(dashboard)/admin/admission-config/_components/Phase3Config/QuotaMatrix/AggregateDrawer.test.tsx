@@ -193,6 +193,24 @@ describe("AggregateDrawer", () => {
     expect(screen.getByText("80")).toBeTruthy()
   })
 
+  it("renders per-method funnel counts parity với tab Theo ngành", () => {
+    render(
+      wrap(
+        <AggregateDrawer
+          academicInfoId={70}
+          roundId={1}
+          programName="CNTT"
+          roundCode="DOT_1"
+          onClose={() => {}}
+        />,
+      ),
+    )
+    expect(screen.getByText("Hồ sơ")).toBeTruthy()
+    expect(screen.getByText("Trúng tuyển")).toBeTruthy()
+    expect(screen.getByText("Nhập học")).toBeTruthy()
+    expect(screen.getByText(/đã bỏ/)).toBeTruthy()
+  })
+
   // Pass 2 hard-review F-2-2: ChevronRight click → PathDetailDrawer nested
   // mở với pathId đúng. Verify drill-down flow + tránh regression khi
   // refactor button-to-drawer dispatch trong AggregateDrawer.

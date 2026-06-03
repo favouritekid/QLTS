@@ -10,7 +10,7 @@
  *     ├─ Ma trận toàn cảnh: cell → AggregateDrawer → PathDetailDrawer
  *     └─ Theo ngành: cell → PathDetailDrawer (1-step skip aggregate)
  *
- * Cell tiết chế (3 dòng): "Admit/Annual" + "Submit cap" + "Status"
+ * Cell tiết chế (3 dòng): "Hồ sơ" + "Trúng tuyển" + "Nhập học"
  * KHÔNG inline edit. Drawer là configurator.
  */
 "use client"

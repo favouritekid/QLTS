@@ -84,6 +84,8 @@ class QuotaMatrixService:
             )
             paths = list((await self.db.execute(paths_stmt)).scalars().all())
 
+        funnel_counts = await self._compute_funnel_counts([p.id for p in paths])
+
         # 4. Aggregate paths into cells map: (ai_id, round_id) → cell
         cell_map: dict[tuple[int, int], QuotaMatrixCell] = {}
         for path in paths:
@@ -103,9 +105,20 @@ class QuotaMatrixService:
                     round_code=round_obj.round_code,
                 )
                 cell_map[key] = cell
-            cell.total_admit_quota += int(path.admit_quota or 0)
-            cell.total_round_quota += int(path.round_quota or 0)
+            if path.admit_quota is None:
+                cell.total_admit_quota = None
+            elif cell.total_admit_quota is not None:
+                cell.total_admit_quota += int(path.admit_quota)
+            if path.round_quota is None:
+                cell.total_round_quota = None
+            elif cell.total_round_quota is not None:
+                cell.total_round_quota += int(path.round_quota)
             cell.total_submission_count += int(path.submission_count or 0)
+            fc = funnel_counts[path.id]
+            cell.total_submitted_count += fc["submitted"]
+            cell.total_approved_count += fc["approved"]
+            cell.total_enrolled_count += fc["enrolled"]
+            cell.total_dropped_count += fc["dropped"]
             cell.path_count += 1
 
         # 5. Build rows
@@ -118,7 +131,9 @@ class QuotaMatrixService:
                 cell = cell_map.get((ai.id, r.id))
                 if cell is not None:
                     cells_by_round_id[r.id] = cell
-            sum_allocated = sum(c.total_admit_quota for c in cells_by_round_id.values())
+            sum_allocated = sum(
+                c.total_admit_quota or 0 for c in cells_by_round_id.values()
+            )
             remaining: int | None = None
             if ai.annual_admission_quota is not None:
                 remaining = ai.annual_admission_quota - sum_allocated
@@ -343,10 +358,7 @@ class QuotaMatrixService:
                 if p is None:
                     cells[r.id] = None
                 else:
-                    fc = funnel_counts.get(
-                        p.id,
-                        {"submitted": 0, "approved": 0, "enrolled": 0, "dropped": 0},
-                    )
+                    fc = funnel_counts[p.id]
                     cells[r.id] = PathMatrixCell(
                         path_id=p.id,
                         admission_round_id=p.admission_round_id,

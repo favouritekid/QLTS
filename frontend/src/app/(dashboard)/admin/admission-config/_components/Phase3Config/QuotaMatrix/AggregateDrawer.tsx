@@ -40,6 +40,10 @@ interface Props {
   onClose: () => void
 }
 
+function fmtCap(cap: number | null | undefined): string {
+  return cap === null || cap === undefined ? "∞" : String(cap)
+}
+
 export function AggregateDrawer({
   academicInfoId,
   roundId,
@@ -120,7 +124,9 @@ export function AggregateDrawer({
                     <TableHead>Phương thức</TableHead>
                     <TableHead className="text-right">Trần submit</TableHead>
                     <TableHead className="text-right">Trần admit</TableHead>
-                    <TableHead className="text-right">Đã nộp</TableHead>
+                    <TableHead className="text-right">Hồ sơ</TableHead>
+                    <TableHead className="text-right">Trúng tuyển</TableHead>
+                    <TableHead className="text-right">Nhập học</TableHead>
                     <TableHead className="text-center">Trạng thái</TableHead>
                     <TableHead>
                       <span className="sr-only">Mở chi tiết</span>
@@ -137,13 +143,25 @@ export function AggregateDrawer({
                         </div>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {cell!.round_quota ?? "—"}
+                        {fmtCap(cell!.round_quota)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {cell!.admit_quota ?? "—"}
+                        {fmtCap(cell!.admit_quota)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
-                        {cell!.submission_count}
+                        {cell!.submitted_count}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {cell!.approved_count}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {cell!.enrolled_count}
+                        {cell!.dropped_count > 0 && (
+                          <span className="text-muted-foreground">
+                            {" "}
+                            ({cell!.dropped_count} đã bỏ)
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-center">
                         <Badge

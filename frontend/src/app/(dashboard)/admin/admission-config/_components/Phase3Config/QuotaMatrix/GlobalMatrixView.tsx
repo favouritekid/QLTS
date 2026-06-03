@@ -45,6 +45,10 @@ import { AggregateDrawer } from "./AggregateDrawer"
 const CURRENT_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = [CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1, CURRENT_YEAR + 2]
 
+function fmtCap(cap: number | null | undefined): string {
+  return cap === null || cap === undefined ? "∞" : String(cap)
+}
+
 interface Props {
   academicYear: number
   onYearChange: (year: number) => void
@@ -178,15 +182,33 @@ export function GlobalMatrixView({ academicYear, onYearChange }: Props) {
                                       })
                                     }
                                     className="w-full text-left bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 border border-blue-200 dark:border-blue-800 rounded-md px-2 py-1.5 transition-colors"
-                                    aria-label={`Mở tổng hợp ${row.program_name} đợt ${r.round_code}: tổng admit ${cell.total_admit_quota}, tổng submit ${cell.total_round_quota}, ${cell.path_count} phương thức tuyển sinh`}
+                                    aria-label={`Mở tổng hợp ${row.program_name} đợt ${r.round_code}: hồ sơ ${cell.total_submitted_count} trên ${fmtCap(cell.total_round_quota)}, trúng tuyển ${cell.total_approved_count} trên ${fmtCap(cell.total_admit_quota)}, nhập học ${cell.total_enrolled_count}, ${cell.path_count} phương thức tuyển sinh`}
                                   >
-                                    <div className="text-xs font-semibold tabular-nums">
-                                      {cell.total_admit_quota} / {row.annual_admission_quota ?? "∞"}
+                                    <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+                                      <span className="text-muted-foreground">Hồ sơ</span>
+                                      <span className="font-semibold">
+                                        {cell.total_submitted_count} / {fmtCap(cell.total_round_quota)}
+                                      </span>
                                     </div>
-                                    <div className="text-[11px] text-muted-foreground tabular-nums">
-                                      Submit {cell.total_round_quota}
+                                    <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+                                      <span className="text-muted-foreground">Trúng tuyển</span>
+                                      <span className="font-semibold">
+                                        {cell.total_approved_count} / {fmtCap(cell.total_admit_quota)}
+                                      </span>
                                     </div>
-                                    <div className="text-[11px] text-muted-foreground">
+                                    <div className="flex items-center justify-between gap-1 text-[11px] tabular-nums">
+                                      <span className="text-muted-foreground">Nhập học</span>
+                                      <span className="font-semibold">
+                                        {cell.total_enrolled_count}
+                                        {cell.total_dropped_count > 0 && (
+                                          <span className="font-normal text-muted-foreground">
+                                            {" "}
+                                            ({cell.total_dropped_count} đã bỏ)
+                                          </span>
+                                        )}
+                                      </span>
+                                    </div>
+                                    <div className="mt-0.5 text-[11px] text-muted-foreground">
                                       {cell.path_count} phương thức
                                     </div>
                                   </button>
