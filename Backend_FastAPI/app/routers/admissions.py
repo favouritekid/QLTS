@@ -980,6 +980,8 @@ async def mark_document_paper_submitted(
             doc_code=doc_code,
             current_user=current_user,
             actual_submission_format=data.actual_submission_format,
+            graduation_proof_kind=data.graduation_proof_kind,
+            supplement_due_date=data.supplement_due_date,
         )
         await db.commit()
         await db.refresh(profile)

@@ -2010,6 +2010,15 @@ def _compute_frontend_fields(
                         if _is_verified and doc.verified_by is not None
                         else None
                     ),
+                    # PR #13 — loại giấy tốt nghiệp + hạn "nợ bằng".
+                    "graduation_proof_kind": (
+                        doc.graduation_proof_kind if _has_artifact else None
+                    ),
+                    "supplement_due_date": (
+                        doc.supplement_due_date.isoformat()
+                        if _has_artifact and doc.supplement_due_date
+                        else None
+                    ),
                 }
     
     # PR #5 — per-document action permissions delegate to the
@@ -2097,6 +2106,14 @@ def _compute_frontend_fields(
             "verified_by_name": uploaded_doc.get("verified_by_name"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
             "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
+            # PR #13 — graduation proof + cờ "đã nhận bằng chính thức".
+            "graduation_proof_kind": uploaded_doc.get("graduation_proof_kind"),
+            "supplement_due_date": uploaded_doc.get("supplement_due_date"),
+            "can_update_graduation_kind": (
+                doc_code == "bang_tot_nghiep_thpt"
+                and uploaded_doc.get("graduation_proof_kind")
+                == "provisional_cert"
+            ),
             **_perms,
         })
 
