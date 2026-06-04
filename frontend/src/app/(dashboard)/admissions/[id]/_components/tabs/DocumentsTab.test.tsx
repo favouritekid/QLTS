@@ -29,6 +29,7 @@ import { DocumentsTab } from "./DocumentsTab";
 vi.mock("@/hooks/admissions/useAdmissions", () => ({
   useUploadAdmissionDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useMarkPaperSubmitted: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
+  useUpdateGraduationProof: () => ({ mutate: vi.fn(), isPending: false }),
   useRejectDocument: () => ({ mutate: vi.fn(), isPending: false }),
   useResetDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useVerifyDocument: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
