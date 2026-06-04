@@ -589,3 +589,136 @@ class TestFeeStatusIDOR:
             f"must NOT read fee-status; got {response.status_code} - "
             f"{response.text[:200]}"
         )
+
+
+# ==============================================================================
+# TEST: LIST-ENDPOINT SCOPE FAIL-CLOSED (audit P1 regression)
+# ==============================================================================
+#
+# The admission list / export / status-counts / stats / academic-years /
+# pending-diploma endpoints all derive their IDOR scope from
+# ``admission_service._resolve_idor_filters``. Before the fix a manager/officer
+# whose ``unit_id IS NULL`` resolved to ``(None, ...)``, which the repository
+# reads as "no unit filter" → a system-wide leak of every profile / CSV row /
+# status count / nợ-bằng entry. These tests lock the fail-closed contract
+# end-to-end.
+#
+# Status mapping: five endpoints let ``PermissionDeniedError`` reach the global
+# handler → 403; ``/pending-diploma`` catches it in the router and re-raises 404
+# (IDOR enumeration convention — admissions.py:285).
+
+# Endpoints that surface the denial as a raw 403.
+_SCOPED_LIST_ENDPOINTS_403 = [
+    "/api/admissions",
+    "/api/admissions/export",
+    "/api/admissions/status-counts",
+    "/api/admissions/stats",
+    "/api/admissions/academic-years",
+]
+_PENDING_DIPLOMA_ENDPOINT = "/api/admissions/pending-diploma"
+
+
+@pytest_asyncio.fixture
+async def officer_no_unit_headers(client: AsyncClient, setup_test_database) -> dict:
+    """Auth headers for an OFFICER with ``unit_id IS NULL``.
+
+    Casbin role IS seeded (``role:officer`` covers every list endpoint via
+    OFFICER_TEMPLATE), so the request clears the gateway and genuinely
+    exercises the *service* scope gate rather than a role deny.
+    """
+    from tests.conftest import _create_user_and_role, _get_token_headers
+
+    data = {
+        "username": "officer_no_unit_idor",
+        "email": "officer_nounit_idor@test.com",
+        "password": "OfficerNoUnit!123",
+        "role": "officer",
+        "status": "active",
+    }
+    await _create_user_and_role(data, "role:officer", unit_id=None)
+    return await _get_token_headers(client, data)
+
+
+@pytest_asyncio.fixture
+async def manager_no_unit_headers(client: AsyncClient, setup_test_database) -> dict:
+    """Auth headers for a MANAGER with ``unit_id IS NULL`` (mirrors the KPI
+    precedent ``test_coverage_manager_no_unit_gets_403``)."""
+    from tests.conftest import _create_user_and_role, _get_token_headers
+
+    data = {
+        "username": "manager_no_unit_idor",
+        "email": "manager_nounit_idor@test.com",
+        "password": "ManagerNoUnit!123",
+        "role": "manager",
+        "status": "active",
+    }
+    await _create_user_and_role(data, "role:manager", unit_id=None)
+    return await _get_token_headers(client, data)
+
+
+class TestListScopeFailClosed:
+    """Manager/Officer without a unit must never see system-wide list data."""
+
+    async def test_officer_with_unit_can_list(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Non-vacuous anchor: a properly-scoped officer reaches the list (200).
+
+        Proves the fail-closed 403s below come from the missing-unit scope
+        gate, not a blanket Casbin deny on the officer role.
+        """
+        headers = await get_auth_headers(client, officer_user_in_db)
+        response = await client.get("/api/admissions", headers=headers)
+        assert response.status_code == 200, (
+            f"Scoped officer must list profiles: {response.status_code} - "
+            f"{response.text[:200]}"
+        )
+
+    @pytest.mark.parametrize("endpoint", _SCOPED_LIST_ENDPOINTS_403)
+    async def test_officer_no_unit_denied_403(
+        self,
+        client: AsyncClient,
+        officer_no_unit_headers: dict,
+        endpoint: str,
+    ):
+        response = await client.get(endpoint, headers=officer_no_unit_headers)
+        assert response.status_code == 403, (
+            f"IDOR leak: unit-less officer must be denied on {endpoint}, got "
+            f"{response.status_code} - {response.text[:200]}"
+        )
+
+    async def test_officer_no_unit_denied_pending_diploma_404(
+        self,
+        client: AsyncClient,
+        officer_no_unit_headers: dict,
+    ):
+        # Router translates PermissionDeniedError → 404 (enumeration convention).
+        response = await client.get(
+            _PENDING_DIPLOMA_ENDPOINT, headers=officer_no_unit_headers
+        )
+        assert response.status_code == 404, (
+            f"unit-less officer must be denied on pending-diploma, got "
+            f"{response.status_code} - {response.text[:200]}"
+        )
+
+    @pytest.mark.parametrize(
+        "endpoint", _SCOPED_LIST_ENDPOINTS_403 + [_PENDING_DIPLOMA_ENDPOINT]
+    )
+    async def test_manager_no_unit_never_leaks(
+        self,
+        client: AsyncClient,
+        manager_no_unit_headers: dict,
+        endpoint: str,
+    ):
+        """A unit-less manager must never see data. 403 (scope or Casbin deny)
+        and 404 (pending-diploma translation) are both acceptable; 200 is the
+        bug. Mirrors KPI ``test_coverage_manager_no_unit_gets_403``.
+        """
+        response = await client.get(endpoint, headers=manager_no_unit_headers)
+        assert response.status_code in (403, 404), (
+            f"IDOR leak: unit-less manager saw data on {endpoint}: "
+            f"{response.status_code} - {response.text[:200]}"
+        )

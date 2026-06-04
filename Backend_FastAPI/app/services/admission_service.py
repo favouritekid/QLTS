@@ -262,12 +262,36 @@ def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Opt
     - Admin: (None, None) — see all
     - Manager: (unit_id, None) — see unit
     - Officer: (unit_id, officer_id) — see only assigned
+
+    Fail-closed: a MANAGER/OFFICER whose ``unit_id IS NULL`` is a
+    misconfiguration, not "see everything". The repository treats
+    ``unit_id=None`` as *no unit filter* (``admission_repository`` only
+    applies the predicate ``if unit_id is not None``), so returning
+    ``(None, ...)`` here would silently widen a unit-scoped staff member to a
+    system-wide view of every profile / CSV row / status count / nợ-bằng
+    entry. Deny instead — mirrors the KPI precedent
+    (``test_coverage_manager_no_unit_gets_403``).
     """
     if current_user.role == UserRole.ADMIN:
         return None, None
     elif current_user.role == UserRole.MANAGER:
+        if current_user.unit_id is None:
+            raise PermissionDeniedError(
+                "Tài khoản quản lý chưa được gán đơn vị nên không thể truy "
+                "cập danh sách hồ sơ tuyển sinh. Liên hệ quản trị viên để "
+                "gán đơn vị."
+            )
         return current_user.unit_id, None
     elif current_user.role == UserRole.OFFICER:
+        if current_user.unit_id is None:
+            # Without a unit the officer filter would collapse to
+            # assigned_officer_id alone, leaking any cross-unit lead ever
+            # assigned to this officer. Deny rather than under-scope.
+            raise PermissionDeniedError(
+                "Tài khoản cán bộ chưa được gán đơn vị nên không thể truy "
+                "cập danh sách hồ sơ tuyển sinh. Liên hệ quản trị viên để "
+                "gán đơn vị."
+            )
         return current_user.unit_id, current_user.id
     else:
         # F8 fix 2026-05-16: defense-in-depth fallback. The expected gate
