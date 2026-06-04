@@ -584,6 +584,55 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_profiles_with_pending_diploma(
+        self,
+        unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
+        due_before: Optional[date] = None,
+    ) -> list[models.AdmissionProfile]:
+        """PR #13.7 — hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời).
+
+        Lọc ``ProfileDocument.graduation_proof_kind == 'provisional_cert'``.
+        IDOR scope mirror ``_resolve_idor_filters``: ``unit_id``
+        (``lead.unit_id``) + ``assigned_officer_id`` (``lead.assigned_officer_id``),
+        bỏ qua khi None (admin). ``due_before`` (optional): chỉ lấy hồ sơ có
+        hạn bổ sung <= ngày (sắp / đã quá hạn). Eager-load lead +
+        assigned_officer + documents.document_type để service dựng tên thí
+        sinh + officer + lấy hạn không N+1. Order ``supplement_due_date`` tăng
+        dần (gần hạn nhất trước; Postgres ASC = NULLS LAST).
+        """
+        stmt = (
+            select(models.AdmissionProfile)
+            .join(
+                models.Lead,
+                models.AdmissionProfile.lead_id == models.Lead.id,
+            )
+            .join(
+                ProfileDocument,
+                ProfileDocument.profile_id == models.AdmissionProfile.id,
+            )
+            .where(ProfileDocument.graduation_proof_kind == "provisional_cert")
+            .options(
+                selectinload(models.AdmissionProfile.lead).selectinload(
+                    models.Lead.assigned_officer
+                ),
+                selectinload(models.AdmissionProfile.documents).joinedload(
+                    ProfileDocument.document_type
+                ),
+            )
+            .order_by(asc(ProfileDocument.supplement_due_date))
+        )
+        if due_before is not None:
+            stmt = stmt.where(ProfileDocument.supplement_due_date <= due_before)
+        if unit_id is not None:
+            stmt = stmt.where(models.Lead.unit_id == unit_id)
+        if assigned_officer_id is not None:
+            stmt = stmt.where(
+                models.Lead.assigned_officer_id == assigned_officer_id
+            )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().unique().all())
+
     async def get_profile_by_lead_year(
         self,
         lead_id: int,

@@ -156,6 +156,8 @@ from .admission import (
     AdmissionProfileUpdate,
     AdmissionProfileResponse,
     AdmissionsPage,
+    PendingDiplomaItem,  # PR #13.7 — nợ bằng reminder
+    PendingDiplomaResponse,  # PR #13.7 — nợ bằng reminder
     AdmissionSubmitResponse,
     # Phase 3 PR-3C Sub-3 — choice-engine endpoint schemas
     AdmissionPublishResultResponse,

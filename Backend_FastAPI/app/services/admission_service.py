@@ -6581,6 +6581,59 @@ async def update_graduation_proof_kind(
     return profile
 
 
+async def list_pending_diploma_profiles(
+    db: AsyncSession,
+    current_user: models.User,
+    due_before: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """PR #13.7 — danh sách hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời).
+
+    IDOR scope qua ``_resolve_idor_filters`` (admin all / manager unit /
+    officer assigned). ``due_before`` lọc hồ sơ có hạn bổ sung <= ngày — query
+    nhắc officer follow-up thí sinh bổ sung bằng chính thức. Casbin admits
+    officer/manager/admin; accountant denied at the gateway.
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_id, assigned_officer_id = _resolve_idor_filters(current_user)
+    profiles = await admission_repo.list_profiles_with_pending_diploma(
+        unit_id=unit_id,
+        assigned_officer_id=assigned_officer_id,
+        due_before=due_before,
+    )
+
+    items: List[Dict[str, Any]] = []
+    for profile in profiles:
+        grad_doc = next(
+            (
+                d
+                for d in profile.documents
+                if d.document_type
+                and d.document_type.code == "bang_tot_nghiep_thpt"
+                and d.graduation_proof_kind == "provisional_cert"
+            ),
+            None,
+        )
+        lead = profile.lead
+        officer = lead.assigned_officer if lead else None
+        items.append(
+            {
+                "profile_id": profile.id,
+                "candidate_name": lead.full_name if lead else None,
+                "phone": lead.phone if lead else None,
+                "status": profile.status,
+                "supplement_due_date": (
+                    grad_doc.supplement_due_date if grad_doc else None
+                ),
+                "assigned_officer_name": (
+                    officer.full_name if officer else None
+                ),
+            }
+        )
+    return items
+
+
 async def reject_document(
     db: AsyncSession,
     profile_id: int,

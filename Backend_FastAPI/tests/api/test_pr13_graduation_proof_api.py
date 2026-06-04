@@ -426,3 +426,108 @@ async def test_regular_user_denied_by_casbin(
         json={"kind": "official_diploma"},
     )
     assert resp.status_code in (403, 404), resp.text
+
+
+# =============================================================================
+# PR #13.7 — pending-diploma ("nợ bằng") reminder endpoint
+# =============================================================================
+
+
+async def _paper_submit_official(client, oh, pid):
+    resp = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/paper-submitted",
+        headers=oh,
+        json={
+            "actual_submission_format": "original",
+            "graduation_proof_kind": "official_diploma",
+        },
+    )
+    assert resp.status_code in (200, 201), resp.text
+    return resp.json()
+
+
+@pytest.mark.asyncio
+async def test_pending_diploma_lists_provisional(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """A provisional-cert profile appears in the officer's nợ-bằng list."""
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "pdl"
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    await _paper_submit_provisional(client, oh, pid)
+
+    resp = await client.get(f"{ADMISSIONS}/pending-diploma", headers=oh)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    item = next((i for i in body["items"] if i["profile_id"] == pid), None)
+    assert item is not None, f"profile {pid} missing from nợ-bằng list: {body}"
+    assert item["supplement_due_date"] == DUE, item
+    assert item["candidate_name"], item
+    assert body["total_count"] == len(body["items"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_pending_diploma_excludes_official_and_honours_due_before(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """official_diploma carries no debt; due_before narrows by supplement date."""
+    # Create BOTH profiles before the officer login so the admin Bearer is not
+    # shadowed by an officer cookie (cookie jar contamination).
+    prof_a = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "pdA"
+    )
+    prof_b = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "pdB"
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    await _paper_submit_provisional(client, oh, prof_a["id"])  # debt (DUE)
+    await _paper_submit_official(client, oh, prof_b["id"])  # no debt
+
+    body = (
+        await client.get(f"{ADMISSIONS}/pending-diploma", headers=oh)
+    ).json()
+    ids = {i["profile_id"] for i in body["items"]}
+    assert prof_a["id"] in ids, body
+    assert prof_b["id"] not in ids, "official_diploma must not show as nợ bằng"
+
+    # due_before BEFORE the supplement date (DUE=2027-06-30) excludes A.
+    early = (
+        await client.get(
+            f"{ADMISSIONS}/pending-diploma?due_before=2027-01-01", headers=oh
+        )
+    ).json()
+    assert prof_a["id"] not in {i["profile_id"] for i in early["items"]}, early
+
+    # due_before AFTER the supplement date includes A.
+    late = (
+        await client.get(
+            f"{ADMISSIONS}/pending-diploma?due_before=2027-12-31", headers=oh
+        )
+    ).json()
+    assert prof_a["id"] in {i["profile_id"] for i in late["items"]}, late
+
+
+@pytest.mark.asyncio
+async def test_pending_diploma_regular_user_denied(
+    client: AsyncClient,
+    regular_user_token_headers: dict,
+    graduation_config: dict,
+):
+    """A basic ``user`` role has no pending-diploma policy → Casbin bounces."""
+    client.cookies.clear()
+    resp = await client.get(
+        f"{ADMISSIONS}/pending-diploma", headers=regular_user_token_headers
+    )
+    assert resp.status_code in (403, 404), resp.text

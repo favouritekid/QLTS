@@ -18,7 +18,7 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -248,6 +248,46 @@ async def get_admission_stats(
         current_user=current_user,
         academic_year=academic_year,
     )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/pending-diploma",
+    response_model=schemas.PendingDiplomaResponse,
+    summary="List profiles owing the official diploma (nợ bằng)",
+)
+async def list_pending_diploma(
+    request: Request,
+    due_before: date | None = Query(
+        None,
+        description="Chỉ lấy hồ sơ có hạn bổ sung bằng <= ngày này (YYYY-MM-DD)",
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List admission profiles that submitted a provisional graduation
+    certificate and still owe the official diploma ("nợ bằng"), IDOR-scoped to
+    the caller (admin all / manager unit / officer assigned).
+
+    Optional ``due_before`` narrows to profiles whose supplement due date has
+    passed or is approaching — the reminder query for the officer follow-up.
+
+    **Note:** declared BEFORE ``/{profile_id}`` so FastAPI does not capture
+    ``pending-diploma`` as a profile id.
+    """
+    try:
+        items = await admission_service.list_pending_diploma_profiles(
+            db=db,
+            current_user=current_user,
+            due_before=due_before,
+        )
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    return schemas.PendingDiplomaResponse(total_count=len(items), items=items)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

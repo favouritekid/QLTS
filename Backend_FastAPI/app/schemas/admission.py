@@ -1381,6 +1381,22 @@ class AdmissionsPage(BaseModel):
     profiles: List[AdmissionProfileResponse]
 
 
+class PendingDiplomaItem(BaseModel):
+    """PR #13.7 — một hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời)."""
+    profile_id: int
+    candidate_name: Optional[str] = None
+    phone: Optional[str] = None
+    status: str
+    supplement_due_date: Optional[date] = None
+    assigned_officer_name: Optional[str] = None
+
+
+class PendingDiplomaResponse(BaseModel):
+    """PR #13.7 — danh sách hồ sơ nợ bằng, IDOR-scoped theo người gọi."""
+    total_count: int
+    items: List[PendingDiplomaItem]
+
+
 # ==============================================================================
 # BULK ACTION SCHEMAS
 # ==============================================================================
