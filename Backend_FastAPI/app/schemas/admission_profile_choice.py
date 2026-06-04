@@ -92,6 +92,35 @@ class AdmissionProfileChoiceResponse(BaseModel):
     )
     scores: list[ChoiceScoreSummary] = Field(default_factory=list)
 
+    # P0 hotfix multi-NV (2026-06-04) — per-NV computed score for DISPLAY.
+    # profile.total_score is None for multi-NV (scores live per choice), so
+    # the FE renders these per NV instead of the profile-level total. Names
+    # are deliberately unambiguous: ``data_complete`` is the submit gate
+    # signal (NO sàn), ``admission_threshold_passed`` is DISPLAY-ONLY (the
+    # min_score floor is enforced by the T6 publish cascade, never by submit).
+    data_complete: bool = Field(
+        default=False,
+        description=(
+            "Đủ điểm để NỘP (|submitted∩allowed| ≥ required_subject_count) — "
+            "KHÔNG xét sàn min_score. Mirror submit gate per-NV."
+        ),
+    )
+    computed_total_score: Optional[Decimal] = Field(
+        default=None,
+        description=(
+            "Điểm tổng NV tính được (no priority bonus); None khi thiếu "
+            "data / invalid / chưa cấu hình criteria."
+        ),
+    )
+    admission_threshold_passed: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Đạt sàn min_score — DISPLAY ONLY, KHÔNG dùng để gate submit. "
+            "None khi data chưa đủ để chấm."
+        ),
+    )
+    threshold_failure_reasons: list[str] = Field(default_factory=list)
+
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="before")
@@ -195,6 +224,99 @@ class AdmissionProfileChoiceResponse(BaseModel):
                 "weight_snapshot": getattr(score_row, "weight_snapshot", None),
             })
         out["scores"] = scores_list
+
+        # ----------------------------------------------------------------
+        # P0 hotfix multi-NV — per-NV computed score (DISPLAY).
+        # ----------------------------------------------------------------
+        # Defensive: ANY failure (missing eager-loaded criteria / group,
+        # scoring edge) falls back to safe defaults so response never 500s.
+        # Reuses AdmissionScoringService.calculate_score (respects
+        # subject_selection_mode + required_subject_count) — no new math.
+        data_complete = False
+        computed_total_score = None
+        admission_threshold_passed = None
+        threshold_failure_reasons: list[str] = []
+        try:
+            # data_complete = the SUBMIT GATE verdict for THIS choice. Reuse
+            # validate_choice_scores_complete so the display badge can NEVER
+            # disagree with whether Submit is actually allowed — range-check,
+            # config-gap fail-closed, and per-choice-criteria required-count
+            # all live in ONE place. applied_rules is unavailable in the schema
+            # layer → pass {}; the gate then derives `required` from the
+            # choice's own criteria (the normal case), falling back to
+            # len(allowed) for a criteria-less choice exactly as the gate does
+            # when applied_rules also lacks the count.
+            from app.services.admission_choice_engine_service import (
+                validate_choice_scores_complete,
+            )
+            data_complete = not validate_choice_scores_complete([data], {})
+
+            # computed score (DISPLAY) via the scoring service — respects
+            # subject_selection_mode + required_subject_count; raw combo score
+            # (no priority bonus). None when data is incomplete / INVALID.
+            allowed_codes: list[str] = []
+            if config is not None:
+                sg = getattr(config, "subject_group", None)
+                if sg is not None:
+                    for sgs in (getattr(sg, "subject_mappings", None) or []):
+                        subj = getattr(sgs, "subject", None)
+                        code = getattr(subj, "code", None) if subj else None
+                        if code:
+                            allowed_codes.append(code)
+            submitted_map: dict[str, Any] = {}
+            for srow in (getattr(data, "scores", None) or []):
+                subj = getattr(srow, "subject", None)
+                code = getattr(subj, "code", None) if subj else None
+                if code is not None:
+                    submitted_map[code] = getattr(srow, "score", None)
+
+            criteria = getattr(path, "criteria", None) if path is not None else None
+            if criteria is not None and allowed_codes and submitted_map:
+                from app.services.admission_scoring_service import (
+                    AdmissionScoringService,
+                    ProfileStatus as _ProfileStatus,
+                )
+
+                score_input = {
+                    c: Decimal(str(v))
+                    for c, v in submitted_map.items()
+                    if v is not None
+                }
+                result = AdmissionScoringService.calculate_score(
+                    criteria=criteria,
+                    subject_scores=score_input,
+                    allowed_subjects=allowed_codes,
+                    # subject_weights=None MIRRORS the T6 publish cascade
+                    # (admission_choice_engine_service._evaluate_single_choice
+                    # passes None too — "Phase 4: read from path snapshot").
+                    # Both call sites are unweighted today; keep them in
+                    # LOCKSTEP. Wiring weight_snapshot into this DISPLAY call
+                    # alone would make computed_total_score diverge from the
+                    # actual admission decision. When Phase 4 wires weights,
+                    # update both sites together.
+                    subject_weights=None,
+                )
+                computed_total_score = result.final_score
+                # A sàn verdict is only meaningful for a VALID result. When
+                # INVALID (missing subject / điểm liệt) leave threshold_passed
+                # None AND threshold_failure_reasons empty — a data-completeness
+                # reason must NOT be mislabelled as a sàn (min_score) failure;
+                # completeness is conveyed by data_complete instead.
+                if result.status == _ProfileStatus.VALID:
+                    admission_threshold_passed = bool(result.passed)
+                    threshold_failure_reasons = list(
+                        result.failure_reasons or []
+                    )
+        except Exception:  # noqa: BLE001 — display-only; never break response
+            data_complete = False
+            computed_total_score = None
+            admission_threshold_passed = None
+            threshold_failure_reasons = []
+
+        out["data_complete"] = data_complete
+        out["computed_total_score"] = computed_total_score
+        out["admission_threshold_passed"] = admission_threshold_passed
+        out["threshold_failure_reasons"] = threshold_failure_reasons
 
         return out
 

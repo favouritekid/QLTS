@@ -3,6 +3,7 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Calculator, CheckCircle2, AlertTriangle } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { PerNvScoreSummary } from "./PerNvScoreSummary"
 
 interface ScoreReviewCardProps {
   profile: AdmissionProfileResponse
@@ -11,8 +12,14 @@ interface ScoreReviewCardProps {
 /**
  * Cockpit card cho § điểm xét tuyển. BE-driven: đọc total_score /
  * average_score / admission_scores root-level fields.
+ *
+ * P0 hotfix multi-NV: khi uses_choice_engine, total_score profile-level là
+ * null → render điểm per-NV (PerNvScoreSummary) thay vì "—"/0.00.
  */
 export function ScoreReviewCard({ profile }: ScoreReviewCardProps) {
+  const isMultiNv = profile.uses_choice_engine === true
+  const choices = profile.choices ?? []
+
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
 
@@ -21,7 +28,9 @@ export function ScoreReviewCard({ profile }: ScoreReviewCardProps) {
   const averageScore = profile.average_score
   const selectedGroup = profile.admission_scores?.selected_group
 
-  const hasScore = isGpaOnly
+  const hasScore = isMultiNv
+    ? choices.length > 0 && choices.every((c) => c.data_complete)
+    : isGpaOnly
     ? gpa !== null && gpa !== undefined
     : totalScore !== null && totalScore !== undefined
 
@@ -41,7 +50,9 @@ export function ScoreReviewCard({ profile }: ScoreReviewCardProps) {
       </CardHeader>
 
       <CardContent className="space-y-2 text-sm">
-        {isGpaOnly ? (
+        {isMultiNv ? (
+          <PerNvScoreSummary choices={choices} compact />
+        ) : isGpaOnly ? (
           <div className="flex justify-between items-baseline">
             <span className="text-muted-foreground">GPA:</span>
             <span className="font-bold text-2xl tabular-nums">

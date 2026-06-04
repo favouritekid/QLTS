@@ -29,6 +29,10 @@ from app.models.admission_config.admission_path import AdmissionPath
 from app.models.admission_config.path_subject_group import (
     PathSubjectGroupConfig,
 )
+from app.models.admission_config.subject import (
+    SubjectGroup,
+    SubjectGroupSubject,
+)
 from app.models.admission_profile_choice import (
     AdmissionProfileChoice,
     ProfileChoiceScore,
@@ -48,6 +52,14 @@ from app.repositories.base import BaseRepository
 # (trước fix: chỉ load academic_info → program lazy → swallowed → empty
 # → display "2026 - hoc_ba - DOT_1" mất ngành/trình độ).
 def _choices_eager_load_options() -> tuple:
+    # P0 hotfix multi-NV (2026-06-04): +2 legs so the sync eligibility/
+    # submit/display helpers (validate_choice_scores_complete +
+    # AdmissionProfileChoiceResponse._compute_display_fields) never lazy-load
+    # in async context (MissingGreenlet):
+    #   * subject_group → subject_mappings → subject — _resolve_allowed_subjects
+    #     walks the M2M to list allowed combo subject codes.
+    #   * admission_path → criteria — per-NV computed_total_score scores via
+    #     AdmissionScoringService.calculate_score(criteria=path.criteria, …).
     return (
         selectinload(models.AdmissionProfile.choices).selectinload(
             AdmissionProfileChoice.admission_path
@@ -61,8 +73,13 @@ def _choices_eager_load_options() -> tuple:
             AdmissionProfileChoice.admission_path
         ).selectinload(AdmissionPath.admission_round),
         selectinload(models.AdmissionProfile.choices).selectinload(
+            AdmissionProfileChoice.admission_path
+        ).selectinload(AdmissionPath.criteria),
+        selectinload(models.AdmissionProfile.choices).selectinload(
             AdmissionProfileChoice.path_subject_group_config
-        ).selectinload(PathSubjectGroupConfig.subject_group),
+        ).selectinload(PathSubjectGroupConfig.subject_group)
+        .selectinload(SubjectGroup.subject_mappings)
+        .selectinload(SubjectGroupSubject.subject),
         selectinload(models.AdmissionProfile.choices).selectinload(
             AdmissionProfileChoice.scores
         ).selectinload(ProfileChoiceScore.subject),
@@ -274,6 +291,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+                # P0 hotfix multi-NV — list/export/stats call
+                # _compute_frontend_fields/_compute_completion_percent per row,
+                # which now read profile.choices (+ nested scores/group/criteria)
+                # for multi-NV eligibility/completion. Without this the per-row
+                # sync access lazy-loads → MissingGreenlet (N-row 500).
+                *_choices_eager_load_options(),
             ).order_by(order_func(sort_column)).offset(skip).limit(limit)
         if base_conditions:
             data_query = data_query.where(and_(*base_conditions))

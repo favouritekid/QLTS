@@ -25,6 +25,7 @@ import {
 import { ChevronDown } from "lucide-react"
 import { useState } from "react"
 import { getSubjectLabel } from "@/lib/utils/admission-helpers"
+import { PerNvScoreSummary } from "./PerNvScoreSummary"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface ScoreSnapshotProps {
@@ -34,6 +35,8 @@ interface ScoreSnapshotProps {
 export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
   const [isOpen, setIsOpen] = useState(false)
 
+  const isMultiNv = profile.uses_choice_engine === true
+  const choices = profile.choices ?? []
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
   const allSubjectScores = profile.admission_scores?.subject_scores ?? {}
@@ -91,6 +94,30 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
     Object.keys(subjectWeights).length > 0
   const getWeight = (code: string): number =>
     subjectWeights[code] !== undefined ? subjectWeights[code] : 1.0
+
+  // P0 hotfix multi-NV — scores live per choice (ProfileChoiceScore), the
+  // profile-level snapshot table below is empty. Render per-NV instead.
+  if (isMultiNv) {
+    return (
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleTrigger className="flex items-center justify-between w-full p-4 hover:bg-muted/50 rounded-lg transition-colors border">
+          <div className="flex items-center gap-2">
+            <Calculator className="w-5 h-5 text-muted-foreground" />
+            <span className="font-semibold">Điểm Theo Nguyện Vọng</span>
+          </div>
+          <ChevronDown
+            className={`w-4 h-4 transition-transform ${
+              isOpen ? "transform rotate-180" : ""
+            }`}
+          />
+        </CollapsibleTrigger>
+
+        <CollapsibleContent className="p-4 border border-t-0 rounded-b-lg">
+          <PerNvScoreSummary choices={choices} />
+        </CollapsibleContent>
+      </Collapsible>
+    )
+  }
 
   // If GPA-only method, show message
   if (isGpaOnly) {

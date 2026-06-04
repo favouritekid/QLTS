@@ -311,3 +311,47 @@ describe("ScoreSnapshot — weighted breakdown (PR6 Step 3)", () => {
     expect(screen.getByText("24.00")).toBeInTheDocument()
   })
 })
+
+describe("ScoreSnapshot — multi-NV (uses_choice_engine)", () => {
+  function buildMultiNvProfile() {
+    return buildProfile({
+      uses_choice_engine: true,
+      total_score: null,
+      choices: [
+        {
+          id: 10,
+          admission_profile_id: 1,
+          admission_path_id: 5,
+          path_subject_group_config_id: 7,
+          display_order: 1,
+          decision: "pending",
+          display_path_name: "Y sỹ đa khoa 2026 - HSA - DOT_2",
+          display_program_name: "Y sỹ đa khoa",
+          display_degree_level: "Cao đẳng",
+          display_subject_group_name: "Toán-Hóa-Sinh",
+          scores: [],
+          data_complete: true,
+          computed_total_score: "24.50",
+          admission_threshold_passed: true,
+          threshold_failure_reasons: [],
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    })
+  }
+
+  it("render collapsible 'Điểm Theo Nguyện Vọng' + per-NV score, KHÔNG bảng snapshot profile-level", () => {
+    render(<ScoreSnapshot profile={buildMultiNvProfile()} />)
+    const trigger = screen.getByRole("button", { name: /điểm theo nguyện vọng/i })
+    fireEvent.click(trigger)
+
+    expect(screen.getByTestId("per-nv-score-summary")).toBeInTheDocument()
+    expect(screen.getByText("Y sỹ đa khoa")).toBeInTheDocument()
+    expect(screen.getByText("24.50")).toBeInTheDocument()
+    // Legacy snapshot table label must NOT show for multi-NV
+    expect(
+      screen.queryByText(/snapshot điểm chuẩn/i),
+    ).not.toBeInTheDocument()
+  })
+})
