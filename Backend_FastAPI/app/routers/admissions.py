@@ -1001,6 +1001,70 @@ async def mark_document_paper_submitted(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/graduation-proof",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Update graduation proof kind (provisional cert -> official diploma)",
+    status_code=status.HTTP_200_OK,
+)
+async def update_document_graduation_proof(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    data: schemas.GraduationProofUpdateRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Update the graduation proof kind for a graduation document (PR #13).
+
+    Use case: a candidate who previously submitted a provisional graduation
+    certificate (``provisional_cert``) later brings the official diploma
+    (``official_diploma``). The officer records the upgrade WITHOUT changing
+    the document status (it stays ``paper_submitted``); ``official_diploma``
+    clears the supplement due date so the "nợ bằng" badge disappears.
+
+    Only applies to ``bang_tot_nghiep_thpt``. Casbin admits officer (manager
+    + admin inherit, mirror ``paper-submitted``); the service layer enforces
+    the IDOR scope via ``get_profile``.
+
+    **Request Body:**
+    - kind: official_diploma | provisional_cert
+
+    **Returns:**
+    - Full AdmissionProfileResponse with updated validation_summary
+    """
+    try:
+        profile = await admission_service.update_graduation_proof_kind(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            new_kind=data.kind,
+            current_user=current_user,
+        )
+        await db.commit()
+        await db.refresh(profile)
+        # PR #13 — emit AFTER commit settles (mirror paper-submitted) so the
+        # FE refetches and the "nợ bằng" badge + completion stay in sync.
+        await _emit_admission_doc_mutation(
+            profile_id,
+            document_action="graduation_proof_updated",
+            doc_code=doc_code,
+        )
+        return profile
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    except ValidationError as e:
+        # BusinessRuleViolation (non-graduation doc) + ValidationError
+        # (invalid kind) are both ValidationError subclasses → 400.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
 @router.patch(
     "/{profile_id}/documents/{doc_code}/verify-format",
     response_model=schemas.AdmissionProfileResponse,

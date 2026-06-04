@@ -188,6 +188,7 @@ from .admission import (
     DocumentUploadResponse,
     DocumentRejectRequest,
     DocumentSubmissionRequest,
+    GraduationProofUpdateRequest,  # PR #13 — graduation proof upgrade
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,

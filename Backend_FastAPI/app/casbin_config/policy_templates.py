@@ -179,6 +179,13 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # (requires_upload=false); service-layer guard enforces the
         # owning-officer + profile-editable + missing-status contract.
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/paper-submitted", "action": "POST"},
+        # PR #13 — officer records a graduation-proof upgrade (provisional
+        # cert → official diploma) WITHOUT changing doc status. Mirrors
+        # paper-submitted (officer-initiated); service layer narrows IDOR +
+        # bang_tot_nghiep_thpt-only. Manager/admin inherit; accountant has no
+        # deny row (same as paper-submitted — finance never reaches the
+        # owning-officer scope check).
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/graduation-proof", "action": "POST"},
         # Phase 3 multi-NV read-only (PR-3B). Officer can VIEW result-published
         # profiles + choice list for their assigned unit; mutations stay
         # manager-only per RBAC matrix plan v0.7. Service-layer IDOR
