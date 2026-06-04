@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -661,3 +661,53 @@ async def test_paper_submit_graduation_requires_kind(
     row = _grad_row((await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json())
     assert row["status"] == "missing", row
     assert row["graduation_proof_kind"] is None, row
+
+
+@pytest.mark.asyncio
+async def test_pending_diploma_excludes_withdrawn_and_dropped(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """Review F3 — non-actionable profiles drop out of the nợ-bằng reminder:
+    withdrawn (status) and dropped (is_dropped=True) even with a provisional
+    cert outstanding; an actionable profile stays listed."""
+    # Create all three before officer login (admin Bearer not shadowed).
+    p_wd = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "wd"
+    )
+    p_drop = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "drp"
+    )
+    p_ok = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "ok"
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    for pid in (p_wd["id"], p_drop["id"], p_ok["id"]):
+        await _paper_submit_provisional(client, oh, pid)
+
+    # All three listed initially.
+    before = (await client.get(f"{ADMISSIONS}/pending-diploma", headers=oh)).json()
+    listed = {i["profile_id"] for i in before["items"]}
+    assert {p_wd["id"], p_drop["id"], p_ok["id"]} <= listed, before
+
+    # Flip to non-actionable states (terminal): withdrawn + dropped.
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text("UPDATE admission_profile SET status='withdrawn' WHERE id=:id"),
+            {"id": p_wd["id"]},
+        )
+        await s.execute(
+            text("UPDATE admission_profile SET is_dropped=true WHERE id=:id"),
+            {"id": p_drop["id"]},
+        )
+        await s.commit()
+
+    after = (await client.get(f"{ADMISSIONS}/pending-diploma", headers=oh)).json()
+    ids = {i["profile_id"] for i in after["items"]}
+    assert p_wd["id"] not in ids, "withdrawn must be excluded"
+    assert p_drop["id"] not in ids, "dropped must be excluded"
+    assert p_ok["id"] in ids, "actionable profile must remain listed"

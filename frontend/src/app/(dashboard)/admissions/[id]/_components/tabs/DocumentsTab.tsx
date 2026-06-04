@@ -461,7 +461,7 @@ interface ActionsCellProps {
     label: string,
     requiredFormat?: string,
   ) => void
-  onUpdateGraduationProof: (code: string) => void
+  onUpdateGraduationProof: (code: string, label: string) => void
   onRejectClick: (code: string, label: string) => void
   onResetClick: (code: string, label: string) => void
   onVerifyClick: (code: string, format: string) => void
@@ -650,7 +650,7 @@ function DocumentRowActions(props: ActionsCellProps) {
             tooltip="Ghi nhận đã nhận bằng tốt nghiệp THPT chính thức (xoá nợ bằng)"
             className="text-success-700 hover:text-success-800 hover:bg-success-50"
             disabled={isGradPending}
-            onClick={() => onUpdateGraduationProof(doc.code)}
+            onClick={() => onUpdateGraduationProof(doc.code, doc.label)}
           >
             {isGradPending ? (
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
@@ -756,15 +756,24 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
   const [selectedFormat, setSelectedFormat] = useState<string>("")
 
   // PR #13 — graduation proof kind chosen inside the paper-submit dialog,
-  // only for GRADUATION_DOC_CODE. Default to the official diploma;
+  // only for GRADUATION_DOC_CODE. Review F1: NO default — the officer must
+  // explicitly pick official vs provisional (a default would let a
+  // provisional cert be recorded as an official diploma, hiding the debt).
   // provisional_cert requires a supplement due date.
   const [graduationKind, setGraduationKind] = useState<
-    "official_diploma" | "provisional_cert"
-  >("official_diploma")
+    "" | "official_diploma" | "provisional_cert"
+  >("")
   const [supplementDue, setSupplementDue] = useState<string>("")
 
   // Reset/Undo Confirmation Dialog State
   const [pendingResetDoc, setPendingResetDoc] = useState<{
+    code: string
+    label: string
+  } | null>(null)
+
+  // Review F2 — confirm before clearing the "nợ bằng" debt (one-click +
+  // irreversible via this flow: the endpoint only accepts official_diploma).
+  const [pendingGradUpdate, setPendingGradUpdate] = useState<{
     code: string
     label: string
   } | null>(null)
@@ -925,9 +934,9 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
       action: "paper",
     })
     setSelectedFormat(requiredFormat || "")
-    // PR #13 — reset the graduation choice for the graduation doc; default to
-    // the official diploma, officer switches to provisional + due if needed.
-    setGraduationKind("official_diploma")
+    // PR #13 / review F1 — reset the graduation choice to UNSELECTED so the
+    // officer must explicitly pick official vs provisional each time.
+    setGraduationKind("")
     setSupplementDue("")
   }
 
@@ -944,8 +953,14 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
       })
     } else if (action === "paper") {
       const isGraduation = docCode === GRADUATION_DOC_CODE
-      // PR #13 — provisional_cert ("nợ bằng") requires a supplement due date.
-      // Block early so the officer fills it rather than eating a 400.
+      // Review F1 — the graduation doc must be classified explicitly (no
+      // default); block until the officer picks a kind. The confirm button is
+      // also disabled — this is defense-in-depth.
+      if (isGraduation && !graduationKind) {
+        toast.error("Vui lòng chọn loại giấy tốt nghiệp")
+        return
+      }
+      // provisional_cert ("nợ bằng") requires a supplement due date.
       if (
         isGraduation &&
         graduationKind === "provisional_cert" &&
@@ -959,7 +974,7 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
       paperMutation.mutate({
         docCode,
         actualSubmissionFormat: selectedFormat,
-        ...(isGraduation
+        ...(isGraduation && graduationKind
           ? {
               graduationProofKind: graduationKind,
               supplementDueDate:
@@ -973,14 +988,24 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
 
     setSubmissionFormatDialog(null)
     setSelectedFormat("")
-    setGraduationKind("official_diploma")
+    setGraduationKind("")
     setSupplementDue("")
   }
 
-  // PR #13 — officer records the official diploma after a provisional cert
-  // (clears the "nợ bằng" debt). The document status is unchanged backend-side.
-  const handleUpdateGraduationProof = (code: string) => {
-    updateGradMutation.mutate({ docCode: code, kind: "official_diploma" })
+  // PR #13 / review F2 — officer records the official diploma after a
+  // provisional cert (clears the "nợ bằng" debt). One-click + irreversible via
+  // this flow, so it goes through a confirm dialog first.
+  const handleUpdateGraduationProof = (code: string, label: string) => {
+    setPendingGradUpdate({ code, label })
+  }
+  const handleGradUpdateConfirm = () => {
+    if (pendingGradUpdate) {
+      updateGradMutation.mutate({
+        docCode: pendingGradUpdate.code,
+        kind: "official_diploma",
+      })
+    }
+    setPendingGradUpdate(null)
   }
 
   const handleRejectClick = (code: string, label: string) => {
@@ -1884,12 +1909,14 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
               onClick={handleSubmissionFormatConfirm}
               disabled={
                 !selectedFormat ||
-                // PR #13 — block until the supplement due date is filled for a
-                // provisional graduation certificate.
+                // Review F1 — for the graduation doc, block until the officer
+                // explicitly picks a kind, and (if provisional) fills the due
+                // date. No default kind → no silent mis-classification.
                 (submissionFormatDialog?.action === "paper" &&
                   submissionFormatDialog?.docCode === GRADUATION_DOC_CODE &&
-                  graduationKind === "provisional_cert" &&
-                  !supplementDue)
+                  (!graduationKind ||
+                    (graduationKind === "provisional_cert" &&
+                      !supplementDue)))
               }
             >
               {submissionFormatDialog?.action === "paper"
@@ -1971,6 +1998,35 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
               onClick={handleResetConfirm}
             >
               Hoàn tác
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Review F2 — confirm before clearing the "nợ bằng" debt. */}
+      <AlertDialog
+        open={!!pendingGradUpdate}
+        onOpenChange={(open) => !open && setPendingGradUpdate(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Đã nhận bằng chính thức?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ghi nhận đã nhận bằng tốt nghiệp THPT chính thức cho
+              &ldquo;{pendingGradUpdate?.label}&rdquo;?
+            </AlertDialogDescription>
+            <p className="text-sm text-muted-foreground">
+              Thao tác này xoá trạng thái &ldquo;nợ bằng&rdquo; (giấy tạm thời)
+              và không thể hoàn tác từ thao tác này.
+            </p>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-success-700 text-white hover:bg-success-800"
+              onClick={handleGradUpdateConfirm}
+            >
+              Xác nhận đã nhận bằng
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

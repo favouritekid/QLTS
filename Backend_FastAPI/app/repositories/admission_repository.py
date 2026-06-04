@@ -612,6 +612,13 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 ProfileDocument.profile_id == models.AdmissionProfile.id,
             )
             .where(ProfileDocument.graduation_proof_kind == "provisional_cert")
+            # Review F3 — chỉ nhắc hồ sơ CÒN actionable: bỏ withdrawn (thí sinh
+            # rút) + dropped (is_dropped=True, status vẫn 'enrolled'). GIỮ
+            # enrolled-không-dropped (đúng use case: nhập học với giấy tạm thời,
+            # vẫn nợ bằng) + rejected (có thể resubmit; reject_document đã clear
+            # field khi reject ở tầng doc).
+            .where(models.AdmissionProfile.status != "withdrawn")
+            .where(models.AdmissionProfile.is_dropped.isnot(True))
             .options(
                 selectinload(models.AdmissionProfile.lead).selectinload(
                     models.Lead.assigned_officer
