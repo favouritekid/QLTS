@@ -531,3 +531,98 @@ async def test_pending_diploma_regular_user_denied(
         f"{ADMISSIONS}/pending-diploma", headers=regular_user_token_headers
     )
     assert resp.status_code in (403, 404), resp.text
+
+
+# =============================================================================
+# Review hardening — graduation-proof update guards
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_provisional_kind(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """The endpoint records the OFFICIAL diploma only; provisional_cert (which
+    needs a supplement due date this endpoint can't carry) → 400."""
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "prov"
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    await _paper_submit_provisional(client, oh, pid)
+    resp = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/graduation-proof",
+        headers=oh,
+        json={"kind": "provisional_cert"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_unreceived_doc(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """Cannot stamp official_diploma on a graduation doc never received
+    (status='missing') → 400 (doc-status coherence guard)."""
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "unrcv"
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    # No paper-submit → graduation doc is still 'missing'.
+    resp = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/graduation-proof",
+        headers=oh,
+        json={"kind": "official_diploma"},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_reject_clears_graduation_debt(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """Rejecting a provisional graduation submission voids the nợ-bằng debt:
+    the profile drops out of the pending-diploma list."""
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "rejdebt"
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    await _paper_submit_provisional(client, oh, pid)
+
+    # Sanity: the debt is listed before rejection.
+    before = (await client.get(f"{ADMISSIONS}/pending-diploma", headers=oh)).json()
+    assert pid in {i["profile_id"] for i in before["items"]}, before
+
+    # Admin (reviewer) rejects the graduation doc.
+    from tests.fixtures.constants import TestUsers
+
+    admin = await _login(
+        client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"]
+    )
+    rej = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/reject",
+        headers=admin,
+        json={"reason": "Giấy tạm thời không hợp lệ, yêu cầu nộp lại"},
+    )
+    assert rej.status_code == 200, rej.text
+
+    # Debt cleared → no longer in the reminder list.
+    after = (await client.get(f"{ADMISSIONS}/pending-diploma", headers=admin)).json()
+    assert pid not in {i["profile_id"] for i in after["items"]}, after

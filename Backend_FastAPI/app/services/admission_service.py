@@ -2149,6 +2149,13 @@ def _compute_frontend_fields(
             "submission_format_confirmed": uploaded_doc.get(
                 "submission_format_confirmed", False
             ),
+            # PR #13 — surface the "nợ bằng" debt even on an extra row so the
+            # badge stays visible if bang_tot_nghiep_thpt drops out of the
+            # snapshot; extras are read-only → no upgrade action (the service
+            # is_extra guard would reject it anyway).
+            "graduation_proof_kind": uploaded_doc.get("graduation_proof_kind"),
+            "supplement_due_date": uploaded_doc.get("supplement_due_date"),
+            "can_update_graduation_kind": False,
             # Extras are read-only: row visible for evidence + audit,
             # but no action buttons. A future sync-path action will own
             # the cleanup workflow.
@@ -6523,26 +6530,64 @@ async def update_graduation_proof_kind(
     new_kind: str,
     current_user: models.User,
 ) -> models.AdmissionProfile:
-    """PR #13 — nâng cấp loại giấy tốt nghiệp THPT (vd provisional→official).
+    """PR #13 — officer ghi nhận đã nhận BẰNG CHÍNH THỨC (provisional→official).
 
     Dùng khi thí sinh bổ sung bằng chính thức cho hồ sơ trước đó nộp Giấy CN
-    tốt nghiệp tạm thời. KHÔNG đổi status. official_diploma → xoá hạn bổ sung.
-    IDOR qua get_profile; role gate ở router (Casbin như paper-submitted).
+    tốt nghiệp tạm thời. KHÔNG đổi status; official_diploma → xoá hạn bổ sung.
+
+    Auth: ``get_profile`` đã chặn IDOR scope (officer=assigned+unit /
+    manager=unit / admin all). Thêm 2 guard mirror ``_authorize_document_action``
+    mà sibling endpoints (paper-submit/verify/reject/reset) áp:
+    - **BR2 is_extra**: doc đã rớt khỏi ``mandatory_docs`` snapshot = read-only.
+    - **doc-status**: chỉ cập nhật khi giấy ĐÃ được ghi nhận
+      (``paper_submitted`` / ``verified``) — không stamp lên doc chưa nhận.
+    Chỉ nhận ``official_diploma``: giấy tạm thời + hạn bổ sung ghi qua paper-
+    submit (mang theo hạn); endpoint này không có field hạn nên nhận
+    provisional_cert sẽ tạo "nợ bằng" hạn NULL mà query nhắc bỏ sót.
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
+    # get_profile eager-loads documents.document_type + enforces IDOR scope.
     profile = await get_profile(db, profile_id, current_user)
 
     if doc_code != "bang_tot_nghiep_thpt":
         raise BusinessRuleViolation("Chỉ áp dụng cho giấy tốt nghiệp THPT")
-    if new_kind not in ("official_diploma", "provisional_cert"):
-        raise ValidationError("graduation_proof_kind không hợp lệ")
+    if new_kind != "official_diploma":
+        raise BusinessRuleViolation(
+            "Endpoint chỉ ghi nhận bằng chính thức; giấy tạm thời + hạn bổ "
+            "sung được ghi qua thao tác nhận giấy."
+        )
 
-    doc_before = await admission_repo.get_document_by_type(
-        profile_id, doc_code
+    # Locate the graduation doc in the eager-loaded snapshot (no extra query).
+    doc_before = next(
+        (
+            d
+            for d in profile.documents
+            if d.document_type and d.document_type.code == doc_code
+        ),
+        None,
     )
-    status = doc_before.status if doc_before else "missing"
+    if not doc_before:
+        raise ResourceNotFoundError(
+            f"Document code '{doc_code}' not found in profile documents"
+        )
+
+    # BR2 — extras (dropped from the mandatory snapshot) are read-only.
+    applied_rules = profile.applied_rules or {}
+    mandatory_docs = applied_rules.get("mandatory_docs") or []
+    if doc_code not in mandatory_docs:
+        raise PermissionDeniedError(
+            f"Document '{doc_code}' is no longer in the current admission "
+            f"path's mandatory list (extra / evidence-only)."
+        )
+
+    # Coherence — only a RECEIVED graduation doc can be upgraded to official.
+    status = doc_before.status
+    if status not in ("paper_submitted", "verified"):
+        raise BusinessRuleViolation(
+            "Chỉ cập nhật loại giấy khi đã ghi nhận giấy tốt nghiệp."
+        )
 
     doc = await admission_repo.update_graduation_proof(
         profile_id=profile_id,
@@ -6565,9 +6610,10 @@ async def update_graduation_proof_kind(
         new_kind=new_kind,
     )
 
-    documents = await admission_repo.get_all_documents(profile_id)
+    # Reuse the eager-loaded collection (mutated in-place via the identity
+    # map) instead of re-querying all documents.
     await _populate_response_fields(
-        db, profile, current_user, documents=documents
+        db, profile, current_user, documents=profile.documents
     )
 
     log.info(

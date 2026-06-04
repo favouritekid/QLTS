@@ -1303,7 +1303,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.rejection_reason = reason
         doc.rejected_at = datetime.now(timezone.utc)
         doc.rejected_by = officer_id
-        
+        # PR #13 — a rejected graduation submission voids the "nợ bằng" debt
+        # fields (mirror reset_document) so the pending-diploma reminder + the
+        # detail badge don't surface a debt on a rejected row.
+        doc.graduation_proof_kind = None
+        doc.supplement_due_date = None
+
         return doc
 
     async def confirm_document_format(
