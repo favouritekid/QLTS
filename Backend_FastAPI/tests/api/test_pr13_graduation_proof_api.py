@@ -626,3 +626,38 @@ async def test_reject_clears_graduation_debt(
     # Debt cleared → no longer in the reminder list.
     after = (await client.get(f"{ADMISSIONS}/pending-diploma", headers=admin)).json()
     assert pid not in {i["profile_id"] for i in after["items"]}, after
+
+
+@pytest.mark.asyncio
+async def test_paper_submit_graduation_requires_kind(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    graduation_config: dict,
+):
+    """Marking the graduation doc received WITHOUT graduation_proof_kind → 400.
+
+    Defaulting (e.g. to official_diploma) would risk silently recording a
+    provisional cert as an official diploma — hiding the nợ-bằng debt. A raw
+    API / Swagger / old client that omits the kind must be rejected, not
+    quietly accepted with NULL classification.
+    """
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, graduation_config, "reqkind"
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        f"{ADMISSIONS}/{pid}/documents/{GRAD_CODE}/paper-submitted",
+        headers=oh,
+        # No graduation_proof_kind — the gap the gate closes.
+        json={"actual_submission_format": "certified_copy"},
+    )
+    assert resp.status_code == 400, resp.text
+
+    # And the doc must NOT have been recorded as received with a NULL kind.
+    row = _grad_row((await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json())
+    assert row["status"] == "missing", row
+    assert row["graduation_proof_kind"] is None, row

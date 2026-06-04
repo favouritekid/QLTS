@@ -6464,13 +6464,25 @@ async def mark_paper_submitted(
     )
 
     # PR #13 — graduation proof chỉ áp cho giấy TN THPT; doc khác bỏ qua 2
-    # field. Validate provisional ⇒ bắt buộc có hạn bổ sung.
+    # field. Giấy TN THPT BẮT BUỘC phân loại khi ghi nhận.
     _grad_kind = graduation_proof_kind
     _grad_due = supplement_due_date
     if doc_code != "bang_tot_nghiep_thpt":
         _grad_kind = None
         _grad_due = None
-    elif _grad_kind is not None:
+    else:
+        # The graduation doc MUST be classified on receipt. Defaulting (e.g.
+        # to official_diploma) would risk silently recording a provisional
+        # cert as an official diploma — the candidate would owe the diploma
+        # but the system would show no "nợ bằng" debt, no badge and no way to
+        # clear it. Require the kind explicitly. The FE dialog always sends
+        # it (RadioGroup forces a choice); this closes the gap for raw API /
+        # Swagger / old clients that omit it.
+        if _grad_kind is None:
+            raise ValidationError(
+                "Cần chọn loại giấy tốt nghiệp (bằng chính thức / giấy tạm "
+                "thời) khi ghi nhận giấy tốt nghiệp THPT."
+            )
         if _grad_kind not in ("official_diploma", "provisional_cert"):
             raise ValidationError("graduation_proof_kind không hợp lệ")
         if _grad_kind == "provisional_cert" and _grad_due is None:
