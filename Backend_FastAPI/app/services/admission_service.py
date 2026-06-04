@@ -24,7 +24,7 @@ Security Features:
 
 import random
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal
 import structlog
@@ -6386,12 +6386,16 @@ async def mark_paper_submitted(
     doc_code: str,
     current_user: models.User,
     actual_submission_format: Optional[str] = None,
+    graduation_proof_kind: Optional[str] = None,
+    supplement_due_date: Optional[date] = None,
 ) -> models.AdmissionProfile:
     """
     Mark a document as paper submitted (officer confirms receipt).
 
     For documents where requires_upload=false.
     Only officers/managers/admins can mark paper submitted.
+    PR #13: graduation_proof_kind/supplement_due_date chỉ áp cho giấy tốt
+    nghiệp THPT (bằng chính thức / giấy tạm thời + hạn bổ sung).
 
     Args:
         db: Database session
@@ -6435,12 +6439,29 @@ async def mark_paper_submitted(
         current_user=current_user,
     )
 
+    # PR #13 — graduation proof chỉ áp cho giấy TN THPT; doc khác bỏ qua 2
+    # field. Validate provisional ⇒ bắt buộc có hạn bổ sung.
+    _grad_kind = graduation_proof_kind
+    _grad_due = supplement_due_date
+    if doc_code != "bang_tot_nghiep_thpt":
+        _grad_kind = None
+        _grad_due = None
+    elif _grad_kind is not None:
+        if _grad_kind not in ("official_diploma", "provisional_cert"):
+            raise ValidationError("graduation_proof_kind không hợp lệ")
+        if _grad_kind == "provisional_cert" and _grad_due is None:
+            raise ValidationError(
+                "Cần nhập hạn bổ sung cho Giấy CN tốt nghiệp tạm thời"
+            )
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
         document_type_code=doc_code,
         officer_id=current_user.id,
         actual_submission_format=actual_submission_format,
+        graduation_proof_kind=_grad_kind,
+        supplement_due_date=_grad_due,
     )
 
     if not doc:
@@ -6456,6 +6477,8 @@ async def mark_paper_submitted(
         actor_user_id=current_user.id,
         old_status=old_status,
         declared_format=actual_submission_format,
+        graduation_proof_kind=_grad_kind,
+        supplement_due_date=_grad_due,
     )
 
     # G2 (ADM-032 partial) — full response contract parity. Mirrors
@@ -6470,6 +6493,71 @@ async def mark_paper_submitted(
         "Document paper submitted confirmed with audit log",
         profile_id=profile_id,
         doc_code=doc_code,
+        officer_id=current_user.id,
+    )
+
+    return profile
+
+
+async def update_graduation_proof_kind(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    new_kind: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """PR #13 — nâng cấp loại giấy tốt nghiệp THPT (vd provisional→official).
+
+    Dùng khi thí sinh bổ sung bằng chính thức cho hồ sơ trước đó nộp Giấy CN
+    tốt nghiệp tạm thời. KHÔNG đổi status. official_diploma → xoá hạn bổ sung.
+    IDOR qua get_profile; role gate ở router (Casbin như paper-submitted).
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    profile = await get_profile(db, profile_id, current_user)
+
+    if doc_code != "bang_tot_nghiep_thpt":
+        raise BusinessRuleViolation("Chỉ áp dụng cho giấy tốt nghiệp THPT")
+    if new_kind not in ("official_diploma", "provisional_cert"):
+        raise ValidationError("graduation_proof_kind không hợp lệ")
+
+    doc_before = await admission_repo.get_document_by_type(
+        profile_id, doc_code
+    )
+    status = doc_before.status if doc_before else "missing"
+
+    doc = await admission_repo.update_graduation_proof(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        new_kind=new_kind,
+    )
+    if not doc:
+        raise ResourceNotFoundError(
+            f"Document code '{doc_code}' not found in profile documents"
+        )
+
+    await db.flush()
+
+    from .document_audit_service import log_graduation_proof_update
+    await log_graduation_proof_update(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        status=status,
+        new_kind=new_kind,
+    )
+
+    documents = await admission_repo.get_all_documents(profile_id)
+    await _populate_response_fields(
+        db, profile, current_user, documents=documents
+    )
+
+    log.info(
+        "Graduation proof kind updated",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        new_kind=new_kind,
         officer_id=current_user.id,
     )
 

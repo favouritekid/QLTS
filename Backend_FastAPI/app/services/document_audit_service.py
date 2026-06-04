@@ -255,10 +255,21 @@ async def log_paper_submission(
     actor_user_id: int,
     old_status: str,
     declared_format: Optional[str] = None,
+    graduation_proof_kind: Optional[str] = None,
+    supplement_due_date: Optional[Any] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
 ) -> models.DocumentAuditLog:
-    """Log a paper submission confirmation action."""
+    """Log a paper submission confirmation action.
+
+    PR #13 — nếu là giấy tốt nghiệp THPT: ghi loại giấy (bằng/tạm thời) +
+    hạn bổ sung vào ``extra_data`` để truy vết "nợ bằng".
+    """
+    extra: Dict[str, Any] = {}
+    if graduation_proof_kind is not None:
+        extra["graduation_proof_kind"] = graduation_proof_kind
+        if supplement_due_date is not None:
+            extra["supplement_due_date"] = supplement_due_date.isoformat()
     return await log_document_action(
         db=db,
         profile_document_id=profile_document_id,
@@ -267,6 +278,34 @@ async def log_paper_submission(
         old_status=old_status,
         new_status="paper_submitted",
         declared_format=declared_format,
+        extra_data=extra or None,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+
+async def log_graduation_proof_update(
+    db: AsyncSession,
+    profile_document_id: int,
+    actor_user_id: int,
+    status: str,
+    new_kind: str,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> models.DocumentAuditLog:
+    """PR #13 — log nâng cấp loại giấy tốt nghiệp (provisional→official).
+
+    Status không đổi (giấy đã nộp) → old=new. Chi tiết ở ``extra_data`` để
+    tránh thêm action enum mới (khỏi migration relax constraint).
+    """
+    return await log_document_action(
+        db=db,
+        profile_document_id=profile_document_id,
+        action=DocumentAction.PAPER_SUBMITTED,
+        actor_user_id=actor_user_id,
+        old_status=status,
+        new_status=status,
+        extra_data={"graduation_proof_update": True, "new_kind": new_kind},
         ip_address=ip_address,
         user_agent=user_agent,
     )
