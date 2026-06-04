@@ -496,6 +496,19 @@ export const documentItemSchema = z.object({
   can_reject: z.boolean().optional(),
   can_reset: z.boolean().optional(),
   can_mark_paper_submitted: z.boolean().optional(),
+  // ---------------------------------------------------------------------
+  // PR #13 — graduation proof (chỉ áp cho doc bang_tot_nghiep_thpt).
+  // Officer ghi rõ "bằng chính thức" vs "giấy CN tốt nghiệp tạm thời" khi
+  // tick đã nhận; provisional_cert kèm hạn bổ sung bằng ("nợ bằng").
+  // can_update_graduation_kind = true ⇒ FE hiện nút "Đã nhận bằng chính
+  // thức". Tất cả optional/nullable cho doc khác + hồ sơ cũ (NULL).
+  // ---------------------------------------------------------------------
+  graduation_proof_kind: z
+    .enum(["official_diploma", "provisional_cert"])
+    .nullable()
+    .optional(),
+  supplement_due_date: z.string().nullable().optional(),
+  can_update_graduation_kind: z.boolean().nullable().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>
