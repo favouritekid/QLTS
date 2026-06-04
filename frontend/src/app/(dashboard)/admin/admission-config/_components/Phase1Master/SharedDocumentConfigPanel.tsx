@@ -25,6 +25,7 @@ import {
   usePreviewSharedDocuments,
 } from "@/hooks/admissions/useMasterData";
 import { AUDIENCE_LABELS } from "@/lib/zod/admission-path";
+import { getShortFormatLabel, type DocumentFormatCode } from "@/lib/utils/admission-helpers";
 import { DocumentType, OfferingType } from "../shared/types";
 
 interface DocSelection {
@@ -45,6 +46,13 @@ interface SharedDocItem {
 
 // Sentinel cho lớp NỀN trong Select (Radix value phải là string non-empty).
 const NEN = "__NEN__";
+
+// Sentinel cho "không yêu cầu loại bản" (submission_format=null) — Radix
+// Select value phải non-empty string. Cho phép officer set Gốc/Chứng thực/
+// Chụp-scan trực tiếp ở màn này (trước đây bảng chỉ có Bắt buộc/Up file/Thứ tự
+// → submission_format luôn NULL → cột "Yêu cầu" tab Tài liệu hiện "—").
+const FMT_NONE = "__FMT_NONE__";
+const FORMAT_CODES: DocumentFormatCode[] = ["original", "certified_copy", "photo"];
 
 // Nhãn trình độ văn hóa cho dialog Xem trước (display-only, mirror BE enum).
 const CULTURAL_LABELS: Record<string, string> = {
@@ -400,10 +408,11 @@ export function SharedDocumentConfigPanel() {
               <div className="space-y-6">
                 <div className="border rounded-lg overflow-hidden">
                   <div className="grid grid-cols-12 bg-muted/50 p-3 text-sm font-medium border-b">
-                    <div className="col-span-6">Loại giấy tờ</div>
+                    <div className="col-span-4">Loại giấy tờ</div>
                     <div className="col-span-2 text-center">Bắt buộc</div>
                     <div className="col-span-2 text-center">Yêu cầu up file</div>
-                    <div className="col-span-2 text-center">Thứ tự</div>
+                    <div className="col-span-3 text-center">Loại bản</div>
+                    <div className="col-span-1 text-center">Thứ tự</div>
                   </div>
 
                   <div className="max-h-[500px] overflow-y-auto">
@@ -425,6 +434,9 @@ export function SharedDocumentConfigPanel() {
                       const orderText = nenItem
                         ? nenItem.display_order
                         : current?.display_order || "-";
+                      const formatValue = nenItem
+                        ? nenItem.submission_format
+                        : current?.submission_format ?? null;
 
                       return (
                         <div
@@ -437,7 +449,7 @@ export function SharedDocumentConfigPanel() {
                                 : ''
                           }`}
                         >
-                          <div className="col-span-6 flex items-center gap-3">
+                          <div className="col-span-4 flex items-center gap-3">
                             <Checkbox
                               id={`doc-${type.id}`}
                               checked={isSelected}
@@ -476,7 +488,36 @@ export function SharedDocumentConfigPanel() {
                             />
                           </div>
 
-                          <div className="col-span-2 flex justify-center text-xs text-muted-foreground">
+                          <div className="col-span-3 flex justify-center">
+                            <Select
+                              value={formatValue ?? FMT_NONE}
+                              disabled={isInheritedNen || !isSelected}
+                              onValueChange={(v) =>
+                                handleUpdate(
+                                  type.id,
+                                  'submission_format',
+                                  v === FMT_NONE ? null : v,
+                                )
+                              }
+                            >
+                              <SelectTrigger
+                                className="h-8 w-full"
+                                aria-label={`Loại bản giấy ${type.name}`}
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={FMT_NONE}>Không yêu cầu</SelectItem>
+                                {FORMAT_CODES.map((code) => (
+                                  <SelectItem key={code} value={code}>
+                                    {getShortFormatLabel(code)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="col-span-1 flex justify-center text-xs text-muted-foreground">
                              {orderText}
                           </div>
                         </div>

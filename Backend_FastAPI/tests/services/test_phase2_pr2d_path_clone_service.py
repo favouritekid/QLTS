@@ -127,6 +127,12 @@ async def test_clone_creates_new_criteria_with_derived_code(
         cloned_path = await s.get(models.AdmissionPath, cloned_item.cloned_path_id)
         assert cloned_path.criteria_id != clone_seed["source_criteria_id"]
         assert cloned_path.admission_round_id == clone_seed["target_round_id"]
+        # TS2026 smoke #1 — display_name copied AS-IS (no " (cloned)" suffix).
+        # Cloned paths live in a different round (round_code disambiguates);
+        # the old suffix only leaked to the storefront/admin UI looking unclean.
+        # Locks the contract so a future edit can't re-introduce the suffix.
+        assert cloned_path.display_name == "Source path"
+        assert "(cloned)" not in (cloned_path.display_name or "")
 
 
 @pytest.mark.asyncio

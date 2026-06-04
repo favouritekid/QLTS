@@ -75,6 +75,7 @@ export interface SmartOfferingSelectorProps {
 
 interface ProcessedOffering extends ProgramOffering {
   displayName: string;
+  triggerName: string;
   programName: string;
   degreeLevel: string;
   searchText: string;
@@ -91,6 +92,16 @@ const DEGREE_LEVEL_LABELS: Record<string, string> = {
   "Đại học": "🎓 ĐẠI HỌC",
   "Cao đẳng": "📚 CAO ĐẲNG",
   "Trung cấp": "📖 TRUNG CẤP",
+};
+
+// Compact bậc cho nhãn TRIGGER (giá trị đã chọn). Dropdown đã phân nhóm theo
+// bậc, nhưng khi đóng lại trigger mất ngữ cảnh nhóm → "Công nghệ ô tô" không
+// phân biệt được TC vs CĐ (2 offering cùng tên khác bậc). Thêm bậc rút gọn vào
+// nhãn trigger để disambiguate.
+const DEGREE_LEVEL_SHORT: Record<string, string> = {
+  "Đại học": "ĐH",
+  "Cao đẳng": "CĐ",
+  "Trung cấp": "TC",
 };
 
 // =============================================================================
@@ -125,14 +136,21 @@ function processOfferings(
       const degreeLevel = offering.program?.degree_level || "Khác";
       const offeringType = offering.offering_type || "Chính quy";
 
+      const shortLevel = DEGREE_LEVEL_SHORT[degreeLevel];
       return {
         ...offering,
-        // Display format: "Ngành - Loại hình"
+        // Display format trong dropdown: "Ngành - Loại hình" (bậc đã ở group header)
         displayName: `${programName} - ${offeringType}`,
+        // Nhãn TRIGGER kèm bậc (TC/CĐ/ĐH) để giá trị đã chọn không nhập nhằng
+        // khi mất ngữ cảnh nhóm.
+        triggerName: shortLevel
+          ? `${programName} (${shortLevel}) - ${offeringType}`
+          : `${programName} - ${offeringType}`,
         programName,
         degreeLevel,
-        // Search text includes all relevant fields
-        searchText: `${programName} ${offeringType} ${degreeLevel}`.toLowerCase(),
+        // Search text includes all relevant fields + the short bậc (TC/CĐ/ĐH)
+        // so a user who sees "(TC)" in the trigger can type "TC" to find it.
+        searchText: `${programName} ${offeringType} ${degreeLevel} ${shortLevel ?? ""}`.toLowerCase(),
       };
     })
     .sort((a, b) => {
@@ -211,7 +229,7 @@ function SelectVariant({
       <SelectTrigger className={className}>
         <SelectValue placeholder={isLoading ? "Đang tải…" : placeholder}>
           {selectedOffering && (
-            <span className="truncate">{selectedOffering.displayName}</span>
+            <span className="truncate">{selectedOffering.triggerName}</span>
           )}
         </SelectValue>
       </SelectTrigger>
@@ -312,7 +330,7 @@ function ComboboxVariant({
   };
 
   const displayValue = selectedOffering
-    ? selectedOffering.displayName
+    ? selectedOffering.triggerName
     : value === "all" || !value
       ? allLabel
       : placeholder;
