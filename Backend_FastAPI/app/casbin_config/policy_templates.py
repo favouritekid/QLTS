@@ -179,6 +179,13 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # (requires_upload=false); service-layer guard enforces the
         # owning-officer + profile-editable + missing-status contract.
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/paper-submitted", "action": "POST"},
+        # PR #13 — officer records a graduation-proof upgrade (provisional
+        # cert → official diploma) WITHOUT changing doc status. Mirrors
+        # paper-submitted (officer-initiated); service layer narrows IDOR +
+        # bang_tot_nghiep_thpt-only. Manager/admin inherit; accountant has no
+        # deny row (same as paper-submitted — finance never reaches the
+        # owning-officer scope check).
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/graduation-proof", "action": "POST"},
         # Phase 3 multi-NV read-only (PR-3B). Officer can VIEW result-published
         # profiles + choice list for their assigned unit; mutations stay
         # manager-only per RBAC matrix plan v0.7. Service-layer IDOR
@@ -233,6 +240,9 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/stats", "action": "GET"},  # Stats dashboard
         {"subject": "{role}", "object": "/api/admissions/status-counts", "action": "GET"},  # Tab badges
         {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET"},  # Year filter
+        # PR #13.7 — "nợ bằng" reminder list (provisional graduation cert still
+        # outstanding). IDOR-scoped in the service (officer assigned scope).
+        {"subject": "{role}", "object": "/api/admissions/pending-diploma", "action": "GET"},
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/program-offerings", "action": "GET"},  # Dropdown data
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
@@ -435,6 +445,10 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/stats",          "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/status-counts",  "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/admissions/academic-years", "action": "GET",  "eft": "deny"},
+        # PR #13.7 — nợ bằng list carries candidate PII (name/phone); finance
+        # staff have no business need + separation-of-duties. Mirror the
+        # /stats /status-counts denies above (accountant inherits officer).
+        {"subject": "{role}", "object": "/api/admissions/pending-diploma", "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads",                     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads",                     "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/{id}",                "action": "GET",  "eft": "deny"},

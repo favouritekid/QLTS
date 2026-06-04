@@ -18,7 +18,7 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -248,6 +248,46 @@ async def get_admission_stats(
         current_user=current_user,
         academic_year=academic_year,
     )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/pending-diploma",
+    response_model=schemas.PendingDiplomaResponse,
+    summary="List profiles owing the official diploma (nợ bằng)",
+)
+async def list_pending_diploma(
+    request: Request,
+    due_before: date | None = Query(
+        None,
+        description="Chỉ lấy hồ sơ có hạn bổ sung bằng <= ngày này (YYYY-MM-DD)",
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List admission profiles that submitted a provisional graduation
+    certificate and still owe the official diploma ("nợ bằng"), IDOR-scoped to
+    the caller (admin all / manager unit / officer assigned).
+
+    Optional ``due_before`` narrows to profiles whose supplement due date has
+    passed or is approaching — the reminder query for the officer follow-up.
+
+    **Note:** declared BEFORE ``/{profile_id}`` so FastAPI does not capture
+    ``pending-diploma`` as a profile id.
+    """
+    try:
+        items = await admission_service.list_pending_diploma_profiles(
+            db=db,
+            current_user=current_user,
+            due_before=due_before,
+        )
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+        )
+    return schemas.PendingDiplomaResponse(total_count=len(items), items=items)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -980,6 +1020,8 @@ async def mark_document_paper_submitted(
             doc_code=doc_code,
             current_user=current_user,
             actual_submission_format=data.actual_submission_format,
+            graduation_proof_kind=data.graduation_proof_kind,
+            supplement_due_date=data.supplement_due_date,
         )
         await db.commit()
         await db.refresh(profile)
@@ -995,6 +1037,70 @@ async def mark_document_paper_submitted(
         # IDOR protection: return 404 to prevent resource enumeration
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
     except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/graduation-proof",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Update graduation proof kind (provisional cert -> official diploma)",
+    status_code=status.HTTP_200_OK,
+)
+async def update_document_graduation_proof(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    data: schemas.GraduationProofUpdateRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Update the graduation proof kind for a graduation document (PR #13).
+
+    Use case: a candidate who previously submitted a provisional graduation
+    certificate (``provisional_cert``) later brings the official diploma
+    (``official_diploma``). The officer records the upgrade WITHOUT changing
+    the document status (it stays ``paper_submitted``); ``official_diploma``
+    clears the supplement due date so the "nợ bằng" badge disappears.
+
+    Only applies to ``bang_tot_nghiep_thpt``. Casbin admits officer (manager
+    + admin inherit, mirror ``paper-submitted``); the service layer enforces
+    the IDOR scope via ``get_profile``.
+
+    **Request Body:**
+    - kind: official_diploma | provisional_cert
+
+    **Returns:**
+    - Full AdmissionProfileResponse with updated validation_summary
+    """
+    try:
+        profile = await admission_service.update_graduation_proof_kind(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            new_kind=data.kind,
+            current_user=current_user,
+        )
+        await db.commit()
+        await db.refresh(profile)
+        # PR #13 — emit AFTER commit settles (mirror paper-submitted) so the
+        # FE refetches and the "nợ bằng" badge + completion stay in sync.
+        await _emit_admission_doc_mutation(
+            profile_id,
+            document_action="graduation_proof_updated",
+            doc_code=doc_code,
+        )
+        return profile
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError:
+        # IDOR protection: return 404 to prevent resource enumeration
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
+    except ValidationError as e:
+        # BusinessRuleViolation (non-graduation doc) + ValidationError
+        # (invalid kind) are both ValidationError subclasses → 400.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 

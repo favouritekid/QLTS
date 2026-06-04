@@ -684,7 +684,9 @@ class AdmissionConfigService:
         from types import SimpleNamespace
 
         from app.services.document_resolution_service import (
+            build_completed_add_items,
             build_resolved_response,
+            compute_completed_add_doc_codes,
             compute_completed_doc_codes,
             compute_preview_audience_set,
             filter_shared_by_audience,
@@ -710,9 +712,26 @@ class AdmissionConfigService:
         # Config preview = snapshot-shape (KHÔNG exclude_inactive) khớp create.
         mandatory_wins_merge(doc_map, layers, "shared", exclude_inactive=False)
 
-        completed = compute_completed_doc_codes(
-            SimpleNamespace(cultural_education_level=cultural_education_level)
+        profile_like = SimpleNamespace(
+            cultural_education_level=cultural_education_level
         )
-        return build_resolved_response(doc_map, completed)
+        completed = compute_completed_doc_codes(profile_like)
+
+        # PR #10 — preview parity: SWAP cho completed_* cũng THÊM Giấy CN hoàn
+        # thành GDPT (synthetic, paper-only) như resolve_documents_for_profile.
+        # Lookup qua AdmissionPathRepository (tái dùng, không inline SQL/duplicate).
+        add_codes = compute_completed_add_doc_codes(profile_like)
+        add_items = []
+        if add_codes:
+            from app.repositories.admission_path_repository import (
+                AdmissionPathRepository,
+            )
+
+            doc_types = await AdmissionPathRepository(
+                self.db
+            ).get_document_types_by_codes(add_codes)
+            add_items = build_completed_add_items(doc_types)
+
+        return build_resolved_response(doc_map, completed, add_items)
 
 

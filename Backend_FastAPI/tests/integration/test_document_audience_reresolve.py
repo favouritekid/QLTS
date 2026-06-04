@@ -113,6 +113,13 @@ async def _setup_audience_data(major_id: int, unit_id: int, officer_id: int) -> 
             bts_thcs = await _get_or_create_doc_type(
                 session, "bang_tot_nghiep_thcs", "Bằng tốt nghiệp THCS"
             )
+            # PR #10 — seed Giấy CN hoàn thành GDPT (doc type ONLY, no group
+            # item). The completed_thpt SWAP injects it synthetically.
+            await _get_or_create_doc_type(
+                session,
+                "giay_cn_hoan_thanh_gdpt",
+                "Giấy chứng nhận hoàn thành chương trình GDPT",
+            )
 
             def _mk_group(code, audience, items):
                 g = models.DocumentGroup(
@@ -290,11 +297,14 @@ class TestReresolveAudience:
         snap = await _snapshot_mandatory(pid)
         assert snap == {"cccd", "hoc_ba_thpt", "bang_tot_nghiep_thpt"}
         assert "hoc_ba_thcs" not in snap
+        # PR #10 — graduated keeps the diploma; NO GDPT swap.
+        assert "giay_cn_hoan_thanh_gdpt" not in snap
 
-    async def test_reresolve_completed_thpt_drops_diploma(
+    async def test_reresolve_completed_thpt_swaps_diploma_for_gdpt(
         self, client, officer_user_in_db, seed_lead_dependencies
     ):
-        """§6 / finding round-8 #2: completed_thpt → LOẠI bằng TN khỏi snapshot."""
+        """§6 + PR #10: completed_thpt → LOẠI bằng TN, THÊM Giấy CN hoàn thành
+        GDPT vào snapshot + tạo ProfileDocument tương ứng."""
         data = await _setup_audience_data(
             seed_lead_dependencies["major_program_id"],
             seed_lead_dependencies["unit_id"],
@@ -311,6 +321,12 @@ class TestReresolveAudience:
         snap = await _snapshot_mandatory(pid)
         assert "hoc_ba_thpt" in snap
         assert "bang_tot_nghiep_thpt" not in snap  # completed → bỏ bằng TN
+        # PR #10 — SWAP: GDPT cert added in its place.
+        assert "giay_cn_hoan_thanh_gdpt" in snap
+        # The delta INSERT must materialise a ProfileDocument for the GDPT cert.
+        doc_codes = await _profile_doc_codes(pid)
+        assert "giay_cn_hoan_thanh_gdpt" in doc_codes
+        assert "bang_tot_nghiep_thpt" not in doc_codes
 
     async def test_reresolve_delta_no_unique_violation_idempotent(
         self, client, officer_user_in_db, seed_lead_dependencies

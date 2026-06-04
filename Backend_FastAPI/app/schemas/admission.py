@@ -321,6 +321,16 @@ class DocumentItemSchema(BaseModel):
             "here (staff-to-staff privacy)."
         ),
     )
+    # PR #13 — loại giấy tốt nghiệp + hạn "nợ bằng" + cờ cho phép cập nhật.
+    graduation_proof_kind: Optional[
+        Literal["official_diploma", "provisional_cert"]
+    ] = Field(None, description="Loại giấy tốt nghiệp THPT (PR#13)")
+    supplement_due_date: Optional[date] = Field(
+        None, description="Hạn bổ sung bằng khi provisional_cert (PR#13)"
+    )
+    can_update_graduation_kind: Optional[bool] = Field(
+        None, description="FE hiện nút 'Đã nhận bằng chính thức' (PR#13)"
+    )
 
     # =========================================================================
     # Checklist-only display fields populated by _compute_frontend_fields.
@@ -1371,6 +1381,22 @@ class AdmissionsPage(BaseModel):
     profiles: List[AdmissionProfileResponse]
 
 
+class PendingDiplomaItem(BaseModel):
+    """PR #13.7 — một hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời)."""
+    profile_id: int
+    candidate_name: Optional[str] = None
+    phone: Optional[str] = None
+    status: str
+    supplement_due_date: Optional[date] = None
+    assigned_officer_name: Optional[str] = None
+
+
+class PendingDiplomaResponse(BaseModel):
+    """PR #13.7 — danh sách hồ sơ nợ bằng, IDOR-scoped theo người gọi."""
+    total_count: int
+    items: List[PendingDiplomaItem]
+
+
 # ==============================================================================
 # BULK ACTION SCHEMAS
 # ==============================================================================
@@ -1557,6 +1583,33 @@ class DocumentSubmissionRequest(BaseModel):
     actual_submission_format: Literal["original", "certified_copy", "photo"] = Field(
         ...,
         description="Type of physical document being submitted/uploaded"
+    )
+    # PR #13 — chỉ áp cho giấy TN THPT (bang_tot_nghiep_thpt); bỏ qua doc khác.
+    graduation_proof_kind: Optional[
+        Literal["official_diploma", "provisional_cert"]
+    ] = Field(None, description="Loại giấy tốt nghiệp THPT (PR#13)")
+    supplement_due_date: Optional[date] = Field(
+        None, description="Hạn bổ sung bằng khi provisional_cert (PR#13)"
+    )
+
+    @model_validator(mode="after")
+    def _check_provisional_due(self):
+        if (
+            self.graduation_proof_kind == "provisional_cert"
+            and self.supplement_due_date is None
+        ):
+            raise ValueError(
+                "supplement_due_date bắt buộc khi provisional_cert"
+            )
+        return self
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class GraduationProofUpdateRequest(BaseModel):
+    """PR #13 — cập nhật loại giấy tốt nghiệp (vd provisional→official)."""
+    kind: Literal["official_diploma", "provisional_cert"] = Field(
+        ..., description="Loại giấy tốt nghiệp mới"
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)

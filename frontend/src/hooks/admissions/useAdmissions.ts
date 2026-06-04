@@ -547,8 +547,21 @@ export function useMarkPaperSubmitted(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (variables: { docCode: string, actualSubmissionFormat: string }) =>
-      admissionsApi.markPaperSubmitted(id, variables.docCode, variables.actualSubmissionFormat),
+    // PR #13 — graduationProofKind/supplementDueDate optional, only sent for
+    // bang_tot_nghiep_thpt (provisional_cert requires the due date).
+    mutationFn: (variables: {
+      docCode: string
+      actualSubmissionFormat: string
+      graduationProofKind?: "official_diploma" | "provisional_cert"
+      supplementDueDate?: string
+    }) =>
+      admissionsApi.markPaperSubmitted(
+        id,
+        variables.docCode,
+        variables.actualSubmissionFormat,
+        variables.graduationProofKind,
+        variables.supplementDueDate
+      ),
     onSuccess: (updatedProfile, variables) => {
       toast.success("Đã xác nhận nhận giấy tờ")
 
@@ -558,6 +571,31 @@ export function useMarkPaperSubmitted(id: number) {
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "xác nhận giấy tờ" })
+    }
+  })
+}
+
+/**
+ * PR #13 — upgrade graduation proof kind (provisional cert → official
+ * diploma). Backend returns the full profile (status unchanged, supplement
+ * due date cleared for official_diploma) so we update the detail cache in
+ * place, matching useMarkPaperSubmitted's parity contract.
+ */
+export function useUpdateGraduationProof(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: {
+      docCode: string
+      kind: "official_diploma" | "provisional_cert"
+    }) =>
+      admissionsApi.updateGraduationProof(id, variables.docCode, variables.kind),
+    onSuccess: (updatedProfile) => {
+      toast.success("Đã cập nhật loại giấy tốt nghiệp")
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "cập nhật giấy tốt nghiệp" })
     }
   })
 }

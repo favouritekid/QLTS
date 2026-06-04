@@ -266,11 +266,43 @@ export async function uploadAdmissionDocument(
 export async function markPaperSubmitted(
   id: number,
   docCode: string,
-  actualSubmissionFormat: string
+  actualSubmissionFormat: string,
+  // PR #13 — only meaningful for bang_tot_nghiep_thpt; backend ignores them
+  // on other doc codes. provisional_cert requires supplementDueDate.
+  graduationProofKind?: "official_diploma" | "provisional_cert",
+  supplementDueDate?: string
 ): Promise<AdmissionProfileResponse> {
+  const body: Record<string, unknown> = {
+    actual_submission_format: actualSubmissionFormat,
+  }
+  if (graduationProofKind) {
+    body.graduation_proof_kind = graduationProofKind
+    if (supplementDueDate) {
+      body.supplement_due_date = supplementDueDate
+    }
+  }
   const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/documents/${docCode}/paper-submitted`,
-    { actual_submission_format: actualSubmissionFormat }
+    body
+  )
+  return response.data
+}
+
+/**
+ * Update graduation proof kind (PR #13).
+ *
+ * Officer records that the candidate brought the official diploma after
+ * previously submitting a provisional certificate. The document status is
+ * NOT changed; the backend clears the supplement due date for official_diploma.
+ */
+export async function updateGraduationProof(
+  id: number,
+  docCode: string,
+  kind: "official_diploma" | "provisional_cert"
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/documents/${docCode}/graduation-proof`,
+    { kind }
   )
   return response.data
 }
@@ -533,6 +565,7 @@ export const admissionsApi = {
   deleteAdmission,
   uploadAdmissionDocument,
   markPaperSubmitted,
+  updateGraduationProof,
   verifyDocumentFormat,
   rejectDocument,
   resetDocument,

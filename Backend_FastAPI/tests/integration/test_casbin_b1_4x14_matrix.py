@@ -445,6 +445,8 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/admissions/stats",                 "GET"),
             ("/api/admissions/status-counts",         "GET"),
             ("/api/admissions/academic-years",        "GET"),
+            # PR #13.7 — nợ bằng reminder list carries candidate PII → accountant deny.
+            ("/api/admissions/pending-diploma",       "GET"),
             # Wave 4 — lead legacy routes deny (10 rows)
             ("/api/leads",                            "GET"),
             ("/api/leads",                            "POST"),

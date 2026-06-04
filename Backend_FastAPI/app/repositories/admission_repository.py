@@ -13,7 +13,7 @@ Benefits:
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional, Tuple
 import unicodedata
 
@@ -584,6 +584,62 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_profiles_with_pending_diploma(
+        self,
+        unit_id: Optional[int] = None,
+        assigned_officer_id: Optional[int] = None,
+        due_before: Optional[date] = None,
+    ) -> list[models.AdmissionProfile]:
+        """PR #13.7 — hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời).
+
+        Lọc ``ProfileDocument.graduation_proof_kind == 'provisional_cert'``.
+        IDOR scope mirror ``_resolve_idor_filters``: ``unit_id``
+        (``lead.unit_id``) + ``assigned_officer_id`` (``lead.assigned_officer_id``),
+        bỏ qua khi None (admin). ``due_before`` (optional): chỉ lấy hồ sơ có
+        hạn bổ sung <= ngày (sắp / đã quá hạn). Eager-load lead +
+        assigned_officer + documents.document_type để service dựng tên thí
+        sinh + officer + lấy hạn không N+1. Order ``supplement_due_date`` tăng
+        dần (gần hạn nhất trước; Postgres ASC = NULLS LAST).
+        """
+        stmt = (
+            select(models.AdmissionProfile)
+            .join(
+                models.Lead,
+                models.AdmissionProfile.lead_id == models.Lead.id,
+            )
+            .join(
+                ProfileDocument,
+                ProfileDocument.profile_id == models.AdmissionProfile.id,
+            )
+            .where(ProfileDocument.graduation_proof_kind == "provisional_cert")
+            # Review F3 — chỉ nhắc hồ sơ CÒN actionable: bỏ withdrawn (thí sinh
+            # rút) + dropped (is_dropped=True, status vẫn 'enrolled'). GIỮ
+            # enrolled-không-dropped (đúng use case: nhập học với giấy tạm thời,
+            # vẫn nợ bằng) + rejected (có thể resubmit; reject_document đã clear
+            # field khi reject ở tầng doc).
+            .where(models.AdmissionProfile.status != "withdrawn")
+            .where(models.AdmissionProfile.is_dropped.isnot(True))
+            .options(
+                selectinload(models.AdmissionProfile.lead).selectinload(
+                    models.Lead.assigned_officer
+                ),
+                selectinload(models.AdmissionProfile.documents).joinedload(
+                    ProfileDocument.document_type
+                ),
+            )
+            .order_by(asc(ProfileDocument.supplement_due_date))
+        )
+        if due_before is not None:
+            stmt = stmt.where(ProfileDocument.supplement_due_date <= due_before)
+        if unit_id is not None:
+            stmt = stmt.where(models.Lead.unit_id == unit_id)
+        if assigned_officer_id is not None:
+            stmt = stmt.where(
+                models.Lead.assigned_officer_id == assigned_officer_id
+            )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().unique().all())
+
     async def get_profile_by_lead_year(
         self,
         lead_id: int,
@@ -1112,6 +1168,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         document_type_code: str,
         officer_id: int,
         actual_submission_format: Optional[str] = None,
+        graduation_proof_kind: Optional[str] = None,
+        supplement_due_date: Optional[date] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Mark a document as paper submitted (officer confirms receipt).
@@ -1122,7 +1180,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id: AdmissionProfile ID
             document_type_code: Document type code
             officer_id: ID of officer confirming receipt
-            actual_submission_format: Declared document format (original | certified_copy | photo)
+            actual_submission_format: Declared format (original|certified_copy|photo)
+            graduation_proof_kind: PR#13 — official_diploma|provisional_cert
+                (chỉ áp cho giấy tốt nghiệp THPT bang_tot_nghiep_thpt)
+            supplement_due_date: PR#13 — hạn bổ sung khi provisional_cert
 
         Returns:
             Updated ProfileDocument or None if not found
@@ -1139,6 +1200,37 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if actual_submission_format:
             doc.actual_submission_format = actual_submission_format
 
+        # PR #13 — loại giấy tốt nghiệp (bằng chính thức / giấy tạm thời).
+        if graduation_proof_kind is not None:
+            doc.graduation_proof_kind = graduation_proof_kind
+            doc.supplement_due_date = (
+                supplement_due_date
+                if graduation_proof_kind == "provisional_cert"
+                else None
+            )
+
+        return doc
+
+    async def update_graduation_proof(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        new_kind: str,
+    ) -> Optional[models.ProfileDocument]:
+        """PR #13 — nâng cấp loại giấy tốt nghiệp (vd provisional→official).
+
+        Dùng khi hồ sơ ĐÃ nộp giấy (status paper_submitted/verified) rồi thí
+        sinh bổ sung bằng chính thức. KHÔNG đổi status (khác
+        mark_paper_submitted vốn theo policy chỉ chạy khi status='missing').
+        official_diploma → xoá hạn bổ sung.
+        """
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+
+        doc.graduation_proof_kind = new_kind
+        if new_kind == "official_diploma":
+            doc.supplement_due_date = None
         return doc
 
     async def reset_document(
@@ -1181,6 +1273,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.rejected_at = None
         doc.rejected_by = None
         doc.rejection_reason = None
+        # PR #13 — rewind graduation proof fields.
+        doc.graduation_proof_kind = None
+        doc.supplement_due_date = None
 
         return doc
 
@@ -1215,7 +1310,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.rejection_reason = reason
         doc.rejected_at = datetime.now(timezone.utc)
         doc.rejected_by = officer_id
-        
+        # PR #13 — a rejected graduation submission voids the "nợ bằng" debt
+        # fields (mirror reset_document) so the pending-diploma reminder + the
+        # detail badge don't surface a debt on a rejected row.
+        doc.graduation_proof_kind = None
+        doc.supplement_due_date = None
+
         return doc
 
     async def confirm_document_format(

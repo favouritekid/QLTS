@@ -24,7 +24,7 @@ Security Features:
 
 import random
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal
 import structlog
@@ -2010,6 +2010,15 @@ def _compute_frontend_fields(
                         if _is_verified and doc.verified_by is not None
                         else None
                     ),
+                    # PR #13 — loại giấy tốt nghiệp + hạn "nợ bằng".
+                    "graduation_proof_kind": (
+                        doc.graduation_proof_kind if _has_artifact else None
+                    ),
+                    "supplement_due_date": (
+                        doc.supplement_due_date.isoformat()
+                        if _has_artifact and doc.supplement_due_date
+                        else None
+                    ),
                 }
     
     # PR #5 — per-document action permissions delegate to the
@@ -2097,6 +2106,14 @@ def _compute_frontend_fields(
             "verified_by_name": uploaded_doc.get("verified_by_name"),
             "rejection_reason": uploaded_doc.get("rejection_reason"),
             "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False),
+            # PR #13 — graduation proof + cờ "đã nhận bằng chính thức".
+            "graduation_proof_kind": uploaded_doc.get("graduation_proof_kind"),
+            "supplement_due_date": uploaded_doc.get("supplement_due_date"),
+            "can_update_graduation_kind": (
+                doc_code == "bang_tot_nghiep_thpt"
+                and uploaded_doc.get("graduation_proof_kind")
+                == "provisional_cert"
+            ),
             **_perms,
         })
 
@@ -2132,6 +2149,13 @@ def _compute_frontend_fields(
             "submission_format_confirmed": uploaded_doc.get(
                 "submission_format_confirmed", False
             ),
+            # PR #13 — surface the "nợ bằng" debt even on an extra row so the
+            # badge stays visible if bang_tot_nghiep_thpt drops out of the
+            # snapshot; extras are read-only → no upgrade action (the service
+            # is_extra guard would reject it anyway).
+            "graduation_proof_kind": uploaded_doc.get("graduation_proof_kind"),
+            "supplement_due_date": uploaded_doc.get("supplement_due_date"),
+            "can_update_graduation_kind": False,
             # Extras are read-only: row visible for evidence + audit,
             # but no action buttons. A future sync-path action will own
             # the cleanup workflow.
@@ -6386,12 +6410,16 @@ async def mark_paper_submitted(
     doc_code: str,
     current_user: models.User,
     actual_submission_format: Optional[str] = None,
+    graduation_proof_kind: Optional[str] = None,
+    supplement_due_date: Optional[date] = None,
 ) -> models.AdmissionProfile:
     """
     Mark a document as paper submitted (officer confirms receipt).
 
     For documents where requires_upload=false.
     Only officers/managers/admins can mark paper submitted.
+    PR #13: graduation_proof_kind/supplement_due_date chỉ áp cho giấy tốt
+    nghiệp THPT (bằng chính thức / giấy tạm thời + hạn bổ sung).
 
     Args:
         db: Database session
@@ -6435,12 +6463,41 @@ async def mark_paper_submitted(
         current_user=current_user,
     )
 
+    # PR #13 — graduation proof chỉ áp cho giấy TN THPT; doc khác bỏ qua 2
+    # field. Giấy TN THPT BẮT BUỘC phân loại khi ghi nhận.
+    _grad_kind = graduation_proof_kind
+    _grad_due = supplement_due_date
+    if doc_code != "bang_tot_nghiep_thpt":
+        _grad_kind = None
+        _grad_due = None
+    else:
+        # The graduation doc MUST be classified on receipt. Defaulting (e.g.
+        # to official_diploma) would risk silently recording a provisional
+        # cert as an official diploma — the candidate would owe the diploma
+        # but the system would show no "nợ bằng" debt, no badge and no way to
+        # clear it. Require the kind explicitly. The FE dialog always sends
+        # it (RadioGroup forces a choice); this closes the gap for raw API /
+        # Swagger / old clients that omit it.
+        if _grad_kind is None:
+            raise ValidationError(
+                "Cần chọn loại giấy tốt nghiệp (bằng chính thức / giấy tạm "
+                "thời) khi ghi nhận giấy tốt nghiệp THPT."
+            )
+        if _grad_kind not in ("official_diploma", "provisional_cert"):
+            raise ValidationError("graduation_proof_kind không hợp lệ")
+        if _grad_kind == "provisional_cert" and _grad_due is None:
+            raise ValidationError(
+                "Cần nhập hạn bổ sung cho Giấy CN tốt nghiệp tạm thời"
+            )
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
         document_type_code=doc_code,
         officer_id=current_user.id,
         actual_submission_format=actual_submission_format,
+        graduation_proof_kind=_grad_kind,
+        supplement_due_date=_grad_due,
     )
 
     if not doc:
@@ -6456,6 +6513,8 @@ async def mark_paper_submitted(
         actor_user_id=current_user.id,
         old_status=old_status,
         declared_format=actual_submission_format,
+        graduation_proof_kind=_grad_kind,
+        supplement_due_date=_grad_due,
     )
 
     # G2 (ADM-032 partial) — full response contract parity. Mirrors
@@ -6474,6 +6533,163 @@ async def mark_paper_submitted(
     )
 
     return profile
+
+
+async def update_graduation_proof_kind(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    new_kind: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """PR #13 — officer ghi nhận đã nhận BẰNG CHÍNH THỨC (provisional→official).
+
+    Dùng khi thí sinh bổ sung bằng chính thức cho hồ sơ trước đó nộp Giấy CN
+    tốt nghiệp tạm thời. KHÔNG đổi status; official_diploma → xoá hạn bổ sung.
+
+    Auth: ``get_profile`` đã chặn IDOR scope (officer=assigned+unit /
+    manager=unit / admin all). Thêm 2 guard mirror ``_authorize_document_action``
+    mà sibling endpoints (paper-submit/verify/reject/reset) áp:
+    - **BR2 is_extra**: doc đã rớt khỏi ``mandatory_docs`` snapshot = read-only.
+    - **doc-status**: chỉ cập nhật khi giấy ĐÃ được ghi nhận
+      (``paper_submitted`` / ``verified``) — không stamp lên doc chưa nhận.
+    Chỉ nhận ``official_diploma``: giấy tạm thời + hạn bổ sung ghi qua paper-
+    submit (mang theo hạn); endpoint này không có field hạn nên nhận
+    provisional_cert sẽ tạo "nợ bằng" hạn NULL mà query nhắc bỏ sót.
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # get_profile eager-loads documents.document_type + enforces IDOR scope.
+    profile = await get_profile(db, profile_id, current_user)
+
+    if doc_code != "bang_tot_nghiep_thpt":
+        raise BusinessRuleViolation("Chỉ áp dụng cho giấy tốt nghiệp THPT")
+    if new_kind != "official_diploma":
+        raise BusinessRuleViolation(
+            "Endpoint chỉ ghi nhận bằng chính thức; giấy tạm thời + hạn bổ "
+            "sung được ghi qua thao tác nhận giấy."
+        )
+
+    # Locate the graduation doc in the eager-loaded snapshot (no extra query).
+    doc_before = next(
+        (
+            d
+            for d in profile.documents
+            if d.document_type and d.document_type.code == doc_code
+        ),
+        None,
+    )
+    if not doc_before:
+        raise ResourceNotFoundError(
+            f"Document code '{doc_code}' not found in profile documents"
+        )
+
+    # BR2 — extras (dropped from the mandatory snapshot) are read-only.
+    applied_rules = profile.applied_rules or {}
+    mandatory_docs = applied_rules.get("mandatory_docs") or []
+    if doc_code not in mandatory_docs:
+        raise PermissionDeniedError(
+            f"Document '{doc_code}' is no longer in the current admission "
+            f"path's mandatory list (extra / evidence-only)."
+        )
+
+    # Coherence — only a RECEIVED graduation doc can be upgraded to official.
+    status = doc_before.status
+    if status not in ("paper_submitted", "verified"):
+        raise BusinessRuleViolation(
+            "Chỉ cập nhật loại giấy khi đã ghi nhận giấy tốt nghiệp."
+        )
+
+    doc = await admission_repo.update_graduation_proof(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        new_kind=new_kind,
+    )
+    if not doc:
+        raise ResourceNotFoundError(
+            f"Document code '{doc_code}' not found in profile documents"
+        )
+
+    await db.flush()
+
+    from .document_audit_service import log_graduation_proof_update
+    await log_graduation_proof_update(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        status=status,
+        new_kind=new_kind,
+    )
+
+    # Reuse the eager-loaded collection (mutated in-place via the identity
+    # map) instead of re-querying all documents.
+    await _populate_response_fields(
+        db, profile, current_user, documents=profile.documents
+    )
+
+    log.info(
+        "Graduation proof kind updated",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        new_kind=new_kind,
+        officer_id=current_user.id,
+    )
+
+    return profile
+
+
+async def list_pending_diploma_profiles(
+    db: AsyncSession,
+    current_user: models.User,
+    due_before: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """PR #13.7 — danh sách hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời).
+
+    IDOR scope qua ``_resolve_idor_filters`` (admin all / manager unit /
+    officer assigned). ``due_before`` lọc hồ sơ có hạn bổ sung <= ngày — query
+    nhắc officer follow-up thí sinh bổ sung bằng chính thức. Casbin admits
+    officer/manager/admin; accountant denied at the gateway.
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    unit_id, assigned_officer_id = _resolve_idor_filters(current_user)
+    profiles = await admission_repo.list_profiles_with_pending_diploma(
+        unit_id=unit_id,
+        assigned_officer_id=assigned_officer_id,
+        due_before=due_before,
+    )
+
+    items: List[Dict[str, Any]] = []
+    for profile in profiles:
+        grad_doc = next(
+            (
+                d
+                for d in profile.documents
+                if d.document_type
+                and d.document_type.code == "bang_tot_nghiep_thpt"
+                and d.graduation_proof_kind == "provisional_cert"
+            ),
+            None,
+        )
+        lead = profile.lead
+        officer = lead.assigned_officer if lead else None
+        items.append(
+            {
+                "profile_id": profile.id,
+                "candidate_name": lead.full_name if lead else None,
+                "phone": lead.phone if lead else None,
+                "status": profile.status,
+                "supplement_due_date": (
+                    grad_doc.supplement_due_date if grad_doc else None
+                ),
+                "assigned_officer_name": (
+                    officer.full_name if officer else None
+                ),
+            }
+        )
+    return items
 
 
 async def reject_document(
