@@ -36,7 +36,9 @@ from app.schemas.admission_path import (
     ResolvedDocumentResponse,
 )
 from app.services.document_resolution_service import (
+    build_completed_add_items,
     build_resolved_response,
+    compute_completed_add_doc_codes,
     compute_completed_doc_codes,
     derive_audience_set,
     filter_shared_by_audience,
@@ -912,6 +914,7 @@ class AdmissionPathService:
         audience_set: Optional[set] = None,
         all_audiences: bool = False,
         completed_codes: Optional[set] = None,
+        add_items: Optional[List[ResolvedDocumentResponse]] = None,
     ) -> Tuple[List[ResolvedDocumentResponse], PostCommitCallback]:
         """
         Resolve document requirements for a path (3-tier + audience).
@@ -929,6 +932,10 @@ class AdmissionPathService:
                 endpoint /paths/{id}/documents không ?audience= → thấy đủ bộ, KHÔNG
                 co lại sau backfill).
             completed_codes: mã bằng TN LOẠI khỏi kết quả (cultural=completed_* §6).
+            add_items: PR #10 — synthetic ResolvedDocumentResponse THÊM vào kết
+                quả (vd Giấy CN hoàn thành GDPT cho completed_thpt). Caller dựng
+                từ DB; builder append nếu code chưa có. CHỈ đường profile truyền
+                (có cultural); path view thuần để None.
 
         Returns:
             (list resolved docs với source + layer_kind + applicable_audience,
@@ -959,7 +966,7 @@ class AdmissionPathService:
             )
             mandatory_wins_merge(doc_map, layers, "shared")
 
-        resolved = build_resolved_response(doc_map, completed_codes)
+        resolved = build_resolved_response(doc_map, completed_codes, add_items)
         return resolved, _noop_callback
 
     async def resolve_documents_for_profile(
@@ -974,15 +981,37 @@ class AdmissionPathService:
         CONFIG_GAP nội bộ → luôn ≥ tập văn hóa; ``compute_completed_doc_codes``
         loại bằng TN khi cultural=completed_* (§6). Caller truyền ``path`` =
         path primary để derive chiều loại hình (P1-A: chain phải eager-load).
+
+        PR #10 — SWAP cho completed_*: ngoài LOẠI bằng TN còn THÊM Giấy CN hoàn
+        thành GDPT (synthetic add-item, paper-only) qua
+        ``_build_completed_add_items``.
         """
         audience_set = derive_audience_set(profile, path)
         completed_codes = compute_completed_doc_codes(profile)
+        add_items = await self._build_completed_add_items(profile)
         return await self.resolve_documents_for_path(
             path,
             offering_type_id,
             audience_set=audience_set,
             completed_codes=completed_codes,
+            add_items=add_items,
         )
+
+    async def _build_completed_add_items(
+        self, profile
+    ) -> List[ResolvedDocumentResponse]:
+        """PR #10 — dựng synthetic add-items cho ``cultural=completed_*`` (SWAP).
+
+        Lookup doc type từ DB rồi delegate shape cho pure
+        ``build_completed_add_items`` (1 nguồn shape, dùng chung với preview).
+        Giấy chưa seed / inactive → repo trả ``[]`` → bỏ qua (fail-safe, không
+        vỡ resolve).
+        """
+        add_codes = compute_completed_add_doc_codes(profile)
+        if not add_codes:
+            return []
+        doc_types = await self.repo.get_document_types_by_codes(add_codes)
+        return build_completed_add_items(doc_types)
 
     # =========================================================================
     # CONTROL FIELD COMPUTATION (for response)

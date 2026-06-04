@@ -23,6 +23,7 @@ from app.models.admission_config import (
     SubjectGroup,
     SubjectGroupSubject,
 )
+from app.models.config import ConfigDocumentType
 from app.models.offering_academic_info import OfferingAcademicInfo
 from app.models.program_offering import ProgramOffering
 from app.models.major_program import MajorProgram
@@ -414,6 +415,26 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     # DOCUMENT GROUP QUERIES (Override Resolution)
     # =========================================================================
     
+    async def get_document_types_by_codes(
+        self, codes: Iterable[str]
+    ) -> List[ConfigDocumentType]:
+        """PR #10 — lookup active ConfigDocumentType cho synthetic add-items.
+
+        ``resolve_documents_for_profile`` cần id/name/display_order của Giấy CN
+        hoàn thành GDPT (chỉ seed doc type, KHÔNG có DocumentGroupItem) để dựng
+        ``ResolvedDocumentResponse``. Chỉ trả doc type ``is_active=True``; [] cho
+        ``codes`` rỗng (giấy chưa seed → swap im lặng bỏ qua, fail-safe).
+        """
+        code_list = list(codes)
+        if not code_list:
+            return []
+        stmt = select(ConfigDocumentType).where(
+            ConfigDocumentType.code.in_(code_list),
+            ConfigDocumentType.is_active == True,  # noqa: E712
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def get_document_groups_for_path(
         self,
         offering_type_id: int,

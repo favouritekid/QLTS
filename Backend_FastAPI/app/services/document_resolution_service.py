@@ -53,6 +53,15 @@ _COMPLETED_DIPLOMA_TO_REMOVE: Dict[str, str] = {
     "completed_thcs": "bang_tot_nghiep_thcs",
 }
 
+# PR #10 — ĐỐI XỨNG with ..._TO_REMOVE: "completed_*" nộp Giấy CN hoàn thành
+# chương trình THAY cho bằng TN bị loại. Vì ``_CULTURAL_TO_AUDIENCE`` map cả
+# completed_thpt + graduated_thpt → CÙNG POST_THPT, audience layer KHÔNG phân
+# biệt được → SWAP phải làm ở tầng code (caller dựng synthetic resolved item).
+# completed_thcs CHƯA có giấy nguồn → để trống (known-limitation GĐ1).
+_COMPLETED_DIPLOMA_TO_ADD: Dict[str, str] = {
+    "completed_thpt": "giay_cn_hoan_thanh_gdpt",
+}
+
 
 def mandatory_wins_merge(
     doc_map: Dict[int, tuple],
@@ -186,9 +195,23 @@ def compute_completed_doc_codes(profile) -> Set[str]:
     return {code} if code else set()
 
 
+def compute_completed_add_doc_codes(profile) -> Set[str]:
+    """PR #10 — mã giấy cần THÊM khi ``cultural='completed_*'`` (đối xứng
+    ``compute_completed_doc_codes``).
+
+    "completed_thpt" (trượt tốt nghiệp) nộp Giấy CN hoàn thành chương trình
+    GDPT thay cho bằng TN bị loại. "graduated_*" giữ bằng, KHÔNG thêm.
+    Trả set rỗng cho cultural khác (kể cả completed_thcs — chưa có giấy nguồn).
+    """
+    cultural = getattr(profile, "cultural_education_level", None)
+    code = _COMPLETED_DIPLOMA_TO_ADD.get(cultural)
+    return {code} if code else set()
+
+
 def build_resolved_response(
     doc_map: Dict[int, tuple],
     completed_codes: Optional[Set[str]] = None,
+    add_items: Optional[List[ResolvedDocumentResponse]] = None,
 ) -> List[ResolvedDocumentResponse]:
     """``doc_map`` ``(item, source, group_audience)`` → list ResolvedDocumentResponse.
 
@@ -198,6 +221,12 @@ def build_resolved_response(
     → bỏ bằng TN §6). ``layer_kind``: path_override / method_override /
     shared_audience / shared_base. ``applicable_audience``: audience group thắng
     (None cho NỀN/override).
+
+    PR #10 — ``add_items``: synthetic ResolvedDocumentResponse do CALLER dựng
+    từ DB (vd Giấy CN hoàn thành GDPT cho ``completed_thpt``). Builder GIỮ PURE:
+    chỉ APPEND item có ``document_type_code`` CHƯA xuất hiện trong kết quả
+    (dedup — nếu DocumentGroup đã cấu hình giấy đó thì giữ bản config, không
+    nhân đôi), rồi sort lại theo ``display_order``.
     """
     completed = completed_codes or set()
     resolved: List[ResolvedDocumentResponse] = []
@@ -229,5 +258,47 @@ def build_resolved_response(
                 layer_kind=layer_kind,
             )
         )
+
+    if add_items:
+        existing_codes = {r.document_type_code for r in resolved}
+        for extra in add_items:
+            if extra.document_type_code not in existing_codes:
+                resolved.append(extra)
+                existing_codes.add(extra.document_type_code)
+
     resolved.sort(key=lambda x: x.display_order)
     return resolved
+
+
+def build_completed_add_items(doc_types) -> List[ResolvedDocumentResponse]:
+    """PR #10 — dựng synthetic add-items (paper-only) từ list ConfigDocumentType.
+
+    Pure builder dùng CHUNG cho cả ``resolve_documents_for_profile`` (resolve
+    thật) lẫn preview config → 1 nguồn shape, KHÔNG drift (finding #3). Caller
+    lookup doc type từ DB rồi truyền vào (chỉ ``id``/``code``/``name``/
+    ``display_order`` được đọc). Phần paper-only dựng CỨNG: vì #10 KHÔNG tạo
+    ``DocumentGroupItem`` cho giấy GDPT, các field config (``requires_upload``,
+    ``submission_format``, ``is_mandatory``) — vốn nằm ở ``DocumentGroupItem`` —
+    phải set tường minh ở đây.
+
+    ``layer_kind='shared_base'`` + ``applicable_audience=None``: item chỉ xuất
+    hiện trong context resolve của hồ sơ completed_*, KHÔNG gắn badge audience
+    (tránh hiểu nhầm "đã tốt nghiệp" cho người trượt TN).
+    """
+    items: List[ResolvedDocumentResponse] = []
+    for dt in doc_types:
+        items.append(
+            ResolvedDocumentResponse(
+                document_type_id=dt.id,
+                document_type_code=dt.code,
+                document_type_name=dt.name,
+                is_mandatory=True,
+                requires_upload=False,  # paper-only — officer ghi nhận tại quầy
+                submission_format=None,
+                display_order=dt.display_order,
+                source="shared",
+                applicable_audience=None,
+                layer_kind="shared_base",
+            )
+        )
+    return items
