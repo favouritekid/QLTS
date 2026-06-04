@@ -200,7 +200,12 @@ class PathCloneService:
                 admission_round_id=target_round_id,
                 criteria_id=new_criteria_id,
                 status="draft",  # cloned paths start draft
-                display_name=f"{src_path.display_name or 'Path'} (cloned)",
+                # Copy display_name as-is. Cloned paths live in a DIFFERENT
+                # round (round_code disambiguates), so the old " (cloned)"
+                # suffix only leaked to the storefront/admin UI looking unclean
+                # (TS2026 smoke finding #1). The criteria name keeps its
+                # "(cloned từ round X)" trace for internal audit.
+                display_name=src_path.display_name,
                 display_order=src_path.display_order,
                 visibility=src_path.visibility,
                 application_fee=src_path.application_fee,
