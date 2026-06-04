@@ -25,6 +25,8 @@ from app.models import (
     OfferingAdmissionRound,
     ProfileChoiceScore,
     ProgramOffering,
+    SubjectGroup,
+    SubjectGroupSubject,
 )
 
 
@@ -85,10 +87,19 @@ class AdmissionProfileChoiceRepository:
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_round
                 ),
-                # path_subject_group_config → subject_group (Contract-06)
+                # path_subject_group_config → subject_group → mappings →
+                # subject (P0 hotfix multi-NV — _resolve_allowed_subjects walks
+                # the M2M; submit gate + computed_total_score need codes)
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
-                ).selectinload(PathSubjectGroupConfig.subject_group),
+                ).selectinload(PathSubjectGroupConfig.subject_group)
+                .selectinload(SubjectGroup.subject_mappings)
+                .selectinload(SubjectGroupSubject.subject),
+                # admission_path → criteria (P0 hotfix multi-NV — per-NV
+                # computed_total_score via calculate_score(criteria=…))
+                selectinload(AdmissionProfileChoice.admission_path).selectinload(
+                    AdmissionPath.criteria
+                ),
                 # scores → subject
                 selectinload(AdmissionProfileChoice.scores).selectinload(
                     ProfileChoiceScore.subject
@@ -131,9 +142,17 @@ class AdmissionProfileChoiceRepository:
                 selectinload(AdmissionProfileChoice.admission_path).selectinload(
                     AdmissionPath.admission_round
                 ),
+                # P0 hotfix multi-NV — extend to mappings→subject + criteria
+                # so submit_and_evaluate's fresh list_by_profile() feeds the
+                # gate, and 8d defensive choices load covers the display path.
                 selectinload(
                     AdmissionProfileChoice.path_subject_group_config
-                ).selectinload(PathSubjectGroupConfig.subject_group),
+                ).selectinload(PathSubjectGroupConfig.subject_group)
+                .selectinload(SubjectGroup.subject_mappings)
+                .selectinload(SubjectGroupSubject.subject),
+                selectinload(AdmissionProfileChoice.admission_path).selectinload(
+                    AdmissionPath.criteria
+                ),
                 selectinload(AdmissionProfileChoice.scores).selectinload(
                     ProfileChoiceScore.subject
                 ),

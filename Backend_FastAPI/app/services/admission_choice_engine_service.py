@@ -60,7 +60,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import structlog
 from sqlalchemy import Integer, func, select
@@ -590,6 +590,178 @@ def _resolve_allowed_subjects(choice: "AdmissionProfileChoice") -> List[str]:
         if code:
             codes.append(code)
     return codes
+
+
+def _collect_subject_score_rows(
+    choice: "AdmissionProfileChoice",
+) -> List[Any]:
+    """Return the raw ``ProfileChoiceScore`` rows eager-loaded on ``choice``.
+
+    Sibling of ``_collect_subject_scores`` — that one flattens to a
+    ``{code: Decimal}`` map (for set membership / count checks); this one
+    keeps the rows so range validation can read ``score`` +
+    ``max_score_snapshot`` per row. Pure / sync — relies on
+    ``choice.scores`` being eager-loaded (admission_repository
+    ``_choices_eager_load_options`` + choice repo chains).
+    """
+    return list(getattr(choice, "scores", None) or [])
+
+
+def _resolve_choice_rule(
+    choice: "AdmissionProfileChoice",
+    applied_rules: Dict[str, Any],
+) -> Tuple[Optional[int], str]:
+    """Resolve ``(required_subject_count, subject_selection_mode)`` PER CHOICE.
+
+    Multi-NV is per-choice: each ``choice.admission_path.criteria`` may
+    differ (e.g. NV1 fixed-3, NV2 best_n-2). Display
+    (``AdmissionProfileChoiceResponse._compute_display_fields``) and the T6
+    publish cascade (``_evaluate_single_choice``) both score against
+    ``choice.admission_path.criteria`` — the submit gate MUST read the same
+    per-choice rule or it could let a choice submit short (its criteria
+    needs MORE than the snapshot) or block a valid one (its criteria is
+    best_n with a smaller required). Fall back to the profile-level
+    ``applied_rules`` snapshot ONLY when the choice has no live criteria
+    (legacy profile / config-gap).
+
+    Sync — relies on ``choice.admission_path.criteria`` being eager-loaded
+    (``admission_repository._choices_eager_load_options`` + choice repo
+    chains add the ``admission_path → criteria`` leg).
+    """
+    criteria = None
+    path = getattr(choice, "admission_path", None)
+    if path is not None:
+        criteria = getattr(path, "criteria", None)
+    required = (
+        getattr(criteria, "required_subject_count", None)
+        if criteria is not None
+        else None
+    )
+    mode = (
+        getattr(criteria, "subject_selection_mode", None)
+        if criteria is not None
+        else None
+    )
+    # Fall back to the immutable profile snapshot only when the choice's
+    # path has no criteria configured.
+    if required is None:
+        required = applied_rules.get("required_subject_count")
+    if not mode:
+        mode = applied_rules.get("subject_selection_mode")
+    return required, (mode or "fixed")
+
+
+def validate_choice_scores_complete(
+    choices: List["AdmissionProfileChoice"],
+    applied_rules: Dict[str, Any],
+) -> List[str]:
+    """P0 hotfix multi-NV — per-NV *data-completeness* gate for SUBMIT.
+
+    Phase 3 moved scores to ``ProfileChoiceScore`` (per choice) but the
+    legacy submit/eligibility/completion path still read profile-level
+    ``ProfileSubjectScore`` → every multi-NV profile read ``0`` scores and
+    could never submit. This helper is the choice-aware replacement.
+
+    Contract (LOCKED — see plan "P0 Hotfix Multi-NV"):
+      * Gate = for EVERY choice: ``|submitted ∩ allowed_subjects| ≥
+        required_subject_count`` AND every counted score is valid
+        numeric/range. "Nộp" ≠ "trúng tuyển".
+      * **NO** ``min_score`` / ``min_gpa`` / sàn / quota / ranking check —
+        that is the T6 publish per-NV cascade (``evaluate_cascade``).
+      * Returns ``[]`` when every choice is data-complete.
+
+    The required-subject rule is resolved **PER CHOICE** from
+    ``choice.admission_path.criteria`` (matching display + T6), falling back
+    to the profile snapshot only when a choice has no criteria — see
+    ``_resolve_choice_rule``.
+
+    Pure + sync. Caller passes ``choices`` EXPLICIT (already async-fetched
+    / eager-loaded); this function only touches ``choice.scores`` +
+    ``choice.path_subject_group_config.subject_group.subject_mappings`` +
+    ``choice.admission_path.criteria`` (all eager). ``choices == []`` returns
+    ``[]`` (the ≥1-choice gate is enforced separately so callers can phrase
+    that error in their own voice — submit gate raises ``BadRequest`` at
+    ``submit_and_evaluate``; ``_validate_scores`` adds a "≥1 nguyện vọng"
+    validation error).
+
+    Args:
+        choices: AdmissionProfileChoice rows (any order — sorted here).
+        applied_rules: profile snapshot — FALLBACK for
+            ``required_subject_count`` + ``subject_selection_mode`` only when
+            a choice's path criteria is absent.
+
+    Returns:
+        list[str] — one Vietnamese message per problem, prefixed ``NV{n}``.
+    """
+    errors: List[str] = []
+
+    ordered = sorted(
+        choices, key=lambda c: getattr(c, "display_order", 0) or 0
+    )
+    for choice in ordered:
+        order = getattr(choice, "display_order", "?")
+        allowed = _resolve_allowed_subjects(choice)
+
+        # Config-gap → fail-closed. allowed==[] would make the count check
+        # vacuously pass (required falls back to 0); refuse instead so a
+        # mis-configured combo can never silently let a profile submit.
+        if not allowed:
+            errors.append(f"NV{order}: tổ hợp chưa cấu hình môn")
+            continue
+
+        allowed_set = set(allowed)
+        submitted = _collect_subject_scores(choice)  # {code: Decimal}
+        rows = _collect_subject_score_rows(choice)
+
+        # PER-CHOICE rule from choice.admission_path.criteria (matches
+        # display + T6); applied_rules is fallback only. See blocker fix
+        # 2026-06-04 — NV2 may carry different criteria than NV1.
+        req_raw, mode = _resolve_choice_rule(choice, applied_rules)
+        # required: configured count if present, else "need all allowed".
+        # A falsy 0 OR an unset (None) count BOTH fall back to len(allowed):
+        # a 0/unset required_subject_count means "every combo subject"
+        # (fail-CLOSED on misconfig), never "zero subjects required" — a
+        # submit gate must not let a stray 0 wave through an empty profile.
+        # Pinned by test_required_zero_falls_back_to_all_subjects.
+        required = int(req_raw) if req_raw else len(allowed)
+
+        valid_submitted = [c for c in submitted if c in allowed_set]
+        if len(valid_submitted) < required:
+            msg = (
+                f"NV{order}: thiếu điểm (cần {required} môn tổ hợp, "
+                f"có {len(valid_submitted)})"
+            )
+            # List the still-missing combo subjects only when every allowed
+            # subject is needed (fixed). For best_n the candidate may pick
+            # any subset so naming specific subjects would mislead.
+            if mode == "fixed" or required >= len(allowed):
+                missing = [c for c in allowed if c not in submitted]
+                if missing:
+                    msg += f" — chưa nhập: {', '.join(missing)}"
+            errors.append(msg)
+
+        # Range check — only on rows that count toward the combo.
+        for row in rows:
+            subj = getattr(row, "subject", None)
+            code = getattr(subj, "code", None) if subj else None
+            if code is None or code not in allowed_set:
+                continue
+            raw = getattr(row, "score", None)
+            if raw is None:
+                errors.append(f"NV{order}: điểm môn {code} không hợp lệ")
+                continue
+            try:
+                val = Decimal(str(raw))
+            except (InvalidOperation, ValueError, TypeError):
+                errors.append(f"NV{order}: điểm môn {code} không hợp lệ")
+                continue
+            max_snap = getattr(row, "max_score_snapshot", None)
+            if val < 0 or (
+                max_snap is not None and val > Decimal(str(max_snap))
+            ):
+                errors.append(f"NV{order}: điểm môn {code} không hợp lệ")
+
+    return errors
 
 
 # ============================================================================

@@ -10,6 +10,7 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { GraduationCap, CheckCircle2, XCircle, AlertTriangle } from "lucide-react"
 import { HealthCheckItem } from "./HealthCheckItem"
+import { PerNvScoreSummary } from "./PerNvScoreSummary"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface AcademicCardProps {
@@ -41,6 +42,8 @@ export function AcademicCard({ profile }: AcademicCardProps) {
     : "text-warning-600"
 
   // Determine which score to display
+  const isMultiNv = profile.uses_choice_engine === true
+  const choices = profile.choices ?? []
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
 
@@ -62,7 +65,16 @@ export function AcademicCard({ profile }: AcademicCardProps) {
       </CardHeader>
 
       <CardContent className="space-y-3">
-        {/* Score Display - Large */}
+        {/* Score Display - Large. P0 hotfix multi-NV: per-NV thay vì
+            profile-level total (null cho multi-NV). */}
+        {isMultiNv ? (
+          <div className="rounded-lg border border-info-200 bg-info-50/60 p-3">
+            <div className="mb-2 text-xs font-medium text-info-600">
+              Điểm Xét Tuyển Theo Nguyện Vọng
+            </div>
+            <PerNvScoreSummary choices={choices} compact />
+          </div>
+        ) : (
         <div className="bg-gradient-to-br from-info-50 to-info-100 rounded-lg p-4 border border-info-200">
           {isGpaOnly ? (
             // GPA-only method
@@ -101,6 +113,7 @@ export function AcademicCard({ profile }: AcademicCardProps) {
             </div>
           )}
         </div>
+        )}
 
         {/* Step 3: Academic History */}
         <HealthCheckItem

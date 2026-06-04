@@ -67,6 +67,22 @@ export const admissionProfileChoiceResponseSchema = z.object({
   display_degree_level: z.string().default(""),
   display_subject_group_name: z.string(),
   scores: z.array(choiceScoreSummarySchema),
+  // P0 hotfix multi-NV (2026-06-04) — per-NV computed score for display.
+  // profile.total_score is null for multi-NV; FE renders these per choice.
+  // `data_complete` mirrors the submit gate (no sàn);
+  // `admission_threshold_passed` is DISPLAY ONLY (sàn enforced at publish).
+  data_complete: z.boolean().default(false),
+  computed_total_score: z
+    .union([z.string(), z.number()])
+    .nullable()
+    .optional()
+    .transform((v) => (v === null || v === undefined ? null : Number(v))),
+  admission_threshold_passed: z
+    .boolean()
+    .nullable()
+    .optional()
+    .transform((v) => (v === undefined ? null : v)),
+  threshold_failure_reasons: z.array(z.string()).default([]),
 })
 export type AdmissionProfileChoiceResponse = z.infer<
   typeof admissionProfileChoiceResponseSchema
