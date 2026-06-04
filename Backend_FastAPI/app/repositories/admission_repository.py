@@ -13,7 +13,7 @@ Benefits:
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional, Tuple
 import unicodedata
 
@@ -1112,6 +1112,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         document_type_code: str,
         officer_id: int,
         actual_submission_format: Optional[str] = None,
+        graduation_proof_kind: Optional[str] = None,
+        supplement_due_date: Optional[date] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Mark a document as paper submitted (officer confirms receipt).
@@ -1122,7 +1124,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id: AdmissionProfile ID
             document_type_code: Document type code
             officer_id: ID of officer confirming receipt
-            actual_submission_format: Declared document format (original | certified_copy | photo)
+            actual_submission_format: Declared format (original|certified_copy|photo)
+            graduation_proof_kind: PR#13 — official_diploma|provisional_cert
+                (chỉ áp cho giấy tốt nghiệp THPT bang_tot_nghiep_thpt)
+            supplement_due_date: PR#13 — hạn bổ sung khi provisional_cert
 
         Returns:
             Updated ProfileDocument or None if not found
@@ -1139,6 +1144,37 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if actual_submission_format:
             doc.actual_submission_format = actual_submission_format
 
+        # PR #13 — loại giấy tốt nghiệp (bằng chính thức / giấy tạm thời).
+        if graduation_proof_kind is not None:
+            doc.graduation_proof_kind = graduation_proof_kind
+            doc.supplement_due_date = (
+                supplement_due_date
+                if graduation_proof_kind == "provisional_cert"
+                else None
+            )
+
+        return doc
+
+    async def update_graduation_proof(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        new_kind: str,
+    ) -> Optional[models.ProfileDocument]:
+        """PR #13 — nâng cấp loại giấy tốt nghiệp (vd provisional→official).
+
+        Dùng khi hồ sơ ĐÃ nộp giấy (status paper_submitted/verified) rồi thí
+        sinh bổ sung bằng chính thức. KHÔNG đổi status (khác
+        mark_paper_submitted vốn theo policy chỉ chạy khi status='missing').
+        official_diploma → xoá hạn bổ sung.
+        """
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+
+        doc.graduation_proof_kind = new_kind
+        if new_kind == "official_diploma":
+            doc.supplement_due_date = None
         return doc
 
     async def reset_document(
@@ -1181,6 +1217,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.rejected_at = None
         doc.rejected_by = None
         doc.rejection_reason = None
+        # PR #13 — rewind graduation proof fields.
+        doc.graduation_proof_kind = None
+        doc.supplement_due_date = None
 
         return doc
 
