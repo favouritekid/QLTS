@@ -7,7 +7,7 @@ Replaces JSON fields in AdmissionProfile:
 - documents_checklist → ProfileDocument
 """
 
-from sqlalchemy import CheckConstraint, Column, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
+from sqlalchemy import CheckConstraint, Column, Date, Index, Integer, String, ForeignKey, Numeric, DateTime, UniqueConstraint, Text, BigInteger, text
 from sqlalchemy.orm import backref, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime, timezone
@@ -192,6 +192,20 @@ class ProfileDocument(Base):
         comment="Verified by officer after inspection: original | certified_copy | photo"
     )
 
+    # PR #13 — phân biệt Bằng TN THPT chính thức vs Giấy CN tốt nghiệp
+    # tạm thời (chỉ áp cho doc 'bang_tot_nghiep_thpt'). Officer chọn loại
+    # khi tick "đã nhận"; provisional_cert → nhập hạn bổ sung bằng.
+    graduation_proof_kind = Column(
+        String(20),
+        nullable=True,
+        comment="official_diploma | provisional_cert | NULL"
+    )
+    supplement_due_date = Column(
+        Date,
+        nullable=True,
+        comment="Hạn bổ sung bằng — set khi kind=provisional_cert"
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -245,6 +259,18 @@ class ProfileDocument(Base):
         CheckConstraint(
             "category <> 'path' OR document_type_id IS NOT NULL",
             name="ck_path_requires_doc_type"
+        ),
+        # PR #13 — graduation_proof_kind chỉ nhận 2 giá trị hợp lệ hoặc NULL.
+        CheckConstraint(
+            "graduation_proof_kind IS NULL OR graduation_proof_kind IN "
+            "('official_diploma','provisional_cert')",
+            name="ck_graduation_proof_kind",
+        ),
+        # PR #13 — hạn bổ sung chỉ có ý nghĩa khi nộp giấy tạm thời.
+        CheckConstraint(
+            "supplement_due_date IS NULL "
+            "OR graduation_proof_kind = 'provisional_cert'",
+            name="ck_supplement_due_only_provisional",
         ),
     )
 
