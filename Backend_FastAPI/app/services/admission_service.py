@@ -924,6 +924,46 @@ def _validate_scores(
     Validate score requirements based on applied rules.
     Returns: (has_gpa_error, validation_errors_list, gpa_errors_list)
     """
+    # P0 hotfix multi-NV (2026-06-04) — scores live per-choice in
+    # ProfileChoiceScore, NOT the profile-level ProfileSubjectScore the
+    # legacy body below reads. Branch out so multi-NV eligibility/completion
+    # use the choice-aware data-completeness gate. Data-complete ONLY (no
+    # min_score/sàn → that is T6 publish per-NV); when complete this returns
+    # no error so eligibility_status flips to "eligible" even below the
+    # threshold (correct per contract — "nộp" ≠ "trúng tuyển").
+    if getattr(profile, "uses_choice_engine", False):
+        # Sync helper — read choices from __dict__ to avoid triggering a
+        # lazy-load (MissingGreenlet) in the async session. All response
+        # paths eager-load choices (admission_repository
+        # _choices_eager_load_options + _populate_response_fields 8d
+        # defensive fetch); the submit gate re-queries fresh.
+        choices = profile.__dict__.get("choices")
+        if choices is None:
+            # Relationship not eager-loaded on this path — stay non-blocking
+            # rather than crash (MissingGreenlet) or spuriously block. This is
+            # display-only fail-open; the authoritative submit gate re-queries
+            # fresh. Log so a missing eager-load on a NEW code path is
+            # observable instead of silently masking incompleteness.
+            log.warning(
+                "validate_scores_choices_unloaded",
+                profile_id=getattr(profile, "id", None),
+                reason=(
+                    "multi-NV profile reached _validate_scores without "
+                    "eager-loaded choices; eligibility computed fail-open. "
+                    "Ensure the caller eager-loads choices "
+                    "(_choices_eager_load_options / _populate_response_fields)."
+                ),
+            )
+            return False, [], []
+        if not choices:
+            msg = "Cần ít nhất 1 nguyện vọng để nộp hồ sơ"
+            return True, [msg], [msg]
+        from .admission_choice_engine_service import (
+            validate_choice_scores_complete,
+        )
+        errs = validate_choice_scores_complete(choices, applied_rules)
+        return bool(errs), errs, errs
+
     min_gpa = float(applied_rules.get("min_gpa") or 0)
     req_count_val = applied_rules.get("required_subject_count")
     required_count = int(req_count_val) if req_count_val is not None else 3
@@ -1174,7 +1214,18 @@ def _compute_completion_percent(
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
     has_family = profile.family_info and len(profile.family_info) > 0
     has_academic = profile.academic_history and len(profile.academic_history) > 0
-    has_any_scores = bool(profile.subject_scores) if hasattr(profile, "subject_scores") else False
+    # P0 hotfix multi-NV — Step 5 (Scores) "has any" reads per-choice
+    # ProfileChoiceScore, not the profile-level relation (always empty for
+    # multi-NV). __dict__ access is lazy-load-safe in this sync helper.
+    if getattr(profile, "uses_choice_engine", False):
+        _ch = profile.__dict__.get("choices") or []
+        has_any_scores = any(bool(c.__dict__.get("scores")) for c in _ch)
+    else:
+        has_any_scores = (
+            bool(profile.subject_scores)
+            if hasattr(profile, "subject_scores")
+            else False
+        )
 
     # Phase E.4 — Step 4 Priority compute (KV resolved + cultural input)
     has_priority_input = bool(
@@ -1515,10 +1566,23 @@ def _compute_frontend_fields(
     # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
     # =========================================================================
     _is_dropped = getattr(profile, "is_dropped", False)
+    # P0 hotfix multi-NV — a multi-NV profile needs ≥1 choice before the
+    # Submit button shows (otherwise the candidate clicks Nộp only to hit a
+    # 400 from submit_and_evaluate's ≥1-choice gate). Block ONLY when it is
+    # multi-NV AND choices are eager-loaded AND empty; an unloaded relation
+    # (None) does NOT block (display-only paths — the submit gate
+    # re-validates with a fresh query). __dict__ access avoids a sync
+    # lazy-load (MissingGreenlet).
+    _loaded_choices = profile.__dict__.get("choices")
+    _multi_nv_no_choice = (
+        getattr(profile, "uses_choice_engine", False)
+        and _loaded_choices is not None
+        and len(_loaded_choices) == 0
+    )
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
-        "submit": status == "draft" and (is_owner or is_manager or is_admin),
+        "submit": status == "draft" and (is_owner or is_manager or is_admin) and not _multi_nv_no_choice,
         "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
@@ -1887,7 +1951,20 @@ def _compute_frontend_fields(
     # Academic
     has_academic = profile.academic_history and len(profile.academic_history) > 0
     
-    has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
+    # P0 hotfix multi-NV — Step 5 (Scores) "has any" must read per-choice
+    # ProfileChoiceScore for multi-NV (profile.subject_scores is always empty
+    # there), mirroring _compute_completion_percent. Without this branch the
+    # RESPONSE step_status[5] stays 'warning' for a fully-scored multi-NV
+    # profile (it never turns 'success'), contradicting completion_percent.
+    if getattr(profile, "uses_choice_engine", False):
+        _ch = profile.__dict__.get("choices") or []
+        has_any_scores = any(bool(c.__dict__.get("scores")) for c in _ch)
+    else:
+        has_any_scores = (
+            bool(profile.subject_scores)
+            if hasattr(profile, 'subject_scores')
+            else False
+        )
 
     # Phase E.4 — Step 4 Priority compute (KV resolved + cultural input)
     has_priority_input = bool(getattr(profile, "cultural_education_level", None))
@@ -2574,6 +2651,29 @@ async def _populate_response_fields(
     if current_user is None:
         # System callback path: no role/permissions to compute. Skip silently.
         return
+
+    # P0 hotfix multi-NV (8d) — DEFENSIVE choices eager-load at the async
+    # chokepoint. deps.py get_admission_for_* (IDOR) + admissions_v2 reload
+    # helpers preload lead/reviewer but NOT choices; _compute_frontend_fields
+    # → _validate_scores + submit-perm + _compute_completion_percent now read
+    # profile.choices for multi-NV, and a lazy access from that sync code
+    # raises MissingGreenlet. Inject the eager-loaded list as a *committed*
+    # value (does NOT mark the instance dirty, does NOT re-lazy) so EVERY
+    # mutation response (approve/reject/override/submit/v2 helpers) is covered
+    # without touching each dependency. Skip when already loaded (GET paths
+    # eager-load via _choices_eager_load_options).
+    if getattr(profile, "uses_choice_engine", False):
+        import sqlalchemy as _sa
+        from sqlalchemy.orm.attributes import set_committed_value
+
+        if "choices" in _sa.inspect(profile).unloaded:
+            from app.repositories.admission_profile_choice_repository import (
+                AdmissionProfileChoiceRepository,
+            )
+            _fresh_choices = await AdmissionProfileChoiceRepository(
+                db
+            ).list_by_profile(profile.id)
+            set_committed_value(profile, "choices", _fresh_choices)
 
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
@@ -4065,7 +4165,10 @@ async def update_profile(
     # Prevent Race Condition (Lost Update) by locking the row
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
-    
+    from app.repositories.admission_repository import (
+        _choices_eager_load_options,
+    )
+
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
@@ -4075,6 +4178,11 @@ async def update_profile(
             .selectinload(models.Lead.assigned_officer),
             # Eager load assigned_reviewer for _compute_frontend_fields
             selectinload(models.AdmissionProfile.assigned_reviewer),
+            # P0 hotfix multi-NV — update_profile calls _compute_frontend_fields
+            # directly (NOT via _populate_response_fields 8d), so eager-load
+            # choices here too or the sync eligibility read MissingGreenlets.
+            # selectinload uses separate SELECTs → compatible with FOR UPDATE.
+            *_choices_eager_load_options(),
         )
         .with_for_update() # Lock the row
     )
@@ -4406,6 +4514,20 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     
     Note: These fields are transient (not in DB) but required by Schema.
     """
+    # P0 hotfix multi-NV (2026-06-04) — profile-level total/average/snapshot
+    # are meaningless for multi-NV (scores live per-choice in
+    # ProfileChoiceScore). The legacy branches below hard-set 0.00 when the
+    # profile-level relation is empty → FE renders a fake "0.00 / Tổng điểm".
+    # Set every profile-level score field to None (schema fields are
+    # Optional) so the response renders "—" and the FE switches to per-NV
+    # display (choice.computed_total_score). See plan step 6.
+    if getattr(profile, "uses_choice_engine", False):
+        profile.total_score = None
+        profile.average_score = None
+        profile.admission_scores = None
+        profile.snapshot_score = None
+        return
+
     # Use provided scores OR fallback to profile relationship
     # If scores arg is provided managed explicitly, use it.
     # Otherwise check if profile.subject_scores is loaded and populated.
@@ -5066,7 +5188,30 @@ async def submit_and_evaluate(
 
     method_type = applied_rules.get("method_type", "subject_based")
 
-    if method_type == "gpa_only":
+    if profile.uses_choice_engine:
+        # =====================================================================
+        # P0 hotfix multi-NV — per-NV data-completeness gate.
+        # =====================================================================
+        # Scores live per-choice in ProfileChoiceScore; the gpa_only /
+        # subject-based branches below read profile-level ProfileSubjectScore
+        # (always empty for multi-NV → a spurious "thiếu điểm" on every
+        # submit). Gate on per-NV completeness instead: every choice carries
+        # ≥ required combo subjects with valid numeric/range scores. NO
+        # min_score / sàn here — the T6 publish cascade (evaluate_cascade)
+        # applies the threshold per NV. ``with_for_update()`` above did NOT
+        # eager choices, so fetch them fresh with the full eager chain the
+        # helper walks (scores+subject + subject_group.subject_mappings).
+        from app.repositories.admission_profile_choice_repository import (
+            AdmissionProfileChoiceRepository,
+        )
+        from .admission_choice_engine_service import (
+            validate_choice_scores_complete,
+        )
+        _choices = await AdmissionProfileChoiceRepository(db).list_by_profile(
+            profile.id
+        )
+        errors.extend(validate_choice_scores_complete(_choices, applied_rules))
+    elif method_type == "gpa_only":
         # =====================================================================
         # GPA-Only Branch: validate using Lead.gpa, no subject scores required
         # =====================================================================

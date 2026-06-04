@@ -51,6 +51,10 @@ function makeChoice(
     display_degree_level: "Cao đẳng",
     display_subject_group_name: "Toán-Lý-Hoá",
     scores: [],
+    data_complete: false,
+    computed_total_score: null,
+    admission_threshold_passed: null,
+    threshold_failure_reasons: [],
     ...overrides,
   }
 }

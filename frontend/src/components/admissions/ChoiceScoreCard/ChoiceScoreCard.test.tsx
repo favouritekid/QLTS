@@ -67,6 +67,10 @@ function makeChoice(
         weight_snapshot: 1,
       },
     ],
+    data_complete: false,
+    computed_total_score: null,
+    admission_threshold_passed: null,
+    threshold_failure_reasons: [],
     ...overrides,
   }
 }
