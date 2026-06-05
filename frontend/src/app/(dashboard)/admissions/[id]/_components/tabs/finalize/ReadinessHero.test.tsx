@@ -1,8 +1,9 @@
 /**
- * ReadinessHero — presentational anchor tests.
+ * ReadinessHero — presentational anchor tests (decision-surface redesign).
  *
- * Pins: renders both verdict signals + identity + metrics; renders the cta slot
- * when provided (single CTA surface, no card-in-card); document metric fallback.
+ * Pins: identity + ONE verdict badge; one-line decision summary only when set;
+ * metrics WITHOUT a duplicate eligibility metric; cta slot renders; no sticky
+ * utility actions in the Hero.
  */
 
 import { describe, it, expect } from "vitest"
@@ -39,24 +40,49 @@ function buildReadiness(overrides: Partial<SubmissionReadiness> = {}): Submissio
     eligibilityLabel: "Đủ điều kiện xét",
     eligibilityTone: "success",
     primaryAction: "submit",
-    readinessLabel: "Có thể nộp ngay",
-    readinessTone: "success",
+    verdictLabel: "Có thể nộp",
+    verdictTone: "success",
+    decisionSummary: null,
     actionItems: [],
     actionItemCount: 0,
+    outstandingLabel: "Mục cần xử lý",
     summaryLine: null,
     hasExecutiveSummary: true,
+    documentTone: "success",
+    hasOutstandingWarnings: false,
     ...overrides,
   }
 }
 
 describe("ReadinessHero", () => {
-  it("renders identity + both verdict signals", () => {
+  it("renders identity + the SINGLE verdict badge", () => {
     render(<ReadinessHero profile={buildProfile()} readiness={buildReadiness()} />)
     expect(screen.getByText("Nguyễn Văn A")).toBeInTheDocument()
     expect(screen.getByText("#1024")).toBeInTheDocument()
-    // Eligibility label shows in BOTH the verdict badge and metric 3 (by design).
-    expect(screen.getAllByText("Đủ điều kiện xét").length).toBeGreaterThan(0)
-    expect(screen.getByText("Có thể nộp ngay")).toBeInTheDocument()
+    expect(screen.getByText("Có thể nộp")).toBeInTheDocument()
+  })
+
+  it("does NOT render a separate eligibility badge or eligibility metric (one verdict only)", () => {
+    const { container } = render(
+      <ReadinessHero profile={buildProfile()} readiness={buildReadiness()} />,
+    )
+    expect(container.textContent).not.toContain("Việc của bạn")
+    expect(container.textContent).not.toContain("Điều kiện xét")
+  })
+
+  it("renders the one-line decision summary only when present", () => {
+    const { rerender, container } = render(
+      <ReadinessHero profile={buildProfile()} readiness={buildReadiness()} />,
+    )
+    // null summary → not rendered
+    expect(container.textContent).not.toMatch(/Còn .* mục cần xử lý/)
+    rerender(
+      <ReadinessHero
+        profile={buildProfile()}
+        readiness={buildReadiness({ decisionSummary: "Còn 3 mục cần xử lý trước khi nộp." })}
+      />,
+    )
+    expect(screen.getByText("Còn 3 mục cần xử lý trước khi nộp.")).toBeInTheDocument()
   })
 
   it("renders document metric m/n from document_stats", () => {
@@ -69,9 +95,30 @@ describe("ReadinessHero", () => {
       <ReadinessHero
         profile={buildProfile({ document_stats: null } as Partial<AdmissionProfileResponse>)}
         readiness={buildReadiness()}
-      />
+      />,
     )
     expect(screen.getByText("—")).toBeInTheDocument()
+  })
+
+  it("renders the outstanding metric with the hook's label when count > 0", () => {
+    render(
+      <ReadinessHero
+        profile={buildProfile()}
+        readiness={buildReadiness({ actionItemCount: 3, outstandingLabel: "Mục cần xử lý" })}
+      />,
+    )
+    expect(screen.getByText("Mục cần xử lý")).toBeInTheDocument()
+    expect(screen.getByText("3")).toBeInTheDocument()
+  })
+
+  it("hides the outstanding metric when count is 0 (no noisy 'Mục cần xử lý: 0')", () => {
+    const { container } = render(
+      <ReadinessHero
+        profile={buildProfile()}
+        readiness={buildReadiness({ actionItemCount: 0, outstandingLabel: "Mục cần xử lý" })}
+      />,
+    )
+    expect(container.textContent).not.toContain("Mục cần xử lý")
   })
 
   it("renders cta slot when provided (single CTA surface)", () => {
@@ -80,18 +127,18 @@ describe("ReadinessHero", () => {
         profile={buildProfile()}
         readiness={buildReadiness()}
         cta={<div data-testid="cta-child">PANEL</div>}
-      />
+      />,
     )
     expect(screen.getByTestId("cta-child")).toBeInTheDocument()
   })
 
-  it("renders summaryLine hint when present", () => {
-    render(
-      <ReadinessHero
-        profile={buildProfile()}
-        readiness={buildReadiness({ summaryLine: "Kiểm tra và nộp hồ sơ" })}
-      />
+  it("does NOT render any sticky utility action in the Hero", () => {
+    const { container } = render(
+      <ReadinessHero profile={buildProfile()} readiness={buildReadiness()} cta={<div>cta</div>} />,
     )
-    expect(screen.getByText("Kiểm tra và nộp hồ sơ")).toBeInTheDocument()
+    expect(container.textContent).not.toContain("Lưu nháp")
+    expect(container.textContent).not.toContain("Lưu thay đổi")
+    expect(container.textContent).not.toContain("Kiểm tra toàn bộ")
+    expect(container.textContent).not.toContain("Gửi link")
   })
 })

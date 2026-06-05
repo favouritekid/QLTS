@@ -30,6 +30,9 @@ vi.mock("./finalize/SectionReview", () => ({
 vi.mock("./finalize/InspectionDetails", () => ({
   InspectionDetails: () => <div data-testid="inspection-details" />,
 }))
+vi.mock("./finalize/ReviewerCockpit", () => ({
+  ReviewerCockpit: () => <div data-testid="reviewer-cockpit" />,
+}))
 
 // Pass-through AlertDialog mock (no Radix portal)
 vi.mock("@/components/ui/alert-dialog", () => ({
@@ -258,6 +261,27 @@ describe("FinalizeTab — Decision Surface", () => {
       const spies = renderTab(buildProfile(), { canSubmit: true })
       fireEvent.click(screen.getByText("Nộp hồ sơ chính thức"))
       expect(spies.onSubmit).toHaveBeenCalled()
+    })
+  })
+
+  describe("Role composition (officer vs reviewer)", () => {
+    it("officer (canSubmit only): renders ActionItemsList + SectionReview, NOT ReviewerCockpit", () => {
+      renderTab(buildProfile(), { canSubmit: true })
+      expect(screen.getByTestId("action-items-list")).toBeInTheDocument()
+      expect(screen.getByTestId("section-review")).toBeInTheDocument()
+      expect(screen.queryByTestId("reviewer-cockpit")).not.toBeInTheDocument()
+    })
+
+    it("reviewer (canApprove): renders ReviewerCockpit, NOT ActionItemsList/SectionReview", () => {
+      renderTab(buildProfile(), { canApprove: true })
+      expect(screen.getByTestId("reviewer-cockpit")).toBeInTheDocument()
+      expect(screen.queryByTestId("action-items-list")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("section-review")).not.toBeInTheDocument()
+    })
+
+    it("InspectionDetails renders for both roles (collapsed self-check)", () => {
+      renderTab(buildProfile(), { canSubmit: true })
+      expect(screen.getByTestId("inspection-details")).toBeInTheDocument()
     })
   })
 })

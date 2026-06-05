@@ -1,24 +1,26 @@
+/**
+ * PriorityReviewCard — compact "Ưu tiên / KV" cockpit signal.
+ *
+ * BE-driven: reads priority_resolution_snapshot (kv_resolved, ut_verified_bucket,
+ * requires_manual_override) + missing_priority_evidence_codes. Detail (bonus
+ * breakdown / cap / override reason) lives in InspectionDetails, NOT here — the
+ * cockpit only answers "đủ duyệt chưa, vướng gì".
+ */
+
 "use client"
 
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { ShieldCheck, CheckCircle2, AlertTriangle, XCircle } from "lucide-react"
+import { SignalCell, type SignalTone } from "./SignalCell"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface PriorityReviewCardProps {
   profile: AdmissionProfileResponse
 }
 
-/**
- * Cockpit card cho § KV/UT review. BE-driven: đọc snapshot fields
- * (kv_resolved, requires_manual_override, ut_verified_bucket,
- * manual_override_reason, path_bonus_rule, frozen_at).
- */
 export function PriorityReviewCard({ profile }: PriorityReviewCardProps) {
   const snapshot = profile.priority_resolution_snapshot ?? {}
   const kv = typeof snapshot.kv_resolved === "string" ? snapshot.kv_resolved : null
   const requiresManualOverride = snapshot.requires_manual_override === true
-  const hasOverride = Boolean(snapshot.manual_override_reason)
+  const hasManualOverride = Boolean(snapshot.manual_override_reason)
   const missingUtCount = profile.missing_priority_evidence_codes?.length ?? 0
 
   const utBucket = (() => {
@@ -31,6 +33,7 @@ export function PriorityReviewCard({ profile }: PriorityReviewCardProps) {
     return null
   })()
 
+  // Bonus cap (mirror the legacy card): area_bonus + UT rate vs path max_total_bonus.
   const areaBonus = (() => {
     const bd = snapshot.breakdown
     if (bd && typeof bd === "object" && "area_bonus" in bd) {
@@ -39,7 +42,6 @@ export function PriorityReviewCard({ profile }: PriorityReviewCardProps) {
     }
     return 0
   })()
-
   const maxTotalBonus = (() => {
     const r = snapshot.path_bonus_rule
     if (r && typeof r === "object" && "max_total_bonus" in r) {
@@ -48,76 +50,42 @@ export function PriorityReviewCard({ profile }: PriorityReviewCardProps) {
     }
     return null
   })()
+  const isCapped = typeof maxTotalBonus === "number" && areaBonus + (utBucket?.rate ?? 0) > maxTotalBonus
 
-  const totalBonus = areaBonus + (utBucket?.rate ?? 0)
-  const isCapped = typeof maxTotalBonus === "number" && totalBonus > maxTotalBonus
-  const appliedBonus = isCapped ? (maxTotalBonus as number) : totalBonus
+  const tone: SignalTone = requiresManualOverride
+    ? "error"
+    : missingUtCount > 0
+      ? "warning"
+      : kv
+        ? "success"
+        : "warning"
 
-  // Status: error nếu requires_manual_override; warning nếu missing UT;
-  // success nếu KV resolved.
-  const StatusIcon = requiresManualOverride
-    ? XCircle
+  const primary = kv ?? "Chưa xác định KV"
+  // Secondary = the most urgent ISSUE (base), then DURABLE provenance/cap suffixes so
+  // the cell self-contains the decision state. The audit line is only "gần đây" (the
+  // latest event) — it can't be the sole carrier of "override applied" because the
+  // next audit event would hide it. Order: issue → provenance → cap.
+  const base = requiresManualOverride
+    ? "Cần ấn định KV thủ công"
     : missingUtCount > 0
-      ? AlertTriangle
-      : kv
-        ? CheckCircle2
-        : AlertTriangle
-  const statusColor = requiresManualOverride
-    ? "text-error-600"
-    : missingUtCount > 0
-      ? "text-warning-600"
-      : kv
-        ? "text-success-600"
-        : "text-warning-600"
+      ? `Thiếu ${missingUtCount} minh chứng UT`
+      : utBucket
+        ? `UT${utBucket.code} hợp lệ (+${utBucket.rate.toFixed(2)}đ)`
+        : kv
+          ? "Ưu tiên hợp lệ"
+          : "Chưa có dữ liệu ưu tiên"
+  const secondary =
+    base +
+    (hasManualOverride ? " · KV cán bộ ấn định" : "") +
+    (isCapped ? " · bị cap" : "")
 
   return (
-    <Card data-testid="priority-review-card">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-muted-foreground" />
-            <CardTitle className="text-lg">KV & Ưu tiên</CardTitle>
-          </div>
-          <StatusIcon className={`w-6 h-6 ${statusColor}`} />
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-2 text-sm">
-        <div className="flex justify-between items-baseline">
-          <span className="text-muted-foreground">KV:</span>
-          <span className="font-semibold">{kv ?? "—"}</span>
-        </div>
-        <div className="flex justify-between items-baseline">
-          <span className="text-muted-foreground">UT đã duyệt:</span>
-          <span className="font-semibold">
-            {utBucket ? `UT${utBucket.code} (+${utBucket.rate.toFixed(2)}đ)` : "—"}
-          </span>
-        </div>
-        <div className="flex justify-between items-baseline">
-          <span className="text-muted-foreground">Tổng cộng:</span>
-          <span className="font-semibold tabular-nums">+{appliedBonus.toFixed(2)}đ</span>
-        </div>
-        {isCapped && (
-          <Badge variant="outline" className="bg-warning-50 border-warning-200 text-warning-700 text-xs">
-            Bị cap (max +{(maxTotalBonus as number).toFixed(2)}đ)
-          </Badge>
-        )}
-        {hasOverride && (
-          <Badge variant="outline" className="bg-purple-50 border-purple-200 text-purple-700 text-xs">
-            Cán bộ đã ấn định
-          </Badge>
-        )}
-        {requiresManualOverride && (
-          <Badge variant="outline" className="bg-error-50 border-error-200 text-error-700 text-xs">
-            Cần ấn định thủ công
-          </Badge>
-        )}
-        {missingUtCount > 0 && (
-          <Badge variant="outline" className="bg-warning-50 border-warning-200 text-warning-700 text-xs">
-            Thiếu {missingUtCount} minh chứng UT
-          </Badge>
-        )}
-      </CardContent>
-    </Card>
+    <SignalCell
+      testId="priority-review-card"
+      title="Ưu tiên / KV"
+      tone={tone}
+      primary={primary}
+      secondary={secondary}
+    />
   )
 }

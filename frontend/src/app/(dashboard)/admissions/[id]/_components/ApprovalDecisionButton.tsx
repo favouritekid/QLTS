@@ -21,6 +21,13 @@ interface ApprovalDecisionButtonProps {
   onApprove: () => void
   isApproving: boolean
   disabled?: boolean
+  /**
+   * Eligibility verdict (eligibility_status === "eligible"). Drives the tone of
+   * the NON-bypass button: success/green ONLY when eligible; neutral secondary
+   * when ineligible (the button is disabled by the caller in that case and must
+   * not carry a positive tone — STEP8 CTA rule). Ignored on the bypass path.
+   */
+  isEligible: boolean
   size?: "default" | "sm" | "lg"
   /**
    * Layout-only className (width/size/min-width).
@@ -48,6 +55,7 @@ export function ApprovalDecisionButton({
   onApprove,
   isApproving,
   disabled = false,
+  isEligible,
   size = "default",
   className,
 }: ApprovalDecisionButtonProps) {
@@ -61,9 +69,9 @@ export function ApprovalDecisionButton({
             className={cn(className, "bg-warning-600 hover:bg-warning-700")}
           >
             {isApproving ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
             ) : (
-              <CheckCircle className="w-4 h-4 mr-2" />
+              <CheckCircle className="w-4 h-4 mr-2" aria-hidden="true" />
             )}
             Phê duyệt (vượt điều kiện)
           </Button>
@@ -111,17 +119,23 @@ export function ApprovalDecisionButton({
     )
   }
 
+  // Non-bypass: success/green ONLY when eligible. When approve is disabled because
+  // the profile is ineligible (caller gate: !isEligible && !bypass_warning), the
+  // button must NOT carry a positive/success tone — fall back to a neutral
+  // secondary tone. The "chưa đủ điều kiện" warning copy lives in the ReadinessHero
+  // badge + helper right next to this CTA (STEP8 CTA rule).
   return (
     <Button
       size={size}
+      variant={isEligible ? "default" : "secondary"}
       onClick={onApprove}
       disabled={isApproving || disabled}
-      className={cn(className, "bg-success-600 hover:bg-success-700")}
+      className={cn(className, isEligible && "bg-success-600 hover:bg-success-700")}
     >
       {isApproving ? (
-        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+        <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
       ) : (
-        <CheckCircle className="w-4 h-4 mr-2" />
+        <CheckCircle className="w-4 h-4 mr-2" aria-hidden="true" />
       )}
       Phê duyệt
     </Button>

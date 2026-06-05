@@ -1,18 +1,21 @@
 /**
- * SectionReview — "RÀ SOÁT CÂU TRẢ LỜI".
+ * SectionReview — "Rà soát câu trả lời" (officer/default workflow surface).
  *
- * 7 compact rows (Step 1-7), each a <button> deep-linking via `onNavigateToStep`.
+ * A 7-row table (Step 1-7): Bước · Nội dung · Trạng thái · Chi tiết · Thao tác.
  * Step 1-6 read `step_status[n]` for the status badge. Step 7 (Học phí) is
- * OVERRIDDEN to `displayStatus="info"` (neutral) and never reads `step_status[7]`
- * (hard-coded "success" — plan B4/I5): no green/success badge, does NOT contribute
- * to ready/completed, CTA only navigates. Detailed tables live in InspectionDetails.
+ * OVERRIDDEN to `displayStatus="info"` ("Tham khảo"); it never reads
+ * `step_status[7]` (hard-coded "success"), shows no green/"Đầy đủ" badge, does NOT
+ * contribute to ready/completed, and its CTA only navigates.
+ *
+ * The "Thao tác" cell is a real <button> → onNavigateToStep(n) (routes through the
+ * unsaved-changes guard in AdmissionDetailClient). Detailed tables live in
+ * InspectionDetails.
  */
 
 "use client"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ChevronRight } from "lucide-react"
 import { ADMISSION_STEPS } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -48,26 +51,18 @@ function resolveDisplayStatus(
   return "unknown"
 }
 
-function resolveMetric(
-  step: number,
-  status: DisplayStatus,
-  profile: AdmissionProfileResponse,
-): string {
-  if (step === 7) return "Dữ liệu học phí xem tại Step 7"
-  if (step === 5 && profile.total_score != null) {
-    // Format to 2 decimals so a float artifact (e.g. 7.333333333333333) never
-    // renders raw; mirrors the other score surfaces.
+/** "Chi tiết" cell — a specific metric for steps 5/6, otherwise "—". */
+function resolveDetail(step: number, profile: AdmissionProfileResponse): string {
+  if (step === 5) {
     const total =
-      typeof profile.total_score === "number"
-        ? profile.total_score.toFixed(2)
-        : profile.total_score
+      typeof profile.total_score === "number" ? profile.total_score.toFixed(2) : "—"
     return `Tổng điểm: ${total}`
   }
   if (step === 6 && profile.document_stats) {
     const s = profile.document_stats
     return `${s.submitted_count}/${s.mandatory_count} tài liệu`
   }
-  return STATUS_META[status].label
+  return "—"
 }
 
 export function SectionReview({ profile, onNavigateToStep }: SectionReviewProps) {
@@ -80,47 +75,55 @@ export function SectionReview({ profile, onNavigateToStep }: SectionReviewProps)
       <CardHeader className="pb-2">
         <CardTitle className="text-base">Rà soát câu trả lời</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-1.5">
-        {rows.map((step) => {
-          const status = resolveDisplayStatus(step.id, stepStatus)
-          const meta = STATUS_META[status]
-          const metric = resolveMetric(step.id, status, profile)
-          // Step 7 only navigates ("Xem Step 7"); editable rows say "Sửa" when
-          // they need work, "Xem" otherwise.
-          const ctaLabel =
-            step.id === 7
-              ? "Xem Step 7"
-              : status === "error" || status === "warning"
-                ? "Sửa"
-                : "Xem"
+      <CardContent className="px-0 sm:px-6">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-muted-foreground">
+                <th scope="col" className="px-3 py-2 text-left font-medium">Bước</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Nội dung</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Trạng thái</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium">Chi tiết</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((step) => {
+                const status = resolveDisplayStatus(step.id, stepStatus)
+                const meta = STATUS_META[status]
+                const detail = resolveDetail(step.id, profile)
+                const ctaLabel =
+                  step.id === 7
+                    ? "Xem Bước 7"
+                    : status === "error" || status === "warning"
+                      ? "Sửa"
+                      : "Xem"
 
-          return (
-            <button
-              key={step.id}
-              type="button"
-              onClick={() => onNavigateToStep(step.id)}
-              className="w-full flex items-center justify-between gap-3 rounded-lg border p-2.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <span className="flex items-center gap-3 min-w-0">
-                <Badge variant={meta.variant} className="shrink-0">
-                  {step.id}
-                </Badge>
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-foreground break-words">
-                    {step.label}
-                  </span>
-                  <span className="block text-xs text-muted-foreground break-words">
-                    {metric}
-                  </span>
-                </span>
-              </span>
-              <span className="flex items-center gap-1 text-sm font-medium text-primary shrink-0">
-                {ctaLabel}
-                <ChevronRight className="h-4 w-4" aria-hidden="true" />
-              </span>
-            </button>
-          )
-        })}
+                return (
+                  <tr key={step.id} className="border-b last:border-0">
+                    <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
+                      Bước {step.id}
+                    </td>
+                    <td className="px-3 py-2.5 font-medium text-foreground">{step.label}</td>
+                    <td className="px-3 py-2.5">
+                      <Badge variant={meta.variant}>{meta.label}</Badge>
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground break-words">{detail}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToStep(step.id)}
+                        className="rounded-md px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        {ctaLabel}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   )

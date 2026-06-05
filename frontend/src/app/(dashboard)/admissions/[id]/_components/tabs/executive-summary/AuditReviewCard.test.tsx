@@ -1,8 +1,8 @@
 /**
- * AuditReviewCard — anchor tests (Commit 8 followup).
+ * AuditReviewCard — one-line latest-event tests.
  *
- * Pin: priority_audit_log slice last 3 + entry shape (action_type/
- * actor_name/actor_id/created_at) + empty fallback.
+ * Pin: latest entry (last element) only, with a TRANSLATED label (never the raw
+ * action_type enum), actor + date; empty fallback.
  */
 
 import { describe, it, expect } from "vitest"
@@ -12,8 +12,6 @@ import type { AdmissionProfileResponse, PriorityAuditEntry } from "@/lib/zod/adm
 import { AuditReviewCard } from "./AuditReviewCard"
 
 function buildEntry(overrides: Partial<PriorityAuditEntry> = {}): PriorityAuditEntry {
-  // Use 'actor_name' in overrides để phân biệt "explicit null" vs "not provided".
-  // `??` chỉ fallback khi `undefined`, không phải null.
   return {
     id: overrides.id ?? 1,
     action_type: overrides.action_type ?? "kv_manual_override",
@@ -49,52 +47,54 @@ function buildProfile(log: PriorityAuditEntry[]): AdmissionProfileResponse {
   } as unknown as AdmissionProfileResponse
 }
 
-describe("AuditReviewCard", () => {
-  it("Empty log: hiển thị 'Chưa có thao tác audit' italic", () => {
+describe("AuditReviewCard — one-line", () => {
+  it("empty log: 'chưa có thao tác' fallback", () => {
     render(<AuditReviewCard profile={buildProfile([])} />)
-    expect(screen.getByText("Chưa có thao tác audit.")).toBeInTheDocument()
+    expect(screen.getByText(/chưa có thao tác/i)).toBeInTheDocument()
   })
 
-  it("Render đúng số entries từ priority_audit_log (max 3 last)", () => {
-    const log = [
-      buildEntry({ id: 1, action_type: "ut_evidence_verified" }),
-      buildEntry({ id: 2, action_type: "ut_evidence_rejected" }),
-      buildEntry({ id: 3, action_type: "kv_manual_override" }),
-      buildEntry({ id: 4, action_type: "ut_evidence_warning_dismissed" }),
-      buildEntry({ id: 5, action_type: "ut_evidence_verified" }),
-    ]
-    render(<AuditReviewCard profile={buildProfile(log)} />)
-    // last 3 = id 3, 4, 5 (reversed = 5, 4, 3)
+  it("translates action_type to a label (never raw enum)", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "kv_manual_override" })])} />)
     const card = screen.getByTestId("audit-review-card")
-    const items = card.querySelectorAll("li")
-    expect(items).toHaveLength(3)
-    // First displayed should be id=5 (newest, reverse of slice -3)
-    expect(items[0].textContent).toContain("ut_evidence_verified")
+    expect(screen.getByText("Ấn định KV")).toBeInTheDocument()
+    expect(card.textContent).not.toContain("kv_manual_override")
+    expect(card.textContent).toContain("Phạm Thái Hà")
   })
 
-  it("Hiển thị actor_name khi có, fallback '#actorId' nếu chỉ có id", () => {
+  it("shows the NEWEST entry only — BE returns DESC, so newest is the FIRST element", () => {
+    // Mirror the backend contract: priority_audit_log is ordered created_at DESC
+    // (admission_service.py:2824), i.e. element [0] is the most recent event.
     const log = [
-      buildEntry({ id: 1, actor_id: 15, actor_name: "Phạm Thái Hà" }),
-      buildEntry({ id: 2, actor_id: 42, actor_name: null }),
+      buildEntry({ id: 2, action_type: "kv_manual_override" }), // newest (index 0)
+      buildEntry({ id: 1, action_type: "ut_evidence_verified" }), // older
     ]
     render(<AuditReviewCard profile={buildProfile(log)} />)
-    expect(screen.getByText("Phạm Thái Hà")).toBeInTheDocument()
-    // Fallback "#42" khi actor_name=null + actor_id=42
-    expect(screen.getByText("#42")).toBeInTheDocument()
+    const card = screen.getByTestId("audit-review-card")
+    expect(card.textContent).toContain("Ấn định KV")
+    expect(card.textContent).not.toContain("Duyệt minh chứng UT")
   })
 
-  it("Hiển thị created_at qua locale 'vi-VN'", () => {
-    const log = [
-      buildEntry({ created_at: "2026-05-20T15:19:00+00:00" }),
-    ]
-    render(<AuditReviewCard profile={buildProfile(log)} />)
-    // Vietnamese date format e.g. "20/5/2026"
-    expect(screen.getByText(/20\/5\/2026|21\/5\/2026/)).toBeInTheDocument()
+  it("maps the live ut_evidence_untick event to a specific label (not the generic fallback)", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "ut_evidence_untick" })])} />)
+    const card = screen.getByTestId("audit-review-card")
+    expect(screen.getByText("Bỏ minh chứng UT")).toBeInTheDocument()
+    expect(card.textContent).not.toContain("Cập nhật hồ sơ ưu tiên")
   })
 
-  it("Hiển thị summary footer 'Xem đầy đủ ở N thao tác'", () => {
-    const log = [buildEntry({ id: 1 }), buildEntry({ id: 2 })]
-    render(<AuditReviewCard profile={buildProfile(log)} />)
-    expect(screen.getByText(/Xem đầy đủ ở 2 thao tác/)).toBeInTheDocument()
+  it("maps ut_evidence_warning_dismissed to a specific label", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "ut_evidence_warning_dismissed" })])} />)
+    expect(screen.getByText("Bỏ qua cảnh báo thiếu UT")).toBeInTheDocument()
+  })
+
+  it("unknown action_type → generic label, no raw enum", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "some_new_action" })])} />)
+    const card = screen.getByTestId("audit-review-card")
+    expect(screen.getByText("Cập nhật hồ sơ ưu tiên")).toBeInTheDocument()
+    expect(card.textContent).not.toContain("some_new_action")
+  })
+
+  it("actor_name null → '#actorId' fallback", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ actor_id: 42, actor_name: null })])} />)
+    expect(screen.getByTestId("audit-review-card").textContent).toContain("#42")
   })
 })

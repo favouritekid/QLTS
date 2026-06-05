@@ -1,25 +1,24 @@
+/**
+ * ScoreReviewCard — compact "Điểm xét tuyển" cockpit signal.
+ *
+ * BE-driven: total_score / average_score / admission_scores.gpa (single-NV) or
+ * per-NV choices (uses_choice_engine). `admission_threshold_passed` is DISPLAY
+ * ONLY (being below the sàn never blocks; "nộp" ≠ "trúng tuyển") so it renders as
+ * a neutral reference in the secondary line, never an error tone.
+ */
+
 "use client"
 
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Calculator, CheckCircle2, AlertTriangle } from "lucide-react"
+import { SignalCell, type SignalTone } from "./SignalCell"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
-import { PerNvScoreSummary } from "./PerNvScoreSummary"
 
 interface ScoreReviewCardProps {
   profile: AdmissionProfileResponse
 }
 
-/**
- * Cockpit card cho § điểm xét tuyển. BE-driven: đọc total_score /
- * average_score / admission_scores root-level fields.
- *
- * P0 hotfix multi-NV: khi uses_choice_engine, total_score profile-level là
- * null → render điểm per-NV (PerNvScoreSummary) thay vì "—"/0.00.
- */
 export function ScoreReviewCard({ profile }: ScoreReviewCardProps) {
   const isMultiNv = profile.uses_choice_engine === true
   const choices = profile.choices ?? []
-
   const methodType = profile.applied_rules?.method_type
   const isGpaOnly = methodType === "gpa_only"
 
@@ -28,54 +27,47 @@ export function ScoreReviewCard({ profile }: ScoreReviewCardProps) {
   const averageScore = profile.average_score
   const selectedGroup = profile.admission_scores?.selected_group
 
-  const hasScore = isMultiNv
-    ? choices.length > 0 && choices.every((c) => c.data_complete)
-    : isGpaOnly
-    ? gpa !== null && gpa !== undefined
-    : totalScore !== null && totalScore !== undefined
+  let tone: SignalTone
+  let primary: string
+  let secondary: string
 
-  const StatusIcon = hasScore ? CheckCircle2 : AlertTriangle
-  const statusColor = hasScore ? "text-success-600" : "text-warning-600"
+  if (isMultiNv) {
+    const total = choices.length
+    const completeCount = choices.filter((c) => c.data_complete).length
+    const passedCount = choices.filter((c) => c.admission_threshold_passed === true).length
+    tone = total > 0 && completeCount === total ? "success" : "warning"
+    primary = total > 0 ? `${completeCount}/${total} NV đủ điểm` : "—"
+    secondary =
+      total === 0
+        ? "Chưa có nguyện vọng"
+        : passedCount > 0
+          ? `${passedCount}/${total} NV đạt sàn`
+          : "Chưa NV nào đạt sàn"
+  } else if (isGpaOnly) {
+    tone = gpa != null ? "success" : "warning"
+    primary = gpa != null ? gpa.toFixed(2) : "—"
+    secondary = gpa != null ? "Điểm TB (GPA) · thang 10" : "Chưa có điểm TB (GPA)"
+  } else {
+    tone = totalScore != null ? "success" : "warning"
+    primary =
+      totalScore != null
+        ? `${totalScore.toFixed(2)}${selectedGroup ? ` (${selectedGroup})` : ""}`
+        : "—"
+    secondary =
+      averageScore != null
+        ? `Trung bình ${averageScore.toFixed(2)}`
+        : totalScore != null
+          ? "Tổng điểm xét tuyển"
+          : "Chưa có điểm xét tuyển"
+  }
 
   return (
-    <Card data-testid="score-review-card">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Calculator className="w-5 h-5 text-muted-foreground" />
-            <CardTitle className="text-lg">Điểm xét tuyển</CardTitle>
-          </div>
-          <StatusIcon className={`w-6 h-6 ${statusColor}`} />
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-2 text-sm">
-        {isMultiNv ? (
-          <PerNvScoreSummary choices={choices} compact />
-        ) : isGpaOnly ? (
-          <div className="flex justify-between items-baseline">
-            <span className="text-muted-foreground">GPA:</span>
-            <span className="font-bold text-2xl tabular-nums">
-              {gpa !== null && gpa !== undefined ? gpa.toFixed(2) : "—"}
-            </span>
-          </div>
-        ) : (
-          <>
-            <div className="flex justify-between items-baseline">
-              <span className="text-muted-foreground">Tổng điểm{selectedGroup ? ` (${selectedGroup})` : ""}:</span>
-              <span className="font-bold text-2xl tabular-nums">
-                {totalScore !== null && totalScore !== undefined ? totalScore.toFixed(2) : "—"}
-              </span>
-            </div>
-            {averageScore !== null && averageScore !== undefined && (
-              <div className="flex justify-between items-baseline text-xs text-muted-foreground">
-                <span>Trung bình:</span>
-                <span className="tabular-nums">{averageScore.toFixed(2)}</span>
-              </div>
-            )}
-          </>
-        )}
-      </CardContent>
-    </Card>
+    <SignalCell
+      testId="score-review-card"
+      title="Điểm xét tuyển"
+      tone={tone}
+      primary={primary}
+      secondary={secondary}
+    />
   )
 }

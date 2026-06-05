@@ -55,6 +55,12 @@ export interface FeeStatusLinkProps {
   className?: string
   /** Show detailed info or just badge */
   variant?: "badge" | "card"
+  /**
+   * Rendered when finance data is unavailable (error / not loaded). Defaults to
+   * `null` (legacy silent behavior). Callers that must not silently disappear
+   * (e.g. the reviewer cockpit fee row) pass a visible fallback.
+   */
+  unavailableFallback?: React.ReactNode
 }
 
 // =============================================================================
@@ -77,6 +83,7 @@ export function FeeStatusLink({
   profileId,
   className,
   variant = "badge",
+  unavailableFallback = null,
 }: FeeStatusLinkProps) {
   const { data: summary, isLoading, error } = useProfileFinanceSummary(profileId)
   const userRole = useAuthStore((s) => s.user?.role)
@@ -91,7 +98,9 @@ export function FeeStatusLink({
   }
 
   if (error || !summary) {
-    return null // Don't show anything if finance data unavailable
+    // Finance data unavailable — render the caller's fallback (or nothing,
+    // preserving the legacy silent behavior when no fallback is provided).
+    return <>{unavailableFallback}</>
   }
 
   const hasFee = summary.fees.length > 0

@@ -19,6 +19,7 @@ import { useSubmissionReadiness } from "./finalize/useSubmissionReadiness"
 import { ReadinessHero } from "./finalize/ReadinessHero"
 import { ActionItemsList } from "./finalize/ActionItemsList"
 import { SectionReview } from "./finalize/SectionReview"
+import { ReviewerCockpit } from "./finalize/ReviewerCockpit"
 import { InspectionDetails } from "./finalize/InspectionDetails"
 import { DecisionActionsPanel } from "./finalize/DecisionActionsPanel"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
@@ -120,7 +121,7 @@ export function FinalizeTab({
 
   // Phase 2 — reviewer surface gate. Manager/Admin reviewer = holds any
   // decision/action permission (NOT submit/resubmit, which are officer/applicant
-  // actions). Drives the HealthCheckGrid cockpit visibility in InspectionDetails.
+  // actions). Drives ReviewerCockpit visibility (decision-signal cockpit).
   // Permission flags only — NOT user.role, NOT override_priority_kv_mode (plan Phase 2).
   const isReviewer =
     canApprove || canReject || canRequestRevision || canPublishResult || canEnroll
@@ -130,6 +131,7 @@ export function FinalizeTab({
     <DecisionActionsPanel
       profile={profile}
       isEligible={isEligible}
+      primaryAction={readiness.primaryAction}
       onSubmit={onSubmit}
       isSubmitting={isSubmitting}
       canSubmit={canSubmit}
@@ -157,13 +159,24 @@ export function FinalizeTab({
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-8">
       <ReadinessHero profile={profile} readiness={readiness} cta={decisionPanel} />
-      <ActionItemsList items={readiness.actionItems} onNavigateToStep={onNavigateToStep} />
-      <SectionReview profile={profile} onNavigateToStep={onNavigateToStep} />
-      <InspectionDetails
-        profile={profile}
-        onNavigateToDocuments={onNavigateToDocuments}
-        isReviewer={isReviewer}
-      />
+
+      {/* Officer / data-entry workflow surface: what to fix + per-step review.
+          Reviewers don't get this main-surface clutter (issue count still shows
+          in the sidebar/status summary). */}
+      {!isReviewer && (
+        <>
+          <ActionItemsList items={readiness.actionItems} onNavigateToStep={onNavigateToStep} />
+          <SectionReview profile={profile} onNavigateToStep={onNavigateToStep} />
+        </>
+      )}
+
+      {/* Manager/Admin review cockpit — reviewer only, default open. */}
+      {isReviewer && (
+        <ReviewerCockpit profile={profile} readiness={readiness} onNavigateToStep={onNavigateToStep} />
+      )}
+
+      {/* Self-check detail — collapsed by default for all roles. */}
+      <InspectionDetails profile={profile} onNavigateToDocuments={onNavigateToDocuments} />
     </div>
   )
 }

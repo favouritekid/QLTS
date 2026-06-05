@@ -1,10 +1,9 @@
 /**
- * PriorityReviewCard — anchor tests (Commit 8 followup).
+ * PriorityReviewCard — compact "Ưu tiên / KV" signal tests.
  *
- * Pin: snapshot field shape contract + visual status (success/warning/error)
- * + 4 conditional badges (Bị cap / Cán bộ đã ấn định / Cần ấn định thủ
- * công / Thiếu N minh chứng UT). Anti-regression cho snapshot key drift
- * BE-side.
+ * Pin: tone (success/warning/error) + KV primary + secondary status line.
+ * Detail badges (cap / override reason / bonus breakdown) moved to
+ * InspectionDetails — no longer asserted here.
  */
 
 import { describe, it, expect } from "vitest"
@@ -15,10 +14,7 @@ import { PriorityReviewCard } from "./PriorityReviewCard"
 
 type Snapshot = Record<string, unknown>
 
-function buildProfile(opts: {
-  snapshot?: Snapshot
-  missingUt?: string[]
-} = {}): AdmissionProfileResponse {
+function buildProfile(opts: { snapshot?: Snapshot; missingUt?: string[] } = {}): AdmissionProfileResponse {
   return {
     id: 1,
     status: "submitted",
@@ -40,27 +36,59 @@ function buildProfile(opts: {
   } as unknown as AdmissionProfileResponse
 }
 
-describe("PriorityReviewCard — happy path", () => {
-  it("KV resolved + UT verified + no cap: success icon, KV + UT + tổng cộng visible", () => {
+describe("PriorityReviewCard — compact signal", () => {
+  it("KV resolved + UT verified: success tone, KV primary + UT secondary", () => {
     const profile = buildProfile({
-      snapshot: {
-        kv_resolved: "KV1",
-        breakdown: { area_bonus: 0.75 },
-        ut_verified_bucket: { applied_code: "04", applied_rate: 1.0 },
-      },
+      snapshot: { kv_resolved: "KV1", ut_verified_bucket: { applied_code: "04", applied_rate: 1.0 } },
     })
     render(<PriorityReviewCard profile={profile} />)
     const card = screen.getByTestId("priority-review-card")
     expect(card.querySelector(".text-success-600")).toBeTruthy()
     expect(screen.getByText("KV1")).toBeInTheDocument()
-    expect(screen.getByText(/UT04.*\+1\.00đ/)).toBeInTheDocument()
-    expect(screen.getByText("+1.75đ")).toBeInTheDocument()
-    expect(screen.queryByText(/Bị cap/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/UT04 hợp lệ \(\+1\.00đ\)/)).toBeInTheDocument()
   })
-})
 
-describe("PriorityReviewCard — cap badge", () => {
-  it("totalBonus > max_total_bonus: hiển thị badge 'Bị cap' + appliedBonus = cap", () => {
+  it("requires_manual_override: error tone + 'Cần ấn định KV thủ công'", () => {
+    const profile = buildProfile({ snapshot: { kv_resolved: null, requires_manual_override: true } })
+    render(<PriorityReviewCard profile={profile} />)
+    const card = screen.getByTestId("priority-review-card")
+    expect(card.querySelector(".text-error-600")).toBeTruthy()
+    expect(screen.getByText("Cần ấn định KV thủ công")).toBeInTheDocument()
+  })
+
+  it("missing UT evidence: warning tone + count", () => {
+    const profile = buildProfile({ snapshot: { kv_resolved: "KV1" }, missingUt: ["UT07", "UT05"] })
+    render(<PriorityReviewCard profile={profile} />)
+    const card = screen.getByTestId("priority-review-card")
+    expect(card.querySelector(".text-warning-600")).toBeTruthy()
+    expect(screen.getByText("Thiếu 2 minh chứng UT")).toBeInTheDocument()
+  })
+
+  it("empty snapshot: 'Chưa xác định KV' + warning tone", () => {
+    render(<PriorityReviewCard profile={buildProfile({ snapshot: {} })} />)
+    const card = screen.getByTestId("priority-review-card")
+    expect(screen.getByText("Chưa xác định KV")).toBeInTheDocument()
+    expect(card.querySelector(".text-warning-600")).toBeTruthy()
+  })
+
+  it("manual_override_reason set → suffix 'KV cán bộ ấn định' (override-applied signal)", () => {
+    const profile = buildProfile({
+      snapshot: { kv_resolved: "KV2-NT", manual_override_reason: "Cán bộ chuyển KV để khớp lịch sử THPT" },
+    })
+    render(<PriorityReviewCard profile={profile} />)
+    expect(screen.getByText(/KV cán bộ ấn định/)).toBeInTheDocument()
+  })
+
+  it("REGRESSION: missing UT + manual override → cell shows BOTH the UT issue AND the override provenance (audit line is not durable)", () => {
+    const profile = buildProfile({
+      snapshot: { kv_resolved: "KV2-NT", manual_override_reason: "Cán bộ ấn định KV" },
+      missingUt: ["UT07", "UT05"],
+    })
+    render(<PriorityReviewCard profile={profile} />)
+    expect(screen.getByText(/Thiếu 2 minh chứng UT · KV cán bộ ấn định/)).toBeInTheDocument()
+  })
+
+  it("bonus exceeds path max_total_bonus → '· bị cap' suffix surfaced", () => {
     const profile = buildProfile({
       snapshot: {
         kv_resolved: "KV1",
@@ -70,72 +98,6 @@ describe("PriorityReviewCard — cap badge", () => {
       },
     })
     render(<PriorityReviewCard profile={profile} />)
-    expect(screen.getByText(/Bị cap \(max \+2\.00đ\)/)).toBeInTheDocument()
-    // Tổng cộng applied = cap (2.0), không phải total raw (2.25)
-    expect(screen.getByText("+2.00đ")).toBeInTheDocument()
-  })
-
-  it("totalBonus <= cap: KHÔNG badge 'Bị cap'", () => {
-    const profile = buildProfile({
-      snapshot: {
-        kv_resolved: "KV1",
-        breakdown: { area_bonus: 0.75 },
-        ut_verified_bucket: { applied_code: "04", applied_rate: 1.0 },
-        path_bonus_rule: { max_total_bonus: 3.0 },
-      },
-    })
-    render(<PriorityReviewCard profile={profile} />)
-    expect(screen.queryByText(/Bị cap/i)).not.toBeInTheDocument()
-    expect(screen.getByText("+1.75đ")).toBeInTheDocument()
-  })
-})
-
-describe("PriorityReviewCard — override badge", () => {
-  it("manual_override_reason set: hiển thị 'Cán bộ đã ấn định' badge purple", () => {
-    const profile = buildProfile({
-      snapshot: {
-        kv_resolved: "KV2-NT",
-        manual_override_reason: "Cán bộ chuyển KV để khớp lịch sử THPT",
-      },
-    })
-    render(<PriorityReviewCard profile={profile} />)
-    expect(screen.getByText("Cán bộ đã ấn định")).toBeInTheDocument()
-  })
-})
-
-describe("PriorityReviewCard — requires_manual_override (error)", () => {
-  it("snapshot.requires_manual_override=true: error icon + badge 'Cần ấn định thủ công'", () => {
-    const profile = buildProfile({
-      snapshot: {
-        kv_resolved: null,
-        requires_manual_override: true,
-      },
-    })
-    render(<PriorityReviewCard profile={profile} />)
-    const card = screen.getByTestId("priority-review-card")
-    expect(card.querySelector(".text-error-600")).toBeTruthy()
-    expect(screen.getByText("Cần ấn định thủ công")).toBeInTheDocument()
-  })
-})
-
-describe("PriorityReviewCard — missing UT badges (warning)", () => {
-  it("missing_priority_evidence_codes > 0: warning icon + badge với count", () => {
-    const profile = buildProfile({
-      snapshot: { kv_resolved: "KV1" },
-      missingUt: ["UT07", "UT05"],
-    })
-    render(<PriorityReviewCard profile={profile} />)
-    const card = screen.getByTestId("priority-review-card")
-    expect(card.querySelector(".text-warning-600")).toBeTruthy()
-    expect(screen.getByText(/Thiếu 2 minh chứng UT/)).toBeInTheDocument()
-  })
-})
-
-describe("PriorityReviewCard — empty/missing snapshot fallback", () => {
-  it("snapshot rỗng: render '—' cho KV + UT, totalBonus=+0.00đ, warning icon (no KV)", () => {
-    const profile = buildProfile({ snapshot: {} })
-    render(<PriorityReviewCard profile={profile} />)
-    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2) // KV + UT
-    expect(screen.getByText("+0.00đ")).toBeInTheDocument()
+    expect(screen.getByText(/bị cap/)).toBeInTheDocument()
   })
 })
