@@ -49,10 +49,24 @@ describe("executiveSummaryItemSchema — Phase 3 union (legacy string | structur
     expect(executiveSummaryItemSchema.parse(obj)).toEqual(obj)
   })
 
-  it("rejects an object with an invalid severity", () => {
+  it("tolerates an unknown severity → coerces to undefined (does NOT throw)", () => {
+    const parsed = executiveSummaryItemSchema.parse({
+      code: "x",
+      message: "y",
+      severity: "fatal",
+    }) as { code: string; message: string; severity?: string }
+    expect(parsed.code).toBe("x")
+    expect(parsed.message).toBe("y")
+    expect(parsed.severity).toBeUndefined()
+  })
+
+  it("an array with an unknown severity does NOT fail the whole parse", () => {
     expect(() =>
-      executiveSummaryItemSchema.parse({ code: "x", message: "y", severity: "fatal" }),
-    ).toThrow()
+      z.array(executiveSummaryItemSchema).parse([
+        { code: "c1", message: "m1", step: 6, severity: "blocker" },
+        { code: "c2", message: "m2", step: 5, severity: "info" },
+      ]),
+    ).not.toThrow()
   })
 
   it("parses a legacy string[] array (old responses)", () => {

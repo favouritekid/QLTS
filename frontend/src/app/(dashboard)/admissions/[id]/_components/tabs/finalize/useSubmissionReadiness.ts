@@ -126,8 +126,9 @@ type ExecSummaryItem = NonNullable<
 /**
  * Phase 3 — turn STRUCTURED executive_summary items (objects with a numeric
  * `.step`) into routed ActionItems. Legacy `string` items and objects without a
- * step are skipped here (caller falls back to the heuristic). Severity comes from
- * the item (`blocker`→error, `warning`→warning); falls back to the list's default.
+ * step are skipped here; the caller's heuristic then recovers their sections (so
+ * a mixed/partial response never drops a blocker). Severity comes from the item
+ * (`blocker`→error, `warning`→warning); falls back to the list's default.
  */
 export function buildStructuredActionItems(
   es: AdmissionProfileResponse["executive_summary"],
@@ -154,50 +155,55 @@ export function buildStructuredActionItems(
 }
 
 /**
- * Build the ActionItems list. Phase 3: prefer STRUCTURED executive_summary
- * blockers/warnings (precise per-step routing); fall back to the heuristic
- * (grouped_validation_errors + step_status[2|3]) for legacy/absent data. Priority
- * (Step 4) is FE-derived and always added. Result is deduped + sorted.
- * Works even when executive_summary is null (R1 fallback).
+ * Build the ActionItems list. Phase 3: route STRUCTURED executive_summary
+ * blockers/warnings (objects with `.step`) precisely, THEN run the heuristic
+ * (grouped_validation_errors → Step 1/5/6, step_status → Step 2/3) for any step
+ * NOT already covered by a structured item. Running the heuristic unconditionally
+ * (not only when structured is empty) means a mixed/partial response — some
+ * legacy `string` items, or objects missing `.step` — still surfaces every
+ * section instead of silently dropping the un-routable ones. Priority (Step 4) is
+ * FE-derived and always added. Result is deduped + sorted. Works even when
+ * executive_summary is null (R1 fallback). Step 7 (Học phí) is display-only: the
+ * BE emits no item and the heuristic never adds one → never an ActionItem.
  */
 export function buildReadinessActionItems(
   profile: AdmissionProfileResponse,
 ): ReadinessActionItem[] {
   const stepStatus = profile.step_status
-  const items: ReadinessActionItem[] = []
 
+  // Precise: structured BE items (objects with a numeric step).
   const structured = buildStructuredActionItems(profile.executive_summary)
-  if (structured.length > 0) {
-    // Structured BE contract present → route each blocker/warning to its step.
-    items.push(...structured)
-  } else {
-    // Heuristic fallback (Phase 1). grouped_validation_errors → Step 1/5/6.
-    const grouped = profile.grouped_validation_errors
-    const groupedBuckets: Array<
-      [GroupedSectionKey, { category: string; errors: string[]; count: number } | undefined]
-    > = [
-      ["personal_info", grouped?.personal_info],
-      ["scores", grouped?.scores],
-      ["documents", grouped?.documents],
-    ]
-    for (const [key, bucket] of groupedBuckets) {
-      if (bucket && bucket.count > 0) {
-        const step = GROUPED_SECTION_TO_STEP[key]
-        items.push(itemFromGrouped(step, bucket, severityFromStep(stepStatus, step)))
-      }
-    }
-    // section-level: ONLY Step 2 (Gia đình) + Step 3 (Học tập).
-    for (const step of [2, 3]) {
-      const s = stepStatus?.[String(step)]
-      if (s === "error" || s === "warning") {
-        items.push({
-          id: `step-${step}`,
-          step,
-          severity: s,
-          message: `${getAdmissionStepLabel(step)} cần được bổ sung.`,
-          source: "section",
-        })
-      }
+  const coveredSteps = new Set<number>(structured.map((i) => i.step))
+  const items: ReadinessActionItem[] = [...structured]
+
+  // Heuristic recovery — fill ONLY the steps structured items did not cover.
+  // grouped_validation_errors → Step 1/5/6.
+  const grouped = profile.grouped_validation_errors
+  const groupedBuckets: Array<
+    [GroupedSectionKey, { category: string; errors: string[]; count: number } | undefined]
+  > = [
+    ["personal_info", grouped?.personal_info],
+    ["scores", grouped?.scores],
+    ["documents", grouped?.documents],
+  ]
+  for (const [key, bucket] of groupedBuckets) {
+    if (!bucket || bucket.count <= 0) continue
+    const step = GROUPED_SECTION_TO_STEP[key]
+    if (coveredSteps.has(step)) continue // structured already routed this step
+    items.push(itemFromGrouped(step, bucket, severityFromStep(stepStatus, step)))
+  }
+  // section-level: ONLY Step 2 (Gia đình) + Step 3 (Học tập).
+  for (const step of [2, 3]) {
+    if (coveredSteps.has(step)) continue
+    const s = stepStatus?.[String(step)]
+    if (s === "error" || s === "warning") {
+      items.push({
+        id: `step-${step}`,
+        step,
+        severity: s,
+        message: `${getAdmissionStepLabel(step)} cần được bổ sung.`,
+        source: "section",
+      })
     }
   }
 
@@ -290,8 +296,13 @@ function resolveReadiness(
       return { label: "Có thể nộp lại", tone: "success" }
 
     case "approve":
+      // Mirror the ApprovalDecisionButton gate (disabled when
+      // `!isEligible && !bypass_warning`): when approve is blocked the Hero must
+      // NOT show a positive/info "ready to approve" signal.
       if (profile.bypass_warning)
         return { label: "Phê duyệt — hồ sơ chưa đủ điều kiện", tone: "warning" }
+      if (!isEligible)
+        return { label: "Chưa thể phê duyệt — chưa đủ điều kiện", tone: "warning" }
       return { label: "Chờ bạn phê duyệt", tone: "info" }
 
     case "publish_result":

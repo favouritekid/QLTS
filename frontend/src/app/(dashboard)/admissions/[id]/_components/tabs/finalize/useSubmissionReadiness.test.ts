@@ -186,6 +186,24 @@ describe("useSubmissionReadiness — primaryAction precedence (B5)", () => {
     expect(r.readinessTone).toBe("warning")
   })
 
+  it("canApprove + ineligible + NO bypass → label/tone NOT positive (mirrors disabled approve button)", () => {
+    const r = run(
+      buildParams({
+        profile: buildProfile({
+          status: "submitted",
+          eligibility_status: "ineligible",
+          bypass_warning: false,
+        }),
+        canApprove: true,
+        isEligible: false,
+      }),
+    )
+    expect(r.primaryAction).toBe("approve")
+    expect(r.readinessTone).not.toBe("info")
+    expect(r.readinessTone).not.toBe("success")
+    expect(r.readinessLabel).toMatch(/Chưa thể phê duyệt/)
+  })
+
   it("canPublishResult → publish_result / 'Sẵn sàng công bố kết quả'", () => {
     const r = run(buildParams({ canPublishResult: true }))
     expect(r.primaryAction).toBe("publish_result")
@@ -301,6 +319,26 @@ describe("useSubmissionReadiness — Phase 3 structured blockers routing", () =>
     expect(byStep[5].severity).toBe("error")
     expect(byStep[2].severity).toBe("warning")
     expect(byStep[6].message).toBe("Thiếu tài liệu")
+  })
+
+  it("(mixed) structured object + legacy string item → heuristic recovers the un-routable section (no blocker dropped)", () => {
+    const profile = buildProfile({
+      step_status: { "5": "error" },
+      grouped_validation_errors: { scores: { category: "Điểm", errors: ["Điểm chưa đạt"], count: 1 } },
+      executive_summary: es({
+        critical_blockers: [
+          { code: "documents_missing", message: "Thiếu tài liệu", step: 6, section: "documents", severity: "blocker" },
+          // legacy string item (no step) — must NOT be lost; its section is
+          // recovered by the heuristic (grouped.scores → Step 5).
+          "legacy điểm blocker không có step",
+        ],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    const steps = r.actionItems.map((i) => i.step).sort((a, b) => a - b)
+    expect(steps).toContain(6) // structured routed
+    expect(steps).toContain(5) // recovered via grouped heuristic — NOT dropped
+    expect(r.actionItems.some((i) => i.message.includes("legacy điểm blocker"))).toBe(false)
   })
 
   it("(b) legacy string blockers → fallback heuristic (string NOT routed)", () => {

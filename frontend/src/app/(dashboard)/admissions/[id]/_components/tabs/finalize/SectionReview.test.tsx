@@ -67,4 +67,18 @@ describe("SectionReview", () => {
     const row1 = screen.getByText("Thông tin cá nhân").closest("button")!
     expect(row1.textContent).toContain("Xem")
   })
+
+  it("Step 5 metric formats total_score to 2 decimals (no raw long float)", () => {
+    render(
+      <SectionReview
+        profile={buildProfile({
+          total_score: 7.333333333333333,
+          step_status: { "5": "success" },
+        } as Partial<AdmissionProfileResponse>)}
+        onNavigateToStep={vi.fn()}
+      />,
+    )
+    expect(screen.getByText("Tổng điểm: 7.33")).toBeInTheDocument()
+    expect(screen.queryByText(/7\.3333/)).not.toBeInTheDocument()
+  })
 })

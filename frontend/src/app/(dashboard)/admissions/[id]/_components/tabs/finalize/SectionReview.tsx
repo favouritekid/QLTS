@@ -55,7 +55,13 @@ function resolveMetric(
 ): string {
   if (step === 7) return "Dữ liệu học phí xem tại Step 7"
   if (step === 5 && profile.total_score != null) {
-    return `Tổng điểm: ${profile.total_score}`
+    // Format to 2 decimals so a float artifact (e.g. 7.333333333333333) never
+    // renders raw; mirrors the other score surfaces.
+    const total =
+      typeof profile.total_score === "number"
+        ? profile.total_score.toFixed(2)
+        : profile.total_score
+    return `Tổng điểm: ${total}`
   }
   if (step === 6 && profile.document_stats) {
     const s = profile.document_stats

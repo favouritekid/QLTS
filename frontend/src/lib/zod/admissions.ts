@@ -35,7 +35,10 @@ export const executiveSummaryItemSchema = z.union([
     message: z.string(),
     step: z.number().int().optional(),
     section: z.string().optional(),
-    severity: z.enum(["blocker", "warning"]).optional(),
+    // Tolerant: an unknown future severity coerces to `undefined` (NOT a parse
+    // error) so one new BE value never fails the whole admission-profile parse.
+    // The hook treats `undefined` as "use the list's default severity".
+    severity: z.enum(["blocker", "warning"]).optional().catch(undefined),
   }),
 ])
 
