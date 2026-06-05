@@ -554,6 +554,7 @@ export function AdmissionDetailClient({
               isEnrolling={enrollMutation.isPending}
               canEnroll={can('enroll')}
               onNavigateToDocuments={() => handleStepChange(6)}
+              onNavigateToStep={handleStepChange}
             />
           )}
         </div>

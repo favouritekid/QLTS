@@ -19,6 +19,31 @@ import { z } from "zod"
 
 import { admissionProfileChoiceResponseSchema } from "./admission-choices"
 
+/**
+ * executive_summary blocker/warning item (Phase 3). Backward-compatible union:
+ *   - legacy `string` (pre-Phase-3 responses), OR
+ *   - structured object `{ code, message, step?, section?, severity? }` that lets
+ *     the FE route each blocker to its exact pipeline step.
+ * Parses BOTH old `string[]` and new `object[]` responses (soft cutover). `step`/
+ * `section`/`severity` are optional so a partial/legacy object still parses and
+ * the consumer can fall back to its heuristic.
+ */
+export const executiveSummaryItemSchema = z.union([
+  z.string(),
+  z.object({
+    code: z.string(),
+    message: z.string(),
+    step: z.number().int().optional(),
+    section: z.string().optional(),
+    // Tolerant: an unknown future severity coerces to `undefined` (NOT a parse
+    // error) so one new BE value never fails the whole admission-profile parse.
+    // The hook treats `undefined` as "use the list's default severity".
+    severity: z.enum(["blocker", "warning"]).optional().catch(undefined),
+  }),
+])
+
+export type ExecutiveSummaryItem = z.infer<typeof executiveSummaryItemSchema>
+
 // ==============================================================================
 // HELPERS
 // ==============================================================================
@@ -1072,8 +1097,9 @@ export const admissionProfileResponseSchema = z.object({
     overall_status: z.enum(["incomplete", "warning", "ready"]),
     completion_percent: z.number().int().min(0).max(100),
     step_summary: z.record(z.string(), z.number()),
-    critical_blockers: z.array(z.string()),
-    warnings: z.array(z.string()),
+    // Phase 3 — backward-compatible: legacy string[] OR structured object[].
+    critical_blockers: z.array(executiveSummaryItemSchema),
+    warnings: z.array(executiveSummaryItemSchema),
     next_action: z.string(),
     can_submit: z.boolean(),
   }).optional().nullable(),

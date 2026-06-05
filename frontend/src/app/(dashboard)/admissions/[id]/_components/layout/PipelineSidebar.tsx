@@ -1,13 +1,13 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { User, Users, GraduationCap, Award, Calculator, FileText, Wallet, CheckSquare } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useMemo } from "react"
 import { IssueSummary } from "./IssueSummary"
 import { derivePriorityIssues } from "./priorityIssues"
 import { canDecide } from "@/lib/utils/admission-permissions"
+import { ADMISSION_STEPS } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface PipelineSidebarProps {
@@ -35,17 +35,6 @@ interface PipelineSidebarProps {
   canVerifyPriorityObject?: boolean
 }
 
-const STEPS = [
-    { id: 1, label: "Thông tin cá nhân", icon: User },
-    { id: 2, label: "Gia đình / Giám hộ", icon: Users },
-    { id: 3, label: "Học tập", icon: GraduationCap },
-    { id: 4, label: "Trình độ & Ưu tiên", icon: Award },
-    { id: 5, label: "Điểm & Điều kiện", icon: Calculator },
-    { id: 6, label: "Tài liệu pháp lý", icon: FileText },
-    { id: 7, label: "Học phí", icon: Wallet },
-    { id: 8, label: "Hoàn tất & Nộp", icon: CheckSquare },
-]
-
 export function PipelineSidebar({
   profile,
   currentStep,
@@ -57,7 +46,7 @@ export function PipelineSidebar({
   completionPercent,
   canVerifyPriorityObject: _canVerifyPriorityObject = false, // eslint-disable-line @typescript-eslint/no-unused-vars -- legacy prop kept for backward-compat; Phase E.3 logic gộp vào Step 4
 }: PipelineSidebarProps) {
-  const visibleSteps = STEPS
+  const visibleSteps = ADMISSION_STEPS
 
   const completedSteps = Object.values(stepsStatus).filter(status => status === "success").length
 
