@@ -218,8 +218,7 @@ async def _resolve_object_bonus(
     verified_codes = [
         c
         for c in codes
-        if isinstance(evidence.get(c), dict)
-        and evidence[c].get("status") == "verified"
+        if isinstance(evidence.get(c), dict) and evidence[c].get("status") == "verified"
     ]
     meta: dict[str, Any] = {
         "verified_codes": verified_codes,
@@ -316,7 +315,7 @@ def _derive_kv_basis_level(
     Phase E.4 (commit 5) refactor — signature mở rộng target_level +
     admission_type + academic_history để khớp matrix nghiệp vụ #6:
 
-      - TC sau THCS (target=trung_cap chính quy, cultural=graduated_thcs) → THUONG_TRU
+      - TC sau THCS (target=trung_cap chính quy, cultural=completed_thcs/graduated_thcs) → THUONG_TRU
       - TC sau THPT/hoàn thành THPT → LICH_SU_THPT
       - CĐ chính quy sau THPT/hoàn thành THPT → LICH_SU_THPT
       - CĐ chính quy hoàn thành THPT + TC → LICH_SU_THPT (extended TT path)
@@ -403,7 +402,7 @@ def _derive_kv_basis_level(
         if cultural == "completed_thpt":
             # CĐ chính quy + hoàn thành THPT đủ kiến thức → LICH_SU_THPT (nghiệp vụ #5)
             return "LICH_SU_THPT", f"cd_{atype}_completed_thpt_uses_school_history"
-        # Eligibility gate đã chặn graduated_thcs/completed_thcs cho CĐ chính quy.
+        # Eligibility gate đã chặn completed_thcs/graduated_thcs cho CĐ chính quy.
         # Defensive: nếu reach here → cấu hình mismatch upstream.
         return "INSUFFICIENT_DATA", f"cd_{atype}_cultural_insufficient_for_kv_basis"
 
@@ -411,16 +410,22 @@ def _derive_kv_basis_level(
     if target_level == "trung_cap":
         if atype == "lien_thong":
             # TC liên thông từ SC/TC sau THCS → THUONG_TRU
-            if cultural == "graduated_thcs" and voc in ("so_cap", "trung_cap"):
+            if cultural in ("completed_thcs", "graduated_thcs") and voc in (
+                "so_cap",
+                "trung_cap",
+            ):
                 return "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc_uses_commune"
             # TC liên thông có THPT/hoàn thành THPT → LICH_SU_THPT
             if cultural in ("completed_thpt", "graduated_thpt", "graduated_gdtx"):
                 return "LICH_SU_THPT", "tc_lien_thong_post_thpt_uses_school_history"
-            return "INSUFFICIENT_DATA", "tc_lien_thong_cultural_insufficient_for_kv_basis"
+            return (
+                "INSUFFICIENT_DATA",
+                "tc_lien_thong_cultural_insufficient_for_kv_basis",
+            )
         # TC chính quy:
-        # - TN_THCS → THUONG_TRU
+        # - Hoàn thành/TN_THCS → THUONG_TRU
         # - completed/graduated THPT/GDTX → LICH_SU_THPT
-        if cultural == "graduated_thcs":
+        if cultural in ("completed_thcs", "graduated_thcs"):
             return "THUONG_TRU", "tc_chinh_quy_post_thcs_uses_commune"
         if cultural in ("completed_thpt", "graduated_thpt", "graduated_gdtx"):
             return "LICH_SU_THPT", "tc_chinh_quy_post_thpt_uses_school_history"
@@ -650,7 +655,8 @@ async def resolve_kv_for_profile(
     accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
 
     basis_entries = [
-        e for e in academic_history
+        e
+        for e in academic_history
         if isinstance(e, dict)
         and e.get("level") in accepted_levels
         and e.get("school_id")
@@ -689,13 +695,15 @@ async def resolve_kv_for_profile(
             else:
                 missing_lookups.append({"school_id": sid, "year": year})
 
-        breakdown_entries.append({
-            "school_id": sid,
-            "school_name_at_time": entry.get("school_name"),
-            "year_from": y_from,
-            "year_to": y_to,
-            "years_by_kv": entry_years_by_kv,
-        })
+        breakdown_entries.append(
+            {
+                "school_id": sid,
+                "school_name_at_time": entry.get("school_name"),
+                "year_from": y_from,
+                "year_to": y_to,
+                "years_by_kv": entry_years_by_kv,
+            }
+        )
 
     if not kv_years:
         # Tất cả lookup miss → vn_school_kv_assignment thiếu catalog cho 100%
@@ -746,10 +754,9 @@ async def resolve_kv_for_profile(
     if len(sorted_entries) >= 2:
         top_entry = sorted_entries[0][1]
         second_entry = sorted_entries[1][1]
-        if (
-            top_entry.get("year_to") == second_entry.get("year_to")
-            and top_entry.get("grade_to") == second_entry.get("grade_to")
-        ):
+        if top_entry.get("year_to") == second_entry.get("year_to") and top_entry.get(
+            "grade_to"
+        ) == second_entry.get("grade_to"):
             return None, _meta_base(
                 rule_applied="ambiguous_requires_manual",
                 pathway=pathway,
@@ -894,8 +901,10 @@ def _make_path_shim_from_academic_info(academic_info: Any) -> Any:
     placeholder=None (legacy không có method chain — bonus_rule context fall
     về admission_method default).
     """
+
     class _PathShim:
         pass
+
     shim = _PathShim()
     shim.__dict__["academic_info"] = academic_info
     shim.__dict__["admission_method"] = None
@@ -992,10 +1001,30 @@ def derive_target_level_and_type(path: "AdmissionPath") -> tuple[str, str]:
     return target_code, admission_type
 
 
+def derive_major_code(path: "AdmissionPath") -> Optional[str]:
+    """Lấy ``MajorProgram.code`` (mã ngành GDNN cấp IV) từ AdmissionPath chain.
+
+    Chain: AdmissionPath → academic_info → offering → program.code. Trả None
+    nếu chain chưa eager-load / thiếu (caller eager-load cùng lúc với
+    ``derive_target_level_and_type`` nên thực tế hai giá trị đi cùng nhau).
+    """
+    academic_info = path.__dict__.get("academic_info")
+    offering = academic_info.__dict__.get("offering") if academic_info else None
+    program = offering.__dict__.get("program") if offering else None
+    return getattr(program, "code", None) if program else None
+
+
+def _is_health_sector_code(major_code: Optional[str]) -> bool:
+    """Mã ngành GDNN cấp IV (TT 04/2017/TT-BLĐTBXH): chữ số 2-3 = '72' →
+    lĩnh vực Sức khỏe (vd 5720101 Y sỹ TC, 6720201 Dược CĐ)."""
+    return bool(major_code) and len(major_code) >= 3 and major_code[1:3] == "72"
+
+
 def validate_eligibility(
     profile: "AdmissionProfile",
     target_level: str,
     admission_type: str = "chinh_quy",
+    major_code: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
     """Validate candidate eligibility for target program level + type.
 
@@ -1022,9 +1051,24 @@ def validate_eligibility(
     cultural = getattr(profile, "cultural_education_level", None)
     vocational = getattr(profile, "vocational_qualification", "none") or "none"
 
+    # === Compliance guard — Luật GDNN 2025 Điều 45 Khoản 2 ===
+    # TC lĩnh vực sức khỏe CHẤM DỨT tuyển sinh diện đầu-vào-THCS từ 01/01/2026.
+    # Chặn CẢ completed_thcs (thuật ngữ TT22) lẫn graduated_thcs (nhãn legacy
+    # cùng tầng đầu vào THCS) để không tạo bypass bằng nhãn cũ. Đầu vào THPT
+    # (completed/graduated_thpt, graduated_gdtx) + ngành khác KHÔNG bị chặn.
+    academic_year = getattr(profile, "academic_year", None)
+    if (
+        target_level in ("trung_cap", "TC")
+        and _is_health_sector_code(major_code)
+        and (academic_year or 0) >= 2026
+        and cultural in ("completed_thcs", "graduated_thcs")
+    ):
+        return False, "tc_health_thcs_entry_closed_2026"
+
     _THPT_GRADUATED = ("graduated_thpt", "graduated_gdtx")
     _THPT_KNOWLEDGE = ("completed_thpt", "graduated_thpt", "graduated_gdtx")
     _THCS_OR_HIGHER = (
+        "completed_thcs",
         "graduated_thcs",
         "completed_thpt",
         "graduated_thpt",
@@ -1159,8 +1203,9 @@ async def derive_profile_target_context(
                     models.AdmissionProfileChoice.display_order == 1,
                 )
                 .options(
-                    _sel_in(models.AdmissionProfileChoice.admission_path)
-                    .selectinload(models.AdmissionPath.admission_method),
+                    _sel_in(models.AdmissionProfileChoice.admission_path).selectinload(
+                        models.AdmissionPath.admission_method
+                    ),
                     _sel_in(models.AdmissionProfileChoice.admission_path)
                     .selectinload(models.AdmissionPath.academic_info)
                     .selectinload(models.OfferingAcademicInfo.offering)
@@ -1184,7 +1229,10 @@ async def derive_profile_target_context(
             # context sẽ là None cho legacy; engine fallback admission_method default.
             stmt = (
                 _sel(models.OfferingAdmissionConfig)
-                .where(models.OfferingAdmissionConfig.id == profile.offering_admission_config_id)
+                .where(
+                    models.OfferingAdmissionConfig.id
+                    == profile.offering_admission_config_id
+                )
                 .options(
                     _sel_in(models.OfferingAdmissionConfig.academic_info)
                     .selectinload(models.OfferingAcademicInfo.offering)
@@ -1220,7 +1268,10 @@ async def derive_profile_target_context(
             # path_bonus_rule snapshot: chain override → method.default.
             # Lazy import để tránh circular.
             try:
-                from .admission_choice_engine_service import resolve_effective_bonus_rule
+                from .admission_choice_engine_service import (
+                    resolve_effective_bonus_rule,
+                )
+
                 if hasattr(path, "bonus_rule_override") or method is not None:
                     rule = resolve_effective_bonus_rule(path)  # type: ignore[arg-type]
                     if rule is not None:
@@ -1237,7 +1288,10 @@ async def derive_profile_target_context(
         # Eligibility check audit — chỉ compute khi cả 2 field có.
         if ctx["target_level"] and ctx["admission_type"]:
             ok, reason = validate_eligibility(
-                profile, ctx["target_level"], ctx["admission_type"]
+                profile,
+                ctx["target_level"],
+                ctx["admission_type"],
+                derive_major_code(path),
             )
             ctx["eligibility"] = {"passed": ok, "reason": reason}
 

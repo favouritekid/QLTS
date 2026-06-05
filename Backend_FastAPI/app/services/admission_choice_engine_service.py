@@ -444,13 +444,14 @@ def _evaluate_single_choice(
     # imports app.models → circular dep nếu top-level import.
     try:
         from app.services.priority_service import (
+            derive_major_code,
             derive_target_level_and_type,
             validate_eligibility,
         )
 
         target_level, admission_type = derive_target_level_and_type(path)
         passed_elig, elig_reason = validate_eligibility(
-            profile, target_level, admission_type
+            profile, target_level, admission_type, derive_major_code(path)
         )
         if not passed_elig:
             reason_codes.append(f"ELIGIBILITY_FAIL:{elig_reason}")
@@ -850,6 +851,7 @@ async def evaluate_cascade(
         # create a circular dep at module load time of this engine file.
         from app.services.priority_service import (
             calculate_priority_bonus,
+            derive_major_code,
             derive_profile_target_context,
             derive_target_level_and_type,
             freeze_priority_snapshot,
@@ -875,7 +877,7 @@ async def evaluate_cascade(
             try:
                 t6_target_level, t6_admission_type = derive_target_level_and_type(path)
                 ok, reason = validate_eligibility(
-                    profile, t6_target_level, t6_admission_type
+                    profile, t6_target_level, t6_admission_type, derive_major_code(path)
                 )
                 t6_eligibility = {"passed": ok, "reason": reason}
             except Exception:  # noqa: BLE001
