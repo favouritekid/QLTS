@@ -118,6 +118,13 @@ export function FinalizeTab({
     canPublishResult ||
     canEnroll
 
+  // Phase 2 — reviewer surface gate. Manager/Admin reviewer = holds any
+  // decision/action permission (NOT submit/resubmit, which are officer/applicant
+  // actions). Drives the HealthCheckGrid cockpit visibility in InspectionDetails.
+  // Permission flags only — NOT user.role, NOT override_priority_kv_mode (plan Phase 2).
+  const isReviewer =
+    canApprove || canReject || canRequestRevision || canPublishResult || canEnroll
+
   // Single action SURFACE — rendered ONLY inside the Hero CTA slot (plan D2).
   const decisionPanel = hasDecisionAction ? (
     <DecisionActionsPanel
@@ -152,7 +159,11 @@ export function FinalizeTab({
       <ReadinessHero profile={profile} readiness={readiness} cta={decisionPanel} />
       <ActionItemsList items={readiness.actionItems} onNavigateToStep={onNavigateToStep} />
       <SectionReview profile={profile} onNavigateToStep={onNavigateToStep} />
-      <InspectionDetails profile={profile} onNavigateToDocuments={onNavigateToDocuments} />
+      <InspectionDetails
+        profile={profile}
+        onNavigateToDocuments={onNavigateToDocuments}
+        isReviewer={isReviewer}
+      />
     </div>
   )
 }
