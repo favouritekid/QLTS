@@ -4810,6 +4810,7 @@ async def _validate_eligibility_all_choices(
 
     from .priority_service import (
         _make_path_shim_from_academic_info,
+        derive_major_code,
         derive_target_level_and_type,
         validate_eligibility,
     )
@@ -4854,7 +4855,9 @@ async def _validate_eligibility_all_choices(
             choices_summary.append(
                 f"NV{choice.display_order}={target_level}/{admission_type}"
             )
-            ok, reason = validate_eligibility(profile, target_level, admission_type)
+            ok, reason = validate_eligibility(
+                profile, target_level, admission_type, derive_major_code(path)
+            )
             if not ok:
                 failures.append(
                     f"NV{choice.display_order} ({target_level}/{admission_type}): "
@@ -4909,7 +4912,9 @@ async def _validate_eligibility_all_choices(
         # pattern (xem priority_service._make_path_shim_from_academic_info).
         shim = _make_path_shim_from_academic_info(config.academic_info)
         target_level, admission_type = derive_target_level_and_type(shim)  # type: ignore[arg-type]
-        ok, reason = validate_eligibility(profile, target_level, admission_type)
+        ok, reason = validate_eligibility(
+            profile, target_level, admission_type, derive_major_code(shim)
+        )
         if not ok:
             failures.append(
                 f"Legacy single-path ({target_level}/{admission_type}): {reason}"

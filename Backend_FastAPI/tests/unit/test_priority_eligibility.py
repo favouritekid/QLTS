@@ -8,6 +8,7 @@ Q9 #07 Phase E.4 — exercises:
 Pure-logic tests dùng SimpleNamespace + stub objects. KHÔNG cần DB; gọi
 helpers trực tiếp.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.priority_service import (
+    _is_health_sector_code,
     derive_target_level_and_type,
     normalize_target_level,
     validate_eligibility,
@@ -59,10 +61,15 @@ def _build_path(degree_level_code: str | None, offering_type_code: str | None):
     return path
 
 
-def _profile(cultural: str | None = None, vocational: str = "none"):
+def _profile(
+    cultural: str | None = None,
+    vocational: str = "none",
+    academic_year: int | None = None,
+):
     return SimpleNamespace(
         cultural_education_level=cultural,
         vocational_qualification=vocational,
+        academic_year=academic_year,
     )
 
 
@@ -214,6 +221,7 @@ def test_cd_lien_thong_fail(cultural: str, vocational: str) -> None:
 @pytest.mark.parametrize(
     "cultural",
     [
+        "completed_thcs",
         "graduated_thcs",
         "completed_thpt",
         "graduated_thpt",
@@ -226,7 +234,7 @@ def test_tc_chinh_quy_pass(cultural: str) -> None:
     assert ok is True
 
 
-@pytest.mark.parametrize("cultural", [None, "completed_thcs"])
+@pytest.mark.parametrize("cultural", [None])
 def test_tc_chinh_quy_fail(cultural: str | None) -> None:
     profile = _profile(cultural=cultural)
     ok, reason = validate_eligibility(profile, "trung_cap", "chinh_quy")
@@ -242,6 +250,8 @@ def test_tc_chinh_quy_fail(cultural: str | None) -> None:
 @pytest.mark.parametrize(
     "cultural, vocational",
     [
+        ("completed_thcs", "so_cap"),
+        ("completed_thcs", "trung_cap"),
         ("graduated_thcs", "so_cap"),
         ("graduated_thcs", "trung_cap"),
         ("graduated_thpt", "so_cap"),
@@ -256,9 +266,10 @@ def test_tc_lien_thong_pass(cultural: str, vocational: str) -> None:
 @pytest.mark.parametrize(
     "cultural, vocational",
     [
+        ("completed_thcs", "none"),  # cần SC/TC
+        ("completed_thcs", "cao_dang"),  # CĐ đã cao hơn TC — out of liên thông scope
         ("graduated_thcs", "none"),  # cần SC/TC
         ("graduated_thcs", "cao_dang"),  # CĐ đã cao hơn TC — out of liên thông scope
-        ("completed_thcs", "trung_cap"),  # cần ≥ TN_THCS
     ],
 )
 def test_tc_lien_thong_fail(cultural: str, vocational: str) -> None:
@@ -295,6 +306,64 @@ def test_unsupported_target_level_blocks() -> None:
     ok, reason = validate_eligibility(profile, "dai_hoc", "chinh_quy")
     assert ok is False
     assert "unsupported_target_level" in reason
+
+
+# ===========================================================================
+# Health-sector TC guard — Luật GDNN 2025 Điều 45 K2 (đóng đầu vào THCS từ 2026)
+# ===========================================================================
+
+_YSY_TC = "5720101"  # Y sỹ đa khoa — Trung cấp (lĩnh vực sức khỏe "72")
+_OTO_TC = "5510216"  # Công nghệ ô tô — Trung cấp (lĩnh vực "51", non-health)
+
+
+def test_is_health_sector_code() -> None:
+    assert _is_health_sector_code("5720101") is True
+    assert _is_health_sector_code("6720201") is True  # Dược CĐ
+    assert _is_health_sector_code("5510216") is False  # CN ô tô
+    assert _is_health_sector_code(None) is False
+    assert _is_health_sector_code("72") is False  # len < 3
+
+
+@pytest.mark.parametrize("cultural", ["completed_thcs", "graduated_thcs"])
+def test_tc_health_thcs_blocked_2026_chinh_quy(cultural: str) -> None:
+    # Cả completed_thcs lẫn graduated_thcs (nhãn legacy cùng tầng THCS) đều chặn.
+    profile = _profile(cultural=cultural, academic_year=2026)
+    ok, reason = validate_eligibility(profile, "trung_cap", "chinh_quy", _YSY_TC)
+    assert ok is False
+    assert reason == "tc_health_thcs_entry_closed_2026"
+
+
+@pytest.mark.parametrize("cultural", ["completed_thcs", "graduated_thcs"])
+def test_tc_health_thcs_blocked_2026_lien_thong(cultural: str) -> None:
+    profile = _profile(cultural=cultural, vocational="trung_cap", academic_year=2026)
+    ok, reason = validate_eligibility(profile, "trung_cap", "lien_thong", _YSY_TC)
+    assert ok is False
+    assert reason == "tc_health_thcs_entry_closed_2026"
+
+
+@pytest.mark.parametrize(
+    "cultural", ["completed_thpt", "graduated_thpt", "graduated_gdtx"]
+)
+def test_tc_health_thpt_input_still_passes(cultural: str) -> None:
+    # Chỉ đóng đầu vào THCS; đầu vào THPT vào TC sức khỏe vẫn hợp lệ.
+    profile = _profile(cultural=cultural, academic_year=2026)
+    ok, _ = validate_eligibility(profile, "trung_cap", "chinh_quy", _YSY_TC)
+    assert ok is True
+
+
+def test_tc_nonhealth_completed_thcs_passes_2026() -> None:
+    # Ngành thường (CN ô tô) + completed_thcs + 2026 → vẫn pass (Option B).
+    profile = _profile(cultural="completed_thcs", academic_year=2026)
+    ok, _ = validate_eligibility(profile, "trung_cap", "chinh_quy", _OTO_TC)
+    assert ok is True
+
+
+@pytest.mark.parametrize("cultural", ["completed_thcs", "graduated_thcs"])
+def test_tc_health_thcs_pre_2026_passes(cultural: str) -> None:
+    # Trước mốc 01/01/2026 guard không áp (backward-compat cycle cũ).
+    profile = _profile(cultural=cultural, academic_year=2025)
+    ok, _ = validate_eligibility(profile, "trung_cap", "chinh_quy", _YSY_TC)
+    assert ok is True
 
 
 # ===========================================================================

@@ -372,14 +372,14 @@ async def test_resolve_kv_thcs_plus_tc_falls_to_commune():
         ("completed_thpt", "none", "CD", True),
         ("graduated_thcs", "trung_cap", "CD", False),  # Chưa TN THPT → CD FAIL (path 2 strict)
         ("graduated_thcs", "none", "CD", False),  # Chỉ TN THCS → CD FAIL
-        ("completed_thcs", "trung_cap", "CD", False),  # Chưa TN THCS → CD FAIL
+        ("completed_thcs", "trung_cap", "CD", False),  # Chưa đủ THPT → CD FAIL
         (None, "none", "CD", False),  # Cultural draft → CD FAIL
         # TC target — TN THCS trở lên OK
         ("graduated_thcs", "none", "TC", True),
         ("graduated_thpt", "none", "TC", True),
         ("completed_thpt", "so_cap", "TC", True),
-        # TC target — fail
-        ("completed_thcs", "none", "TC", False),  # Chưa TN THCS
+        # TC target — completed_thcs OK (TT22); draft cultural (None) still fails
+        ("completed_thcs", "none", "TC", True),
         (None, "none", "TC", False),
         # SC target — luôn pass
         ("completed_thcs", "none", "SC", True),

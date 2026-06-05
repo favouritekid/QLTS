@@ -106,13 +106,15 @@ def test_has_thpt_history_thpt_missing_year_returns_false() -> None:
         # TC chính quy + cultural đủ THPT → LICH_SU_THPT
         ("graduated_thpt", "none", "trung_cap", "chinh_quy", "LICH_SU_THPT", "tc_chinh_quy_post_thpt"),
         ("completed_thpt", "so_cap", "trung_cap", "chinh_quy", "LICH_SU_THPT", "tc_chinh_quy_post_thpt"),
-        # TC liên thông từ SC/TC + cultural graduated_thcs → THUONG_TRU
+        # TC liên thông từ SC/TC + cultural completed_thcs/graduated_thcs → THUONG_TRU
+        ("completed_thcs", "so_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
+        ("completed_thcs", "trung_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
         ("graduated_thcs", "so_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
         ("graduated_thcs", "trung_cap", "trung_cap", "lien_thong", "THUONG_TRU", "tc_lien_thong_post_thcs_with_voc"),
         # TC liên thông + cultural THPT → LICH_SU_THPT
         ("graduated_thpt", "so_cap", "trung_cap", "lien_thong", "LICH_SU_THPT", "tc_lien_thong_post_thpt"),
-        # TC chính quy + completed_thcs → INSUFFICIENT_DATA
-        ("completed_thcs", "none", "trung_cap", "chinh_quy", "INSUFFICIENT_DATA", "tc_chinh_quy_cultural_insufficient"),
+        # TC chính quy + completed_thcs → THUONG_TRU (TT22 hoàn thành = đủ ĐK TC)
+        ("completed_thcs", "none", "trung_cap", "chinh_quy", "THUONG_TRU", "tc_chinh_quy_post_thcs"),
         # SC chính quy → THUONG_TRU
         ("graduated_thcs", "none", "so_cap", "chinh_quy", "THUONG_TRU", "sc_uses_commune"),
         # SC chính quy + cultural=None — yêu cầu nghiệp vụ #5: SC KHÔNG yêu
@@ -341,6 +343,24 @@ async def test_resolve_thuong_tru_happy_with_commune_in_catalog() -> None:
     """TC chính quy + graduated_thcs + commune_code resolve OK."""
     profile = _profile_stub(
         cultural_education_level="graduated_thcs",
+        permanent_commune_code="66_22255",
+    )
+    db = _mock_db(commune_kv="KV2-NT")
+    kv, meta = await resolve_kv_for_profile(
+        profile, db, target_level="trung_cap", admission_type="chinh_quy",
+    )
+    assert kv == "KV2-NT"
+    assert meta["rule_applied"] == "commune_lookup"
+    assert meta["pathway"] == "thuong_tru"
+    assert meta["basis"] == "THUONG_TRU"
+    assert meta["breakdown"]["commune_code_used"] == "66_22255"
+
+
+@pytest.mark.asyncio
+async def test_resolve_completed_thcs_tc_chinh_quy_uses_commune_lookup() -> None:
+    """TC chinh quy + completed_thcs + commune_code resolve OK (TT22)."""
+    profile = _profile_stub(
+        cultural_education_level="completed_thcs",
         permanent_commune_code="66_22255",
     )
     db = _mock_db(commune_kv="KV2-NT")

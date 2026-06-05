@@ -14,6 +14,7 @@ Tests verify:
 
 Mock pattern: AsyncMock cho db.execute dispatching theo statement target.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -173,7 +174,9 @@ async def test_multi_nv_inconsistent_admission_types_blocks() -> None:
     """Cùng target_level (CĐ) nhưng admission_type khác (chính quy vs liên thông)
     → MULTI_NV_INCONSISTENT."""
     profile = _profile(
-        cultural="graduated_thpt", vocational="trung_cap", uses_choice_engine=True,
+        cultural="graduated_thpt",
+        vocational="trung_cap",
+        uses_choice_engine=True,
     )
     choices = [
         SimpleNamespace(
@@ -234,7 +237,9 @@ async def test_single_nv_no_consistency_check_needed() -> None:
     await _validate_eligibility_all_choices(db, profile)
 
 
-async def test_multi_nv_inconsistent_with_eligibility_fail_prefers_consistency_msg() -> None:
+async def test_multi_nv_inconsistent_with_eligibility_fail_prefers_consistency_msg() -> (
+    None
+):
     """Khi cả 2 vấn đề tồn tại (multi-NV inconsistent + eligibility fail
     cho ít nhất 1 NV), helper raise MULTI_NV_INCONSISTENT trước (architectural
     error first; data error after split sẽ surface eligibility riêng cho mỗi
@@ -242,7 +247,9 @@ async def test_multi_nv_inconsistent_with_eligibility_fail_prefers_consistency_m
     profile = _profile(cultural="graduated_thcs", uses_choice_engine=True)
     choices = [
         SimpleNamespace(
-            admission_path=_make_path("cao_dang", "chinh_quy"),  # graduated_thcs fail CĐ
+            admission_path=_make_path(
+                "cao_dang", "chinh_quy"
+            ),  # graduated_thcs fail CĐ
             display_order=1,
         ),
         SimpleNamespace(
@@ -379,7 +386,7 @@ async def test_legacy_tc_chinh_quy_graduated_thcs_passes() -> None:
     await _validate_eligibility_all_choices(db, profile)
 
 
-async def test_legacy_tc_chinh_quy_completed_thcs_blocks() -> None:
+async def test_legacy_tc_chinh_quy_completed_thcs_passes() -> None:
     profile = _profile(
         cultural="completed_thcs",
         uses_choice_engine=False,
@@ -390,10 +397,7 @@ async def test_legacy_tc_chinh_quy_completed_thcs_blocks() -> None:
     config_stub.academic_info = path.__dict__["academic_info"]
     db = _make_db_legacy(config_stub=config_stub)
 
-    with pytest.raises(BusinessRuleViolation) as exc:
-        await _validate_eligibility_all_choices(db, profile)
-    assert "ELIGIBILITY_FAIL" in str(exc.value)
-    assert "trung_cap" in str(exc.value)
+    await _validate_eligibility_all_choices(db, profile)
 
 
 async def test_legacy_sc_chinh_quy_no_cultural_passes() -> None:
