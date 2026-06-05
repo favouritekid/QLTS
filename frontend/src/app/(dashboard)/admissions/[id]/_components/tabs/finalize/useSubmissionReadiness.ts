@@ -13,12 +13,17 @@
  *      currently surfaced (submit/resubmit/approve/publish/enroll/...). It only
  *      drives Hero label/tone; it NEVER filters the decision button cluster.
  *
- * ActionItems source (plan B2 — NOT flat `critical_blockers`):
- *   - message-level: `grouped_validation_errors` (personal_info→1, scores→5,
- *     documents→6) + `derivePriorityIssues`→4.
- *   - section-level: `step_status[2|3]` ∈ {error,warning} only.
- *   - Step 7 (Học phí) is display-only (`step_status[7]` hard-coded "success")
- *     → NEVER produces an ActionItem (plan B4).
+ * ActionItems source (Phase 3 — structured-first, heuristic fallback):
+ *   - PREFERRED: `executive_summary.critical_blockers` / `warnings` when they are
+ *     structured objects with a numeric `.step` (BE Phase 3) → route each to its
+ *     exact step; severity from the item (blocker→error, warning→warning).
+ *   - FALLBACK (legacy string[] / missing step / no executive_summary):
+ *     `grouped_validation_errors` (personal_info→1, scores→5, documents→6) +
+ *     `step_status[2|3]` (family/academic).
+ *   - `derivePriorityIssues`→Step 4 is FE-derived (never in executive_summary) and
+ *     is ALWAYS added (deduped against any Step 4 already present).
+ *   - Step 7 (Học phí) is display-only → BE emits no item + heuristic never adds
+ *     one → NEVER an ActionItem.
  */
 
 import { useMemo } from "react"
@@ -113,67 +118,114 @@ function itemFromGrouped(
   return { id: `step-${step}`, step, severity, message, source: "message" }
 }
 
+/** One element of `executive_summary.critical_blockers` / `warnings` (Phase 3). */
+type ExecSummaryItem = NonNullable<
+  AdmissionProfileResponse["executive_summary"]
+>["critical_blockers"][number]
+
 /**
- * Build the ActionItems list from backend fields. Independent of
- * `executive_summary` (works even when it is null — plan R1 fallback).
+ * Phase 3 — turn STRUCTURED executive_summary items (objects with a numeric
+ * `.step`) into routed ActionItems. Legacy `string` items and objects without a
+ * step are skipped here (caller falls back to the heuristic). Severity comes from
+ * the item (`blocker`→error, `warning`→warning); falls back to the list's default.
+ */
+export function buildStructuredActionItems(
+  es: AdmissionProfileResponse["executive_summary"],
+): ReadinessActionItem[] {
+  if (!es) return []
+  const out: ReadinessActionItem[] = []
+  const consume = (list: ExecSummaryItem[] | undefined, fallback: "error" | "warning") => {
+    for (const it of list ?? []) {
+      if (typeof it === "string" || typeof it.step !== "number") continue
+      const severity: "error" | "warning" =
+        it.severity === "blocker" ? "error" : it.severity === "warning" ? "warning" : fallback
+      out.push({
+        id: it.code || `step-${it.step}-${it.message}`,
+        step: it.step,
+        severity,
+        message: it.message,
+        source: "message",
+      })
+    }
+  }
+  consume(es.critical_blockers, "error")
+  consume(es.warnings, "warning")
+  return out
+}
+
+/**
+ * Build the ActionItems list. Phase 3: prefer STRUCTURED executive_summary
+ * blockers/warnings (precise per-step routing); fall back to the heuristic
+ * (grouped_validation_errors + step_status[2|3]) for legacy/absent data. Priority
+ * (Step 4) is FE-derived and always added. Result is deduped + sorted.
+ * Works even when executive_summary is null (R1 fallback).
  */
 export function buildReadinessActionItems(
   profile: AdmissionProfileResponse,
 ): ReadinessActionItem[] {
   const stepStatus = profile.step_status
   const items: ReadinessActionItem[] = []
-  const seen = new Set<number>()
 
-  const grouped = profile.grouped_validation_errors
-
-  // message-level: grouped_validation_errors → Step 1/5/6 (single source: the
-  // section→step map). Each bucket maps to one short summary row.
-  const groupedBuckets: Array<
-    [GroupedSectionKey, { category: string; errors: string[]; count: number } | undefined]
-  > = [
-    ["personal_info", grouped?.personal_info],
-    ["scores", grouped?.scores],
-    ["documents", grouped?.documents],
-  ]
-  for (const [key, bucket] of groupedBuckets) {
-    if (bucket && bucket.count > 0) {
-      const step = GROUPED_SECTION_TO_STEP[key]
-      items.push(itemFromGrouped(step, bucket, severityFromStep(stepStatus, step)))
-      seen.add(step)
+  const structured = buildStructuredActionItems(profile.executive_summary)
+  if (structured.length > 0) {
+    // Structured BE contract present → route each blocker/warning to its step.
+    items.push(...structured)
+  } else {
+    // Heuristic fallback (Phase 1). grouped_validation_errors → Step 1/5/6.
+    const grouped = profile.grouped_validation_errors
+    const groupedBuckets: Array<
+      [GroupedSectionKey, { category: string; errors: string[]; count: number } | undefined]
+    > = [
+      ["personal_info", grouped?.personal_info],
+      ["scores", grouped?.scores],
+      ["documents", grouped?.documents],
+    ]
+    for (const [key, bucket] of groupedBuckets) {
+      if (bucket && bucket.count > 0) {
+        const step = GROUPED_SECTION_TO_STEP[key]
+        items.push(itemFromGrouped(step, bucket, severityFromStep(stepStatus, step)))
+      }
+    }
+    // section-level: ONLY Step 2 (Gia đình) + Step 3 (Học tập).
+    for (const step of [2, 3]) {
+      const s = stepStatus?.[String(step)]
+      if (s === "error" || s === "warning") {
+        items.push({
+          id: `step-${step}`,
+          step,
+          severity: s,
+          message: `${getAdmissionStepLabel(step)} cần được bổ sung.`,
+          source: "section",
+        })
+      }
     }
   }
 
-  // message-level: priority → Step 4 (derived, BE-flag driven)
-  const priorityIssues = derivePriorityIssues(profile)
-  if (priorityIssues.length > 0) {
-    items.push({
-      id: "step-4",
-      step: 4,
-      severity: severityFromStep(stepStatus, 4),
-      message: summarizeMany(priorityIssues),
-      source: "message",
-    })
-    seen.add(4)
-  }
-
-  // section-level: ONLY Step 2 (Gia đình) + Step 3 (Học tập) — no grouped detail.
-  // (Step 7 excluded by design — plan B4. Steps 1/4/5/6 handled above.)
-  for (const step of [2, 3]) {
-    if (seen.has(step)) continue // defensive dedupe — message-level wins
-    const s = stepStatus?.[String(step)]
-    if (s === "error" || s === "warning") {
+  // Priority (Step 4) is FE-derived (derivePriorityIssues) — NEVER in
+  // executive_summary. Add once, unless a Step 4 item is already present.
+  if (!items.some((i) => i.step === 4)) {
+    const priorityIssues = derivePriorityIssues(profile)
+    if (priorityIssues.length > 0) {
       items.push({
-        id: `step-${step}`,
-        step,
-        severity: s,
-        message: `${getAdmissionStepLabel(step)} cần được bổ sung.`,
-        source: "section",
+        id: "step-4",
+        step: 4,
+        severity: severityFromStep(stepStatus, 4),
+        message: summarizeMany(priorityIssues),
+        source: "message",
       })
     }
   }
 
+  // Dedupe (by id = code, or `step-…` key) — no duplicate step/code/message rows.
+  const seenIds = new Set<string>()
+  const deduped = items.filter((it) => {
+    if (seenIds.has(it.id)) return false
+    seenIds.add(it.id)
+    return true
+  })
+
   // error before warning, then ascending step.
-  return items.sort((a, b) => {
+  return deduped.sort((a, b) => {
     if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1
     return a.step - b.step
   })
@@ -291,7 +343,15 @@ export function useSubmissionReadiness(
     )
 
     const es = profile.executive_summary
-    const summaryLine = es ? es.next_action || es.critical_blockers[0] || null : null
+    // summaryLine hint — extract message from the first blocker (string or object).
+    const firstBlocker = es?.critical_blockers?.[0]
+    const firstBlockerMsg =
+      firstBlocker == null
+        ? null
+        : typeof firstBlocker === "string"
+          ? firstBlocker
+          : firstBlocker.message
+    const summaryLine = es ? es.next_action || firstBlockerMsg || null : null
 
     return {
       eligibilityVerdict: verdict,

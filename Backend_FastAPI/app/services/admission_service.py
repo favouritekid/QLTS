@@ -1531,6 +1531,93 @@ async def _resolve_verifier_names(
     return out
 
 
+def _build_executive_summary_items(
+    *,
+    personal_error_count: int,
+    missing_doc_count: int,
+    unverified_doc_count: int,
+    gpa_error: bool,
+    has_family: bool,
+    has_academic: bool,
+    docs_format_confirmed: bool,
+) -> tuple[list[dict], list[dict]]:
+    """Build executive_summary ``(critical_blockers, warnings)`` as structured items.
+
+    Phase 3 — each item is ``{code, message, step, section, severity}`` so the FE
+    routes a blocker to its EXACT pipeline step (CTA "Sửa Step X") instead of a
+    heuristic. ``code`` is stable + snake_case (text-independent — copy can change
+    without breaking consumers). Step mapping: personal->1, family->2, academic->3,
+    priority->4, gpa/score->5, docs->6, tuition->7.
+
+    Semantics are UNCHANGED from the prior string form: identical trigger
+    conditions and the SAME blocker/warning split — family/academic/docs-format
+    stay WARNINGS (not promoted to blockers); tuition emits nothing (display-only,
+    no item). Pure function — no DB, no migration.
+    """
+    critical_blockers: list[dict] = []
+    if personal_error_count > 0:
+        critical_blockers.append({
+            "code": "personal_info_missing",
+            "message": f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc",
+            "step": 1,
+            "section": "personal_info",
+            "severity": "blocker",
+        })
+    # PR #6 review — phrase per bucket so the dashboard reflects whether the user
+    # must upload OR ask the manager to verify.
+    if missing_doc_count > 0:
+        critical_blockers.append({
+            "code": "documents_missing",
+            "message": f"Thiếu {missing_doc_count} tài liệu bắt buộc",
+            "step": 6,
+            "section": "documents",
+            "severity": "blocker",
+        })
+    if unverified_doc_count > 0:
+        critical_blockers.append({
+            "code": "documents_unverified",
+            "message": f"{unverified_doc_count} tài liệu chờ xác minh từ quản lý",
+            "step": 6,
+            "section": "documents",
+            "severity": "blocker",
+        })
+    if gpa_error:
+        critical_blockers.append({
+            "code": "score_below_threshold",
+            "message": "Điểm số chưa đạt yêu cầu",
+            "step": 5,
+            "section": "scores",
+            "severity": "blocker",
+        })
+
+    warnings: list[dict] = []
+    if not has_family:
+        warnings.append({
+            "code": "family_missing",
+            "message": "Chưa điền thông tin gia đình",
+            "step": 2,
+            "section": "family",
+            "severity": "warning",
+        })
+    if not has_academic:
+        warnings.append({
+            "code": "academic_missing",
+            "message": "Chưa điền lịch sử học tập",
+            "step": 3,
+            "section": "academic",
+            "severity": "warning",
+        })
+    if not docs_format_confirmed:
+        warnings.append({
+            "code": "documents_format_unconfirmed",
+            "message": "Một số tài liệu chưa được xác nhận định dạng",
+            "step": 6,
+            "section": "documents",
+            "severity": "warning",
+        })
+    return critical_blockers, warnings
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -2317,30 +2404,20 @@ def _compute_frontend_fields(
     else:
         overall_status = "ready"  # All steps complete
 
-    # Identify critical blockers (errors that prevent submission)
-    critical_blockers = []
-    if personal_error_count > 0:
-        critical_blockers.append(f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc")
-    # PR #6 review — phrase the blocker per bucket so the dashboard
-    # accurately reflects whether the user needs to upload OR ask the
-    # manager to verify.
-    if len(missing_doc_codes) > 0:
-        critical_blockers.append(f"Thiếu {len(missing_doc_codes)} tài liệu bắt buộc")
-    if len(unverified_doc_codes) > 0:
-        critical_blockers.append(
-            f"{len(unverified_doc_codes)} tài liệu chờ xác minh từ quản lý"
-        )
-    if gpa_error:
-        critical_blockers.append("Điểm số chưa đạt yêu cầu")
-
-    # Identify warnings (non-blocking issues)
-    warning_messages = []
-    if not has_family:
-        warning_messages.append("Chưa điền thông tin gia đình")
-    if not has_academic:
-        warning_messages.append("Chưa điền lịch sử học tập")
-    if not docs_format_confirmed:
-        warning_messages.append("Một số tài liệu chưa được xác nhận định dạng")
+    # Identify critical blockers + warnings as STRUCTURED items (Phase 3 — each
+    # carries {code, message, step, section, severity} so the FE routes a blocker
+    # to its exact step). Built by a pure helper for unit-testability. Semantics
+    # UNCHANGED vs the old string form (same conditions, same blocker/warning
+    # split). Transient field (no DB migration).
+    critical_blockers, warning_messages = _build_executive_summary_items(
+        personal_error_count=personal_error_count,
+        missing_doc_count=len(missing_doc_codes),
+        unverified_doc_count=len(unverified_doc_codes),
+        gpa_error=bool(gpa_error),
+        has_family=bool(has_family),
+        has_academic=bool(has_academic),
+        docs_format_confirmed=bool(docs_format_confirmed),
+    )
 
     # Suggest next action (Phase E.4 — 8-step model: Step 4=Priority, 5=Scores, 6=Documents)
     if step_status[1] == "error":

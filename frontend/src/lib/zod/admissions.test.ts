@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect } from "vitest"
+import { z } from "zod"
 
 import {
   admissionProfileCreateSchema,
@@ -22,7 +23,56 @@ import {
   appliedRulesSchema,
   priorityObjectEvidenceEntrySchema,
   subjectGroupSnapshotSchema,
+  executiveSummaryItemSchema,
 } from "./admissions"
+
+describe("executiveSummaryItemSchema — Phase 3 union (legacy string | structured object)", () => {
+  it("parses a legacy string item", () => {
+    expect(executiveSummaryItemSchema.parse("Thiếu 2 tài liệu bắt buộc")).toBe(
+      "Thiếu 2 tài liệu bắt buộc",
+    )
+  })
+
+  it("parses a structured object item with all fields", () => {
+    const obj = {
+      code: "documents_missing",
+      message: "Thiếu 2 tài liệu bắt buộc",
+      step: 6,
+      section: "documents",
+      severity: "blocker" as const,
+    }
+    expect(executiveSummaryItemSchema.parse(obj)).toEqual(obj)
+  })
+
+  it("parses a structured object with optional step/section/severity omitted", () => {
+    const obj = { code: "x", message: "y" }
+    expect(executiveSummaryItemSchema.parse(obj)).toEqual(obj)
+  })
+
+  it("rejects an object with an invalid severity", () => {
+    expect(() =>
+      executiveSummaryItemSchema.parse({ code: "x", message: "y", severity: "fatal" }),
+    ).toThrow()
+  })
+
+  it("parses a legacy string[] array (old responses)", () => {
+    const arr = ["a", "b"]
+    expect(z.array(executiveSummaryItemSchema).parse(arr)).toEqual(arr)
+  })
+
+  it("parses a structured object[] array (new responses)", () => {
+    const arr = [
+      { code: "c1", message: "m1", step: 1, section: "personal_info", severity: "blocker" as const },
+      { code: "c2", message: "m2", step: 6, section: "documents", severity: "warning" as const },
+    ]
+    expect(z.array(executiveSummaryItemSchema).parse(arr)).toEqual(arr)
+  })
+
+  it("parses a MIXED array (string + object) — soft-cutover tolerance", () => {
+    const arr = ["legacy", { code: "c", message: "m", step: 2 }]
+    expect(z.array(executiveSummaryItemSchema).parse(arr)).toEqual(arr)
+  })
+})
 
 describe("admissionProfileCreateSchema — round contract hardening (plan v4)", () => {
   const base = {

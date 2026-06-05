@@ -266,3 +266,113 @@ describe("useSubmissionReadiness — action items", () => {
     expect(r.actionItems.some((i) => i.step === 3)).toBe(true)
   })
 })
+
+// Phase 3 — structured executive_summary blocker/warning items.
+type ExecutiveSummary = NonNullable<AdmissionProfileResponse["executive_summary"]>
+function es(overrides: Partial<ExecutiveSummary> = {}): ExecutiveSummary {
+  return {
+    overall_status: "incomplete",
+    completion_percent: 50,
+    step_summary: {},
+    critical_blockers: [],
+    warnings: [],
+    next_action: "Hoàn thiện hồ sơ",
+    can_submit: false,
+    ...overrides,
+  }
+}
+
+describe("useSubmissionReadiness — Phase 3 structured blockers routing", () => {
+  it("(a) structured blockers route ActionItems by .step with item severity", () => {
+    const profile = buildProfile({
+      executive_summary: es({
+        critical_blockers: [
+          { code: "score_below_threshold", message: "Điểm chưa đạt", step: 5, section: "scores", severity: "blocker" },
+          { code: "documents_missing", message: "Thiếu tài liệu", step: 6, section: "documents", severity: "blocker" },
+        ],
+        warnings: [
+          { code: "family_missing", message: "Chưa điền gia đình", step: 2, section: "family", severity: "warning" },
+        ],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    const byStep = Object.fromEntries(r.actionItems.map((i) => [i.step, i]))
+    expect(r.actionItems.map((i) => i.step).sort((a, b) => a - b)).toEqual([2, 5, 6])
+    expect(byStep[5].severity).toBe("error")
+    expect(byStep[2].severity).toBe("warning")
+    expect(byStep[6].message).toBe("Thiếu tài liệu")
+  })
+
+  it("(b) legacy string blockers → fallback heuristic (string NOT routed)", () => {
+    const profile = buildProfile({
+      step_status: { "3": "error" },
+      grouped_validation_errors: { scores: { category: "Điểm", errors: ["x"], count: 1 } },
+      executive_summary: es({ critical_blockers: ["legacy string blocker"] }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    expect(r.actionItems.map((i) => i.step).sort((a, b) => a - b)).toEqual([3, 5])
+    expect(r.actionItems.some((i) => i.message.includes("legacy string blocker"))).toBe(false)
+  })
+
+  it("(c) dedupes structured items with the same code", () => {
+    const profile = buildProfile({
+      executive_summary: es({
+        critical_blockers: [
+          { code: "documents_missing", message: "Thiếu", step: 6, severity: "blocker" },
+          { code: "documents_missing", message: "Thiếu", step: 6, severity: "blocker" },
+        ],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    expect(r.actionItems.filter((i) => i.id === "documents_missing").length).toBe(1)
+  })
+
+  it("(c2) keeps DISTINCT blockers on the same step (per-blocker rows)", () => {
+    const profile = buildProfile({
+      executive_summary: es({
+        critical_blockers: [
+          { code: "documents_missing", message: "Thiếu", step: 6, severity: "blocker" },
+          { code: "documents_unverified", message: "Chờ xác minh", step: 6, severity: "blocker" },
+        ],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    expect(r.actionItems.filter((i) => i.step === 6).length).toBe(2)
+  })
+
+  it("structured present → grouped heuristic NOT used (structured wins on step 6)", () => {
+    const profile = buildProfile({
+      grouped_validation_errors: { documents: { category: "Tài liệu", errors: ["heuristic doc"], count: 1 } },
+      executive_summary: es({
+        critical_blockers: [{ code: "documents_missing", message: "structured doc", step: 6, severity: "blocker" }],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    const step6 = r.actionItems.filter((i) => i.step === 6)
+    expect(step6.length).toBe(1)
+    expect(step6[0].message).toBe("structured doc")
+  })
+
+  it("priority (Step 4) still added alongside structured items", () => {
+    const profile = buildProfile({
+      cultural_education_level: null,
+      executive_summary: es({
+        critical_blockers: [{ code: "score_below_threshold", message: "Điểm", step: 5, severity: "blocker" }],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    expect(r.actionItems.some((i) => i.step === 4)).toBe(true)
+    expect(r.actionItems.some((i) => i.step === 5)).toBe(true)
+  })
+
+  it("summaryLine falls back to first structured blocker message when next_action empty", () => {
+    const profile = buildProfile({
+      executive_summary: es({
+        next_action: "",
+        critical_blockers: [{ code: "c", message: "Xử lý tài liệu", step: 6, severity: "blocker" }],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile }))
+    expect(r.summaryLine).toBe("Xử lý tài liệu")
+  })
+})
