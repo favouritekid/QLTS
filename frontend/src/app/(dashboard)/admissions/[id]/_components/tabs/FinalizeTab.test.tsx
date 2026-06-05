@@ -13,15 +13,22 @@ import { describe, it, expect, vi, beforeEach } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
-// Mock executive-summary children — they pull heavy dependencies, parity tested separately.
-vi.mock("./executive-summary/ExecutiveSummaryHeader", () => ({
-  ExecutiveSummaryHeader: () => <div data-testid="executive-summary-header" />,
+// Mock readiness children — parity tested in their own suites. ReadinessHero is a
+// passthrough that renders its `cta` slot so the DecisionActionsPanel (real) still
+// renders the decision buttons this suite asserts on (single action SURFACE — D2).
+vi.mock("./finalize/ReadinessHero", () => ({
+  ReadinessHero: ({ cta }: { cta?: React.ReactNode }) => (
+    <div data-testid="readiness-hero">{cta}</div>
+  ),
 }))
-vi.mock("./executive-summary/HealthCheckGrid", () => ({
-  HealthCheckGrid: () => <div data-testid="health-check-grid" />,
+vi.mock("./finalize/ActionItemsList", () => ({
+  ActionItemsList: () => <div data-testid="action-items-list" />,
 }))
-vi.mock("./executive-summary/ReviewDetails", () => ({
-  ReviewDetails: () => <div data-testid="review-details" />,
+vi.mock("./finalize/SectionReview", () => ({
+  SectionReview: () => <div data-testid="section-review" />,
+}))
+vi.mock("./finalize/InspectionDetails", () => ({
+  InspectionDetails: () => <div data-testid="inspection-details" />,
 }))
 
 // Pass-through AlertDialog mock (no Radix portal)
@@ -79,6 +86,7 @@ function renderTab(
     onPublishResult: vi.fn(),
     onEnroll: vi.fn(),
     onNavigateToDocuments: vi.fn(),
+    onNavigateToStep: vi.fn(),
   }
   render(
     <FinalizeTab
@@ -106,6 +114,7 @@ function renderTab(
       isEnrolling={false}
       canEnroll={false}
       onNavigateToDocuments={spies.onNavigateToDocuments}
+      onNavigateToStep={spies.onNavigateToStep}
       {...overrides}
     />
   )
@@ -221,6 +230,7 @@ describe("FinalizeTab — Decision Surface", () => {
           canPublishResult={false}
           canEnroll={false}
           onNavigateToDocuments={vi.fn()}
+          onNavigateToStep={vi.fn()}
         />
       )
       expect(container.textContent).not.toContain("Nộp hồ sơ")
