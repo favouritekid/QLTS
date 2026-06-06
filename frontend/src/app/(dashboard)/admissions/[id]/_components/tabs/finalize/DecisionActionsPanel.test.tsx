@@ -1,12 +1,16 @@
 /**
- * DecisionActionsPanel — extraction + composition anchor tests (STEP8 plan D2/R4).
+ * DecisionActionsPanel — decision CTA hierarchy tests (plan Hero redesign).
  *
  * Pins:
- *   - Multi-action cluster preserved (canApprove+canReject → both; 3-way review).
- *   - Root is NOT a Card and carries NO sticky/bottom-4/shadow-lg (Hero owns shell).
+ *   - Reviewer cluster prominence: eligible → Phê duyệt primary + Yêu cầu sửa /
+ *     Từ chối secondary; ineligible & no bypass → Yêu cầu sửa primary, Phê duyệt
+ *     disabled tertiary (no success green) + reason line.
+ *   - Single-action states: enroll/submit/resubmit show ONLY their own action;
+ *     publish_result shows "Công bố" + "Yêu cầu sửa" (secondary, when permitted) but
+ *     still hides approve/reject.
  *   - bypass_warning guard preserved (warning class + AlertDialog).
- *   - submit disabled when !isEligible; resubmit NEVER gated by isEligible.
- *   - No send-link inside the panel (stays on sticky AdmissionActions).
+ *   - submit disabled + reason when !isEligible; resubmit NEVER gated by isEligible.
+ *   - Root is NOT a Card / sticky (Hero owns shell). No send-link inside the panel.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -72,6 +76,7 @@ function renderPanel(
     <DecisionActionsPanel
       profile={profile}
       isEligible={profile.eligibility_status === "eligible"}
+      primaryAction="approve"
       onSubmit={spies.onSubmit}
       isSubmitting={false}
       canSubmit={false}
@@ -99,70 +104,144 @@ function renderPanel(
   return { ...utils, spies }
 }
 
-describe("DecisionActionsPanel — multi-action cluster (B5/I3)", () => {
+describe("DecisionActionsPanel — reviewer cluster hierarchy", () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it("canApprove + canReject → renders BOTH", () => {
+  it("eligible + canApprove + canReject → both render (approve primary, reject secondary)", () => {
     renderPanel(buildProfile(), { canApprove: true, canReject: true })
     expect(screen.getByText("Phê duyệt")).toBeInTheDocument()
     expect(screen.getByText("Từ chối hồ sơ")).toBeInTheDocument()
   })
 
-  it("canRequestRevision + canReject + canApprove → renders ALL THREE", () => {
-    renderPanel(buildProfile(), {
-      canRequestRevision: true,
-      canReject: true,
-      canApprove: true,
-    })
-    // "Yêu cầu sửa" appears twice (trigger + dialog confirm via passthrough mock).
+  it("eligible + 3-way → Phê duyệt + Yêu cầu sửa + Từ chối all render", () => {
+    renderPanel(buildProfile(), { canApprove: true, canReject: true, canRequestRevision: true })
     expect(screen.getAllByText("Yêu cầu sửa").length).toBeGreaterThan(0)
     expect(screen.getByText("Từ chối hồ sơ")).toBeInTheDocument()
     expect(screen.getByText("Phê duyệt")).toBeInTheDocument()
+  })
+
+  it("ineligible + no bypass → Yêu cầu sửa primary; Phê duyệt disabled tertiary + reason; Từ chối present", () => {
+    renderPanel(buildProfile({ eligibility_status: "ineligible", bypass_warning: false }), {
+      canApprove: true,
+      canReject: true,
+      canRequestRevision: true,
+      isEligible: false,
+    })
+    expect(screen.getAllByText("Yêu cầu sửa").length).toBeGreaterThan(0)
+    expect(screen.getByText("Từ chối hồ sơ")).toBeInTheDocument()
+    const approve = screen.getByText("Phê duyệt").closest("button")
+    expect(approve).toBeDisabled()
+    expect(approve?.className).not.toMatch(/bg-success-600/)
+    expect(screen.getByText("Chưa đủ điều kiện để phê duyệt.")).toBeInTheDocument()
+  })
+})
+
+describe("DecisionActionsPanel — single-action states hide off-state actions", () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it("publish_result → 'Công bố kết quả' (primary) + 'Yêu cầu sửa' (secondary); hides Phê duyệt/Từ chối", () => {
+    renderPanel(buildProfile(), {
+      primaryAction: "publish_result",
+      canPublishResult: true,
+      canApprove: true,
+      canReject: true,
+      canRequestRevision: true,
+    })
+    expect(screen.getAllByText("Công bố kết quả").length).toBeGreaterThan(0)
+    // Reviewer giữ được đường trả hồ sơ multi-NV lỗi về officer trước khi công bố.
+    expect(screen.getAllByText("Yêu cầu sửa").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Phê duyệt")).not.toBeInTheDocument()
+    expect(screen.queryByText("Từ chối hồ sơ")).not.toBeInTheDocument()
+  })
+
+  it("publish_result without request_revision perm → ONLY 'Công bố kết quả'", () => {
+    renderPanel(buildProfile(), { primaryAction: "publish_result", canPublishResult: true })
+    expect(screen.getAllByText("Công bố kết quả").length).toBeGreaterThan(0)
+    expect(screen.queryByText("Yêu cầu sửa")).not.toBeInTheDocument()
+    expect(screen.queryByText("Từ chối hồ sơ")).not.toBeInTheDocument()
+  })
+
+  it("enroll → ONLY 'Ghi danh'", () => {
+    renderPanel(buildProfile(), { primaryAction: "enroll", canEnroll: true, canReject: true })
+    expect(screen.getByText("Ghi danh")).toBeInTheDocument()
+    expect(screen.queryByText("Từ chối hồ sơ")).not.toBeInTheDocument()
   })
 })
 
 describe("DecisionActionsPanel — composition (R4: no Card/sticky shell)", () => {
   it("root is a plain div, NOT a Card, with no sticky/bottom/shadow classes", () => {
-    const { container } = renderPanel(buildProfile(), { canSubmit: true })
+    const { container } = renderPanel(buildProfile(), { primaryAction: "submit", canSubmit: true })
     const root = container.firstChild as HTMLElement
     expect(root.tagName).toBe("DIV")
     expect(root.className).not.toMatch(/lg:sticky/)
     expect(root.className).not.toMatch(/bottom-4/)
     expect(root.className).not.toMatch(/lg:shadow-lg/)
-    // Not the Card primitive (rounded-xl bg-card shadow border).
     expect(root.className).not.toMatch(/rounded-xl/)
     expect(root.className).not.toMatch(/bg-card/)
   })
 })
 
-describe("DecisionActionsPanel — bypass_warning guard (I4)", () => {
-  it("bypass_warning=true → Approve trigger has warning class + AlertDialog", () => {
+describe("DecisionActionsPanel — approve tone", () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it("bypass_warning=true → 'Phê duyệt (vượt điều kiện)' warning class + AlertDialog", () => {
     const profile = buildProfile({ bypass_warning: true, eligibility_status: "ineligible", validation_errors: ["Thiếu CCCD"] })
-    renderPanel(profile, { canApprove: true })
+    renderPanel(profile, { canApprove: true, isEligible: false })
     const trigger = screen.getByText("Phê duyệt (vượt điều kiện)").closest("button")
     expect(trigger?.className).toMatch(/bg-warning-600/)
     expect(screen.getByText("⚠️ Hồ sơ chưa đủ điều kiện")).toBeInTheDocument()
   })
+
+  it("eligible → Phê duyệt enabled with success tone", () => {
+    renderPanel(buildProfile({ eligibility_status: "eligible" }), { canApprove: true, isEligible: true })
+    const btn = screen.getByText("Phê duyệt").closest("button")
+    expect(btn).not.toBeDisabled()
+    expect(btn?.className).toMatch(/bg-success-600/)
+  })
+
+  it("ineligible + no bypass (only approve perm) → disabled, neutral (no green), reason line", () => {
+    renderPanel(buildProfile({ eligibility_status: "ineligible", bypass_warning: false }), {
+      canApprove: true,
+      isEligible: false,
+    })
+    const btn = screen.getByText("Phê duyệt").closest("button")
+    expect(btn).toBeDisabled()
+    expect(btn?.className).not.toMatch(/bg-success-600/)
+    expect(screen.queryByText("Phê duyệt (vượt điều kiện)")).not.toBeInTheDocument()
+    expect(screen.getByText("Chưa đủ điều kiện để phê duyệt.")).toBeInTheDocument()
+  })
 })
 
-describe("DecisionActionsPanel — submit vs resubmit gate (I1/I2)", () => {
+describe("DecisionActionsPanel — submit / resubmit gate (I1/I2)", () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it("canSubmit + !isEligible → 'Nộp hồ sơ chính thức' DISABLED", () => {
+  it("submit + !isEligible → 'Nộp hồ sơ chính thức' DISABLED + reason line", () => {
     renderPanel(buildProfile({ eligibility_status: "ineligible" }), {
+      primaryAction: "submit",
       canSubmit: true,
       isEligible: false,
     })
     expect(screen.getByText("Nộp hồ sơ chính thức").closest("button")).toBeDisabled()
+    expect(screen.getByText("Chưa đủ điều kiện để nộp.")).toBeInTheDocument()
   })
 
-  it("canResubmit + !isEligible → 'Nộp lại hồ sơ' ENABLED and actionable", () => {
+  it("submit + eligible → enabled, no reason line", () => {
+    renderPanel(buildProfile({ eligibility_status: "eligible" }), {
+      primaryAction: "submit",
+      canSubmit: true,
+      isEligible: true,
+    })
+    expect(screen.getByText("Nộp hồ sơ chính thức").closest("button")).not.toBeDisabled()
+    expect(screen.queryByText("Chưa đủ điều kiện để nộp.")).not.toBeInTheDocument()
+  })
+
+  it("resubmit + !isEligible → 'Nộp lại hồ sơ' ENABLED and actionable", () => {
     const { spies } = renderPanel(buildProfile({ eligibility_status: "ineligible", status: "rejected" }), {
+      primaryAction: "resubmit",
       canResubmit: true,
       isEligible: false,
     })
     expect(screen.getByText("Nộp lại hồ sơ").closest("button")).not.toBeDisabled()
-    // Confirm action is wired (AlertDialogAction "Nộp lại").
     fireEvent.click(screen.getByText("Nộp lại"))
     expect(spies.onResubmit).toHaveBeenCalled()
   })
@@ -170,7 +249,7 @@ describe("DecisionActionsPanel — submit vs resubmit gate (I1/I2)", () => {
 
 describe("DecisionActionsPanel — no send-link (D1/D3)", () => {
   it("does not render any 'Gửi link' utility action", () => {
-    renderPanel(buildProfile(), { canSubmit: true, canApprove: true })
+    renderPanel(buildProfile(), { primaryAction: "submit", canSubmit: true, canApprove: true })
     expect(screen.queryByText(/Gửi link/i)).not.toBeInTheDocument()
   })
 })

@@ -83,15 +83,17 @@ describe("useSubmissionReadiness — eligibility verdict", () => {
   })
 })
 
-describe("useSubmissionReadiness — action readiness", () => {
-  it("canSubmit && isEligible → 'Có thể nộp ngay' (success)", () => {
+describe("useSubmissionReadiness — verdict + summary", () => {
+  it("canSubmit && isEligible (clean) → verdict 'Có thể nộp' (success), no summary", () => {
     const r = run(buildParams({ canSubmit: true, isEligible: true }))
     expect(r.primaryAction).toBe("submit")
-    expect(r.readinessLabel).toBe("Có thể nộp ngay")
-    expect(r.readinessTone).toBe("success")
+    expect(r.verdictLabel).toBe("Có thể nộp")
+    expect(r.verdictTone).toBe("success")
+    expect(r.decisionSummary).toBeNull()
+    expect(r.outstandingLabel).toBe("Mục cần xử lý")
   })
 
-  it("submitted + eligible but NO canSubmit → primaryAction none, never says 'nộp'", () => {
+  it("submitted + eligible but NO canSubmit → primaryAction none, verdict never says 'nộp'", () => {
     const r = run(
       buildParams({
         profile: buildProfile({ status: "submitted", eligibility_status: "eligible" }),
@@ -100,11 +102,11 @@ describe("useSubmissionReadiness — action readiness", () => {
       }),
     )
     expect(r.primaryAction).toBe("none")
-    expect(r.readinessLabel).not.toMatch(/nộp/i)
-    expect(r.readinessTone).toBe("neutral")
+    expect(r.verdictLabel).not.toMatch(/nộp/i)
+    expect(r.verdictTone).toBe("neutral")
   })
 
-  it("canSubmit && !isEligible with action items → 'N mục cần xử lý'", () => {
+  it("canSubmit && !isEligible + items → verdict 'Chưa thể nộp', summary counts items", () => {
     const profile = buildProfile({
       eligibility_status: "ineligible",
       step_status: { "5": "error" },
@@ -114,25 +116,25 @@ describe("useSubmissionReadiness — action readiness", () => {
     } as Partial<AdmissionProfileResponse>)
     const r = run(buildParams({ profile, canSubmit: true, isEligible: false }))
     expect(r.actionItemCount).toBeGreaterThan(0)
-    expect(r.readinessLabel).toBe(`${r.actionItemCount} mục cần xử lý`)
+    expect(r.verdictLabel).toBe("Chưa thể nộp")
+    expect(r.verdictTone).toBe("warning")
+    expect(r.decisionSummary).toBe(`Còn ${r.actionItemCount} mục cần xử lý trước khi nộp.`)
   })
 
-  it("FALLBACK: canSubmit && !isEligible but 0 action items → 'Chưa đủ điều kiện nộp' (never 0 mục)", () => {
+  it("canSubmit && !isEligible + 0 items → verdict 'Chưa thể nộp', summary 'Chưa đủ điều kiện để nộp.'", () => {
     const profile = buildProfile({
       eligibility_status: "ineligible",
       step_status: { "1": "success", "2": "success", "3": "success", "5": "success", "6": "success", "7": "success" },
     } as Partial<AdmissionProfileResponse>)
     const r = run(buildParams({ profile, canSubmit: true, isEligible: false }))
     expect(r.actionItemCount).toBe(0)
-    expect(r.readinessLabel).toBe("Chưa đủ điều kiện nộp")
-    expect(r.readinessLabel).not.toMatch(/0 mục/)
+    expect(r.verdictLabel).toBe("Chưa thể nộp")
+    expect(r.decisionSummary).toBe("Chưa đủ điều kiện để nộp.")
   })
 
-  it("resubmit does NOT depend on eligibility: canResubmit + ineligible (clean) → 'Có thể nộp lại'", () => {
+  it("resubmit clean (ineligible) → verdict 'Có thể nộp lại' (success) — NOT gated by eligibility", () => {
     const r = run(
       buildParams({
-        // Clean profile (KV resolved so the non-draft defensive priority check
-        // does not fire) → N=0; resubmit label is positive despite ineligible.
         profile: buildProfile({
           status: "rejected",
           eligibility_status: "ineligible",
@@ -144,10 +146,10 @@ describe("useSubmissionReadiness — action readiness", () => {
     )
     expect(r.primaryAction).toBe("resubmit")
     expect(r.actionItemCount).toBe(0)
-    expect(r.readinessLabel).toBe("Có thể nộp lại")
+    expect(r.verdictLabel).toBe("Có thể nộp lại")
   })
 
-  it("resubmit + ineligible + items → 'Nộp lại — N mục cần xử lý'", () => {
+  it("resubmit + items → verdict 'Cần xử lý', summary counts", () => {
     const profile = buildProfile({
       status: "rejected",
       eligibility_status: "ineligible",
@@ -158,23 +160,26 @@ describe("useSubmissionReadiness — action readiness", () => {
     } as Partial<AdmissionProfileResponse>)
     const r = run(buildParams({ profile, canResubmit: true, isEligible: false }))
     expect(r.primaryAction).toBe("resubmit")
-    expect(r.readinessLabel).toBe(`Nộp lại — ${r.actionItemCount} mục cần xử lý`)
+    expect(r.verdictLabel).toBe("Cần xử lý")
+    expect(r.decisionSummary).toBe(`Còn ${r.actionItemCount} mục cần xử lý trước khi nộp lại.`)
   })
 })
 
 describe("useSubmissionReadiness — primaryAction precedence (B5)", () => {
-  it("canApprove → approve / 'Chờ bạn phê duyệt'", () => {
+  it("canApprove (eligible clean) → approve / verdict 'Chờ phê duyệt' (info)", () => {
     const r = run(buildParams({ canApprove: true }))
     expect(r.primaryAction).toBe("approve")
-    expect(r.readinessLabel).toBe("Chờ bạn phê duyệt")
+    expect(r.verdictLabel).toBe("Chờ phê duyệt")
+    expect(r.verdictTone).toBe("info")
+    expect(r.outstandingLabel).toBe("Mục cần xử lý")
   })
 
-  it("approve wins over reject + request_revision (cluster preserved elsewhere)", () => {
+  it("approve wins over reject + request_revision", () => {
     const r = run(buildParams({ canApprove: true, canReject: true, canRequestRevision: true }))
     expect(r.primaryAction).toBe("approve")
   })
 
-  it("canApprove + bypass_warning → warning tone label", () => {
+  it("canApprove + bypass_warning → warning tone", () => {
     const r = run(
       buildParams({
         profile: buildProfile({ bypass_warning: true, eligibility_status: "ineligible" }),
@@ -183,10 +188,10 @@ describe("useSubmissionReadiness — primaryAction precedence (B5)", () => {
       }),
     )
     expect(r.primaryAction).toBe("approve")
-    expect(r.readinessTone).toBe("warning")
+    expect(r.verdictTone).toBe("warning")
   })
 
-  it("canApprove + ineligible + NO bypass → label/tone NOT positive (mirrors disabled approve button)", () => {
+  it("canApprove + ineligible + NO bypass → verdict NOT positive ('Chưa thể phê duyệt')", () => {
     const r = run(
       buildParams({
         profile: buildProfile({
@@ -199,27 +204,41 @@ describe("useSubmissionReadiness — primaryAction precedence (B5)", () => {
       }),
     )
     expect(r.primaryAction).toBe("approve")
-    expect(r.readinessTone).not.toBe("info")
-    expect(r.readinessTone).not.toBe("success")
-    expect(r.readinessLabel).toMatch(/Chưa thể phê duyệt/)
+    expect(r.verdictTone).not.toBe("info")
+    expect(r.verdictTone).not.toBe("success")
+    expect(r.verdictLabel).toBe("Chưa thể phê duyệt")
   })
 
-  it("canPublishResult → publish_result / 'Sẵn sàng công bố kết quả'", () => {
+  it("canPublishResult → publish_result / verdict 'Sẵn sàng công bố'", () => {
     const r = run(buildParams({ canPublishResult: true }))
     expect(r.primaryAction).toBe("publish_result")
-    expect(r.readinessLabel).toBe("Sẵn sàng công bố kết quả")
+    expect(r.verdictLabel).toBe("Sẵn sàng công bố")
   })
 
-  it("canEnroll → enroll / 'Sẵn sàng ghi danh'", () => {
+  it("multi-NV submitted: canApprove + canPublishResult both true → publish_result WINS (BE overlap admission_service.py:1673/1681)", () => {
+    const r = run(
+      buildParams({
+        profile: buildProfile({ status: "submitted", uses_choice_engine: true } as Partial<AdmissionProfileResponse>),
+        canApprove: true,
+        canPublishResult: true,
+        canReject: true,
+        canRequestRevision: true,
+      }),
+    )
+    expect(r.primaryAction).toBe("publish_result")
+    expect(r.verdictLabel).toBe("Sẵn sàng công bố")
+  })
+
+  it("canEnroll → enroll / verdict 'Sẵn sàng ghi danh'", () => {
     const r = run(buildParams({ canEnroll: true }))
     expect(r.primaryAction).toBe("enroll")
-    expect(r.readinessLabel).toBe("Sẵn sàng ghi danh")
+    expect(r.verdictLabel).toBe("Sẵn sàng ghi danh")
   })
 
-  it("no flags → none, label reflects status (not an action prompt)", () => {
+  it("no flags → none, verdict reflects status (not an action prompt)", () => {
     const r = run(buildParams({ profile: buildProfile({ status: "enrolled" }) }))
     expect(r.primaryAction).toBe("none")
-    expect(r.readinessLabel).toBe("Đã nhập học")
+    expect(r.verdictLabel).toBe("Đã nhập học")
   })
 })
 
@@ -412,5 +431,68 @@ describe("useSubmissionReadiness — Phase 3 structured blockers routing", () =>
     } as Partial<AdmissionProfileResponse>)
     const r = run(buildParams({ profile }))
     expect(r.summaryLine).toBe("Xử lý tài liệu")
+  })
+})
+
+describe("useSubmissionReadiness — data consistency (eligible but warnings)", () => {
+  it("eligible + docs incomplete → approve verdict 'Còn cảnh báo rà soát' (warning) + summary", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 5, verified_count: 5, mandatory_count: 7, missing_count: 2 },
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canApprove: true, isEligible: true }))
+    expect(r.primaryAction).toBe("approve")
+    expect(r.verdictLabel).toBe("Còn cảnh báo rà soát")
+    expect(r.verdictTone).toBe("warning")
+    expect(r.documentTone).toBe("warning")
+    expect(r.hasOutstandingWarnings).toBe(true)
+    expect(r.decisionSummary).toMatch(/cần kiểm tra trước khi phê duyệt/)
+  })
+
+  it("eligible + docs complete + no warnings → approve verdict 'Chờ phê duyệt' (info), no summary", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 7, verified_count: 7, mandatory_count: 7, missing_count: 0 },
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canApprove: true, isEligible: true }))
+    expect(r.verdictLabel).toBe("Chờ phê duyệt")
+    expect(r.verdictTone).toBe("info")
+    expect(r.documentTone).toBe("success")
+    expect(r.hasOutstandingWarnings).toBe(false)
+    expect(r.decisionSummary).toBeNull()
+  })
+
+  it("SUBMIT eligible + docs incomplete → verdict 'Còn cảnh báo' (warning) + summary 'trước khi nộp'", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 5, verified_count: 5, mandatory_count: 7, missing_count: 2 },
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canSubmit: true, isEligible: true }))
+    expect(r.primaryAction).toBe("submit")
+    expect(r.verdictLabel).toBe("Còn cảnh báo")
+    expect(r.verdictTone).toBe("warning")
+    expect(r.decisionSummary).toMatch(/cần kiểm tra trước khi nộp/)
+  })
+
+  it("eligible + docs submitted-but-UNVERIFIED → warning (Hero mirrors the cockpit pending-verify state)", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 7, verified_count: 4, mandatory_count: 7, missing_count: 0, unverified_count: 3 },
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canApprove: true, isEligible: true }))
+    expect(r.documentTone).toBe("warning")
+    expect(r.hasOutstandingWarnings).toBe(true)
+    expect(r.verdictLabel).toBe("Còn cảnh báo rà soát")
+  })
+
+  it("eligible + all docs verified but missing UT evidence → documentTone warning (mirror cockpit DocumentReviewCard)", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 5, verified_count: 5, mandatory_count: 5, missing_count: 0, unverified_count: 0 },
+      missing_priority_evidence_codes: ["UT07"],
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canApprove: true, isEligible: true }))
+    // Hero "Tài liệu" metric must not be green while the cockpit shows amber for missing UT.
+    expect(r.documentTone).toBe("warning")
   })
 })

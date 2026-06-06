@@ -57,7 +57,7 @@ export function ActionItemsList({ items, onNavigateToStep }: ActionItemsListProp
               </span>
             </span>
             <span className="flex items-center gap-1 text-sm font-medium text-primary shrink-0">
-              Sửa Step {item.step}
+              Sửa Bước {item.step}
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </span>
           </button>

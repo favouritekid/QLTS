@@ -21,12 +21,12 @@ describe("ActionItemsList", () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it("renders one button row per item with 'Sửa Step X'", () => {
+  it("renders one button row per item with 'Sửa Bước X'", () => {
     render(<ActionItemsList items={items} onNavigateToStep={vi.fn()} />)
     expect(screen.getByText("Việc cần xử lý (2)")).toBeInTheDocument()
     expect(screen.getByText("Điểm chưa đạt")).toBeInTheDocument()
-    expect(screen.getByText("Sửa Step 5")).toBeInTheDocument()
-    expect(screen.getByText("Sửa Step 3")).toBeInTheDocument()
+    expect(screen.getByText("Sửa Bước 5")).toBeInTheDocument()
+    expect(screen.getByText("Sửa Bước 3")).toBeInTheDocument()
     // rows are real buttons (keyboard-activatable)
     expect(screen.getByText("Điểm chưa đạt").closest("button")).toBeTruthy()
   })

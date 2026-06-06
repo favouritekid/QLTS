@@ -1,27 +1,29 @@
 /**
- * DecisionActionsPanel — Step 8 decision button cluster (extracted, Phase 1).
+ * DecisionActionsPanel — Step 8 decision CTA group (Hero `cta` slot, plan D2).
  *
- * This is the *content* of the former FinalizeTab decision card (button cluster
- * + AlertDialogs + bypass_warning guard + helper text). It is rendered in EXACTLY
- * ONE place: the `cta` slot of `ReadinessHero` (plan D2 — a single action SURFACE).
+ * The Hero is a DECISION surface, not a permission matrix. A permission flag only
+ * says an action is allowed; the workflow STATE + readiness decide whether it
+ * should appear here, and with what prominence (plan Hero redesign — supersedes
+ * the rev-5 "render every permission equally" invariant):
  *
- * Deliberately:
- *   - NO outer `<Card>` and NO `lg:sticky lg:bottom-4 lg:z-30 lg:shadow-lg` —
- *     ReadinessHero owns the visual shell/padding (plan rev 6 / R4). This avoids
- *     card-in-card and a stray sticky-bottom that would overlap the sticky
- *     AdmissionActions bar.
- *   - The full multi-action cluster is preserved per permission flag (review
- *     state still renders Yêu cầu sửa + Từ chối + Phê duyệt together — plan B5/I3).
- *     `primaryAction` in the Hero only picks a label; it never hides a button.
+ *   - publish_result → "Công bố kết quả" (primary) + "Yêu cầu sửa" (secondary khi
+ *       được phép — đường bounce hồ sơ multi-NV lỗi về officer). enroll → ONLY "Ghi danh".
+ *   - submit   → primary "Nộp hồ sơ chính thức" (disabled + reason when !isEligible).
+ *   - resubmit → primary "Nộp lại hồ sơ" (NOT gated by eligibility — invariant I2).
+ *   - reviewer cluster:
+ *       · approvable (eligible OR bypass) → primary Phê duyệt; secondary Yêu cầu
+ *         sửa + Từ chối.
+ *       · ineligible & no bypass → primary Yêu cầu sửa; secondary Từ chối; Phê
+ *         duyệt tertiary (small, neutral, disabled) + reason. Approve is never a
+ *         positive CTA when blocked.
  *
- * Gate contract (unchanged — plan B3 / invariants I1/I2):
- *   - submit:   `canSubmit`, button disabled when `!isEligible`.
- *   - resubmit: ONLY `canResubmit` — never gated by `isEligible`.
- *   - approve:  bypass_warning guard preserved via ApprovalDecisionButton.
+ * NO outer Card / sticky (the Hero owns the shell — plan rev 6 / R4). Approve tone
+ * (success / warning / neutral-disabled) is composed by ApprovalDecisionButton.
  */
 
 "use client"
 
+import type { ReactNode } from "react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Send, Loader2, XCircle, GraduationCap, ClipboardCheck } from "lucide-react"
@@ -38,52 +40,69 @@ import {
 } from "@/components/ui/alert-dialog"
 import { ApprovalDecisionButton } from "../../ApprovalDecisionButton"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { PrimaryAction } from "./useSubmissionReadiness"
+
+type Prominence = "primary" | "secondary" | "tertiary"
+
+const PRIMARY_CLASS = "w-full sm:w-auto min-w-[200px]"
+const SECONDARY_CLASS = "w-full sm:w-auto"
 
 export interface DecisionActionsPanelProps {
   profile: AdmissionProfileResponse
   isEligible: boolean
+  /** The Hero's primary action — picks which cluster/prominence layout to render. */
+  primaryAction: PrimaryAction
   /** Layout className from the Hero CTA slot (no shell/sticky of its own). */
   className?: string
 
-  // Submit (officer/applicant — state draft)
   onSubmit: () => void
   isSubmitting: boolean
   canSubmit: boolean
 
-  // Resubmit (officer — state rejected/revision_requested)
   onResubmit?: () => void
   isResubmitting?: boolean
   canResubmit: boolean
 
-  // Approve (manager/admin — state submitted/resubmitted/reviewing)
   onApprove?: () => void
   isApproving?: boolean
   canApprove: boolean
 
-  // Reject (manager/admin)
   onReject?: () => void
   isRejecting?: boolean
   canReject: boolean
 
-  // Request revision (manager → officer fix flow)
   onRequestRevision?: () => void
   isRequestingRevision?: boolean
   canRequestRevision: boolean
 
-  // Publish result (manager/admin multi-NV — engine cascade)
   onPublishResult?: () => void
   isPublishingResult?: boolean
   canPublishResult: boolean
 
-  // Enroll (manager — state confirmed/overridden post-approval)
   onEnroll?: () => void
   isEnrolling?: boolean
   canEnroll: boolean
 }
 
+function Shell({ children, reason, className }: { children: ReactNode; reason?: ReactNode; className?: string }) {
+  return (
+    <div className={cn("w-full space-y-2", className)}>
+      <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-3">
+        {children}
+      </div>
+      {reason}
+    </div>
+  )
+}
+
+function Reason({ children }: { children: ReactNode }) {
+  return <p className="text-center text-xs text-warning-700">{children}</p>
+}
+
 export function DecisionActionsPanel({
   profile,
   isEligible,
+  primaryAction,
   className,
   onSubmit,
   isSubmitting,
@@ -107,205 +126,262 @@ export function DecisionActionsPanel({
   isEnrolling = false,
   canEnroll,
 }: DecisionActionsPanelProps) {
-  return (
-    <div
+  // ----- per-action renderers (closures) -------------------------------------
+  const submitButton = () => (
+    <Button
+      key="submit"
+      size="lg"
+      disabled={!isEligible || isSubmitting}
+      onClick={onSubmit}
+      className={PRIMARY_CLASS}
+    >
+      {isSubmitting ? (
+        <>
+          <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+          Đang xử lý…
+        </>
+      ) : (
+        <>
+          <Send className="w-4 h-4 mr-2" aria-hidden="true" />
+          Nộp hồ sơ chính thức
+        </>
+      )}
+    </Button>
+  )
+
+  const resubmitButton = () => (
+    <AlertDialog key="resubmit">
+      <AlertDialogTrigger asChild>
+        <Button size="lg" disabled={isResubmitting} className={PRIMARY_CLASS}>
+          {isResubmitting ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+          ) : (
+            <Send className="w-4 h-4 mr-2" aria-hidden="true" />
+          )}
+          Nộp lại hồ sơ
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Nộp lại hồ sơ?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Hồ sơ đã bị từ chối trước đó. Sau khi nộp lại, hồ sơ sẽ được chuyển sang trạng
+            thái chờ duyệt.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Hủy</AlertDialogCancel>
+          <AlertDialogAction onClick={onResubmit}>Nộp lại</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
+  const publishButton = () => (
+    <AlertDialog key="publish">
+      <AlertDialogTrigger asChild>
+        <Button
+          size="lg"
+          disabled={isPublishingResult}
+          className={cn(PRIMARY_CLASS, "bg-purple-600 hover:bg-purple-700")}
+        >
+          {isPublishingResult ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+          ) : (
+            <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
+          )}
+          Công bố kết quả
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Công bố kết quả xét tuyển?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Hệ thống sẽ chạy <strong>engine xét tuần tự các nguyện vọng</strong> theo thứ tự
+            ưu tiên. Mỗi NV sẽ có quyết định riêng: <strong>Đậu</strong> / <strong>Trượt</strong>{" "}
+            / <strong>Bị bỏ qua</strong> / <strong>Dự bị</strong>. Hành động không thể hoàn tác
+            (chỉ admin có thể rollback về Nháp).
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Hủy</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault()
+              onPublishResult?.()
+            }}
+            className="bg-purple-600 hover:bg-purple-700"
+          >
+            Công bố kết quả
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
+  const enrollButton = () => (
+    <Button
+      key="enroll"
+      size="lg"
+      onClick={onEnroll}
+      disabled={isEnrolling}
+      className={cn(PRIMARY_CLASS, "bg-info-600 hover:bg-info-700")}
+    >
+      {isEnrolling ? (
+        <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+      ) : (
+        <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
+      )}
+      Ghi danh
+    </Button>
+  )
+
+  const approveButton = (prominence: Prominence) => (
+    <ApprovalDecisionButton
+      key="approve"
+      profile={profile}
+      onApprove={onApprove!}
+      isApproving={isApproving}
+      isEligible={isEligible}
+      disabled={(!isEligible && !profile.bypass_warning) || isRejecting}
+      size={prominence === "primary" ? "lg" : "sm"}
+      className={prominence === "primary" ? PRIMARY_CLASS : SECONDARY_CLASS}
+    />
+  )
+
+  const requestRevisionButton = (prominence: Prominence) => (
+    <AlertDialog key="revision">
+      <AlertDialogTrigger asChild>
+        <Button
+          size={prominence === "primary" ? "lg" : "default"}
+          variant={prominence === "primary" ? "default" : "outline"}
+          disabled={isRequestingRevision || isApproving || isRejecting}
+          className={prominence === "primary" ? PRIMARY_CLASS : SECONDARY_CLASS}
+        >
+          {isRequestingRevision ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+          ) : (
+            <ClipboardCheck className="w-4 h-4 mr-2" aria-hidden="true" />
+          )}
+          Yêu cầu sửa
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Yêu cầu sửa hồ sơ?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Hồ sơ sẽ chuyển sang trạng thái <strong>Cần sửa</strong>. Officer phụ trách sẽ
+            nhận thông báo và có thể chỉnh sửa rồi nộp lại.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Hủy</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => {
+              e.preventDefault()
+              onRequestRevision?.()
+            }}
+          >
+            Yêu cầu sửa
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
+  const rejectButton = (prominence: Prominence) => (
+    <Button
+      key="reject"
+      size={prominence === "primary" ? "lg" : "default"}
+      variant="outline"
+      disabled={isRejecting || isApproving}
+      onClick={onReject}
       className={cn(
-        "w-full scroll-mb-[calc(var(--bottom-nav-height-safe)_+_5rem)] lg:scroll-mb-6",
-        className,
+        "border-error-300 text-error-600 hover:bg-error-50 hover:text-error-700",
+        prominence === "primary" ? PRIMARY_CLASS : SECONDARY_CLASS,
       )}
     >
-      <div className="flex flex-col sm:flex-row justify-center items-center gap-3 flex-wrap">
-        {canRequestRevision && onRequestRevision && (
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                size="lg"
-                variant="outline"
-                disabled={isRequestingRevision || isApproving || isRejecting}
-                className="w-full sm:w-auto min-w-[160px]"
-              >
-                {isRequestingRevision ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-                ) : (
-                  <ClipboardCheck className="w-4 h-4 mr-2" aria-hidden="true" />
-                )}
-                Yêu cầu sửa
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Yêu cầu sửa hồ sơ?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Hồ sơ sẽ chuyển sang trạng thái <strong>Cần sửa</strong>. Officer
-                  phụ trách sẽ nhận thông báo và có thể chỉnh sửa rồi nộp lại.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Hủy</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={(e) => {
-                    e.preventDefault()
-                    onRequestRevision?.()
-                  }}
-                >
-                  Yêu cầu sửa
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-
-        {canReject && onReject && (
-          <Button
-            size="lg"
-            variant="outline"
-            disabled={isRejecting || isApproving}
-            onClick={onReject}
-            className="w-full sm:w-auto min-w-[160px]"
-          >
-            {isRejecting ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-                Đang xử lý…
-              </>
-            ) : (
-              <>
-                <XCircle className="w-4 h-4 mr-2" aria-hidden="true" />
-                Từ chối hồ sơ
-              </>
-            )}
-          </Button>
-        )}
-
-        {canApprove && onApprove && (
-          <ApprovalDecisionButton
-            profile={profile}
-            onApprove={onApprove}
-            isApproving={isApproving}
-            disabled={(!isEligible && !profile.bypass_warning) || isRejecting}
-            size="lg"
-            // Layout-only — màu success/warning do component tự compose theo
-            // profile.bypass_warning (KHÔNG override để tránh mất risk signal).
-            className="w-full sm:w-auto min-w-[200px]"
-          />
-        )}
-
-        {canPublishResult && onPublishResult && (
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button
-                size="lg"
-                disabled={isPublishingResult}
-                className="w-full sm:w-auto min-w-[200px] bg-success-600 hover:bg-success-700"
-              >
-                {isPublishingResult ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-                ) : (
-                  <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
-                )}
-                Công bố kết quả
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Công bố kết quả xét tuyển?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Hệ thống sẽ chạy <strong>engine xét tuần tự các nguyện vọng</strong>
-                  {" "}theo thứ tự ưu tiên. Mỗi NV sẽ có quyết định riêng:
-                  {" "}<strong>Đậu</strong> / <strong>Trượt</strong> / <strong>Bị bỏ qua</strong>
-                  {" "}/ <strong>Dự bị</strong>. Hành động không thể hoàn tác (chỉ admin có thể rollback về Nháp).
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Hủy</AlertDialogCancel>
-                <AlertDialogAction
-                  onClick={(e) => {
-                    e.preventDefault()
-                    onPublishResult?.()
-                  }}
-                  className="bg-success-600 hover:bg-success-700"
-                >
-                  Công bố kết quả
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-
-        {canEnroll && onEnroll && (
-          <Button
-            size="lg"
-            onClick={onEnroll}
-            disabled={isEnrolling}
-            className="w-full sm:w-auto min-w-[200px] bg-info-600 hover:bg-info-700"
-          >
-            {isEnrolling ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-            ) : (
-              <GraduationCap className="w-4 h-4 mr-2" aria-hidden="true" />
-            )}
-            Ghi danh
-          </Button>
-        )}
-
-        {canSubmit && (
-          <Button
-            size="lg"
-            disabled={!isEligible || isSubmitting}
-            onClick={onSubmit}
-            className="w-full sm:w-auto min-w-[200px]"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-                Đang xử lý…
-              </>
-            ) : (
-              <>
-                <Send className="w-4 h-4 mr-2" aria-hidden="true" />
-                Nộp hồ sơ chính thức
-              </>
-            )}
-          </Button>
-        )}
-
-        {canResubmit && onResubmit && (
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button size="lg" disabled={isResubmitting} className="w-full sm:w-auto min-w-[200px]">
-                {isResubmitting ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Send className="w-4 h-4 mr-2" aria-hidden="true" />
-                )}
-                Nộp lại hồ sơ
-              </Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Nộp lại hồ sơ?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Hồ sơ đã bị từ chối trước đó. Sau khi nộp lại, hồ sơ sẽ
-                  được chuyển sang trạng thái chờ duyệt.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Hủy</AlertDialogCancel>
-                <AlertDialogAction onClick={onResubmit}>
-                  Nộp lại
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        )}
-      </div>
-
-      {(canSubmit || canApprove) && !isEligible && !profile.bypass_warning && (
-        <p className="text-center text-sm text-muted-foreground mt-4">
-          Hồ sơ chưa đủ điều kiện. Vui lòng xem danh sách &ldquo;Việc cần xử
-          lý&rdquo; phía trên hoặc nút &ldquo;N vấn đề&rdquo; (mobile).
-        </p>
+      {isRejecting ? (
+        <>
+          <Loader2 className="w-4 h-4 mr-2 animate-spin" aria-hidden="true" />
+          Đang xử lý…
+        </>
+      ) : (
+        <>
+          <XCircle className="w-4 h-4 mr-2" aria-hidden="true" />
+          Từ chối hồ sơ
+        </>
       )}
-    </div>
+    </Button>
+  )
+
+  // ----- single-action states (only the state's own action) -------------------
+  if (primaryAction === "publish_result" && canPublishResult && onPublishResult) {
+    // Công bố là primary, NHƯNG reviewer vẫn cần đường trả hồ sơ multi-NV lỗi về
+    // officer TRƯỚC khi chạy engine cascade không hoàn tác — surface "Yêu cầu sửa"
+    // làm secondary khi được phép (state submitted có quyền này; reviewing thì
+    // KHÔNG → vẫn publish-only). "Từ chối" giữ ẩn để bề mặt publish không biến
+    // thành ma trận permission.
+    return (
+      <Shell className={className}>
+        {publishButton()}
+        {canRequestRevision && onRequestRevision && requestRevisionButton("secondary")}
+      </Shell>
+    )
+  }
+  if (primaryAction === "enroll" && canEnroll && onEnroll) {
+    return <Shell className={className}>{enrollButton()}</Shell>
+  }
+  if (primaryAction === "submit" && canSubmit) {
+    return (
+      <Shell
+        className={className}
+        reason={!isEligible ? <Reason>Chưa đủ điều kiện để nộp.</Reason> : undefined}
+      >
+        {submitButton()}
+      </Shell>
+    )
+  }
+  if (primaryAction === "resubmit" && canResubmit && onResubmit) {
+    return <Shell className={className}>{resubmitButton()}</Shell>
+  }
+
+  // ----- reviewer cluster (approve / request_revision / reject) ----------------
+  const approvable = isEligible || !!profile.bypass_warning
+  const cluster: ReactNode[] = []
+  let reason: ReactNode = undefined
+
+  if (canApprove && onApprove) {
+    if (approvable) {
+      cluster.push(approveButton("primary"))
+      if (canRequestRevision && onRequestRevision) cluster.push(requestRevisionButton("secondary"))
+      if (canReject && onReject) cluster.push(rejectButton("secondary"))
+    } else {
+      // ineligible & no bypass — de-emphasize approve (not a positive CTA).
+      let primaryTaken = false
+      if (canRequestRevision && onRequestRevision) {
+        cluster.push(requestRevisionButton("primary"))
+        primaryTaken = true
+      }
+      if (canReject && onReject) cluster.push(rejectButton(primaryTaken ? "secondary" : "primary"))
+      cluster.push(approveButton("tertiary"))
+      reason = <Reason>Chưa đủ điều kiện để phê duyệt.</Reason>
+    }
+  } else {
+    // No approve permission — revision / reject only.
+    let primaryTaken = false
+    if (canRequestRevision && onRequestRevision) {
+      cluster.push(requestRevisionButton("primary"))
+      primaryTaken = true
+    }
+    if (canReject && onReject) cluster.push(rejectButton(primaryTaken ? "secondary" : "primary"))
+  }
+
+  if (cluster.length === 0) return null
+
+  return (
+    <Shell className={className} reason={reason}>
+      {cluster}
+    </Shell>
   )
 }

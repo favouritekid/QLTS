@@ -9,7 +9,7 @@
  * Two Hero signals (STEP8 plan B3/B5):
  *   1. eligibilityVerdict — "Đủ điều kiện xét" vs "Chưa đủ" — reads
  *      `eligibility_status` (xét-tuyển state, independent of any action).
- *   2. primaryAction + readinessLabel/Tone — tracks the ACTUAL primary action
+ *   2. primaryAction + verdictLabel/Tone — tracks the ACTUAL primary action
  *      currently surfaced (submit/resubmit/approve/publish/enroll/...). It only
  *      drives Hero label/tone; it NEVER filters the decision button cluster.
  *
@@ -60,6 +60,8 @@ export interface ReadinessActionItem {
   message: string
   /** message-level (grouped/priority) vs section-level (step_status). */
   source: "message" | "section"
+  /** Number of underlying issues at this step (≥1) — for the reviewer locator chip. */
+  count?: number
 }
 
 export interface SubmissionReadiness {
@@ -67,14 +69,25 @@ export interface SubmissionReadiness {
   eligibilityLabel: string
   eligibilityTone: ReadinessTone
   primaryAction: PrimaryAction
-  readinessLabel: string
-  readinessTone: ReadinessTone
+  /** Single SHORT Hero verdict badge ("Có thể nộp"/"Chưa thể phê duyệt"/…). The
+   *  one decisive signal — eligibility is folded in, NOT a separate badge. */
+  verdictLabel: string
+  verdictTone: ReadinessTone
+  /** One-line decision summary under the badge; null when the badge says it all
+   *  (never a pure restatement of the badge — plan Hero rule #3). */
+  decisionSummary: string | null
   actionItems: ReadinessActionItem[]
   /** N = number of action items (≈ sections needing work, NOT total errors). */
   actionItemCount: number
+  /** Label for the 3rd Hero metric: "Mục cần xử lý" (submit/resubmit) | "Cảnh báo". */
+  outstandingLabel: string
   /** Optional "next action" hint from executive_summary (null when absent). */
   summaryLine: string | null
   hasExecutiveSummary: boolean
+  /** Tone for the "Tài liệu bắt buộc" metric (warning when submitted < mandatory). */
+  documentTone: ReadinessTone
+  /** True when docs incomplete OR there are warnings/action items still open. */
+  hasOutstandingWarnings: boolean
 }
 
 export interface UseSubmissionReadinessParams {
@@ -115,7 +128,7 @@ function itemFromGrouped(
   const message = first
     ? summarizeMany(group.errors)
     : `${group.category}: ${group.count} mục cần xử lý`
-  return { id: `step-${step}`, step, severity, message, source: "message" }
+  return { id: `step-${step}`, step, severity, message, source: "message", count: Math.max(1, group.count) }
 }
 
 /** One element of `executive_summary.critical_blockers` / `warnings` (Phase 3). */
@@ -146,6 +159,7 @@ export function buildStructuredActionItems(
         severity,
         message: it.message,
         source: "message",
+        count: 1,
       })
     }
   }
@@ -203,6 +217,7 @@ export function buildReadinessActionItems(
         severity: s,
         message: `${getAdmissionStepLabel(step)} cần được bổ sung.`,
         source: "section",
+        count: 1,
       })
     }
   }
@@ -218,6 +233,7 @@ export function buildReadinessActionItems(
         severity: severityFromStep(stepStatus, 4),
         message: summarizeMany(priorityIssues),
         source: "message",
+        count: priorityIssues.length,
       })
     }
   }
@@ -259,68 +275,128 @@ function eligibilityToneFor(verdict: EligibilityVerdict): ReadinessTone {
   }
 }
 
+/**
+ * Generic cockpit summary line — used by ReviewerCockpit ONLY as the fallback when
+ * `readiness.decisionSummary` is null (clean/terminal states). Co-located with the
+ * verdict wording so the cockpit body never drifts from the badge. The verdict's
+ * own `decisionSummary` (when present) always wins, so this never contradicts it.
+ */
+export function cockpitFallbackSummary(r: SubmissionReadiness): string {
+  if (r.eligibilityVerdict === "ineligible")
+    return "Hồ sơ chưa đủ điều kiện — chưa thể phê duyệt."
+  if (r.eligibilityVerdict === "pending")
+    return "Hồ sơ chưa được xét điều kiện xét tuyển."
+  if (r.hasOutstandingWarnings)
+    return "Hồ sơ đủ điều kiện cơ bản, nhưng còn cảnh báo cần rà soát trước khi phê duyệt."
+  return "Hồ sơ đủ điều kiện — có thể phê duyệt."
+}
+
 function resolvePrimaryAction(p: UseSubmissionReadinessParams): PrimaryAction {
-  // first-match wins (plan B5 precedence). approve beats reject/request_revision
-  // in the review cluster — they remain visible in the panel regardless.
+  // first-match wins. publish_result / enroll OUTRANK approve: a multi-NV submitted
+  // profile grants BOTH canApprove AND canPublishResult to a manager/admin
+  // (admission_service.py:1673 approve on submitted/resubmitted; :1681 publish on
+  // uses_choice_engine + submitted/reviewing). The simplified multi-NV flow makes
+  // "Công bố kết quả" (engine cascade) the primary action, so it must win —
+  // otherwise the panel's publish-only branch never fires and the publish CTA is
+  // unreachable while the Hero mislabels the verdict as "Chờ phê duyệt".
   if (p.canSubmit) return "submit"
   if (p.canResubmit) return "resubmit"
-  if (p.canApprove) return "approve"
   if (p.canPublishResult) return "publish_result"
   if (p.canEnroll) return "enroll"
+  if (p.canApprove) return "approve"
   if (p.canRequestRevision) return "request_revision"
   if (p.canReject) return "reject"
   return "none"
 }
 
-function resolveReadiness(
+/**
+ * Map the current primary action + workflow state to ONE short Hero verdict
+ * (badge label + tone) and an optional one-line `summary`. The badge is the single
+ * decisive signal; the summary ADDS detail (count / why) and is null when the
+ * badge already says everything (plan Hero rule #2/#3). Eligibility is folded in —
+ * there is no separate eligibility badge.
+ */
+function resolveVerdict(
   primaryAction: PrimaryAction,
   params: UseSubmissionReadinessParams,
   actionItemCount: number,
   hasError: boolean,
-): { label: string; tone: ReadinessTone } {
+  hasOutstandingWarnings: boolean,
+): { label: string; tone: ReadinessTone; summary: string | null } {
   const { profile, isEligible } = params
   const issueTone: ReadinessTone = hasError ? "error" : "warning"
 
   switch (primaryAction) {
     case "submit":
-      if (isEligible) return { label: "Có thể nộp ngay", tone: "success" }
-      // Fallback (plan chốt #3): never say "0 mục cần xử lý".
-      if (actionItemCount > 0)
-        return { label: `${actionItemCount} mục cần xử lý`, tone: issueTone }
-      return { label: "Chưa đủ điều kiện nộp", tone: "warning" }
+      if (!isEligible)
+        return {
+          label: "Chưa thể nộp",
+          tone: "warning",
+          summary:
+            actionItemCount > 0
+              ? `Còn ${actionItemCount} mục cần xử lý trước khi nộp.`
+              : "Chưa đủ điều kiện để nộp.",
+        }
+      if (hasOutstandingWarnings)
+        return {
+          label: "Còn cảnh báo",
+          tone: "warning",
+          summary: "Còn tài liệu/cảnh báo cần kiểm tra trước khi nộp.",
+        }
+      return { label: "Có thể nộp", tone: "success", summary: null }
 
     case "resubmit":
       // resubmit does NOT depend on eligibility (plan B3 gate / invariant I2).
       if (actionItemCount > 0)
-        return { label: `Nộp lại — ${actionItemCount} mục cần xử lý`, tone: issueTone }
-      return { label: "Có thể nộp lại", tone: "success" }
+        return {
+          label: "Cần xử lý",
+          tone: issueTone,
+          summary: `Còn ${actionItemCount} mục cần xử lý trước khi nộp lại.`,
+        }
+      return { label: "Có thể nộp lại", tone: "success", summary: null }
 
     case "approve":
-      // Mirror the ApprovalDecisionButton gate (disabled when
-      // `!isEligible && !bypass_warning`): when approve is blocked the Hero must
-      // NOT show a positive/info "ready to approve" signal.
       if (profile.bypass_warning)
-        return { label: "Phê duyệt — hồ sơ chưa đủ điều kiện", tone: "warning" }
+        return {
+          label: "Phê duyệt vượt điều kiện",
+          tone: "warning",
+          summary: "Đợt cho phép nộp hồ sơ chưa đầy đủ — phê duyệt sẽ ghi dữ liệu thiếu.",
+        }
       if (!isEligible)
-        return { label: "Chưa thể phê duyệt — chưa đủ điều kiện", tone: "warning" }
-      return { label: "Chờ bạn phê duyệt", tone: "info" }
+        return {
+          label: "Chưa thể phê duyệt",
+          tone: "warning",
+          summary: "Chưa đủ điều kiện — kiểm tra chi tiết từng nhóm bên dưới.",
+        }
+      if (hasOutstandingWarnings)
+        return {
+          label: "Còn cảnh báo rà soát",
+          tone: "warning",
+          summary:
+            "Hồ sơ đủ điều kiện cơ bản, còn tài liệu/cảnh báo cần kiểm tra trước khi phê duyệt.",
+        }
+      return { label: "Chờ phê duyệt", tone: "info", summary: null }
 
     case "publish_result":
-      return { label: "Sẵn sàng công bố kết quả", tone: "info" }
+      return {
+        label: "Sẵn sàng công bố",
+        tone: "info",
+        summary: "Chạy engine xét tuần tự các nguyện vọng theo thứ tự ưu tiên.",
+      }
 
     case "enroll":
-      return { label: "Sẵn sàng ghi danh", tone: "info" }
+      return { label: "Sẵn sàng ghi danh", tone: "info", summary: null }
 
     case "request_revision":
-      return { label: "Có thể yêu cầu sửa", tone: "neutral" }
+      return { label: "Có thể yêu cầu sửa", tone: "neutral", summary: null }
 
     case "reject":
-      return { label: "Chờ xử lý phê duyệt", tone: "neutral" }
+      return { label: "Chờ xử lý", tone: "neutral", summary: null }
 
     case "none":
     default:
       // No action available → reflect read-only status, do NOT imply "nộp được".
-      return { label: getStatusConfig(profile.status).label, tone: "neutral" }
+      return { label: getStatusConfig(profile.status).label, tone: "neutral", summary: null }
   }
 }
 
@@ -345,15 +421,47 @@ export function useSubmissionReadiness(
     const actionItems = buildReadinessActionItems(profile)
     const hasError = actionItems.some((i) => i.severity === "error")
 
-    const primaryAction = resolvePrimaryAction(params)
-    const { label: readinessLabel, tone: readinessTone } = resolveReadiness(
-      primaryAction,
-      params,
-      actionItems.length,
-      hasError,
-    )
-
     const es = profile.executive_summary
+
+    // Data-consistency: the Hero doc signal must not contradict the cockpit doc
+    // cell. The Hero metric has only ONE "needs attention" tier (warning), so it
+    // treats ANY incompleteness the cockpit flags as a warning — not-yet-submitted
+    // (submitted < mandatory OR missing_count > 0) OR submitted-but-unverified
+    // (unverified_count > 0, fallback submitted − verified). (The cockpit
+    // DocumentReviewCard further splits missing→error vs unverified→warning; the
+    // Hero collapses both to warning, so it never shows green while the cockpit
+    // shows red/amber for the same profile.)
+    const docStats = profile.document_stats
+    const docUnverified =
+      docStats?.unverified_count ??
+      (docStats ? Math.max(0, docStats.submitted_count - docStats.verified_count) : 0)
+    const docsIncomplete =
+      !!docStats &&
+      typeof docStats.mandatory_count === "number" &&
+      docStats.mandatory_count > 0 &&
+      (docStats.submitted_count < docStats.mandatory_count ||
+        (docStats.missing_count ?? 0) > 0 ||
+        docUnverified > 0)
+    // The cockpit DocumentReviewCard folds missing UT priority evidence into its
+    // "Tài liệu" tone (→ warning); mirror that here so the Hero "Tài liệu" metric
+    // never shows green while the cockpit cell shows amber for the same profile.
+    const missingUtCount = profile.missing_priority_evidence_codes?.length ?? 0
+    const documentTone: ReadinessTone =
+      docsIncomplete || missingUtCount > 0
+        ? "warning"
+        : docStats
+          ? "success"
+          : "neutral"
+    const hasOutstandingWarnings =
+      docsIncomplete || (es?.warnings?.length ?? 0) > 0 || actionItems.length > 0
+
+    const primaryAction = resolvePrimaryAction(params)
+    const {
+      label: verdictLabel,
+      tone: verdictTone,
+      summary: verdictSummary,
+    } = resolveVerdict(primaryAction, params, actionItems.length, hasError, hasOutstandingWarnings)
+
     // summaryLine hint — extract message from the first blocker (string or object).
     const firstBlocker = es?.critical_blockers?.[0]
     const firstBlockerMsg =
@@ -364,17 +472,36 @@ export function useSubmissionReadiness(
           : firstBlocker.message
     const summaryLine = es ? es.next_action || firstBlockerMsg || null : null
 
+    // One-line decision summary: the verdict's own summary takes priority; the BE
+    // `next_action` hint (summaryLine) surfaces here whenever the verdict has NO
+    // summary of its own — i.e. the info/neutral verdicts (approve-clean, enroll,
+    // request_revision, reject, none) AND the clean submit/resubmit cases. For the
+    // "has problems" verdicts that DO carry a summary (submit/approve when blocked or
+    // with warnings), that count/why line is shown and the granular next_action lives
+    // in ActionItemsList / cockpit below. Never a pure restatement of the badge (rule #3).
+    const decisionSummary = verdictSummary ?? summaryLine
+
+    // 3rd Hero metric label — one honest label for both roles. The value is
+    // `actionItemCount` (sections needing work); labelling it "Cảnh báo" for
+    // reviewers mislabels error-severity items and can read 0 under a warning
+    // badge. Warning/severity nuance lives in the verdict badge, not this count.
+    const outstandingLabel = "Mục cần xử lý"
+
     return {
       eligibilityVerdict: verdict,
       eligibilityLabel: eligibilityLabelFor(verdict),
       eligibilityTone: eligibilityToneFor(verdict),
       primaryAction,
-      readinessLabel,
-      readinessTone,
+      verdictLabel,
+      verdictTone,
+      decisionSummary,
       actionItems,
       actionItemCount: actionItems.length,
+      outstandingLabel,
       summaryLine,
       hasExecutiveSummary: !!es,
+      documentTone,
+      hasOutstandingWarnings,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- params object is reconstructed each render; depend on its stable members
   }, [

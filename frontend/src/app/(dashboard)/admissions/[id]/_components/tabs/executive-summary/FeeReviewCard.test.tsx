@@ -1,21 +1,34 @@
 /**
- * FeeReviewCard — anchor tests (Commit 8 followup).
+ * FeeReviewCard — compact "Học phí" mini-row tests.
  *
- * Pin: cross-module FeeStatusLink mounting với đúng profileId; helper
- * copy text + accessibility.
+ * Pin: cross-module FeeStatusLink mounted with the profile id + badge variant +
+ * an `unavailableFallback` (so finance-unavailable doesn't silently disappear).
+ * FeeStatusLink is mocked (it owns the react-query hook + fallback rendering).
  */
 
 import { describe, it, expect, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
-// Mock FeeStatusLink — cross-module dependency với react-query.
+let lastProps: { profileId?: number; variant?: string; hasFallback?: boolean } = {}
+
 vi.mock("@/components/finance", () => ({
-  FeeStatusLink: ({ profileId, variant }: { profileId: number; variant: string }) => (
-    <span data-testid="fee-status-link" data-profile-id={profileId} data-variant={variant}>
-      Chưa tính phí
-    </span>
-  ),
+  FeeStatusLink: ({
+    profileId,
+    variant,
+    unavailableFallback,
+  }: {
+    profileId: number
+    variant: string
+    unavailableFallback?: React.ReactNode
+  }) => {
+    lastProps = { profileId, variant, hasFallback: unavailableFallback != null }
+    return (
+      <span data-testid="fee-status-link" data-profile-id={profileId} data-variant={variant}>
+        Chưa tính phí
+      </span>
+    )
+  },
 }))
 
 import { FeeReviewCard } from "./FeeReviewCard"
@@ -42,23 +55,18 @@ function buildProfile(id: number): AdmissionProfileResponse {
   } as unknown as AdmissionProfileResponse
 }
 
-describe("FeeReviewCard", () => {
-  it("renders card với title 'Học phí'", () => {
+describe("FeeReviewCard — mini-row", () => {
+  it("renders the row with 'Học phí' label", () => {
     render(<FeeReviewCard profile={buildProfile(39)} />)
-    const card = screen.getByTestId("fee-review-card")
-    expect(card).toBeInTheDocument()
+    expect(screen.getByTestId("fee-review-card")).toBeInTheDocument()
     expect(screen.getByText("Học phí")).toBeInTheDocument()
   })
 
-  it("mount FeeStatusLink với đúng profile.id + variant='badge'", () => {
+  it("mounts FeeStatusLink with profile.id, variant='badge', and an unavailable fallback", () => {
     render(<FeeReviewCard profile={buildProfile(42)} />)
     const link = screen.getByTestId("fee-status-link")
     expect(link).toHaveAttribute("data-profile-id", "42")
     expect(link).toHaveAttribute("data-variant", "badge")
-  })
-
-  it("hiển thị helper copy 'Trạng thái học phí từ module tài chính'", () => {
-    render(<FeeReviewCard profile={buildProfile(1)} />)
-    expect(screen.getByText(/Trạng thái học phí từ module tài chính/)).toBeInTheDocument()
+    expect(lastProps.hasFallback).toBe(true)
   })
 })
