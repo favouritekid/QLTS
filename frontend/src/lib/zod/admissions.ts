@@ -330,9 +330,11 @@ export const academicRecordSchema = z
       .nullable(),
     school_name: z
       .string()
+      // .trim() BEFORE .min(1) so a whitespace-only value ("   ") fails the
+      // required check instead of passing it and then collapsing to "".
+      .trim()
       .min(1, "Tên trường không được để trống")
-      .max(255, "Tên trường không được quá 255 ký tự")
-      .trim(),
+      .max(255, "Tên trường không được quá 255 ký tự"),
     level: z
       .enum(VN_SCHOOL_LEVELS)
       .optional()

@@ -115,7 +115,15 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     }}
                                     onChange={(v) => {
                                         form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
-                                        form.setValue(`academic_history.${index}.school_name`, v.school_name, { shouldDirty: true })
+                                        // `shouldValidate: true` — picking a school sets the value
+                                        // programmatically, which does NOT re-run validation by default;
+                                        // without it a prior "Tên trường không được để trống" error
+                                        // (set when the row was empty) would persist even after a school
+                                        // is selected. Re-validating clears the stale error.
+                                        form.setValue(`academic_history.${index}.school_name`, v.school_name, {
+                                            shouldDirty: true,
+                                            shouldValidate: true,
+                                        })
                                         form.setValue(
                                             `academic_history.${index}.level`,
                                             v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
@@ -124,7 +132,13 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     }}
                                     disabled={!isEditable}
                                 />
-                                {form.formState.errors.academic_history?.[index]?.school_name?.message && (
+                                {/* Manual error display ONLY when a school is picked (school_id set):
+                                    in that case the free-text fallback below is unmounted, so its
+                                    <FormMessage/> can't show the error. When school_id is null the
+                                    free-text FormField already renders the message — gating here avoids
+                                    showing "Tên trường không được để trống" twice. */}
+                                {form.watch(`academic_history.${index}.school_id`) &&
+                                    form.formState.errors.academic_history?.[index]?.school_name?.message && (
                                     <p className="text-xs text-destructive">
                                         {form.formState.errors.academic_history[index]?.school_name?.message as string}
                                     </p>
