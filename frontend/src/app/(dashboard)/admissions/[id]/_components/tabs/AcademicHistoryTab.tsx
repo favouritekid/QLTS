@@ -19,12 +19,26 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Trash2, GraduationCap } from "lucide-react"
 import { VnSchoolPicker } from "@/components/admissions/VnSchoolPicker"
 import { VN_SCHOOL_LEVELS } from "@/lib/zod/admissions"
-import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
+
+// Dải lớp theo cấp học — nguồn DUY NHẤT cho quick-add + phân loại notices,
+// tránh magic number rải rác (vd đổi range quick-add nhưng quên đổi filter
+// notices → lệch âm thầm). graduationType gán ở lớp cuối cấp. Engine KV chỉ
+// dùng entry THPT; THCS display-only.
+const GRADE_BANDS = {
+  THCS: { start: 6, end: 9, graduationType: "THCS" },
+  THPT: { start: 10, end: 12, graduationType: "THPT" },
+} as const
+
+type GradeBand = (typeof GRADE_BANDS)[keyof typeof GRADE_BANDS]
+const bandYears = (b: { start: number; end: number }) => b.end - b.start + 1
+const bandGradesLabel = (b: { start: number; end: number }) =>
+  Array.from({ length: bandYears(b) }, (_, i) => b.start + i).join("/")
 
 export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps) {
   const { fields, append, remove } = useFieldArray({
@@ -44,15 +58,15 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     })
   }
 
-  // Commit 5 — quick-add 3 năm THPT. Tạo 3 record lớp 10/11/12 mặc định
-  // dùng năm hiện tại làm tốt nghiệp; officer chỉ cần điền tên trường +
-  // GPA. Engine yêu cầu lịch sử THPT để xác định KV → tăng tốc nhập hồ
-  // sơ tốt nghiệp năm hiện tại.
-  const addThreeYearsThpt = () => {
-    const gradYear = new Date().getFullYear()
-    for (let i = 0; i < 3; i++) {
-      const grade = 10 + i
-      const year = gradYear - 2 + i
+  // Quick-add toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9). Mỗi lớp 1
+  // năm, lớp cuối cấp = endYear; officer chỉ cần điền trường + GPA. Trình độ
+  // (graduation_type) gán cho MỌI lớp = cấp học quick-add (cả thẻ tương xứng
+  // THPT/THCS). Engine yêu cầu lịch sử THPT có school_id để xác định KV.
+  const addBand = (band: GradeBand, endYear: number) => {
+    const count = bandYears(band)
+    for (let i = 0; i < count; i++) {
+      const grade = band.start + i
+      const year = endYear - (count - 1) + i // lớp đầu = endYear−(count−1) … lớp cuối = endYear
       append({
         school_id: null,
         school_name: "",
@@ -61,10 +75,90 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
         year_to: year,
         grade_to: grade,
         gpa: null,
-        graduation_type: grade === 12 ? "THPT" : null,
+        graduation_type: band.graduationType,
       } as Parameters<typeof append>[0])
     }
   }
+
+  // 3 năm THPT (lớp 10/11/12), tốt nghiệp = năm hiện tại.
+  const addThreeYearsThpt = () => addBand(GRADE_BANDS.THPT, new Date().getFullYear())
+
+  // 4 năm THCS (lớp 6/7/8/9). Năm tự lùi: lớp 9 = năm ngay trước khi vào lớp 10
+  // nếu hồ sơ đã có THPT (chuỗi liền mạch), else năm hiện tại − 3. Engine KV
+  // KHÔNG dùng entry THCS (chỉ lưu hồ sơ).
+  const addFourYearsThcs = () => {
+    const existing = form.getValues("academic_history") ?? []
+    const thptStartYears = existing
+      .filter(
+        (r) =>
+          r?.grade_to != null &&
+          r.grade_to >= GRADE_BANDS.THPT.start &&
+          r.grade_to <= GRADE_BANDS.THPT.end &&
+          r?.year_from != null,
+      )
+      .map((r) => r.year_from as number)
+    const grade9Year = thptStartYears.length
+      ? Math.min(...thptStartYears) - 1
+      : new Date().getFullYear() - 3
+    addBand(GRADE_BANDS.THCS, grade9Year)
+  }
+
+  // ── Vệ sinh nhập liệu (Tầng 2) + gợi ý KV (Tầng 3) ─────────────────────────
+  // Thuần data-quality hints (cảnh báo MỀM, KHÔNG chặn lưu/nộp) — engine BE
+  // mới là nguồn KV/eligibility chính thức (xem priority_service). Đếm theo
+  // grade_to (10-12 = THPT, 6-9 = THCS) để hoạt động ngay cả khi chưa chọn
+  // trường (level chỉ set sau khi pick từ danh mục).
+  const records = (form.watch("academic_history") ?? []) as Array<{
+    grade_to?: number | null
+    year_to?: number | null
+    school_id?: number | null
+  }>
+  const currentYear = new Date().getFullYear()
+  const inBand = (g: number | null | undefined, lo: number, hi: number): boolean =>
+    g != null && g >= lo && g <= hi
+  const thptRecords = records.filter((r) =>
+    inBand(r?.grade_to, GRADE_BANDS.THPT.start, GRADE_BANDS.THPT.end),
+  )
+  const thcsRecords = records.filter((r) =>
+    inBand(r?.grade_to, GRADE_BANDS.THCS.start, GRADE_BANDS.THCS.end),
+  )
+
+  const gradeCount = new Map<number, number>()
+  records.forEach((r) => {
+    if (r?.grade_to != null)
+      gradeCount.set(r.grade_to, (gradeCount.get(r.grade_to) ?? 0) + 1)
+  })
+  const dupGrades = [...gradeCount.entries()]
+    .filter(([, c]) => c > 1)
+    .map(([g]) => g)
+    .sort((a, b) => a - b)
+  const hasFutureYear = records.some(
+    (r) => r?.year_to != null && r.year_to > currentYear + 1,
+  )
+
+  const softNotices: string[] = []
+  if (dupGrades.length > 0)
+    softNotices.push(
+      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải chuyển trường giữa năm.`,
+    )
+  if (thptRecords.length > bandYears(GRADE_BANDS.THPT))
+    softNotices.push(
+      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu chuyển trường.`,
+    )
+  if (thcsRecords.length > bandYears(GRADE_BANDS.THCS))
+    softNotices.push(
+      `Đang có ${thcsRecords.length} năm THCS (thường ${bandYears(GRADE_BANDS.THCS)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THCS)}).`,
+    )
+  if (hasFutureYear)
+    softNotices.push(
+      `Có năm kết thúc lớn hơn ${currentYear + 1} — kiểm tra lại năm học.`,
+    )
+
+  // Tầng 3 — engine chỉ resolve KV từ entry THPT CÓ school_id (chọn từ danh
+  // mục). Có dòng THPT nhưng chưa chọn trường nào từ danh mục → KV chưa tính
+  // được (fail-closed "insufficient_data"). Hint mềm, không chặn.
+  const needsThptCatalogPick =
+    thptRecords.length > 0 && !thptRecords.some((r) => r?.school_id != null)
 
   return (
     <div className="space-y-8">
@@ -80,11 +174,43 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
             </CardHeader>
 
             <CardContent className="space-y-6 pt-6">
+                {/* NOTICES — soft data-quality hints (Tầng 2) + KV-readiness (Tầng 3).
+                    KHÔNG chặn lưu/nộp; engine BE là nguồn KV/eligibility chính thức. */}
+                {(softNotices.length > 0 || needsThptCatalogPick) && (
+                    <div className="space-y-2" data-testid="academic-notices">
+                        {needsThptCatalogPick && (
+                            <div
+                                role="status"
+                                data-testid="academic-kv-hint"
+                                className="rounded-md border border-info-300 bg-info-50 px-3 py-2 text-xs text-info-900 flex items-start gap-2"
+                            >
+                                <span aria-hidden="true">ℹ</span>
+                                <span>
+                                    Để hệ thống tự xác định KV ưu tiên, hãy chọn ít nhất một
+                                    trường THPT <strong>từ danh mục</strong> (trường nhập tay
+                                    không tự resolve được KV).
+                                </span>
+                            </div>
+                        )}
+                        {softNotices.map((msg, i) => (
+                            <div
+                                key={msg}
+                                role="status"
+                                data-testid={`academic-notice-${i}`}
+                                className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                            >
+                                <span aria-hidden="true">⚠</span>
+                                <span>{msg}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {/* LIST */}
-                <div className="space-y-4">
+                <div className="space-y-3">
                     {fields.map((field, index) => (
-                    <div key={field.id} className="p-4 border rounded-lg bg-muted/50 relative group transition-colors hover:bg-card hover:border-info-200 hover:shadow-sm">
-                        <div className="flex items-center justify-between mb-4">
+                    <div key={field.id} className="p-3 border rounded-lg bg-muted/50 relative group transition-colors hover:bg-card hover:border-info-200 hover:shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
                             <span className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Trường #{index + 1}</span>
                             {isEditable && (
                                 <Button
@@ -100,53 +226,61 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             )}
                         </div>
                         
-                        <div className="grid gap-6 md:grid-cols-2">
-                        <div className="md:col-span-2 space-y-2">
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium leading-none">
-                                    Tên trường (tìm trong danh mục)
-                                </label>
-                                <VnSchoolPicker
-                                    value={{
-                                        school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
-                                        school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
-                                        level: form.watch(`academic_history.${index}.level`) ?? null,
-                                        current_kv: null,
-                                    }}
-                                    onChange={(v) => {
-                                        form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
-                                        // `shouldValidate: true` — picking a school sets the value
-                                        // programmatically, which does NOT re-run validation by default;
-                                        // without it a prior "Tên trường không được để trống" error
-                                        // (set when the row was empty) would persist even after a school
-                                        // is selected. Re-validating clears the stale error.
-                                        form.setValue(`academic_history.${index}.school_name`, v.school_name, {
-                                            shouldDirty: true,
-                                            shouldValidate: true,
-                                        })
-                                        form.setValue(
-                                            `academic_history.${index}.level`,
-                                            v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
-                                            { shouldDirty: true },
-                                        )
-                                    }}
-                                    disabled={!isEditable}
-                                />
-                                {/* Manual error display ONLY when a school is picked (school_id set):
-                                    in that case the free-text fallback below is unmounted, so its
-                                    <FormMessage/> can't show the error. When school_id is null the
-                                    free-text FormField already renders the message — gating here avoids
-                                    showing "Tên trường không được để trống" twice. */}
-                                {form.watch(`academic_history.${index}.school_id`) &&
-                                    form.formState.errors.academic_history?.[index]?.school_name?.message && (
-                                    <p className="text-xs text-destructive">
-                                        {form.formState.errors.academic_history[index]?.school_name?.message as string}
-                                    </p>
-                                )}
-                            </div>
-                            {/* Free-text fallback if no school_id picked */}
-                            {!form.watch(`academic_history.${index}.school_id`) && (
-                                <>
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                        <div className="col-span-2 md:col-span-5 space-y-2">
+                            {/* Picker + ô nhập tay trên CÙNG 1 dòng (tên trường thường ngắn).
+                                Khi đã chọn từ danh mục, ô nhập tay ẩn → picker chiếm full width. */}
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 items-start">
+                                <div
+                                    className={
+                                        form.watch(`academic_history.${index}.school_id`)
+                                            ? "space-y-2 md:col-span-2"
+                                            : "space-y-2"
+                                    }
+                                >
+                                    {/* Mirror FormLabel (flex items-center text-xs) để label + gap
+                                        khớp cột "nhập tay" → 2 control thẳng hàng dọc. */}
+                                    <label className="flex items-center text-xs font-medium text-muted-foreground">
+                                        Tên trường (tìm trong danh mục)
+                                    </label>
+                                    <VnSchoolPicker
+                                        value={{
+                                            school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
+                                            school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
+                                            level: form.watch(`academic_history.${index}.level`) ?? null,
+                                            current_kv: null,
+                                        }}
+                                        onChange={(v) => {
+                                            form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
+                                            // `shouldValidate: true` — picking a school sets the value
+                                            // programmatically, which does NOT re-run validation by default;
+                                            // without it a prior "Tên trường không được để trống" error
+                                            // (set when the row was empty) would persist even after a school
+                                            // is selected. Re-validating clears the stale error.
+                                            form.setValue(`academic_history.${index}.school_name`, v.school_name, {
+                                                shouldDirty: true,
+                                                shouldValidate: true,
+                                            })
+                                            form.setValue(
+                                                `academic_history.${index}.level`,
+                                                v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
+                                                { shouldDirty: true },
+                                            )
+                                        }}
+                                        disabled={!isEditable}
+                                    />
+                                    {/* Manual error display ONLY when a school is picked (school_id set):
+                                        the free-text fallback is unmounted then, so its <FormMessage/>
+                                        can't show the error. Gating avoids showing it twice. */}
+                                    {form.watch(`academic_history.${index}.school_id`) &&
+                                        form.formState.errors.academic_history?.[index]?.school_name?.message && (
+                                        <p className="text-xs text-destructive">
+                                            {form.formState.errors.academic_history[index]?.school_name?.message as string}
+                                        </p>
+                                    )}
+                                </div>
+                                {/* Free-text fallback (ô bên phải) — chỉ khi chưa chọn từ danh mục */}
+                                {!form.watch(`academic_history.${index}.school_id`) && (
                                     <FormField
                                         control={form.control}
                                         name={`academic_history.${index}.school_name`}
@@ -168,29 +302,28 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                             </FormItem>
                                         )}
                                     />
-                                    {/* Commit 5 — free-text school warning. Engine resolve KV
-                                        cần school_id (administrative_nodes link). Trường nhập
-                                        tay sẽ không kết nối, KV chỉ resolve được khi quản lý
-                                        ấn định thủ công. */}
-                                    {(form.watch(`academic_history.${index}.school_name`) ?? "").trim().length > 0 && (
-                                        <div
-                                            role="alert"
-                                            data-testid={`academic-freetext-warning-${index}`}
-                                            className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
-                                        >
-                                            <span aria-hidden="true">⚠</span>
-                                            <span>
-                                                Trường nhập tay sẽ không dùng được để tự xác định
-                                                KV. Vui lòng chọn từ danh mục bên trên, hoặc đề
-                                                nghị quản lý ấn định KV thủ công.
-                                            </span>
-                                        </div>
-                                    )}
-                                </>
+                                )}
+                            </div>
+                            {/* Free-text KV warning — full width dưới 2 ô. Engine resolve KV cần
+                                school_id; trường nhập tay không tự resolve được. */}
+                            {!form.watch(`academic_history.${index}.school_id`) &&
+                                (form.watch(`academic_history.${index}.school_name`) ?? "").trim().length > 0 && (
+                                <div
+                                    role="alert"
+                                    data-testid={`academic-freetext-warning-${index}`}
+                                    className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                                >
+                                    <span aria-hidden="true">⚠</span>
+                                    <span>
+                                        Trường nhập tay sẽ không dùng được để tự xác định KV. Vui
+                                        lòng chọn từ danh mục bên trên, hoặc đề nghị quản lý ấn
+                                        định KV thủ công.
+                                    </span>
+                                </div>
                             )}
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="contents">
                              <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.year_from`}
@@ -236,7 +369,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             />
                         </div>
                         
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="contents">
                             <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.grade_to`}
@@ -294,7 +427,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     <FormLabel className="text-xs">Trình độ</FormLabel>
                                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
                                     <FormControl>
-                                        <SelectTrigger className="bg-background" aria-label="Chọn trình độ tốt nghiệp">
+                                        <SelectTrigger className="bg-background h-11 md:h-9" aria-label="Chọn trình độ tốt nghiệp">
                                         <SelectValue placeholder="Chọn" />
                                         </SelectTrigger>
                                     </FormControl>
@@ -346,6 +479,16 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                         >
                             <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                             Thêm 3 năm THPT (lớp 10/11/12)
+                        </Button>
+                        {/* Quick-add 4 năm THCS (lớp 6/7/8/9) */}
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={addFourYearsThcs}
+                            data-testid="academic-quick-add-thcs"
+                        >
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
+                            Thêm 4 năm THCS (lớp 6/7/8/9)
                         </Button>
                     </div>
                 )}
