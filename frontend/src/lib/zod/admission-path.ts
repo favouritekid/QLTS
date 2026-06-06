@@ -350,6 +350,11 @@ export const admissionPathResponseSchema = z.object({
   display_name: z.string().nullable(),
   display_order: z.number(),
   visibility: z.enum(["public", "internal"]),
+  // Trình độ (cấp đào tạo) + tên ngành — BE populate từ
+  // academic_info.offering.program (build_path_response). FE phân biệt CĐ/TC
+  // trong dropdown nguyện vọng. NULL/absent nếu BE chưa load chain.
+  degree_level: z.string().nullable().optional(),
+  major_name: z.string().nullable().optional(),
   activated_at: z.string().datetime({ offset: true }).nullable(),
   // BE Pydantic trả nested ``activator: Optional[UserNested]`` (admission_path.py:499).
   // Trước đây FE viết ``activated_by: number`` → Zod parse fail khi BE trả object.
