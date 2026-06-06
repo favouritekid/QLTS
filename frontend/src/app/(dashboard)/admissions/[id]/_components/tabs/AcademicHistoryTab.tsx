@@ -19,7 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Plus, Trash2, GraduationCap } from "lucide-react"
 import { VnSchoolPicker } from "@/components/admissions/VnSchoolPicker"
 import { VN_SCHOOL_LEVELS } from "@/lib/zod/admissions"
-import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
   form: UseFormReturn<AdmissionProfileUpdateInput>
@@ -66,6 +66,93 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     }
   }
 
+  // Quick-add 4 năm THCS (lớp 6/7/8/9). Đối xứng với addThreeYearsThpt. Năm
+  // tự điền lùi: lớp 9 = năm ngay trước khi vào lớp 10 nếu đã có THPT (chuỗi
+  // liền mạch dưới THPT), else năm hiện tại − 3. Engine KV KHÔNG dùng entry
+  // THCS (chỉ lưu hồ sơ) — nút này phục vụ nhập liệu nhanh học bạ THCS.
+  const addFourYearsThcs = () => {
+    const existing = form.getValues("academic_history") ?? []
+    const thptStartYears = existing
+      .filter(
+        (r) =>
+          r?.grade_to != null &&
+          r.grade_to >= 10 &&
+          r.grade_to <= 12 &&
+          r?.year_from != null,
+      )
+      .map((r) => r.year_from as number)
+    const grade9Year = thptStartYears.length
+      ? Math.min(...thptStartYears) - 1
+      : new Date().getFullYear() - 3
+    for (let i = 0; i < 4; i++) {
+      const grade = 6 + i
+      const year = grade9Year - 3 + i // lớp 6 = grade9Year−3 … lớp 9 = grade9Year
+      append({
+        school_id: null,
+        school_name: "",
+        level: null,
+        year_from: year,
+        year_to: year,
+        grade_to: grade,
+        gpa: null,
+        graduation_type: grade === 9 ? "THCS" : null,
+      } as Parameters<typeof append>[0])
+    }
+  }
+
+  // ── Vệ sinh nhập liệu (Tầng 2) + gợi ý KV (Tầng 3) ─────────────────────────
+  // Thuần data-quality hints (cảnh báo MỀM, KHÔNG chặn lưu/nộp) — engine BE
+  // mới là nguồn KV/eligibility chính thức (xem priority_service). Đếm theo
+  // grade_to (10-12 = THPT, 6-9 = THCS) để hoạt động ngay cả khi chưa chọn
+  // trường (level chỉ set sau khi pick từ danh mục).
+  const records = (form.watch("academic_history") ?? []) as Array<{
+    grade_to?: number | null
+    year_to?: number | null
+    school_id?: number | null
+  }>
+  const currentYear = new Date().getFullYear()
+  const inBand = (g: number | null | undefined, lo: number, hi: number): boolean =>
+    g != null && g >= lo && g <= hi
+  const thptRecords = records.filter((r) => inBand(r?.grade_to, 10, 12))
+  const thcsRecords = records.filter((r) => inBand(r?.grade_to, 6, 9))
+
+  const gradeCount = new Map<number, number>()
+  records.forEach((r) => {
+    if (r?.grade_to != null)
+      gradeCount.set(r.grade_to, (gradeCount.get(r.grade_to) ?? 0) + 1)
+  })
+  const dupGrades = [...gradeCount.entries()]
+    .filter(([, c]) => c > 1)
+    .map(([g]) => g)
+    .sort((a, b) => a - b)
+  const hasFutureYear = records.some(
+    (r) => r?.year_to != null && r.year_to > currentYear + 1,
+  )
+
+  const softNotices: string[] = []
+  if (dupGrades.length > 0)
+    softNotices.push(
+      `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải chuyển trường giữa năm.`,
+    )
+  if (thptRecords.length > 3)
+    softNotices.push(
+      `Đang có ${thptRecords.length} năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu chuyển trường.`,
+    )
+  if (thcsRecords.length > 4)
+    softNotices.push(
+      `Đang có ${thcsRecords.length} năm THCS (thường 4 năm: lớp 6/7/8/9).`,
+    )
+  if (hasFutureYear)
+    softNotices.push(
+      `Có năm kết thúc lớn hơn ${currentYear + 1} — kiểm tra lại năm học.`,
+    )
+
+  // Tầng 3 — engine chỉ resolve KV từ entry THPT CÓ school_id (chọn từ danh
+  // mục). Có dòng THPT nhưng chưa chọn trường nào từ danh mục → KV chưa tính
+  // được (fail-closed "insufficient_data"). Hint mềm, không chặn.
+  const needsThptCatalogPick =
+    thptRecords.length > 0 && !thptRecords.some((r) => r?.school_id != null)
+
   return (
     <div className="space-y-8">
         <Card className="shadow-sm border-border">
@@ -80,6 +167,38 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
             </CardHeader>
 
             <CardContent className="space-y-6 pt-6">
+                {/* NOTICES — soft data-quality hints (Tầng 2) + KV-readiness (Tầng 3).
+                    KHÔNG chặn lưu/nộp; engine BE là nguồn KV/eligibility chính thức. */}
+                {(softNotices.length > 0 || needsThptCatalogPick) && (
+                    <div className="space-y-2" data-testid="academic-notices">
+                        {needsThptCatalogPick && (
+                            <div
+                                role="status"
+                                data-testid="academic-kv-hint"
+                                className="rounded-md border border-info-300 bg-info-50 px-3 py-2 text-xs text-info-900 flex items-start gap-2"
+                            >
+                                <span aria-hidden="true">ℹ</span>
+                                <span>
+                                    Để hệ thống tự xác định KV ưu tiên, hãy chọn ít nhất một
+                                    trường THPT <strong>từ danh mục</strong> (trường nhập tay
+                                    không tự resolve được KV).
+                                </span>
+                            </div>
+                        )}
+                        {softNotices.map((msg, i) => (
+                            <div
+                                key={msg}
+                                role="status"
+                                data-testid={`academic-notice-${i}`}
+                                className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                            >
+                                <span aria-hidden="true">⚠</span>
+                                <span>{msg}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {/* LIST */}
                 <div className="space-y-4">
                     {fields.map((field, index) => (
@@ -346,6 +465,16 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                         >
                             <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
                             Thêm 3 năm THPT (lớp 10/11/12)
+                        </Button>
+                        {/* Quick-add 4 năm THCS (lớp 6/7/8/9) */}
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={addFourYearsThcs}
+                            data-testid="academic-quick-add-thcs"
+                        >
+                            <Plus className="w-4 h-4 mr-2" aria-hidden="true" />
+                            Thêm 4 năm THCS (lớp 6/7/8/9)
                         </Button>
                     </div>
                 )}

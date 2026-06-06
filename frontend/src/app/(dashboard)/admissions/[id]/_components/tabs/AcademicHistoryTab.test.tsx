@@ -51,7 +51,7 @@ vi.mock("@/components/admissions/VnSchoolPicker", () => ({
 }))
 
 import { AcademicHistoryTab } from "./AcademicHistoryTab"
-import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
+import type { AdmissionProfileUpdateInput, AcademicRecord } from "@/lib/zod/admissions"
 
 function Harness({
   defaults,
@@ -118,6 +118,124 @@ describe("AcademicHistoryTab — Commit 5 quick-add 3 năm THPT", () => {
     // Lớp 12 = graduation_type THPT, lớp 10/11 null
     expect((history[2] as { graduation_type?: string | null }).graduation_type).toBe("THPT")
     expect((history[0] as { graduation_type?: string | null }).graduation_type).toBeNull()
+  })
+})
+
+describe("AcademicHistoryTab — quick-add 4 năm THCS", () => {
+  it("Button 'Thêm 4 năm THCS' render khi isEditable=true", () => {
+    renderTab({ isEditable: true })
+    expect(screen.getByTestId("academic-quick-add-thcs")).toBeInTheDocument()
+  })
+
+  it("Button KHÔNG render khi isEditable=false", () => {
+    renderTab({ isEditable: false })
+    expect(screen.queryByTestId("academic-quick-add-thcs")).not.toBeInTheDocument()
+  })
+
+  it("Click tạo đúng 4 record lớp 6/7/8/9 + graduation_type=THCS ở lớp 9", () => {
+    let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
+    renderTab({
+      isEditable: true,
+      exposeForm: (f) => {
+        capturedForm = f
+      },
+    })
+
+    fireEvent.click(screen.getByTestId("academic-quick-add-thcs"))
+
+    const history = capturedForm!.getValues("academic_history") ?? []
+    expect(history).toHaveLength(4)
+    expect(history.map((h) => h.grade_to)).toEqual([6, 7, 8, 9])
+    // Lớp 9 = graduation_type THCS, lớp 6/7/8 null
+    expect((history[3] as { graduation_type?: string | null }).graduation_type).toBe("THCS")
+    expect((history[0] as { graduation_type?: string | null }).graduation_type).toBeNull()
+    // year_from === year_to mỗi record (1 năm/lớp), năm tăng dần
+    expect(history[0].year_to).toBe(history[0].year_from)
+    expect(history[3].year_to - history[0].year_from).toBe(3)
+  })
+})
+
+describe("AcademicHistoryTab — soft data-quality notices (Tầng 2/3)", () => {
+  const rec = (over: Partial<AcademicRecord>): AcademicRecord => ({
+    school_id: 1,
+    school_name: "Trường X",
+    level: "THPT",
+    year_from: 2020,
+    year_to: 2021,
+    grade_to: 12,
+    gpa: null,
+    ...over,
+  })
+
+  it("cảnh báo trùng lớp khi 2 entry cùng grade_to", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 12, year_from: 2020, year_to: 2021 }),
+          rec({ school_id: 2, grade_to: 12, year_from: 2021, year_to: 2022 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByText(/Lớp 12 xuất hiện nhiều lần/i)).toBeInTheDocument()
+  })
+
+  it("cảnh báo khi > 3 năm THPT (cho phép, không chặn)", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, grade_to: 10 }),
+          rec({ school_id: 2, grade_to: 11 }),
+          rec({ school_id: 3, grade_to: 12 }),
+          rec({ school_id: 4, grade_to: 11 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByText(/Đang có 4 năm THPT/i)).toBeInTheDocument()
+  })
+
+  it("cảnh báo năm kết thúc ở tương lai", () => {
+    const future = new Date().getFullYear() + 5
+    renderTab({
+      defaults: {
+        academic_history: [rec({ year_from: future, year_to: future, grade_to: 12 })],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByText(/kiểm tra lại năm học/i)).toBeInTheDocument()
+  })
+
+  it("hiện gợi ý KV khi có dòng THPT nhưng chưa chọn trường từ danh mục", () => {
+    renderTab({
+      defaults: {
+        academic_history: [rec({ school_id: null, school_name: "THPT gõ tay", grade_to: 12 })],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.getByTestId("academic-kv-hint")).toBeInTheDocument()
+  })
+
+  it("ẩn gợi ý KV khi đã chọn ít nhất 1 trường THPT từ danh mục", () => {
+    renderTab({
+      defaults: {
+        academic_history: [rec({ school_id: 42, grade_to: 12 })],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-kv-hint")).not.toBeInTheDocument()
+  })
+
+  it("KHÔNG có notice nào khi nhập chuẩn 3 THPT + 4 THCS đã chọn trường", () => {
+    renderTab({
+      defaults: {
+        academic_history: [
+          rec({ school_id: 1, level: "THCS", grade_to: 6 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 7 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 8 }),
+          rec({ school_id: 1, level: "THCS", grade_to: 9 }),
+          rec({ school_id: 2, grade_to: 10 }),
+          rec({ school_id: 2, grade_to: 11 }),
+          rec({ school_id: 2, grade_to: 12 }),
+        ],
+      } as Partial<AdmissionProfileUpdateInput>,
+    })
+    expect(screen.queryByTestId("academic-notices")).not.toBeInTheDocument()
   })
 })
 
