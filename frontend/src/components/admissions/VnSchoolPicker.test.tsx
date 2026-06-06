@@ -10,6 +10,7 @@
  * - "Hiển thị X/Y kết quả" message when total > items.length
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
+import * as React from "react"
 import { render, screen, fireEvent } from "@/test/utils/test-utils"
 import { VnSchoolPicker, type VnSchoolPickerValue } from "./VnSchoolPicker"
 
@@ -201,6 +202,40 @@ describe("VnSchoolPicker", () => {
     const input = screen.getByPlaceholderText(/Gõ tên trường/i)
     fireEvent.change(input, { target: { value: "khong tim thay" } })
     expect(screen.getByText(/Không tìm thấy trường nào/i)).toBeInTheDocument()
+  })
+
+  it("shows KV badge after picking even when the parent never feeds current_kv back", () => {
+    // Regression: AcademicHistoryTab passes value.current_kv = null (the form
+    // schema has no current_kv field). Before the fix the "KV hiện tại" badge
+    // could never render after a pick. The picker now remembers the picked
+    // school's KV internally so the officer gets immediate KV feedback.
+    mockHook.mockReturnValue({
+      data: { items: sampleItems, total: 3, limit: 20, offset: 0 },
+      isLoading: false,
+    })
+    function Parent() {
+      const [val, setVal] = React.useState<VnSchoolPickerValue>(emptyValue)
+      return (
+        <VnSchoolPicker
+          // Mirror AcademicHistoryTab: parent persists id/name/level but drops KV.
+          value={{ ...val, current_kv: null }}
+          onChange={(v) =>
+            setVal({
+              school_id: v.school_id,
+              school_name: v.school_name,
+              level: v.level,
+              current_kv: null,
+            })
+          }
+        />
+      )
+    }
+    render(<Parent />)
+    fireEvent.click(screen.getByRole("combobox"))
+    fireEvent.click(screen.getByText("PT DTNT Tây Nguyên")) // current_kv: KV1
+
+    expect(screen.getByText(/Đã chọn từ danh mục/i)).toBeInTheDocument()
+    expect(screen.getByText(/KV hiện tại: KV1/i)).toBeInTheDocument()
   })
 
   it("disabled prop disables trigger button", () => {

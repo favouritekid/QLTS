@@ -60,6 +60,18 @@ export function VnSchoolPicker({
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
   const [debouncedQuery, setDebouncedQuery] = React.useState("")
+  // Display-only KV of the school picked in THIS session. The form schema
+  // (academicRecordSchema) has NO current_kv field — KV is engine-resolved at
+  // submit — so the AcademicHistoryTab parent always feeds `value.current_kv =
+  // null` back. Without this, the "KV hiện tại" badge could never render after
+  // a pick, even though the search API returns the school's current_kv. We keep
+  // {id, kv} so the badge only shows for the school currently selected (no stale
+  // KV if the selection changes). Falls back to value.current_kv when a parent
+  // does supply one (e.g. the unit tests).
+  const [pickedSchool, setPickedSchool] = React.useState<{
+    id: number
+    kv: string | null
+  } | null>(null)
 
   // Debounce search query (300ms)
   React.useEffect(() => {
@@ -74,6 +86,7 @@ export function VnSchoolPicker({
   })
 
   const handleSelect = (school: VnSchoolSearchItem) => {
+    setPickedSchool({ id: school.id, kv: school.current_kv })
     onChange({
       school_id: school.id,
       school_name: school.name,
@@ -85,6 +98,7 @@ export function VnSchoolPicker({
 
   const handleManualClear = (e: React.MouseEvent) => {
     e.stopPropagation()
+    setPickedSchool(null)
     onChange({
       school_id: null,
       school_name: "",
@@ -93,6 +107,13 @@ export function VnSchoolPicker({
     })
     setQuery("")
   }
+
+  // KV to display in the badge: the parent's value.current_kv if present, else
+  // the in-session pick — but only when it matches the currently selected school
+  // (guards against showing a previous school's KV after the selection changes).
+  const displayKv =
+    value.current_kv ??
+    (pickedSchool && pickedSchool.id === value.school_id ? pickedSchool.kv : null)
 
   const displayLabel = value.school_name || placeholder
 
@@ -224,9 +245,9 @@ export function VnSchoolPicker({
             {value.level && (
               <span className="ml-2 font-medium">{value.level}</span>
             )}
-            {value.current_kv && (
+            {displayKv && (
               <span className="ml-2 text-info-700 font-medium">
-                KV hiện tại: {value.current_kv}
+                KV hiện tại: {displayKv}
               </span>
             )}
           </span>
