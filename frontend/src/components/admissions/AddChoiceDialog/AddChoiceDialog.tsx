@@ -66,6 +66,7 @@ import {
 } from "@/lib/api/admission-paths"
 import { useCreateChoice } from "@/hooks/admissions/useAdmissionChoices"
 import { parseApiError } from "@/lib/utils/api-errors"
+import { foldVietnamese } from "@/lib/utils/vietnamese"
 
 export interface AddChoiceDialogProps {
   profileId: number
@@ -300,7 +301,13 @@ export function AddChoiceDialog({
                   className="w-[var(--radix-popover-trigger-width)] p-0"
                   align="start"
                 >
-                  <Command>
+                  {/* filter bỏ dấu: officer gõ KHÔNG dấu ("ke toan") vẫn match
+                      "Kế toán" (cmdk filter mặc định không fold dấu tiếng Việt). */}
+                  <Command
+                    filter={(value, search) =>
+                      foldVietnamese(value).includes(foldVietnamese(search)) ? 1 : 0
+                    }
+                  >
                     <CommandInput placeholder="Gõ tên ngành…" />
                     <CommandList>
                       <CommandEmpty>Không tìm thấy ngành.</CommandEmpty>
