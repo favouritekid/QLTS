@@ -82,4 +82,19 @@ describe("SectionReview (table)", () => {
     render(<SectionReview profile={buildProfile()} onNavigateToStep={vi.fn()} />)
     expect(screen.getByText("Tổng điểm: —")).toBeInTheDocument()
   })
+
+  it("Step 5 detail shows NV completeness for multi-NV (not 'Tổng điểm: —')", () => {
+    render(
+      <SectionReview
+        profile={buildProfile({
+          uses_choice_engine: true,
+          total_score: null,
+          choices: [{ data_complete: true }, { data_complete: false }],
+        } as Partial<AdmissionProfileResponse>)}
+        onNavigateToStep={vi.fn()}
+      />,
+    )
+    expect(screen.getByText("1/2 NV đủ điểm")).toBeInTheDocument()
+    expect(screen.queryByText("Tổng điểm: —")).not.toBeInTheDocument()
+  })
 })

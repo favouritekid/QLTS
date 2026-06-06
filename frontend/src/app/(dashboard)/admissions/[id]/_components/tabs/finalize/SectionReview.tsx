@@ -54,6 +54,14 @@ function resolveDisplayStatus(
 /** "Chi tiết" cell — a specific metric for steps 5/6, otherwise "—". */
 function resolveDetail(step: number, profile: AdmissionProfileResponse): string {
   if (step === 5) {
+    // Multi-NV: profile-level total_score is null by design (scores live per-NV),
+    // so a flat "Tổng điểm: —" would read as "missing scores". Show NV completeness.
+    if (profile.uses_choice_engine) {
+      const choices = profile.choices ?? []
+      if (choices.length === 0) return "Chưa có nguyện vọng"
+      const complete = choices.filter((c) => c.data_complete).length
+      return `${complete}/${choices.length} NV đủ điểm`
+    }
     const total =
       typeof profile.total_score === "number" ? profile.total_score.toFixed(2) : "—"
     return `Tổng điểm: ${total}`

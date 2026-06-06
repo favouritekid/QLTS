@@ -57,6 +57,7 @@ import {
 import { DecisionBadge } from "@/components/admissions/DecisionBadge"
 import { ChoiceScoreCard } from "@/components/admissions/ChoiceScoreCard"
 import { AuditReasonDialog } from "@/components/admissions/AuditReasonDialog"
+import { getChoiceDisplayName } from "@/lib/utils/admission-helpers"
 import { pushRecentReason } from "@/components/admissions/AuditReasonDialog/reason-templates"
 import {
   useDeleteChoice,
@@ -179,9 +180,9 @@ function SortableChoiceRow({
             {choice.display_program_name}
           </p>
         )}
-        <p className="mt-0.5 truncate text-xs text-muted-foreground">
-          {choice.display_path_name || "—"}
-        </p>
+        {/* Program + degree + tổ hợp already identify the choice; the machine
+            composite `display_path_name` (… - 2026 - 201 - DOT_2) is omitted so we
+            don't leak the method/round codes to the user. */}
         <p className="text-xs text-muted-foreground">
           Tổ hợp: {choice.display_subject_group_name || "Chưa chọn"}
         </p>
@@ -462,7 +463,7 @@ export function ChoiceListEditor({
               Sửa điểm NV{pendingEditScores?.display_order ?? ""}
             </DialogTitle>
             <DialogDescription>
-              {pendingEditScores?.display_path_name || "—"}
+              {pendingEditScores ? getChoiceDisplayName(pendingEditScores) : "—"}
               {pendingEditScores?.display_subject_group_name
                 ? ` · ${pendingEditScores.display_subject_group_name}`
                 : ""}
@@ -489,9 +490,9 @@ export function ChoiceListEditor({
             <AlertDialogTitle>Xoá nguyện vọng?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingRemove
-                ? `Bạn sắp xoá NV${pendingRemove.display_order}: ${
-                    pendingRemove.display_path_name || "(chưa rõ)"
-                  }. Hành động này không thể hoàn tác.`
+                ? `Bạn sắp xoá NV${pendingRemove.display_order}: ${getChoiceDisplayName(
+                    pendingRemove,
+                  )}. Hành động này không thể hoàn tác.`
                 : null}
             </AlertDialogDescription>
           </AlertDialogHeader>

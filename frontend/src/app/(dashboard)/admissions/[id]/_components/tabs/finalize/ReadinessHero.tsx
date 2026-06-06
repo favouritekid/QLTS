@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 import { User } from "lucide-react"
-import { getAdmissionMethodLabel } from "@/lib/utils/admission-helpers"
+import { getAdmissionMethodLabel, getChoiceSummaryLabel } from "@/lib/utils/admission-helpers"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { ReadinessTone, SubmissionReadiness } from "./useSubmissionReadiness"
 import {
@@ -58,6 +58,9 @@ function Metric({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function ReadinessHero({ profile, readiness, cta }: ReadinessHeroProps) {
+  // "Nguyện vọng" = the candidate's actual choice(s) (program/degree), NOT the
+  // method. "Phương thức" shows the humanized method separately (never a raw code).
+  const choiceLabel = getChoiceSummaryLabel(profile)
   const methodLabel = getAdmissionMethodLabel(profile.applied_rules)
   const completion = profile.completion_percent ?? 0
   const stats = profile.document_stats
@@ -102,7 +105,11 @@ export function ReadinessHero({ profile, readiness, cta }: ReadinessHeroProps) {
                 </span>
                 <span className="flex items-center gap-1.5 min-w-0">
                   <span className="font-medium text-foreground">Nguyện vọng:</span>
-                  <span className="font-semibold text-foreground break-words">{methodLabel}</span>
+                  <span className="font-semibold text-foreground break-words">{choiceLabel}</span>
+                </span>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-medium text-foreground">Phương thức:</span>
+                  <span className="break-words">{methodLabel}</span>
                 </span>
               </div>
             </div>
