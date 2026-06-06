@@ -200,10 +200,10 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                 )}
 
                 {/* LIST */}
-                <div className="space-y-4">
+                <div className="space-y-3">
                     {fields.map((field, index) => (
-                    <div key={field.id} className="p-4 border rounded-lg bg-muted/50 relative group transition-colors hover:bg-card hover:border-info-200 hover:shadow-sm">
-                        <div className="flex items-center justify-between mb-4">
+                    <div key={field.id} className="p-3 border rounded-lg bg-muted/50 relative group transition-colors hover:bg-card hover:border-info-200 hover:shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
                             <span className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Trường #{index + 1}</span>
                             {isEditable && (
                                 <Button
@@ -219,53 +219,59 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             )}
                         </div>
                         
-                        <div className="grid gap-6 md:grid-cols-2">
-                        <div className="md:col-span-2 space-y-2">
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium leading-none">
-                                    Tên trường (tìm trong danh mục)
-                                </label>
-                                <VnSchoolPicker
-                                    value={{
-                                        school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
-                                        school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
-                                        level: form.watch(`academic_history.${index}.level`) ?? null,
-                                        current_kv: null,
-                                    }}
-                                    onChange={(v) => {
-                                        form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
-                                        // `shouldValidate: true` — picking a school sets the value
-                                        // programmatically, which does NOT re-run validation by default;
-                                        // without it a prior "Tên trường không được để trống" error
-                                        // (set when the row was empty) would persist even after a school
-                                        // is selected. Re-validating clears the stale error.
-                                        form.setValue(`academic_history.${index}.school_name`, v.school_name, {
-                                            shouldDirty: true,
-                                            shouldValidate: true,
-                                        })
-                                        form.setValue(
-                                            `academic_history.${index}.level`,
-                                            v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
-                                            { shouldDirty: true },
-                                        )
-                                    }}
-                                    disabled={!isEditable}
-                                />
-                                {/* Manual error display ONLY when a school is picked (school_id set):
-                                    in that case the free-text fallback below is unmounted, so its
-                                    <FormMessage/> can't show the error. When school_id is null the
-                                    free-text FormField already renders the message — gating here avoids
-                                    showing "Tên trường không được để trống" twice. */}
-                                {form.watch(`academic_history.${index}.school_id`) &&
-                                    form.formState.errors.academic_history?.[index]?.school_name?.message && (
-                                    <p className="text-xs text-destructive">
-                                        {form.formState.errors.academic_history[index]?.school_name?.message as string}
-                                    </p>
-                                )}
-                            </div>
-                            {/* Free-text fallback if no school_id picked */}
-                            {!form.watch(`academic_history.${index}.school_id`) && (
-                                <>
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                        <div className="col-span-2 md:col-span-5 space-y-2">
+                            {/* Picker + ô nhập tay trên CÙNG 1 dòng (tên trường thường ngắn).
+                                Khi đã chọn từ danh mục, ô nhập tay ẩn → picker chiếm full width. */}
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 items-start">
+                                <div
+                                    className={
+                                        form.watch(`academic_history.${index}.school_id`)
+                                            ? "space-y-1 md:col-span-2"
+                                            : "space-y-1"
+                                    }
+                                >
+                                    <label className="text-xs font-medium leading-none">
+                                        Tên trường (tìm trong danh mục)
+                                    </label>
+                                    <VnSchoolPicker
+                                        value={{
+                                            school_id: form.watch(`academic_history.${index}.school_id`) ?? null,
+                                            school_name: form.watch(`academic_history.${index}.school_name`) ?? "",
+                                            level: form.watch(`academic_history.${index}.level`) ?? null,
+                                            current_kv: null,
+                                        }}
+                                        onChange={(v) => {
+                                            form.setValue(`academic_history.${index}.school_id`, v.school_id, { shouldDirty: true })
+                                            // `shouldValidate: true` — picking a school sets the value
+                                            // programmatically, which does NOT re-run validation by default;
+                                            // without it a prior "Tên trường không được để trống" error
+                                            // (set when the row was empty) would persist even after a school
+                                            // is selected. Re-validating clears the stale error.
+                                            form.setValue(`academic_history.${index}.school_name`, v.school_name, {
+                                                shouldDirty: true,
+                                                shouldValidate: true,
+                                            })
+                                            form.setValue(
+                                                `academic_history.${index}.level`,
+                                                v.level as (typeof VN_SCHOOL_LEVELS)[number] | null,
+                                                { shouldDirty: true },
+                                            )
+                                        }}
+                                        disabled={!isEditable}
+                                    />
+                                    {/* Manual error display ONLY when a school is picked (school_id set):
+                                        the free-text fallback is unmounted then, so its <FormMessage/>
+                                        can't show the error. Gating avoids showing it twice. */}
+                                    {form.watch(`academic_history.${index}.school_id`) &&
+                                        form.formState.errors.academic_history?.[index]?.school_name?.message && (
+                                        <p className="text-xs text-destructive">
+                                            {form.formState.errors.academic_history[index]?.school_name?.message as string}
+                                        </p>
+                                    )}
+                                </div>
+                                {/* Free-text fallback (ô bên phải) — chỉ khi chưa chọn từ danh mục */}
+                                {!form.watch(`academic_history.${index}.school_id`) && (
                                     <FormField
                                         control={form.control}
                                         name={`academic_history.${index}.school_name`}
@@ -287,29 +293,28 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                             </FormItem>
                                         )}
                                     />
-                                    {/* Commit 5 — free-text school warning. Engine resolve KV
-                                        cần school_id (administrative_nodes link). Trường nhập
-                                        tay sẽ không kết nối, KV chỉ resolve được khi quản lý
-                                        ấn định thủ công. */}
-                                    {(form.watch(`academic_history.${index}.school_name`) ?? "").trim().length > 0 && (
-                                        <div
-                                            role="alert"
-                                            data-testid={`academic-freetext-warning-${index}`}
-                                            className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
-                                        >
-                                            <span aria-hidden="true">⚠</span>
-                                            <span>
-                                                Trường nhập tay sẽ không dùng được để tự xác định
-                                                KV. Vui lòng chọn từ danh mục bên trên, hoặc đề
-                                                nghị quản lý ấn định KV thủ công.
-                                            </span>
-                                        </div>
-                                    )}
-                                </>
+                                )}
+                            </div>
+                            {/* Free-text KV warning — full width dưới 2 ô. Engine resolve KV cần
+                                school_id; trường nhập tay không tự resolve được. */}
+                            {!form.watch(`academic_history.${index}.school_id`) &&
+                                (form.watch(`academic_history.${index}.school_name`) ?? "").trim().length > 0 && (
+                                <div
+                                    role="alert"
+                                    data-testid={`academic-freetext-warning-${index}`}
+                                    className="rounded-md border border-warning-300 bg-warning-50 px-3 py-2 text-xs text-warning-900 flex items-start gap-2"
+                                >
+                                    <span aria-hidden="true">⚠</span>
+                                    <span>
+                                        Trường nhập tay sẽ không dùng được để tự xác định KV. Vui
+                                        lòng chọn từ danh mục bên trên, hoặc đề nghị quản lý ấn
+                                        định KV thủ công.
+                                    </span>
+                                </div>
                             )}
                         </div>
                         
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="contents">
                              <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.year_from`}
@@ -355,7 +360,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             />
                         </div>
                         
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="contents">
                             <FormField
                                 control={form.control}
                                 name={`academic_history.${index}.grade_to`}
