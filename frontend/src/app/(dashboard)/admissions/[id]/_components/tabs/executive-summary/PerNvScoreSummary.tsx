@@ -60,8 +60,9 @@ export function PerNvScoreSummary({
           scoreNum !== null && !Number.isNaN(scoreNum)
             ? scoreNum.toFixed(2)
             : "—"
-        const title =
-          choice.display_program_name || choice.display_path_name || "—"
+        // Program name only — drop the `|| display_path_name` machine-composite
+        // fallback (… - 2026 - 201 - DOT_2) so it never leaks codes here.
+        const title = (choice.display_program_name ?? "").trim() || "—"
 
         return (
           <li

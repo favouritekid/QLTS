@@ -165,7 +165,7 @@ describe("ChoiceListEditor", () => {
     expect(onRequestAdd).toHaveBeenCalledOnce()
   })
 
-  it("clicking delete shows confirm dialog with NV label + path name", () => {
+  it("clicking delete shows confirm dialog with NV label + choice display name", () => {
     const choices = [
       makeChoice({
         id: 7,
@@ -186,9 +186,11 @@ describe("ChoiceListEditor", () => {
     fireEvent.click(screen.getByLabelText("Xoá nguyện vọng 2"))
     // Radix Dialog renders in portal — query against document.body
     expect(screen.getByText("Xoá nguyện vọng?")).toBeTruthy()
+    // Humanized display name (program — degree), NOT the machine composite path name.
     expect(
-      screen.getByText(/NV2.*CNTT 2026 - HSA - DOT_1/),
+      screen.getByText(/NV2.*Cao đẳng Công nghệ thông tin — Cao đẳng/),
     ).toBeTruthy()
+    expect(screen.queryByText(/CNTT 2026 - HSA - DOT_1/)).toBeNull()
   })
 
   it("confirm in delete dialog triggers deleteChoice API with correct id", async () => {

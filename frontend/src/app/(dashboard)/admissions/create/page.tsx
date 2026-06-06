@@ -25,6 +25,7 @@ import { getPathsForOffering } from "@/lib/api/admission-paths"
 import { toast } from "sonner"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { todayVN } from "@/lib/utils/vn-date"
+import { formatRoundLabel } from "@/lib/utils/admission-helpers"
 import type { LeadAdmissionBlocker } from "@/types/lead.types"
 
 // Blocker code → user-facing VN message. Source of truth lives in backend
@@ -477,7 +478,7 @@ export default function CreateAdmissionPage() {
                     return (
                       <SelectItem key={r.id} value={r.id.toString()}>
                         <span className="flex items-center gap-2">
-                          <span>{r.name ?? r.code ?? `Đợt #${r.id}`}</span>
+                          <span>{formatRoundLabel(r)}</span>
                           {windowLabel && (
                             <span className="text-xs text-muted-foreground">
                               ({windowLabel})

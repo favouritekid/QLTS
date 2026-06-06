@@ -66,13 +66,44 @@ export function getChoiceSummaryLabel(profile: {
 }): string {
   const choices = profile.choices ?? []
   if (choices.length > 0) {
-    const first = choices[0]
-    const program = (first.display_program_name ?? "").trim()
-    const degree = (first.display_degree_level ?? "").trim()
-    const base = [program, degree].filter(Boolean).join(" — ") || program || "—"
+    const base = getChoiceDisplayName(choices[0])
     return choices.length > 1 ? `${base} +${choices.length - 1} NV` : base
   }
   return (profile.program_name ?? "").trim() || "—"
+}
+
+/**
+ * Human display name for a SINGLE choice (nguyện vọng): "Ngành — Bậc". Use this
+ * everywhere a choice is labelled instead of `display_path_name`, which is a
+ * machine composite that leaks year/method-code/round-code (e.g.
+ * "Công nghệ ô tô - 2026 - 201 - DOT_2").
+ */
+export function getChoiceDisplayName(choice: {
+  display_program_name?: string | null
+  display_degree_level?: string | null
+}): string {
+  const program = (choice.display_program_name ?? "").trim()
+  const degree = (choice.display_degree_level ?? "").trim()
+  return [program, degree].filter(Boolean).join(" — ") || program || degree || "—"
+}
+
+/**
+ * Human label for an admission round. Prefers `round_name`; otherwise humanizes
+ * the internal `round_code` ("DOT_2" → "Đợt 2") instead of leaking it; last resort
+ * "Đợt #{id}". Avoids the raw "DOT_2" in pickers/labels.
+ */
+export function formatRoundLabel(round: {
+  name?: string | null
+  code?: string | null
+  id?: number | null
+}): string {
+  const name = (round.name ?? "").trim()
+  if (name) return name
+  const code = round.code ?? ""
+  const m = code.match(/^DOT[_-]?(\d+)$/i)
+  if (m) return `Đợt ${m[1]}`
+  if (code) return code
+  return round.id != null ? `Đợt #${round.id}` : "Đợt —"
 }
 
 // ==============================================================================
@@ -96,6 +127,9 @@ export function getSubjectLabel(code: string): string {
     geography: "Địa lý",
     civic_education: "GDCD",
     foreign_language: "Ngoại ngữ",
+    // THCS (TS2026 trung cấp / cao đẳng nghề) integrated-subject codes.
+    natural_science: "Khoa học tự nhiên",
+    social_science: "Khoa học xã hội",
   }
 
   return labels[code] ?? code
