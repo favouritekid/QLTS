@@ -234,11 +234,13 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                 <div
                                     className={
                                         form.watch(`academic_history.${index}.school_id`)
-                                            ? "space-y-1 md:col-span-2"
-                                            : "space-y-1"
+                                            ? "space-y-2 md:col-span-2"
+                                            : "space-y-2"
                                     }
                                 >
-                                    <label className="text-xs font-medium leading-none">
+                                    {/* Mirror FormLabel (flex items-center text-xs) để label + gap
+                                        khớp cột "nhập tay" → 2 control thẳng hàng dọc. */}
+                                    <label className="flex items-center text-xs font-medium text-muted-foreground">
                                         Tên trường (tìm trong danh mục)
                                     </label>
                                     <VnSchoolPicker
