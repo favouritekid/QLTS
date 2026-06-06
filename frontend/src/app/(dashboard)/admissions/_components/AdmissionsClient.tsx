@@ -114,6 +114,7 @@ import {
 import {
   areAdmissionsListParamsEqual,
   CURRENT_ADMISSIONS_YEAR,
+  ADMISSION_STATUS_TABS as STATUS_TABS,
 } from "@/hooks/admissions/filterDefaults"
 import { admissionsApi } from "@/lib/api/admissions"
 import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
@@ -158,52 +159,9 @@ const PAYMENT_STATUS_OPTIONS = [
   { value: "no_fee", label: "Chưa có học phí" },
 ]
 
-/** Tab definitions - group statuses for quick filtering.
- *
- * `approved` vs `confirmed`: the applicant still has to tap the magic link
- * before enrollment — keeping the two tabs separate lets officers spot
- * profiles that are stuck waiting on the applicant without hunting through
- * a mixed "Đã duyệt" bucket. `overridden` stays with `approved` because it's
- * still an admin-driven state awaiting enroll.
- *
- * phase1_11 (#184 Wave 3 PR-3A) — 14-state display readiness:
- *
- * * ``reviewing`` joins ``pending`` (officer đang xét, chưa quyết).
- * * ``revision_requested`` joins ``pending`` (đã nộp + yêu cầu bổ sung,
- *   chờ ứng viên fix; UI consistent với resubmitted parallel state).
- * * ``admitted`` joins ``approved`` tab (positive admission outcome,
- *   choice engine equivalent of legacy ``approved``).
- * * ``waitlisted`` gets a NEW dedicated tab "Chờ ghế" between
- *   ``approved`` and ``confirmed`` chronologically (admin needs
- *   visibility into the wait queue separately from approved batch).
- * * ``withdrawn`` joins ``rejected`` tab (negative outcome — admin
- *   already filters these together via ``useAdmissionsFilter``).
- * * ``result_published`` is NOT in any tab — broadcast marker
- *   reachable only via "Tất cả" filter or the dedicated drop-down
- *   ``STATUS_OPTIONS`` (Codex Q1 chốt: not per-profile workflow target).
- *
- * MUST sync with ``useAdmissionsFilter.STATUS_TABS`` — drift
- * causes inconsistent filter behavior between tabs UI and the
- * versioned-storage hook.
- */
-const STATUS_TABS = [
-  { key: "all", label: "Tất cả", statuses: [] as string[] },
-  { key: "draft", label: "Nháp", statuses: ["draft"] },
-  {
-    key: "pending",
-    label: "Chờ duyệt",
-    statuses: ["submitted", "resubmitted", "reviewing", "revision_requested"],
-  },
-  {
-    key: "approved",
-    label: "Đã duyệt",
-    statuses: ["approved", "admitted", "overridden"],
-  },
-  { key: "waitlisted", label: "Chờ ghế", statuses: ["waitlisted"] },
-  { key: "confirmed", label: "Đã xác nhận", statuses: ["confirmed"] },
-  { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
-  { key: "rejected", label: "Từ chối", statuses: ["rejected", "withdrawn"] },
-] as const
+// Status tabs (rendered here) come from the SHARED `ADMISSION_STATUS_TABS`
+// (imported as STATUS_TABS) so the tab→status filter mapping in
+// useAdmissionsFilter.handleTabClick can never drift from these rendered tabs.
 
 // =============================================================================
 // STAT CARD COMPONENT
@@ -617,8 +575,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tất cả trình độ</SelectItem>
+              {/* Filter value MUST be the degree-level NAME ("Cao đẳng"), not the
+                  code ("cao_dang"): the BE matches it against the MajorProgram.degree_level
+                  TEXT column, which stores the name. Sending the code matched nothing. */}
               {degreeLevels?.map((level) => (
-                <SelectItem key={level.code} value={level.code}>
+                <SelectItem key={level.code} value={level.name}>
                   {level.name}
                 </SelectItem>
               ))}

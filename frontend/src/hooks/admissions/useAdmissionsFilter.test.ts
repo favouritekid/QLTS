@@ -154,7 +154,7 @@ describe("useAdmissionsFilter", () => {
       expect(result.current.state.statusFilters).toEqual([])
     })
 
-    it('should set statusFilters for the "approved" tab', () => {
+    it('should set statusFilters for the "approved" tab (admitted/overridden, NOT confirmed)', () => {
       const { result } = renderHook(() => useAdmissionsFilter())
 
       act(() => {
@@ -163,8 +163,22 @@ describe("useAdmissionsFilter", () => {
 
       expect(result.current.state.activeTab).toBe("approved")
       expect(result.current.state.statusFilters).toContain("approved")
-      expect(result.current.state.statusFilters).toContain("confirmed")
+      expect(result.current.state.statusFilters).toContain("admitted")
       expect(result.current.state.statusFilters).toContain("overridden")
+      // `confirmed` has its OWN tab — it must NOT be folded into approved, or the
+      // "Đã duyệt" count (which excludes confirmed) would disagree with the result.
+      expect(result.current.state.statusFilters).not.toContain("confirmed")
+    })
+
+    it('should filter to ["confirmed"] for the "confirmed" tab (regression: hook drift left it empty → showed ALL)', () => {
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      act(() => {
+        result.current.handlers.handleTabClick("confirmed")
+      })
+
+      expect(result.current.state.activeTab).toBe("confirmed")
+      expect(result.current.state.statusFilters).toEqual(["confirmed"])
     })
 
     it("should reset page to 1 when switching tabs", () => {

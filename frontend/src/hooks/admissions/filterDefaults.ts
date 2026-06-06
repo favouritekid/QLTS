@@ -2,6 +2,40 @@ import type { AdmissionListParams } from "@/lib/zod/admissions"
 
 export type AdmissionsSearchParamsRecord = Record<string, string | string[] | undefined>
 
+/**
+ * Status tabs for the admissions list — the SINGLE source for both the tab UI
+ * (AdmissionsClient renders `label`) and the tab→status filter mapping
+ * (useAdmissionsFilter.handleTabClick reads `statuses`). Keeping ONE constant
+ * prevents the drift that previously broke the "Đã xác nhận" filter (the hook's
+ * copy lacked a `confirmed` tab → handleTabClick("confirmed") set an empty filter
+ * → showed ALL profiles) and made the "Đã duyệt" count disagree with its result
+ * (the hook folded `confirmed` into `approved` while the UI counted it separately).
+ *
+ * 14-state grouping (phase1_11 #184): pending = submitted/resubmitted/reviewing/
+ * revision_requested; approved = approved/admitted/overridden (admin-driven,
+ * awaiting enroll); confirmed has its OWN tab (applicant tapped the magic link);
+ * waitlisted its own; rejected = rejected/withdrawn. `result_published` is in no
+ * tab (broadcast marker, reachable only via "Tất cả" / the status drop-down).
+ */
+export const ADMISSION_STATUS_TABS: ReadonlyArray<{
+  key: string
+  label: string
+  statuses: readonly string[]
+}> = [
+  { key: "all", label: "Tất cả", statuses: [] },
+  { key: "draft", label: "Nháp", statuses: ["draft"] },
+  {
+    key: "pending",
+    label: "Chờ duyệt",
+    statuses: ["submitted", "resubmitted", "reviewing", "revision_requested"],
+  },
+  { key: "approved", label: "Đã duyệt", statuses: ["approved", "admitted", "overridden"] },
+  { key: "waitlisted", label: "Chờ ghế", statuses: ["waitlisted"] },
+  { key: "confirmed", label: "Đã xác nhận", statuses: ["confirmed"] },
+  { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
+  { key: "rejected", label: "Từ chối", statuses: ["rejected", "withdrawn"] },
+]
+
 export const ADMISSIONS_DEFAULT_PAGE_SIZE = 20
 export const ADMISSIONS_DEFAULT_SORT_BY: NonNullable<AdmissionListParams["sort_by"]> = "created_at"
 export const ADMISSIONS_DEFAULT_SORT_ORDER: NonNullable<AdmissionListParams["order"]> = "desc"

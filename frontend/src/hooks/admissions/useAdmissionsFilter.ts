@@ -20,6 +20,7 @@ import type { AdmissionListParams } from "@/lib/zod/admissions"
 import {
   ADMISSIONS_DEFAULT_PAGE_SIZE,
   CURRENT_ADMISSIONS_YEAR,
+  ADMISSION_STATUS_TABS as STATUS_TABS,
 } from "./filterDefaults"
 
 // =============================================================================
@@ -80,42 +81,10 @@ interface VersionedStorage {
   data: StoredFilters
 }
 
-/**
- * Tab definitions — group statuses for quick filtering.
- *
- * phase1_11 (#184 Wave 3 PR-3A) — 14-state display readiness.
- * MUST stay in lockstep with ``AdmissionsClient.STATUS_TABS``;
- * the UI tabs read the latter, this hook reads its own constant
- * for versioned storage rehydrate. Drift = filter inconsistency
- * across page reload.
- *
- * Differences from the AdmissionsClient version:
- * * ``confirmed`` lives in its own tab in the UI (officer ergonomic
- *   per Codex Q2 prior decision); but here it's bucketed into
- *   ``approved`` for the storage shape. The hook's STATUS_TABS is
- *   only used as the storage-version key set; UI rendering
- *   defers to the AdmissionsClient declaration. Keeping the two
- *   shapes intentionally diverging on ``confirmed`` is a
- *   pre-existing ergonomic split; phase1_11 doesn't change it.
- */
-const STATUS_TABS: ReadonlyArray<{
-  key: string
-  statuses: readonly string[]
-}> = [
-  { key: "all", statuses: [] },
-  { key: "draft", statuses: ["draft"] },
-  {
-    key: "pending",
-    statuses: ["submitted", "resubmitted", "reviewing", "revision_requested"],
-  },
-  {
-    key: "approved",
-    statuses: ["approved", "admitted", "confirmed", "overridden"],
-  },
-  { key: "waitlisted", statuses: ["waitlisted"] },
-  { key: "enrolled", statuses: ["enrolled"] },
-  { key: "rejected", statuses: ["rejected", "withdrawn"] },
-]
+// STATUS_TABS is the SHARED `ADMISSION_STATUS_TABS` (imported as STATUS_TABS) —
+// the SAME constant the UI renders, so handleTabClick's tab→status mapping can
+// never drift from the rendered tabs (the old local copy drifted: it lacked a
+// `confirmed` tab and folded `confirmed` into `approved`, breaking the filter).
 
 const DEFAULT_FILTERS: StoredFilters = {
   page: 1,
