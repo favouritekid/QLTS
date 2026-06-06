@@ -575,8 +575,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tất cả trình độ</SelectItem>
+              {/* Filter value MUST be the degree-level NAME ("Cao đẳng"), not the
+                  code ("cao_dang"): the BE matches it against the MajorProgram.degree_level
+                  TEXT column, which stores the name. Sending the code matched nothing. */}
               {degreeLevels?.map((level) => (
-                <SelectItem key={level.code} value={level.code}>
+                <SelectItem key={level.code} value={level.name}>
                   {level.name}
                 </SelectItem>
               ))}
