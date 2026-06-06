@@ -60,7 +60,9 @@ export function PriorityReviewCard({ profile }: PriorityReviewCardProps) {
         ? "success"
         : "warning"
 
-  const primary = kv ?? "Chưa xác định KV"
+  // `||` (not `??`) so an empty-string kv_resolved also falls back — matches the
+  // tone check below which already treats "" as falsy ("Chưa xác định KV").
+  const primary = kv || "Chưa xác định KV"
   // Secondary = the most urgent ISSUE (base), then DURABLE provenance/cap suffixes so
   // the cell self-contains the decision state. The audit line is only "gần đây" (the
   // latest event) — it can't be the sole carrier of "override applied" because the

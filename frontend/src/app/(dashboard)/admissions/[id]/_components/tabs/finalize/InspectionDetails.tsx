@@ -4,8 +4,9 @@
  * Wraps the read-only self-check detail surfaces (ReviewDetails: PrioritySummaryPanel
  * / UtEvidenceCards / ScoreSnapshot / DocumentChecklist) behind a single collapsible
  * that is CLOSED by default for every role — so neither officer nor reviewer faces a
- * "wall of information" up front. The manager review cockpit (HealthCheckGrid) lives
- * in its own `ReviewerCockpit` (reviewer-only, default open), NOT here.
+ * "wall of information" up front. The manager review cockpit lives in its own
+ * `ReviewerCockpit` (DecisionSummaryGrid + IssueLocator; reviewer-only, default
+ * open), NOT here.
  *
  * Radix trigger is a real <button> with aria-expanded (a11y, plan P1-a).
  */

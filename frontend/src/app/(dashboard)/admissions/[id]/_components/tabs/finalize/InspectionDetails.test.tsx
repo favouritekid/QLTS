@@ -2,8 +2,8 @@
  * InspectionDetails — single collapsible "Chi tiết kiểm tra" (default CLOSED, all roles).
  *
  * Pins: ReviewDetails not mounted until opened; trigger is a real <button> with
- * aria-expanded; opening reveals ReviewDetails. (HealthCheckGrid is NOT here — it
- * lives in ReviewerCockpit.)
+ * aria-expanded; opening reveals ReviewDetails. (The reviewer cockpit is NOT here —
+ * it lives in ReviewerCockpit.)
  */
 
 import { describe, it, expect, vi } from "vitest"

@@ -60,7 +60,9 @@ function resolveDetail(step: number, profile: AdmissionProfileResponse): string 
   }
   if (step === 6 && profile.document_stats) {
     const s = profile.document_stats
-    return `${s.submitted_count}/${s.mandatory_count} tài liệu`
+    return s.mandatory_count === 0
+      ? "Không yêu cầu tài liệu"
+      : `${s.submitted_count}/${s.mandatory_count} tài liệu`
   }
   return "—"
 }

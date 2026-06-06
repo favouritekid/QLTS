@@ -484,4 +484,15 @@ describe("useSubmissionReadiness — data consistency (eligible but warnings)", 
     expect(r.hasOutstandingWarnings).toBe(true)
     expect(r.verdictLabel).toBe("Còn cảnh báo rà soát")
   })
+
+  it("eligible + all docs verified but missing UT evidence → documentTone warning (mirror cockpit DocumentReviewCard)", () => {
+    const profile = buildProfile({
+      eligibility_status: "eligible",
+      document_stats: { submitted_count: 5, verified_count: 5, mandatory_count: 5, missing_count: 0, unverified_count: 0 },
+      missing_priority_evidence_codes: ["UT07"],
+    } as Partial<AdmissionProfileResponse>)
+    const r = run(buildParams({ profile, canApprove: true, isEligible: true }))
+    // Hero "Tài liệu" metric must not be green while the cockpit shows amber for missing UT.
+    expect(r.documentTone).toBe("warning")
+  })
 })

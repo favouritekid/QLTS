@@ -21,18 +21,15 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
-import {
-  User,
-  CheckCircle2,
-  AlertCircle,
-  AlertTriangle,
-  Info,
-  CircleDot,
-  type LucideIcon,
-} from "lucide-react"
+import { User } from "lucide-react"
 import { getAdmissionMethodLabel } from "@/lib/utils/admission-helpers"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { ReadinessTone, SubmissionReadiness } from "./useSubmissionReadiness"
+import {
+  READINESS_TONE_VARIANT,
+  READINESS_TONE_ICON,
+  READINESS_TONE_TEXT,
+} from "./readinessTone"
 
 interface ReadinessHeroProps {
   profile: AdmissionProfileResponse
@@ -41,36 +38,10 @@ interface ReadinessHeroProps {
   cta?: ReactNode
 }
 
-type BadgeVariant = "success" | "warning" | "error" | "info" | "secondary"
-
-const TONE_VARIANT: Record<ReadinessTone, BadgeVariant> = {
-  success: "success",
-  warning: "warning",
-  error: "error",
-  info: "info",
-  neutral: "secondary",
-}
-
-const TONE_ICON: Record<ReadinessTone, LucideIcon> = {
-  success: CheckCircle2,
-  warning: AlertTriangle,
-  error: AlertCircle,
-  info: Info,
-  neutral: CircleDot,
-}
-
-const TONE_TEXT: Record<ReadinessTone, string> = {
-  success: "text-success-700",
-  warning: "text-warning-700",
-  error: "text-error-600",
-  info: "text-info-700",
-  neutral: "text-foreground",
-}
-
 function ToneBadge({ tone, label }: { tone: ReadinessTone; label: string }) {
-  const Icon = TONE_ICON[tone]
+  const Icon = READINESS_TONE_ICON[tone]
   return (
-    <Badge variant={TONE_VARIANT[tone]} className="gap-1.5 px-3 py-1 text-sm max-w-full">
+    <Badge variant={READINESS_TONE_VARIANT[tone]} className="gap-1.5 px-3 py-1 text-sm max-w-full">
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </Badge>
@@ -91,9 +62,11 @@ export function ReadinessHero({ profile, readiness, cta }: ReadinessHeroProps) {
   const completion = profile.completion_percent ?? 0
   const stats = profile.document_stats
   const docMetric =
-    stats && typeof stats.mandatory_count === "number"
-      ? `${stats.submitted_count}/${stats.mandatory_count} đã nộp`
-      : "—"
+    !stats || typeof stats.mandatory_count !== "number"
+      ? "—"
+      : stats.mandatory_count === 0
+        ? "Không yêu cầu"
+        : `${stats.submitted_count}/${stats.mandatory_count} đã nộp`
   // Display code formatted FE-side from year + id (no dedicated BE field).
   const code = profile.academic_year
     ? `HS-${profile.academic_year}-${String(profile.id).padStart(5, "0")}`
@@ -169,7 +142,7 @@ export function ReadinessHero({ profile, readiness, cta }: ReadinessHeroProps) {
             </div>
           </Metric>
           <Metric label="Tài liệu">
-            <span className={TONE_TEXT[readiness.documentTone]}>{docMetric}</span>
+            <span className={READINESS_TONE_TEXT[readiness.documentTone]}>{docMetric}</span>
           </Metric>
           {outstanding > 0 && (
             <Metric label={readiness.outstandingLabel}>

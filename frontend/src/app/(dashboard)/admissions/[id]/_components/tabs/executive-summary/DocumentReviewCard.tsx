@@ -45,7 +45,7 @@ export function DocumentReviewCard({ profile }: DocumentReviewCardProps) {
   const primary = noMandatory ? "Không yêu cầu tài liệu" : `${submitted}/${mandatory} đã nộp`
 
   const secondary = hasMissingDocs
-    ? `Thiếu ${missing} tài liệu bắt buộc${hasPendingVerify ? ` · ${unverified} chờ xác minh` : ""}`
+    ? `Thiếu ${missing} tài liệu bắt buộc${hasPendingVerify ? ` · ${unverified} chờ xác minh` : ""}${missingUtCount > 0 ? ` · thiếu ${missingUtCount} minh chứng UT` : ""}`
     : hasPendingVerify
       ? `Đã nộp đủ, còn ${unverified} tài liệu chờ xác minh`
       : missingUtCount > 0

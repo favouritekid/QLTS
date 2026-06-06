@@ -6,7 +6,8 @@
  * should appear here, and with what prominence (plan Hero redesign — supersedes
  * the rev-5 "render every permission equally" invariant):
  *
- *   - publish_result → ONLY "Công bố kết quả".   enroll → ONLY "Ghi danh".
+ *   - publish_result → "Công bố kết quả" (primary) + "Yêu cầu sửa" (secondary khi
+ *       được phép — đường bounce hồ sơ multi-NV lỗi về officer). enroll → ONLY "Ghi danh".
  *   - submit   → primary "Nộp hồ sơ chính thức" (disabled + reason when !isEligible).
  *   - resubmit → primary "Nộp lại hồ sơ" (NOT gated by eligibility — invariant I2).
  *   - reviewer cluster:
@@ -316,7 +317,17 @@ export function DecisionActionsPanel({
 
   // ----- single-action states (only the state's own action) -------------------
   if (primaryAction === "publish_result" && canPublishResult && onPublishResult) {
-    return <Shell className={className}>{publishButton()}</Shell>
+    // Công bố là primary, NHƯNG reviewer vẫn cần đường trả hồ sơ multi-NV lỗi về
+    // officer TRƯỚC khi chạy engine cascade không hoàn tác — surface "Yêu cầu sửa"
+    // làm secondary khi được phép (state submitted có quyền này; reviewing thì
+    // KHÔNG → vẫn publish-only). "Từ chối" giữ ẩn để bề mặt publish không biến
+    // thành ma trận permission.
+    return (
+      <Shell className={className}>
+        {publishButton()}
+        {canRequestRevision && onRequestRevision && requestRevisionButton("secondary")}
+      </Shell>
+    )
   }
   if (primaryAction === "enroll" && canEnroll && onEnroll) {
     return <Shell className={className}>{enrollButton()}</Shell>

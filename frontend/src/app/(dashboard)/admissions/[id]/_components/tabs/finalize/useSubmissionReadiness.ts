@@ -9,7 +9,7 @@
  * Two Hero signals (STEP8 plan B3/B5):
  *   1. eligibilityVerdict — "Đủ điều kiện xét" vs "Chưa đủ" — reads
  *      `eligibility_status` (xét-tuyển state, independent of any action).
- *   2. primaryAction + readinessLabel/Tone — tracks the ACTUAL primary action
+ *   2. primaryAction + verdictLabel/Tone — tracks the ACTUAL primary action
  *      currently surfaced (submit/resubmit/approve/publish/enroll/...). It only
  *      drives Hero label/tone; it NEVER filters the decision button cluster.
  *
@@ -275,6 +275,22 @@ function eligibilityToneFor(verdict: EligibilityVerdict): ReadinessTone {
   }
 }
 
+/**
+ * Generic cockpit summary line — used by ReviewerCockpit ONLY as the fallback when
+ * `readiness.decisionSummary` is null (clean/terminal states). Co-located with the
+ * verdict wording so the cockpit body never drifts from the badge. The verdict's
+ * own `decisionSummary` (when present) always wins, so this never contradicts it.
+ */
+export function cockpitFallbackSummary(r: SubmissionReadiness): string {
+  if (r.eligibilityVerdict === "ineligible")
+    return "Hồ sơ chưa đủ điều kiện — chưa thể phê duyệt."
+  if (r.eligibilityVerdict === "pending")
+    return "Hồ sơ chưa được xét điều kiện xét tuyển."
+  if (r.hasOutstandingWarnings)
+    return "Hồ sơ đủ điều kiện cơ bản, nhưng còn cảnh báo cần rà soát trước khi phê duyệt."
+  return "Hồ sơ đủ điều kiện — có thể phê duyệt."
+}
+
 function resolvePrimaryAction(p: UseSubmissionReadinessParams): PrimaryAction {
   // first-match wins. publish_result / enroll OUTRANK approve: a multi-NV submitted
   // profile grants BOTH canApprove AND canPublishResult to a manager/admin
@@ -426,11 +442,16 @@ export function useSubmissionReadiness(
       (docStats.submitted_count < docStats.mandatory_count ||
         (docStats.missing_count ?? 0) > 0 ||
         docUnverified > 0)
-    const documentTone: ReadinessTone = docsIncomplete
-      ? "warning"
-      : docStats
-        ? "success"
-        : "neutral"
+    // The cockpit DocumentReviewCard folds missing UT priority evidence into its
+    // "Tài liệu" tone (→ warning); mirror that here so the Hero "Tài liệu" metric
+    // never shows green while the cockpit cell shows amber for the same profile.
+    const missingUtCount = profile.missing_priority_evidence_codes?.length ?? 0
+    const documentTone: ReadinessTone =
+      docsIncomplete || missingUtCount > 0
+        ? "warning"
+        : docStats
+          ? "success"
+          : "neutral"
     const hasOutstandingWarnings =
       docsIncomplete || (es?.warnings?.length ?? 0) > 0 || actionItems.length > 0
 
@@ -451,10 +472,11 @@ export function useSubmissionReadiness(
           : firstBlocker.message
     const summaryLine = es ? es.next_action || firstBlockerMsg || null : null
 
-    // One-line decision summary: the verdict's own summary first; otherwise the BE
-    // `next_action` hint (summaryLine) for ANY state — so guidance like "Kiểm tra
-    // lại ảnh CCCD" still surfaces for submit/resubmit/request_revision/reject, not
-    // only terminal states. Never a pure restatement of the badge (Hero rule #3).
+    // One-line decision summary: the verdict's own summary takes priority; the BE
+    // `next_action` hint (summaryLine) only surfaces here when the verdict has NO
+    // summary of its own (clean/terminal states) — for "has problems" states the
+    // verdict summary (count / why) is shown and the granular next_action lives in
+    // ActionItemsList / cockpit below. Never a pure restatement of the badge (rule #3).
     const decisionSummary = verdictSummary ?? summaryLine
 
     // 3rd Hero metric label — one honest label for both roles. The value is

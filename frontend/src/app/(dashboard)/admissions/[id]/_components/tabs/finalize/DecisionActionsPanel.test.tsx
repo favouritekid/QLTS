@@ -138,7 +138,7 @@ describe("DecisionActionsPanel — reviewer cluster hierarchy", () => {
 describe("DecisionActionsPanel — single-action states hide off-state actions", () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it("publish_result → ONLY 'Công bố kết quả' (hides approve/reject/revision even when all permitted — multi-NV overlap)", () => {
+  it("publish_result → 'Công bố kết quả' (primary) + 'Yêu cầu sửa' (secondary); hides Phê duyệt/Từ chối", () => {
     renderPanel(buildProfile(), {
       primaryAction: "publish_result",
       canPublishResult: true,
@@ -147,9 +147,17 @@ describe("DecisionActionsPanel — single-action states hide off-state actions",
       canRequestRevision: true,
     })
     expect(screen.getAllByText("Công bố kết quả").length).toBeGreaterThan(0)
+    // Reviewer giữ được đường trả hồ sơ multi-NV lỗi về officer trước khi công bố.
+    expect(screen.getAllByText("Yêu cầu sửa").length).toBeGreaterThan(0)
     expect(screen.queryByText("Phê duyệt")).not.toBeInTheDocument()
     expect(screen.queryByText("Từ chối hồ sơ")).not.toBeInTheDocument()
+  })
+
+  it("publish_result without request_revision perm → ONLY 'Công bố kết quả'", () => {
+    renderPanel(buildProfile(), { primaryAction: "publish_result", canPublishResult: true })
+    expect(screen.getAllByText("Công bố kết quả").length).toBeGreaterThan(0)
     expect(screen.queryByText("Yêu cầu sửa")).not.toBeInTheDocument()
+    expect(screen.queryByText("Từ chối hồ sơ")).not.toBeInTheDocument()
   })
 
   it("enroll → ONLY 'Ghi danh'", () => {

@@ -27,34 +27,14 @@ import { IssueLocator } from "./IssueLocator"
 import { FeeReviewCard } from "../executive-summary/FeeReviewCard"
 import { AuditReviewCard } from "../executive-summary/AuditReviewCard"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
-import type { ReadinessTone, SubmissionReadiness } from "./useSubmissionReadiness"
+import { cockpitFallbackSummary, type SubmissionReadiness } from "./useSubmissionReadiness"
+import { READINESS_TONE_VARIANT } from "./readinessTone"
 
 interface ReviewerCockpitProps {
   profile: AdmissionProfileResponse
   readiness: SubmissionReadiness
   /** Deep-link to a pipeline step from the "Cần yêu cầu sửa" locator chips. */
   onNavigateToStep: (step: number) => void
-}
-
-const TONE_VARIANT: Record<
-  ReadinessTone,
-  "success" | "warning" | "error" | "info" | "secondary"
-> = {
-  success: "success",
-  warning: "warning",
-  error: "error",
-  info: "info",
-  neutral: "secondary",
-}
-
-function cockpitSummary(r: SubmissionReadiness): string {
-  if (r.eligibilityVerdict === "ineligible")
-    return "Hồ sơ chưa đủ điều kiện — chưa thể phê duyệt."
-  if (r.eligibilityVerdict === "pending")
-    return "Hồ sơ chưa được xét điều kiện xét tuyển."
-  if (r.hasOutstandingWarnings)
-    return "Hồ sơ đủ điều kiện cơ bản, nhưng còn cảnh báo cần rà soát trước khi phê duyệt."
-  return "Hồ sơ đủ điều kiện — có thể phê duyệt."
 }
 
 export function ReviewerCockpit({ profile, readiness, onNavigateToStep }: ReviewerCockpitProps) {
@@ -70,7 +50,7 @@ export function ReviewerCockpit({ profile, readiness, onNavigateToStep }: Review
           </span>
           <span className="flex shrink-0 items-center gap-2">
             <Badge
-              variant={TONE_VARIANT[readiness.verdictTone]}
+              variant={READINESS_TONE_VARIANT[readiness.verdictTone]}
               className="max-w-[55vw] truncate sm:max-w-none"
             >
               {readiness.verdictLabel}
@@ -87,7 +67,7 @@ export function ReviewerCockpit({ profile, readiness, onNavigateToStep }: Review
               matching the verdict badge); fall back to a generic line only for
               null/clean states so the body never contradicts the badge. */}
           <p className="text-sm text-muted-foreground break-words">
-            {readiness.decisionSummary ?? cockpitSummary(readiness)}
+            {readiness.decisionSummary ?? cockpitFallbackSummary(readiness)}
           </p>
           <DecisionSummaryGrid profile={profile} readiness={readiness} />
           <IssueLocator
