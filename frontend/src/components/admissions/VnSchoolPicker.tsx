@@ -127,7 +127,7 @@ export function VnSchoolPicker({
             role="combobox"
             aria-expanded={open}
             aria-label="Chọn trường THPT từ danh mục"
-            className="flex-1 justify-between font-normal"
+            className="flex-1 justify-between font-normal h-11 md:h-9"
             disabled={disabled}
           >
             <span
@@ -230,7 +230,7 @@ export function VnSchoolPicker({
           size="icon"
           onClick={handleManualClear}
           aria-label="Bỏ chọn trường"
-          className="shrink-0 text-muted-foreground hover:text-destructive"
+          className="shrink-0 text-muted-foreground hover:text-destructive size-11 md:size-9"
         >
           <X className="h-4 w-4" />
         </Button>
