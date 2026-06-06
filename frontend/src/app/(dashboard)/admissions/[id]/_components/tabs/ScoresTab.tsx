@@ -876,6 +876,7 @@ function MultiNvScoresTab({
           nextDisplayOrder={nextDisplayOrder}
           currentPathId={currentPathId}
           roundIdOverride={roundIdFromAppliedRules}
+          existingPathIds={choices.map((c) => c.admission_path_id)}
         />
       </CardContent>
     </Card>

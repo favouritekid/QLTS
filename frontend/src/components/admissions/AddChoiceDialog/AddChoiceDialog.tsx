@@ -24,8 +24,21 @@
  */
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Loader2 } from "lucide-react"
+import { Check, ChevronsUpDown, Loader2 } from "lucide-react"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
 
 import {
   Dialog,
@@ -41,13 +54,10 @@ import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { groupByMethodType } from "@/lib/admissions/method-groups"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   getAdmissionPath,
@@ -68,6 +78,10 @@ export interface AddChoiceDialogProps {
   currentPathId: number | null
   /** Optional fallback nếu profile chưa có NV nào — truyền round_id đã biết. */
   roundIdOverride?: number
+  /** admission_path_id của các NV đã có → disable trong dropdown ("đã chọn"),
+   * chặn officer chọn lại cùng path. Cùng ngành khác phương thức (path khác)
+   * vẫn cho. Mặc định []. */
+  existingPathIds?: number[]
 }
 
 interface ScoreState {
@@ -83,8 +97,10 @@ export function AddChoiceDialog({
   nextDisplayOrder,
   currentPathId,
   roundIdOverride,
+  existingPathIds = [],
 }: AddChoiceDialogProps) {
   const [selectedPathId, setSelectedPathId] = useState<number | null>(null)
+  const [pathOpen, setPathOpen] = useState(false)
   const [selectedConfigId, setSelectedConfigId] = useState<number | null>(null)
   const [scores, setScores] = useState<ScoreState[]>([])
   const [serverError, setServerError] = useState<string | null>(null)
@@ -215,6 +231,8 @@ export function AddChoiceDialog({
 
   const isLoading = loadingCurrentPath || loadingPaths
   const isSubmitting = createChoice.isPending
+  const selectedPath =
+    pathsData?.items.find((p) => p.id === selectedPathId) ?? null
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -246,46 +264,95 @@ export function AddChoiceDialog({
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="select-path">Ngành / Phương thức xét tuyển</Label>
-              <Select
-                value={selectedPathId?.toString() ?? ""}
-                onValueChange={(v) => {
-                  setSelectedPathId(Number(v))
-                  setSelectedConfigId(null)
-                }}
-                disabled={loadingPaths || isSubmitting}
-              >
-                <SelectTrigger id="select-path">
-                  <SelectValue
-                    placeholder={
-                      loadingPaths ? "Đang tải…" : "Chọn ngành + phương thức"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {/* Nhóm path theo loại phương thức (Học bạ / Điểm thi / Kết
-                      hợp / Khác) của method gắn với path + sort display_order →
-                      giảm officer chọn nhầm. Ẩn tiêu đề khi chỉ 1 nhóm. */}
-                  {(() => {
-                    const groups = groupByMethodType(
-                      pathsData?.items ?? [],
-                      (p) => p.admission_method,
-                      (p) => p.display_order ?? 0,
-                      (p) => p.display_name || `Path ${p.id}`,
-                    )
-                    const showHeaders = groups.length > 1
-                    return groups.map((g) => (
-                      <SelectGroup key={g.key}>
-                        {showHeaders && <SelectLabel>{g.label}</SelectLabel>}
-                        {g.items.map((p) => (
-                          <SelectItem key={p.id} value={p.id.toString()}>
-                            {p.display_name || `Path ${p.id}`}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))
-                  })()}
-                </SelectContent>
-              </Select>
+              {/* Combobox gõ-để-lọc: officer gõ tên ngành → lọc tức thì (danh sách
+                  dài, dễ tra cứu nhất). Mỗi dòng = tên ngành + tag [cấp] [phương
+                  thức]; path đã là NV bị disable "(đã chọn)" — chặn chọn trùng
+                  cùng path (cùng ngành khác phương thức vẫn cho). */}
+              <Popover open={pathOpen} onOpenChange={setPathOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    id="select-path"
+                    type="button"
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={pathOpen}
+                    disabled={loadingPaths || isSubmitting}
+                    className="w-full justify-between font-normal"
+                  >
+                    <span
+                      className={cn(
+                        "truncate",
+                        !selectedPath && "text-muted-foreground",
+                      )}
+                    >
+                      {selectedPath
+                        ? selectedPath.major_name ||
+                          selectedPath.display_name ||
+                          `Path ${selectedPath.id}`
+                        : loadingPaths
+                          ? "Đang tải…"
+                          : "Chọn ngành (gõ để tìm)…"}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-[var(--radix-popover-trigger-width)] p-0"
+                  align="start"
+                >
+                  <Command>
+                    <CommandInput placeholder="Gõ tên ngành…" />
+                    <CommandList>
+                      <CommandEmpty>Không tìm thấy ngành.</CommandEmpty>
+                      {(pathsData?.items ?? []).map((p) => {
+                        const taken = existingPathIds.includes(p.id)
+                        const label =
+                          p.major_name || p.display_name || `Path ${p.id}`
+                        const methodName = p.admission_method?.name ?? ""
+                        return (
+                          <CommandItem
+                            key={p.id}
+                            // value = keyword tìm kiếm (ngành + cấp + phương thức)
+                            // + id đảm bảo unique cho cmdk.
+                            value={`${label} ${p.degree_level ?? ""} ${methodName} ${p.id}`}
+                            disabled={taken}
+                            onSelect={() => {
+                              setSelectedPathId(p.id)
+                              setSelectedConfigId(null)
+                              setPathOpen(false)
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4 shrink-0",
+                                selectedPathId === p.id
+                                  ? "opacity-100"
+                                  : "opacity-0",
+                              )}
+                            />
+                            <span className="flex-1 truncate">{label}</span>
+                            {p.degree_level && (
+                              <span className="ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                                {p.degree_level}
+                              </span>
+                            )}
+                            {methodName && (
+                              <span className="ml-1 shrink-0 rounded bg-info-50 px-1.5 py-0.5 text-[11px] text-info-700">
+                                {methodName}
+                              </span>
+                            )}
+                            {taken && (
+                              <span className="ml-1 shrink-0 text-[11px] text-muted-foreground">
+                                (đã chọn)
+                              </span>
+                            )}
+                          </CommandItem>
+                        )
+                      })}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
             {selectedPathId !== null && (

@@ -120,6 +120,16 @@ async def build_path_response(
         response.round_archived_at = _round.archived_at
         response.round_is_active = _round.is_active
         response.round_allow_multi_nv = _round.allow_multi_nv
+    # Trình độ + tên ngành (FE phân biệt CĐ/TC trong dropdown nguyện vọng).
+    # ``__dict__.get`` tránh lazy load (MissingGreenlet) khi chain chưa eager-load
+    # — flat field stay None. degree_level là column trên MajorProgram nên load
+    # cùng ``program`` (không trigger lazy thêm).
+    _ai = path.__dict__.get("academic_info")
+    _offering = _ai.__dict__.get("offering") if _ai is not None else None
+    _program = _offering.__dict__.get("program") if _offering is not None else None
+    if _program is not None:
+        response.degree_level = getattr(_program, "degree_level", None)
+        response.major_name = getattr(_program, "name", None)
     response.available_actions = service.compute_available_actions(path, current_user)
     response.can_edit = service.compute_can_edit(path, current_user)
     response.can_activate = await service.compute_can_activate(path, current_user)

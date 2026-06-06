@@ -425,6 +425,19 @@ class AdmissionPathResponse(BaseModel):
     display_order: int
     visibility: VisibilityStatus
 
+    # Trình độ (cấp đào tạo) + tên ngành — FLAT, populated trong
+    # ``build_path_response`` từ academic_info.offering.program (đã eager-load ở
+    # các list query). Để FE phân biệt CĐ/TC trong dropdown nguyện vọng (2 ngành
+    # cùng tên khác cấp hiện y hệt). Default None khi chain chưa load (an toàn
+    # như các flat field round bên dưới).
+    degree_level: Optional[str] = Field(
+        default=None,
+        description="Cấp đào tạo của ngành (vd 'Cao đẳng' / 'Trung cấp'). NULL nếu chưa load.",
+    )
+    major_name: Optional[str] = Field(
+        default=None, description="Tên ngành (major_program.name). NULL nếu chưa load."
+    )
+
     # Phase 2 v8.2 PR-2B v2 / PR-2C v2 — round + per-path quota fields.
     admission_round_id: int = Field(
         description="Round FK (NOT NULL post PR-2C v2 3-col UNIQUE swap)."
