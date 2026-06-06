@@ -62,6 +62,22 @@ describe("ReadinessHero", () => {
     expect(screen.getByText("Có thể nộp")).toBeInTheDocument()
   })
 
+  it("'Nguyện vọng' shows the choice (program/degree); 'Phương thức' shows the humanized method, never the raw code", () => {
+    const { container } = render(
+      <ReadinessHero
+        profile={buildProfile({
+          applied_rules: { admission_method: "201", method_type: "subject_based" },
+          choices: [{ display_program_name: "Công nghệ ô tô", display_degree_level: "Trung cấp" }],
+        } as Partial<AdmissionProfileResponse>)}
+        readiness={buildReadiness()}
+      />,
+    )
+    expect(screen.getByText("Công nghệ ô tô — Trung cấp")).toBeInTheDocument()
+    expect(screen.getByText("Xét theo tổ hợp môn")).toBeInTheDocument()
+    expect(container.textContent).not.toContain("Nguyện vọng: 201")
+    expect(screen.queryByText("201")).not.toBeInTheDocument()
+  })
+
   it("does NOT render a separate eligibility badge or eligibility metric (one verdict only)", () => {
     const { container } = render(
       <ReadinessHero profile={buildProfile()} readiness={buildReadiness()} />,
@@ -93,7 +109,12 @@ describe("ReadinessHero", () => {
   it("document metric falls back to — when document_stats null", () => {
     render(
       <ReadinessHero
-        profile={buildProfile({ document_stats: null } as Partial<AdmissionProfileResponse>)}
+        profile={buildProfile({
+          document_stats: null,
+          // Give a choice so the "Nguyện vọng" field isn't also "—" (which would
+          // make the bare getByText("—") ambiguous) — isolate the doc metric.
+          choices: [{ display_program_name: "X", display_degree_level: "Y" }],
+        } as Partial<AdmissionProfileResponse>)}
         readiness={buildReadiness()}
       />,
     )

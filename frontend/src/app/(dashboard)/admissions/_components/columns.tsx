@@ -31,23 +31,23 @@ import {
 } from "@/components/ui/dropdown-menu"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { hasAction } from "@/lib/admission/permissions"
+import { ADMISSION_STATUS_CONFIG } from "@/lib/status-config"
 
 // =============================================================================
 // STATUS CONFIGURATION
 // =============================================================================
 
-export const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  draft: { label: "Nháp", color: "bg-muted text-muted-foreground" },
-  submitted: { label: "Chờ duyệt", color: "bg-info-100 text-info-700" },
-  resubmitted: { label: "Đã nộp lại", color: "bg-info-100 text-info-700" },
-  approved: { label: "Đã duyệt", color: "bg-success-100 text-success-700" },
-  rejected: { label: "Từ chối", color: "bg-error-100 text-error-700" },
-  revision_requested: { label: "Yêu cầu bổ sung", color: "bg-orange-100 text-orange-700" },
-  confirmed: { label: "Đã xác nhận", color: "bg-emerald-100 text-emerald-700" },
-  overridden: { label: "Đã override", color: "bg-purple-100 text-purple-700" },
-  enrolled: { label: "Đã nhập học", color: "bg-blue-100 text-blue-700" },
-  withdrawn: { label: "Đã rút hồ sơ", color: "bg-muted text-muted-foreground" },
-}
+// Derived from the canonical ADMISSION_STATUS_CONFIG (single source of truth) so
+// the list status badge covers EVERY admission state — incl. the multi-NV states
+// reviewing / result_published / admitted / waitlisted that the old inline map
+// omitted, which made the list render the raw English enum for those rows.
+export const STATUS_CONFIG: Record<string, { label: string; color: string }> =
+  Object.fromEntries(
+    Object.entries(ADMISSION_STATUS_CONFIG).map(([status, cfg]) => [
+      status,
+      { label: cfg.label, color: cfg.badgeColor },
+    ]),
+  )
 
 export const ELIGIBILITY_CONFIG: Record<string, { label: string; color: string }> = {
   eligible: { label: "Đủ điều kiện", color: "bg-success-100 text-success-700" },

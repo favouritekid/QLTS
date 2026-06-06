@@ -12,12 +12,19 @@ import type { AppliedRules, DocumentItem } from "@/lib/zod/admissions"
 // ==============================================================================
 
 /**
- * Get human-readable label for admission method code.
+ * Get a human-readable label for the admission METHOD (phương thức xét tuyển).
+ *
+ * `applied_rules.admission_method` is EITHER a legacy enum string (HOC_BA/…) OR a
+ * TS2026 numeric method CODE ("201"/"301"/…) — the latter is meaningless to a
+ * user. So: a known legacy enum → its specific label; otherwise fall back to the
+ * stable `method_type` enum (gpa_only/subject_based/combined). NEVER return the
+ * raw numeric code (that's the "Nguyện vọng: 201" bug).
+ *
  * @param appliedRules Applied rules snapshot from backend
- * @returns Formatted admission method label
+ * @returns Vietnamese method label (never a raw code)
  */
 export function getAdmissionMethodLabel(appliedRules: AppliedRules): string {
-  const methodLabels: Record<string, string> = {
+  const legacyLabels: Record<string, string> = {
     HOC_BA: "Xét học bạ THPT",
     THI_THPT: "Xét điểm thi THPT Quốc gia",
     DGNL: "Xét điểm đánh giá năng lực",
@@ -26,11 +33,46 @@ export function getAdmissionMethodLabel(appliedRules: AppliedRules): string {
     TUYEN_THANG: "Tuyển thẳng",
     UU_TIEN: "Xét ưu tiên",
   }
+  const methodTypeLabels: Record<string, string> = {
+    gpa_only: "Xét học bạ",
+    subject_based: "Xét theo tổ hợp môn",
+    combined: "Xét kết hợp",
+  }
 
   const method = appliedRules.admission_method
-  if (!method) return "Chưa xác định"
+  if (method && legacyLabels[method]) return legacyLabels[method]
 
-  return methodLabels[method] ?? method
+  // Numeric TS2026 codes (or any unknown method) → use the coarse-but-stable
+  // method_type instead of leaking the raw code to the UI.
+  const methodType = appliedRules.method_type
+  if (methodType && methodTypeLabels[methodType]) return methodTypeLabels[methodType]
+
+  return "Xét tuyển"
+}
+
+/**
+ * Summary of the candidate's actual CHOICE(S) (nguyện vọng) for compact identity
+ * rows. Multi-NV (uses_choice_engine): the first choice's program — degree, plus
+ * "+N NV" when there are more. Single-NV / no choices: the profile-level
+ * `program_name`. Returns "—" only when nothing is available. This is the field a
+ * "Nguyện vọng:" caption should show — NOT the admission method.
+ */
+export function getChoiceSummaryLabel(profile: {
+  choices?: ReadonlyArray<{
+    display_program_name?: string | null
+    display_degree_level?: string | null
+  }> | null
+  program_name?: string | null
+}): string {
+  const choices = profile.choices ?? []
+  if (choices.length > 0) {
+    const first = choices[0]
+    const program = (first.display_program_name ?? "").trim()
+    const degree = (first.display_degree_level ?? "").trim()
+    const base = [program, degree].filter(Boolean).join(" — ") || program || "—"
+    return choices.length > 1 ? `${base} +${choices.length - 1} NV` : base
+  }
+  return (profile.program_name ?? "").trim() || "—"
 }
 
 // ==============================================================================
