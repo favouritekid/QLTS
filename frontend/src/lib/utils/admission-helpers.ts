@@ -84,7 +84,9 @@ export function getChoiceDisplayName(choice: {
 }): string {
   const program = (choice.display_program_name ?? "").trim()
   const degree = (choice.display_degree_level ?? "").trim()
-  return [program, degree].filter(Boolean).join(" — ") || program || degree || "—"
+  // filter(Boolean) + join already covers the single-value cases; only reaches ""
+  // when both are empty → "—".
+  return [program, degree].filter(Boolean).join(" — ") || "—"
 }
 
 /**
