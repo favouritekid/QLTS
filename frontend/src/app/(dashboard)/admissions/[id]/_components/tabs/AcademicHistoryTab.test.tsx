@@ -99,7 +99,7 @@ describe("AcademicHistoryTab — Commit 5 quick-add 3 năm THPT", () => {
     expect(screen.queryByTestId("academic-quick-add-thpt")).not.toBeInTheDocument()
   })
 
-  it("Click button tạo đúng 3 record lớp 10/11/12 + graduation_type=THPT ở lớp 12", () => {
+  it("Click button tạo đúng 3 record lớp 10/11/12 + graduation_type=THPT mọi lớp", () => {
     let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
     renderTab({
       isEditable: true,
@@ -115,9 +115,10 @@ describe("AcademicHistoryTab — Commit 5 quick-add 3 năm THPT", () => {
     expect(history[0].grade_to).toBe(10)
     expect(history[1].grade_to).toBe(11)
     expect(history[2].grade_to).toBe(12)
-    // Lớp 12 = graduation_type THPT, lớp 10/11 null
-    expect((history[2] as { graduation_type?: string | null }).graduation_type).toBe("THPT")
-    expect((history[0] as { graduation_type?: string | null }).graduation_type).toBeNull()
+    // Trình độ = THPT cho MỌI lớp (tương xứng cấp học quick-add)
+    expect(
+      (history as Array<{ graduation_type?: string | null }>).map((h) => h.graduation_type),
+    ).toEqual(["THPT", "THPT", "THPT"])
   })
 })
 
@@ -132,7 +133,7 @@ describe("AcademicHistoryTab — quick-add 4 năm THCS", () => {
     expect(screen.queryByTestId("academic-quick-add-thcs")).not.toBeInTheDocument()
   })
 
-  it("Click tạo đúng 4 record lớp 6/7/8/9 + graduation_type=THCS ở lớp 9", () => {
+  it("Click tạo đúng 4 record lớp 6/7/8/9 + graduation_type=THCS mọi lớp", () => {
     let capturedForm: UseFormReturn<AdmissionProfileUpdateInput> | null = null
     renderTab({
       isEditable: true,
@@ -146,9 +147,10 @@ describe("AcademicHistoryTab — quick-add 4 năm THCS", () => {
     const history = capturedForm!.getValues("academic_history") ?? []
     expect(history).toHaveLength(4)
     expect(history.map((h) => h.grade_to)).toEqual([6, 7, 8, 9])
-    // Lớp 9 = graduation_type THCS, lớp 6/7/8 null
-    expect((history[3] as { graduation_type?: string | null }).graduation_type).toBe("THCS")
-    expect((history[0] as { graduation_type?: string | null }).graduation_type).toBeNull()
+    // Trình độ = THCS cho MỌI lớp (tương xứng cấp học quick-add)
+    expect(
+      (history as Array<{ graduation_type?: string | null }>).map((h) => h.graduation_type),
+    ).toEqual(["THCS", "THCS", "THCS", "THCS"])
     // year_from === year_to mỗi record (1 năm/lớp), năm tăng dần
     expect(history[0].year_to).toBe(history[0].year_from)
     expect(history[3].year_to - history[0].year_from).toBe(3)

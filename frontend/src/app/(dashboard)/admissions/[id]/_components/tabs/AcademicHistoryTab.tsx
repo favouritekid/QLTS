@@ -59,8 +59,9 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   }
 
   // Quick-add toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9). Mỗi lớp 1
-  // năm, lớp cuối cấp = endYear; officer chỉ cần điền trường + GPA. graduation_type
-  // gán ở lớp cuối. Engine yêu cầu lịch sử THPT có school_id để xác định KV.
+  // năm, lớp cuối cấp = endYear; officer chỉ cần điền trường + GPA. Trình độ
+  // (graduation_type) gán cho MỌI lớp = cấp học quick-add (cả thẻ tương xứng
+  // THPT/THCS). Engine yêu cầu lịch sử THPT có school_id để xác định KV.
   const addBand = (band: GradeBand, endYear: number) => {
     const count = bandYears(band)
     for (let i = 0; i < count; i++) {
@@ -74,7 +75,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
         year_to: year,
         grade_to: grade,
         gpa: null,
-        graduation_type: grade === band.end ? band.graduationType : null,
+        graduation_type: band.graduationType,
       } as Parameters<typeof append>[0])
     }
   }
@@ -424,7 +425,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     <FormLabel className="text-xs">Trình độ</FormLabel>
                                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
                                     <FormControl>
-                                        <SelectTrigger className="bg-background" aria-label="Chọn trình độ tốt nghiệp">
+                                        <SelectTrigger className="bg-background h-11 md:h-9" aria-label="Chọn trình độ tốt nghiệp">
                                         <SelectValue placeholder="Chọn" />
                                         </SelectTrigger>
                                     </FormControl>
