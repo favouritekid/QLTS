@@ -41,10 +41,13 @@ import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { groupByMethodType } from "@/lib/admissions/method-groups"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   getAdmissionPath,
@@ -259,11 +262,28 @@ export function AddChoiceDialog({
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {pathsData?.items.map((p) => (
-                    <SelectItem key={p.id} value={p.id.toString()}>
-                      {p.display_name || `Path ${p.id}`}
-                    </SelectItem>
-                  ))}
+                  {/* Nhóm path theo loại phương thức (Học bạ / Điểm thi / Kết
+                      hợp / Khác) của method gắn với path + sort display_order →
+                      giảm officer chọn nhầm. Ẩn tiêu đề khi chỉ 1 nhóm. */}
+                  {(() => {
+                    const groups = groupByMethodType(
+                      pathsData?.items ?? [],
+                      (p) => p.admission_method,
+                      (p) => p.display_order ?? 0,
+                      (p) => p.display_name || `Path ${p.id}`,
+                    )
+                    const showHeaders = groups.length > 1
+                    return groups.map((g) => (
+                      <SelectGroup key={g.key}>
+                        {showHeaders && <SelectLabel>{g.label}</SelectLabel>}
+                        {g.items.map((p) => (
+                          <SelectItem key={p.id} value={p.id.toString()}>
+                            {p.display_name || `Path ${p.id}`}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))
+                  })()}
                 </SelectContent>
               </Select>
             </div>

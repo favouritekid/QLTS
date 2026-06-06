@@ -13,7 +13,8 @@ import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { groupByMethodType } from "@/lib/admissions/method-groups"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
 import { ClipboardCheck, ArrowLeft, Loader2, AlertCircle } from "lucide-react"
@@ -55,6 +56,11 @@ interface AdmissionMethod {
   name: string
   description?: string
   is_active: boolean
+  // BE /api/admission-config/methods trả đủ các cờ này (mirror admin-config
+  // AdmissionMethod) — dùng để nhóm dropdown theo loại + sort.
+  requires_gpa: boolean
+  requires_subject_scores: boolean
+  display_order?: number
 }
 
 interface AdmissionMethodListResponse {
@@ -542,11 +548,28 @@ export default function CreateAdmissionPage() {
                   <SelectValue placeholder="Chọn phương thức xét tuyển" />
                 </SelectTrigger>
                 <SelectContent>
-                  {methodsForYear.map((method) => (
-                    <SelectItem key={method.id} value={method.id.toString()}>
-                      {method.name}
-                    </SelectItem>
-                  ))}
+                  {/* Nhóm theo loại (Học bạ / Điểm thi / Kết hợp / Khác) + sort
+                      display_order trong nhóm → danh sách có tổ chức, giảm chọn
+                      nhầm. Ẩn tiêu đề khi chỉ 1 nhóm. */}
+                  {(() => {
+                    const groups = groupByMethodType(
+                      methodsForYear,
+                      (m) => m,
+                      (m) => m.display_order ?? 0,
+                      (m) => m.name,
+                    )
+                    const showHeaders = groups.length > 1
+                    return groups.map((g) => (
+                      <SelectGroup key={g.key}>
+                        {showHeaders && <SelectLabel>{g.label}</SelectLabel>}
+                        {g.items.map((method) => (
+                          <SelectItem key={method.id} value={method.id.toString()}>
+                            {method.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))
+                  })()}
                 </SelectContent>
               </Select>
             )}
