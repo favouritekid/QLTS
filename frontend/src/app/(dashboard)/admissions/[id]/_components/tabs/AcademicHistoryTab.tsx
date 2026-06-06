@@ -26,6 +26,20 @@ interface AcademicHistoryTabProps {
   isEditable: boolean
 }
 
+// Dải lớp theo cấp học — nguồn DUY NHẤT cho quick-add + phân loại notices,
+// tránh magic number rải rác (vd đổi range quick-add nhưng quên đổi filter
+// notices → lệch âm thầm). graduationType gán ở lớp cuối cấp. Engine KV chỉ
+// dùng entry THPT; THCS display-only.
+const GRADE_BANDS = {
+  THCS: { start: 6, end: 9, graduationType: "THCS" },
+  THPT: { start: 10, end: 12, graduationType: "THPT" },
+} as const
+
+type GradeBand = (typeof GRADE_BANDS)[keyof typeof GRADE_BANDS]
+const bandYears = (b: { start: number; end: number }) => b.end - b.start + 1
+const bandGradesLabel = (b: { start: number; end: number }) =>
+  Array.from({ length: bandYears(b) }, (_, i) => b.start + i).join("/")
+
 export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps) {
   const { fields, append, remove } = useFieldArray({
     control: form.control,
@@ -44,15 +58,14 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     })
   }
 
-  // Commit 5 — quick-add 3 năm THPT. Tạo 3 record lớp 10/11/12 mặc định
-  // dùng năm hiện tại làm tốt nghiệp; officer chỉ cần điền tên trường +
-  // GPA. Engine yêu cầu lịch sử THPT để xác định KV → tăng tốc nhập hồ
-  // sơ tốt nghiệp năm hiện tại.
-  const addThreeYearsThpt = () => {
-    const gradYear = new Date().getFullYear()
-    for (let i = 0; i < 3; i++) {
-      const grade = 10 + i
-      const year = gradYear - 2 + i
+  // Quick-add toàn bộ các lớp của một cấp (THPT 10→12, THCS 6→9). Mỗi lớp 1
+  // năm, lớp cuối cấp = endYear; officer chỉ cần điền trường + GPA. graduation_type
+  // gán ở lớp cuối. Engine yêu cầu lịch sử THPT có school_id để xác định KV.
+  const addBand = (band: GradeBand, endYear: number) => {
+    const count = bandYears(band)
+    for (let i = 0; i < count; i++) {
+      const grade = band.start + i
+      const year = endYear - (count - 1) + i // lớp đầu = endYear−(count−1) … lớp cuối = endYear
       append({
         school_id: null,
         school_name: "",
@@ -61,43 +74,32 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
         year_to: year,
         grade_to: grade,
         gpa: null,
-        graduation_type: grade === 12 ? "THPT" : null,
+        graduation_type: grade === band.end ? band.graduationType : null,
       } as Parameters<typeof append>[0])
     }
   }
 
-  // Quick-add 4 năm THCS (lớp 6/7/8/9). Đối xứng với addThreeYearsThpt. Năm
-  // tự điền lùi: lớp 9 = năm ngay trước khi vào lớp 10 nếu đã có THPT (chuỗi
-  // liền mạch dưới THPT), else năm hiện tại − 3. Engine KV KHÔNG dùng entry
-  // THCS (chỉ lưu hồ sơ) — nút này phục vụ nhập liệu nhanh học bạ THCS.
+  // 3 năm THPT (lớp 10/11/12), tốt nghiệp = năm hiện tại.
+  const addThreeYearsThpt = () => addBand(GRADE_BANDS.THPT, new Date().getFullYear())
+
+  // 4 năm THCS (lớp 6/7/8/9). Năm tự lùi: lớp 9 = năm ngay trước khi vào lớp 10
+  // nếu hồ sơ đã có THPT (chuỗi liền mạch), else năm hiện tại − 3. Engine KV
+  // KHÔNG dùng entry THCS (chỉ lưu hồ sơ).
   const addFourYearsThcs = () => {
     const existing = form.getValues("academic_history") ?? []
     const thptStartYears = existing
       .filter(
         (r) =>
           r?.grade_to != null &&
-          r.grade_to >= 10 &&
-          r.grade_to <= 12 &&
+          r.grade_to >= GRADE_BANDS.THPT.start &&
+          r.grade_to <= GRADE_BANDS.THPT.end &&
           r?.year_from != null,
       )
       .map((r) => r.year_from as number)
     const grade9Year = thptStartYears.length
       ? Math.min(...thptStartYears) - 1
       : new Date().getFullYear() - 3
-    for (let i = 0; i < 4; i++) {
-      const grade = 6 + i
-      const year = grade9Year - 3 + i // lớp 6 = grade9Year−3 … lớp 9 = grade9Year
-      append({
-        school_id: null,
-        school_name: "",
-        level: null,
-        year_from: year,
-        year_to: year,
-        grade_to: grade,
-        gpa: null,
-        graduation_type: grade === 9 ? "THCS" : null,
-      } as Parameters<typeof append>[0])
-    }
+    addBand(GRADE_BANDS.THCS, grade9Year)
   }
 
   // ── Vệ sinh nhập liệu (Tầng 2) + gợi ý KV (Tầng 3) ─────────────────────────
@@ -113,8 +115,12 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
   const currentYear = new Date().getFullYear()
   const inBand = (g: number | null | undefined, lo: number, hi: number): boolean =>
     g != null && g >= lo && g <= hi
-  const thptRecords = records.filter((r) => inBand(r?.grade_to, 10, 12))
-  const thcsRecords = records.filter((r) => inBand(r?.grade_to, 6, 9))
+  const thptRecords = records.filter((r) =>
+    inBand(r?.grade_to, GRADE_BANDS.THPT.start, GRADE_BANDS.THPT.end),
+  )
+  const thcsRecords = records.filter((r) =>
+    inBand(r?.grade_to, GRADE_BANDS.THCS.start, GRADE_BANDS.THCS.end),
+  )
 
   const gradeCount = new Map<number, number>()
   records.forEach((r) => {
@@ -134,13 +140,13 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
     softNotices.push(
       `Lớp ${dupGrades.join(", ")} xuất hiện nhiều lần — kiểm tra lại nếu không phải chuyển trường giữa năm.`,
     )
-  if (thptRecords.length > 3)
+  if (thptRecords.length > bandYears(GRADE_BANDS.THPT))
     softNotices.push(
-      `Đang có ${thptRecords.length} năm THPT (thường 3 năm: lớp 10/11/12). Nhiều hơn là bình thường nếu chuyển trường.`,
+      `Đang có ${thptRecords.length} năm THPT (thường ${bandYears(GRADE_BANDS.THPT)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THPT)}). Nhiều hơn là bình thường nếu chuyển trường.`,
     )
-  if (thcsRecords.length > 4)
+  if (thcsRecords.length > bandYears(GRADE_BANDS.THCS))
     softNotices.push(
-      `Đang có ${thcsRecords.length} năm THCS (thường 4 năm: lớp 6/7/8/9).`,
+      `Đang có ${thcsRecords.length} năm THCS (thường ${bandYears(GRADE_BANDS.THCS)} năm: lớp ${bandGradesLabel(GRADE_BANDS.THCS)}).`,
     )
   if (hasFutureYear)
     softNotices.push(
