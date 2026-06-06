@@ -71,6 +71,18 @@ describe("DocumentReviewCard — tone by failure mode", () => {
     expect(screen.getByText(/Thiếu 2 tài liệu bắt buộc/)).toBeInTheDocument()
   })
 
+  it("missing mandatory docs AND missing UT → error tone + both counts in one secondary", () => {
+    render(
+      <DocumentReviewCard
+        profile={buildProfile({ mandatory_count: 5, verified_count: 1, submitted_count: 3, missing_count: 2, unverified_count: 0, missingUt: ["UT07"] })}
+      />,
+    )
+    const card = screen.getByTestId("document-review-card")
+    expect(card.querySelector(".text-error-600")).toBeTruthy()
+    // The error-branch secondary appends the UT count (no "chờ xác minh" since unverified=0).
+    expect(screen.getByText("Thiếu 2 tài liệu bắt buộc · thiếu 1 minh chứng UT")).toBeInTheDocument()
+  })
+
   it("REGRESSION: submitted đủ, chờ xác minh → WARNING (KHÔNG error)", () => {
     render(
       <DocumentReviewCard

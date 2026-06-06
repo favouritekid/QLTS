@@ -473,10 +473,12 @@ export function useSubmissionReadiness(
     const summaryLine = es ? es.next_action || firstBlockerMsg || null : null
 
     // One-line decision summary: the verdict's own summary takes priority; the BE
-    // `next_action` hint (summaryLine) only surfaces here when the verdict has NO
-    // summary of its own (clean/terminal states) — for "has problems" states the
-    // verdict summary (count / why) is shown and the granular next_action lives in
-    // ActionItemsList / cockpit below. Never a pure restatement of the badge (rule #3).
+    // `next_action` hint (summaryLine) surfaces here whenever the verdict has NO
+    // summary of its own — i.e. the info/neutral verdicts (approve-clean, enroll,
+    // request_revision, reject, none) AND the clean submit/resubmit cases. For the
+    // "has problems" verdicts that DO carry a summary (submit/approve when blocked or
+    // with warnings), that count/why line is shown and the granular next_action lives
+    // in ActionItemsList / cockpit below. Never a pure restatement of the badge (rule #3).
     const decisionSummary = verdictSummary ?? summaryLine
 
     // 3rd Hero metric label — one honest label for both roles. The value is

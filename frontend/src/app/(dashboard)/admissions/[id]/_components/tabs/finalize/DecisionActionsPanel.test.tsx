@@ -5,8 +5,9 @@
  *   - Reviewer cluster prominence: eligible → Phê duyệt primary + Yêu cầu sửa /
  *     Từ chối secondary; ineligible & no bypass → Yêu cầu sửa primary, Phê duyệt
  *     disabled tertiary (no success green) + reason line.
- *   - Single-action states hide off-state actions: publish_result/enroll show ONLY
- *     their own action (no reject/revision).
+ *   - Single-action states: enroll/submit/resubmit show ONLY their own action;
+ *     publish_result shows "Công bố" + "Yêu cầu sửa" (secondary, when permitted) but
+ *     still hides approve/reject.
  *   - bypass_warning guard preserved (warning class + AlertDialog).
  *   - submit disabled + reason when !isEligible; resubmit NEVER gated by isEligible.
  *   - Root is NOT a Card / sticky (Hero owns shell). No send-link inside the panel.
