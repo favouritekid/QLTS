@@ -51,6 +51,151 @@ async def seed_admission_statuses(seed_lead_dependencies: dict):
     }
 
 
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def seed_application_fee_finance_dependencies(setup_test_database):
+    """Seed metadata-created test DB rows normally owned by Alembic."""
+    from tests.fixtures.constants import TestUsers
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            for username, email in (
+                ("system", "system@qlts.internal"),
+                ("backfill", "backfill@qlts.internal"),
+            ):
+                result = await session.execute(
+                    select(models.User).where(models.User.username == username)
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    session.add(
+                        models.User(
+                            username=username,
+                            email=email,
+                            password_hash=TestUsers.DEFAULT["real_hash"],
+                            full_name=f"{username.title()} Policy User",
+                            role="user",
+                            status="inactive",
+                            unit_id=None,
+                            current_assignment_id=None,
+                        )
+                    )
+                else:
+                    user.email = email
+                    user.password_hash = TestUsers.DEFAULT["real_hash"]
+                    user.role = "user"
+                    user.status = "inactive"
+                    user.unit_id = None
+                    user.current_assignment_id = None
+
+            result = await session.execute(
+                select(models.PaymentMethod).where(models.PaymentMethod.code == "cash")
+            )
+            if result.scalar_one_or_none() is None:
+                session.add(
+                    models.PaymentMethod(
+                        code="cash",
+                        name="Tiền mặt",
+                        is_online=False,
+                        requires_verification=True,
+                        gateway_code=None,
+                        display_order=2,
+                        is_active=True,
+                    )
+                )
+
+
+async def create_fee_scope_user(
+    *,
+    username: str,
+    email: str,
+    role: str,
+    unit_id: int,
+    app_instance,
+) -> dict:
+    """Create an active test user for fee-collection IDOR cases."""
+    from casbin_async_sqlalchemy_adapter.adapter import CasbinRule
+
+    from app.security import get_password_hash
+    from tests.fixtures.users import create_user_with_role
+
+    return await create_user_with_role(
+        session_factory=AsyncSessionLocal,
+        user_data={
+            "username": username,
+            "email": email,
+            "password": "ScopedPassword!123",
+            "role": role,
+            "status": "active",
+        },
+        casbin_role=f"role:{role}",
+        unit_id=unit_id,
+        models=models,
+        get_password_hash=get_password_hash,
+        CasbinRule=CasbinRule,
+        app=app_instance,
+    )
+
+
+@pytest_asyncio.fixture(scope="function")
+async def accountant_user_in_db(
+    setup_test_database,
+    seed_lead_dependencies: dict,
+    app_instance,
+):
+    return await create_fee_scope_user(
+        username="fee_accountant_unit1",
+        email="fee_accountant_unit1@example.com",
+        role="accountant",
+        unit_id=seed_lead_dependencies["unit_id"],
+        app_instance=app_instance,
+    )
+
+
+@pytest_asyncio.fixture(scope="function")
+async def accountant_other_unit_user_in_db(
+    setup_test_database,
+    seed_other_unit: dict,
+    app_instance,
+):
+    return await create_fee_scope_user(
+        username="fee_accountant_unit2",
+        email="fee_accountant_unit2@example.com",
+        role="accountant",
+        unit_id=seed_other_unit["unit_id"],
+        app_instance=app_instance,
+    )
+
+
+@pytest_asyncio.fixture(scope="function")
+async def officer_peer_user_in_db(
+    setup_test_database,
+    seed_lead_dependencies: dict,
+    app_instance,
+):
+    return await create_fee_scope_user(
+        username="fee_officer_peer",
+        email="fee_officer_peer@example.com",
+        role="officer",
+        unit_id=seed_lead_dependencies["unit_id"],
+        app_instance=app_instance,
+    )
+
+
+@pytest_asyncio.fixture(scope="function")
+async def officer_other_unit_user_in_db(
+    setup_test_database,
+    seed_other_unit: dict,
+    app_instance,
+):
+    return await create_fee_scope_user(
+        username="fee_officer_unit2",
+        email="fee_officer_unit2@example.com",
+        role="officer",
+        unit_id=seed_other_unit["unit_id"],
+        app_instance=app_instance,
+    )
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
@@ -178,6 +323,25 @@ async def create_admission_profile_with_fee_status(
         return result.scalar_one()
 
 
+async def create_pending_fee_profile(
+    *,
+    unit_id: int,
+    assigned_officer_id: int,
+    citizen_id: str,
+) -> models.AdmissionProfile:
+    lead_id = await create_test_lead_with_consultation(
+        unit_id=unit_id,
+        assigned_officer_id=assigned_officer_id,
+    )
+    return await create_admission_profile_with_fee_status(
+        lead_id=lead_id,
+        citizen_id=citizen_id,
+        academic_year=2026,
+        requires_fee=True,
+        fee_status="pending",
+    )
+
+
 async def get_auth_headers(client: AsyncClient, user_info: dict) -> dict:
     """Login and get auth headers."""
     login_data = {"username": user_info["username"], "password": user_info["password"]}
@@ -191,6 +355,23 @@ async def get_auth_headers(client: AsyncClient, user_info: dict) -> dict:
         pytest.fail("Login succeeded but access_token cookie not found")
 
     return {"Authorization": f"Bearer {access_token}"}
+
+
+async def post_record_fee_payment(
+    client: AsyncClient,
+    profile_id: int,
+    user_info: dict,
+    transaction_id: str,
+):
+    headers = await get_auth_headers(client, user_info)
+    return await client.post(
+        f"/api/admissions/{profile_id}/record-fee-payment",
+        params={
+            "transaction_id": transaction_id,
+            "amount": 100000,
+        },
+        headers=headers,
+    )
 
 
 async def reload_profile(profile_id: int) -> models.AdmissionProfile:
@@ -212,6 +393,29 @@ async def get_lead_status(lead_id: int) -> str:
             .where(models.Lead.id == lead_id)
         )
         return result.scalar_one_or_none()
+
+
+async def get_application_fee_chain(profile_id: int):
+    async with AsyncSessionLocal() as session:
+        fee_result = await session.execute(
+            select(models.Fee)
+            .where(
+                models.Fee.admission_profile_id == profile_id,
+                models.Fee.fee_type == "application",
+            )
+            .options(
+                selectinload(models.Fee.invoices)
+                .selectinload(models.Invoice.payments)
+                .selectinload(models.Payment.method)
+            )
+        )
+        fee = fee_result.scalar_one()
+        tx_result = await session.execute(
+            select(models.PaymentTransaction).where(
+                models.PaymentTransaction.fee_id == fee.id
+            )
+        )
+        return fee, tx_result.scalars().all()
 
 
 # ==============================================================================
@@ -350,13 +554,34 @@ class TestRecordFeePayment:
         lead_status = await get_lead_status(lead_id)
         assert lead_status == "sts13", f"Expected sts13, got {lead_status}"
 
-    async def test_officer_cannot_record_fee_payment(
+        fee, transactions = await get_application_fee_chain(profile.id)
+        assert fee.status == "paid"
+        assert fee.base_amount == Decimal("100000.00")
+        assert fee.paid_amount == Decimal("100000.00")
+        assert fee.waived_amount == Decimal("0.00")
+        assert fee.semester_no is None
+        assert len(fee.invoices) == 1
+        invoice = fee.invoices[0]
+        assert invoice.invoice_number == f"APP-{fee.id}"
+        assert invoice.status == "paid"
+        assert len(invoice.payments) == 1
+        payment = invoice.payments[0]
+        assert payment.status == "verified"
+        assert payment.method.code == "cash"
+        assert payment.intent_id is None
+        assert payment.verified_by_id != payment.created_by_id
+        assert len(transactions) == 1
+        assert transactions[0].transaction_type == "payment"
+        assert transactions[0].performed_by_id == payment.verified_by_id
+        assert transactions[0].external_reference == "TXN123456"
+
+    async def test_assigned_officer_can_record_fee_payment(
         self,
         client: AsyncClient,
         officer_user_in_db: dict,
         seed_admission_statuses: dict,
     ):
-        """Test officer cannot record fee payment (admin only)."""
+        """Assigned officer can collect application fee."""
         unit_id = seed_admission_statuses["unit_id"]
         officer_id = officer_user_in_db["id"]
 
@@ -384,7 +609,184 @@ class TestRecordFeePayment:
             headers=officer_headers,
         )
 
-        assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+        assert response.status_code == 200, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "paid"
+
+    async def test_manager_same_unit_can_record_fee_payment(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Manager can collect for profiles in their unit."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000104",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            manager_user_in_db,
+            "IDORMGR01",
+        )
+
+        assert response.status_code == 200, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "paid"
+
+    async def test_accountant_same_unit_can_record_fee_payment(
+        self,
+        client: AsyncClient,
+        accountant_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Accountant can collect for profiles in their unit."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000105",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            accountant_user_in_db,
+            "IDORACCT1",
+        )
+
+        assert response.status_code == 200, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "paid"
+
+    async def test_officer_same_unit_but_not_assigned_gets_404(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        officer_peer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Officer in the same unit still needs assignment."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_peer_user_in_db["id"],
+            citizen_id="200000000106",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            officer_user_in_db,
+            "IDOROFF01",
+        )
+
+        assert response.status_code == 404, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "pending"
+
+    async def test_accountant_other_unit_gets_404(
+        self,
+        client: AsyncClient,
+        accountant_other_unit_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Accountant cannot collect outside their unit."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000107",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            accountant_other_unit_user_in_db,
+            "IDORACCT2",
+        )
+
+        assert response.status_code == 404, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "pending"
+
+    async def test_manager_other_unit_gets_404(
+        self,
+        client: AsyncClient,
+        manager_other_unit_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Manager cannot collect outside their unit."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000108",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            manager_other_unit_user_in_db,
+            "IDORMGR02",
+        )
+
+        assert response.status_code == 404, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "pending"
+
+    async def test_officer_other_unit_gets_404(
+        self,
+        client: AsyncClient,
+        officer_other_unit_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Officer cannot collect outside their unit."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000109",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            officer_other_unit_user_in_db,
+            "IDOROFF02",
+        )
+
+        assert response.status_code == 404, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "pending"
+
+    async def test_regular_user_gets_404(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Regular user receives fake 404, not a leaking permission response."""
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000110",
+        )
+
+        response = await post_record_fee_payment(
+            client,
+            profile.id,
+            regular_user_in_db,
+            "IDORUSER1",
+        )
+
+        assert response.status_code == 404, response.text
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "pending"
 
     async def test_record_fee_payment_idempotent(
         self,
@@ -423,6 +825,159 @@ class TestRecordFeePayment:
 
         # Should return 200 (idempotent), not error
         assert response.status_code == 200
+
+
+class TestRecordFeePaymentPermissionFlag:
+    """GET detail exposes the Thin-Client action flag for fee collection."""
+
+    async def _get_detail(
+        self,
+        client: AsyncClient,
+        profile_id: int,
+        user_info: dict,
+    ) -> dict:
+        headers = await get_auth_headers(client, user_info)
+        response = await client.get(f"/api/admissions/{profile_id}", headers=headers)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    async def test_admin_pending_profile_can_record_fee(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000601",
+        )
+
+        data = await self._get_detail(client, profile.id, admin_user_in_db)
+
+        assert data["permissions"]["record_fee_payment"] is True
+        assert "record_fee_payment" in data["available_actions"]
+
+    async def test_assigned_officer_pending_profile_can_record_fee(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000602",
+        )
+
+        data = await self._get_detail(client, profile.id, officer_user_in_db)
+
+        assert data["permissions"]["record_fee_payment"] is True
+        assert "record_fee_payment" in data["available_actions"]
+
+    async def test_manager_same_unit_pending_profile_can_record_fee(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000603",
+        )
+
+        data = await self._get_detail(client, profile.id, manager_user_in_db)
+
+        assert data["permissions"]["record_fee_payment"] is True
+        assert "record_fee_payment" in data["available_actions"]
+
+    async def test_admin_paid_profile_cannot_record_fee_again(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000604",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="paid",
+        )
+
+        data = await self._get_detail(client, profile.id, admin_user_in_db)
+
+        assert data["permissions"]["record_fee_payment"] is False
+        assert "record_fee_payment" not in data["available_actions"]
+
+    async def test_admin_exempt_profile_cannot_record_fee(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000605",
+            academic_year=2026,
+            requires_fee=False,
+            fee_status="exempt",
+        )
+
+        data = await self._get_detail(client, profile.id, admin_user_in_db)
+
+        assert data["permissions"]["record_fee_payment"] is False
+        assert "record_fee_payment" not in data["available_actions"]
+
+
+class TestFeePaymentDataExposed:
+    """GET detail preserves payment snapshot fields for the frontend panel."""
+
+    async def test_fee_payment_snapshot_survives_response_schema(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+        silence_fee_dispatch,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000606",
+        )
+
+        paid = await post_record_fee_payment(
+            client,
+            profile.id,
+            admin_user_in_db,
+            "SNAPSHOT-001",
+        )
+        assert paid.status_code == 200, paid.text
+
+        headers = await get_auth_headers(client, admin_user_in_db)
+        detail = await client.get(f"/api/admissions/{profile.id}", headers=headers)
+        assert detail.status_code == 200, detail.text
+        applied_rules = detail.json()["applied_rules"]
+
+        assert applied_rules["fee_paid_at"] is not None
+        assert (
+            applied_rules["fee_payment_data"]["transaction_id"]
+            == "SNAPSHOT-001"
+        )
 
 
 # ==============================================================================
@@ -590,7 +1145,6 @@ class TestFullFlowWithFee:
             status="submitted",
         )
 
-        officer_headers = await get_auth_headers(client, officer_user_in_db)
         manager_headers = await get_auth_headers(client, manager_user_in_db)
         admin_headers = await get_auth_headers(client, admin_user_in_db)
 
@@ -736,7 +1290,7 @@ class TestApplicationFeePaidEvent:
                     profile_id=profile.id,
                     payment_data={
                         "transaction_id": "TXN-DISPATCH-001",
-                        "amount": 150000,
+                        "amount": 100000,
                     },
                     recorded_by=recorded_by,
                 )
@@ -756,7 +1310,7 @@ class TestApplicationFeePaidEvent:
                 assert payload["lead_id"] == lead_id
                 assert payload["unit_id"] == unit_id
                 assert payload["officer_id"] == officer_id
-                assert payload["amount"] == "150000"
+                assert payload["amount"] == "100000.00"
                 assert payload["transaction_id"] == "TXN-DISPATCH-001"
                 assert payload["actor_id"] == recorded_by.id
                 assert payload["actor_name"] in (
@@ -841,7 +1395,7 @@ class TestApplicationFeePaidEvent:
                     "lead_id": lead_id,
                     "unit_id": unit_id,
                     "officer_id": officer_id,
-                    "amount": "150000",
+                    "amount": "100000",
                     "transaction_id": "TXN-E2E-001",
                     "actor_id": officer_id,
                     "actor_name": admin_user_in_db["username"],
@@ -873,7 +1427,7 @@ class TestApplicationFeePaidEvent:
             matching = next(n for n in notifs if n.user_id == officer_id)
             assert matching.title == "Lệ phí xét tuyển đã thanh toán"
             assert str(profile.id) in matching.message
-            assert "150000" in matching.message
+            assert "100000" in matching.message
             # Data JSON carries the source event type for audit/trace
             assert matching.data is not None
             assert matching.data.get("event") == "application_fee_paid"
@@ -925,3 +1479,554 @@ class TestApplicationFeePaidEvent:
                 )
                 await callback()
                 mock_dispatch.assert_not_called()
+
+
+# ==============================================================================
+# ADVERSARIAL / FINANCIAL-INTEGRITY TESTS (plan v8 — guards, fingerprint,
+# reconcile-conflict, replay, race). Happy-path + IDOR live above.
+# ==============================================================================
+
+
+async def _load_user(user_id: int) -> models.User:
+    async with AsyncSessionLocal() as session:
+        return await session.get(models.User, user_id)
+
+
+async def _load_system_user() -> models.User:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(models.User).where(models.User.username == "system")
+        )
+        return result.scalar_one()
+
+
+async def _tamper_system(**fields) -> None:
+    """Mutate the seeded ``system`` principal in a committed txn so the runtime
+    fingerprint check (`_get_system_application_fee_user`) sees the tamper."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(models.User).where(models.User.username == "system")
+            )
+            system = result.scalar_one()
+            for key, value in fields.items():
+                setattr(system, key, value)
+
+
+async def _load_paid_chain_objects(session, profile_id: int):
+    fee = (
+        await session.execute(
+            select(models.Fee)
+            .where(
+                models.Fee.admission_profile_id == profile_id,
+                models.Fee.fee_type == "application",
+            )
+            .options(
+                selectinload(models.Fee.invoices).selectinload(
+                    models.Invoice.payments
+                )
+            )
+        )
+    ).scalar_one()
+    invoice = fee.invoices[0]
+    payment = invoice.payments[0]
+    txn = (
+        await session.execute(
+            select(models.PaymentTransaction).where(
+                models.PaymentTransaction.fee_id == fee.id
+            )
+        )
+    ).scalar_one()
+    return fee, invoice, payment, txn
+
+
+# --- reconcile-conflict drift mutators (committable single-field tampers) --- #
+def _m_payment_status_pending(s, fee, invoice, payment, txn):
+    payment.status = "pending"
+
+
+def _m_payment_amount_drift(s, fee, invoice, payment, txn):
+    # Stays > 0 (chk_payment_amount_positive) but != expected → reconcile rejects.
+    payment.amount = Decimal("1.00")
+
+
+def _m_fee_paid_amount_drift(s, fee, invoice, payment, txn):
+    fee.paid_amount = Decimal("1.00")
+
+
+def _m_invoice_installment_no(s, fee, invoice, payment, txn):
+    invoice.installment_no = 2
+
+
+def _m_invoice_penalty_drift(s, fee, invoice, payment, txn):
+    invoice.penalty_amount = Decimal("1.00")
+
+
+def _m_txn_external_ref_drift(s, fee, invoice, payment, txn):
+    txn.external_reference = "WRONG-REF"
+
+
+def _m_extra_adjustment_txn(s, fee, invoice, payment, txn):
+    # P0-3: an extra adjustment/waive txn sharing fee_id (payment_id NULL) must
+    # be caught by cardinality-per-fee_id, NOT slip past payment.transactions.
+    s.add(
+        models.PaymentTransaction(
+            payment_id=None,
+            fee_id=fee.id,
+            transaction_type="adjustment",
+            amount=Decimal("0"),
+            balance_before=Decimal("0"),
+            balance_after=Decimal("0"),
+            performed_by_id=None,
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+
+
+@pytest_asyncio.fixture
+async def silence_fee_dispatch():
+    """Isolate ledger/reconcile/replay assertions from the notification
+    subsystem. The ``application_fee_paid`` rule is NOT seeded in the
+    create_all() test DB, and a sibling test that seeds a real rule leaves a
+    stale process cache → the post-commit ``safe_dispatch`` would FK-violate on
+    a missing rule row. These tests assert the finance ledger, not delivery."""
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "app.services.notification_dispatcher.safe_dispatch",
+        new=AsyncMock(),
+    ):
+        yield
+
+
+class TestRecordFeePaymentGuards:
+    """Guard rails: amount must equal expected, cash-only, real recorder."""
+
+    async def test_amount_mismatch_returns_400(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000401",
+        )
+        headers = await get_auth_headers(client, admin_user_in_db)
+        response = await client.post(
+            f"/api/admissions/{profile.id}/record-fee-payment",
+            params={"transaction_id": "AMT-MISMATCH-1", "amount": 99999},
+            headers=headers,
+        )
+        assert response.status_code == 400, response.text
+        updated = await reload_profile(profile.id)
+        assert updated.applied_rules.get("fee_status") == "pending"
+
+    async def test_non_cash_method_returns_400(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000402",
+        )
+        headers = await get_auth_headers(client, admin_user_in_db)
+        response = await client.post(
+            f"/api/admissions/{profile.id}/record-fee-payment",
+            params={
+                "transaction_id": "METHOD-BANK-1",
+                "amount": 100000,
+                "payment_method_code": "bank_transfer",
+            },
+            headers=headers,
+        )
+        assert response.status_code == 400, response.text
+        updated = await reload_profile(profile.id)
+        assert updated.applied_rules.get("fee_status") == "pending"
+
+    async def test_system_user_cannot_be_recorder_raises_bad_request(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import BadRequest
+
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000403",
+        )
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(models.User).where(models.User.username == "system")
+            )
+            system = result.scalar_one()
+            with pytest.raises(BadRequest):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={
+                        "transaction_id": "SYS-RECORDER-1",
+                        "amount": 100000,
+                    },
+                    recorded_by=system,
+                )
+
+
+class TestSystemPrincipalFingerprint:
+    """P1-5: any tamper of the `system` principal fails closed (ConflictError),
+    incl. the UserUnitAssignment source-of-truth (not just the user cache)."""
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("status", "active"),
+            ("role", "admin"),
+            ("email", "evil@qlts.internal"),
+        ],
+    )
+    async def test_attribute_tamper_raises_conflict(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+        field: str,
+        value: str,
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id=f"20000000041{['status', 'role', 'email'].index(field)}",
+        )
+        await _tamper_system(**{field: value})
+        async with AsyncSessionLocal() as session:
+            recorded_by = await session.get(models.User, admin_user_in_db["id"])
+            with pytest.raises(ConflictError):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={
+                        "transaction_id": f"FPRINT-{field}",
+                        "amount": 100000,
+                    },
+                    recorded_by=recorded_by,
+                )
+
+    async def test_unit_id_tamper_raises_conflict(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        unit_id = seed_admission_statuses["unit_id"]
+        profile = await create_pending_fee_profile(
+            unit_id=unit_id,
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000420",
+        )
+        await _tamper_system(unit_id=unit_id)
+        async with AsyncSessionLocal() as session:
+            recorded_by = await session.get(models.User, admin_user_in_db["id"])
+            with pytest.raises(ConflictError):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={"transaction_id": "FPRINT-unit", "amount": 100000},
+                    recorded_by=recorded_by,
+                )
+
+    async def test_active_unit_assignment_raises_conflict(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """SoT cross-check: an active UserUnitAssignment for `system` (cache
+        fields untouched) still fails closed."""
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        unit_id = seed_admission_statuses["unit_id"]
+        profile = await create_pending_fee_profile(
+            unit_id=unit_id,
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000421",
+        )
+        system = await _load_system_user()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                session.add(
+                    models.UserUnitAssignment(
+                        user_id=system.id,
+                        unit_id=unit_id,
+                        role="user",
+                        is_active=True,
+                    )
+                )
+        async with AsyncSessionLocal() as session:
+            recorded_by = await session.get(models.User, admin_user_in_db["id"])
+            with pytest.raises(ConflictError):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={"transaction_id": "FPRINT-assign", "amount": 100000},
+                    recorded_by=recorded_by,
+                )
+
+    async def test_current_assignment_id_tamper_raises_conflict(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Cache field `current_assignment_id` non-null (pointing at an INACTIVE
+        assignment) fails closed before the active-assignment query runs."""
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        unit_id = seed_admission_statuses["unit_id"]
+        profile = await create_pending_fee_profile(
+            unit_id=unit_id,
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000422",
+        )
+        system = await _load_system_user()
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                assignment = models.UserUnitAssignment(
+                    user_id=system.id,
+                    unit_id=unit_id,
+                    role="user",
+                    is_active=False,
+                    end_date=datetime.now(timezone.utc),
+                )
+                session.add(assignment)
+                await session.flush()
+                target = await session.get(models.User, system.id)
+                target.current_assignment_id = assignment.id
+        async with AsyncSessionLocal() as session:
+            recorded_by = await session.get(models.User, admin_user_in_db["id"])
+            with pytest.raises(ConflictError):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={"transaction_id": "FPRINT-cur", "amount": 100000},
+                    recorded_by=recorded_by,
+                )
+
+
+class TestRecordFeePaymentReconcile:
+    """Reconcile is strict: a paid chain that drifts on ANY field (or grows an
+    extra txn) must ConflictError on replay — never silently auto-verify."""
+
+    @pytest.mark.parametrize(
+        "case_id,mutator",
+        [
+            ("payment_status_pending", _m_payment_status_pending),
+            ("payment_amount_drift", _m_payment_amount_drift),
+            ("fee_paid_amount_drift", _m_fee_paid_amount_drift),
+            ("invoice_installment_no", _m_invoice_installment_no),
+            ("invoice_penalty_drift", _m_invoice_penalty_drift),
+            ("txn_external_ref_drift", _m_txn_external_ref_drift),
+            ("extra_adjustment_txn", _m_extra_adjustment_txn),
+        ],
+    )
+    async def test_drift_then_replay_raises_conflict(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+        silence_fee_dispatch,
+        case_id: str,
+        mutator,
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        receipt = f"RECON-{case_id[:8].upper()}"
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id=f"2000000005{abs(hash(case_id)) % 90 + 10}",
+        )
+        # 1. Pay once → full consistent chain (committed by router).
+        ok = await post_record_fee_payment(
+            client, profile.id, admin_user_in_db, receipt
+        )
+        assert ok.status_code == 200, ok.text
+        # 2. Drift one ledger field (committed).
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                fee, invoice, payment, txn = await _load_paid_chain_objects(
+                    session, profile.id
+                )
+                mutator(session, fee, invoice, payment, txn)
+        # 3. Replay same receipt → reconcile detects drift → ConflictError.
+        async with AsyncSessionLocal() as session:
+            recorded_by = await session.get(models.User, admin_user_in_db["id"])
+            with pytest.raises(ConflictError):
+                await admission_service.record_application_fee_payment(
+                    db=session,
+                    profile_id=profile.id,
+                    payment_data={"transaction_id": receipt, "amount": 100000},
+                    recorded_by=recorded_by,
+                )
+
+
+class TestApplicationFeeReplayProtection:
+    """A receipt is single-use across profiles — incl. legacy-patched keys."""
+
+    async def test_same_receipt_other_profile_conflicts(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+        silence_fee_dispatch,
+    ):
+        unit_id = seed_admission_statuses["unit_id"]
+        officer_id = officer_user_in_db["id"]
+        profile_a = await create_pending_fee_profile(
+            unit_id=unit_id, assigned_officer_id=officer_id,
+            citizen_id="200000000601",
+        )
+        profile_b = await create_pending_fee_profile(
+            unit_id=unit_id, assigned_officer_id=officer_id,
+            citizen_id="200000000602",
+        )
+        shared = "SHARED-RCPT-1"
+        first = await post_record_fee_payment(
+            client, profile_a.id, admin_user_in_db, shared
+        )
+        assert first.status_code == 200, first.text
+        second = await post_record_fee_payment(
+            client, profile_b.id, admin_user_in_db, shared
+        )
+        assert second.status_code == 409, second.text
+        b_after = await reload_profile(profile_b.id)
+        assert b_after.applied_rules.get("fee_status") == "pending"
+
+    async def test_legacy_patched_receipt_conflicts(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+        silence_fee_dispatch,
+    ):
+        """Mimic migration `_patch_legacy_keys`: a pre-existing txn's
+        idempotency_key set from a legacy reference must block a runtime
+        collection of that same receipt on another profile."""
+        from app.utils.fee_receipt import canonical_receipt_key
+
+        unit_id = seed_admission_statuses["unit_id"]
+        officer_id = officer_user_in_db["id"]
+        profile_legacy = await create_pending_fee_profile(
+            unit_id=unit_id, assigned_officer_id=officer_id,
+            citizen_id="200000000603",
+        )
+        profile_new = await create_pending_fee_profile(
+            unit_id=unit_id, assigned_officer_id=officer_id,
+            citizen_id="200000000604",
+        )
+        seeded = await post_record_fee_payment(
+            client, profile_legacy.id, admin_user_in_db, "ORIG-LEGACY-1"
+        )
+        assert seeded.status_code == 200, seeded.text
+        legacy_receipt = "WIRE-REF-2024-XYZ"
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                fee = (
+                    await session.execute(
+                        select(models.Fee).where(
+                            models.Fee.admission_profile_id == profile_legacy.id,
+                            models.Fee.fee_type == "application",
+                        )
+                    )
+                ).scalar_one()
+                txn = (
+                    await session.execute(
+                        select(models.PaymentTransaction).where(
+                            models.PaymentTransaction.fee_id == fee.id
+                        )
+                    )
+                ).scalar_one()
+                txn.idempotency_key = canonical_receipt_key(legacy_receipt)
+                txn.external_reference = legacy_receipt
+        blocked = await post_record_fee_payment(
+            client, profile_new.id, admin_user_in_db, legacy_receipt
+        )
+        assert blocked.status_code == 409, blocked.text
+        new_after = await reload_profile(profile_new.id)
+        assert new_after.applied_rules.get("fee_status") == "pending"
+
+
+class TestRecordFeePaymentRace:
+    """Concurrent collection on one profile must not double-charge: the row
+    lock + unique idempotency_key collapse to exactly one ledger chain."""
+
+    async def test_concurrent_same_receipt_single_chain(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        import asyncio
+
+        from app.services import admission_service
+
+        profile = await create_pending_fee_profile(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+            citizen_id="200000000701",
+        )
+        admin_id = admin_user_in_db["id"]
+        receipt = "RACE-RCPT-01"
+
+        async def _record():
+            # Separate session per coroutine — never share AsyncSession across
+            # asyncio.gather (memory: async-session-gather).
+            async with AsyncSessionLocal() as session:
+                recorded_by = await session.get(models.User, admin_id)
+                try:
+                    _, _cb = await admission_service.record_application_fee_payment(
+                        db=session,
+                        profile_id=profile.id,
+                        payment_data={"transaction_id": receipt, "amount": 100000},
+                        recorded_by=recorded_by,
+                    )
+                    await session.commit()
+                    return "ok"
+                except Exception as exc:  # noqa: BLE001 — loser may raise
+                    await session.rollback()
+                    return type(exc).__name__
+
+        await asyncio.gather(_record(), _record(), return_exceptions=True)
+
+        # Invariant that matters: exactly one fee + one transaction (no
+        # double-charge), regardless of which coroutine won the row lock.
+        fee, txns = await get_application_fee_chain(profile.id)
+        assert fee is not None
+        assert len(txns) == 1, f"expected 1 txn, got {len(txns)}"
+        paid = await reload_profile(profile.id)
+        assert paid.applied_rules.get("fee_status") == "paid"

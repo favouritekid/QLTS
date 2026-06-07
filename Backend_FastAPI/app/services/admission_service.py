@@ -26,7 +26,7 @@ import random
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import structlog
 from sqlalchemy import or_, and_, select, func
 from sqlalchemy.exc import IntegrityError
@@ -1809,6 +1809,35 @@ def _compute_frontend_fields(
                 is_admin
                 or is_manager
                 or (is_officer and is_owner)
+            )
+        ),
+        # Thu lệ phí xét tuyển - POST /api/admissions/{id}/record-fee-payment.
+        # Mirror get_admission_for_fee_collection (deps.py): admin all;
+        # manager/accountant same-unit; officer assigned+same-unit. Gate
+        # draft/submitted + le phi thuc su pending -> nut khong hien cho exempt /
+        # da-paid / post-decision.
+        "record_fee_payment": (
+            status in ("draft", "submitted")
+            and bool((profile.applied_rules or {}).get("requires_application_fee"))
+            and (profile.applied_rules or {}).get("fee_status") == "pending"
+            and (
+                is_admin
+                or (
+                    profile.lead is not None
+                    and profile.lead.unit_id is not None
+                    and (
+                        (
+                            user_role in (UserRole.MANAGER, UserRole.ACCOUNTANT)
+                            and profile.lead.unit_id == current_user.unit_id
+                        )
+                        or (
+                            is_officer
+                            and profile.lead.unit_id == current_user.unit_id
+                            and profile.lead.assigned_officer_id is not None
+                            and profile.lead.assigned_officer_id == current_user.id
+                        )
+                    )
+                )
             )
         ),
         "view": True,
@@ -8306,6 +8335,429 @@ async def request_revision(
 # APPLICATION FEE MANAGEMENT
 # ==============================================================================
 
+_MONEY_QUANT = Decimal("0.01")
+_BACKFILL_IDEMPOTENCY_PREFIX = "appfee:backfill:"
+
+
+def _money(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value)).quantize(_MONEY_QUANT)
+    except (InvalidOperation, TypeError, ValueError):
+        raise BadRequest("Invalid application fee amount")
+
+
+def _money_text(value: Any) -> str:
+    return format(_money(value), "f")
+
+
+def _assert_money_equal(actual: Any, expected: Decimal, label: str) -> None:
+    if _money(actual) != expected:
+        raise ConflictError(f"Inconsistent application fee ledger: {label}")
+
+
+def _receipt_from_payment_data(payment_data: Dict[str, Any]) -> str:
+    receipt = str(payment_data.get("transaction_id") or "").strip()
+    if not 6 <= len(receipt) <= 80:
+        raise BadRequest("transaction_id must be 6-80 characters after trimming")
+    return receipt
+
+
+def _expected_application_fee(applied_rules: Dict[str, Any]) -> Decimal:
+    if "application_fee" not in applied_rules:
+        raise BadRequest("Application fee amount is missing from profile rules")
+    expected = _money(applied_rules.get("application_fee"))
+    if expected <= 0:
+        raise BadRequest("Application fee amount must be greater than 0")
+    return expected
+
+
+def _is_bcrypt_hash(value: Any) -> bool:
+    text = str(value or "")
+    return (
+        len(text) >= 50
+        and (
+            text.startswith("$2a$")
+            or text.startswith("$2b$")
+            or text.startswith("$2y$")
+        )
+    )
+
+
+async def _get_system_application_fee_user(db: AsyncSession) -> models.User:
+    result = await db.execute(
+        select(models.User).where(models.User.username == "system")
+    )
+    system_user = result.scalar_one_or_none()
+    if system_user is None:
+        raise ConflictError("Technical user 'system' is not configured")
+
+    fingerprint_ok = (
+        system_user.status == "inactive"
+        and system_user.role == UserRole.USER
+        and system_user.email == "system@qlts.internal"
+        and system_user.unit_id is None
+        and system_user.current_assignment_id is None
+        and _is_bcrypt_hash(system_user.password_hash)
+    )
+    if not fingerprint_ok:
+        raise ConflictError("Technical user 'system' fingerprint is invalid")
+
+    active_assignment = await db.execute(
+        select(models.UserUnitAssignment.id)
+        .where(
+            models.UserUnitAssignment.user_id == system_user.id,
+            models.UserUnitAssignment.is_active == True,  # noqa: E712
+        )
+        .limit(1)
+    )
+    if active_assignment.scalar_one_or_none() is not None:
+        raise ConflictError("Technical user 'system' has an active unit assignment")
+
+    return system_user
+
+
+async def _get_cash_payment_method(db: AsyncSession):
+    from app.models.finance import PaymentMethod
+
+    result = await db.execute(
+        select(PaymentMethod).where(
+            PaymentMethod.code == "cash",
+            PaymentMethod.is_active == True,  # noqa: E712
+            PaymentMethod.is_online == False,  # noqa: E712
+        )
+    )
+    methods = result.scalars().all()
+    if len(methods) != 1:
+        raise ConflictError("Cash payment method is not configured exactly once")
+    return methods[0]
+
+
+async def _load_application_fee(db: AsyncSession, profile_id: int):
+    from app.models.finance import Fee, Invoice, Payment
+
+    result = await db.execute(
+        select(Fee)
+        .where(
+            Fee.admission_profile_id == profile_id,
+            Fee.fee_type == "application",
+        )
+        .options(
+            selectinload(Fee.invoices)
+            .selectinload(Invoice.payments)
+            .selectinload(Payment.method),
+        )
+        .order_by(Fee.id)
+    )
+    fees = result.scalars().unique().all()
+    if len(fees) > 1:
+        raise ConflictError("Multiple application fee rows exist for this profile")
+    return fees[0] if fees else None
+
+
+async def _load_fee_transactions(db: AsyncSession, fee_id: int) -> List[Any]:
+    from app.models.finance import PaymentTransaction
+
+    result = await db.execute(
+        select(PaymentTransaction)
+        .where(PaymentTransaction.fee_id == fee_id)
+        .options(
+            selectinload(PaymentTransaction.payment),
+            selectinload(PaymentTransaction.fee),
+        )
+        .order_by(PaymentTransaction.id)
+    )
+    return result.scalars().unique().all()
+
+
+async def _find_transaction_by_key(db: AsyncSession, idempotency_key: str):
+    from app.models.finance import PaymentTransaction
+
+    result = await db.execute(
+        select(PaymentTransaction)
+        .where(PaymentTransaction.idempotency_key == idempotency_key)
+        .options(
+            selectinload(PaymentTransaction.fee),
+            selectinload(PaymentTransaction.payment),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _assert_receipt_not_used_by_other_profile(
+    db: AsyncSession,
+    profile_id: int,
+    idempotency_key: str,
+    receipt: str,
+) -> None:
+    existing = await _find_transaction_by_key(db, idempotency_key)
+    if existing is None:
+        return
+    existing_profile_id = (
+        existing.fee.admission_profile_id
+        if existing.fee is not None
+        else None
+    )
+    if existing_profile_id != profile_id:
+        raise ConflictError(f"Biên lai {receipt} đã dùng cho hồ sơ khác")
+
+
+def _assert_paid_fee_fields(fee: Any, expected: Decimal) -> None:
+    if fee.status != "paid":
+        raise ConflictError("Inconsistent application fee ledger: fee status")
+    if fee.fee_type != "application":
+        raise ConflictError("Inconsistent application fee ledger: fee type")
+    _assert_money_equal(fee.base_amount, expected, "fee base_amount")
+    _assert_money_equal(fee.total_discount, Decimal("0"), "fee total_discount")
+    _assert_money_equal(fee.final_amount, expected, "fee final_amount")
+    _assert_money_equal(fee.paid_amount, expected, "fee paid_amount")
+    _assert_money_equal(fee.waived_amount, Decimal("0"), "fee waived_amount")
+    if fee.semester_no is not None:
+        raise ConflictError("Inconsistent application fee ledger: fee semester_no")
+    if fee.installment_plan_id is not None:
+        raise ConflictError(
+            "Inconsistent application fee ledger: fee installment_plan"
+        )
+
+
+def _assert_paid_invoice_fields(invoice: Any, fee: Any, expected: Decimal) -> None:
+    if invoice.fee_id != fee.id:
+        raise ConflictError("Inconsistent application fee ledger: invoice fee_id")
+    if invoice.status != "paid":
+        raise ConflictError("Inconsistent application fee ledger: invoice status")
+    _assert_money_equal(invoice.amount, expected, "invoice amount")
+    _assert_money_equal(invoice.paid_amount, expected, "invoice paid_amount")
+    _assert_money_equal(invoice.penalty_amount, Decimal("0"), "invoice penalty_amount")
+    if invoice.installment_no != 1:
+        raise ConflictError(
+            "Inconsistent application fee ledger: invoice installment_no"
+        )
+    if invoice.invoice_number != f"APP-{fee.id}":
+        raise ConflictError("Inconsistent application fee ledger: invoice_number")
+
+
+def _assert_paid_payment_fields(
+    payment: Any,
+    invoice: Any,
+    expected: Decimal,
+    system_user_id: int,
+) -> None:
+    if payment.invoice_id != invoice.id:
+        raise ConflictError("Inconsistent application fee ledger: payment invoice_id")
+    if payment.status != "verified":
+        raise ConflictError("Inconsistent application fee ledger: payment status")
+    _assert_money_equal(payment.amount, expected, "payment amount")
+    if payment.method is None or payment.method.code != "cash":
+        raise ConflictError("Inconsistent application fee ledger: payment method")
+    if not payment.method.is_active or payment.method.is_online:
+        raise ConflictError(
+            "Inconsistent application fee ledger: payment method flags"
+        )
+    if payment.created_by_id == payment.verified_by_id:
+        raise ConflictError("Inconsistent application fee ledger: self approval")
+    if payment.verified_by_id != system_user_id:
+        raise ConflictError("Inconsistent application fee ledger: verifier")
+    if payment.intent_id is not None:
+        raise ConflictError("Inconsistent application fee ledger: payment intent")
+    if payment.verified_at is None:
+        raise ConflictError("Inconsistent application fee ledger: verified_at")
+    if payment.rejected_by_id is not None or payment.rejection_reason is not None:
+        raise ConflictError("Inconsistent application fee ledger: rejection fields")
+
+
+def _assert_paid_transaction_fields(
+    transaction: Any,
+    fee: Any,
+    payment: Any,
+    expected: Decimal,
+    system_user_id: int,
+    receipt_key: str,
+) -> None:
+    if transaction.payment_id != payment.id:
+        raise ConflictError(
+            "Inconsistent application fee ledger: transaction payment_id"
+        )
+    if transaction.fee_id != fee.id:
+        raise ConflictError("Inconsistent application fee ledger: transaction fee_id")
+    if transaction.transaction_type != "payment":
+        raise ConflictError("Inconsistent application fee ledger: transaction type")
+    _assert_money_equal(transaction.amount, expected, "transaction amount")
+    _assert_money_equal(
+        transaction.balance_before,
+        expected,
+        "transaction balance_before",
+    )
+    _assert_money_equal(
+        transaction.balance_after,
+        Decimal("0"),
+        "transaction balance_after",
+    )
+    gateway_response = transaction.gateway_response or {}
+    if gateway_response.get("verification_mode") not in {"policy_auto", "backfill"}:
+        raise ConflictError("Inconsistent application fee ledger: verification mode")
+    if transaction.performed_by_id != system_user_id:
+        raise ConflictError("Inconsistent application fee ledger: performed_by")
+    if transaction.external_reference != payment.reference_code:
+        raise ConflictError("Inconsistent application fee ledger: external reference")
+    allowed_keys = {receipt_key, f"{_BACKFILL_IDEMPOTENCY_PREFIX}{fee.id}"}
+    if transaction.idempotency_key not in allowed_keys:
+        raise ConflictError("Inconsistent application fee ledger: receipt key")
+
+
+async def _paid_chain_state(
+    db: AsyncSession,
+    fee: Any,
+    expected: Decimal,
+    system_user_id: int,
+    receipt_key: str,
+) -> str:
+    if fee is None:
+        return "missing"
+
+    _assert_paid_fee_fields(fee, expected)
+    transactions = await _load_fee_transactions(db, fee.id)
+    invoices = list(fee.invoices or [])
+
+    if len(invoices) > 1:
+        raise ConflictError("Multiple application fee invoices exist")
+    if not invoices:
+        if transactions:
+            raise ConflictError("Application fee transaction exists without invoice")
+        return "missing"
+
+    invoice = invoices[0]
+    _assert_paid_invoice_fields(invoice, fee, expected)
+    payments = list(invoice.payments or [])
+    if len(payments) > 1:
+        raise ConflictError("Multiple application fee payments exist")
+    if not payments:
+        if transactions:
+            raise ConflictError("Application fee transaction exists without payment")
+        return "missing"
+
+    payment = payments[0]
+    _assert_paid_payment_fields(payment, invoice, expected, system_user_id)
+    if len(transactions) > 1:
+        raise ConflictError("Multiple application fee transactions exist")
+    if not transactions:
+        return "missing"
+
+    _assert_paid_transaction_fields(
+        transactions[0],
+        fee,
+        payment,
+        expected,
+        system_user_id,
+        receipt_key,
+    )
+    return "consistent"
+
+
+async def _create_or_repair_paid_chain(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    fee: Any,
+    expected: Decimal,
+    receipt: str,
+    receipt_key: str,
+    recorded_by: models.User,
+    system_user: models.User,
+    cash_method: Any,
+    now: datetime,
+):
+    from app.models.finance import Fee, Invoice, Payment, PaymentTransaction
+
+    created_fee = fee is None
+    if fee is None:
+        fee = Fee(
+            admission_profile_id=profile.id,
+            fee_type="application",
+            academic_year=profile.academic_year,
+            semester_no=None,
+            base_amount=expected,
+            total_discount=Decimal("0"),
+            final_amount=expected,
+            paid_amount=expected,
+            waived_amount=Decimal("0"),
+            status="paid",
+            installment_plan_id=None,
+            calculated_by_id=recorded_by.id,
+            calculated_at=now,
+            last_payment_at=now,
+            notes="Application fee collected via admissions workflow",
+        )
+        db.add(fee)
+        await db.flush()
+
+    invoices = [] if created_fee else list(fee.invoices or [])
+    invoice = invoices[0] if invoices else None
+    created_invoice = invoice is None
+    if invoice is None:
+        invoice = Invoice(
+            fee_id=fee.id,
+            invoice_number=f"APP-{fee.id}",
+            installment_no=1,
+            amount=expected,
+            paid_amount=expected,
+            penalty_amount=Decimal("0"),
+            due_date=now.date(),
+            status="paid",
+            issued_at=now,
+            paid_at=now,
+            issued_by_id=recorded_by.id,
+            notes="Application fee invoice",
+        )
+        db.add(invoice)
+        await db.flush()
+
+    payments = [] if created_invoice else list(invoice.payments or [])
+    payment = payments[0] if payments else None
+    if payment is None:
+        payment = Payment(
+            invoice_id=invoice.id,
+            method_id=cash_method.id,
+            amount=expected,
+            reference_code=receipt,
+            status="verified",
+            payment_date=now,
+            verified_at=now,
+            created_by_id=recorded_by.id,
+            verified_by_id=system_user.id,
+            rejected_by_id=None,
+            rejection_reason=None,
+            intent_id=None,
+            notes="Application fee cash collection auto-verified by policy",
+        )
+        db.add(payment)
+        await db.flush()
+
+    transactions = await _load_fee_transactions(db, fee.id)
+    if not transactions:
+        transaction = PaymentTransaction(
+            payment_id=payment.id,
+            fee_id=fee.id,
+            transaction_type="payment",
+            amount=expected,
+            balance_before=expected,
+            balance_after=Decimal("0"),
+            external_reference=receipt,
+            gateway_response={
+                "verification_mode": "policy_auto",
+                "receipt": receipt,
+                "amount": _money_text(expected),
+                "recorded_by_id": recorded_by.id,
+                "verified_by_id": system_user.id,
+            },
+            idempotency_key=receipt_key,
+            performed_by_id=system_user.id,
+            notes="Application fee payment",
+            created_at=now,
+        )
+        db.add(transaction)
+        await db.flush()
+
+    return fee
+
+
 async def record_application_fee_payment(
     db: AsyncSession,
     profile_id: int,
@@ -8373,46 +8825,135 @@ async def record_application_fee_payment(
             "This admission profile does not require application fee payment"
         )
 
-    if current_fee_status == "paid":
-        log.info(
-            "Application fee already paid (idempotent)",
-            profile_id=profile_id,
+    if current_fee_status == "exempt":
+        raise BadRequest("Application fee is exempt and cannot be collected")
+    if current_fee_status not in ("pending", "paid"):
+        raise BadRequest(
+            f"Cannot collect application fee in '{current_fee_status}' state"
         )
-        # Return without error for idempotency
-        async def noop():
-            pass
-        return profile, noop
+    if recorded_by is None:
+        raise BadRequest(
+            "Application fee cash collection requires an authenticated actor"
+        )
 
-    # Update fee_status in applied_rules
-    applied_rules["fee_status"] = "paid"
-    applied_rules["fee_paid_at"] = datetime.now(timezone.utc).isoformat()
-    applied_rules["fee_payment_data"] = payment_data
-    profile.applied_rules = {**applied_rules}  # New dict to trigger JSONB change detection
-    flag_modified(profile, "applied_rules")
-    profile.updated_at = datetime.now(timezone.utc)
+    raw_method_code = payment_data.get("payment_method_code") or "cash"
+    method_code = str(raw_method_code).strip().casefold()
+    if method_code != "cash":
+        raise BadRequest("Application fee collection is cash-only")
 
-    # ✅ SYNC: Update lead to sts13 (Đã hoàn lệ phí xét tuyển)
-    from .lead_admission_sync import sync_lead_fee_paid
-    await sync_lead_fee_paid(
-        db=db,
-        profile=profile,
-        changed_by_user_id=recorded_by.id if recorded_by else None,
-        reason="Application fee payment confirmed",
+    expected = _expected_application_fee(applied_rules)
+    amount = _money(payment_data.get("amount"))
+    from ..schemas.finance import MAX_AMOUNT
+    if amount <= 0 or amount > _money(MAX_AMOUNT):
+        raise BadRequest("Application fee amount is out of range")
+    if amount != expected:
+        raise BadRequest("Payment amount must match the configured application fee")
+
+    receipt = _receipt_from_payment_data(payment_data)
+    from app.utils.fee_receipt import canonical_receipt_key
+    receipt_key = canonical_receipt_key(receipt)
+    system_user = await _get_system_application_fee_user(db)
+    if recorded_by.id == system_user.id:
+        raise BadRequest("Technical user 'system' cannot be the payment recorder")
+    cash_method = await _get_cash_payment_method(db)
+    await _assert_receipt_not_used_by_other_profile(
+        db,
+        profile_id=profile_id,
+        idempotency_key=receipt_key,
+        receipt=receipt,
     )
 
-    await db.flush()
+    fee = await _load_application_fee(db, profile_id)
+    chain_state = await _paid_chain_state(
+        db,
+        fee,
+        expected,
+        system_user_id=system_user.id,
+        receipt_key=receipt_key,
+    )
+
+    now = datetime.now(timezone.utc)
+    if chain_state == "missing":
+        try:
+            async with db.begin_nested():
+                fee = await _load_application_fee(db, profile_id)
+                await _create_or_repair_paid_chain(
+                    db=db,
+                    profile=profile,
+                    fee=fee,
+                    expected=expected,
+                    receipt=receipt,
+                    receipt_key=receipt_key,
+                    recorded_by=recorded_by,
+                    system_user=system_user,
+                    cash_method=cash_method,
+                    now=now,
+                )
+        except IntegrityError as exc:
+            log.warning(
+                "Application fee ledger create hit integrity race; reconciling",
+                profile_id=profile_id,
+                receipt_key=receipt_key,
+                error=str(exc),
+            )
+
+        await _assert_receipt_not_used_by_other_profile(
+            db,
+            profile_id=profile_id,
+            idempotency_key=receipt_key,
+            receipt=receipt,
+        )
+        fee = await _load_application_fee(db, profile_id)
+        chain_state = await _paid_chain_state(
+            db,
+            fee,
+            expected,
+            system_user_id=system_user.id,
+            receipt_key=receipt_key,
+        )
+        if chain_state != "consistent":
+            raise ConflictError("Application fee ledger could not be reconciled")
+
+    did_transition_to_paid = current_fee_status != "paid"
+    if did_transition_to_paid:
+        payment_snapshot = {
+            "transaction_id": receipt,
+            "amount": _money_text(expected),
+            "payment_method_code": "cash",
+            "paid_at": now.isoformat(),
+            "recorded_by": recorded_by.id,
+        }
+
+        applied_rules["fee_status"] = "paid"
+        applied_rules["fee_paid_at"] = now.isoformat()
+        applied_rules["fee_payment_data"] = payment_snapshot
+        # Use a new dict to trigger JSONB change detection.
+        profile.applied_rules = {**applied_rules}
+        flag_modified(profile, "applied_rules")
+        profile.updated_at = now
+
+        # ✅ SYNC: Update lead to sts13 (Đã hoàn lệ phí xét tuyển)
+        from .lead_admission_sync import sync_lead_fee_paid
+        await sync_lead_fee_paid(
+            db=db,
+            profile=profile,
+            changed_by_user_id=recorded_by.id,
+            reason="Application fee payment confirmed",
+        )
+
+        await db.flush()
 
     # Populate transient computed fields so the mutation response matches GET.
-    # Helper handles recorded_by=None silently (system callback path).
     await _populate_response_fields(db, profile, recorded_by)
 
     log.info(
         "Application fee payment recorded",
         profile_id=profile_id,
         lead_id=profile.lead_id,
-        amount=payment_data.get("amount"),
-        transaction_id=payment_data.get("transaction_id"),
-        recorded_by=recorded_by.id if recorded_by else "system",
+        amount=_money_text(expected),
+        transaction_id=receipt,
+        recorded_by=recorded_by.id,
+        did_transition_to_paid=did_transition_to_paid,
     )
 
     # Resolve notification payload while the session is still open — the
@@ -8430,19 +8971,20 @@ async def record_application_fee_payment(
         "lead_id": profile.lead_id,
         "unit_id": _unit_id,
         "officer_id": _officer_id,
-        "amount": str(payment_data.get("amount", 0)),
-        "transaction_id": str(payment_data.get("transaction_id") or ""),
-        "actor_id": recorded_by.id if recorded_by else 0,
+        "amount": _money_text(expected),
+        "transaction_id": receipt,
+        "actor_id": recorded_by.id,
         "actor_name": (
-            (recorded_by.full_name or recorded_by.username)
-            if recorded_by
-            else "System"
+            recorded_by.full_name or recorded_by.username
         ),
     }
     _db = db
     _rooms = rooms_for_admission(profile)
 
     async def post_commit():
+        if not did_transition_to_paid:
+            return
+
         from app.services.notification_dispatcher import safe_dispatch
         from app.core.events import SystemEvents
 

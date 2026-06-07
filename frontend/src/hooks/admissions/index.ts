@@ -31,6 +31,7 @@ export {
   // Mutations
   useCreateAdmission,
   useUpdateAdmission,
+  useRecordApplicationFeePayment,
   useSubmitAdmission,
   useResubmitAdmission,
   useApproveAdmission,

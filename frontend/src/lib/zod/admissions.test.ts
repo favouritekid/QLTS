@@ -230,6 +230,46 @@ describe("appliedRulesSchema (top-level subject_weights)", () => {
       }),
     ).toThrow()
   })
+
+  it("preserves application fee payment snapshot fields", () => {
+    const parsed = appliedRulesSchema.parse({
+      scoring_method: "sum" as const,
+      allowed_subject_codes: ["math"],
+      subject_groups: [],
+      method_type: "subject_based" as const,
+      application_fee: 100000,
+      requires_application_fee: true,
+      fee_status: "paid",
+      fee_paid_at: "2026-06-07T08:30:00Z",
+      fee_payment_data: {
+        transaction_id: "RCPT-001",
+        amount: "100000",
+        payment_method_code: "cash",
+        paid_at: "2026-06-07T08:30:00Z",
+        recorded_by: 7,
+      },
+    })
+
+    expect(parsed.application_fee).toBe(100000)
+    expect(parsed.requires_application_fee).toBe(true)
+    expect(parsed.fee_status).toBe("paid")
+    expect(parsed.fee_paid_at).toBe("2026-06-07T08:30:00Z")
+    expect(parsed.fee_payment_data?.transaction_id).toBe("RCPT-001")
+    expect(parsed.fee_payment_data?.recorded_by).toBe(7)
+  })
+
+  it("accepts legacy snapshots without application fee payment fields", () => {
+    const parsed = appliedRulesSchema.parse({
+      min_gpa: 6.5,
+      scoring_method: "sum" as const,
+      allowed_subject_codes: ["math"],
+      subject_groups: [],
+      method_type: "subject_based" as const,
+    })
+
+    expect(parsed.fee_paid_at).toBeUndefined()
+    expect(parsed.fee_payment_data).toBeUndefined()
+  })
 })
 
 

@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { useRouter } from "next/navigation"
 
 import { admissionsApi } from "@/lib/api/admissions"
+import { feesKeys } from "@/hooks/finance/useFees"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
@@ -187,6 +188,39 @@ export function useUpdateAdmission(id: number) {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
         context: "cập nhật hồ sơ"
+      })
+    },
+  })
+}
+
+export function useRecordApplicationFeePayment(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: {
+      transaction_id: string
+      amount: number
+      payment_method_code?: string
+    }) => admissionsApi.recordApplicationFeePayment(id, data),
+    onSuccess: (updatedProfile) => {
+      toast.success("Đã thu lệ phí xét tuyển")
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({
+        queryKey: [...admissionsKeys.all, "status-counts"],
+      })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "thu lệ phí xét tuyển",
       })
     },
   })

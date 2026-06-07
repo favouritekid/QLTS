@@ -64,6 +64,29 @@ export async function updateAdmission(
   return response.data
 }
 
+/**
+ * Record an application-fee cash payment.
+ *
+ * Backend contract intentionally uses query params, not a JSON body.
+ */
+export async function recordApplicationFeePayment(
+  id: number,
+  p: { transaction_id: string; amount: number; payment_method_code?: string }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/record-fee-payment`,
+    null,
+    {
+      params: {
+        transaction_id: p.transaction_id,
+        amount: p.amount,
+        payment_method_code: p.payment_method_code ?? "cash",
+      },
+    }
+  )
+  return response.data
+}
+
 // ============================================
 // ADMISSION ACTIONS
 // ============================================
@@ -554,6 +577,7 @@ export const admissionsApi = {
   getAdmission,
   createAdmission,
   updateAdmission,
+  recordApplicationFeePayment,
   submitAdmission,
   resubmitAdmission,
   requestRevision,

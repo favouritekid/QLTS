@@ -18,8 +18,11 @@ import {
   useDeleteAdmission,
   useApproveAdmission,
   useEnrollStudent,
+  useRecordApplicationFeePayment,
   admissionsKeys,
 } from "./useAdmissions";
+import { feesKeys } from "@/hooks/finance/useFees";
+import { handleApiError } from "@/lib/error-handler";
 
 // Mock next/navigation (required by hooks using useRouter)
 const pushMock = vi.fn();
@@ -333,6 +336,106 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       invalidateSpy.mockRestore();
+    });
+  });
+
+  describe("application fee collection", () => {
+    it("posts query params and invalidates admission plus finance caches", async () => {
+      const captured: { url?: URL } = {};
+      server.use(
+        http.post(
+          `${API_BASE_URL}/api/admissions/:id/record-fee-payment`,
+          ({ request }) => {
+            captured.url = new URL(request.url);
+            return HttpResponse.json({
+              id: MOCK_ADMISSION_ID,
+              status: "submitted",
+              applied_rules: {
+                application_fee: 100000,
+                requires_application_fee: true,
+                fee_status: "paid",
+                fee_paid_at: "2026-06-07T08:30:00Z",
+                fee_payment_data: {
+                  transaction_id: "RCPT-001",
+                  amount: "100000",
+                  payment_method_code: "cash",
+                },
+              },
+            });
+          }
+        )
+      );
+
+      const { queryClient, Wrapper } = createWrapperWithClient();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+      const { result } = renderHook(
+        () => useRecordApplicationFeePayment(MOCK_ADMISSION_ID),
+        { wrapper: Wrapper }
+      );
+
+      await act(async () => {
+        await result.current.mutateAsync({
+          transaction_id: "RCPT-001",
+          amount: 100000,
+        });
+      });
+
+      expect(captured.url).toBeDefined();
+      expect(captured.url?.searchParams.get("transaction_id")).toBe("RCPT-001");
+      expect(captured.url?.searchParams.get("amount")).toBe("100000");
+      expect(captured.url?.searchParams.get("payment_method_code")).toBe("cash");
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryKey: admissionsKeys.detail(MOCK_ADMISSION_ID),
+        })
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: admissionsKeys.lists() })
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryKey: feesKeys.profileSummary(MOCK_ADMISSION_ID),
+        })
+      );
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryKey: feesKeys.byProfile(MOCK_ADMISSION_ID),
+        })
+      );
+
+      invalidateSpy.mockRestore();
+    });
+
+    it("routes backend errors through handleApiError", async () => {
+      server.use(
+        http.post(
+          `${API_BASE_URL}/api/admissions/:id/record-fee-payment`,
+          () => HttpResponse.json({ detail: "Receipt already used" }, { status: 409 })
+        )
+      );
+
+      const { Wrapper } = createWrapperWithClient();
+      const { result } = renderHook(
+        () => useRecordApplicationFeePayment(MOCK_ADMISSION_ID),
+        { wrapper: Wrapper }
+      );
+
+      await act(async () => {
+        await expect(
+          result.current.mutateAsync({
+            transaction_id: "RCPT-ERR",
+            amount: 100000,
+          })
+        ).rejects.toBeTruthy();
+      });
+
+      expect(handleApiError).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          context: "thu lệ phí xét tuyển",
+        })
+      );
     });
   });
 
