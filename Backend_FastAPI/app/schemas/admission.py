@@ -979,6 +979,11 @@ class AppliedRulesSchema(BaseModel):
     application_fee: Optional[float] = None
     requires_application_fee: Optional[bool] = None
     fee_status: Optional[str] = None  # exempt/paid/pending/etc
+    # Snapshot do record_application_fee_payment ghi (admission_service.py).
+    # Khai tuong minh de extra="ignore" khong strip - panel "da thu" cua FE doc
+    # bien lai + thoi diem thu tu day. (recorded_by la id int.)
+    fee_paid_at: Optional[str] = None
+    fee_payment_data: Optional[Dict[str, Any]] = None
     method_quota: Optional[int] = None
     applicable_to: Optional[Any] = None  # JSONB free-form (eligibility expr)
     subject_weights: Optional[Dict[str, float]] = None

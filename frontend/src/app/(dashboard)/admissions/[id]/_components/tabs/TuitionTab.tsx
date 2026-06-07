@@ -20,6 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ApplicationFeeCollectionPanel } from "./ApplicationFeeCollectionPanel"
 import { CalculateFeeDialog } from "@/components/admissions/CalculateFeeDialog"
 import {
   CreditCard,
@@ -37,7 +38,6 @@ import {
   FeeStatusBadge,
 } from "@/components/finance"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
-import type { FeeStatus } from "@/types/finance.types"
 import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/lib/stores/auth.store"
@@ -78,11 +78,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
         ? "Bạn không có quyền tính phí cho hồ sơ này"
         : "Hồ sơ cần được duyệt trước khi tính phí"
       : undefined
+  const applicationFeePanel = <ApplicationFeeCollectionPanel profile={profile} />
 
   // Loading state
   if (isLoading) {
     return (
       <div className="space-y-6">
+        {applicationFeePanel}
         <Skeleton className="h-48 w-full rounded-lg" />
         <Skeleton className="h-32 w-full rounded-lg" />
         <Skeleton className="h-48 w-full rounded-lg" />
@@ -94,6 +96,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   if (error || !summary) {
     return (
       <div className="space-y-6">
+        {applicationFeePanel}
         <Card>
           <CardContent className="py-12 text-center">
             <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" aria-hidden="true" />
@@ -131,6 +134,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   if (!hasFees) {
     return (
       <div className="space-y-6">
+        {applicationFeePanel}
         <Card>
           <CardContent className="py-12 text-center">
             <Calculator className="h-16 w-16 mx-auto text-muted-foreground/30 mb-4" aria-hidden="true" />
@@ -161,6 +165,8 @@ export function TuitionTab({ profile }: TuitionTabProps) {
 
   return (
     <div className="space-y-6">
+      {applicationFeePanel}
+
       {/* Summary Card */}
       <Card
         className={cn(

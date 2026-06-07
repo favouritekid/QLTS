@@ -19,6 +19,7 @@ Endpoints:
 """
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,7 @@ from ..core import deps
 from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
     get_admission_for_manager,
+    get_admission_for_fee_collection,
     get_admission_for_user,
     get_admission_for_user_read,
 )
@@ -51,6 +53,7 @@ from ..utils.exceptions import (
 )
 from ..utils.token_logging import token_fingerprint
 from ..core.constants import UserRole
+from ..schemas.finance import MAX_AMOUNT
 from ..utils.csv_helpers import sanitize_csv_row
 
 log = structlog.get_logger(__name__)
@@ -1575,51 +1578,66 @@ async def get_fee_status(
 @router.post(
     "/{profile_id}/record-fee-payment",
     response_model=schemas.AdmissionProfileResponse,
-    summary="Record application fee payment (Admin/System)",
+    summary="Record application fee payment",
 )
 async def record_fee_payment(
     request: Request,
     profile_id: int,
-    transaction_id: str = Query(..., description="Payment transaction ID"),
-    amount: float = Query(..., gt=0, description="Payment amount in VND"),
+    transaction_id: str = Query(
+        ...,
+        min_length=6,
+        max_length=80,
+        description="Payment receipt / transaction ID",
+    ),
+    amount: Decimal = Query(
+        ...,
+        gt=0,
+        le=MAX_AMOUNT,
+        description="Payment amount in VND",
+    ),
+    payment_method_code: str = Query(
+        "cash",
+        min_length=1,
+        max_length=50,
+        description="Payment method code. Application-fee collection is cash-only.",
+    ),
     current_user: models.User = Depends(deps.get_current_active_user),
+    profile: models.AdmissionProfile = Depends(get_admission_for_fee_collection),
     db: AsyncSession = Depends(database.get_db),
 ):
     """
     Record application fee payment for an admission profile.
 
-    **Authorization:** Admin only or System callback
+    **Authorization:** Officer/Manager/Accountant/Admin via Casbin + IDOR scope
 
     **Use cases:**
-    1. Manual payment confirmation by admin
-    2. Payment gateway callback (via internal API)
+    1. Cash collection by officer/accountant/manager/admin
 
     **Request Parameters:**
-    - transaction_id: Payment transaction ID from gateway
+    - transaction_id: Receipt / transaction ID
     - amount: Payment amount in VND
+    - payment_method_code: Must be cash
 
     **Effects:**
+    - Creates/reconciles Finance Fee/Invoice/Payment/PaymentTransaction records
     - Updates profile.applied_rules.fee_status to "paid"
     - Syncs lead to sts13 (Đã hoàn lệ phí xét tuyển)
 
     **Returns:**
     - Updated AdmissionProfile
     """
-    # Only Admin can manually record payment
-    if current_user.role != UserRole.ADMIN:
-        raise PermissionDeniedError("Only Admins can manually record fee payment")
-
     try:
         payment_data = {
             "transaction_id": transaction_id,
             "amount": amount,
+            "payment_method_code": payment_method_code,
             "paid_at": datetime.now().isoformat(),
             "recorded_by": current_user.id,
         }
 
         result, callback = await admission_service.record_application_fee_payment(
             db=db,
-            profile_id=profile_id,
+            profile_id=profile.id,
             payment_data=payment_data,
             recorded_by=current_user,
         )

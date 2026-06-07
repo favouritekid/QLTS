@@ -167,6 +167,12 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # actions (submit/resubmit/withdraw). Officer triggers generate-side;
         # candidate consume qua /magic-link/{action}/{token} (PR #280 wired).
         {"subject": "{role}", "object": "/api/admissions/{id}/send-magic-link", "action": "POST"},
+        {
+            "subject": "{role}",
+            "object": "/api/admissions/{id}/record-fee-payment",
+            "action": "POST",
+            "eft": "allow",
+        },
         # Post-approval minor correction — Casbin admits the role; service
         # narrows further with status whitelist + per-path allowlist +
         # HARD_DENY checks. IDOR via get_admission_for_user (admin all /

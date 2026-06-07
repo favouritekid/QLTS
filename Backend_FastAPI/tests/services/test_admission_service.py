@@ -14,6 +14,7 @@ Uses real database via fixtures (no mocking).
 import random
 import uuid
 import pytest
+import pytest_asyncio
 from datetime import datetime, timezone
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -28,6 +29,59 @@ from tests.fixtures.builders import (
 
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture(scope="function", autouse=True)
+async def seed_application_fee_finance_dependencies(setup_test_database):
+    """Seed metadata-created test DB rows normally owned by Alembic."""
+    from tests.fixtures.constants import TestUsers
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            for username, email in (
+                ("system", "system@qlts.internal"),
+                ("backfill", "backfill@qlts.internal"),
+            ):
+                result = await session.execute(
+                    select(models.User).where(models.User.username == username)
+                )
+                user = result.scalar_one_or_none()
+                if user is None:
+                    session.add(
+                        models.User(
+                            username=username,
+                            email=email,
+                            password_hash=TestUsers.DEFAULT["real_hash"],
+                            full_name=f"{username.title()} Policy User",
+                            role="user",
+                            status="inactive",
+                            unit_id=None,
+                            current_assignment_id=None,
+                        )
+                    )
+                else:
+                    user.email = email
+                    user.password_hash = TestUsers.DEFAULT["real_hash"]
+                    user.role = "user"
+                    user.status = "inactive"
+                    user.unit_id = None
+                    user.current_assignment_id = None
+
+            result = await session.execute(
+                select(models.PaymentMethod).where(models.PaymentMethod.code == "cash")
+            )
+            if result.scalar_one_or_none() is None:
+                session.add(
+                    models.PaymentMethod(
+                        code="cash",
+                        name="Tiền mặt",
+                        is_online=False,
+                        requires_verification=True,
+                        gateway_code=None,
+                        display_order=2,
+                        is_active=True,
+                    )
+                )
 
 
 # ==============================================================================
@@ -1259,7 +1313,7 @@ async def _create_profile_with_state(
                 patched_rules["upload_required_docs"] = mandatory_doc_codes
             if requires_application_fee:
                 patched_rules["requires_application_fee"] = True
-                patched_rules["fee_amount"] = 500000
+                patched_rules["application_fee"] = 500000
                 patched_rules["fee_status"] = "pending"
 
             update_values = {
@@ -1597,20 +1651,16 @@ class TestUnclaimResponseFields:
 
 
 class TestRecordFeePaymentNoneRecordedBy:
-    """Direct service-level call: helper must not crash when recorded_by=None.
+    """Direct service-level call: cash collection requires a real actor."""
 
-    Simulates a future payment-gateway callback that has no user context.
-    The helper signature accepts Optional[User] and skips silently when None,
-    preventing AttributeError at _compute_frontend_fields:419 (current_user.role).
-    """
-
-    async def test_record_fee_payment_with_none_recorded_by_does_not_crash(
+    async def test_record_fee_payment_with_none_recorded_by_raises_bad_request(
         self,
         client: AsyncClient,
         officer_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
         from app.services import admission_service
+        from app.utils.exceptions import BadRequest
 
         profile_id, _, _ = await _create_profile_with_state(
             client, officer_user_in_db, seed_lead_dependencies,
@@ -1618,10 +1668,9 @@ class TestRecordFeePaymentNoneRecordedBy:
             requires_application_fee=True,
         )
 
-        # Direct service call with recorded_by=None — must not raise
         async with AsyncSessionLocal() as session:
-            try:
-                profile, _callback = await admission_service.record_application_fee_payment(
+            with pytest.raises(BadRequest):
+                await admission_service.record_application_fee_payment(
                     db=session,
                     profile_id=profile_id,
                     payment_data={
@@ -1630,16 +1679,6 @@ class TestRecordFeePaymentNoneRecordedBy:
                     },
                     recorded_by=None,
                 )
-                await session.commit()
-            except AttributeError as exc:
-                pytest.fail(
-                    f"record_application_fee_payment crashed when recorded_by=None: {exc}. "
-                    f"_populate_response_fields may not be handling the None case."
-                )
-
-        # Status should be updated
-        assert profile is not None
-        assert profile.id == profile_id
 
 
 class TestClaimReviewIdempotent:

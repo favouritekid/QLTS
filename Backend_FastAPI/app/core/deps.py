@@ -59,6 +59,7 @@ __all__ = [
     "get_admission_for_manager",  # Manager approve/reject
     "get_admission_for_admin_locked",  # Admin rollback — SELECT FOR UPDATE
     "get_admission_for_user",  # Officer resubmit
+    "get_admission_for_fee_collection",  # Finance collection — SELECT FOR UPDATE
     "get_admission_for_user_read",  # Read-only fee-status / detail (no lock)
 
     # Admission Configuration Console IDOR
@@ -2393,6 +2394,68 @@ async def get_admission_for_user(
                     assigned_officer_id=profile.lead.assigned_officer_id,
                 )
                 raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+async def get_admission_for_fee_collection(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR protection for application-fee collection.
+
+    This is a write dependency, so it locks the profile row. Scope mirrors the
+    Finance fee authorization surface without its post-decision state gate:
+    application fees are collected while profiles are still draft/submitted.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    lead = profile.lead
+    role = current_user.role
+    authorized = False
+
+    if role == UserRole.ADMIN:
+        authorized = True
+    elif lead is not None and lead.unit_id is not None:
+        if role in (UserRole.MANAGER, UserRole.ACCOUNTANT):
+            authorized = lead.unit_id == current_user.unit_id
+        elif role == UserRole.OFFICER:
+            authorized = (
+                lead.unit_id == current_user.unit_id
+                and lead.assigned_officer_id is not None
+                and lead.assigned_officer_id == current_user.id
+            )
+
+    if not authorized:
+        log.warning(
+            "IDOR attempt: user tried to collect application fee outside scope",
+            user_id=current_user.id,
+            user_role=str(role),
+            user_unit_id=current_user.unit_id,
+            profile_id=profile_id,
+            profile_unit_id=lead.unit_id if lead else None,
+            assigned_officer_id=lead.assigned_officer_id if lead else None,
+        )
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
 

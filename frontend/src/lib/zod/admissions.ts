@@ -753,6 +753,22 @@ export const appliedRulesSchema = z.object({
   // (plain sum), which preserves behavior for pre-migration snapshots.
   subject_weights: z.record(z.string(), z.number().positive()).optional(),
 
+  // Application fee snapshot. All fields are nullish for legacy profiles whose
+  // applied_rules predate the application-fee ledger contract.
+  application_fee: z.number().nullish(),
+  requires_application_fee: z.boolean().nullish(),
+  fee_status: z.string().nullish(),
+  fee_paid_at: z.string().nullish(),
+  fee_payment_data: z
+    .object({
+      transaction_id: z.string(),
+      amount: z.string().optional(),
+      payment_method_code: z.string().optional(),
+      paid_at: z.string().optional(),
+      recorded_by: z.number().optional(),
+    })
+    .nullish(),
+
   // =========================================================================
   // GROUP 3: Subject Validation (CRITICAL for input validation)
   // =========================================================================
