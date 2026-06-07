@@ -470,7 +470,7 @@ async def bulk_user_action(
     enforcer = request.app.state.enforcer
 
     # Perform bulk action
-    message, bulk_callback = await user_service.perform_bulk_action(
+    message, bulk_callback, disconnect_ids = await user_service.perform_bulk_action(
         db,
         action=action_data.action,
         user_ids=action_data.user_ids,
@@ -502,7 +502,13 @@ async def bulk_user_action(
         action_desc += f" to {action_data.status}"
     action_desc += f" for {len(action_data.user_ids)} users"
 
-    _, log_callback = await log_admin_activity(
+    # NOTE: activity_service.log_activity (via log_admin_activity) returns a
+    # single UserActivityLog (PR #251 dropped the old (log, callback) tuple — the
+    # Tuple annotation on log_admin_activity is stale). It is staged in THIS
+    # transaction and committed below. Do NOT unpack it (the previous
+    # `_, log_callback = ` raised TypeError, 500-ing every bulk action — latent
+    # because the bulk endpoint had no endpoint-level test).
+    await log_admin_activity(
         db=db,
         request=request,
         action=f"bulk_{action_data.action}",
@@ -511,9 +517,33 @@ async def bulk_user_action(
         description=action_desc,
         changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
     )
+    # Server-side socket force-disconnect for deactivated users (transport
+    # boundary — done here in the router, NOT the service). BEFORE commit: any
+    # failure (publish error / ACK timeout) raises → no commit → the status
+    # change rolls back (fail-closed). disconnect_ids is only populated when the
+    # bulk moved accounts to a non-active status.
+    if disconnect_ids:
+        # ONE batched command for the whole set → bounded to a single ACK
+        # timeout regardless of how many users (avoids N × timeout holding the
+        # transaction + row locks). Fail-closed: any failure rolls back the
+        # status change and returns 500 (mirrors update_existing_user).
+        from app.socket_manager import force_disconnect_user_strict
+        try:
+            await force_disconnect_user_strict(disconnect_ids)
+        except Exception:
+            await db.rollback()
+            log.error(
+                "Bulk deactivation failed: could not disconnect sockets",
+                user_ids=disconnect_ids,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Deactivation failed: could not disconnect sockets.",
+            )
+
     await db.commit()
     await bulk_callback()
-    await log_callback()
 
     return {"detail": message}
 
@@ -1015,6 +1045,35 @@ async def update_existing_user(
     _updated_role = updated_user.role
     _updated_unit_id = updated_user.unit_id
     _current_admin_id = current_admin.id
+
+    # === Offboarding: revoke sessions + server-side socket disconnect ===
+    # When status moves to a non-active value, persist it (flush ⇒ row lock)
+    # BEFORE revoking so a concurrent login serializes on the locked row
+    # (flush-before-revoke, P0), then revoke all sessions (strict cache cleanup)
+    # and force-disconnect live sockets across workers (ACK-confirmed). Any
+    # failure rolls back the whole change → fail-closed (status stays unchanged).
+    if "status" in changes and changes["status"]["new"] != "active":
+        await db.flush()
+        try:
+            await user_service.invalidate_all_sessions(
+                db,
+                db_user,
+                reason="Account deactivated by administrator",
+                fail_on_cache_cleanup=True,
+            )
+            from app.socket_manager import force_disconnect_user_strict
+            await force_disconnect_user_strict(db_user.id)
+        except Exception:
+            await db.rollback()
+            log.error(
+                "Deactivation failed: could not revoke sessions / disconnect sockets",
+                user_id=_updated_user_id,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Deactivation failed: could not revoke sessions.",
+            )
 
     # ✅ TRANSACTION PATTERN: Commit and execute callback
     await db.commit()

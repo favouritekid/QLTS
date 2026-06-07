@@ -1296,7 +1296,13 @@ async def set_password_by_admin(
         raise e
 
 
-async def invalidate_all_sessions(db: AsyncSession, user: models.User):
+async def invalidate_all_sessions(
+    db: AsyncSession,
+    user: models.User,
+    *,
+    reason: str = "Password changed",
+    fail_on_cache_cleanup: bool = False,
+):
     """
     (V5 - Fixed) Vô hiệu hóa tất cả các phiên hoạt động.
     Sửa lỗi Race Condition bằng cách khóa (lock) và cập nhật DB trong 1 transaction.
@@ -1356,8 +1362,12 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
                     }
                 )
 
-        # 4. ✅ COMMIT TỰ ĐỘNG (khi ra khỏi `async with db.begin()`)
-        log.info("DB transaction committed, sessions revoked in DB", user_id=user_id)
+        # 4. Savepoint released here — the session-revoke rows are STAGED in the
+        #    caller's OUTER transaction (NOT committed yet; the caller commits).
+        log.info(
+            "Session-revoke staged in caller transaction (savepoint released)",
+            user_id=user_id,
+        )
 
         # 5. ✅ XÓA REDIS KEYS (SAU KHI COMMIT THÀNH CÔNG)
         if revoked_jtis:
@@ -1377,18 +1387,33 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
                     user_id=user_id,
                     error=str(e_redis_del),
                 )
-                # Không ném lỗi ở đây, vì DB đã commit (nhưng cần log)
+                # STRICT (offboarding): a Redis cleanup miss leaves a phantom
+                # session:{jti} that can resurrect an old access token after the
+                # account is reactivated + logs in (which clears user_blacklist).
+                # Raise so the caller rolls back the status change → fail-closed.
+                # Default path (change_password) stays best-effort: the DB
+                # session-revoke is staged in the CALLER's transaction (savepoint
+                # released into it above, NOT yet committed) and is durable only
+                # if the caller commits.
+                if fail_on_cache_cleanup:
+                    raise CacheServiceError(
+                        detail="Failed to clear session keys from cache",
+                        context={
+                            "operation": "redis_session_cleanup",
+                            "user_id": user_id,
+                        },
+                    )
 
         # 6. ✅ DISPATCH EVENT (Event Dispatcher Pattern - SAU KHI MỌI THỨ HOÀN TẤT)
         try:
             await dispatcher.dispatch(
                 TransportEvents.USER_FORCE_LOGOUT,
                 user_id=user_id,
-                reason="Password changed",
+                reason=reason,
                 revoked_jtis=[]  # All sessions revoked
             )
             socket_events_emitted_total.labels(event_type="force_logout_all").inc()
-            log.info("Dispatched force_logout event (password change)", user_id=user_id)
+            log.info("Dispatched force_logout event", user_id=user_id, reason=reason)
         except Exception as e_dispatch:
             socket_emit_failures_total.labels(event_type="force_logout_all").inc()
             log.error(
@@ -1503,10 +1528,11 @@ async def perform_bulk_action(
             # ✅ FIX Bug #2: Return Tuple instead of string
             async def _noop():
                 pass
-            return "No users found for the provided IDs. 0 users affected.", _noop
+            return "No users found for the provided IDs. 0 users affected.", _noop, []
 
         processed_count = 0
         message = ""
+        disconnect_ids: list = []  # status-changed ids the router must force-disconnect
         if action == "delete":
             # ✅ SPRINT 5: Use Repository for consultation check
             # Check if any users have consultations (cannot delete)
@@ -1604,6 +1630,26 @@ async def perform_bulk_action(
                     new_status=new_status,
                 )
 
+            # Revoke sessions for accounts moved to a NON-active status. Persist
+            # the status (flush ⇒ row lock) BEFORE revoking so a concurrent login
+            # is serialized on the locked row (flush-before-revoke, P0). Strict
+            # cache cleanup so a Redis miss fails the whole bulk → router rollback.
+            # Server-side socket force-disconnect is done by the ROUTER (transport
+            # boundary): this service returns the ids to disconnect.
+            if new_status != "active" and ids_changed:
+                await db.flush()
+                by_id = {u.id: u for u in users_to_process}
+                for uid in sorted(ids_changed):
+                    u = by_id.get(uid)
+                    if u is not None:
+                        await invalidate_all_sessions(
+                            db,
+                            u,
+                            reason="Account deactivated by administrator",
+                            fail_on_cache_cleanup=True,
+                        )
+                disconnect_ids = sorted(ids_changed)
+
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
@@ -1612,7 +1658,7 @@ async def perform_bulk_action(
             """Execute after router commits the transaction."""
             pass
 
-        return message, _post_commit
+        return message, _post_commit, disconnect_ids
 
     except Exception as e:
         # ✅ Router will handle rollback

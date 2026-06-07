@@ -11,7 +11,7 @@ from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, security  # ✅ THÊM IMPORT security
-from ..database import safe_redis_exists, safe_redis_get
+from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get
 from ..services import user_service
 from ..utils.exceptions import (
     BusinessRuleViolation,
@@ -109,7 +109,15 @@ async def get_current_user(
     1. httpOnly cookie (access_token) - RECOMMENDED for browser requests
     2. Authorization header (fallback for API clients & backwards compatibility)
 
-    Checks: session validity (r_jti), blacklist, and user status.
+    Checks: JWT validity, access-JTI blacklist, user existence, user global
+    blacklist, and session validity (Redis `session:{r_jti}` corroborated by a
+    non-revoked, non-expired DB session row — DB is the source of truth).
+
+    Does NOT gate `User.status` — intentional. Recovery / self-service endpoints
+    (change-password, secure-account, logout, sessions, trusted devices, MFA
+    setup/disable, public config) must let an inactive user still authenticate
+    here. `status` is enforced by `get_current_active_user` for business APIs
+    and by the token-issuance gate in /login, /verify-mfa and /refresh.
     """
     credentials_exception = InvalidToken(detail="Could not validate credentials")
 
@@ -233,49 +241,67 @@ async def get_current_user(
                 )
                 raise credentials_exception
 
-        # === ✅ NEW STEP 4: CHECK SESSION VALIDITY ===
-        # (Kiểm tra xem session (liên kết qua r_jti) có bị revoke không)
+        # === STEP 4: CHECK SESSION VALIDITY (Redis cache + DB authoritative) ===
+        # Redis is only a cache. A Redis `session:{jti}` hit can be STALE (an
+        # invalidate_all_sessions cleanup miss) or a PHANTOM (Redis-only row with
+        # no DB session, from the historical no-commit bug). Trusting it alone
+        # lets a revoked/old access token resurrect once `user_blacklist` is
+        # cleared by a later login. So: fast-reject on a clear Redis miss, then
+        # ALWAYS corroborate against a non-revoked, non-expired DB session row
+        # (the source of truth for revocation).
         try:
             stored_user_id = await safe_redis_get(f"session:{refresh_jti}")
-            if not stored_user_id or int(stored_user_id) != user.id:
-                log.warning(
-                    "Token validation failed: Session not found in Redis (revoked?)",
-                    user_id=user.id,
-                    refresh_jti=refresh_jti,
-                )
-                raise credentials_exception
+            # True = hit, False = clear miss, None = Redis unavailable (DB decides)
+            redis_session_ok = (
+                bool(stored_user_id) and int(stored_user_id) == user.id
+            )
         except InvalidToken:
             raise
         except Exception as e:
             log.error(
-                "Redis Session check failed", refresh_jti=refresh_jti, error=str(e)
+                "Redis Session check failed; relying on DB",
+                refresh_jti=refresh_jti,
+                error=str(e),
             )
-            # (Fallback CSDL cho session check)
-            # (✅ PHASE 2: Use SessionRepository instead of direct SQL)
-            try:
-                from app.repositories import SessionRepository
+            redis_session_ok = None
 
-                repo = SessionRepository(db)
-                session = await repo.get_by_refresh_jti_and_user(refresh_jti, user.id)
-                if session is None:
-                    log.warning(
-                        "Database fallback: Session not found or revoked",
-                        jti=refresh_jti,
-                    )
-                    raise credentials_exception
-                log.info(
-                    "Database fallback successful: Session validated via database",
-                    jti=refresh_jti,
-                )
-            except InvalidToken:
-                raise
-            except Exception as db_error:
-                log.error(
-                    "Database fallback failed during Session check",
-                    jti=refresh_jti,
-                    error=str(db_error),
-                )
-                raise credentials_exception
+        if redis_session_ok is False:
+            log.warning(
+                "Token validation failed: Session not found in Redis (revoked?)",
+                user_id=user.id,
+                refresh_jti=refresh_jti,
+            )
+            raise credentials_exception
+
+        # STEP 4b: authoritative DB cross-check (ALWAYS runs after a Redis hit
+        # OR when Redis is unavailable). DB row must exist, be non-revoked and
+        # non-expired (get_by_refresh_jti_and_user filters revoked_at IS NULL
+        # AND expires_at > now).
+        try:
+            from app.repositories import SessionRepository
+
+            db_session = await SessionRepository(db).get_by_refresh_jti_and_user(
+                refresh_jti, user.id
+            )
+        except InvalidToken:
+            raise
+        except Exception as db_error:
+            log.error(
+                "DB session cross-check failed", jti=refresh_jti, error=str(db_error)
+            )
+            raise credentials_exception  # fail-closed
+        if db_session is None:
+            log.warning(
+                "Session rejected: no non-revoked DB row (stale/phantom Redis)",
+                user_id=user.id,
+                refresh_jti=refresh_jti,
+            )
+            # Best-effort purge the stale/phantom Redis key so it can't resurrect.
+            try:
+                await safe_redis_delete(f"session:{refresh_jti}")
+            except Exception:
+                pass
+            raise credentials_exception
 
         # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
         # ⚠️ DISABLED (Phase 7): This was causing issues because:

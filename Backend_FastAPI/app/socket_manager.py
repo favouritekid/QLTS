@@ -1,5 +1,13 @@
 # app/socket_manager.py
 
+import asyncio
+import json
+import math
+import os
+import threading
+import uuid
+
+import redis as _redis_sync  # sync client for the heartbeat watchdog thread
 import socketio
 import structlog
 from fastapi import HTTPException
@@ -211,6 +219,25 @@ async def _get_user_from_token(token: str) -> models.User:
                 raise HTTPException(status_code=404, detail="User not found")
             if user.id != int(stored_user_id):
                 raise HTTPException(status_code=401, detail="Token/User mismatch")
+
+            # DB-authoritative session cross-check (parity with HTTP deps STEP 4).
+            # The Redis session:{jti} hit above can be stale (cleanup miss) or a
+            # phantom (Redis-only, no DB row). Require a non-revoked, non-expired
+            # DB session row for THIS jti, else reject — closes token resurrection
+            # after reactivate + login clears user_blacklist.
+            from app.repositories import SessionRepository
+            db_session = await SessionRepository(db).get_by_refresh_jti_and_user(
+                refresh_jti, user.id
+            )
+            if db_session is None:
+                log.warning(
+                    "Socket auth rejected: no non-revoked DB session (stale/phantom)",
+                    user_id=user.id,
+                    jti=refresh_jti,
+                )
+                raise HTTPException(
+                    status_code=401, detail="Session revoked or expired"
+                )
 
             # ✅ FIX-3: Check user blacklist (CRITICAL SECURITY FIX)
             try:
@@ -480,6 +507,18 @@ async def revalidate_auth(sid):
             user_id = session.get("user_id")
             refresh_jti = session.get("jti")
 
+            # Fail-closed: a session without user_id/jti cannot be validated
+            # against the DB (the exact-jti check below would be skipped),
+            # leaving it permanently trusted. Disconnect immediately.
+            if not user_id or not refresh_jti:
+                log.warning(
+                    "Revalidation failed: missing user_id/jti in socket session",
+                    sid=sid,
+                    user_id=user_id,
+                )
+                await sio.disconnect(sid)
+                return {"valid": False, "reason": "Invalid session"}
+
             # Check if this specific session is still valid in Redis
             if refresh_jti:
                 session_valid = await safe_redis_get(f"session:{refresh_jti}")
@@ -504,32 +543,27 @@ async def revalidate_auth(sid):
                 await sio.disconnect(sid)
                 return {"valid": False, "reason": "User session invalidated"}
 
-            # Fallback: Check if ANY active session exists in DB
-            from datetime import datetime, timezone
-            from sqlalchemy import and_, select
+            # DB-authoritative cross-check for THIS jti (NOT "any active session"
+            # of the user). The old code passed an old/revoked socket as long as
+            # the user had *some* active session — so a fresh login after
+            # deactivate→reactivate kept a stale socket alive. Require a
+            # non-revoked, non-expired DB row matching exactly refresh_jti.
+            if refresh_jti:
+                async with AsyncSessionLocal() as db:
+                    from app.repositories import SessionRepository
 
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(models.UserSession)
-                    .where(
-                        and_(
-                            models.UserSession.user_id == user_id,
-                            models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc),
-                        )
-                    )
-                    .limit(1)
-                )
-                active_session = result.scalar_one_or_none()
-
-                if not active_session:
+                    db_session = await SessionRepository(
+                        db
+                    ).get_by_refresh_jti_and_user(refresh_jti, user_id)
+                if db_session is None:
                     log.warning(
-                        "Revalidation failed: No active sessions in DB",
+                        "Revalidation failed: session revoked/expired in DB (exact jti)",
                         sid=sid,
-                        user_id=user_id
+                        user_id=user_id,
+                        jti=refresh_jti,
                     )
                     await sio.disconnect(sid)
-                    return {"valid": False, "reason": "No active sessions"}
+                    return {"valid": False, "reason": "Session revoked"}
 
             log.debug("Revalidation successful", sid=sid, user_id=user_id)
             socket_events_received_total.labels(event_type="revalidate_auth").inc()
@@ -618,6 +652,275 @@ async def emit_force_logout(user_id: int, revoked_jtis: list, **kwargs):
             log.warning("Emitted broadcast force_logout_batch (ALL)", user_id=user_id)
     except Exception as e:
         log.error("Failed to emit force_logout event", user_id=user_id, error=str(e))
+
+
+# =====================================================================
+# SERVER-SIDE FORCE-DISCONNECT (enforcement, NOT client-dependent)
+# =====================================================================
+# emit_force_logout() above only EMITS an event the client must honour — a
+# custom/malicious client can ignore it and keep receiving realtime. For real
+# offboarding we disconnect sockets server-side, across ALL Gunicorn workers,
+# with confirmation. Mechanism: the offboarding request publishes a command on a
+# Redis channel; every worker runs a subscriber that disconnects its LOCAL
+# participants (AsyncRedisManager.get_participants is local-only) and ACKs. The
+# publisher BLOCKS until every REQUIRED worker ACKs, else raises → the admin
+# request rolls back the status change (fail-closed).
+#
+# A "required" worker is any registered worker whose heartbeat key still exists.
+# The heartbeat is refreshed by a DEDICATED THREAD (not a coroutine) so it keeps
+# proving "process alive" even when the event loop stalls — a stalled worker then
+# stays in the required set but cannot ACK → fail-closed. A worker that cannot
+# refresh its heartbeat (Redis unreachable) or whose process dies stops the
+# thread, so a missing heartbeat key (past the TTL grace) provably means the
+# process exited and its sockets are closed. A worker with a live heartbeat that
+# fails to ACK makes offboarding fail-closed (NOT pruned).
+FORCE_DISCONNECT_CHANNEL = "socket:force_disconnect"
+_WORKERS_SET = "socket:workers"
+_WORKER_HB_PREFIX = "socket:worker_hb:"
+_ACK_PREFIX = "socket:dc_ack:"
+# TTL must exceed the max tolerated event-loop stall; a worker that stops
+# refreshing self-terminates, so key-gone (past this grace) == process gone.
+_WORKER_HB_TTL = 30        # heartbeat key lifetime / death grace (s)
+_WORKER_HB_REFRESH = 5     # heartbeat refresh interval (s)
+_ACK_TTL = 30             # ack-set cleanup backstop (s)
+_ACK_TIMEOUT = 3.0        # publisher waits for all required workers (s)
+_ACK_POLL = 0.1          # ack poll interval (s)
+
+# Unique id for THIS worker process (set by register_socket_worker at startup).
+_worker_id = None
+
+_HB_MAX_FAILS = 3        # consecutive heartbeat-thread refresh failures → os._exit
+_hb_thread = None        # heartbeat watchdog thread (independent of event loop)
+_hb_stop = None          # threading.Event used to stop the heartbeat thread
+
+
+async def register_socket_worker():
+    """Register this worker: write heartbeat FIRST, then add to the set (so a
+    worker is never in the set without a live heartbeat). Called once at startup
+    AFTER the subscriber is listening; caller treats failure as fatal."""
+    global _worker_id
+    _worker_id = uuid.uuid4().hex
+    await redis_client.set(_WORKER_HB_PREFIX + _worker_id, "1", ex=_WORKER_HB_TTL)
+    await redis_client.sadd(_WORKERS_SET, _worker_id)
+    log.info("Socket worker registered", worker_id=_worker_id)
+    return _worker_id
+
+
+async def deregister_socket_worker():
+    """Remove this worker from the set + drop its heartbeat (graceful exit)."""
+    if not _worker_id:
+        return
+    try:
+        await redis_client.srem(_WORKERS_SET, _worker_id)
+        await redis_client.delete(_WORKER_HB_PREFIX + _worker_id)
+    except Exception as e:
+        log.error("Socket worker deregister failed", worker_id=_worker_id, error=str(e))
+
+
+def _heartbeat_thread_run(worker_id, stop_event):
+    """Runs in a DEDICATED THREAD, independent of the asyncio event loop, so the
+    heartbeat keeps proving 'process alive' even if the event loop STALLS. If the
+    loop hangs, this worker stays in the required ACK set (heartbeat still alive)
+    but cannot ACK → the offboarding request times out and rolls back
+    (fail-closed). A coroutine heartbeat could NOT do this: a stalled loop never
+    runs it, the key expires, and the worker would be wrongly pruned while its
+    sockets are still alive. If Redis is unreachable for too long, terminate the
+    process so its sockets close (heartbeat-gone then provably == process-gone).
+    Gunicorn's worker `timeout` (120s) > TTL (30s), so without this thread a
+    31–119s stall would silently drop a live worker."""
+    # Finite socket timeouts are REQUIRED: with the default (infinite) timeout a
+    # network blackhole makes client.set() hang past the TTL, the key expires and
+    # the worker is pruned while its process/sockets are still alive. With a 2s
+    # timeout, 3 consecutive failures trip os._exit well before the 30s TTL
+    # (~3×(2+5)s ≈ 21s), so heartbeat-gone still implies process-gone.
+    client = _redis_sync.Redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+        socket_connect_timeout=2,
+        socket_timeout=2,
+        retry_on_timeout=False,
+    )
+    fails = 0
+    try:
+        while not stop_event.is_set():
+            try:
+                client.set(_WORKER_HB_PREFIX + worker_id, "1", ex=_WORKER_HB_TTL)
+                fails = 0
+            except Exception as e:
+                fails += 1
+                log.error(
+                    "Heartbeat thread refresh failed",
+                    worker_id=worker_id,
+                    attempt=fails,
+                    error=str(e),
+                )
+                if fails >= _HB_MAX_FAILS:
+                    log.critical(
+                        "Heartbeat unrecoverable — exiting worker (Gunicorn restart)",
+                        worker_id=worker_id,
+                    )
+                    os._exit(1)
+            stop_event.wait(_WORKER_HB_REFRESH)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def start_heartbeat_thread():
+    """Start the heartbeat watchdog thread (call AFTER register_socket_worker)."""
+    global _hb_thread, _hb_stop
+    _hb_stop = threading.Event()
+    _hb_thread = threading.Thread(
+        target=_heartbeat_thread_run,
+        args=(_worker_id, _hb_stop),
+        name="socket-heartbeat",
+        daemon=True,
+    )
+    _hb_thread.start()
+    log.info("Socket heartbeat thread started", worker_id=_worker_id)
+
+
+def stop_heartbeat_thread():
+    """Signal the heartbeat thread to stop and join it (graceful shutdown)."""
+    if _hb_stop is not None:
+        _hb_stop.set()
+    if _hb_thread is not None:
+        _hb_thread.join(timeout=5)
+
+
+async def _required_workers():
+    """Workers that MUST ACK a force-disconnect: every registered worker whose
+    heartbeat key still EXISTS. Entries whose key is gone (past the TTL grace)
+    are pruned — a worker that stopped refreshing self-terminated (os._exit), so
+    its process is gone and sockets closed. We do NOT prune a worker that merely
+    fails to ACK while its heartbeat is live: that path stays fail-closed."""
+    members = await redis_client.smembers(_WORKERS_SET)  # decode_responses → str
+    required, dead = set(), set()
+    for wid in members:
+        if await redis_client.exists(_WORKER_HB_PREFIX + wid):
+            required.add(wid)
+        else:
+            dead.add(wid)  # heartbeat gone past grace → process exited
+    if dead:
+        await redis_client.srem(_WORKERS_SET, *dead)
+    return required
+
+
+async def force_disconnect_user(user_ids) -> int:
+    """LOCAL: disconnect every SID of the given user(s) on THIS worker. Accepts a
+    single id or an iterable. Snapshots participants first (disconnect mutates
+    room membership). Raises on any disconnect failure → caller does NOT ACK →
+    publisher times out (fail-closed)."""
+    if isinstance(user_ids, int):
+        user_ids = [user_ids]
+    user_ids = list(user_ids)
+    count = 0
+    for uid in user_ids:
+        room = f"user_room_{uid}"
+        sids = [sid for sid, _ in sio.manager.get_participants("/", room)]
+        for sid in sids:
+            await sio.disconnect(sid)
+            count += 1
+    log.info("force_disconnect_user (local)", user_ids=user_ids, disconnected=count)
+    return count
+
+
+async def _handle_force_disconnect(raw: str):
+    """Subscriber handler: disconnect the whole batch locally, then ACK ONCE.
+    No ACK if the disconnect raises (publisher fail-closes)."""
+    data = json.loads(raw)
+    command_id = data["command_id"]
+    await force_disconnect_user(data["user_ids"])  # raises → no ACK below
+    ack_key = _ACK_PREFIX + command_id
+    await redis_client.sadd(ack_key, _worker_id)
+    await redis_client.expire(ack_key, _ACK_TTL)
+
+
+async def subscribe_force_disconnect():
+    """Create the pubsub and AWAIT the SUBSCRIBE before returning, so the caller
+    registers this worker as live only AFTER it is actually listening."""
+    pubsub = redis_client.pubsub()
+    await pubsub.subscribe(FORCE_DISCONNECT_CHANNEL)
+    return pubsub
+
+
+async def consume_force_disconnect(pubsub):
+    """Background consumer loop. Raises/returns on fatal pubsub error → the
+    lifespan supervisor terminates the worker so Gunicorn restarts it."""
+    log.info("Force-disconnect subscriber listening", worker_id=_worker_id)
+    try:
+        async for message in pubsub.listen():
+            if not message or message.get("type") != "message":
+                continue
+            try:
+                await _handle_force_disconnect(message["data"])
+            except Exception as e:
+                # Handler failure → deliberately do NOT ACK so the publisher
+                # times out and fail-closes. Keep consuming other commands.
+                log.error("Force-disconnect handler failed (no ACK)", error=str(e))
+    finally:
+        try:
+            await pubsub.unsubscribe(FORCE_DISCONNECT_CHANNEL)
+            await pubsub.aclose()
+        except Exception:
+            pass
+
+
+async def force_disconnect_user_strict(
+    user_ids, *, timeout: float = _ACK_TIMEOUT
+) -> str:
+    """ENFORCEMENT: publish ONE force-disconnect command for the whole batch and
+    BLOCK until every required worker ACKs, else raise (fail-closed). Redis
+    PUBLISH only reports how many subscribers RECEIVED the message — not that
+    they processed it — so we require explicit per-worker ACKs. A single batched
+    command bounds the admin request to ONE timeout regardless of batch size."""
+    if isinstance(user_ids, int):
+        user_ids = [user_ids]
+    user_ids = list(user_ids)
+    if not user_ids:
+        return ""
+    command_id = uuid.uuid4().hex
+    ack_key = _ACK_PREFIX + command_id
+    # Snapshot required workers BEFORE publishing. Workers that start AFTER are
+    # not required to ACK (they hold no sockets predating the command).
+    required = await _required_workers()
+    if not required:
+        # No worker alive → cannot guarantee enforcement → fail-closed.
+        raise RuntimeError("No live socket workers to enforce force-disconnect")
+    payload = json.dumps({"command_id": command_id, "user_ids": user_ids})
+    await redis_client.publish(FORCE_DISCONNECT_CHANNEL, payload)
+    try:
+        max_polls = max(1, int(math.ceil(timeout / _ACK_POLL)))
+        acked = set()
+        for _ in range(max_polls):
+            acked = set(await redis_client.smembers(ack_key))
+            if required <= acked:
+                break
+            await asyncio.sleep(_ACK_POLL)
+        missing = required - acked
+        if missing:
+            log.error(
+                "force_disconnect_user_strict: ACK timeout",
+                user_ids=user_ids,
+                command_id=command_id,
+                missing=list(missing),
+            )
+            raise TimeoutError(
+                f"Force-disconnect not ACKed by workers: {sorted(missing)}"
+            )
+        log.info(
+            "force_disconnect_user_strict OK",
+            user_ids=user_ids,
+            workers=len(required),
+        )
+        return command_id
+    finally:
+        try:
+            await redis_client.delete(ack_key)
+        except Exception:
+            pass
 
 
 async def emit_data_updated(event_data: dict, **kwargs):

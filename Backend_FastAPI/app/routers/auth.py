@@ -72,6 +72,27 @@ def _suspicious_login_only_channels(risk_score: int) -> Optional[List[str]]:
 # Used by both /login (non-MFA) and /verify-mfa to avoid code duplication.
 # =============================================================================
 
+
+def _deny_if_not_active(user, *, ip_address):
+    """Token-issuance gate: block any non-active account (offboarding / lock).
+
+    Raises a generic ``InvalidCredentials`` (401) — identical to a wrong
+    password, so an unauthenticated caller cannot enumerate account state.
+    Do NOT record a failed lockout attempt here: this is a legitimate deny,
+    not a brute-force attempt. Status is whitelisted on ``"active"`` so every
+    other value (inactive/pending/banned/suspended/locked) is rejected.
+    """
+    if user.status != "active":
+        log.warning(
+            "Token issuance blocked: account not active",
+            user_id=user.id,
+            status=user.status,
+            ip_address=ip_address,
+            security_event="LOGIN_BLOCKED_INACTIVE",
+        )
+        raise InvalidCredentials()
+
+
 async def _complete_login_flow(
     user: "models.User",
     request: Request,
@@ -88,6 +109,17 @@ async def _complete_login_flow(
     - /verify-mfa (after both password + MFA code verified)
     """
     from datetime import datetime, timedelta, timezone
+
+    # ===== AUTHORITATIVE STATUS GATE (Tầng A) =====
+    # Re-read status from the DB under a row lock immediately before minting
+    # tokens. The early gates in /login and /verify-mfa read a possibly-stale
+    # ORM object; this closes the deactivate↔mint race (admin sets the account
+    # non-active after authentication but before tokens are issued). Runs for
+    # BOTH callers (login + verify-mfa) since both mint through this helper.
+    await db.refresh(user, attribute_names=["status"], with_for_update=True)
+    _deny_if_not_active(
+        user, ip_address=request.client.host if request.client else None
+    )
 
     try:
         await user_service.remove_user_from_global_blacklist(user.id)
@@ -135,7 +167,23 @@ async def _complete_login_flow(
         if session_callback:
             post_commit_callbacks.append(session_callback)
     except Exception as session_error:
-        log.error("Failed to create session", user_id=user.id, error=str(session_error), exc_info=True)
+        # FAIL-CLOSED: get_current_user STEP 4 is now DB-authoritative — it
+        # requires a non-revoked DB session row for this jti. Without that row an
+        # issued token would be rejected (401) on the very next request. So undo
+        # the Redis session key and abort the login with 500 instead of minting a
+        # token that is dead on arrival.
+        log.error(
+            "Failed to create DB session — aborting login (fail-closed)",
+            user_id=user.id,
+            error=str(session_error),
+            exc_info=True,
+        )
+        await db.rollback()
+        try:
+            await safe_redis_delete(f"session:{refresh_jti}")
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Could not process session")
 
     # 4. Record login history + suspicious login detection
     login_notification_data = None
@@ -436,6 +484,15 @@ async def login_for_access_token(
         # Re-raise original error (don't reveal lockout info to attacker)
         raise auth_error
 
+    # ===== STATUS GATE (Tầng B — early) =====
+    # Block non-active accounts BEFORE the MFA branch so an inactive account
+    # never receives an mfa_token. Placed OUTSIDE the authenticate try/except so
+    # the raise is not recorded as a failed lockout attempt (legitimate deny).
+    # Authoritative re-check happens in _complete_login_flow (Tầng A).
+    _deny_if_not_active(
+        user, ip_address=request.client.host if request.client else None
+    )
+
     # ===== MFA CHECK =====
     # If user has MFA enabled, return mfa_token instead of full login.
     # CRITICAL: Do NOT reset_attempts here. Password correct ≠ auth complete.
@@ -589,7 +646,7 @@ async def check_session_status(
     )
 
     return {
-        "status": "active",
+        "status": current_user.status,  # real account status, not hardcoded
         "user_id": current_user.id,
         "username": current_user.username,
         "session_valid": True,
@@ -885,6 +942,18 @@ async def refresh_access_token(
                     log.warning("User not found during refresh", username=username)
                     raise credentials_exception
 
+                # ===== AUTHORITATIVE STATUS GATE (Tầng A) =====
+                # get_user_for_refresh already holds a FOR UPDATE row lock, so
+                # this status read is authoritative. Block token rotation for a
+                # non-active account. Raises InvalidCredentials (NOT InvalidToken)
+                # → handled by the dedicated outer `except InvalidCredentials`
+                # below: returns 401 WITHOUT incrementing the refresh-abuse
+                # counter (legitimate deny, not abuse).
+                _deny_if_not_active(
+                    user,
+                    ip_address=request.client.host if request.client else None,
+                )
+
                 # SECURITY: Check user-level blacklist (set by invalidate_all_sessions
                 # on password change/reset). Without this, old refresh tokens could
                 # still rotate even after all sessions were invalidated.
@@ -1120,6 +1189,11 @@ async def refresh_access_token(
 
         return response
 
+    except InvalidCredentials:
+        # Non-active account denied at the Tầng A gate above. Route to a clean
+        # 401 via the global handler WITHOUT tripping the refresh-abuse counter
+        # or revoking sessions (this is a legitimate deny, not token abuse).
+        raise
     except (JWTError, InvalidToken):
         # ✅ M4: Increment failed refresh counter
         if _refresh_username:
@@ -1228,6 +1302,15 @@ async def verify_mfa(
     user = await user_service.get_user_by_username(db, username=username)
     if not user or user.id != user_id:
         raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # ===== STATUS GATE (Tầng B — early) =====
+    # Block non-active accounts BEFORE spending an OTP / bumping the MFA counter.
+    # Catches the TOCTOU window where the account is deactivated between /login
+    # (mfa_token issued) and /verify-mfa. Authoritative re-check happens in
+    # _complete_login_flow (Tầng A) below.
+    _deny_if_not_active(
+        user, ip_address=request.client.host if request.client else None
+    )
 
     # 4. Verify MFA code
     is_valid = await mfa_service.verify_mfa_code(db, user, mfa_data.code)

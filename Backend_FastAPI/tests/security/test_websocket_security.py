@@ -52,10 +52,13 @@ log = logging.getLogger(__name__)
 
 
 # Skip all tests if socketio client not available
-pytestmark = pytest.mark.skipif(
-    not SOCKETIO_AVAILABLE,
-    reason="python-socketio not installed. Install with: pip install python-socketio[asyncio_client]"
-)
+pytestmark = [
+    pytest.mark.security,
+    pytest.mark.skipif(
+        not SOCKETIO_AVAILABLE,
+        reason="python-socketio not installed. Install with: pip install python-socketio[asyncio_client]",
+    ),
+]
 
 
 # ============================================

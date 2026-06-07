@@ -1,0 +1,14 @@
+[flake8]
+# Match the project's Black/isort standard (pyproject.toml line_length = 88)
+# so the linter agrees with the formatter. Without this, flake8 defaults to 79
+# and reports E501 on Black-compliant lines.
+max-line-length = 88
+# Black-compatible ignores: E203 (whitespace before ':') and W503 (line break
+# before binary operator) conflict with Black's formatting.
+extend-ignore = E203, W503
+exclude =
+    .git,
+    __pycache__,
+    alembic/versions,
+    .venv,
+    venv
