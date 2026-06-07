@@ -763,14 +763,19 @@ class TestRecordFeePayment:
         updated_profile = await reload_profile(profile.id)
         assert updated_profile.applied_rules.get("fee_status") == "pending"
 
-    async def test_regular_user_gets_404(
+    async def test_regular_user_denied_by_casbin(
         self,
         client: AsyncClient,
         regular_user_in_db: dict,
         officer_user_in_db: dict,
         seed_admission_statuses: dict,
     ):
-        """Regular user receives fake 404, not a leaking permission response."""
+        """role:user has no Casbin allow for this route → denied 403 at the
+        route layer (CasbinAuth), BEFORE the IDOR scope dependency runs. The
+        404 no-leak applies to allowed roles with the wrong *scope* (officer
+        non-assigned / other-unit — covered by the tests above), not to a role
+        that may never collect fees at all. Mirrors every other admission write
+        endpoint, which is CasbinAuth-gated."""
         profile = await create_pending_fee_profile(
             unit_id=seed_admission_statuses["unit_id"],
             assigned_officer_id=officer_user_in_db["id"],
@@ -784,7 +789,7 @@ class TestRecordFeePayment:
             "IDORUSER1",
         )
 
-        assert response.status_code == 404, response.text
+        assert response.status_code == 403, response.text
         updated_profile = await reload_profile(profile.id)
         assert updated_profile.applied_rules.get("fee_status") == "pending"
 

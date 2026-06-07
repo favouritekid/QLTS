@@ -759,10 +759,14 @@ export const appliedRulesSchema = z.object({
   requires_application_fee: z.boolean().nullish(),
   fee_status: z.string().nullish(),
   fee_paid_at: z.string().nullish(),
+  // Legacy paid snapshots (pre-ledger route) stored fee_payment_data directly:
+  // `amount` as a JSON number and may omit `transaction_id`. The migration does
+  // NOT rewrite that JSON, so the contract must accept both the legacy and the
+  // new (string amount) shapes — otherwise a paid profile fails to parse.
   fee_payment_data: z
     .object({
-      transaction_id: z.string(),
-      amount: z.string().optional(),
+      transaction_id: z.string().optional(),
+      amount: z.union([z.string(), z.number()]).optional(),
       payment_method_code: z.string().optional(),
       paid_at: z.string().optional(),
       recorded_by: z.number().optional(),

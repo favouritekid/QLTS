@@ -270,6 +270,46 @@ describe("appliedRulesSchema (top-level subject_weights)", () => {
     expect(parsed.fee_paid_at).toBeUndefined()
     expect(parsed.fee_payment_data).toBeUndefined()
   })
+
+  it("accepts a LEGACY paid snapshot with a numeric amount (pre-ledger route)", () => {
+    // Profiles paid before the ledger route stored fee_payment_data with
+    // `amount` as a JSON NUMBER (prod #25 = 70000.0). The migration does NOT
+    // rewrite that JSON, so the contract must still parse it — otherwise the
+    // paid profile fails to parse and its detail page breaks.
+    const parsed = appliedRulesSchema.parse({
+      scoring_method: "sum" as const,
+      allowed_subject_codes: ["math"],
+      subject_groups: [],
+      method_type: "subject_based" as const,
+      application_fee: 70000,
+      requires_application_fee: true,
+      fee_status: "paid",
+      fee_paid_at: "2026-06-05T12:03:35.646372",
+      fee_payment_data: {
+        amount: 70000.0,
+        paid_at: "2026-06-05T12:03:35.646372",
+        recorded_by: 15,
+        transaction_id: "CASH-HS25-20260605",
+      },
+    })
+
+    expect(parsed.fee_payment_data?.amount).toBe(70000)
+    expect(parsed.fee_payment_data?.transaction_id).toBe("CASH-HS25-20260605")
+  })
+
+  it("accepts a legacy fee_payment_data missing transaction_id", () => {
+    const parsed = appliedRulesSchema.parse({
+      scoring_method: "sum" as const,
+      allowed_subject_codes: ["math"],
+      subject_groups: [],
+      method_type: "subject_based" as const,
+      fee_status: "paid",
+      fee_payment_data: { amount: 50000 },
+    })
+
+    expect(parsed.fee_payment_data?.amount).toBe(50000)
+    expect(parsed.fee_payment_data?.transaction_id).toBeUndefined()
+  })
 })
 
 
