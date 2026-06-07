@@ -1601,7 +1601,7 @@ async def record_fee_payment(
         max_length=50,
         description="Payment method code. Application-fee collection is cash-only.",
     ),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = CasbinAuth,
     profile: models.AdmissionProfile = Depends(get_admission_for_fee_collection),
     db: AsyncSession = Depends(database.get_db),
 ):
