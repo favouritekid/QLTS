@@ -528,6 +528,44 @@ async def lifespan(app: FastAPI):
             "❌ FAILED TO CONNECT TO REDIS on startup!", error=str(e), exc_info=True
         )
 
+    # === Server-side force-disconnect enforcement (per-worker, fail-fast) ===
+    # Register this worker, start its heartbeat, and run the force-disconnect
+    # subscriber. These are REQUIRED for offboarding enforcement, so a startup
+    # failure is fatal (raise → worker does not come up). If a task later dies,
+    # we terminate the worker so Gunicorn restarts a fresh one (workers share a
+    # port and /health is always 200, so a single worker cannot be drained).
+    from .socket_manager import (
+        register_socket_worker,
+        start_heartbeat_thread,
+        subscribe_force_disconnect,
+        consume_force_disconnect,
+    )
+
+    # Readiness handshake: SUBSCRIBE first, register this worker as live only
+    # AFTER it is actually listening, THEN start the consume loop — so a command
+    # can never be missed by a worker that is "live" but not yet subscribed.
+    _socket_pubsub = await subscribe_force_disconnect()
+    await register_socket_worker()
+    # Heartbeat runs in a DEDICATED THREAD so it survives event-loop stalls
+    # (a stalled worker stays in the ACK set but can't ACK → fail-closed).
+    start_heartbeat_thread()
+    fastapi_app.state._socket_pubsub = _socket_pubsub
+    fastapi_app.state._socket_dc_task = asyncio.create_task(
+        consume_force_disconnect(_socket_pubsub)
+    )
+
+    def _socket_task_died(task: asyncio.Task):
+        if task.cancelled():
+            return  # expected during graceful shutdown
+        exc = task.exception()
+        log.critical(
+            "Force-disconnect subscriber died — exiting worker for Gunicorn restart",
+            error=str(exc) if exc else "returned unexpectedly",
+        )
+        os._exit(1)
+
+    fastapi_app.state._socket_dc_task.add_done_callback(_socket_task_died)
+
     # --- Ứng dụng chạy ---
     yield
 
@@ -572,6 +610,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         # Lỗi này giờ đây chỉ bắt các lỗi chung (ví dụ: lỗi khi emit)
         log.error("Error during Socket.IO shutdown", error=str(e))
+
+    # Only AFTER this worker's sockets are disconnected do we stop enforcement:
+    # cancel the consumer (cancelled()=True → no os._exit), stop the heartbeat
+    # thread, and deregister. Order matters — deregistering before sockets are
+    # closed would drop the worker from the ACK set while it still holds sockets.
+    try:
+        from .socket_manager import deregister_socket_worker, stop_heartbeat_thread
+
+        _dc = getattr(fastapi_app.state, "_socket_dc_task", None)
+        if _dc is not None:
+            _dc.cancel()
+        stop_heartbeat_thread()
+        await deregister_socket_worker()
+    except Exception as e_sock:
+        log.error("Socket enforcement shutdown cleanup failed", error=str(e_sock))
 
     # Close Redis lock client
     try:

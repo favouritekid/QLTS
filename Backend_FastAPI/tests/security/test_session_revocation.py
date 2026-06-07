@@ -19,6 +19,9 @@ from ..fixtures.constants import AuthURLs
 
 log = logging.getLogger(__name__)
 
+# Select these Socket.IO revocation tests under `-m security`.
+pytestmark = pytest.mark.security
+
 
 @pytest.mark.asyncio
 async def test_targeted_revocation_flow(test_server, client, regular_user_in_db, test_redis_client):

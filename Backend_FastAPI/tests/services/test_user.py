@@ -667,9 +667,9 @@ class TestBulkActions:
             mock_lead_repo = MockLeadRepo.return_value
             mock_lead_repo.unassign_leads_from_officers = AsyncMock(return_value=0)
             
-            msg, callback = await user_service.perform_bulk_action(
-                db, 
-                "delete", 
+            msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
+                db,
+                "delete",
                 user_ids, 
                 admin_user
             )
@@ -708,7 +708,7 @@ class TestBulkActions:
         user_ids = [u.id for u in inactive_users]
         
         # Act - use change_status action with new_status parameter
-        msg, callback = await user_service.perform_bulk_action(
+        msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
             db, 
             "change_status", 
             user_ids, 
@@ -749,7 +749,7 @@ class TestBulkActions:
         user_ids = [u.id for u in active_users]
         
         # Act - use change_status with banned status
-        msg, callback = await user_service.perform_bulk_action(
+        msg, callback, _disconnect_ids = await user_service.perform_bulk_action(
             db, 
             "change_status", 
             user_ids, 
