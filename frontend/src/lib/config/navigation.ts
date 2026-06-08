@@ -9,6 +9,7 @@
  */
 import {
   Activity,
+  BarChart3,
   Bell,
   Building2,
   Calculator,
@@ -24,6 +25,7 @@ import {
   LayoutDashboard,
   Percent,
   Receipt,
+  RotateCcw,
   Settings,
   Send,
   Share2,
@@ -34,6 +36,7 @@ import {
   Trello,
   UserCheck,
   Users,
+  WalletCards,
   Workflow,
 } from "lucide-react";
 import type { NavigationConfig } from "@/types/navigation";
@@ -148,7 +151,14 @@ export const navigationConfig: NavigationConfig = {
           href: "/finance",
           icon: DollarSign,
           roles: ["accountant", "manager", "admin"],
-          excludePaths: ["/finance/fees", "/finance/invoices", "/finance/payments"],
+          excludePaths: [
+            "/finance/fees",
+            "/finance/invoices",
+            "/finance/payments",
+            "/finance/debt-report",
+            "/finance/refunds",
+            "/finance/overpayments",
+          ],
         },
         {
           label: "Fees",
@@ -168,6 +178,24 @@ export const navigationConfig: NavigationConfig = {
           icon: CreditCard,
           roles: ["accountant", "manager", "admin"],
           // Badge for pending count can be added dynamically
+        },
+        {
+          label: "Debt Report",
+          href: "/finance/debt-report",
+          icon: BarChart3,
+          roles: ["accountant", "manager", "admin"],
+        },
+        {
+          label: "Refunds",
+          href: "/finance/refunds",
+          icon: RotateCcw,
+          roles: ["accountant", "manager", "admin"],
+        },
+        {
+          label: "Overpayments",
+          href: "/finance/overpayments",
+          icon: WalletCards,
+          roles: ["accountant", "manager", "admin"],
         },
       ],
     },

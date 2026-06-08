@@ -74,10 +74,12 @@ from .routers import (
     notifications,
     officer,
     organization,
+    overpayments,
     payments,  # ✅ FINANCE MODULE: Payment Processing
     pipeline,
     profile,
     public_admissions,  # ✅ Public admissions portal API
+    refunds,
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
     sessions,
     users,
@@ -901,6 +903,8 @@ fastapi_app.include_router(monitoring.router, prefix="/api")
 fastapi_app.include_router(fees.router, prefix="/api")
 fastapi_app.include_router(invoices.router, prefix="/api")
 fastapi_app.include_router(payments.router, prefix="/api")
+fastapi_app.include_router(refunds.router, prefix="/api")
+fastapi_app.include_router(overpayments.router, prefix="/api")
 fastapi_app.include_router(accounting.router, prefix="/api")
 fastapi_app.include_router(finance_dashboard.router, prefix="/api")
 fastapi_app.include_router(installment_plans.router, prefix="/api")

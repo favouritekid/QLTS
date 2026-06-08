@@ -34,7 +34,7 @@ from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentTransaction, PaymentMethod,
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
-    TransactionTypeEnum,
+    RefundRequest, RefundStatusEnum, TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
@@ -701,8 +701,6 @@ class RefundService:
             ResourceNotFoundError: If payment not found
             BusinessRuleViolation: If amount exceeds available
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
         payment = await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
         if not payment:
             raise ResourceNotFoundError("Payment not found")
@@ -769,8 +767,6 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
         refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
@@ -778,6 +774,11 @@ class RefundService:
         if refund.status != RefundStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 f"Can only approve pending refunds. Current status: {refund.status}"
+            )
+
+        if refund.requested_by_id == approver_id:
+            raise BusinessRuleViolation(
+                "Cannot approve your own refund request (maker-checker violation)"
             )
 
         # Update refund status
@@ -814,8 +815,6 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
         refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
@@ -830,6 +829,8 @@ class RefundService:
 
         # Update refund status
         refund.status = RefundStatusEnum.rejected.value
+        refund.rejected_by_id = rejector_id
+        refund.rejected_at = datetime.now(timezone.utc)
         refund.rejection_reason = reason
 
         await self.db.flush()
@@ -847,6 +848,7 @@ class RefundService:
         self,
         refund_id: int,
         processor_id: int,
+        refund_reference: Optional[str] = None,
         unit_id: Optional[int] = None,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
@@ -857,13 +859,12 @@ class RefundService:
         Args:
             refund_id: Approved refund to process
             processor_id: User processing refund
+            refund_reference: External bank/gateway reference for the refund
             unit_id: Unit ID for IDOR protection
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
         refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
@@ -885,6 +886,7 @@ class RefundService:
         # Update refund status
         refund.status = RefundStatusEnum.refunded.value
         refund.refunded_at = datetime.now(timezone.utc)
+        refund.refund_reference = refund_reference
 
         # Update invoice paid_amount (decrease)
         invoice.paid_amount = invoice.paid_amount - refund.amount
@@ -987,6 +989,34 @@ class RefundService:
             )
 
         return refund, post_commit
+
+    async def get_refund(
+        self,
+        refund_id: int,
+        unit_id: Optional[int] = None,
+    ) -> "RefundRequest":
+        """Get refund by ID with IDOR scope."""
+        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        if not refund:
+            raise ResourceNotFoundError("Refund request not found")
+        return refund
+
+    async def list_refunds(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        payment_id: Optional[int] = None,
+    ) -> Tuple[List["RefundRequest"], int]:
+        """List refund requests with total count."""
+        return await self.refund_repo.get_filtered_with_count(
+            skip=skip,
+            limit=limit,
+            unit_id=unit_id,
+            statuses=statuses,
+            payment_id=payment_id,
+        )
 
     async def _get_profile_for_fee(
         self,

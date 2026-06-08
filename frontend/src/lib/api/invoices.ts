@@ -12,6 +12,7 @@ import type {
   InvoiceDetail,
   InvoiceFilters,
   InvoicePenaltyRequest,
+  VietQRResponse,
 } from "@/types/finance.types"
 
 // ============================================================================
@@ -77,6 +78,14 @@ export async function getInvoicesByFee(feeId: number): Promise<Invoice[]> {
   return response.data
 }
 
+/**
+ * Get VietQR payload and PNG for an invoice.
+ */
+export async function getInvoiceVietQR(invoiceId: number): Promise<VietQRResponse> {
+  const response = await api.get<VietQRResponse>(API_ENDPOINTS.FINANCE.INVOICES.VIETQR(invoiceId))
+  return response.data
+}
+
 // ============================================================================
 // INVOICE ACTIONS
 // ============================================================================
@@ -138,6 +147,7 @@ export const invoicesApi = {
   getInvoices,
   getInvoice,
   getInvoicesByFee,
+  getInvoiceVietQR,
   // Actions
   issueInvoice,
   cancelInvoice,

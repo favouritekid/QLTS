@@ -14,6 +14,7 @@ import type {
   InvoiceDetail,
   InvoiceFilters,
   InvoicePenaltyRequest,
+  VietQRResponse,
 } from "@/types/finance.types"
 import { feesKeys } from "./useFees"
 
@@ -27,6 +28,7 @@ export const invoicesKeys = {
   list: (filters?: InvoiceFilters) => [...invoicesKeys.lists(), filters] as const,
   details: () => [...invoicesKeys.all, "detail"] as const,
   detail: (id: number) => [...invoicesKeys.details(), id] as const,
+  vietqr: (id: number) => [...invoicesKeys.detail(id), "vietqr"] as const,
   byFee: (feeId: number) => [...invoicesKeys.all, "by-fee", feeId] as const,
 }
 
@@ -158,6 +160,15 @@ export function useInvoicesByFee(feeId: number, options?: { enabled?: boolean })
     queryFn: () => invoicesApi.getInvoicesByFee(feeId),
     enabled: (options?.enabled ?? true) && !!feeId,
     staleTime: 1000 * 30,
+  })
+}
+
+export function useInvoiceVietQR(invoiceId: number, options?: { enabled?: boolean }) {
+  return useQuery<VietQRResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: invoicesKeys.vietqr(invoiceId),
+    queryFn: () => invoicesApi.getInvoiceVietQR(invoiceId),
+    enabled: (options?.enabled ?? true) && !!invoiceId,
+    staleTime: 1000 * 60,
   })
 }
 

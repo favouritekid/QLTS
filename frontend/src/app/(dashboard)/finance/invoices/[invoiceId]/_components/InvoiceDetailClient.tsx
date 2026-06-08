@@ -31,8 +31,9 @@ import {
   Calendar,
   Wifi,
 } from "lucide-react"
+import { useInvoiceVietQR } from "@/hooks/finance/useInvoices"
 import { useInvoiceViewModel } from "@/hooks/finance/useInvoiceViewModel"
-import { AmountDisplay, InvoiceStatusBadge, PaymentStatusBadge } from "@/components/finance"
+import { AmountDisplay, InvoiceStatusBadge, PaymentStatusBadge, VietQRDisplay } from "@/components/finance"
 import { FEE_TYPE_LABELS, type PaymentStatus, type FeeType } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
 import { PaymentRecordDialog } from "./PaymentRecordDialog"
@@ -84,6 +85,14 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
 
   // Fetch invoice detail
   const { data: invoice, isLoading, error } = useInvoiceViewModel(invoiceId)
+  const {
+    data: vietqr,
+    isLoading: vietqrLoading,
+    error: vietqrError,
+    refetch: refetchVietQR,
+  } = useInvoiceVietQR(invoiceId, {
+    enabled: !!invoice?.show_record_payment_button,
+  })
 
   // Handle dialog close
   const handleDialogClose = React.useCallback(() => {
@@ -331,6 +340,15 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
 
         {/* Sidebar */}
         <div className="space-y-6">
+          {invoice.show_record_payment_button && (
+            <VietQRDisplay
+              data={vietqr}
+              isLoading={vietqrLoading}
+              error={vietqrError}
+              onRetry={() => refetchVietQR()}
+            />
+          )}
+
           {/* Fee Info */}
           {invoice.fee && (
             <Card>

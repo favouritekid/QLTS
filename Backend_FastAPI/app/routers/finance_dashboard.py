@@ -11,10 +11,10 @@ Endpoints:
 - GET /api/finance/dashboard - Get finance dashboard statistics
 """
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 import structlog
@@ -24,6 +24,7 @@ from app.core.constants import UserRole
 from app.core.deps import CasbinAuth
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
+from app.services.finance_report_service import FinanceReportService
 from app.models.finance import (
     Fee, Invoice, Payment, RefundRequest, OverpaymentRecord,
     FeeStatusEnum, InvoiceStatusEnum, PaymentStatusEnum,
@@ -37,14 +38,56 @@ router = APIRouter(prefix="/finance", tags=["Finance - Dashboard"])
 
 @limiter.limit(RateLimits.DATA_READ)
 @router.get(
+    "/debt-report",
+    response_model=finance_schemas.DebtReportResponse,
+    summary="Get debt report grouped by admission profile",
+)
+async def get_debt_report(
+    request: Request,
+    unit_id: Optional[int] = Query(None, description="Admin-only unit filter"),
+    academic_year: Optional[int] = Query(
+        None, description="Filter by fee academic year"
+    ),
+    round_id: Optional[int] = Query(
+        None, description="Filter by applied_rules admission_round_id"
+    ),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type"),
+    aging: Optional[str] = Query(None, pattern="^(0_30|31_60|over_60)$"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Return debtor rows and summary totals.
+
+    Non-admin callers are always scoped to their own unit. Admin may optionally
+    pass ``unit_id`` to narrow the report.
+    """
+    scoped_unit_id = (
+        unit_id if current_user.role == UserRole.ADMIN else current_user.unit_id
+    )
+    report_service = FinanceReportService(db)
+    return await report_service.get_debt_report(
+        unit_id=scoped_unit_id,
+        academic_year=academic_year,
+        round_id=round_id,
+        fee_type=fee_type,
+        aging=aging,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
     "/dashboard",
     response_model=finance_schemas.FinanceDashboardStats,
     summary="Get finance dashboard statistics",
 )
 async def get_dashboard_stats(
     request: Request,
-    start_date: Optional[date] = Query(None, description="Start date for period collections (YYYY-MM-DD)"),
-    end_date: Optional[date] = Query(None, description="End date for period collections (YYYY-MM-DD)"),
+    start_date: Optional[date] = Query(
+        None, description="Start date for period collections (YYYY-MM-DD)"
+    ),
+    end_date: Optional[date] = Query(
+        None, description="End date for period collections (YYYY-MM-DD)"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -52,7 +95,7 @@ async def get_dashboard_stats(
     Get finance dashboard statistics.
 
     **Query Parameters:**
-    - start_date: Optional start date for period_collections calculation (default: 7 days ago)
+    - start_date: Optional start of period_collections range (default: 7 days ago)
     - end_date: Optional end date for period_collections calculation (default: today)
 
     **Returns:**
@@ -85,8 +128,16 @@ async def get_dashboard_stats(
 
     # Build base conditions for IDOR
     base_fee_query = select(Fee).join(models.AdmissionProfile).join(models.Lead)
-    base_invoice_query = select(Invoice).join(Fee).join(models.AdmissionProfile).join(models.Lead)
-    base_payment_query = select(Payment).join(Invoice).join(Fee).join(models.AdmissionProfile).join(models.Lead)
+    base_invoice_query = (
+        select(Invoice).join(Fee).join(models.AdmissionProfile).join(models.Lead)
+    )
+    base_payment_query = (
+        select(Payment)
+        .join(Invoice)
+        .join(Fee)
+        .join(models.AdmissionProfile)
+        .join(models.Lead)
+    )
 
     if unit_id is not None:
         base_fee_query = base_fee_query.where(models.Lead.unit_id == unit_id)
@@ -135,7 +186,9 @@ async def get_dashboard_stats(
         )
     )
     if unit_id is not None:
-        pending_payments_query = pending_payments_query.where(models.Lead.unit_id == unit_id)
+        pending_payments_query = pending_payments_query.where(
+            models.Lead.unit_id == unit_id
+        )
     result = await db.execute(pending_payments_query)
     pending_payments_count = result.scalar() or 0
 
@@ -143,7 +196,9 @@ async def get_dashboard_stats(
     overdue_query = (
         select(
             func.count(Invoice.id).label("count"),
-            func.coalesce(func.sum(Invoice.amount - Invoice.paid_amount), 0).label("amount")
+            func.coalesce(
+                func.sum(Invoice.amount - Invoice.paid_amount), 0
+            ).label("amount")
         )
         .join(Fee)
         .join(models.AdmissionProfile)

@@ -261,7 +261,10 @@ export interface OverpaymentRecord {
   refund_request_id: number | null
   created_at: string
   updated_at: string
-  // [TODO_BACKEND] Add permission flag: can_resolve
+  can_resolve: boolean
+  can_apply: boolean
+  can_refund: boolean
+  can_write_off: boolean
 }
 
 // ============================================================================
@@ -284,8 +287,23 @@ export interface RefundRequest {
   refund_reference: string | null
   created_at: string
   updated_at: string
-  // [TODO_BACKEND] Add: requested_by_name (denormalized)
-  // [TODO_BACKEND] Add permission flags: can_approve, can_reject, can_process
+  can_approve: boolean
+  can_reject: boolean
+  can_process: boolean
+}
+
+export interface VietQRBankAccount {
+  bank_bin: string
+  account_number: string
+  account_name: string
+}
+
+export interface VietQRResponse {
+  qr_payload: string
+  qr_image_base64: string
+  bank_account: VietQRBankAccount
+  amount: string
+  content: string
 }
 
 // ============================================================================
@@ -356,6 +374,40 @@ export interface FinanceDashboardStats {
   period_end: string | null
   pending_overpayments_count: number
   pending_refunds_count: number
+}
+
+export type DebtAgingBucket = "0_30" | "31_60" | "over_60"
+
+export interface DebtReportRow {
+  admission_profile_id: number
+  profile_code: string
+  profile_name: string
+  unit_id: number | null
+  unit_name: string | null
+  academic_year: number
+  admission_round_id: number | null
+  fee_types: string[]
+  invoice_count: number
+  total_expected: string
+  total_paid: string
+  total_outstanding: string
+  days_overdue: number
+  aging_bucket: DebtAgingBucket
+}
+
+export interface DebtReportSummary {
+  debtor_count: number
+  total_expected: string
+  total_paid: string
+  total_outstanding: string
+  bucket_0_30: string
+  bucket_31_60: string
+  bucket_over_60: string
+}
+
+export interface DebtReportResponse {
+  items: DebtReportRow[]
+  summary: DebtReportSummary
 }
 
 // ============================================================================
@@ -676,6 +728,28 @@ export interface PaymentFilters {
   invoice_id?: number
   status?: PaymentStatus
   method_id?: number
+  page?: number
+  page_size?: number
+}
+
+export interface DebtReportFilters {
+  unit_id?: number
+  academic_year?: number
+  round_id?: number
+  fee_type?: FeeType
+  aging?: DebtAgingBucket
+}
+
+export interface RefundFilters {
+  payment_id?: number
+  status?: RefundStatus
+  page?: number
+  page_size?: number
+}
+
+export interface OverpaymentFilters {
+  profile_id?: number
+  status?: OverpaymentStatus
   page?: number
   page_size?: number
 }

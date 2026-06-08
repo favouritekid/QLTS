@@ -17,25 +17,28 @@ Endpoints:
 - POST /api/invoices/{invoice_id}/apply-penalty - Apply late payment penalty
 """
 
+import base64
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from app import database, models, schemas
-from app.core import deps
+from app import database, models
 from app.core.constants import UserRole
 from app.core.deps import CasbinAuth, RequireManager
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.invoice_service import InvoiceService
+from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
+from app.utils.id_helpers import format_profile_code
+from app.utils.text_helpers import to_bank_transfer_note
+from app.utils.vietqr import build_vietqr_payload, render_qr_png
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
-    ConflictError,
 )
 
 log = structlog.get_logger(__name__)
@@ -62,9 +65,13 @@ async def list_invoices(
     request: Request,
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
-    status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
+    status: Optional[str] = Query(
+        None, description="Filter by status (comma-separated)"
+    ),
     fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
-    overdue_only: Optional[bool] = Query(None, description="Filter only overdue invoices"),
+    overdue_only: Optional[bool] = Query(
+        None, description="Filter only overdue invoices"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -205,6 +212,80 @@ async def get_invoices_by_fee(
     ]
 
 
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/{invoice_id}/vietqr",
+    response_model=finance_schemas.VietQRResponse,
+    summary="Get VietQR transfer payload for an invoice",
+)
+async def get_invoice_vietqr(
+    request: Request,
+    invoice_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Get a VietQR code for offline bank transfer.
+
+    **Security:**
+    - IDOR protection: Only accessible for user's unit
+    - Requires invoice read permission
+    - Bank collection config is public collection information, not a secret
+    """
+    invoice_service = InvoiceService(db)
+    config_service = SystemConfigService(db)
+    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    try:
+        invoice = await invoice_service.get_invoice(invoice_id, unit_id)
+        bank_account = await config_service.get_value("bank_collection_account")
+        if not isinstance(bank_account, dict):
+            raise ResourceNotFoundError("Bank collection account is not configured")
+
+        bank_bin = str(bank_account.get("bank_bin") or "").strip()
+        account_number = str(bank_account.get("account_number") or "").strip()
+        account_name = str(bank_account.get("account_name") or "").strip()
+        if not bank_bin or not account_number or not account_name:
+            raise ResourceNotFoundError("Bank collection account is not configured")
+
+        fee = invoice.fee
+        profile = fee.admission_profile if fee else None
+        lead = profile.lead if profile and getattr(profile, "lead", None) else None
+        profile_code = format_profile_code(profile.id) if profile else "HS-000000"
+        raw_note = (
+            f"{lead.full_name if lead else 'Unknown'} "
+            f"{profile_code} thanh toan hoc phi"
+        )
+        content = to_bank_transfer_note(raw_note, max_len=90)
+        amount = invoice.remaining_amount
+
+        payload = build_vietqr_payload(
+            bank_bin=bank_bin,
+            account_number=account_number,
+            account_name=to_bank_transfer_note(account_name, max_len=25),
+            amount=amount,
+            add_info=content,
+        )
+        qr_png = render_qr_png(payload)
+
+        return finance_schemas.VietQRResponse(
+            qr_payload=payload,
+            qr_image_base64=base64.b64encode(qr_png).decode("ascii"),
+            bank_account=finance_schemas.VietQRBankAccount(
+                bank_bin=bank_bin,
+                account_number=account_number,
+                account_name=account_name,
+            ),
+            amount=amount,
+            content=content,
+        )
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (BadRequest, ValueError) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 # ==============================================================================
 # INVOICE LIFECYCLE
 # ==============================================================================
@@ -270,7 +351,9 @@ async def issue_invoice(
 async def cancel_invoice(
     request: Request,
     invoice_id: int,
-    reason: str = Query(..., min_length=1, max_length=500, description="Cancellation reason"),
+    reason: str = Query(
+        ..., min_length=1, max_length=500, description="Cancellation reason"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = RequireManager,
 ):
@@ -324,7 +407,9 @@ async def cancel_invoice(
 async def apply_penalty(
     request: Request,
     invoice_id: int,
-    penalty_amount: Optional[Decimal] = Query(None, gt=0, description="Penalty amount (auto-calculated if not provided)"),
+    penalty_amount: Optional[Decimal] = Query(
+        None, gt=0, description="Penalty amount (auto-calculated if not provided)"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = RequireManager,
 ):
@@ -390,7 +475,9 @@ def _build_invoice_response(
         - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
     """
     # P1: Compute permission flags based on status, amounts, AND role
-    status_value = invoice.status.value if hasattr(invoice.status, "value") else invoice.status
+    status_value = (
+        invoice.status.value if hasattr(invoice.status, "value") else invoice.status
+    )
     remaining_amount = invoice.amount - invoice.paid_amount
 
     # Role-aware permission computation
@@ -432,7 +519,9 @@ def _build_invoice_detail_response(
     invoice, current_user_role: str = None
 ) -> finance_schemas.InvoiceDetailResponse:
     """Build InvoiceDetailResponse from Invoice model with payments."""
-    base_response = _build_invoice_response(invoice, current_user_role=current_user_role)
+    base_response = _build_invoice_response(
+        invoice, current_user_role=current_user_role
+    )
 
     payment_summaries = [
         finance_schemas.PaymentSummaryResponse(

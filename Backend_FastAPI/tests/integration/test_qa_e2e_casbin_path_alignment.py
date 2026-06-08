@@ -52,20 +52,13 @@ def _manager_export_entries() -> set[tuple[str, str]]:
     }
 
 
-def test_no_refunds_policy_entries_in_accountant_template():
-    """W2-2 anchor: /api/refunds/* entries không tồn tại trong
-    ACCOUNTANT_TEMPLATE seed list.
-
-    Refunds module deferred (no router). Re-introducing entry → ghost
-    permission grant cho action không thể thực hiện → confusion + audit
-    trail noise. Promote khi router ships per memory `finance-event-
-    decisions`.
-    """
+def test_refunds_policy_entries_present_in_accountant_template():
+    """Finance Phase 1 anchor: refund router shipped, so policy must exist."""
     objects = _accountant_objects()
-    refunds_dead = {o for o in objects if o.startswith("/api/refunds")}
-    assert not refunds_dead, (
-        f"ACCOUNTANT_TEMPLATE has /api/refunds/* dead policies — refunds "
-        f"module deferred (no router). Drop entries: {sorted(refunds_dead)}"
+    expected = {"/api/refunds", "/api/refunds/{id}", "/api/refunds/{id}/process"}
+    missing = expected - objects
+    assert not missing, (
+        f"ACCOUNTANT_TEMPLATE missing refund policies: {sorted(missing)}"
     )
 
 
