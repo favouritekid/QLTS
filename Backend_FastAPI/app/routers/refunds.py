@@ -76,6 +76,21 @@ async def create_refund(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
+    # F1: managers inherit officer in Casbin (g, role:manager, role:officer) so the
+    # officer POST grant leaks the create endpoint to managers. Managers are
+    # approver-only (maker-checker), so enforce the create capability here to match
+    # the `can_create` flag the FE reads. Casbin role inheritance cannot express
+    # "officer + accountant but not manager" because manager IS-A officer.
+    if current_user.role not in (
+        UserRole.OFFICER,
+        UserRole.ACCOUNTANT,
+        UserRole.ADMIN,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managers are approver-only and cannot create refund requests",
+        )
+
     refund_service = RefundService(db)
     unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
     try:

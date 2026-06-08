@@ -238,6 +238,17 @@ async def get_invoice_vietqr(
 
     try:
         invoice = await invoice_service.get_invoice(invoice_id, unit_id)
+
+        # F3: only payable invoices may produce a transfer QR. A draft/cancelled
+        # invoice can carry a positive remaining amount but cannot be paid through
+        # normal payment recording, so a QR for it would mislead the applicant.
+        # Mirror record_manual_payment's allowed statuses.
+        if invoice.status not in ("issued", "partial", "overdue"):
+            raise BadRequest(
+                f"VietQR is only available for payable invoices "
+                f"(issued/partial/overdue); current status: '{invoice.status}'"
+            )
+
         bank_account = await config_service.get_value("bank_collection_account")
         if not isinstance(bank_account, dict):
             raise ResourceNotFoundError("Bank collection account is not configured")

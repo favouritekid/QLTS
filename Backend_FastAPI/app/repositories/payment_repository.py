@@ -375,22 +375,26 @@ class PaymentRepository(BaseRepository[Payment]):
         payment_id: int
     ) -> Decimal:
         """
-        Get total refunded amount for a payment.
+        Get the total committed refund amount for a payment.
 
-        Used to enforce: total_refunds <= payment.amount
+        Counts every non-rejected request (pending + approved + refunded) so
+        that open requests are *reserved* against the payment. Used to enforce
+        ``total_committed_refunds <= payment.amount`` — this prevents creating
+        a second open refund whose amount would exceed what remains once the
+        already-open requests are processed (Finance Phase 1 F2).
 
         Args:
             payment_id: Payment ID
 
         Returns:
-            Total refunded amount
+            Total committed (non-rejected) refund amount
         """
         query = (
             select(func.coalesce(func.sum(RefundRequest.amount), 0))
             .where(
                 and_(
                     RefundRequest.payment_id == payment_id,
-                    RefundRequest.status == RefundStatusEnum.refunded.value
+                    RefundRequest.status != RefundStatusEnum.rejected.value
                 )
             )
         )
@@ -822,6 +826,32 @@ class OverpaymentRepository(BaseRepository[OverpaymentRecord]):
             .where(OverpaymentRecord.id == overpayment_id)
         )
 
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_for_update(
+        self,
+        overpayment_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[OverpaymentRecord]:
+        """Get an overpayment with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by every resolution path (apply/refund/write-off) so two concurrent
+        requests cannot both pass the pending check and double-resolve the same
+        liability (Finance Phase 1 F6). No nullable joinedloads here — FOR UPDATE
+        cannot be applied to the nullable side of an outer join; relations are
+        re-fetched separately by the service.
+        """
+        query = (
+            select(OverpaymentRecord)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(OverpaymentRecord.id == overpayment_id)
+            .with_for_update(of=OverpaymentRecord)
+        )
         if unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
 

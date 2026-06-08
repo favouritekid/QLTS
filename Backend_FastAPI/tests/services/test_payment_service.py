@@ -631,10 +631,10 @@ class TestOverpaymentService:
                 unit_id=pf["unit_id"],
             )
 
-    async def test_refund_overpayment_creates_refund_request(
+    async def test_refund_overpayment_keeps_pending_until_processed(
         self, db, payment_fixtures
     ):
-        """Refund resolution spawns a pending RefundRequest linked to the record."""
+        """F4: refund resolution links a RefundRequest but keeps overpayment pending."""
         pf = payment_fixtures
         overpayment = await self._create_pending_overpayment(db, pf)
 
@@ -642,22 +642,112 @@ class TestOverpaymentService:
         resolved, callback = await service.refund_overpayment(
             overpayment_id=overpayment.id,
             notes="Student requested refund",
-            user_id=pf["checker"].id,
+            user_id=pf["maker"].id,
             unit_id=pf["unit_id"],
         )
         await db.commit()
         assert callback is None
 
-        assert resolved.status == OverpaymentStatusEnum.refunded.value
-        assert resolved.resolution_type == ResolutionTypeEnum.refund.value
+        # Liability stays pending; only linked to the (still-open) refund request.
+        assert resolved.status == OverpaymentStatusEnum.pending.value
         assert resolved.refund_request_id is not None
-        assert resolved.resolved_by_id == pf["checker"].id
 
         refund = await db.get(RefundRequest, resolved.refund_request_id)
         assert refund is not None
         assert refund.payment_id == overpayment.payment_id
         assert refund.amount == Decimal("50000")
         assert refund.status == RefundStatusEnum.pending.value
+
+    async def test_refund_overpayment_blocks_second_resolution(
+        self, db, payment_fixtures
+    ):
+        """F4: an open linked refund blocks any other resolution of the same record."""
+        pf = payment_fixtures
+        overpayment = await self._create_pending_overpayment(db, pf)
+        service = OverpaymentService(db)
+
+        await service.refund_overpayment(
+            overpayment_id=overpayment.id,
+            notes="Refund first",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.write_off(
+                overpayment_id=overpayment.id,
+                reason="cannot write off while refund open",
+                user_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "open refund" in str(exc.value).lower()
+
+    async def test_process_refund_closes_linked_overpayment(
+        self, db, payment_fixtures
+    ):
+        """F4: processing the refund finally marks the linked overpayment refunded."""
+        pf = payment_fixtures
+        overpayment = await self._create_pending_overpayment(db, pf)
+        op_service = OverpaymentService(db)
+        refund_service = RefundService(db)
+
+        resolved, _ = await op_service.refund_overpayment(
+            overpayment_id=overpayment.id,
+            notes="Refund",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        refund_id = resolved.refund_request_id
+
+        await refund_service.approve_refund(
+            refund_id=refund_id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        await refund_service.process_approved_refund(
+            refund_id=refund_id,
+            processor_id=pf["checker"].id,
+            refund_reference="BANK-OP-001",
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        await db.refresh(overpayment)
+        assert overpayment.status == OverpaymentStatusEnum.refunded.value
+        assert overpayment.resolution_type == ResolutionTypeEnum.refund.value
+        assert overpayment.resolved_by_id == pf["checker"].id
+
+    async def test_apply_overpayment_rejects_non_payable_invoice(
+        self, db, payment_fixtures
+    ):
+        """F5: cannot apply an overpayment onto a cancelled/draft invoice."""
+        pf = payment_fixtures
+        overpayment = await self._create_pending_overpayment(db, pf)
+
+        cancelled_invoice = Invoice(
+            fee_id=pf["fee"].id,
+            invoice_number="INV-TEST-CANCELLED-1",
+            installment_no=3,
+            amount=Decimal("500000"),
+            status=InvoiceStatusEnum.cancelled.value,
+            due_date=date.today() + timedelta(days=30),
+        )
+        db.add(cancelled_invoice)
+        await db.flush()
+
+        service = OverpaymentService(db)
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.apply_to_invoice(
+                overpayment_id=overpayment.id,
+                target_invoice_id=cancelled_invoice.id,
+                user_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "status" in str(exc.value).lower()
 
 
 # =============================================================================
@@ -708,6 +798,44 @@ class TestRefundService:
         assert refund.status == "pending"
         assert refund.amount == Decimal("500000")
         assert refund.reason == "Student withdrawal"
+
+    async def test_request_refund_reserves_open_requests(self, db, payment_fixtures):
+        """F2: open (pending/approved) refunds are reserved against the payment."""
+        pf = payment_fixtures
+        payment = await self._create_verified_payment(db, pf)  # amount 1,000,000
+        refund_service = RefundService(db)
+
+        # First open request reserves 700,000.
+        await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("700000"),
+            reason="First refund",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Second request of 400,000 would over-commit (700k + 400k > 1,000k).
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await refund_service.request_refund(
+                payment_id=payment.id,
+                amount=Decimal("400000"),
+                reason="Second refund",
+                user_id=pf["maker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "exceeds available" in str(exc.value).lower()
+
+        # A second request within the remaining 300,000 still succeeds.
+        ok, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("300000"),
+            reason="Second refund within budget",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        assert ok.status == "pending"
 
     async def test_list_refunds_filters_by_payment_and_status(
         self, db, payment_fixtures

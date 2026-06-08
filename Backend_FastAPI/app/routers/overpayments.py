@@ -212,13 +212,23 @@ def _build_overpayment_response(
         else overpayment.status
     )
     is_pending = status_value == "pending"
+    # F4: an overpayment with an open (pending/approved) linked refund stays
+    # 'pending' but must not be re-resolved until that refund completes/rejects.
+    refund = getattr(overpayment, "refund_request", None)
+    refund_status = (
+        (refund.status.value if hasattr(refund.status, "value") else refund.status)
+        if refund is not None
+        else None
+    )
+    has_open_refund = refund_status in ("pending", "approved")
+    resolvable = is_pending and not has_open_refund
     # Mirror Casbin maker-checker: apply/refund are accountant finance actions,
     # write-off is a manager action; admin can do all three via wildcard.
     is_finance = current_user_role in [UserRole.ACCOUNTANT, UserRole.ADMIN]
     is_manager_admin = current_user_role in [UserRole.MANAGER, UserRole.ADMIN]
-    can_apply = is_pending and is_finance
-    can_refund = is_pending and is_finance
-    can_write_off = is_pending and is_manager_admin
+    can_apply = resolvable and is_finance
+    can_refund = resolvable and is_finance
+    can_write_off = resolvable and is_manager_admin
     can_resolve = can_apply or can_refund or can_write_off
 
     return finance_schemas.OverpaymentRecordResponse(

@@ -14,6 +14,8 @@ from app.models.finance import (
     OverpaymentRecord,
     OverpaymentStatusEnum,
     PaymentTransaction,
+    RefundRequest,
+    RefundStatusEnum,
     ResolutionTypeEnum,
     TransactionTypeEnum,
 )
@@ -24,6 +26,13 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
     ResourceNotFoundError,
+)
+
+# Invoice statuses that can still receive money (mirror record_manual_payment).
+_PAYABLE_INVOICE_STATUSES = (
+    InvoiceStatusEnum.issued.value,
+    InvoiceStatusEnum.partial.value,
+    InvoiceStatusEnum.overdue.value,
 )
 
 
@@ -43,6 +52,20 @@ class OverpaymentService:
         unit_id: Optional[int] = None,
     ) -> OverpaymentRecord:
         overpayment = await self.overpayment_repo.get_by_id_with_relations(
+            overpayment_id,
+            unit_id,
+        )
+        if not overpayment:
+            raise ResourceNotFoundError("Overpayment not found")
+        return overpayment
+
+    async def _get_overpayment_locked(
+        self,
+        overpayment_id: int,
+        unit_id: Optional[int] = None,
+    ) -> OverpaymentRecord:
+        """Fetch an overpayment with a row lock for a resolution mutation (F6)."""
+        overpayment = await self.overpayment_repo.get_for_update(
             overpayment_id,
             unit_id,
         )
@@ -75,8 +98,8 @@ class OverpaymentService:
         notes: Optional[str] = None,
         unit_id: Optional[int] = None,
     ) -> Tuple[OverpaymentRecord, None]:
-        overpayment = await self.get_overpayment(overpayment_id, unit_id)
-        self._ensure_pending(overpayment)
+        overpayment = await self._get_overpayment_locked(overpayment_id, unit_id)
+        await self._ensure_resolvable(overpayment)
 
         target_invoice = await self.invoice_repo.get_for_update(
             target_invoice_id,
@@ -84,6 +107,13 @@ class OverpaymentService:
         )
         if not target_invoice:
             raise ResourceNotFoundError("Target invoice not found")
+
+        if target_invoice.status not in _PAYABLE_INVOICE_STATUSES:
+            raise BusinessRuleViolation(
+                f"Cannot apply overpayment to invoice with status "
+                f"'{target_invoice.status}'. Allowed: "
+                f"{list(_PAYABLE_INVOICE_STATUSES)}"
+            )
 
         target_fee = await self.fee_repo.get_for_update(target_invoice.fee_id, unit_id)
         if not target_fee:
@@ -165,8 +195,8 @@ class OverpaymentService:
         notes: Optional[str] = None,
         unit_id: Optional[int] = None,
     ) -> Tuple[OverpaymentRecord, None]:
-        overpayment = await self.get_overpayment(overpayment_id, unit_id)
-        self._ensure_pending(overpayment)
+        overpayment = await self._get_overpayment_locked(overpayment_id, unit_id)
+        await self._ensure_resolvable(overpayment)
 
         refund, _ = await self.refund_service.request_refund(
             payment_id=overpayment.payment_id,
@@ -176,11 +206,10 @@ class OverpaymentService:
             unit_id=unit_id,
         )
 
-        overpayment.status = OverpaymentStatusEnum.refunded.value
-        overpayment.resolution_type = ResolutionTypeEnum.refund.value
-        overpayment.resolved_at = datetime.now(timezone.utc)
-        overpayment.resolved_by_id = user_id
-        overpayment.resolution_notes = notes
+        # F4: the overpayment liability stays *pending* and is only linked to the
+        # refund request. It is closed to 'refunded' when that request is actually
+        # processed (RefundService.process_approved_refund). If the refund is
+        # rejected, the link clears and the overpayment remains re-resolvable.
         overpayment.refund_request_id = refund.id
 
         await self.db.flush()
@@ -193,8 +222,8 @@ class OverpaymentService:
         user_id: int,
         unit_id: Optional[int] = None,
     ) -> Tuple[OverpaymentRecord, None]:
-        overpayment = await self.get_overpayment(overpayment_id, unit_id)
-        self._ensure_pending(overpayment)
+        overpayment = await self._get_overpayment_locked(overpayment_id, unit_id)
+        await self._ensure_resolvable(overpayment)
 
         if not reason or not reason.strip():
             raise BadRequest("Write-off reason is required")
@@ -208,10 +237,25 @@ class OverpaymentService:
         await self.db.flush()
         return overpayment, None
 
-    @staticmethod
-    def _ensure_pending(overpayment: OverpaymentRecord) -> None:
+    async def _ensure_resolvable(self, overpayment: OverpaymentRecord) -> None:
+        """Guard a resolution: must be pending AND have no open linked refund.
+
+        Blocking on an open (pending/approved) linked refund prevents a second
+        resolution (apply/refund/write-off) from running while a refund created
+        via :meth:`refund_overpayment` is still in flight (F4 double-resolution).
+        """
         if overpayment.status != OverpaymentStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 "Can only resolve pending overpayments. "
                 f"Current status: {overpayment.status}"
             )
+        if overpayment.refund_request_id is not None:
+            refund = await self.db.get(RefundRequest, overpayment.refund_request_id)
+            if refund and refund.status in (
+                RefundStatusEnum.pending.value,
+                RefundStatusEnum.approved.value,
+            ):
+                raise BusinessRuleViolation(
+                    f"Overpayment has an open refund request (#{refund.id}, "
+                    f"{refund.status}); resolve that refund first"
+                )

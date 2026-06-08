@@ -61,10 +61,14 @@ class FinanceReportService:
             )
             .where(
                 and_(
-                    Invoice.status.notin_(
+                    # F7: only collectible invoices count as debt. Draft (generated
+                    # but not issued) invoices cannot accept payment, so including
+                    # them would overstate debtor balances.
+                    Invoice.status.in_(
                         [
-                            InvoiceStatusEnum.paid.value,
-                            InvoiceStatusEnum.cancelled.value,
+                            InvoiceStatusEnum.issued.value,
+                            InvoiceStatusEnum.partial.value,
+                            InvoiceStatusEnum.overdue.value,
                         ]
                     ),
                     (Invoice.amount + Invoice.penalty_amount - Invoice.paid_amount) > 0,

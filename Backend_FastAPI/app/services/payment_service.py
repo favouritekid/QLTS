@@ -35,6 +35,7 @@ from app.models.finance import (
     Fee, Invoice, Payment, PaymentTransaction, PaymentMethod,
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
     RefundRequest, RefundStatusEnum, TransactionTypeEnum,
+    OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
@@ -713,14 +714,17 @@ class RefundService:
         if amount <= 0:
             raise BadRequest("Refund amount must be positive")
 
-        # Check total refunds don't exceed payment
-        total_refunded = await self.payment_repo.get_total_refunds_for_payment(payment_id)
-        available = payment.amount - total_refunded
+        # Reserve already-committed refunds (pending + approved + refunded) so a
+        # second open request cannot over-commit the payment (Finance Phase 1 F2).
+        total_committed = await self.payment_repo.get_total_refunds_for_payment(
+            payment_id
+        )
+        available = payment.amount - total_committed
 
         if amount > available:
             raise BusinessRuleViolation(
                 f"Refund amount ({amount}) exceeds available ({available}). "
-                f"Already refunded: {total_refunded}"
+                f"Already committed (pending/approved/refunded): {total_committed}"
             )
 
         if not reason or not reason.strip():
@@ -920,6 +924,27 @@ class RefundService:
         self.db.add(transaction)
 
         await self.db.flush()
+
+        # F4: if this refund resolves a tracked overpayment, close that liability
+        # now that the money-out is actually processed. The overpayment was kept
+        # 'pending' (linked via refund_request_id) so a rejected/abandoned refund
+        # leaves it re-resolvable; only a *processed* refund marks it 'refunded'.
+        linked_overpayment = (
+            await self.db.execute(
+                select(OverpaymentRecord)
+                .where(OverpaymentRecord.refund_request_id == refund.id)
+                .with_for_update(of=OverpaymentRecord)
+            )
+        ).scalars().first()
+        if (
+            linked_overpayment is not None
+            and linked_overpayment.status == OverpaymentStatusEnum.pending.value
+        ):
+            linked_overpayment.status = OverpaymentStatusEnum.refunded.value
+            linked_overpayment.resolution_type = ResolutionTypeEnum.refund.value
+            linked_overpayment.resolved_at = datetime.now(timezone.utc)
+            linked_overpayment.resolved_by_id = processor_id
+            await self.db.flush()
 
         # Hoist profile resolution BEFORE the tuition-only branch.
         # The notification payload below needs lead_id/admission_profile_id
