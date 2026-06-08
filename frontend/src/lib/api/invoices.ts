@@ -7,11 +7,13 @@
 
 import { api } from "./client"
 import { API_ENDPOINTS } from "./endpoints"
+import { vietQRResponseSchema } from "@/lib/zod/finance"
 import type {
   Invoice,
   InvoiceDetail,
   InvoiceFilters,
   InvoicePenaltyRequest,
+  VietQRResponse,
 } from "@/types/finance.types"
 
 // ============================================================================
@@ -77,6 +79,14 @@ export async function getInvoicesByFee(feeId: number): Promise<Invoice[]> {
   return response.data
 }
 
+/**
+ * Get VietQR payload and PNG for an invoice.
+ */
+export async function getInvoiceVietQR(invoiceId: number): Promise<VietQRResponse> {
+  const response = await api.get<VietQRResponse>(API_ENDPOINTS.FINANCE.INVOICES.VIETQR(invoiceId))
+  return vietQRResponseSchema.parse(response.data) as VietQRResponse
+}
+
 // ============================================================================
 // INVOICE ACTIONS
 // ============================================================================
@@ -138,6 +148,7 @@ export const invoicesApi = {
   getInvoices,
   getInvoice,
   getInvoicesByFee,
+  getInvoiceVietQR,
   // Actions
   issueInvoice,
   cancelInvoice,

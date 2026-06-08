@@ -34,7 +34,9 @@ from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentTransaction, PaymentMethod,
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
-    TransactionTypeEnum,
+    RefundRequest, RefundStatusEnum, TransactionTypeEnum,
+    OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
+    PAYABLE_INVOICE_STATUSES,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
@@ -124,16 +126,11 @@ class PaymentService:
         if not invoice:
             raise ResourceNotFoundError("Invoice not found")
 
-        # Check invoice status allows payment
-        allowed_statuses = [
-            InvoiceStatusEnum.issued.value,
-            InvoiceStatusEnum.partial.value,
-            InvoiceStatusEnum.overdue.value,
-        ]
-        if invoice.status not in allowed_statuses:
+        # Check invoice status allows payment (canonical payable set)
+        if invoice.status not in PAYABLE_INVOICE_STATUSES:
             raise BusinessRuleViolation(
                 f"Cannot record payment for invoice with status '{invoice.status}'. "
-                f"Allowed: {allowed_statuses}"
+                f"Allowed: {list(PAYABLE_INVOICE_STATUSES)}"
             )
 
         # Validate amount doesn't exceed remaining
@@ -701,9 +698,10 @@ class RefundService:
             ResourceNotFoundError: If payment not found
             BusinessRuleViolation: If amount exceeds available
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
-        payment = await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        # Lock the source payment row BEFORE computing committed refunds so two
+        # concurrent requests on the same payment serialize: the second blocks
+        # here until the first commits, then sees its reserved amount (race fix).
+        payment = await self.payment_repo.get_for_update(payment_id, unit_id)
         if not payment:
             raise ResourceNotFoundError("Payment not found")
 
@@ -715,14 +713,17 @@ class RefundService:
         if amount <= 0:
             raise BadRequest("Refund amount must be positive")
 
-        # Check total refunds don't exceed payment
-        total_refunded = await self.payment_repo.get_total_refunds_for_payment(payment_id)
-        available = payment.amount - total_refunded
+        # Reserve already-committed refunds (pending + approved + refunded) so a
+        # second open request cannot over-commit the payment (Finance Phase 1 F2).
+        total_committed = await self.payment_repo.get_total_refunds_for_payment(
+            payment_id
+        )
+        available = payment.amount - total_committed
 
         if amount > available:
             raise BusinessRuleViolation(
                 f"Refund amount ({amount}) exceeds available ({available}). "
-                f"Already refunded: {total_refunded}"
+                f"Already committed (pending/approved/refunded): {total_committed}"
             )
 
         if not reason or not reason.strip():
@@ -769,15 +770,20 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row so concurrent lifecycle ops serialize and re-read
+        # status after acquiring the lock (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
         if refund.status != RefundStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 f"Can only approve pending refunds. Current status: {refund.status}"
+            )
+
+        if refund.requested_by_id == approver_id:
+            raise BusinessRuleViolation(
+                "Cannot approve your own refund request (maker-checker violation)"
             )
 
         # Update refund status
@@ -814,9 +820,9 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row so concurrent lifecycle ops serialize and re-read
+        # status after acquiring the lock (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
@@ -830,6 +836,8 @@ class RefundService:
 
         # Update refund status
         refund.status = RefundStatusEnum.rejected.value
+        refund.rejected_by_id = rejector_id
+        refund.rejected_at = datetime.now(timezone.utc)
         refund.rejection_reason = reason
 
         await self.db.flush()
@@ -847,6 +855,7 @@ class RefundService:
         self,
         refund_id: int,
         processor_id: int,
+        refund_reference: Optional[str] = None,
         unit_id: Optional[int] = None,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
@@ -857,14 +866,16 @@ class RefundService:
         Args:
             refund_id: Approved refund to process
             processor_id: User processing refund
+            refund_reference: External bank/gateway reference for the refund
             unit_id: Unit ID for IDOR protection
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        from app.models.finance import RefundRequest, RefundStatusEnum
-
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row FIRST so a second concurrent process blocks here,
+        # then re-reads status after the first commits and sees 'refunded' →
+        # raises below instead of double-processing (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
@@ -885,10 +896,17 @@ class RefundService:
         # Update refund status
         refund.status = RefundStatusEnum.refunded.value
         refund.refunded_at = datetime.now(timezone.utc)
+        refund.refund_reference = refund_reference
 
-        # Update invoice paid_amount (decrease)
+        # Update invoice paid_amount (decrease). A full refund (paid back to 0)
+        # must return the invoice to 'issued', not leave it 'partial' with 0 paid
+        # (which would block re-collection — can_record_payment keys on 'issued').
         invoice.paid_amount = invoice.paid_amount - refund.amount
-        if invoice.paid_amount < invoice.amount:
+        if invoice.paid_amount <= 0:
+            invoice.paid_amount = Decimal("0")
+            invoice.status = InvoiceStatusEnum.issued.value
+            invoice.paid_at = None
+        elif invoice.paid_amount < invoice.amount:
             invoice.status = InvoiceStatusEnum.partial.value
             invoice.paid_at = None
 
@@ -918,6 +936,27 @@ class RefundService:
         self.db.add(transaction)
 
         await self.db.flush()
+
+        # F4: if this refund resolves a tracked overpayment, close that liability
+        # now that the money-out is actually processed. The overpayment was kept
+        # 'pending' (linked via refund_request_id) so a rejected/abandoned refund
+        # leaves it re-resolvable; only a *processed* refund marks it 'refunded'.
+        linked_overpayment = (
+            await self.db.execute(
+                select(OverpaymentRecord)
+                .where(OverpaymentRecord.refund_request_id == refund.id)
+                .with_for_update(of=OverpaymentRecord)
+            )
+        ).scalars().first()
+        if (
+            linked_overpayment is not None
+            and linked_overpayment.status == OverpaymentStatusEnum.pending.value
+        ):
+            linked_overpayment.status = OverpaymentStatusEnum.refunded.value
+            linked_overpayment.resolution_type = ResolutionTypeEnum.refund.value
+            linked_overpayment.resolved_at = datetime.now(timezone.utc)
+            linked_overpayment.resolved_by_id = processor_id
+            await self.db.flush()
 
         # Hoist profile resolution BEFORE the tuition-only branch.
         # The notification payload below needs lead_id/admission_profile_id
@@ -987,6 +1026,34 @@ class RefundService:
             )
 
         return refund, post_commit
+
+    async def get_refund(
+        self,
+        refund_id: int,
+        unit_id: Optional[int] = None,
+    ) -> "RefundRequest":
+        """Get refund by ID with IDOR scope."""
+        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        if not refund:
+            raise ResourceNotFoundError("Refund request not found")
+        return refund
+
+    async def list_refunds(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        payment_id: Optional[int] = None,
+    ) -> Tuple[List["RefundRequest"], int]:
+        """List refund requests with total count."""
+        return await self.refund_repo.get_filtered_with_count(
+            skip=skip,
+            limit=limit,
+            unit_id=unit_id,
+            statuses=statuses,
+            payment_id=payment_id,
+        )
 
     async def _get_profile_for_fee(
         self,

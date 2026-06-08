@@ -46,6 +46,16 @@ class InvoiceStatusEnum(str, enum.Enum):
     overdue = "overdue"      # Past due date, not fully paid
 
 
+# Single source of truth for "an invoice that can still receive money".
+# Used by manual payment recording, overpayment apply, VietQR generation, and
+# the debt report so the payable-status rule never diverges across the module.
+PAYABLE_INVOICE_STATUSES = (
+    InvoiceStatusEnum.issued.value,
+    InvoiceStatusEnum.partial.value,
+    InvoiceStatusEnum.overdue.value,
+)
+
+
 class Invoice(Base):
     """
     Invoice record for a fee installment.

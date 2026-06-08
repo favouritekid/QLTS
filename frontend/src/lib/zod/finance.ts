@@ -361,7 +361,10 @@ export const overpaymentRecordSchema = z.object({
   refund_request_id: z.number().int().positive().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
-  // [TODO_BACKEND] Add permission flag: can_resolve
+  can_resolve: z.boolean(),
+  can_apply: z.boolean(),
+  can_refund: z.boolean(),
+  can_write_off: z.boolean(),
 })
 
 export type OverpaymentRecord = z.infer<typeof overpaymentRecordSchema>
@@ -387,11 +390,56 @@ export const refundRequestSchema = z.object({
   refund_reference: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
-  // [TODO_BACKEND] Add: requested_by_name (denormalized)
-  // [TODO_BACKEND] Add permission flags: can_approve, can_reject, can_process
+  can_approve: z.boolean(),
+  can_reject: z.boolean(),
+  can_process: z.boolean(),
 })
 
 export type RefundRequest = z.infer<typeof refundRequestSchema>
+
+export const vietQRResponseSchema = z.object({
+  qr_payload: z.string(),
+  qr_image_base64: z.string(),
+  bank_account: z.object({
+    bank_bin: z.string(),
+    account_number: z.string(),
+    account_name: z.string(),
+  }),
+  amount: z.string(),
+  content: z.string(),
+})
+
+export const debtAgingBucketSchema = z.enum(["0_30", "31_60", "over_60"])
+
+export const debtReportRowSchema = z.object({
+  admission_profile_id: z.number().int().positive(),
+  profile_code: z.string(),
+  profile_name: z.string(),
+  unit_id: z.number().int().positive().nullable(),
+  unit_name: z.string().nullable(),
+  academic_year: z.number().int(),
+  admission_round_id: z.number().int().positive().nullable(),
+  fee_types: z.array(z.string()),
+  invoice_count: z.number().int().min(0),
+  total_expected: z.string(),
+  total_paid: z.string(),
+  total_outstanding: z.string(),
+  days_overdue: z.number().int().min(0),
+  aging_bucket: debtAgingBucketSchema,
+})
+
+export const debtReportResponseSchema = z.object({
+  items: z.array(debtReportRowSchema),
+  summary: z.object({
+    debtor_count: z.number().int().min(0),
+    total_expected: z.string(),
+    total_paid: z.string(),
+    total_outstanding: z.string(),
+    bucket_0_30: z.string(),
+    bucket_31_60: z.string(),
+    bucket_over_60: z.string(),
+  }),
+})
 
 // ==============================================================================
 // ACCOUNTING PERIOD RESPONSE SCHEMAS (from backend AccountingPeriodResponse)
@@ -466,6 +514,9 @@ export const financeDashboardStatsSchema = z.object({
   overdue_amount: z.string(),
   today_collections: z.string(),
   monthly_collections: z.string(),
+  period_collections: z.string(),
+  period_start: z.string().nullable().optional(),
+  period_end: z.string().nullable().optional(),
   pending_overpayments_count: z.number().int().min(0),
   pending_refunds_count: z.number().int().min(0),
 })

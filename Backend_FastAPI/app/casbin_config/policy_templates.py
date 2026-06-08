@@ -273,6 +273,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/fees/by-profile/{profile_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/summary/{profile_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/by-invoice/{invoice_id}", "action": "GET"},
@@ -330,6 +331,7 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
 
         # DASHBOARD - Finance overview
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},
+        {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
 
         # FEES - Read + Calculate + Waive + Recalculate (not Cancel - admin only)
         {"subject": "{role}", "object": "/api/fees", "action": "GET"},
@@ -343,6 +345,7 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # INVOICES - Full CRUD (except delete)
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/issue", "action": "PUT"},
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},
@@ -365,10 +368,17 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},
 
-        # REFUNDS — DEAD POLICY removed 2026-05-16. Refunds module deferred
-        # (no router exists; live probe /api/refunds → 404). Per memory
-        # `finance-event-decisions`, REFUND_PROCESSED tagged internal_future
-        # với 0 prod traffic. Promote back when router ships.
+        # REFUNDS - request + process, approval remains manager/admin maker-checker.
+        {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds", "action": "POST"},
+        {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds/{id}/process", "action": "POST"},
+
+        # OVERPAYMENTS - finance resolution except manager-only write-off.
+        {"subject": "{role}", "object": "/api/overpayments", "action": "GET"},
+        {"subject": "{role}", "object": "/api/overpayments/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/overpayments/{id}/apply", "action": "POST"},
+        {"subject": "{role}", "object": "/api/overpayments/{id}/refund", "action": "POST"},
 
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
@@ -556,12 +566,20 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/validate-activation", "action": "GET"},  # Validate
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
+        {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice
         {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},  # Apply penalty
         {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment (maker-checker)
         {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
+        {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/refunds/{id}/approve", "action": "POST"},
+        {"subject": "{role}", "object": "/api/refunds/{id}/reject", "action": "POST"},
+        {"subject": "{role}", "object": "/api/overpayments", "action": "GET"},
+        {"subject": "{role}", "object": "/api/overpayments/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/overpayments/{id}/write-off", "action": "POST"},
         {"subject": "{role}", "object": "/api/accounting/periods/{id}", "action": "GET"},  # View period details
         {"subject": "{role}", "object": "/api/accounting/periods/{id}/summary", "action": "GET"},  # View period summary
         # CTV Management (Phase 1: Collaborator System)

@@ -449,7 +449,9 @@ class InvoiceRepository(BaseRepository[Invoice]):
             .options(
                 selectinload(Invoice.payments),
                 selectinload(Invoice.payment_intents),
-                joinedload(Invoice.fee).joinedload(Fee.admission_profile),
+                joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
             )
             .where(Invoice.id == invoice_id)
         )

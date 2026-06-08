@@ -85,6 +85,34 @@ class PaymentRepository(BaseRepository[Payment]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_for_update(
+        self,
+        payment_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[Payment]:
+        """Get a payment with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by refund creation to serialize concurrent requests against the
+        same payment: the second request blocks until the first commits, then
+        re-reads the committed-refund total and cannot over-commit. No nullable
+        joinedloads (FOR UPDATE can't apply to the nullable side of an outer
+        join); only the row's own columns (amount/status) are needed.
+        """
+        query = (
+            select(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(Payment.id == payment_id)
+            .with_for_update(of=Payment)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_by_invoice_id(
         self,
         invoice_id: int,
@@ -375,22 +403,26 @@ class PaymentRepository(BaseRepository[Payment]):
         payment_id: int
     ) -> Decimal:
         """
-        Get total refunded amount for a payment.
+        Get the total committed refund amount for a payment.
 
-        Used to enforce: total_refunds <= payment.amount
+        Counts every non-rejected request (pending + approved + refunded) so
+        that open requests are *reserved* against the payment. Used to enforce
+        ``total_committed_refunds <= payment.amount`` — this prevents creating
+        a second open refund whose amount would exceed what remains once the
+        already-open requests are processed (Finance Phase 1 F2).
 
         Args:
             payment_id: Payment ID
 
         Returns:
-            Total refunded amount
+            Total committed (non-rejected) refund amount
         """
         query = (
             select(func.coalesce(func.sum(RefundRequest.amount), 0))
             .where(
                 and_(
                     RefundRequest.payment_id == payment_id,
-                    RefundRequest.status == RefundStatusEnum.refunded.value
+                    RefundRequest.status != RefundStatusEnum.rejected.value
                 )
             )
         )
@@ -622,6 +654,38 @@ class RefundRepository(BaseRepository[RefundRequest]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_for_update(
+        self,
+        refund_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[RefundRequest]:
+        """Get a refund request with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by approve/reject/process so concurrent lifecycle ops on the same
+        refund serialize: the second op blocks until the first commits, then
+        re-reads the (now-changed) status and is rejected. Locks only the
+        refund row (``of=RefundRequest``); payment→invoice are inner-joined and
+        eager-loaded so process can update balances without a lazy load.
+        """
+        query = (
+            select(RefundRequest)
+            .join(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(RefundRequest.payment).joinedload(Payment.invoice),
+            )
+            .where(RefundRequest.id == refund_id)
+            .with_for_update(of=RefundRequest)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_pending_approval(
         self,
         unit_id: Optional[int] = None,
@@ -732,6 +796,65 @@ class RefundRepository(BaseRepository[RefundRequest]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_filtered_with_count(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        payment_id: Optional[int] = None,
+    ) -> Tuple[List[RefundRequest], int]:
+        """Get filtered refund requests with total count and IDOR scope."""
+        base_conditions = []
+
+        if unit_id is not None:
+            base_conditions.append(models.Lead.unit_id == unit_id)
+
+        if statuses:
+            base_conditions.append(RefundRequest.status.in_(statuses))
+
+        if payment_id:
+            base_conditions.append(RefundRequest.payment_id == payment_id)
+
+        count_query = (
+            select(func.count(RefundRequest.id))
+            .join(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+        )
+        if base_conditions:
+            count_query = count_query.where(and_(*base_conditions))
+
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        data_query = (
+            select(RefundRequest)
+            .join(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(RefundRequest.payment)
+                .joinedload(Payment.invoice)
+                .joinedload(Invoice.fee),
+                joinedload(RefundRequest.requested_by),
+                joinedload(RefundRequest.approved_by),
+                joinedload(RefundRequest.rejected_by),
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(RefundRequest.created_at.desc())
+        )
+        if base_conditions:
+            data_query = data_query.where(and_(*base_conditions))
+
+        result = await self.db.execute(data_query)
+        return list(result.scalars().all()), total
+
 
 class OverpaymentRepository(BaseRepository[OverpaymentRecord]):
     """Repository for OverpaymentRecord model operations."""
@@ -739,6 +862,61 @@ class OverpaymentRepository(BaseRepository[OverpaymentRecord]):
     def __init__(self, db: AsyncSession):
         """Initialize OverpaymentRecord repository."""
         super().__init__(db, OverpaymentRecord)
+
+    async def get_by_id_with_relations(
+        self,
+        overpayment_id: int,
+        unit_id: Optional[int] = None
+    ) -> Optional[OverpaymentRecord]:
+        """Get overpayment by ID with all related data and IDOR scope."""
+        query = (
+            select(OverpaymentRecord)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(OverpaymentRecord.payment),
+                joinedload(OverpaymentRecord.invoice).joinedload(Invoice.fee),
+                joinedload(OverpaymentRecord.admission_profile).joinedload(
+                    models.AdmissionProfile.lead
+                ),
+                joinedload(OverpaymentRecord.resolved_by),
+                joinedload(OverpaymentRecord.applied_to_invoice),
+                joinedload(OverpaymentRecord.refund_request),
+            )
+            .where(OverpaymentRecord.id == overpayment_id)
+        )
+
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_for_update(
+        self,
+        overpayment_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[OverpaymentRecord]:
+        """Get an overpayment with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by every resolution path (apply/refund/write-off) so two concurrent
+        requests cannot both pass the pending check and double-resolve the same
+        liability (Finance Phase 1 F6). No nullable joinedloads here — FOR UPDATE
+        cannot be applied to the nullable side of an outer join; relations are
+        re-fetched separately by the service.
+        """
+        query = (
+            select(OverpaymentRecord)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(OverpaymentRecord.id == overpayment_id)
+            .with_for_update(of=OverpaymentRecord)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
 
     async def get_pending_for_profile(
         self,
@@ -825,6 +1003,61 @@ class OverpaymentRepository(BaseRepository[OverpaymentRecord]):
 
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_filtered_with_count(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        profile_id: Optional[int] = None,
+    ) -> Tuple[List[OverpaymentRecord], int]:
+        """Get filtered overpayments with total count and IDOR scope."""
+        base_conditions = []
+
+        if unit_id is not None:
+            base_conditions.append(models.Lead.unit_id == unit_id)
+
+        if statuses:
+            base_conditions.append(OverpaymentRecord.status.in_(statuses))
+
+        if profile_id:
+            base_conditions.append(OverpaymentRecord.admission_profile_id == profile_id)
+
+        count_query = (
+            select(func.count(OverpaymentRecord.id))
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+        )
+        if base_conditions:
+            count_query = count_query.where(and_(*base_conditions))
+
+        count_result = await self.db.execute(count_query)
+        total = count_result.scalar() or 0
+
+        data_query = (
+            select(OverpaymentRecord)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(OverpaymentRecord.payment),
+                joinedload(OverpaymentRecord.invoice).joinedload(Invoice.fee),
+                joinedload(OverpaymentRecord.admission_profile).joinedload(
+                    models.AdmissionProfile.lead
+                ),
+                joinedload(OverpaymentRecord.resolved_by),
+                joinedload(OverpaymentRecord.applied_to_invoice),
+                joinedload(OverpaymentRecord.refund_request),
+            )
+            .offset(skip)
+            .limit(limit)
+            .order_by(OverpaymentRecord.created_at.desc())
+        )
+        if base_conditions:
+            data_query = data_query.where(and_(*base_conditions))
+
+        result = await self.db.execute(data_query)
+        return list(result.scalars().all()), total
 
 
 class PaymentTransactionRepository(BaseRepository[PaymentTransaction]):

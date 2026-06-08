@@ -235,6 +235,7 @@ export const API_ENDPOINTS = {
   // ============================================================================
   FINANCE: {
     DASHBOARD: "/api/finance/dashboard",
+    DEBT_REPORT: "/api/finance/debt-report",
 
     FEES: {
       LIST: "/api/fees",
@@ -251,6 +252,7 @@ export const API_ENDPOINTS = {
       LIST: "/api/invoices",
       BY_FEE: (feeId: number) => `/api/invoices/by-fee/${feeId}`,
       DETAIL: (invoiceId: number) => `/api/invoices/${invoiceId}`,
+      VIETQR: (invoiceId: number) => `/api/invoices/${invoiceId}/vietqr`,
       ISSUE: (invoiceId: number) => `/api/invoices/${invoiceId}/issue`,
       CANCEL: (invoiceId: number) => `/api/invoices/${invoiceId}/cancel`,
       PENALTY: (invoiceId: number) => `/api/invoices/${invoiceId}/apply-penalty`,
@@ -277,7 +279,6 @@ export const API_ENDPOINTS = {
       DETAIL: (id: number) => `/api/installment-plans/${id}`,
     },
 
-    // P3 - Wait for backend router implementation
     OVERPAYMENTS: {
       LIST: "/api/overpayments",
       DETAIL: (id: number) => `/api/overpayments/${id}`,
@@ -286,7 +287,6 @@ export const API_ENDPOINTS = {
       WRITE_OFF: (id: number) => `/api/overpayments/${id}/write-off`,
     },
 
-    // P3 - Wait for backend router implementation
     REFUNDS: {
       LIST: "/api/refunds",
       CREATE: "/api/refunds",

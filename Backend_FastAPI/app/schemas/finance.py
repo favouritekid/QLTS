@@ -614,6 +614,16 @@ class RefundProcessRequest(BaseModel):
     refund_reference: str = Field(..., min_length=1, max_length=100)
 
 
+class RefundRejectRequest(BaseModel):
+    """Schema for rejecting a refund request."""
+    rejection_reason: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator('rejection_reason')
+    @classmethod
+    def sanitize_rejection_reason(cls, v: str) -> str:
+        return html.escape(v.strip())
+
+
 class RefundRequestResponse(BaseModel):
     """Response schema for refund request."""
     id: int
@@ -632,6 +642,9 @@ class RefundRequestResponse(BaseModel):
     refund_reference: Optional[str]
     created_at: datetime
     updated_at: datetime
+    can_approve: bool = False
+    can_reject: bool = False
+    can_process: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -697,6 +710,13 @@ class OverpaymentRecordResponse(BaseModel):
     refund_request_id: Optional[int]
     created_at: datetime
     updated_at: datetime
+    can_resolve: bool = False
+    # Granular maker-checker flags (mirror Casbin): apply/refund are accountant
+    # finance actions; write-off is a manager action. ``can_resolve`` stays as
+    # the coarse "row has any action for me" flag.
+    can_apply: bool = False
+    can_refund: bool = False
+    can_write_off: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -837,6 +857,80 @@ class PaymentsPage(BaseModel):
     page_size: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class RefundsPage(BaseModel):
+    """Paginated refunds response."""
+    items: List[RefundRequestResponse]
+    total: int
+    page: int
+    page_size: int
+    # Page-level capability: only officer/accountant/admin may create a refund
+    # request (mirror Casbin POST /api/refunds). Manager is approver-only.
+    can_create: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OverpaymentsPage(BaseModel):
+    """Paginated overpayments response."""
+    items: List[OverpaymentRecordResponse]
+    total: int
+    page: int
+    page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VietQRBankAccount(BaseModel):
+    """Public bank collection account shown beside a VietQR code."""
+    bank_bin: str
+    account_number: str
+    account_name: str
+
+
+class VietQRResponse(BaseModel):
+    """VietQR payload and rendered image for an invoice transfer."""
+    qr_payload: str
+    qr_image_base64: str
+    bank_account: VietQRBankAccount
+    amount: Decimal
+    content: str
+
+
+class DebtReportRow(BaseModel):
+    """Single debtor row aggregated by admission profile."""
+    admission_profile_id: int
+    profile_code: str
+    profile_name: str
+    unit_id: Optional[int] = None
+    unit_name: Optional[str] = None
+    academic_year: int
+    admission_round_id: Optional[int] = None
+    fee_types: List[str] = []
+    invoice_count: int
+    total_expected: Decimal
+    total_paid: Decimal
+    total_outstanding: Decimal
+    days_overdue: int
+    aging_bucket: str
+
+
+class DebtReportSummary(BaseModel):
+    """Debt report totals and bucket totals."""
+    debtor_count: int
+    total_expected: Decimal
+    total_paid: Decimal
+    total_outstanding: Decimal
+    bucket_0_30: Decimal = Decimal("0")
+    bucket_31_60: Decimal = Decimal("0")
+    bucket_over_60: Decimal = Decimal("0")
+
+
+class DebtReportResponse(BaseModel):
+    """Debt report response grouped by admission profile."""
+    items: List[DebtReportRow]
+    summary: DebtReportSummary
 
 
 # ==============================================================================
