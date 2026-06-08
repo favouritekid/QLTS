@@ -36,6 +36,7 @@ from app.models.finance import (
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
     RefundRequest, RefundStatusEnum, TransactionTypeEnum,
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
+    PAYABLE_INVOICE_STATUSES,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
@@ -125,16 +126,11 @@ class PaymentService:
         if not invoice:
             raise ResourceNotFoundError("Invoice not found")
 
-        # Check invoice status allows payment
-        allowed_statuses = [
-            InvoiceStatusEnum.issued.value,
-            InvoiceStatusEnum.partial.value,
-            InvoiceStatusEnum.overdue.value,
-        ]
-        if invoice.status not in allowed_statuses:
+        # Check invoice status allows payment (canonical payable set)
+        if invoice.status not in PAYABLE_INVOICE_STATUSES:
             raise BusinessRuleViolation(
                 f"Cannot record payment for invoice with status '{invoice.status}'. "
-                f"Allowed: {allowed_statuses}"
+                f"Allowed: {list(PAYABLE_INVOICE_STATUSES)}"
             )
 
         # Validate amount doesn't exceed remaining
@@ -702,7 +698,10 @@ class RefundService:
             ResourceNotFoundError: If payment not found
             BusinessRuleViolation: If amount exceeds available
         """
-        payment = await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        # Lock the source payment row BEFORE computing committed refunds so two
+        # concurrent requests on the same payment serialize: the second blocks
+        # here until the first commits, then sees its reserved amount (race fix).
+        payment = await self.payment_repo.get_for_update(payment_id, unit_id)
         if not payment:
             raise ResourceNotFoundError("Payment not found")
 
@@ -771,7 +770,9 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row so concurrent lifecycle ops serialize and re-read
+        # status after acquiring the lock (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
@@ -819,7 +820,9 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row so concurrent lifecycle ops serialize and re-read
+        # status after acquiring the lock (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
@@ -869,7 +872,10 @@ class RefundService:
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
         """
-        refund = await self.refund_repo.get_by_id_with_relations(refund_id, unit_id)
+        # Lock the refund row FIRST so a second concurrent process blocks here,
+        # then re-reads status after the first commits and sees 'refunded' →
+        # raises below instead of double-processing (race fix).
+        refund = await self.refund_repo.get_for_update(refund_id, unit_id)
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
@@ -892,9 +898,15 @@ class RefundService:
         refund.refunded_at = datetime.now(timezone.utc)
         refund.refund_reference = refund_reference
 
-        # Update invoice paid_amount (decrease)
+        # Update invoice paid_amount (decrease). A full refund (paid back to 0)
+        # must return the invoice to 'issued', not leave it 'partial' with 0 paid
+        # (which would block re-collection — can_record_payment keys on 'issued').
         invoice.paid_amount = invoice.paid_amount - refund.amount
-        if invoice.paid_amount < invoice.amount:
+        if invoice.paid_amount <= 0:
+            invoice.paid_amount = Decimal("0")
+            invoice.status = InvoiceStatusEnum.issued.value
+            invoice.paid_at = None
+        elif invoice.paid_amount < invoice.amount:
             invoice.status = InvoiceStatusEnum.partial.value
             invoice.paid_at = None
 

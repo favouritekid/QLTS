@@ -7,6 +7,7 @@
 
 import { api } from "./client"
 import { API_ENDPOINTS } from "./endpoints"
+import { vietQRResponseSchema } from "@/lib/zod/finance"
 import type {
   Invoice,
   InvoiceDetail,
@@ -83,7 +84,7 @@ export async function getInvoicesByFee(feeId: number): Promise<Invoice[]> {
  */
 export async function getInvoiceVietQR(invoiceId: number): Promise<VietQRResponse> {
   const response = await api.get<VietQRResponse>(API_ENDPOINTS.FINANCE.INVOICES.VIETQR(invoiceId))
-  return response.data
+  return vietQRResponseSchema.parse(response.data) as VietQRResponse
 }
 
 // ============================================================================

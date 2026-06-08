@@ -13,6 +13,7 @@ from app.models.finance import (
     InvoiceStatusEnum,
     OverpaymentRecord,
     OverpaymentStatusEnum,
+    PAYABLE_INVOICE_STATUSES,
     PaymentTransaction,
     RefundRequest,
     RefundStatusEnum,
@@ -26,13 +27,6 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
     ResourceNotFoundError,
-)
-
-# Invoice statuses that can still receive money (mirror record_manual_payment).
-_PAYABLE_INVOICE_STATUSES = (
-    InvoiceStatusEnum.issued.value,
-    InvoiceStatusEnum.partial.value,
-    InvoiceStatusEnum.overdue.value,
 )
 
 
@@ -108,11 +102,11 @@ class OverpaymentService:
         if not target_invoice:
             raise ResourceNotFoundError("Target invoice not found")
 
-        if target_invoice.status not in _PAYABLE_INVOICE_STATUSES:
+        if target_invoice.status not in PAYABLE_INVOICE_STATUSES:
             raise BusinessRuleViolation(
                 f"Cannot apply overpayment to invoice with status "
                 f"'{target_invoice.status}'. Allowed: "
-                f"{list(_PAYABLE_INVOICE_STATUSES)}"
+                f"{list(PAYABLE_INVOICE_STATUSES)}"
             )
 
         target_fee = await self.fee_repo.get_for_update(target_invoice.fee_id, unit_id)
@@ -124,7 +118,10 @@ class OverpaymentService:
                 "Overpayment can only be applied to an invoice on the same profile"
             )
 
-        apply_amount = amount or overpayment.overpayment_amount
+        # Use `is not None` (not `or`): Decimal('0') is falsy, so `amount or ...`
+        # would silently fall through to the full amount instead of being
+        # rejected by the `<= 0` guard below.
+        apply_amount = amount if amount is not None else overpayment.overpayment_amount
         if apply_amount <= 0:
             raise BadRequest("Applied amount must be positive")
         if apply_amount != overpayment.overpayment_amount:

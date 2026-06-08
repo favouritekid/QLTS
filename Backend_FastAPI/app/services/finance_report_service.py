@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app import models
-from app.models.finance import Fee, Invoice, InvoiceStatusEnum
+from app.models.finance import Fee, Invoice, PAYABLE_INVOICE_STATUSES
 from app.schemas import finance as finance_schemas
 from app.utils.id_helpers import format_profile_code
 
@@ -64,13 +64,7 @@ class FinanceReportService:
                     # F7: only collectible invoices count as debt. Draft (generated
                     # but not issued) invoices cannot accept payment, so including
                     # them would overstate debtor balances.
-                    Invoice.status.in_(
-                        [
-                            InvoiceStatusEnum.issued.value,
-                            InvoiceStatusEnum.partial.value,
-                            InvoiceStatusEnum.overdue.value,
-                        ]
-                    ),
+                    Invoice.status.in_(PAYABLE_INVOICE_STATUSES),
                     (Invoice.amount + Invoice.penalty_amount - Invoice.paid_amount) > 0,
                 )
             )
@@ -92,7 +86,10 @@ class FinanceReportService:
         result = await self.db.execute(query)
         invoices = list(result.scalars().all())
 
-        grouped: dict[int, _DebtAccumulator] = {}
+        # Grain = (profile, academic_year). Grouping by profile alone would label a
+        # multi-year debtor with one year while summing outstanding across years,
+        # and break per-year filtering (#6).
+        grouped: dict[tuple[int, int], _DebtAccumulator] = {}
         for invoice in invoices:
             fee = invoice.fee
             if not fee or not fee.admission_profile:
@@ -110,7 +107,8 @@ class FinanceReportService:
             except (TypeError, ValueError):
                 parsed_round_id = None
 
-            accumulator = grouped.get(profile.id)
+            group_key = (profile.id, fee.academic_year)
+            accumulator = grouped.get(group_key)
             if accumulator is None:
                 accumulator = _DebtAccumulator(
                     admission_profile_id=profile.id,
@@ -120,7 +118,7 @@ class FinanceReportService:
                     academic_year=fee.academic_year,
                     admission_round_id=parsed_round_id,
                 )
-                grouped[profile.id] = accumulator
+                grouped[group_key] = accumulator
 
             outstanding = invoice.remaining_amount
             accumulator.invoice_count += 1

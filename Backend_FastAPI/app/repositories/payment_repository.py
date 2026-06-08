@@ -85,6 +85,34 @@ class PaymentRepository(BaseRepository[Payment]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_for_update(
+        self,
+        payment_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[Payment]:
+        """Get a payment with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by refund creation to serialize concurrent requests against the
+        same payment: the second request blocks until the first commits, then
+        re-reads the committed-refund total and cannot over-commit. No nullable
+        joinedloads (FOR UPDATE can't apply to the nullable side of an outer
+        join); only the row's own columns (amount/status) are needed.
+        """
+        query = (
+            select(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(Payment.id == payment_id)
+            .with_for_update(of=Payment)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_by_invoice_id(
         self,
         invoice_id: int,
@@ -620,6 +648,38 @@ class RefundRepository(BaseRepository[RefundRequest]):
         )
 
         # IDOR Filter
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_for_update(
+        self,
+        refund_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[RefundRequest]:
+        """Get a refund request with a pessimistic row lock (SELECT FOR UPDATE).
+
+        Used by approve/reject/process so concurrent lifecycle ops on the same
+        refund serialize: the second op blocks until the first commits, then
+        re-reads the (now-changed) status and is rejected. Locks only the
+        refund row (``of=RefundRequest``); payment→invoice are inner-joined and
+        eager-loaded so process can update balances without a lazy load.
+        """
+        query = (
+            select(RefundRequest)
+            .join(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(RefundRequest.payment).joinedload(Payment.invoice),
+            )
+            .where(RefundRequest.id == refund_id)
+            .with_for_update(of=RefundRequest)
+        )
         if unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
 

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, finance_scope_unit_id
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas import finance as finance_schemas
 from app.services.overpayment_service import OverpaymentService
@@ -37,7 +37,7 @@ async def list_overpayments(
     current_user: models.User = CasbinAuth,
 ):
     service = OverpaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     overpayments, total = await service.list_overpayments(
         skip=(page - 1) * page_size,
         limit=page_size,
@@ -69,7 +69,7 @@ async def get_overpayment(
     current_user: models.User = CasbinAuth,
 ):
     service = OverpaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         overpayment = await service.get_overpayment(overpayment_id, unit_id)
         return _build_overpayment_response(overpayment, current_user.role)
@@ -97,7 +97,7 @@ async def apply_overpayment(
         )
 
     service = OverpaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         overpayment, callback = await service.apply_to_invoice(
             overpayment_id=overpayment_id,
@@ -138,7 +138,7 @@ async def refund_overpayment(
         )
 
     service = OverpaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         overpayment, callback = await service.refund_overpayment(
             overpayment_id=overpayment_id,
@@ -177,7 +177,7 @@ async def write_off_overpayment(
         )
 
     service = OverpaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         overpayment, callback = await service.write_off(
             overpayment_id=overpayment_id,

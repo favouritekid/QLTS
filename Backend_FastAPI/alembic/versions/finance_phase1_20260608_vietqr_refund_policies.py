@@ -32,7 +32,6 @@ _SYSTEM_CONFIG_SQL = sa.text(
 
 _POLICIES = [
     ("role:officer", "/api/invoices/{id}/vietqr", "GET", "allow"),
-    ("role:officer", "/api/refunds", "POST", "allow"),
     ("role:accountant", "/api/finance/debt-report", "GET", "allow"),
     ("role:accountant", "/api/invoices/{id}/vietqr", "GET", "allow"),
     ("role:accountant", "/api/refunds", "GET", "allow"),

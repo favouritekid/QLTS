@@ -26,9 +26,10 @@ import structlog
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, RequireManager
+from app.core.deps import CasbinAuth, RequireManager, finance_scope_unit_id
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
+from app.models.finance import PAYABLE_INVOICE_STATUSES
 from app.services.invoice_service import InvoiceService
 from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
@@ -234,7 +235,7 @@ async def get_invoice_vietqr(
     """
     invoice_service = InvoiceService(db)
     config_service = SystemConfigService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         invoice = await invoice_service.get_invoice(invoice_id, unit_id)
@@ -243,7 +244,7 @@ async def get_invoice_vietqr(
         # invoice can carry a positive remaining amount but cannot be paid through
         # normal payment recording, so a QR for it would mislead the applicant.
         # Mirror record_manual_payment's allowed statuses.
-        if invoice.status not in ("issued", "partial", "overdue"):
+        if invoice.status not in PAYABLE_INVOICE_STATUSES:
             raise BadRequest(
                 f"VietQR is only available for payable invoices "
                 f"(issued/partial/overdue); current status: '{invoice.status}'"
@@ -268,7 +269,10 @@ async def get_invoice_vietqr(
             f"{profile_code} thanh toan hoc phi"
         )
         content = to_bank_transfer_note(raw_note, max_len=90)
-        amount = invoice.remaining_amount
+        # Quantize to whole VND (zero-decimal currency) so the QR-encoded amount
+        # and the returned/displayed amount are identical — build_vietqr_payload
+        # emits int(amount), so a fractional remaining would otherwise diverge.
+        amount = invoice.remaining_amount.quantize(Decimal("1"))
 
         payload = build_vietqr_payload(
             bank_bin=bank_bin,

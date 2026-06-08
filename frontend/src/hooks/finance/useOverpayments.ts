@@ -21,7 +21,13 @@ export const overpaymentsKeys = {
 
 function getErrorMessage(error: AxiosError<ApiErrorResponse>, fallback: string) {
   const detail = error.response?.data?.detail
-  return typeof detail === "string" ? detail : fallback
+  if (typeof detail === "string") return detail
+  // FastAPI 422 returns detail as an array of {msg, loc, ...}; surface the first.
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: unknown }
+    if (first && typeof first.msg === "string") return first.msg
+  }
+  return fallback
 }
 
 export function useOverpayments(filters?: OverpaymentFilters, options?: { enabled?: boolean }) {

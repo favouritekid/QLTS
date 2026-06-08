@@ -514,6 +514,9 @@ export const financeDashboardStatsSchema = z.object({
   overdue_amount: z.string(),
   today_collections: z.string(),
   monthly_collections: z.string(),
+  period_collections: z.string(),
+  period_start: z.string().nullable().optional(),
+  period_end: z.string().nullable().optional(),
   pending_overpayments_count: z.number().int().min(0),
   pending_refunds_count: z.number().int().min(0),
 })

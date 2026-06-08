@@ -554,6 +554,27 @@ async def require_finance_staff(
     return current_user
 
 
+def finance_scope_unit_id(current_user: models.User) -> Optional[int]:
+    """Resolve the unit-scope filter for finance list/detail endpoints.
+
+    Admin → ``None`` (all units). A non-admin is scoped to their own unit. A
+    non-admin WITHOUT a unit cannot be safely scoped — the repositories treat
+    ``unit_id=None`` as "no filter / all units", so returning None for such a
+    user would silently leak every unit's data (IDOR). Deny instead.
+
+    Use this everywhere finance endpoints derive their unit scope, replacing the
+    ad-hoc ``None if admin else current_user.unit_id`` idiom.
+    """
+    if current_user.role == UserRole.ADMIN:
+        return None
+    if current_user.unit_id is None:
+        raise PermissionDeniedError(
+            detail="Your account is not assigned to a unit; finance scope cannot "
+            "be determined."
+        )
+    return current_user.unit_id
+
+
 async def require_any_staff(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:

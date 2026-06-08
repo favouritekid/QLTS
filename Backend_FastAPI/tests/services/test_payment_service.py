@@ -837,6 +837,62 @@ class TestRefundService:
         await db.commit()
         assert ok.status == "pending"
 
+    async def test_double_process_same_refund_rejected_balance_unchanged(
+        self, db, payment_fixtures
+    ):
+        """Race regression (sequential proxy): processing an already-processed
+        refund a second time must be rejected (status re-checked under the row
+        lock) and must NOT change balances again. Also covers full-refund →
+        invoice 'issued' (#7)."""
+        pf = payment_fixtures
+        payment = await self._create_verified_payment(db, pf)  # 1,000,000
+        refund_service = RefundService(db)
+
+        refund, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("1000000"),
+            reason="Full refund",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await refund_service.approve_refund(
+            refund_id=refund.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        await refund_service.process_approved_refund(
+            refund_id=refund.id,
+            processor_id=pf["checker"].id,
+            refund_reference="REF-1",
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        await db.refresh(pf["invoice"])
+        await db.refresh(pf["fee"])
+        assert pf["invoice"].paid_amount == Decimal("0")
+        # #7: a full refund returns the invoice to 'issued', not 'partial'.
+        assert pf["invoice"].status == InvoiceStatusEnum.issued.value
+        fee_paid_after_first = pf["fee"].paid_amount
+
+        # Second process of the SAME refund → rejected (status now 'refunded').
+        with pytest.raises(BusinessRuleViolation):
+            await refund_service.process_approved_refund(
+                refund_id=refund.id,
+                processor_id=pf["checker"].id,
+                refund_reference="REF-2",
+                unit_id=pf["unit_id"],
+            )
+        await db.rollback()
+
+        await db.refresh(pf["invoice"])
+        await db.refresh(pf["fee"])
+        assert pf["invoice"].paid_amount == Decimal("0")
+        assert pf["fee"].paid_amount == fee_paid_after_first
+
     async def test_list_refunds_filters_by_payment_and_status(
         self, db, payment_fixtures
     ):

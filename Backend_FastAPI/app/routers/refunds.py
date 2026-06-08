@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, finance_scope_unit_id
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import RefundService
@@ -37,7 +37,7 @@ async def list_refunds(
     current_user: models.User = CasbinAuth,
 ):
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     statuses = _parse_status_filter(status_filter)
     refunds, total = await refund_service.list_refunds(
         skip=(page - 1) * page_size,
@@ -47,7 +47,6 @@ async def list_refunds(
         payment_id=payment_id,
     )
     can_create = current_user.role in [
-        UserRole.OFFICER,
         UserRole.ACCOUNTANT,
         UserRole.ADMIN,
     ]
@@ -76,23 +75,13 @@ async def create_refund(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
-    # F1: managers inherit officer in Casbin (g, role:manager, role:officer) so the
-    # officer POST grant leaks the create endpoint to managers. Managers are
-    # approver-only (maker-checker), so enforce the create capability here to match
-    # the `can_create` flag the FE reads. Casbin role inheritance cannot express
-    # "officer + accountant but not manager" because manager IS-A officer.
-    if current_user.role not in (
-        UserRole.OFFICER,
-        UserRole.ACCOUNTANT,
-        UserRole.ADMIN,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managers are approver-only and cannot create refund requests",
-        )
-
+    # F1/F12: create is authorized by Casbin alone — POST /api/refunds is granted
+    # only to accountant (explicit) + admin (wildcard). Officer was removed from
+    # the grant (it leaked to manager via `g, role:manager, role:officer` and had
+    # no UI), and manager/officer have no inheritance path to it. The can_create
+    # response flag mirrors this for the FE.
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         refund, callback = await refund_service.request_refund(
             payment_id=data.payment_id,
@@ -125,7 +114,7 @@ async def get_refund(
     current_user: models.User = CasbinAuth,
 ):
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         refund = await refund_service.get_refund(refund_id, unit_id)
         return _build_refund_response(refund, current_user.id, current_user.role)
@@ -146,7 +135,7 @@ async def approve_refund(
     current_user: models.User = CasbinAuth,
 ):
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         refund, callback = await refund_service.approve_refund(
             refund_id=refund_id,
@@ -178,7 +167,7 @@ async def reject_refund(
     current_user: models.User = CasbinAuth,
 ):
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         refund, callback = await refund_service.reject_refund(
             refund_id=refund_id,
@@ -217,7 +206,7 @@ async def process_refund(
         )
 
     refund_service = RefundService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     try:
         refund, callback = await refund_service.process_approved_refund(
             refund_id=refund_id,

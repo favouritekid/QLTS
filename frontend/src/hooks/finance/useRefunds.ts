@@ -20,7 +20,13 @@ export const refundsKeys = {
 
 function getErrorMessage(error: AxiosError<ApiErrorResponse>, fallback: string) {
   const detail = error.response?.data?.detail
-  return typeof detail === "string" ? detail : fallback
+  if (typeof detail === "string") return detail
+  // FastAPI 422 returns detail as an array of {msg, loc, ...}; surface the first.
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { msg?: unknown }
+    if (first && typeof first.msg === "string") return first.msg
+  }
+  return fallback
 }
 
 export function useRefunds(filters?: RefundFilters, options?: { enabled?: boolean }) {
@@ -102,6 +108,9 @@ export function useProcessRefund() {
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: refundsKeys.detail(refund.id) })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
+      // Processing a refund can auto-close a linked overpayment (F4), so refresh
+      // the overpayments cache too.
+      queryClient.invalidateQueries({ queryKey: ["overpayments"] })
     },
     onError: (error) => {
       toast.error(getErrorMessage(error, "Khong the xu ly hoan phi"))

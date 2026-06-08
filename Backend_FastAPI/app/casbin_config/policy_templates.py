@@ -280,7 +280,6 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/payments/intents", "action": "POST"},  # Create payment intent (online)
         {"subject": "{role}", "object": "/api/payments/intents/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/methods", "action": "GET"},
-        {"subject": "{role}", "object": "/api/refunds", "action": "POST"},
         # NOTE (PR #324 Commit 5) — Officer DENY for /api/leads/export,
         # /bulk-assign, /bulk-delete, /distribution-preview was DESIGNED
         # here but NOT shipped. Reason: officer sits as an inheritance

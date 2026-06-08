@@ -21,7 +21,7 @@ import structlog
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, finance_scope_unit_id
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.finance_report_service import FinanceReportService
@@ -61,9 +61,12 @@ async def get_debt_report(
     Non-admin callers are always scoped to their own unit. Admin may optionally
     pass ``unit_id`` to narrow the report.
     """
-    scoped_unit_id = (
-        unit_id if current_user.role == UserRole.ADMIN else current_user.unit_id
-    )
+    # Admin may optionally narrow by unit_id; non-admins are hard-scoped to their
+    # own unit (and denied if they have none — avoids the NULL-unit IDOR leak).
+    if current_user.role == UserRole.ADMIN:
+        scoped_unit_id = unit_id
+    else:
+        scoped_unit_id = finance_scope_unit_id(current_user)
     report_service = FinanceReportService(db)
     return await report_service.get_debt_report(
         unit_id=scoped_unit_id,

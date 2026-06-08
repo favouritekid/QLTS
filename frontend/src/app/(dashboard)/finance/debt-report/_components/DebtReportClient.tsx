@@ -76,8 +76,16 @@ export function DebtReportClient() {
       item.days_overdue,
       item.aging_bucket,
     ])
+    // Neutralize CSV/formula injection: a cell starting with = + - @ (or tab/CR)
+    // is treated as a formula by Excel/Sheets. profile_name is user-controlled
+    // (lead full_name), so prefix risky cells with a single quote before quoting.
+    const escapeCell = (cell: string | number) => {
+      let s = String(cell)
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+      return `"${s.replaceAll('"', '""')}"`
+    }
     const csv = [header, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replaceAll("\"", "\"\"")}"`).join(","))
+      .map((row) => row.map(escapeCell).join(","))
       .join("\n")
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
     const url = URL.createObjectURL(blob)

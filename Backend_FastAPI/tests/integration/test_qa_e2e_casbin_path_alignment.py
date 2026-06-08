@@ -19,15 +19,25 @@ test fail loudly.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from sqlalchemy import text
 
 from app.casbin_config.policy_templates import (
     ACCOUNTANT_TEMPLATE,
     MANAGER_TEMPLATE,
+    OFFICER_TEMPLATE,
 )
 from app.database import AsyncSessionLocal
 from app.main import fastapi_app
+
+
+def _normalize_path(path: str) -> str:
+    """Collapse ``{anything}`` path params to ``{}`` so policy placeholder names
+    (``{id}``) compare equal to route names (``{refund_id}``) — keyMatch4 treats
+    ``{...}`` as a single-segment wildcard regardless of the name."""
+    return re.sub(r"\{[^}]+\}", "{}", path)
 
 
 def _collect_route_paths() -> set[str]:
@@ -59,6 +69,39 @@ def test_refunds_policy_entries_present_in_accountant_template():
     missing = expected - objects
     assert not missing, (
         f"ACCOUNTANT_TEMPLATE missing refund policies: {sorted(missing)}"
+    )
+
+
+def test_finance_phase1_policies_map_to_real_routes():
+    """Anchor: every Finance Phase 1 policy object (refund/overpayment/debt-report
+    /vietqr) maps to an actually-mounted FastAPI route.
+
+    The earlier rewrite only checked template-vs-template; this restores the
+    route-table cross-check so a typo'd/non-existent finance policy path (which
+    keyMatch4 would silently deny → 404) fails loudly.
+    """
+    route_paths = {_normalize_path(p) for p in _collect_route_paths()}
+    prefixes = (
+        "/api/refunds",
+        "/api/overpayments",
+        "/api/finance/debt-report",
+        "/api/invoices/{id}/vietqr",
+    )
+    finance_objs = {
+        p["object"]
+        for tmpl in (ACCOUNTANT_TEMPLATE, MANAGER_TEMPLATE, OFFICER_TEMPLATE)
+        for p in tmpl["policies"]
+        if any(p["object"].startswith(pre) for pre in prefixes)
+    }
+    missing = {o for o in finance_objs if _normalize_path(o) not in route_paths}
+    mounted = sorted(
+        p
+        for p in route_paths
+        if any(k in p for k in ("refund", "overpay", "debt", "vietqr"))
+    )
+    assert not missing, (
+        f"Casbin finance policies point at non-existent routes: {sorted(missing)}. "
+        f"Mounted finance routes: {mounted}"
     )
 
 
