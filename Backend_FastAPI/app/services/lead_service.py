@@ -4625,10 +4625,28 @@ async def _populate_lead_detail_fields(
         and lead.assigned_officer_id == current_user.id
     )
     can_request_reopen = is_officer_assigned and cs_terminal
+    pending_exists = False
+    if can_request_reopen:
+        # Đã có pending request cho lead → ẩn nút "Xin mở lại" (backend cũng chặn
+        # ConflictError). Chỉ query khi đã đủ điều kiện kia (tránh query thừa).
+        pending_exists = (
+            await db.execute(
+                select(models.LeadReopenRequest.id)
+                .where(
+                    models.LeadReopenRequest.lead_id == lead.id,
+                    models.LeadReopenRequest.status == "pending",
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none() is not None
+        if pending_exists:
+            can_request_reopen = False
     permissions["can_request_reopen"] = can_request_reopen
     if not can_request_reopen:
         blockers["can_request_reopen"] = (
-            "not_terminal" if not cs_terminal else "forbidden"
+            "pending_exists"
+            if pending_exists
+            else ("not_terminal" if not cs_terminal else "forbidden")
         )
 
     lead.permissions = permissions

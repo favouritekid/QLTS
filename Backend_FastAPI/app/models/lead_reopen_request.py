@@ -77,11 +77,12 @@ class LeadReopenRequest(Base):
     # CHỈ để filter/sort list duyệt — KHÔNG phải nguồn phân quyền. IDOR
     # approve/reject dùng lead.unit_id HIỆN TẠI (get_reopen_request_for_user §7.4),
     # KHÔNG dùng snapshot.
+    # KHÔNG index=True đơn lẻ: composite ix_lead_reopen_request_unit_status có
+    # unit_id làm cột dẫn đầu nên đã phủ truy vấn theo unit_id.
     unit_id = Column(
         Integer,
         ForeignKey("organization_unit.id"),
         nullable=False,
-        index=True,
     )
 
     lead = relationship("Lead", foreign_keys=[lead_id])

@@ -448,11 +448,13 @@ class LeadDetail(Lead):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LeadReopenRequest(BaseModel):
-    """Body cho POST /leads/{lead_id}/reopen — mở lại lead đã ngừng tư vấn.
+class ReopenReasonBody(BaseModel):
+    """Body ``{reason}`` cho mở lại / xin mở lại lead đã ngừng tư vấn.
 
-    Chỉ manager/admin (role-gate ở backend Casbin + IDOR). ``reason`` bắt buộc, lưu
-    nguyên văn để audit. Xem Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
+    Dùng cho POST /leads/{id}/reopen (Phase A, manager/admin) và
+    POST /leads/{id}/reopen-requests (Phase B, officer xin). Đổi tên từ
+    ``LeadReopenRequest`` để KHÔNG nhầm với model ``models.LeadReopenRequest`` (bảng).
+    ``reason`` bắt buộc, lưu nguyên văn để audit.
     """
     # Strip whitespace TRƯỚC khi đếm min_length → "     " (5 dấu cách) bị chặn ngay ở
     # Pydantic (422) thay vì lọt tới service rồi mới reject (400) — nhất quán mã lỗi.

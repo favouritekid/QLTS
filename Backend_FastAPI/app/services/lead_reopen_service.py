@@ -141,6 +141,29 @@ async def _apply_reopen(
     )
 
 
+async def _resolve_pending_requests(
+    db: AsyncSession, lead_id: int, reviewer: models.User
+) -> None:
+    """Đánh dấu mọi pending reopen-request của lead = ``approved`` (tự động) khi lead
+    đã được mở lại bằng đường khác (Phase A direct reopen). Partial-unique đảm bảo tối
+    đa 1 pending. Gọi DƯỚI lock lead (serialize với request_reopen) nên không race.
+    """
+    pending = (
+        await db.execute(
+            select(models.LeadReopenRequest).where(
+                models.LeadReopenRequest.lead_id == lead_id,
+                models.LeadReopenRequest.status == "pending",
+            )
+        )
+    ).scalars().all()
+    now = datetime.now(timezone.utc)
+    for preq in pending:
+        preq.status = "approved"
+        preq.reviewed_by_id = reviewer.id
+        preq.review_note = "Tự động duyệt: lead đã được mở lại trực tiếp."
+        preq.reviewed_at = now
+
+
 async def reopen_lead(
     db: AsyncSession,
     lead_id: int,
@@ -173,6 +196,11 @@ async def reopen_lead(
     async with db.begin_nested():
         lead = await _lock_terminal_lead(db, lead_id)
         await _apply_reopen(db, lead, reviewer, reason_text)
+        # Lead mở lại TRỰC TIẾP (Phase A, không qua approve_reopen) → mọi pending
+        # request của officer trở nên mồ côi nếu để nguyên (không bao giờ duyệt được
+        # vì lead hết terminal). Auto-resolve để inbox sạch + officer không kẹt
+        # ConflictError khi xin lại sau này.
+        await _resolve_pending_requests(db, lead.id, reviewer)
 
     async def _post_commit() -> None:
         # MVP: no-op. Phase C: dispatch LEAD_REOPEN_* notifications here.
@@ -428,7 +456,9 @@ async def list_reopen_requests(
     if status:
         q = q.where(models.LeadReopenRequest.status == status)
 
-    if user.role == UserRole.MANAGER:
+    if user.role == UserRole.ADMIN:
+        pass  # admin: toàn hệ thống (không lọc unit).
+    elif user.role == UserRole.MANAGER:
         if user.unit_id is None:
             return []
         from ..repositories.organization_repository import OrganizationRepository
@@ -439,7 +469,10 @@ async def list_reopen_requests(
         q = q.join(
             models.Lead, models.LeadReopenRequest.lead_id == models.Lead.id
         ).where(models.Lead.unit_id.in_(allowed))
-    # admin: không lọc unit (toàn hệ thống).
+    else:
+        # Defense-in-depth: role ngoài {admin, manager} KHÔNG xem được. Casbin đã
+        # gate endpoint; đây là rào nếu hàm bị tái dùng nơi khác.
+        return []
 
     result = await db.execute(q)
     return list(result.scalars().all())

@@ -1747,7 +1747,7 @@ async def update_lead_consultation_status(
 @router.post("/{lead_id}/reopen", response_model=schemas.Lead)
 async def reopen_lead_endpoint(
     request: Request,
-    body: schemas.LeadReopenRequest,
+    body: schemas.ReopenReasonBody,
     lead: models.Lead = LeadAccessDep,
     current_user: models.User = CasbinAuth,
     db: AsyncSession = Depends(database.get_db),
@@ -1799,7 +1799,7 @@ async def reopen_lead_endpoint(
 )
 async def create_reopen_request(
     request: Request,
-    body: schemas.LeadReopenRequest,
+    body: schemas.ReopenReasonBody,
     lead: models.Lead = LeadAccessDep,
     current_user: models.User = CasbinAuth,
     db: AsyncSession = Depends(database.get_db),

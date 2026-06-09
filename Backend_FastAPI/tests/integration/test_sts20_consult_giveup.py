@@ -1535,3 +1535,43 @@ async def test_can_request_reopen_flag(db: AsyncSession):
     # Officer KHÔNG assigned → can_request_reopen False.
     await _populate_lead_detail_fields(db, lead, other)
     assert lead.permissions["can_request_reopen"] is False
+
+    # #2: đã có pending request → officer assigned cũng KHÔNG xin được nữa (ẩn nút).
+    await request_reopen(db, lead.id, officer, "xin mở lại lần này")
+    await _populate_lead_detail_fields(db, lead, officer)
+    assert lead.permissions["can_request_reopen"] is False
+    assert lead.action_blockers["can_request_reopen"] == "pending_exists"
+
+
+async def test_reopen_lead_auto_resolves_pending_request(db: AsyncSession):
+    """#1: lead mở lại TRỰC TIẾP (Phase A reopen_lead) khi đang có pending request →
+    request được AUTO-approved (không mồ côi 'Chờ duyệt' mãi)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "officer xin mở lại")
+    assert req.status == "pending"
+
+    # Manager mở lại TRỰC TIẾP (không qua approve_reopen).
+    reopened, _ = await reopen_lead(db, lead.id, manager, "manager mở thẳng")
+    assert reopened.consultation_status_id == "sts04"
+
+    await db.refresh(req)
+    assert req.status == "approved"  # auto-resolved
+    assert req.reviewed_by_id == manager.id
+    assert "Tự động" in (req.review_note or "")
+
+
+async def test_list_reopen_requests_other_role_empty(db: AsyncSession):
+    """#3 defense-in-depth: role ngoài {admin, manager} → list rỗng (Casbin đã gate
+    endpoint; đây là rào nếu hàm bị tái dùng nơi khác)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+    await request_reopen(db, lead.id, officer, "xin mở lại")
+
+    assert await list_reopen_requests(db, officer, status="pending") == []

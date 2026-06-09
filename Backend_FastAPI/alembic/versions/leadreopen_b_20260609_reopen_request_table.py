@@ -112,9 +112,8 @@ def upgrade() -> None:
     op.create_index(
         "ix_lead_reopen_request_status", "lead_reopen_request", ["status"]
     )
-    op.create_index(
-        "ix_lead_reopen_request_unit_id", "lead_reopen_request", ["unit_id"]
-    )
+    # KHÔNG tạo single index unit_id: composite (unit_id, status) bên dưới đã phủ
+    # (unit_id là cột dẫn đầu) → tránh index dư (chi phí ghi/space).
     op.create_index(
         "ix_lead_reopen_request_unit_status",
         "lead_reopen_request",
