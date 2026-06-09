@@ -19,7 +19,7 @@ interface VietQRDisplayProps {
 export function VietQRDisplay({ data, isLoading, error, onRetry }: VietQRDisplayProps) {
   const copy = React.useCallback(async (value: string, label: string) => {
     await navigator.clipboard.writeText(value)
-    toast.success(`Da copy ${label}`)
+    toast.success(`Đã sao chép ${label}`)
   }, [])
 
   return (
@@ -27,7 +27,7 @@ export function VietQRDisplay({ data, isLoading, error, onRetry }: VietQRDisplay
       <CardHeader>
         <CardTitle className="text-lg flex items-center gap-2">
           <QrCode className="h-5 w-5" />
-          Chuyen khoan VietQR
+          Chuyển khoản VietQR
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -39,10 +39,10 @@ export function VietQRDisplay({ data, isLoading, error, onRetry }: VietQRDisplay
           </>
         ) : error ? (
           <div className="space-y-3 text-sm text-muted-foreground">
-            <p>Chua the hien thi ma QR.</p>
+            <p>Chưa thể hiển thị mã QR.</p>
             {onRetry && (
               <Button variant="outline" size="sm" onClick={onRetry}>
-                Thu lai
+                Thử lại
               </Button>
             )}
           </div>
@@ -57,20 +57,20 @@ export function VietQRDisplay({ data, isLoading, error, onRetry }: VietQRDisplay
             </div>
             <div className="space-y-2 text-sm">
               <InfoRow
-                label="So tien"
+                label="Số tiền"
                 value={<AmountDisplay amount={data.amount} showCurrency size="sm" />}
               />
               <CopyRow
-                label="So tai khoan"
+                label="Số tài khoản"
                 value={data.bank_account.account_number}
-                onCopy={() => copy(data.bank_account.account_number, "so tai khoan")}
+                onCopy={() => copy(data.bank_account.account_number, "số tài khoản")}
               />
-              <InfoRow label="Ten tai khoan" value={data.bank_account.account_name} />
+              <InfoRow label="Tên tài khoản" value={data.bank_account.account_name} />
               <CopyRow
-                label="Noi dung"
+                label="Nội dung"
                 value={data.content}
                 mono
-                onCopy={() => copy(data.content, "noi dung")}
+                onCopy={() => copy(data.content, "nội dung")}
               />
             </div>
           </>
@@ -109,7 +109,7 @@ function CopyRow({
         </span>
         <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={onCopy}>
           <Copy className="h-3.5 w-3.5" />
-          <span className="sr-only">Copy {label}</span>
+          <span className="sr-only">Sao chép {label}</span>
         </Button>
       </div>
     </div>

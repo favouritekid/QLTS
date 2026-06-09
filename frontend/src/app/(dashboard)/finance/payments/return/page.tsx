@@ -4,8 +4,8 @@ import { PaymentReturnClient } from "./_components/PaymentReturnClient"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export const metadata = {
-  title: "Kết quả thanh toán - Finance",
-  description: "Kết quả thanh toán online",
+  title: "Kết quả thanh toán - Tài chính",
+  description: "Kết quả thanh toán trực tuyến",
 }
 
 /**

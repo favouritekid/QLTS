@@ -147,7 +147,7 @@ export const navigationConfig: NavigationConfig = {
       title: "Finance",
       items: [
         {
-          label: "Finance Dashboard",
+          label: "Tổng quan tài chính",
           href: "/finance",
           icon: DollarSign,
           roles: ["accountant", "manager", "admin"],
@@ -161,38 +161,38 @@ export const navigationConfig: NavigationConfig = {
           ],
         },
         {
-          label: "Fees",
+          label: "Khoản phí",
           href: "/finance/fees",
           icon: Calculator,
           roles: ["accountant", "manager", "admin"],
         },
         {
-          label: "Invoices",
+          label: "Hóa đơn",
           href: "/finance/invoices",
           icon: Receipt,
           roles: ["accountant", "manager", "admin"],
         },
         {
-          label: "Pending Payments",
+          label: "Thanh toán chờ duyệt",
           href: "/finance/payments",
           icon: CreditCard,
           roles: ["accountant", "manager", "admin"],
           // Badge for pending count can be added dynamically
         },
         {
-          label: "Debt Report",
+          label: "Báo cáo công nợ",
           href: "/finance/debt-report",
           icon: BarChart3,
           roles: ["accountant", "manager", "admin"],
         },
         {
-          label: "Refunds",
+          label: "Hoàn phí",
           href: "/finance/refunds",
           icon: RotateCcw,
           roles: ["accountant", "manager", "admin"],
         },
         {
-          label: "Overpayments",
+          label: "Tiền nộp thừa",
           href: "/finance/overpayments",
           icon: WalletCards,
           roles: ["accountant", "manager", "admin"],

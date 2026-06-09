@@ -174,7 +174,7 @@ export function FeeCalculateDialog({
                     />
                   </FormControl>
                   <FormDescription>
-                    ID của hồ sơ tuyển sinh đã được duyệt (approved)
+                    ID của hồ sơ tuyển sinh đã được duyệt
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

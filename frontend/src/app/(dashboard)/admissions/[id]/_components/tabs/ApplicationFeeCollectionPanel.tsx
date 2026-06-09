@@ -30,6 +30,15 @@ interface ApplicationFeeCollectionPanelProps {
 const RECEIPT_MIN_LENGTH = 6
 const RECEIPT_MAX_LENGTH = 80
 
+function suggestReceiptCode(profileId: number): string {
+  // Pre-fill an editable default so the officer isn't stuck on a blank,
+  // required field ("không biết nhập gì"). Unique per (hồ sơ, ngày) → thỏa
+  // ràng buộc chống trùng biên lai của backend. Officer giữ nguyên khi thu
+  // tiền mặt tại quầy, hoặc thay bằng số phiếu thu giấy thực tế.
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "")
+  return `PT-${profileId}-${today}`
+}
+
 export function ApplicationFeeCollectionPanel({
   profile,
 }: ApplicationFeeCollectionPanelProps) {
@@ -169,7 +178,9 @@ function ApplicationFeePaymentDialog({
   profileId: number
   onOpenChange: (open: boolean) => void
 }) {
-  const [transactionId, setTransactionId] = useState("")
+  const [transactionId, setTransactionId] = useState(() =>
+    suggestReceiptCode(profileId),
+  )
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const mutation = useRecordApplicationFeePayment(profileId)
   const trimmedTransactionId = transactionId.trim()
@@ -235,11 +246,17 @@ function ApplicationFeePaymentDialog({
               id="application_fee_receipt"
               value={transactionId}
               onChange={(event) => setTransactionId(event.target.value)}
+              onFocus={(event) => event.target.select()}
               minLength={RECEIPT_MIN_LENGTH}
               maxLength={RECEIPT_MAX_LENGTH}
+              placeholder="VD: số phiếu thu giấy — hoặc giữ mã gợi ý"
               disabled={isPending}
               autoFocus
             />
+            <p className="text-xs text-muted-foreground">
+              Số biên lai/phiếu thu giấy (nếu có). Đã điền sẵn mã gợi ý duy nhất —
+              giữ nguyên hoặc thay bằng số biên lai thực tế (6–80 ký tự).
+            </p>
           </div>
 
           <div className="space-y-2">

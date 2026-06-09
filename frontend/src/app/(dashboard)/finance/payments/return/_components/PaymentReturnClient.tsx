@@ -256,7 +256,7 @@ export function PaymentReturnClient() {
               <Button variant="outline" className="flex-1" asChild>
                 <Link href="/finance">
                   <ArrowLeft className="h-4 w-4 mr-2" />
-                  Về Finance
+                  Về Tài chính
                 </Link>
               </Button>
             )}

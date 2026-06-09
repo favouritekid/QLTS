@@ -48,13 +48,13 @@ export function useApplyOverpayment() {
   >({
     mutationFn: ({ id, data }) => overpaymentsApi.applyOverpayment(id, data),
     onSuccess: (overpayment) => {
-      toast.success("Da ap dung tien thua")
+      toast.success("Đã áp dụng tiền nộp thừa")
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.detail(overpayment.id) })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the ap dung tien thua"))
+      toast.error(getErrorMessage(error, "Không thể áp dụng tiền nộp thừa"))
     },
   })
 }
@@ -68,13 +68,13 @@ export function useRefundOverpayment() {
   >({
     mutationFn: ({ id, data }) => overpaymentsApi.refundOverpayment(id, data),
     onSuccess: (overpayment) => {
-      toast.success("Da tao yeu cau hoan tien thua")
+      toast.success("Đã tạo yêu cầu hoàn tiền nộp thừa")
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.detail(overpayment.id) })
       queryClient.invalidateQueries({ queryKey: ["refunds"] })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the tao yeu cau hoan tien thua"))
+      toast.error(getErrorMessage(error, "Không thể tạo yêu cầu hoàn tiền nộp thừa"))
     },
   })
 }
@@ -88,13 +88,13 @@ export function useWriteOffOverpayment() {
   >({
     mutationFn: ({ id, data }) => overpaymentsApi.writeOffOverpayment(id, data),
     onSuccess: (overpayment) => {
-      toast.success("Da xoa so tien thua")
+      toast.success("Đã xóa sổ tiền nộp thừa")
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: overpaymentsKeys.detail(overpayment.id) })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the xoa so tien thua"))
+      toast.error(getErrorMessage(error, "Không thể xóa sổ tiền nộp thừa"))
     },
   })
 }

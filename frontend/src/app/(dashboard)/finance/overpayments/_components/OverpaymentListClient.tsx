@@ -40,10 +40,10 @@ import {
 import type { OverpaymentRecord, OverpaymentStatus } from "@/types/finance.types"
 
 const STATUS_LABELS: Record<OverpaymentStatus, string> = {
-  pending: "Cho xu ly",
-  applied: "Da ap dung",
-  refunded: "Da hoan",
-  cancelled: "Da xoa so",
+  pending: "Chờ xử lý",
+  applied: "Đã áp dụng",
+  refunded: "Đã hoàn",
+  cancelled: "Đã xóa sổ",
 }
 
 type ActionState =
@@ -119,10 +119,10 @@ export function OverpaymentListClient() {
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
             <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-destructive" />
-            <p className="font-medium text-destructive">Khong the tai danh sach tien thua</p>
+            <p className="font-medium text-destructive">Không thể tải danh sách tiền nộp thừa</p>
             <Button variant="outline" className="mt-4" onClick={() => refetch()}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              Thu lai
+              Thử lại
             </Button>
           </CardContent>
         </Card>
@@ -134,26 +134,26 @@ export function OverpaymentListClient() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Tien thua</h1>
-          <p className="text-muted-foreground">Xu ly cac khoan overpayment dang treo</p>
+          <h1 className="text-2xl font-bold tracking-tight">Tiền nộp thừa</h1>
+          <p className="text-muted-foreground">Xử lý các khoản tiền nộp thừa đang treo</p>
         </div>
         <Button variant="outline" onClick={() => refetch()}>
           <RefreshCw className="mr-2 h-4 w-4" />
-          Lam moi
+          Làm mới
         </Button>
       </div>
 
       <div className="flex max-w-xs">
         <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as OverpaymentStatus | "all")}>
           <SelectTrigger>
-            <SelectValue placeholder="Trang thai" />
+            <SelectValue placeholder="Trạng thái" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="pending">Cho xu ly</SelectItem>
-            <SelectItem value="all">Tat ca</SelectItem>
-            <SelectItem value="applied">Da ap dung</SelectItem>
-            <SelectItem value="refunded">Da hoan</SelectItem>
-            <SelectItem value="cancelled">Da xoa so</SelectItem>
+            <SelectItem value="pending">Chờ xử lý</SelectItem>
+            <SelectItem value="all">Tất cả</SelectItem>
+            <SelectItem value="applied">Đã áp dụng</SelectItem>
+            <SelectItem value="refunded">Đã hoàn</SelectItem>
+            <SelectItem value="cancelled">Đã xóa sổ</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -163,19 +163,19 @@ export function OverpaymentListClient() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Overpayment</TableHead>
-                <TableHead>Ho so</TableHead>
-                <TableHead>Invoice</TableHead>
-                <TableHead className="text-right">So tien</TableHead>
-                <TableHead>Trang thai</TableHead>
-                <TableHead className="text-right">Thao tac</TableHead>
+                <TableHead>Khoản nộp thừa</TableHead>
+                <TableHead>Hồ sơ</TableHead>
+                <TableHead>Hóa đơn</TableHead>
+                <TableHead className="text-right">Số tiền</TableHead>
+                <TableHead>Trạng thái</TableHead>
+                <TableHead className="text-right">Thao tác</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Dang tai...
+                    Đang tải...
                   </TableCell>
                 </TableRow>
               ) : data?.items.length ? (
@@ -197,19 +197,19 @@ export function OverpaymentListClient() {
                         {overpayment.can_apply && (
                           <Button size="sm" variant="outline" onClick={() => setAction({ type: "apply", overpayment })}>
                             <CheckCircle className="mr-2 h-4 w-4" />
-                            Ap dung
+                            Áp dụng
                           </Button>
                         )}
                         {overpayment.can_refund && (
                           <Button size="sm" variant="outline" onClick={() => setAction({ type: "refund", overpayment })}>
                             <RotateCcw className="mr-2 h-4 w-4" />
-                            Hoan
+                            Hoàn tiền
                           </Button>
                         )}
                         {overpayment.can_write_off && (
                           <Button size="sm" variant="outline" onClick={() => setAction({ type: "write_off", overpayment })}>
                             <XCircle className="mr-2 h-4 w-4" />
-                            Xoa so
+                            Xóa sổ
                           </Button>
                         )}
                       </div>
@@ -219,7 +219,7 @@ export function OverpaymentListClient() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Khong co du lieu
+                    Không có dữ liệu
                   </TableCell>
                 </TableRow>
               )}
@@ -231,17 +231,17 @@ export function OverpaymentListClient() {
       <Dialog open={action?.type === "apply"} onOpenChange={(open) => !open && closeAction()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Ap dung tien thua</DialogTitle>
+            <DialogTitle>Áp dụng tiền nộp thừa</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <Field label="Invoice dich">
+            <Field label="Hóa đơn đích">
               <Input
                 inputMode="numeric"
                 value={targetInvoiceId}
                 onChange={(event) => setTargetInvoiceId(event.target.value.replace(/\D/g, ""))}
               />
             </Field>
-            <Field label="So tien">
+            <Field label="Số tiền">
               <Input
                 inputMode="decimal"
                 placeholder={action?.type === "apply" ? action.overpayment.overpayment_amount : undefined}
@@ -249,14 +249,14 @@ export function OverpaymentListClient() {
                 onChange={(event) => setAmount(event.target.value)}
               />
             </Field>
-            <Field label="Ghi chu">
+            <Field label="Ghi chú">
               <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
             </Field>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={closeAction}>Huy</Button>
+            <Button variant="outline" onClick={closeAction}>Hủy</Button>
             <Button onClick={handleApply} disabled={!targetInvoiceId || applyOverpayment.isPending}>
-              Ap dung
+              Áp dụng
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -265,15 +265,15 @@ export function OverpaymentListClient() {
       <Dialog open={action?.type === "refund"} onOpenChange={(open) => !open && closeAction()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Tao yeu cau hoan tien thua</DialogTitle>
+            <DialogTitle>Tạo yêu cầu hoàn tiền nộp thừa</DialogTitle>
           </DialogHeader>
-          <Field label="Ghi chu">
+          <Field label="Ghi chú">
             <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
           </Field>
           <DialogFooter>
-            <Button variant="outline" onClick={closeAction}>Huy</Button>
+            <Button variant="outline" onClick={closeAction}>Hủy</Button>
             <Button onClick={handleRefund} disabled={refundOverpayment.isPending}>
-              Tao yeu cau
+              Tạo yêu cầu
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -282,15 +282,15 @@ export function OverpaymentListClient() {
       <Dialog open={action?.type === "write_off"} onOpenChange={(open) => !open && closeAction()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Xoa so tien thua</DialogTitle>
+            <DialogTitle>Xóa sổ tiền nộp thừa</DialogTitle>
           </DialogHeader>
-          <Field label="Ly do">
+          <Field label="Lý do">
             <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
           </Field>
           <DialogFooter>
-            <Button variant="outline" onClick={closeAction}>Huy</Button>
+            <Button variant="outline" onClick={closeAction}>Hủy</Button>
             <Button variant="destructive" onClick={handleWriteOff} disabled={!notes || writeOffOverpayment.isPending}>
-              Xoa so
+              Xóa sổ
             </Button>
           </DialogFooter>
         </DialogContent>
