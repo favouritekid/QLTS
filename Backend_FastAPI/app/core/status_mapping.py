@@ -61,6 +61,23 @@ DEFAULT_LEAD_STATUS = "new"
 
 
 # =============================================================================
+# CONSULTATION TERMINAL PREDICATE (single source of truth)
+# =============================================================================
+
+def is_consultation_terminal_status(cs: "Optional[ConsultationStatus]") -> bool:
+    """True nếu consultation status là trạng thái CUỐI của phase tư vấn (vd sts20
+    CONSULT_GIVEUP — "đã ngừng tư vấn").
+
+    Một định nghĩa DUY NHẤT cho mọi nơi cần phân biệt "lead đã ngừng tư vấn":
+    chặn tạo hồ sơ (admission eligibility), khóa đổi phone (§9.1 B-2), gợi ý mở
+    lại (§9.1 B-1'), cờ ``can_reopen``, và service reopen. Scope
+    ``phase == 'consultation'`` để KHÔNG bắt nhầm terminal phase admission/fee
+    (sts16/sts08/...). Xem Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
+    """
+    return cs is not None and bool(cs.is_final) and cs.phase == "consultation"
+
+
+# =============================================================================
 # DATA CLASSES
 # =============================================================================
 

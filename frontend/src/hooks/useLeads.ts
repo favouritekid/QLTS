@@ -822,6 +822,68 @@ export function useAddConsultation() {
 }
 
 /**
+ * Reopen a consultation-terminal lead (sts20 → sts04). Manager/admin only —
+ * the button visibility is gated by ``lead.permissions.can_reopen`` from the API.
+ *
+ * @example
+ * ```tsx
+ * const reopen = useReopenLead();
+ * reopen.mutate({ leadId: 123, reason: "Khách đổi ý, muốn tư vấn lại" });
+ * ```
+ */
+export function useReopenLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Lead,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; reason: string }
+  >({
+    mutationFn: async ({ leadId, reason }) => {
+      return await leadsApi.reopenLead(leadId, { reason });
+    },
+
+    onSuccess: async (_updatedLead, { leadId }) => {
+      toast.success("Đã mở lại tư vấn", {
+        description: "Lead trở về trạng thái tư vấn — bạn có thể tiếp tục.",
+      });
+
+      // Detail (cờ permissions + status đổi) + timeline + lists + workflow context.
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: "active",
+      });
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.timeline(leadId),
+        exact: true,
+        refetchType: "active",
+      });
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.lists(),
+        refetchType: "active",
+      });
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(leadId),
+        exact: true,
+        refetchType: "active",
+      });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Không thể mở lại tư vấn";
+      toast.error("Lỗi mở lại tư vấn", { description: message });
+    },
+  });
+}
+
+/**
  * Update a consultation (admin: all, officer: most recent only)
  *
  * @example

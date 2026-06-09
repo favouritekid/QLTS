@@ -129,6 +129,7 @@ from .lead import (
     LeadBase,
     LeadCreate,
     LeadDetail,
+    LeadReopenRequest,  # ✅ Reopen Phase A: body POST /leads/{id}/reopen
     LeadImportError,
     LeadImportResult,
     LeadInsights,

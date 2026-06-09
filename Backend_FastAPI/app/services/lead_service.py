@@ -23,7 +23,10 @@ from ..utils.exceptions import (
     ValidationError,
 )
 from ..services import pipeline_service, distribution_service, audit_service
-from ..core.status_mapping import sync_lead_status_from_consultation
+from ..core.status_mapping import (
+    sync_lead_status_from_consultation,
+    is_consultation_terminal_status,
+)
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
@@ -931,7 +934,25 @@ async def create_lead(
             
             lead_name = existing_phone_lead.full_name or "N/A"
             lead_phone = existing_phone_lead.phone or "N/A"
-            
+
+            # ✅ §9.1 B-1′: nếu SĐT thuộc một lead đã ngừng tư vấn (consultation
+            # terminal, sts20), gợi ý MỞ LẠI (reopen) thay vì báo "trùng SĐT" chung
+            # chung — đúng nghiệp vụ. (Security thật do B-2 + check_phone_conflict.)
+            if existing_phone_lead.consultation_status_id:
+                _dup_cs = await db.get(
+                    models.ConsultationStatus,
+                    existing_phone_lead.consultation_status_id,
+                )
+                if is_consultation_terminal_status(_dup_cs):
+                    raise DuplicateResourceError(
+                        detail=(
+                            f"Số điện thoại thuộc lead đã ngừng tư vấn: {lead_name} "
+                            f"(SĐT: {lead_phone}) - Đơn vị: {unit_name} - "
+                            f"Quản lý bởi: {officer_name}. Vui lòng MỞ LẠI "
+                            "(reopen) lead đó thay vì tạo mới."
+                        )
+                    )
+
             raise DuplicateResourceError(
                 detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
             )
@@ -1342,6 +1363,32 @@ async def update_lead(
 
             if not allowed:
                 raise BusinessRuleViolation(detail=block_reason)
+
+            # =========================================================================
+            # ✅ §9.1 B-2: Khóa SĐT trên lead consultation-terminal (sts20).
+            # Lead ở trạng thái cuối phase tư vấn vẫn "giam" SĐT của nó trên
+            # lead_phone_identity. Cho officer đổi phone/phone2 sẽ GIẢI PHÓNG số đó
+            # (uq_lead_phone_active) → tạo lead mới cùng SĐT, bỏ qua kiểm soát reopen
+            # ("reopen lậu"). Giữ số khóa → buộc dùng đường mở lại (reopen, lúc đó
+            # lock tự gỡ). Chỉ chặn khi giá trị THẬT SỰ đổi (no-op resubmit qua
+            # được). Xem LEAD_REOPEN_WORKFLOW_PLAN §9.1.
+            # =========================================================================
+            phone_being_released = (
+                ("phone" in update_data and update_data["phone"] != db_lead.phone)
+                or ("phone2" in update_data and update_data["phone2"] != db_lead.phone2)
+            )
+            if phone_being_released and db_lead.consultation_status_id:
+                _term_cs = await db.get(
+                    models.ConsultationStatus, db_lead.consultation_status_id
+                )
+                if is_consultation_terminal_status(_term_cs):
+                    raise BusinessRuleViolation(
+                        detail=(
+                            f"Lead đang ở trạng thái '{_term_cs.name}' (đã ngừng "
+                            "tư vấn) — không thể đổi số điện thoại. Vui lòng mở lại "
+                            "tư vấn (reopen) trước khi chỉnh sửa."
+                        )
+                    )
 
             # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
             # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
@@ -4556,6 +4603,20 @@ async def _populate_lead_detail_fields(
     blockers: dict[str, str] = {}
     if not eligibility.eligible and eligibility.blocker_code:
         blockers["create_admission"] = eligibility.blocker_code
+
+    # ✅ Reopen (Phase A): manager/admin mở lại được lead consultation-terminal (sts20).
+    # FE hiện nút "Mở lại tư vấn" THUẦN theo cờ này (KHÔNG đọc user.role ở FE). Backend
+    # là nơi role-gate. Blocker: not_terminal (lead chưa ở trạng thái cuối tư vấn) /
+    # forbidden (đúng trạng thái nhưng user không phải manager/admin).
+    is_manager_admin = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    cs_terminal = False
+    if lead.consultation_status_id:
+        _cs = await db.get(models.ConsultationStatus, lead.consultation_status_id)
+        cs_terminal = is_consultation_terminal_status(_cs)
+    can_reopen = is_manager_admin and cs_terminal
+    permissions["can_reopen"] = can_reopen
+    if not can_reopen:
+        blockers["can_reopen"] = "not_terminal" if not cs_terminal else "forbidden"
 
     lead.permissions = permissions
     lead.available_actions = [k for k, v in permissions.items() if v]

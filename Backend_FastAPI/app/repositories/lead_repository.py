@@ -1110,19 +1110,27 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def get_by_id_for_update(
         self,
-        lead_id: int
+        lead_id: int,
+        *,
+        populate_existing: bool = False,
     ) -> Optional[models.Lead]:
         """
         Get lead by ID with row-level lock (FOR UPDATE).
-        
+
         ✅ ARCHITECTURE COMPLIANT: Replaces direct query in process_officer_action.
-        
+
         Used when modifying lead state in transactions where you need
         to prevent concurrent modifications.
-        
+
         Args:
             lead_id: Lead ID
-            
+            populate_existing: When True, OVERWRITE the in-session instance's
+                attributes from the freshly-locked row (SQLAlchemy otherwise
+                returns the cached identity-map instance WITHOUT refreshing it,
+                so a re-check after the lock would read pre-lock/stale values —
+                e.g. a lead already loaded by a non-locking IDOR dependency).
+                Set True when the caller re-validates state under the lock.
+
         Returns:
             Lead with lock acquired, or None if not found
         """
@@ -1131,6 +1139,8 @@ class LeadRepository(BaseRepository[models.Lead]):
             .where(models.Lead.id == lead_id)
             .with_for_update()
         )
+        if populate_existing:
+            query = query.execution_options(populate_existing=True)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 

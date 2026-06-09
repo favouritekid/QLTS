@@ -448,6 +448,24 @@ class LeadDetail(Lead):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LeadReopenRequest(BaseModel):
+    """Body cho POST /leads/{lead_id}/reopen — mở lại lead đã ngừng tư vấn.
+
+    Chỉ manager/admin (role-gate ở backend Casbin + IDOR). ``reason`` bắt buộc, lưu
+    nguyên văn để audit. Xem Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
+    """
+    # Strip whitespace TRƯỚC khi đếm min_length → "     " (5 dấu cách) bị chặn ngay ở
+    # Pydantic (422) thay vì lọt tới service rồi mới reject (400) — nhất quán mã lỗi.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reason: str = Field(
+        ...,
+        min_length=5,
+        max_length=500,
+        description="Lý do mở lại (bắt buộc, tối thiểu 5 ký tự).",
+    )
+
+
 class LeadsSummary(BaseModel):
     """Aggregate stats over the entire filtered set (not just current page)."""
     new_count: int = 0

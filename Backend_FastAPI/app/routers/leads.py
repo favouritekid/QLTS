@@ -17,7 +17,11 @@ from ..services.notification_dispatcher import safe_dispatch, rooms_for_lead  # 
 from ..services.notification_payloads import EventPayload  # ✅ Phase 1
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..core.constants import UserRole
-from ..utils.exceptions import BusinessRuleViolation, ConflictError
+from ..utils.exceptions import (
+    BusinessRuleViolation,
+    ConflictError,
+    ResourceNotFoundError,
+)
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
@@ -1732,6 +1736,54 @@ async def update_lead_consultation_status(
     )
 
     return lead
+
+
+# =============================================================================
+# REOPEN LEAD (Phase A) — mở lại lead đã ngừng tư vấn (sts20 → sts04)
+# =============================================================================
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/{lead_id}/reopen", response_model=schemas.Lead)
+async def reopen_lead_endpoint(
+    request: Request,
+    body: schemas.LeadReopenRequest,
+    lead: models.Lead = LeadAccessDep,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Mở lại một lead đã ngừng tư vấn (consultation-terminal, vd sts20) → sts04.
+
+    Manager/Admin only (Casbin role-gate + IDOR ``get_lead_for_user`` → 404 ngoài phạm
+    vi). Lead về sts04 (re-engage point), set mốc ``consultation_reengaged_at`` để beat
+    SLA có thể auto-close lại lần sau mà không cần xóa history. Reopen là service chuyên
+    dụng (KHÔNG seed allowed_transition sts20→sts04). Xem
+    Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
+
+    **Error Responses:**
+    - 400: lead không ở trạng thái cuối phase tư vấn / đã xóa (BusinessRuleViolation)
+    - 404: lead không tồn tại hoặc ngoài phạm vi IDOR (ResourceNotFoundError)
+    """
+    from ..services import lead_reopen_service
+    from ..repositories.lead_repository import LeadRepository
+
+    result, callback = await lead_reopen_service.reopen_lead(
+        db, lead.id, reviewer=current_user, reason=body.reason
+    )
+    await db.commit()
+    if callback:
+        await callback()
+
+    # Re-fetch eager-loaded for response_model=schemas.Lead (nested
+    # consultation_status/unit/offering/assigned_officer — returning the bare locked
+    # `result` would lazy-load post-commit → MissingGreenlet). Guard the
+    # near-impossible None from a concurrent soft-delete so we never serialize None
+    # against a non-optional response_model (500); surface a clean 404 instead.
+    repo = LeadRepository(db)
+    reopened = await repo.get_by_id_shallow(result.id)
+    if reopened is None:
+        raise ResourceNotFoundError(detail=f"Lead {result.id} not found after reopen")
+    return reopened
 
 
 # =============================================================================

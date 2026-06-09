@@ -773,7 +773,11 @@ export interface APIError {
 export interface LeadDetail extends Lead {
   permissions: Record<string, boolean>;
   available_actions: string[];
-  action_blockers: Partial<Record<"create_admission", LeadAdmissionBlocker>>;
+  action_blockers: Partial<Record<"create_admission", LeadAdmissionBlocker>> & {
+    // Reopen (Phase A): "not_terminal" (lead không ở trạng thái cuối tư vấn) hoặc
+    // "forbidden" (không phải manager/admin). Cờ hiển thị đọc từ permissions.can_reopen.
+    can_reopen?: "not_terminal" | "forbidden";
+  };
 }
 
 /**

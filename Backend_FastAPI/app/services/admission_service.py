@@ -1389,14 +1389,11 @@ async def check_lead_level_admission_eligibility(
     # is_final status would break multi-year re-application. Explicit DB get
     # avoids a lazy-load crash in async context.
     if lead.consultation_status_id:
+        from ..core.status_mapping import is_consultation_terminal_status
         current_cs = await db.get(
             models.ConsultationStatus, lead.consultation_status_id
         )
-        if (
-            current_cs is not None
-            and current_cs.is_final
-            and current_cs.phase == "consultation"
-        ):
+        if is_consultation_terminal_status(current_cs):
             return LeadAdmissionEligibility(
                 False,
                 "consultation_terminal",
