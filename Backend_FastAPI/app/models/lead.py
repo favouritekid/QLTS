@@ -207,6 +207,14 @@ class Lead(Base):
     pipeline_stage_id = Column(
         String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True
     )
+    # Mốc re-engage: set = now() mỗi lần lead consultation-terminal (sts20) được mở lại
+    # (reopen sts20→sts04). NULL = chưa từng reopen → RULE #13.2 (fsm_engine) giữ nguyên
+    # hành vi "EVER" (blast-radius tối thiểu). Đã reopen → guard idempotency chỉ tính
+    # history sau mốc này, nên beat có thể auto-close lại lần sau mà KHÔNG cần xóa.
+    # Xem LEAD_REOPEN_WORKFLOW_PLAN §3.1/§3.2 + execute_system_transition.
+    consultation_reengaged_at = Column(
+        DateTime(timezone=True), nullable=True
+    )
     # Blacklist: Officers who have reassigned this lead (cannot receive it again)
     rejected_by_officer_ids = Column(
         JSON,

@@ -531,15 +531,27 @@ async def execute_system_transition(
         )
         return False
 
-    # ✅ RULE #13.2: Check if lead was EVER in this status before (prevent loops)
+    # ✅ RULE #13.2: Skip if lead has been in this status SINCE its last re-engage
+    # (prevent loops). Semantics changed from "EVER" → "since last re-engage": a lead
+    # deliberately re-opened (consultation_reengaged_at set, e.g. reopen sts20→sts04 via
+    # lead_reopen_service) can be auto-closed AGAIN later without deleting any history.
+    # A lead never re-opened (column NULL) → behaves exactly as the old "EVER" check, so
+    # idempotency of every other system event is unchanged (blast-radius minimal).
+    # NOTE: ``lead`` is the in-memory object passed in — read
+    # consultation_reengaged_at in Python and append a ``changed_at`` predicate;
+    # do NOT join the lead table.
+    # See LEAD_REOPEN_WORKFLOW_PLAN §3.2.
+    _history_conditions = [
+        models.LeadStatusHistory.lead_id == lead.id,
+        models.LeadStatusHistory.new_consultation_status_id == to_status_id,
+    ]
+    if lead.consultation_reengaged_at is not None:
+        _history_conditions.append(
+            models.LeadStatusHistory.changed_at > lead.consultation_reengaged_at
+        )
     result = await db.execute(
         select(models.LeadStatusHistory)
-        .where(
-            and_(
-                models.LeadStatusHistory.lead_id == lead.id,
-                models.LeadStatusHistory.new_consultation_status_id == to_status_id
-            )
-        )
+        .where(and_(*_history_conditions))
         .limit(1)
     )
     previous_occurrence = result.scalar_one_or_none()
