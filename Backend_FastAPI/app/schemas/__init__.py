@@ -129,7 +129,9 @@ from .lead import (
     LeadBase,
     LeadCreate,
     LeadDetail,
-    LeadReopenRequest,  # ✅ Reopen Phase A: body POST /leads/{id}/reopen
+    ReopenReasonBody,  # ✅ Reopen: body {reason} (Phase A reopen + Phase B request)
+    ReopenReviewBody,  # ✅ Reopen Phase B: body approve/reject
+    LeadReopenRequestOut,  # ✅ Reopen Phase B: response 1 yêu cầu
     LeadImportError,
     LeadImportResult,
     LeadInsights,

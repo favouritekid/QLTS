@@ -137,6 +137,12 @@ export const navigationConfig: NavigationConfig = {
           icon: ClipboardCheck,
           roles: [], // Accessible to all roles
         },
+        {
+          label: "Yêu cầu mở lại",
+          href: "/reopen-requests",
+          icon: RotateCcw,
+          roles: ["admin", "manager"], // Inbox duyệt reopen (officer xin)
+        },
       ],
     },
 

@@ -1052,6 +1052,43 @@ async def get_lead_for_user(
     raise ResourceNotFoundError(detail="Lead not found")
 
 
+async def get_reopen_request_for_user(
+    request_id: int = Path(..., description="ID của reopen request"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.LeadReopenRequest:
+    """IDOR cho approve/reject reopen-request (manager/admin).
+
+    Manager CHỈ thao tác request của lead trong unit của mình — so theo ``lead.unit_id``
+    HIỆN TẠI (KHÔNG dùng ``request.unit_id`` snapshot). Ngoài phạm vi → 404 (không 403,
+    không lộ tồn tại). Admin: toàn hệ thống. Xem LEAD_REOPEN_WORKFLOW_PLAN §7.4.
+    """
+    req = await db.get(models.LeadReopenRequest, request_id)
+    if req is None:
+        raise ResourceNotFoundError(detail="Reopen request not found")
+
+    if current_user.role == UserRole.ADMIN:
+        return req
+
+    if current_user.role == UserRole.MANAGER:
+        if current_user.unit_id is not None:
+            lead = await db.get(models.Lead, req.lead_id)
+            if lead is not None:
+                from ..repositories.organization_repository import (
+                    OrganizationRepository,
+                )
+
+                org_repo = OrganizationRepository(db)
+                allowed_unit_ids = await org_repo.get_descendant_unit_ids(
+                    current_user.unit_id
+                )
+                if lead.unit_id in allowed_unit_ids:
+                    return req
+        raise ResourceNotFoundError(detail="Reopen request not found")
+
+    raise ResourceNotFoundError(detail="Reopen request not found")
+
+
 # ============================================================================
 # OWNERSHIP VERIFICATION DEPENDENCIES (IDOR PREVENTION)
 # ============================================================================

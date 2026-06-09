@@ -27,7 +27,14 @@ from app.services.fsm_engine import (
     execute_system_transition,
     get_next_statuses_for_lead,
 )
-from app.services.lead_reopen_service import reopen_lead
+from app.services.lead_reopen_service import (
+    approve_reopen,
+    cancel_reopen,
+    list_reopen_requests,
+    reject_reopen,
+    reopen_lead,
+    request_reopen,
+)
 from app.tasks.sla_tasks import close_stale_rejected_leads
 
 pytestmark = pytest.mark.asyncio
@@ -1265,3 +1272,306 @@ async def test_reopen_idor_manager_outside_unit_gets_404(db: AsyncSession):
         await get_lead_for_user(
             lead_id=lead_a.id, db=db, current_user=manager_b,
         )
+
+
+# ---------------------------------------------------------------------------
+# Reopen REQUEST workflow (Phase B) — officer xin → manager/admin duyệt
+# ---------------------------------------------------------------------------
+
+async def _make_sts20_lead(db, unit_id, officer_id=None):
+    return await _make_lead(
+        db, unit_id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer_id,
+    )
+
+
+async def test_request_reopen_creates_pending(db: AsyncSession):
+    """Officer xin → tạo LeadReopenRequest pending (unit = lead.unit)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, cb = await request_reopen(db, lead.id, officer, "khách muốn tư vấn lại")
+    if cb:
+        await cb()
+
+    assert req.status == "pending"
+    assert req.requested_by_id == officer.id
+    assert req.unit_id == unit.id
+    assert req.reviewed_by_id is None
+    # Lead chưa đổi (chờ duyệt).
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts20"
+
+
+async def test_request_reopen_duplicate_pending_conflict(db: AsyncSession):
+    """Lead đã có pending → request thứ 2 raise ConflictError."""
+    from app.utils.exceptions import ConflictError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    await request_reopen(db, lead.id, officer, "lần 1 xin mở lại")
+    with pytest.raises(ConflictError):
+        await request_reopen(db, lead.id, officer, "lần 2 xin mở lại")
+
+
+async def test_request_reopen_partial_unique_db_guard(db: AsyncSession):
+    """Belt: partial-unique uq_reopen_one_pending_per_lead chặn 2 pending ở DB
+    (race-safe kể cả khi service-check bị bypass)."""
+    from sqlalchemy.exc import IntegrityError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id)
+
+    db.add(models.LeadReopenRequest(
+        lead_id=lead.id, requested_by_id=officer.id, reason="x" * 5,
+        status="pending", unit_id=unit.id,
+    ))
+    await db.flush()
+    # Pending thứ 2 cùng lead → vi phạm partial-unique. begin_nested để IntegrityError
+    # chỉ rollback savepoint (session vẫn dùng được sau).
+    with pytest.raises(IntegrityError):
+        async with db.begin_nested():
+            db.add(models.LeadReopenRequest(
+                lead_id=lead.id, requested_by_id=officer.id, reason="y" * 5,
+                status="pending", unit_id=unit.id,
+            ))
+            await db.flush()
+
+
+async def test_request_reopen_non_terminal_rejected(db: AsyncSession):
+    """Lead KHÔNG terminal (sts04) → BusinessRuleViolation."""
+    from app.utils.exceptions import BusinessRuleViolation
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_lead(db, unit.id, status="contacted", officer_id=officer.id)
+
+    with pytest.raises(BusinessRuleViolation):
+        await request_reopen(db, lead.id, officer, "xin mở lead chưa đóng")
+
+
+async def test_approve_reopen_opens_lead_and_marks_approved(db: AsyncSession):
+    """Manager duyệt → lead về sts04, request approved, history changed_by=manager,
+    request giữ requested_by=officer (attribution tách bạch)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "khách quay lại")
+    approved, cb = await approve_reopen(db, req.id, manager, note="ok duyệt")
+    if cb:
+        await cb()
+
+    assert approved.status == "approved"
+    assert approved.reviewed_by_id == manager.id
+    assert approved.requested_by_id == officer.id  # attribution giữ officer
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts04"
+    assert lead.consultation_reengaged_at is not None
+
+    hist = (await db.execute(
+        select(models.LeadStatusHistory).where(
+            models.LeadStatusHistory.lead_id == lead.id,
+            models.LeadStatusHistory.new_consultation_status_id == "sts04",
+        )
+    )).scalars().all()
+    assert len(hist) == 1
+    assert hist[0].changed_by_user_id == manager.id  # người duyệt thực hiện reopen
+
+
+async def test_approve_reopen_already_processed_blocked(db: AsyncSession):
+    """Duyệt lại request đã approved → BusinessRuleViolation (re-check pending)."""
+    from app.utils.exceptions import BusinessRuleViolation
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "khách quay lại")
+    await approve_reopen(db, req.id, manager)
+    with pytest.raises(BusinessRuleViolation):
+        await approve_reopen(db, req.id, manager)
+
+
+async def test_reject_reopen_keeps_lead_sts20(db: AsyncSession):
+    """Từ chối → request rejected, lead GIỮ sts20; note bắt buộc."""
+    from app.utils.exceptions import BusinessRuleViolation, ValidationError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "xin mở lại")
+
+    # note rỗng → ValidationError.
+    with pytest.raises(ValidationError):
+        await reject_reopen(db, req.id, manager, note="  ")
+
+    rejected, cb = await reject_reopen(
+        db, req.id, manager, note="lead đã liên hệ nhiều lần không phản hồi",
+    )
+    if cb:
+        await cb()
+    assert rejected.status == "rejected"
+    assert rejected.reviewed_by_id == manager.id
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts20"  # KHÔNG mở lại
+
+    # reject lại request đã xử lý → BusinessRuleViolation.
+    with pytest.raises(BusinessRuleViolation):
+        await reject_reopen(db, req.id, manager, note="thử lại lần nữa")
+
+
+async def test_cancel_reopen_owner_only(db: AsyncSession):
+    """Chỉ chủ sở hữu hủy được; người khác → ResourceNotFoundError (không lộ)."""
+    from app.utils.exceptions import ResourceNotFoundError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    other = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "xin mở lại")
+
+    # Officer khác hủy → 404.
+    with pytest.raises(ResourceNotFoundError):
+        await cancel_reopen(db, req.id, other)
+
+    cancelled = await cancel_reopen(db, req.id, officer)
+    assert cancelled.status == "cancelled"
+
+
+async def test_list_reopen_requests_manager_unit_scoped(db: AsyncSession):
+    """Manager chỉ thấy request của lead trong unit mình; admin thấy tất cả."""
+    await _seed_fsm(db)
+    unit_a = await _make_unit(db)
+    unit_b = await _make_unit(db)
+    off_a = await _make_officer(db, unit_a.id, cap=10)
+    off_b = await _make_officer(db, unit_b.id, cap=10)
+    manager_a = await _make_manager(db, unit_a.id)
+    admin = await _make_admin(db, unit_a.id)
+    lead_a = await _make_sts20_lead(db, unit_a.id, officer_id=off_a.id)
+    lead_b = await _make_sts20_lead(db, unit_b.id, officer_id=off_b.id)
+
+    req_a, _ = await request_reopen(db, lead_a.id, off_a, "unit A xin mở lại")
+    req_b, _ = await request_reopen(db, lead_b.id, off_b, "unit B xin mở lại")
+    await db.flush()
+
+    mgr_list = await list_reopen_requests(db, manager_a, status="pending")
+    mgr_ids = {r.id for r in mgr_list}
+    assert req_a.id in mgr_ids
+    assert req_b.id not in mgr_ids  # ngoài unit -> không thấy
+
+    admin_list = await list_reopen_requests(db, admin, status="pending")
+    admin_ids = {r.id for r in admin_list}
+    assert req_a.id in admin_ids and req_b.id in admin_ids  # admin thấy hết
+
+
+async def test_get_reopen_request_for_user_idor(db: AsyncSession):
+    """Dep IDOR: manager ngoài unit → 404; cùng unit/admin → ok (theo lead.unit)."""
+    from app.core.deps import get_reopen_request_for_user
+    from app.utils.exceptions import ResourceNotFoundError
+
+    await _seed_fsm(db)
+    unit_a = await _make_unit(db)
+    unit_b = await _make_unit(db)
+    off_a = await _make_officer(db, unit_a.id, cap=10)
+    manager_a = await _make_manager(db, unit_a.id)
+    manager_b = await _make_manager(db, unit_b.id)
+    admin = await _make_admin(db, unit_a.id)
+    lead_a = await _make_sts20_lead(db, unit_a.id, officer_id=off_a.id)
+
+    req, _ = await request_reopen(db, lead_a.id, off_a, "xin mở lại")
+
+    # Cùng unit + admin → trả request.
+    assert (await get_reopen_request_for_user(
+        request_id=req.id, db=db, current_user=manager_a)).id == req.id
+    assert (await get_reopen_request_for_user(
+        request_id=req.id, db=db, current_user=admin)).id == req.id
+
+    # Manager ngoài unit → 404.
+    with pytest.raises(ResourceNotFoundError):
+        await get_reopen_request_for_user(
+            request_id=req.id, db=db, current_user=manager_b)
+
+
+async def test_can_request_reopen_flag(db: AsyncSession):
+    """§6.0 Phase B: can_request_reopen=True cho officer ASSIGNED trên sts20; False cho
+    manager (dùng can_reopen) và officer KHÔNG assigned."""
+    from app.services.lead_service import _populate_lead_detail_fields
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    other = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    # Officer assigned → can_request_reopen True, can_reopen False.
+    await _populate_lead_detail_fields(db, lead, officer)
+    assert lead.permissions["can_request_reopen"] is True
+    assert lead.permissions["can_reopen"] is False
+
+    # Manager → can_request_reopen False (dùng can_reopen trực tiếp).
+    await _populate_lead_detail_fields(db, lead, manager)
+    assert lead.permissions["can_request_reopen"] is False
+    assert lead.permissions["can_reopen"] is True
+
+    # Officer KHÔNG assigned → can_request_reopen False.
+    await _populate_lead_detail_fields(db, lead, other)
+    assert lead.permissions["can_request_reopen"] is False
+
+    # #2: đã có pending request → officer assigned cũng KHÔNG xin được nữa (ẩn nút).
+    await request_reopen(db, lead.id, officer, "xin mở lại lần này")
+    await _populate_lead_detail_fields(db, lead, officer)
+    assert lead.permissions["can_request_reopen"] is False
+    assert lead.action_blockers["can_request_reopen"] == "pending_exists"
+
+
+async def test_reopen_lead_auto_resolves_pending_request(db: AsyncSession):
+    """#1: lead mở lại TRỰC TIẾP (Phase A reopen_lead) khi đang có pending request →
+    request được AUTO-approved (không mồ côi 'Chờ duyệt' mãi)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+
+    req, _ = await request_reopen(db, lead.id, officer, "officer xin mở lại")
+    assert req.status == "pending"
+
+    # Manager mở lại TRỰC TIẾP (không qua approve_reopen).
+    reopened, _ = await reopen_lead(db, lead.id, manager, "manager mở thẳng")
+    assert reopened.consultation_status_id == "sts04"
+
+    await db.refresh(req)
+    assert req.status == "approved"  # auto-resolved
+    assert req.reviewed_by_id == manager.id
+    assert "Tự động" in (req.review_note or "")
+
+
+async def test_list_reopen_requests_other_role_empty(db: AsyncSession):
+    """#3 defense-in-depth: role ngoài {admin, manager} → list rỗng (Casbin đã gate
+    endpoint; đây là rào nếu hàm bị tái dùng nơi khác)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_sts20_lead(db, unit.id, officer_id=officer.id)
+    await request_reopen(db, lead.id, officer, "xin mở lại")
+
+    assert await list_reopen_requests(db, officer, status="pending") == []

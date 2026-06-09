@@ -64,6 +64,7 @@ from .routers import (
     kpi_planning,  # ✅ PHASE A6: KPI Planning Engine
     kpi_setup,  # ✅ KPI Setup: Coverage Dashboard
     leads,
+    reopen_requests,  # ✅ Lead reopen Phase B: officer-request inbox
     meta,  # ✅ Public metadata (KPI catalog)
     monitoring,
     notification_consents,  # ✅ PHASE B7: Notification Consent management
@@ -867,6 +868,7 @@ fastapi_app.include_router(zalo_webhooks.router)  # ✅ PHASE C1: Zalo webhooks 
 fastapi_app.include_router(zalo_bot_webhooks.router)  # ✅ v5 Step 18: Zalo Bot webhook (shared-secret header)
 fastapi_app.include_router(zalo_bot_link.router)  # ✅ v5 Step 19: Staff Zalo Bot link API
 fastapi_app.include_router(leads.router, prefix="/api/leads")
+fastapi_app.include_router(reopen_requests.router, prefix="/api/reopen-requests")
 fastapi_app.include_router(collaborators.admin_router, prefix="/api")  # ✅ CTV: Admin/Manager CTV management
 fastapi_app.include_router(collaborators.ctv_router, prefix="/api")  # ✅ CTV: Self-service endpoints
 fastapi_app.include_router(collaborators.public_router, prefix="/api")  # ✅ CTV P2: Public self-registration (no auth)

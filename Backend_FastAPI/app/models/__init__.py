@@ -32,6 +32,7 @@ from .commission import CommissionPolicy, CommissionRecord
 from .lead import AssignmentDecisionLog, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 from .lead_phone import LeadPhoneIdentity
+from .lead_reopen_request import LeadReopenRequest
 
 # Admission models (NEW: Replacement for Application)
 from .admission import AdmissionProfile, AdmissionConfirmationToken
@@ -183,6 +184,7 @@ __all__ = [
     "CRMInteraction",
     "Lead",
     "LeadPhoneIdentity",
+    "LeadReopenRequest",
     "LeadStatusHistory",
     # Admission (NEW)
     "AdmissionProfile",

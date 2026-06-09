@@ -303,6 +303,77 @@ export async function reopenLead(
   return response.data
 }
 
+/** Một yêu cầu mở lại (Phase B) — officer xin, manager/admin duyệt. */
+export interface ReopenRequestItem {
+  id: number
+  lead_id: number
+  requested_by_id: number
+  reason: string
+  status: "pending" | "approved" | "rejected" | "cancelled"
+  reviewed_by_id: number | null
+  review_note: string | null
+  created_at: string
+  reviewed_at: string | null
+  unit_id: number
+  lead_name: string | null
+  requested_by_name: string | null
+  reviewed_by_name: string | null
+}
+
+/** Officer XIN mở lại lead (chờ duyệt). */
+export async function createReopenRequest(
+  leadId: number,
+  data: { reason: string }
+): Promise<ReopenRequestItem> {
+  const r = await api.post<ReopenRequestItem>(
+    `/api/leads/${leadId}/reopen-requests`,
+    data
+  )
+  return r.data
+}
+
+/** Inbox duyệt (manager/admin) — IDOR-scoped ở backend. */
+export async function listReopenRequests(
+  status?: string
+): Promise<ReopenRequestItem[]> {
+  const r = await api.get<ReopenRequestItem[]>("/api/reopen-requests", {
+    params: status ? { status } : undefined,
+  })
+  return r.data
+}
+
+export async function approveReopenRequest(
+  requestId: number,
+  data?: { note?: string }
+): Promise<ReopenRequestItem> {
+  const r = await api.post<ReopenRequestItem>(
+    `/api/reopen-requests/${requestId}/approve`,
+    data ?? {}
+  )
+  return r.data
+}
+
+export async function rejectReopenRequest(
+  requestId: number,
+  data: { note: string }
+): Promise<ReopenRequestItem> {
+  const r = await api.post<ReopenRequestItem>(
+    `/api/reopen-requests/${requestId}/reject`,
+    data
+  )
+  return r.data
+}
+
+/** Officer hủy yêu cầu pending của chính mình. */
+export async function cancelReopenRequest(
+  requestId: number
+): Promise<ReopenRequestItem> {
+  const r = await api.delete<ReopenRequestItem>(
+    `/api/reopen-requests/${requestId}`
+  )
+  return r.data
+}
+
 /**
  * Update consultation (admin: all, officer: most recent only)
  *
@@ -611,6 +682,13 @@ export const leadsApi = {
 
   // Reopen (Phase A)
   reopenLead,
+
+  // Reopen request (Phase B)
+  createReopenRequest,
+  listReopenRequests,
+  approveReopenRequest,
+  rejectReopenRequest,
+  cancelReopenRequest,
 
   // Data Access
   getLeadTimeline,

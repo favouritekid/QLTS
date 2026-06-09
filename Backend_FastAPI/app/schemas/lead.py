@@ -448,11 +448,13 @@ class LeadDetail(Lead):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LeadReopenRequest(BaseModel):
-    """Body cho POST /leads/{lead_id}/reopen — mở lại lead đã ngừng tư vấn.
+class ReopenReasonBody(BaseModel):
+    """Body ``{reason}`` cho mở lại / xin mở lại lead đã ngừng tư vấn.
 
-    Chỉ manager/admin (role-gate ở backend Casbin + IDOR). ``reason`` bắt buộc, lưu
-    nguyên văn để audit. Xem Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
+    Dùng cho POST /leads/{id}/reopen (Phase A, manager/admin) và
+    POST /leads/{id}/reopen-requests (Phase B, officer xin). Đổi tên từ
+    ``LeadReopenRequest`` để KHÔNG nhầm với model ``models.LeadReopenRequest`` (bảng).
+    ``reason`` bắt buộc, lưu nguyên văn để audit.
     """
     # Strip whitespace TRƯỚC khi đếm min_length → "     " (5 dấu cách) bị chặn ngay ở
     # Pydantic (422) thay vì lọt tới service rồi mới reject (400) — nhất quán mã lỗi.
@@ -464,6 +466,36 @@ class LeadReopenRequest(BaseModel):
         max_length=500,
         description="Lý do mở lại (bắt buộc, tối thiểu 5 ký tự).",
     )
+
+
+class ReopenReviewBody(BaseModel):
+    """Body approve/reject reopen-request. ``note`` optional khi duyệt, BẮT BUỘC khi
+    từ chối (validate ở service)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: Optional[str] = Field(
+        None, max_length=500, description="Ghi chú duyệt / lý do từ chối."
+    )
+
+
+class LeadReopenRequestOut(BaseModel):
+    """Response 1 yêu cầu mở lại (inbox manager). Tên denormalized populate ở router."""
+    id: int
+    lead_id: int
+    requested_by_id: int
+    reason: str
+    status: str
+    reviewed_by_id: Optional[int] = None
+    review_note: Optional[str] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    unit_id: int
+    # Denormalized cho hiển thị inbox (router set từ selectinload):
+    lead_name: Optional[str] = None
+    requested_by_name: Optional[str] = None
+    reviewed_by_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LeadsSummary(BaseModel):

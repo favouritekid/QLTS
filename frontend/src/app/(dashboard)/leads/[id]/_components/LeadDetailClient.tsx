@@ -100,6 +100,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
+  const [requestReopenDialogOpen, setRequestReopenDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
 
@@ -367,6 +368,18 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 Mở lại tư vấn
               </Button>
             )}
+            {/* Xin mở lại — officer assigned (cờ can_request_reopen). Khác can_reopen
+                (manager/admin mở trực tiếp): officer chỉ GỬI yêu cầu chờ duyệt. */}
+            {lead.permissions?.can_request_reopen && (
+              <Button
+                variant="outline"
+                className="rounded-xl border-amber-300 text-amber-700 hover:bg-amber-50"
+                onClick={() => setRequestReopenDialogOpen(true)}
+              >
+                <RotateCcw className="mr-1.5 h-4 w-4" />
+                Xin mở lại
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="rounded-xl" aria-label="Tùy chọn khác">
@@ -530,6 +543,13 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
       <ReopenLeadDialog
         open={reopenDialogOpen}
         onOpenChange={setReopenDialogOpen}
+        lead={lead}
+      />
+
+      <ReopenLeadDialog
+        mode="request"
+        open={requestReopenDialogOpen}
+        onOpenChange={setRequestReopenDialogOpen}
         lead={lead}
       />
 
