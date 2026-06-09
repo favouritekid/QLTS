@@ -27,6 +27,7 @@ from app.services.fsm_engine import (
     execute_system_transition,
     get_next_statuses_for_lead,
 )
+from app.services.lead_reopen_service import reopen_lead
 from app.tasks.sla_tasks import close_stale_rejected_leads
 
 pytestmark = pytest.mark.asyncio
@@ -970,3 +971,297 @@ async def test_backfill_script_closes_only_stale_and_is_idempotent(db: AsyncSess
 
     # Idempotent: re-run matches zero (moved leads are no longer sts04).
     assert await count_stale_sts04(db, 30) == 0
+
+
+# ---------------------------------------------------------------------------
+# Reopen workflow (Phase A) — mở lại lead consultation-terminal (sts20 → sts04)
+# ---------------------------------------------------------------------------
+
+async def test_reopen_sts20_to_sts04_sets_reengaged_and_history(db: AsyncSession):
+    """Manager mở lại lead sts20 → sts04: derive status (KHÔNG hardcode), set mốc
+    re-engage, ghi history (changed_by=reviewer, reason='reopen:')."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id,
+    )
+    v_before = lead.version
+
+    reopened, cb = await reopen_lead(
+        db, lead.id, reviewer=manager, reason="Khách đổi ý, muốn tư vấn lại",
+    )
+    if cb:
+        await cb()
+
+    assert reopened.consultation_status_id == "sts04"
+    assert reopened.pipeline_stage_id == "stg02"
+    # status suy từ sts04 qua sync_lead_status (Rule 4: stg02 non-final) -> 'contacted'.
+    assert reopened.status == "contacted"
+    assert reopened.status != "rejected"  # đã rời khỏi trạng thái give-up
+    assert reopened.consultation_reengaged_at is not None
+    # #1: reopen reset đồng hồ SLA (last_consultation_at = now == reengaged_at) để beat
+    # KHÔNG đóng lại ngay.
+    assert reopened.last_consultation_at == reopened.consultation_reengaged_at
+    # #3: bump version (optimistic-lock) — mọi thay đổi trạng thái phải tăng version.
+    assert reopened.version == (v_before or 1) + 1
+    # assigned_officer giữ nguyên (reopen KHÔNG đụng assignment) — C1.
+    assert reopened.assigned_officer_id == officer.id
+
+    await db.flush()
+    hist = (await db.execute(
+        select(models.LeadStatusHistory)
+        .where(
+            models.LeadStatusHistory.lead_id == lead.id,
+            models.LeadStatusHistory.new_consultation_status_id == "sts04",
+        )
+    )).scalars().all()
+    assert len(hist) == 1
+    assert hist[0].old_consultation_status_id == "sts20"
+    assert hist[0].changed_by_user_id == manager.id
+    assert "reopen:" in (hist[0].reason or "")
+
+
+async def test_reopen_rejects_non_terminal_lead(db: AsyncSession):
+    """Lead KHÔNG ở trạng thái cuối phase tư vấn (sts04) → BusinessRuleViolation."""
+    from app.utils.exceptions import BusinessRuleViolation
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_lead(db, unit.id, status="contacted")  # sts04, non-final
+
+    with pytest.raises(BusinessRuleViolation):
+        await reopen_lead(db, lead.id, reviewer=manager, reason="thử mở lại")
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts04"  # unchanged
+
+
+async def test_reopen_rejects_deleted_lead(db: AsyncSession):
+    """Lead sts20 đã soft-delete → không mở lại được (BusinessRuleViolation)."""
+    from app.utils.exceptions import BusinessRuleViolation
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+    )
+    lead.deleted_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    with pytest.raises(BusinessRuleViolation):
+        await reopen_lead(db, lead.id, reviewer=manager, reason="mở lại lead đã xóa")
+
+
+async def test_reopen_requires_reason(db: AsyncSession):
+    """Thiếu lý do (hoặc quá ngắn) → ValidationError."""
+    from app.utils.exceptions import ValidationError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+    )
+
+    with pytest.raises(ValidationError):
+        await reopen_lead(db, lead.id, reviewer=manager, reason="  ")
+
+
+async def test_reopen_then_beat_can_close_again(db: AsyncSession):
+    """⭐ Lõi §3.2: sau reopen (reengaged_at set), beat auto-close ĐÓNG LẠI ĐƯỢC dù
+    đã có history sts20 cũ — RULE #13.2 'since last re-engage' chỉ tính history sau mốc.
+    Audit đủ CẢ 2 lần give-up (không xóa history nào)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    now = datetime.now(timezone.utc)
+
+    # Lead đang sts20, ĐÃ give-up 1 lần (history sts20 cũ, trước mốc reopen).
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id, last_consultation_at=now - timedelta(days=40),
+    )
+    db.add(models.LeadStatusHistory(
+        lead_id=lead.id, old_status="contacted", new_status="rejected",
+        old_consultation_status_id="sts04", new_consultation_status_id="sts20",
+        changed_by_user_id=None, reason="prior give-up",
+        changed_at=now - timedelta(days=50),
+    ))
+    await db.flush()
+
+    # Mở lại -> sts04 + reengaged_at ~ now.
+    reopened, cb = await reopen_lead(
+        db, lead.id, reviewer=manager, reason="khách quay lại hỏi học phí",
+    )
+    if cb:
+        await cb()
+    assert reopened.consultation_status_id == "sts04"
+    assert reopened.consultation_reengaged_at is not None
+
+    # Reopen reset last_consultation_at = now (#1). Mô phỏng officer tư vấn lại rồi im
+    # lặng tiếp quá SLA: đẩy last_consultation_at về quá khứ SAU reopen -> stale LẠI.
+    lead.last_consultation_at = now - timedelta(days=40)
+    await db.flush()
+
+    # Stale lại -> beat đóng LẠI được nhờ RULE #13.2 'since last re-engage'
+    # (history sts20 cũ changed_at < reengaged_at bị bỏ qua).
+    cutoff = now - timedelta(days=30)
+    result = await close_stale_rejected_leads(db, cutoff=cutoff, days=15)
+    assert result["transitioned"] == 1  # #13.2 KHÔNG còn skip (history cũ < reengaged)
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts20"
+
+    # Audit append-only: CẢ 2 history give-up tồn tại (không mất lớp nào).
+    sts20_hist = (await db.execute(
+        select(models.LeadStatusHistory).where(
+            models.LeadStatusHistory.lead_id == lead.id,
+            models.LeadStatusHistory.new_consultation_status_id == "sts20",
+        )
+    )).scalars().all()
+    assert len(sts20_hist) == 2
+
+
+async def test_reopen_resets_sla_clock_so_beat_does_not_immediately_reclose(
+    db: AsyncSession,
+):
+    """#1: reopen reset last_consultation_at = now → lead KHÔNG còn stale → beat
+    auto-close KHÔNG đóng lại NGAY sau reopen (cho officer cửa sổ SLA mới)."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    now = datetime.now(timezone.utc)
+
+    # Lead give-up tồn đọng đã rất lâu (40 ngày).
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id, last_consultation_at=now - timedelta(days=40),
+    )
+
+    reopened, cb = await reopen_lead(
+        db, lead.id, reviewer=manager, reason="khách quay lại, hẹn gọi tuần sau",
+    )
+    if cb:
+        await cb()
+
+    # Beat chạy NGAY (cutoff 30d). Vì last_consultation_at đã = now, lead KHÔNG stale.
+    cutoff = now - timedelta(days=30)
+    result = await close_stale_rejected_leads(db, cutoff=cutoff, days=15)
+    assert result["checked"] == 0  # không khớp stale-predicate
+    assert result["transitioned"] == 0
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts04"  # vẫn mở, không bị đóng lại
+
+
+async def test_can_reopen_flag_thin_client(db: AsyncSession):
+    """§6.0 permission contract: can_reopen=True cho manager/admin trên sts20; False +
+    blocker not_terminal (sts04) / forbidden (officer)."""
+    from app.services.lead_service import _populate_lead_detail_fields
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    officer = await _make_officer(db, unit.id, cap=10)
+    sts20_lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id,
+    )
+    sts04_lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts04", status="contacted",
+        officer_id=officer.id,
+    )
+
+    # Manager trên sts20 -> can_reopen True, có trong available_actions.
+    await _populate_lead_detail_fields(db, sts20_lead, manager)
+    assert sts20_lead.permissions["can_reopen"] is True
+    assert "can_reopen" in sts20_lead.available_actions
+
+    # Manager trên sts04 -> False + blocker not_terminal.
+    await _populate_lead_detail_fields(db, sts04_lead, manager)
+    assert sts04_lead.permissions["can_reopen"] is False
+    assert sts04_lead.action_blockers["can_reopen"] == "not_terminal"
+
+    # Officer trên sts20 -> False + blocker forbidden (role-gate).
+    await _populate_lead_detail_fields(db, sts20_lead, officer)
+    assert sts20_lead.permissions["can_reopen"] is False
+    assert sts20_lead.action_blockers["can_reopen"] == "forbidden"
+
+
+async def test_b2_block_phone_change_on_terminal_lead(db: AsyncSession):
+    """§9.1 B-2: officer KHÔNG đổi được phone của lead sts20 (giữ SĐT khóa → chống
+    'reopen lậu'); sau reopen (sts04) đổi được."""
+    from app.services.lead_service import update_lead
+    from app.utils.exceptions import BusinessRuleViolation
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id,
+    )
+
+    # Officer assigned đổi phone lead terminal -> bị chặn.
+    with pytest.raises(BusinessRuleViolation):
+        await update_lead(
+            db, lead.id, schemas.LeadUpdate(phone="0988111222"),
+            updated_by=officer,
+        )
+
+    # Mở lại -> sts04, lock gỡ -> đổi phone OK.
+    await reopen_lead(db, lead.id, reviewer=manager, reason="khách muốn tiếp tục")
+    updated, _cb = await update_lead(
+        db, lead.id, schemas.LeadUpdate(phone="0988111222"), updated_by=officer,
+    )
+    assert updated.phone == "0988111222"
+
+
+async def test_b1_create_lead_duplicate_phone_terminal_suggests_reopen(
+    db: AsyncSession, monkeypatch,
+):
+    """§9.1 B-1′: tạo lead trùng SĐT của một lead sts20 → message gợi ý MỞ LẠI."""
+    from app.services.lead_service import create_lead
+    from app.utils.exceptions import DuplicateResourceError
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    admin = await _make_admin(db, unit.id)
+    existing = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+    )
+    dup_phone = existing.phone
+
+    import app.celery_utils as cu
+    monkeypatch.setattr(cu, "process_automatic_lead_assignment_task", MagicMock())
+
+    lead_in = schemas.LeadCreate(
+        full_name="Trùng SĐT", phone=dup_phone, source="website", unit_id=unit.id,
+    )
+    with pytest.raises(DuplicateResourceError) as exc:
+        await create_lead(db, lead_in, created_by=admin)
+    assert "MỞ LẠI" in str(exc.value) or "reopen" in str(exc.value).lower()
+
+
+async def test_reopen_idor_manager_outside_unit_gets_404(db: AsyncSession):
+    """IDOR: manager mở lead ngoài unit → ResourceNotFoundError (404, không 403)."""
+    from app.core.deps import get_lead_for_user
+    from app.utils.exceptions import ResourceNotFoundError
+
+    await _seed_fsm(db)
+    unit_a = await _make_unit(db)
+    unit_b = await _make_unit(db)
+    manager_b = await _make_manager(db, unit_b.id)
+    lead_a = await _make_lead(
+        db, unit_a.id, consultation_status_id="sts20", status="rejected",
+    )
+
+    with pytest.raises(ResourceNotFoundError):
+        await get_lead_for_user(
+            lead_id=lead_a.id, db=db, current_user=manager_b,
+        )
