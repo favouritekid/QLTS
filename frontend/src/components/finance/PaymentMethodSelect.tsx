@@ -170,7 +170,7 @@ export function PaymentMethodSelect({
                   {option.is_online ? (
                     <>
                       <Wifi className="h-3 w-3 mr-1" />
-                      Online
+                      Trực tuyến
                     </>
                   ) : (
                     <>

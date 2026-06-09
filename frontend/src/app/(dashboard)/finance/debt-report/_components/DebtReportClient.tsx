@@ -102,10 +102,10 @@ export function DebtReportClient() {
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
             <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-destructive" />
-            <p className="font-medium text-destructive">Khong the tai bao cao cong no</p>
+            <p className="font-medium text-destructive">Không thể tải báo cáo công nợ</p>
             <Button variant="outline" className="mt-4" onClick={() => refetch()}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              Thu lai
+              Thử lại
             </Button>
           </CardContent>
         </Card>
@@ -117,13 +117,13 @@ export function DebtReportClient() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Bao cao cong no</h1>
-          <p className="text-muted-foreground">Tong hop theo ho so tuyen sinh</p>
+          <h1 className="text-2xl font-bold tracking-tight">Báo cáo công nợ</h1>
+          <p className="text-muted-foreground">Tổng hợp theo hồ sơ tuyển sinh</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Lam moi
+            Làm mới
           </Button>
           <Button variant="outline" onClick={exportCsv} disabled={!data?.items?.length}>
             <Download className="mr-2 h-4 w-4" />
@@ -133,55 +133,55 @@ export function DebtReportClient() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <SummaryCard title="Ho so no" value={data?.summary.debtor_count ?? 0} />
-        <SummaryCard title="Du thu" amount={data?.summary.total_expected ?? "0"} />
-        <SummaryCard title="Da thu" amount={data?.summary.total_paid ?? "0"} />
-        <SummaryCard title="Con lai" amount={data?.summary.total_outstanding ?? "0"} emphasis />
+        <SummaryCard title="Hồ sơ nợ" value={data?.summary.debtor_count ?? 0} />
+        <SummaryCard title="Dự thu" amount={data?.summary.total_expected ?? "0"} />
+        <SummaryCard title="Đã thu" amount={data?.summary.total_paid ?? "0"} />
+        <SummaryCard title="Còn lại" amount={data?.summary.total_outstanding ?? "0"} emphasis />
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Filter className="h-5 w-5" />
-            Bo loc
+            Bộ lọc
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Input
             inputMode="numeric"
-            placeholder="Nam hoc"
+            placeholder="Năm học"
             value={academicYear}
             onChange={(event) => setAcademicYear(event.target.value.replace(/\D/g, ""))}
           />
           <Input
             inputMode="numeric"
-            placeholder="Dot tuyen sinh"
+            placeholder="Đợt tuyển sinh"
             value={roundId}
             onChange={(event) => setRoundId(event.target.value.replace(/\D/g, ""))}
           />
           <Select value={feeType} onValueChange={(value) => setFeeType(value as FeeType | "all")}>
             <SelectTrigger>
-              <SelectValue placeholder="Loai phi" />
+              <SelectValue placeholder="Loại phí" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Tat ca phi</SelectItem>
-              <SelectItem value="application">Xet tuyen</SelectItem>
-              <SelectItem value="tuition">Hoc phi</SelectItem>
-              <SelectItem value="enrollment">Nhap hoc</SelectItem>
-              <SelectItem value="insurance">Bao hiem</SelectItem>
-              <SelectItem value="dormitory">Ky tuc xa</SelectItem>
-              <SelectItem value="other">Khac</SelectItem>
+              <SelectItem value="all">Tất cả phí</SelectItem>
+              <SelectItem value="application">Xét tuyển</SelectItem>
+              <SelectItem value="tuition">Học phí</SelectItem>
+              <SelectItem value="enrollment">Nhập học</SelectItem>
+              <SelectItem value="insurance">Bảo hiểm</SelectItem>
+              <SelectItem value="dormitory">Ký túc xá</SelectItem>
+              <SelectItem value="other">Khác</SelectItem>
             </SelectContent>
           </Select>
           <Select value={aging} onValueChange={(value) => setAging(value as DebtAgingBucket | "all")}>
             <SelectTrigger>
-              <SelectValue placeholder="Tuoi no" />
+              <SelectValue placeholder="Tuổi nợ" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Tat ca tuoi no</SelectItem>
-              <SelectItem value="0_30">0-30 ngay</SelectItem>
-              <SelectItem value="31_60">31-60 ngay</SelectItem>
-              <SelectItem value="over_60">Tren 60 ngay</SelectItem>
+              <SelectItem value="all">Tất cả tuổi nợ</SelectItem>
+              <SelectItem value="0_30">0-30 ngày</SelectItem>
+              <SelectItem value="31_60">31-60 ngày</SelectItem>
+              <SelectItem value="over_60">Trên 60 ngày</SelectItem>
             </SelectContent>
           </Select>
         </CardContent>
@@ -192,19 +192,19 @@ export function DebtReportClient() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Ho so</TableHead>
-                <TableHead>Don vi</TableHead>
-                <TableHead>Loai phi</TableHead>
-                <TableHead className="text-right">Con lai</TableHead>
-                <TableHead className="text-right">Ngay qua han</TableHead>
-                <TableHead>Bucket</TableHead>
+                <TableHead>Hồ sơ</TableHead>
+                <TableHead>Đơn vị</TableHead>
+                <TableHead>Loại phí</TableHead>
+                <TableHead className="text-right">Còn lại</TableHead>
+                <TableHead className="text-right">Ngày quá hạn</TableHead>
+                <TableHead>Nhóm tuổi nợ</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Dang tai...
+                    Đang tải...
                   </TableCell>
                 </TableRow>
               ) : data?.items.length ? (
@@ -230,7 +230,7 @@ export function DebtReportClient() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Khong co du lieu
+                    Không có dữ liệu
                   </TableCell>
                 </TableRow>
               )}

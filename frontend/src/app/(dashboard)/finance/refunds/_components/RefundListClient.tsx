@@ -41,10 +41,10 @@ import {
 import type { RefundRequest, RefundStatus } from "@/types/finance.types"
 
 const STATUS_LABELS: Record<RefundStatus, string> = {
-  pending: "Cho duyet",
-  approved: "Da duyet",
-  rejected: "Tu choi",
-  refunded: "Da hoan",
+  pending: "Chờ duyệt",
+  approved: "Đã duyệt",
+  rejected: "Từ chối",
+  refunded: "Đã hoàn",
 }
 
 export function RefundListClient() {
@@ -101,10 +101,10 @@ export function RefundListClient() {
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
             <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-destructive" />
-            <p className="font-medium text-destructive">Khong the tai danh sach hoan phi</p>
+            <p className="font-medium text-destructive">Không thể tải danh sách hoàn phí</p>
             <Button variant="outline" className="mt-4" onClick={() => refetch()}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              Thu lai
+              Thử lại
             </Button>
           </CardContent>
         </Card>
@@ -116,18 +116,18 @@ export function RefundListClient() {
     <div className="p-4 sm:p-6 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Hoan phi</h1>
-          <p className="text-muted-foreground">Yeu cau, phe duyet va xu ly hoan phi</p>
+          <h1 className="text-2xl font-bold tracking-tight">Hoàn phí</h1>
+          <p className="text-muted-foreground">Yêu cầu, phê duyệt và xử lý hoàn phí</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => refetch()}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Lam moi
+            Làm mới
           </Button>
           {data?.can_create && (
             <Button onClick={() => setCreateOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
-              Tao yeu cau
+              Tạo yêu cầu
             </Button>
           )}
         </div>
@@ -136,14 +136,14 @@ export function RefundListClient() {
       <div className="flex max-w-xs">
         <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as RefundStatus | "all")}>
           <SelectTrigger>
-            <SelectValue placeholder="Trang thai" />
+            <SelectValue placeholder="Trạng thái" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="pending">Cho duyet</SelectItem>
-            <SelectItem value="all">Tat ca</SelectItem>
-            <SelectItem value="approved">Da duyet</SelectItem>
-            <SelectItem value="rejected">Tu choi</SelectItem>
-            <SelectItem value="refunded">Da hoan</SelectItem>
+            <SelectItem value="pending">Chờ duyệt</SelectItem>
+            <SelectItem value="all">Tất cả</SelectItem>
+            <SelectItem value="approved">Đã duyệt</SelectItem>
+            <SelectItem value="rejected">Từ chối</SelectItem>
+            <SelectItem value="refunded">Đã hoàn</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -153,19 +153,19 @@ export function RefundListClient() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Refund</TableHead>
-                <TableHead>Payment</TableHead>
-                <TableHead className="text-right">So tien</TableHead>
-                <TableHead>Trang thai</TableHead>
-                <TableHead>Ngay tao</TableHead>
-                <TableHead className="text-right">Thao tac</TableHead>
+                <TableHead>Hoàn phí</TableHead>
+                <TableHead>Thanh toán</TableHead>
+                <TableHead className="text-right">Số tiền</TableHead>
+                <TableHead>Trạng thái</TableHead>
+                <TableHead>Ngày tạo</TableHead>
+                <TableHead className="text-right">Thao tác</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Dang tai...
+                    Đang tải...
                   </TableCell>
                 </TableRow>
               ) : data?.items.length ? (
@@ -190,7 +190,7 @@ export function RefundListClient() {
                         {refund.can_approve && (
                           <Button size="sm" variant="outline" onClick={() => approveRefund.mutate(refund.id)}>
                             <CheckCircle className="mr-2 h-4 w-4" />
-                            Duyet
+                            Duyệt
                           </Button>
                         )}
                         {refund.can_reject && (
@@ -200,13 +200,13 @@ export function RefundListClient() {
                             onClick={() => setAction({ type: "reject", refund })}
                           >
                             <XCircle className="mr-2 h-4 w-4" />
-                            Tu choi
+                            Từ chối
                           </Button>
                         )}
                         {refund.can_process && (
                           <Button size="sm" onClick={() => setAction({ type: "process", refund })}>
                             <RotateCcw className="mr-2 h-4 w-4" />
-                            Xu ly
+                            Xử lý
                           </Button>
                         )}
                       </div>
@@ -216,7 +216,7 @@ export function RefundListClient() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
-                    Khong co du lieu
+                    Không có dữ liệu
                   </TableCell>
                 </TableRow>
               )}
@@ -228,24 +228,24 @@ export function RefundListClient() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Tao yeu cau hoan phi</DialogTitle>
+            <DialogTitle>Tạo yêu cầu hoàn phí</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <Field label="Payment ID">
+            <Field label="Mã thanh toán">
               <Input
                 inputMode="numeric"
                 value={createForm.payment_id}
                 onChange={(event) => setCreateForm((prev) => ({ ...prev, payment_id: event.target.value.replace(/\D/g, "") }))}
               />
             </Field>
-            <Field label="So tien">
+            <Field label="Số tiền">
               <Input
                 inputMode="decimal"
                 value={createForm.amount}
                 onChange={(event) => setCreateForm((prev) => ({ ...prev, amount: event.target.value }))}
               />
             </Field>
-            <Field label="Ly do">
+            <Field label="Lý do">
               <Textarea
                 value={createForm.reason}
                 onChange={(event) => setCreateForm((prev) => ({ ...prev, reason: event.target.value }))}
@@ -253,12 +253,12 @@ export function RefundListClient() {
             </Field>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Huy</Button>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Hủy</Button>
             <Button
               onClick={handleCreate}
               disabled={!createForm.payment_id || !createForm.amount || !createForm.reason || createRefund.isPending}
             >
-              Tao
+              Tạo
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -267,13 +267,13 @@ export function RefundListClient() {
       <Dialog open={action?.type === "reject"} onOpenChange={(open) => !open && setAction(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Tu choi hoan phi</DialogTitle>
+            <DialogTitle>Từ chối hoàn phí</DialogTitle>
           </DialogHeader>
           <Textarea value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAction(null)}>Huy</Button>
+            <Button variant="outline" onClick={() => setAction(null)}>Hủy</Button>
             <Button variant="destructive" onClick={handleReject} disabled={!rejectionReason || rejectRefund.isPending}>
-              Tu choi
+              Từ chối
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -282,15 +282,15 @@ export function RefundListClient() {
       <Dialog open={action?.type === "process"} onOpenChange={(open) => !open && setAction(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Xu ly hoan phi</DialogTitle>
+            <DialogTitle>Xử lý hoàn phí</DialogTitle>
           </DialogHeader>
-          <Field label="Ma tham chieu">
+          <Field label="Mã tham chiếu">
             <Input value={refundReference} onChange={(event) => setRefundReference(event.target.value)} />
           </Field>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAction(null)}>Huy</Button>
+            <Button variant="outline" onClick={() => setAction(null)}>Hủy</Button>
             <Button onClick={handleProcess} disabled={!refundReference || processRefund.isPending}>
-              Xu ly
+              Xử lý
             </Button>
           </DialogFooter>
         </DialogContent>

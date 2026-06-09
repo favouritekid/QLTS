@@ -51,12 +51,12 @@ export function useCreateRefund() {
   return useMutation<RefundRequest, AxiosError<ApiErrorResponse>, RefundCreateRequest>({
     mutationFn: refundsApi.createRefund,
     onSuccess: () => {
-      toast.success("Da tao yeu cau hoan phi")
+      toast.success("Đã tạo yêu cầu hoàn phí")
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the tao yeu cau hoan phi"))
+      toast.error(getErrorMessage(error, "Không thể tạo yêu cầu hoàn phí"))
     },
   })
 }
@@ -66,12 +66,12 @@ export function useApproveRefund() {
   return useMutation<RefundRequest, AxiosError<ApiErrorResponse>, number>({
     mutationFn: refundsApi.approveRefund,
     onSuccess: (refund) => {
-      toast.success("Da phe duyet hoan phi")
+      toast.success("Đã phê duyệt hoàn phí")
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: refundsKeys.detail(refund.id) })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the phe duyet hoan phi"))
+      toast.error(getErrorMessage(error, "Không thể phê duyệt hoàn phí"))
     },
   })
 }
@@ -85,12 +85,12 @@ export function useRejectRefund() {
   >({
     mutationFn: ({ id, data }) => refundsApi.rejectRefund(id, data),
     onSuccess: (refund) => {
-      toast.success("Da tu choi hoan phi")
+      toast.success("Đã từ chối hoàn phí")
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: refundsKeys.detail(refund.id) })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the tu choi hoan phi"))
+      toast.error(getErrorMessage(error, "Không thể từ chối hoàn phí"))
     },
   })
 }
@@ -104,7 +104,7 @@ export function useProcessRefund() {
   >({
     mutationFn: ({ id, data }) => refundsApi.processRefund(id, data),
     onSuccess: (refund) => {
-      toast.success("Da xu ly hoan phi")
+      toast.success("Đã xử lý hoàn phí")
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: refundsKeys.detail(refund.id) })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
@@ -113,7 +113,7 @@ export function useProcessRefund() {
       queryClient.invalidateQueries({ queryKey: ["overpayments"] })
     },
     onError: (error) => {
-      toast.error(getErrorMessage(error, "Khong the xu ly hoan phi"))
+      toast.error(getErrorMessage(error, "Không thể xử lý hoàn phí"))
     },
   })
 }
