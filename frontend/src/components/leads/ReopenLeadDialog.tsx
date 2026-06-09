@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Loader2, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -43,12 +43,9 @@ export function ReopenLeadDialog({
   const [reason, setReason] = useState("")
   const mutation = useReopenLead()
 
-  // Dialog luôn được mount (không key theo open) → xóa lý do cũ mỗi lần mở để không
-  // hiện lại text của lần submit lỗi trước nếu mở lại mà không qua bước đóng.
-  useEffect(() => {
-    if (open) setReason("")
-  }, [open])
-
+  // reason được xóa khi đóng dialog (onOpenChange !next → reset). Nút "Mở lại" chỉ mở
+  // dialog từ trạng thái đã đóng nên mỗi lần mở reason luôn rỗng — không cần effect
+  // reset-on-open (vi phạm rule setState-trong-effect).
   const reasonTrimmed = reason.trim()
   const reasonValid =
     reasonTrimmed.length >= REASON_MIN && reasonTrimmed.length <= REASON_MAX
