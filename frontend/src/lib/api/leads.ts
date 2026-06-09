@@ -287,6 +287,23 @@ export async function addConsultation(
 }
 
 /**
+ * Reopen a consultation-terminal lead (sts20 → sts04). Manager/admin only.
+ *
+ * Backend re-opens the lead, sets the re-engage marker so the SLA beat can
+ * auto-close it again later. Returns the updated lead.
+ *
+ * @throws {AxiosError} 400 if lead not in a consultation-terminal state,
+ *   404 if lead not found / out of IDOR scope, 403 if not allowed (Casbin).
+ */
+export async function reopenLead(
+  leadId: number,
+  data: { reason: string }
+): Promise<Lead> {
+  const response = await api.post<Lead>(`/api/leads/${leadId}/reopen`, data)
+  return response.data
+}
+
+/**
  * Update consultation (admin: all, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
@@ -591,6 +608,9 @@ export const leadsApi = {
   updateConsultation,
   deleteConsultation,
   restoreConsultation,
+
+  // Reopen (Phase A)
+  reopenLead,
 
   // Data Access
   getLeadTimeline,

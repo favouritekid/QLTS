@@ -25,6 +25,7 @@ import {
   Target,
   FileText,
   GraduationCap,
+  RotateCcw,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,7 @@ import { useWorkflowContext } from "@/hooks/useWorkflowContext";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
+import { ReopenLeadDialog } from "@/components/leads/ReopenLeadDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import { ActionBanner } from "@/components/leads/ActionBanner";
@@ -97,6 +99,7 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
+  const [reopenDialogOpen, setReopenDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
 
@@ -351,6 +354,19 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 </TooltipProvider>
               )
             )}
+            {/* Mở lại tư vấn — hiện THUẦN theo cờ permissions.can_reopen từ API
+                (Thin Client: không đọc user.role). Backend bật cờ cho manager/admin
+                khi lead ở trạng thái cuối phase tư vấn (sts20). */}
+            {lead.permissions?.can_reopen && (
+              <Button
+                variant="default"
+                className="bg-amber-600 hover:bg-amber-700 rounded-xl shadow-lg shadow-amber-200"
+                onClick={() => setReopenDialogOpen(true)}
+              >
+                <RotateCcw className="mr-1.5 h-4 w-4" />
+                Mở lại tư vấn
+              </Button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="rounded-xl" aria-label="Tùy chọn khác">
@@ -508,6 +524,12 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
       <ReassignLeadDialog
         open={reassignDialogOpen}
         onOpenChange={setReassignDialogOpen}
+        lead={lead}
+      />
+
+      <ReopenLeadDialog
+        open={reopenDialogOpen}
+        onOpenChange={setReopenDialogOpen}
         lead={lead}
       />
 
