@@ -14,34 +14,52 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { useReopenLead } from "@/hooks/useLeads"
+import { useReopenLead, useCreateReopenRequest } from "@/hooks/useLeads"
 import type { LeadDetail } from "@/types/lead.types"
 
 interface ReopenLeadDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   lead: LeadDetail
+  /** "reopen": manager/admin mở trực tiếp; "request": officer XIN (chờ duyệt). */
+  mode?: "reopen" | "request"
 }
 
 // Mirror backend LeadReopenRequest.reason (min_length=5, max_length=500).
 const REASON_MIN = 5
 const REASON_MAX = 500
 
+const COPY = {
+  reopen: {
+    title: "Mở lại tư vấn",
+    desc: "Mở lại sẽ đưa lead về luồng tư vấn để tiếp tục chăm sóc.",
+    label: "Lý do mở lại",
+    submit: "Mở lại tư vấn",
+  },
+  request: {
+    title: "Xin mở lại tư vấn",
+    desc: "Yêu cầu sẽ được gửi tới quản lý duyệt trước khi lead được mở lại.",
+    label: "Lý do xin mở lại",
+    submit: "Gửi yêu cầu",
+  },
+} as const
+
 /**
- * Manager/admin entry to ``POST /leads/{id}/reopen`` — đưa một lead đã ngừng tư
- * vấn (sts20) trở lại luồng tư vấn (sts04).
- *
- * Visibility được quyết định ở nơi gọi qua cờ ``lead.permissions.can_reopen``
- * từ API (Thin Client — FE không tự suy quyền). Dialog chỉ thu lý do bắt buộc
- * và gọi mutation; mọi guard nghiệp vụ nằm ở backend.
+ * Dialog mở lại / xin mở lại lead đã ngừng tư vấn (sts20). Visibility quyết định ở
+ * nơi gọi qua cờ ``permissions.can_reopen`` (manager/admin) hoặc
+ * ``permissions.can_request_reopen`` (officer) — Thin Client. Dialog chỉ thu lý do.
  */
 export function ReopenLeadDialog({
   open,
   onOpenChange,
   lead,
+  mode = "reopen",
 }: ReopenLeadDialogProps) {
   const [reason, setReason] = useState("")
-  const mutation = useReopenLead()
+  const reopenMutation = useReopenLead()
+  const requestMutation = useCreateReopenRequest()
+  const mutation = mode === "request" ? requestMutation : reopenMutation
+  const copy = COPY[mode]
 
   // reason được xóa khi đóng dialog (onOpenChange !next → reset). Nút "Mở lại" chỉ mở
   // dialog từ trạng thái đã đóng nên mỗi lần mở reason luôn rỗng — không cần effect
@@ -78,17 +96,16 @@ export function ReopenLeadDialog({
     >
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>Mở lại tư vấn</DialogTitle>
+          <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>
             Lead <strong>{lead.full_name}</strong> đang ở trạng thái đã ngừng tư
-            vấn. Mở lại sẽ đưa lead về luồng tư vấn để tiếp tục chăm sóc. Lý do
-            được lưu lại để đối soát.
+            vấn. {copy.desc} Lý do được lưu lại để đối soát.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-2 py-2">
           <Label htmlFor="reopen-reason">
-            Lý do mở lại{" "}
+            {copy.label}{" "}
             <span className="text-muted-foreground text-xs">
               (bắt buộc, ≥ {REASON_MIN} ký tự)
             </span>
@@ -135,7 +152,7 @@ export function ReopenLeadDialog({
             ) : (
               <RotateCcw className="mr-2 h-4 w-4" />
             )}
-            Mở lại tư vấn
+            {copy.submit}
           </Button>
         </DialogFooter>
       </DialogContent>

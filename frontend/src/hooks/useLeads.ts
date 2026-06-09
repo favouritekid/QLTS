@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { leadsApi } from "@/lib/api/leads";
 import { workflowContextKeys } from "@/hooks/useWorkflowContext";
 import type { ApiErrorResponse } from "@/types/api.types";
+import type { ReopenRequestItem } from "@/lib/api/leads";
 import type {
   Lead,
   LeadDetail,
@@ -880,6 +881,128 @@ export function useReopenLead() {
             : "Không thể mở lại tư vấn";
       toast.error("Lỗi mở lại tư vấn", { description: message });
     },
+  });
+}
+
+// =====================================================================
+// REOPEN REQUESTS (Phase B) — officer xin → manager/admin duyệt
+// =====================================================================
+
+export const reopenRequestKeys = {
+  all: ["reopen-requests"] as const,
+  list: (status?: string) =>
+    [...reopenRequestKeys.all, "list", status ?? "all"] as const,
+};
+
+function _reopenErr(fallback: string) {
+  return (error: AxiosError<ApiErrorResponse>) => {
+    const detail = error.response?.data?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((e) => e.msg).join(", ")
+          : fallback;
+    toast.error(fallback, { description: message });
+  };
+}
+
+/** Inbox duyệt (manager/admin) — IDOR-scoped ở backend. */
+export function useReopenRequests(status?: string) {
+  return useQuery<ReopenRequestItem[], AxiosError<ApiErrorResponse>>({
+    queryKey: reopenRequestKeys.list(status),
+    queryFn: () => leadsApi.listReopenRequests(status),
+  });
+}
+
+/** Officer XIN mở lại lead. */
+export function useCreateReopenRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReopenRequestItem,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; reason: string }
+  >({
+    mutationFn: ({ leadId, reason }) =>
+      leadsApi.createReopenRequest(leadId, { reason }),
+    onSuccess: async (_d, { leadId }) => {
+      toast.success("Đã gửi yêu cầu mở lại", {
+        description: "Yêu cầu đang chờ quản lý duyệt.",
+      });
+      await queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(leadId),
+        exact: true,
+        refetchType: "active",
+      });
+      queryClient.invalidateQueries({ queryKey: reopenRequestKeys.all });
+    },
+    onError: _reopenErr("Không gửi được yêu cầu mở lại"),
+  });
+}
+
+/** Manager/admin DUYỆT yêu cầu → lead mở lại. */
+export function useApproveReopenRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReopenRequestItem,
+    AxiosError<ApiErrorResponse>,
+    { requestId: number; note?: string }
+  >({
+    mutationFn: ({ requestId, note }) =>
+      leadsApi.approveReopenRequest(requestId, { note }),
+    onSuccess: (r) => {
+      toast.success("Đã duyệt — lead được mở lại");
+      queryClient.invalidateQueries({ queryKey: reopenRequestKeys.all });
+      queryClient.invalidateQueries({
+        queryKey: leadsKeys.detail(r.lead_id),
+        exact: true,
+        refetchType: "active",
+      });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+    },
+    onError: _reopenErr("Không duyệt được yêu cầu"),
+  });
+}
+
+/** Manager/admin TỪ CHỐI yêu cầu (note bắt buộc). */
+export function useRejectReopenRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReopenRequestItem,
+    AxiosError<ApiErrorResponse>,
+    { requestId: number; note: string }
+  >({
+    mutationFn: ({ requestId, note }) =>
+      leadsApi.rejectReopenRequest(requestId, { note }),
+    onSuccess: () => {
+      toast.success("Đã từ chối yêu cầu");
+      queryClient.invalidateQueries({ queryKey: reopenRequestKeys.all });
+    },
+    onError: _reopenErr("Không từ chối được yêu cầu"),
+  });
+}
+
+/** Officer HỦY yêu cầu pending của chính mình. */
+export function useCancelReopenRequest() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    ReopenRequestItem,
+    AxiosError<ApiErrorResponse>,
+    { requestId: number; leadId?: number }
+  >({
+    mutationFn: ({ requestId }) => leadsApi.cancelReopenRequest(requestId),
+    onSuccess: (_d, { leadId }) => {
+      toast.success("Đã hủy yêu cầu mở lại");
+      queryClient.invalidateQueries({ queryKey: reopenRequestKeys.all });
+      if (leadId) {
+        queryClient.invalidateQueries({
+          queryKey: leadsKeys.detail(leadId),
+          exact: true,
+          refetchType: "active",
+        });
+      }
+    },
+    onError: _reopenErr("Không hủy được yêu cầu"),
   });
 }
 
