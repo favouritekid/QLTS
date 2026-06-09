@@ -59,6 +59,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // Module-level role gate for the deep-link CTAs into /finance/*. The
   // proxy blocks officers from that area entirely — surfacing a button
   // that redirects them out of the page is a worse UX than hiding it.
+  //
+  // NOTE (audit 2026-06-09): đây là NGOẠI LỆ CÓ CHỦ ĐÍCH của quy tắc thin-client
+  // "no role checks". Nó CHỈ ẩn link điều hướng sang module Finance — KHÔNG gate
+  // bất kỳ mutation/dữ liệu nào (mọi thao tác tài chính do BE + proxy enforce,
+  // vd hasAction(calculate_fee)/record_fee_payment ở trên). Vì "được vào module
+  // Finance" là quyền cấp-module (không gắn với 1 hồ sơ) nên không có permission
+  // flag profile-scoped phù hợp để thay; role check ở đây là chấp nhận được.
   const userRole = useAuthStore((s) => s.user?.role)
   const canAccessFinanceModule = hasFinanceAccess(userRole)
   // P3 (2026-05-22) — BE coi {approved, overridden, admitted} là admitted-like
