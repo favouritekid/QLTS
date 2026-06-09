@@ -239,27 +239,27 @@ async def test_officer_owner_has_upload_but_not_verify(
 
 
 @pytest.mark.asyncio
-async def test_officer_cannot_verify_reject_or_reset_even_with_casbin_allow(
+async def test_officer_cannot_verify_or_reject_but_can_reset(
     client: AsyncClient,
     admin_token_headers: dict,
     officer_user_in_db: dict,
     doc_perm_config: dict,
 ):
-    """Service-layer guard keeps reviewer actions out of officer reach.
-
-    Before PR #5 review follow-up, the 4 doc-mutation routes only ran
-    Casbin + an IDOR check. Even after we relax Casbin to let the
-    officer hit /paper-submitted (needed for the can_mark_paper_submitted
-    flag), a separate `_authorize_document_action` guard must still
-    reject officer attempts on verify-format / reject / reset — the
-    can_* flags the FE receives would be false for those actions, and
-    the API must honour that, not just hide the buttons.
+    """Service-layer guard: officer (owning) trên hồ sơ draft ĐƯỢC tự reset
+    upload của mình (BR3 self-service undo) NHƯNG KHÔNG verify / reject — hai
+    việc đó vẫn reviewer-only bất kể route Casbin có chạm tới hay không.
     """
-    prof = await _create_profile(client, admin_token_headers, officer_user_in_db, doc_perm_config)
+    prof = await _create_profile(
+        client, admin_token_headers, officer_user_in_db, doc_perm_config
+    )
     pid = prof["id"]
 
-    oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    current = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["documents_checklist"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    current = (
+        await client.get(f"{ADMISSIONS}/{pid}", headers=oh)
+    ).json()["documents_checklist"]
     target = next(d for d in current if d.get("requires_upload"))
 
     # Officer uploads first so verify/reject/reset have a non-missing target.
@@ -271,18 +271,33 @@ async def test_officer_cannot_verify_reject_or_reset_even_with_casbin_allow(
     )
     assert upload.status_code in (200, 201), upload.text
 
-    # Casbin may also reject officer — either way, the action is forbidden.
-    # Accept any 4xx that is NOT 200 so behaviour is robust to whether
-    # Casbin seed has been applied yet.
+    # verify-format + reject stay reviewer-only — officer bị từ chối (403/404).
     for route, method, body in [
         (f"{ADMISSIONS}/{pid}/documents/{target['code']}/verify-format", "PATCH", {"format": "photo"}),
         (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reject", "POST", {"reason": "officer-not-allowed"}),
-        (f"{ADMISSIONS}/{pid}/documents/{target['code']}/reset", "POST", {}),
     ]:
         resp = await client.request(method, route, headers=oh, json=body)
         assert resp.status_code in (403, 404), (
             f"{method} {route}: expected 403/404 for officer, got {resp.status_code}: {resp.text[:200]}"
         )
+
+    # BR3 (2026-06-09): officer (owner) RESET THÀNH CÔNG trên hồ sơ draft —
+    # gỡ chính upload của mình. Doc trở về 'missing'.
+    reset = await client.request(
+        "POST",
+        f"{ADMISSIONS}/{pid}/documents/{target['code']}/reset",
+        headers=oh,
+        json={},
+    )
+    assert reset.status_code in (200, 201), (
+        f"officer reset trên hồ sơ draft phải thành công, "
+        f"got {reset.status_code}: {reset.text[:200]}"
+    )
+    after = (
+        await client.get(f"{ADMISSIONS}/{pid}", headers=oh)
+    ).json()["documents_checklist"]
+    target_after = next(d for d in after if d["code"] == target["code"])
+    assert target_after["status"] == "missing", target_after
 
 
 @pytest.mark.asyncio

@@ -7131,9 +7131,12 @@ async def reset_document(
     consistent. The caller-side pattern lives in
     ``app/routers/admissions.py::reset_document_endpoint``.
 
-    Permissions:
-    - Officer: Can reset documents for profiles in draft/rejected status
-    - Manager/Admin: Can reset any document except for enrolled profiles
+    Permissions (DocumentActionPolicy = single source of truth):
+    - Officer (owning): reset trên hồ sơ draft / rejected / revision_requested
+      (gỡ submission của chính mình; OWNER_DOC_MUTATION_STATES). KHÔNG reset khi
+      submitted/resubmitted (đang chờ reviewer) hay approved/enrolled.
+    - Manager (in-scope) / Admin: reset bất kỳ doc non-missing trừ hồ sơ enrolled.
+    - verify/reject vẫn reviewer-only (review ≠ sửa nội dung).
 
     Args:
         db: Database session
