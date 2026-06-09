@@ -1,9 +1,9 @@
 # Plan: Lead Reopen Workflow — mở lại lead sts20 (CONSULT_GIVEUP) có kiểm soát
 
-> Trạng thái: **PLAN — chưa code.** Tiền đề: PR sts20 CONSULT_GIVEUP đã code+test
-> local (branch `feat/sts20-consult-giveup`, chưa push) + gate chặn tạo hồ sơ từ
-> lead consultation-terminal (`consultation_terminal` trong
-> `check_lead_level_admission_eligibility`).
+> Trạng thái: **PLAN — chưa code.** Tiền đề: PR sts20 CONSULT_GIVEUP đã **MERGED
+> (#390) + deploy prod** — chạy với `SLA_AUTO_GIVEUP_ENABLED=false` (beat CHƯA tự
+> đóng) + gate chặn tạo hồ sơ từ lead consultation-terminal (`consultation_terminal`
+> trong `check_lead_level_admission_eligibility`). `SLA_CONSULT_GIVEUP_DAYS` prod = 15.
 >
 > **Hai quyết định đã chốt (2026-06-09):**
 > 1. **RULE #13.2 → mốc re-engage** (KHÔNG xóa history). Giữ `lead_status_history`
@@ -24,9 +24,10 @@ transition ra). Khi lead sang sts20:
 lại** qua nghiệp vụ. Cần quy trình **manager/admin mở lại có lý do + audit + chống
 lạm dụng**; ở Phase B nâng lên **officer xin → manager/admin duyệt**.
 
-**Liên hệ với rollout flag:** Phase A là **tiền đề để bật `SLA_AUTO_GIVEUP_ENABLED`**
-(two-step rollout của PR sts20). Có đường mở lại tối thiểu thì việc beat tự đóng
-lead mới an toàn (đảo được). Không cần chờ trọn Phase B mới bật beat.
+**Liên hệ với rollout flag:** Điều kiện bật `SLA_AUTO_GIVEUP_ENABLED` (beat tự đóng)
+một cách an toàn = **PR-A (reopen MVP) + chốt §9.1 (chặn "reopen lậu" qua
+soft-delete)** — CẢ HAI nằm trong acceptance của PR-A. Đủ đường mở lại + bịt đường
+lách thì beat tự đóng lead mới mới đảo được. Không cần chờ trọn Phase B.
 
 ## 2. Quyết định thiết kế (chốt)
 
@@ -36,10 +37,11 @@ lead mới an toàn (đảo được). Không cần chờ trọn Phase B mới b
   sts20→sts04`.** Nếu seed, manager đổi được sts20→sts04 qua `add_consultation`
   thường, bỏ qua kiểm soát. → Reopen là **service chuyên dụng** (mutate có guard +
   ghi history thủ công + set mốc re-engage).
-- **Suy `lead.status` từ sts04 bằng `derive_lead_status`/`sync_lead_status`** —
-  KHÔNG hardcode `'contacted'`. Tránh drift nếu quy tắc derive đổi (cùng bài học
-  với migration backfill PR sts20). Canonical hiện tại: sts04 → `status='contacted'`,
-  `pipeline_stage_id='stg02'`.
+- **Suy `lead.status` + `pipeline_stage_id` từ sts04 bằng `sync_lead_status`/
+  `derive_lead_status`, rồi ĐỌC LẠI giá trị SAU sync để ghi history** — KHÔNG
+  hardcode `'contacted'`/`'stg02'`. Tránh drift nếu quy tắc derive đổi (cùng bài học
+  migration backfill PR sts20). Canonical hiện tại (chỉ để tham chiếu): sts04 →
+  `status='contacted'`, `pipeline_stage_id='stg02'`. Chi tiết bước ở §5.
 - **Lock khi mở lại**: `SELECT ... FOR UPDATE` trên lead row trong transaction
   (chống double-reopen / TOCTOU; pattern admin rollback lock #345). Re-check
   `consultation_status_id='sts20'` SAU khi đã lock.
@@ -81,10 +83,15 @@ WHERE lead_status_history.lead_id = :lead
 
 > ⚠ Đây là guard **dùng chung mọi system transition**. Bắt buộc:
 > - Chạy **full FSM anchor matrix** (`test-fixture-drift-after-policy-refactor`).
-> - Test riêng: reopen → stale ≥30d lại → **beat đóng lại được** (history sts20
->   mới tạo, audit đủ cả 2 lần give-up).
+> - Test riêng: reopen → stale lại ≥ `SLA_CONSULT_GIVEUP_DAYS` (prod 15) →
+>   **beat đóng lại được** (history sts20 mới tạo, audit đủ cả 2 lần give-up).
 > - Test hồi quy: lead chưa reopen vẫn skip đúng như cũ (idempotency các event khác
 >   không vỡ).
+> - **Lưu ý implement (B2):** `fsm_engine.py:~535` chỉ `SELECT FROM LeadStatusHistory`;
+>   `lead` là object Python **in-memory** (truyền vào hàm), KHÔNG join bảng `lead`. Đọc
+>   `lead.consultation_reengaged_at` bằng Python rồi: nếu `is not None` mới thêm
+>   `AND LeadStatusHistory.changed_at > :reengaged_at` vào WHERE. KHÔNG viết SQL join
+>   bảng `lead` — đoạn SQL ở §3.2 chỉ minh hoạ semantics, không phải query thật.
 
 ## 4. Vì sao mốc-thời-gian thay cho xóa history
 
@@ -112,14 +119,30 @@ Guard REOPEN (lõi, dùng chung A/B), trong 1 transaction:
 1. `SELECT lead ... FOR UPDATE`.
 2. Re-check `lead.consultation_status_id == 'sts20'` (DB, không tin client) → nếu
    không: `BusinessRuleViolation`.
-3. Set lead: `consultation_status_id='sts04'`, `pipeline_stage_id='stg02'`,
-   `status = derive_lead_status(sts04)` (= 'contacted'), `consultation_reengaged_at
-   = now`, `updated_at = now`.
-4. INSERT `lead_status_history` (old='sts20'/new='sts04', old_status='rejected'/
-   new_status='contacted', `changed_by_user_id` = reviewer, reason='reopen: <lý do>').
-5. `audit_service` log.
+3. **Capture old state TRƯỚC khi đổi**: `old_cs='sts20'`,
+   `old_status=lead.status` (canonical 'rejected'), `old_stage=lead.pipeline_stage_id`.
+4. **Mutate + sync (KHÔNG gán literal status/stage)**: set
+   `lead.consultation_status_id='sts04'`, `consultation_reengaged_at=now`,
+   `updated_at=now`; gọi `sync_lead_status`/`derive_lead_status` để suy `lead.status`
+   + `lead.pipeline_stage_id` từ sts04.
+5. **Ghi history từ state đã capture + ĐỌC LẠI sau sync**: INSERT
+   `lead_status_history` old=(`old_cs`, `old_status`, `old_stage`) →
+   new=(`'sts04'`, `lead.status`, `lead.pipeline_stage_id` *sau* sync),
+   `changed_by_user_id`=reviewer, reason='reopen: <lý do>'.
+6. `audit_service` log.
 
 ## 6. Phase A — MVP (manager/admin 1-click)
+
+### 6.0 Backend permission contract (BẮT BUỘC — để FE flag-driven)
+FE hiện nút theo **permission flag từ API**, KHÔNG `user.role`. Phải mở rộng chỗ
+populate `permissions`/`available_actions`/`action_blockers` của Lead detail
+(`lead_service.py` `_attach...`, hiện chỉ có `create_admission` —
+`permissions = {"create_admission": ...}`):
+- `permissions["can_reopen"] = (lead.consultation_status_id == 'sts20')` **và** user
+  là manager/admin (role-gate ở backend; FE chỉ đọc cờ).
+- `action_blockers["can_reopen"]` = lý do khi false (vd `not_terminal` / `forbidden`).
+- `available_actions` tự gồm `"can_reopen"` khi cờ true.
+Thiếu bước này → FE rơi lại role-check hoặc thiếu nút (đúng lỗi đã chỉ ra).
 
 ### 6.1 Service `app/services/lead_reopen_service.py`
 - `reopen_lead(db, lead_id, reviewer, reason) -> (lead, post_commit_cb)`
@@ -144,9 +167,13 @@ Guard REOPEN (lõi, dùng chung A/B), trong 1 transaction:
   onSuccess invalidate lead detail + danh sách (`react-query-mutation-cache-parity`).
 
 ### 6.5 Test Phase A (one-off container — `local-test-oneoff-container-pattern`)
-- reopen: lead sts20 → sts04 + status='contacted' + `reengaged_at` set + history
+- reopen: lead sts20 → sts04 + `status` = giá trị SAU `sync_lead_status` (canonical
+  'contacted' — verify qua helper, KHÔNG so literal) + `reengaged_at` set + history
   (changed_by=reviewer). Lead không sts20 → `BusinessRuleViolation`.
-- **beat đóng lại được** sau reopen rồi stale ≥30d (verify §3.2).
+- `can_reopen` flag (§6.0): true cho manager/admin trên lead sts20; false + blocker
+  cho lead không sts20.
+- **beat đóng lại được** sau reopen rồi stale lại ≥ `SLA_CONSULT_GIVEUP_DAYS`
+  (verify §3.2).
 - IDOR: manager mở lead ngoài unit → 404; role:user/officer → 403 (Casbin).
 - Race: 2 reopen song song → 1 thắng (FOR UPDATE).
 - Full FSM anchor matrix (guard #13.2 đổi).
@@ -239,42 +266,92 @@ thiệp = reopen). Khi code reopen, bổ sung:
 - **Abuse tracking** (Phase D): đếm reopen request bị REJECT của 1 officer trong N
   ngày; vượt ngưỡng → flag (giống `collaborator.is_flagged`). Báo admin.
 
-### 9.1 ⚠ Open question — vector soft-delete + tạo lại cùng SĐT
-Lead sts20 bị **soft-delete** → `uq_lead_phone_active` (partial `WHERE deleted_at
-IS NULL`) giải phóng SĐT → officer **tạo lead mới cùng SĐT**, **bỏ qua** kiểm soát
-reopen ("reopen lậu"). Cần quyết một trong:
-- (a) Hạn chế quyền xóa lead ở trạng thái terminal (sts20) cho officer; hoặc
-- (b) Khi tạo lead, phát hiện trùng SĐT với lead sts20 **đã xóa** → cảnh báo / buộc
-  dùng đường reopen.
-→ Chốt trước khi bật beat rộng (nếu để hở, beat càng đóng nhiều thì bề mặt lạm dụng
-càng lớn).
+### 9.1 Vector giải phóng SĐT + tạo lại cùng số — **acceptance bắt buộc của PR-A**
+
+> ⚠ **Sửa threat model (hard-review 2026-06-09).** Bản plan cũ giả định "officer
+> **xóa** lead sts20 → giải phóng SĐT". SAI: `delete_lead` là **admin-only**
+> (`lead_service.py:4201` enforce ở service + router Casbin) — officer KHÔNG xóa được
+> lead nào. Mitigation (a) cũ ("chặn officer xóa lead terminal") vì thế **vô nghĩa**
+> (officer vốn đã bị chặn xóa mọi lead). Cơ chế giải phóng SĐT cũng KHÔNG ở bảng `lead`:
+> `uq_lead_phone_active` nằm trên bảng riêng **`lead_phone_identity(phone_normalized)
+> WHERE deleted_at IS NULL`** (`lead_phone.py:34`, FK `ondelete=CASCADE`, cascade
+> soft-delete khi xóa/đổi phone).
+
+**Đường lách thật (officer làm được):** officer *assigned* **đổi số điện thoại** của
+lead sts20 qua `PUT /leads/{id}` — `update_lead` cho phép officer assigned
+(`lead_service.py:1291`); identity-lock (`:1334`) CHỈ khóa phone/email khi lead có
+AdmissionProfile ở approved/rejected/enrolled, mà lead sts20 (đi từ sts04 "từ chối tư
+vấn") gần như chắc chắn **chưa có** profile → KHÔNG bị khóa. Đổi phone →
+`update_phone_identities` (`:1613`) soft-delete identity cũ → SĐT cũ được giải phóng →
+officer `POST /leads` **tạo lead mới cùng SĐT** → lead mới ở sts00, **bỏ qua toàn bộ
+audit/kiểm soát reopen** ("reopen lậu").
+
+> ⚠⚠ **Sửa lần 2 (lúc bắt tay code 2026-06-09).** Ý "gate `create_lead` match SĐT lead
+> sts20" (B-1 bản đầu) **KHÔNG bịt được vector**: sau khi officer đổi phone lead sts20
+> X→Y, lead đó mang phone **Y** — query "lead sts20 có phone X" tìm thấy **rỗng**. Cơ
+> chế giải phóng phá luôn cái link mà B-1 định bắt. Defense đúng phải **giữ cho SĐT
+> không bị giải phóng khỏi lead terminal** ngay từ đầu.
+
+**Defense đúng = B-2 (khóa SĐT trên lead terminal) — PRIMARY, bắt buộc PR-A:**
+- **(B-2) Chặn đổi `phone`/`phone2` của lead consultation-terminal (sts20)** trong
+  `update_lead` (đặt ngay sau identity-lock `:1334`; chỉ chặn khi giá trị thật sự đổi).
+  Hệ quả dây chuyền bịt kín: SĐT **luôn khóa active** trên lead sts20 →
+  `create_lead` (`:912` `check_phone_conflict`, global `deleted_at IS NULL`) **đã** raise
+  `DuplicateResourceError` khi tạo trùng → officer **buộc phải reopen** (sts20→sts04, lúc
+  đó mới đổi/tái dùng được). **Airtight cho đường officer** — không cần gate create_lead.
+  - Lưu ý gồm **cả `phone2`** (cũng vào `lead_phone_identity`), KHÔNG chỉ `phone`.
+
+**Rẻ, nên có (UX — không phải security gate):**
+- **(B-1′) Cải thiện message `create_lead`**: khi `check_phone_conflict` trùng một lead
+  **sts20 chưa xóa**, đổi message từ "trùng SĐT" chung → **gợi ý mở lại (reopen)** lead
+  đó. Vì B-2 giữ SĐT luôn khóa trên lead sts20 nên B-1′ luôn có cơ hội kích hoạt đúng.
+
+**Defer / optional:**
+- Đường **admin-xóa** lead sts20 (giải phóng SĐT) → tạo lại: admin toàn quyền + có log
+  `audit_service.log_deleted` → defense-in-depth tùy chọn (gate create_lead match lead
+  sts20 **đã xóa**), KHÔNG bắt buộc PR-A.
 
 ## 10. PR breakdown (ước lượng)
 
 | PR | Phase | Nội dung | ~ |
 |---|---|---|---|
-| PR-A | A (MVP) | cột `consultation_reengaged_at` + sửa RULE #13.2 (mốc) + `reopen_lead` + endpoint `/leads/{id}/reopen` + Casbin manager/admin + FE nút/dialog + full FSM matrix | 1.5–2d |
+| PR-A | A (MVP) | cột `consultation_reengaged_at` + sửa RULE #13.2 (mốc) + `reopen_lead` + endpoint `/leads/{id}/reopen` + **permission contract `can_reopen` (§6.0)** + **guard "reopen lậu" §9.1 B-2 (khóa đổi phone/phone2 lead terminal) + B-1′ (message gợi ý reopen)** + Casbin manager/admin + FE nút/dialog + full FSM matrix | 2.5–3d |
 | PR-B | B | bảng `lead_reopen_request` + officer-request/approve/reject/cancel + IDOR scope (7.4) + inbox FE | 2–2.5d |
 | PR-C | C | notification events (requested/approved/rejected) | 1d |
 | PR-D | D | abuse tracking + báo cáo admin | 0.5–1d |
 
-**PR-A là lõi đủ để bật `SLA_AUTO_GIVEUP_ENABLED` an toàn** (manager mở lại được +
-beat đóng lại được + audit đủ). Phase B/C/D hoàn thiện luồng officer-self-service.
+**Bật `SLA_AUTO_GIVEUP_ENABLED` an toàn = PR-A TRỌN VẸN** (reopen MVP + guard §9.1 B-2
+khóa đổi phone lead terminal + permission contract §6.0): manager mở lại được + beat đóng lại
+được + audit đủ + không còn đường "reopen lậu". Phase B/C/D hoàn thiện luồng
+officer-self-service.
 
 ## 11. Rủi ro / điểm review kỹ
 
 - **Guard #13.2 đổi (§3.2)** là guard chung — phải full FSM anchor matrix + test
   hồi quy idempotency các event khác + test reopen→stale→đóng-lại. Đây là điểm
   review kỹ nhất của PR-A.
-- **Vector soft-delete-recreate (§9.1)** — chốt (a) hoặc (b) trước khi mở beat rộng.
+- **Vector "reopen lậu" (§9.1)** — đường thật = officer **đổi phone** lead sts20 rồi
+  tạo lead mới cùng số (KHÔNG phải officer-xóa: `delete_lead` admin-only). Bắt buộc
+  PR-A: **B-2 khóa đổi phone/phone2 trên lead terminal** (giữ SĐT khóa →
+  `check_phone_conflict` hiện hữu tự chặn tạo trùng → buộc reopen). Gate-match-phone ở
+  `create_lead` KHÔNG đủ (lead terminal mất phone sau giải phóng). Điểm review kỹ #2.
 - **IDOR scope approve/reject (§7.4)** — Phase B bắt buộc dependency unit-scope, không
   chỉ role.
 - **Không seed transition sts20→sts04** — nếu lỡ seed, bỏ qua được kiểm soát. Giữ
   reopen ở service chuyên dụng.
 - **derive_lead_status** — gọi helper, không hardcode `'contacted'` (verify canonical
   sts04 = contacted/stg02).
-- `uq_lead_phone_active` với **cùng** lead (reopen, không tạo mới) — an toàn; rủi ro
-  chỉ ở nhánh xóa-rồi-tạo-mới (§9.1).
-- **Consultation records outcome sts20**: nếu manager đóng tay qua `add_consultation`
-  tạo consultation `status_id='sts20'`, khi reopen lead về sts04 các consultation đó
-  vẫn ghi sts20 — xác nhận không lệch hiển thị/đếm.
+- `uq_lead_phone_active` (trên bảng `lead_phone_identity`, KHÔNG phải `lead`) với
+  **cùng** lead (reopen, không tạo mới) — an toàn; rủi ro chỉ ở nhánh giải-phóng-SĐT
+  (officer đổi-phone hoặc admin-xóa) rồi tạo-lead-mới (§9.1).
+- **Consultation records outcome sts20**: khi reopen lead về sts04, các consultation
+  `status_id='sts20'` đã tạo (cả **manual** qua `add_consultation` LẪN **beat**
+  `sla_tasks` — beat thêm Consultation hệ thống khi `assigned_officer_id` not null) vẫn
+  ghi sts20 → xác nhận không lệch hiển thị/đếm (sts20 `counts_for_funnel=true`). (C2)
+- **(C1) Assignment sau reopen**: beat KHÔNG reset `assigned_officer_id` → lead sts20
+  giữ officer cũ → reopen về sts04 thì officer cũ nhận lại + workload sts04 phục hồi
+  (assignment_service tính sts04 vào utilization). Đúng nghiệp vụ; reopen KHÔNG đụng
+  assignment. Nếu lead đã mất assignment thì quyết định auto-assign hay để pending.
+- **(C3) Index**: query #13.2 mới lọc `(lead_id, new_consultation_status_id,
+  changed_at)` — hiện chỉ single-column index. Scale nhỏ (ít history/lead) → KHÔNG
+  blocker; cân nhắc composite index khi tiện.
