@@ -479,6 +479,28 @@ class Settings(BaseSettings):
         default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
     )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin
 
+    # -- Lead Lifecycle SLA: auto-close stale rejected consultations --
+    # A lead in sts04 (CONSULT_REJECTED, is_final=false for re-engagement) that
+    # has had no consultation activity for this many days is auto-transitioned to
+    # sts20 (CONSULT_GIVEUP, terminal) by the daily SLA beat. This frees officer
+    # workload (sts04 still counts as non-final load) so balanced auto-assign can
+    # resume. Tunable without code change. NOTE: 15d is more aggressive than 30d
+    # (on prod data ~100 leads vs ~42) — pair with the reopen workflow before
+    # flipping SLA_AUTO_GIVEUP_ENABLED so closed leads can come back.
+    SLA_CONSULT_GIVEUP_DAYS: int = Field(
+        default=15, validation_alias="SLA_CONSULT_GIVEUP_DAYS"
+    )
+    # Master switch for the daily auto-close beat (2-step rollout). Default False
+    # so deploying the feature seeds sts20 + transitions (manual close by
+    # manager/admin works immediately) WITHOUT auto-closing any lead. The beat
+    # schedule is always registered (a stale worker can't silently drop it), but
+    # the task early-returns until this is flipped true — pair with the one-shot
+    # scripts/backfill_sts20_giveup.py so closing existing/stale leads is a
+    # deliberate, observable step once the reopen workflow is ready.
+    SLA_AUTO_GIVEUP_ENABLED: bool = Field(
+        default=False, validation_alias="SLA_AUTO_GIVEUP_ENABLED"
+    )
+
     # -- VNPay Payment Gateway Settings --
     # Get credentials from VNPay merchant portal
     # Sandbox docs: https://sandbox.vnpayment.vn/apis/

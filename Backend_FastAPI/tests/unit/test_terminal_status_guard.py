@@ -230,6 +230,8 @@ class TestTerminalGuardIntegration:
             {"id": "sts12", "name": "Ngừng theo học", "phase": "enrolled", "is_final": True},
             {"id": "sts16", "name": "Hồ sơ không đạt yêu cầu", "phase": "admission", "is_final": True},
             {"id": "sts18", "name": "Đã hoàn học phí", "phase": "fee", "is_final": True},
+            {"id": "sts20", "name": "Đã ngừng tư vấn",
+             "phase": "consultation", "is_final": True},
         ]
 
     def test_enrolled_phase_statuses_should_hard_block(self, terminal_statuses):
@@ -248,10 +250,18 @@ class TestTerminalGuardIntegration:
             if s["phase"] != "enrolled" and s["is_final"]
         ]
 
-        assert len(non_enrolled_statuses) == 3  # sts08, sts16, sts18
+        assert len(non_enrolled_statuses) == 4  # sts08, sts16, sts18, sts20
         for status in non_enrolled_statuses:
             assert status["is_final"] is True
             # These should result in hard_block=False, is_terminal=True
+
+    def test_giveup_consultation_terminal_is_non_enrolled(self, terminal_statuses):
+        """sts20 (CONSULT_GIVEUP) is a consultation-phase terminal → SOFT BLOCK."""
+        giveup = next((s for s in terminal_statuses if s["id"] == "sts20"), None)
+        assert giveup is not None
+        assert giveup["is_final"] is True
+        assert giveup["phase"] == "consultation"
+        assert giveup["phase"] != "enrolled"  # never hard-blocks
 
 
 class TestTerminalGuardErrorMessages:
@@ -278,3 +288,42 @@ class TestTerminalGuardErrorMessages:
         )
         assert "terminal" in result.reason
         assert "không cập nhật lead status" in result.reason
+
+
+class TestGiveupManualClosePhaseGate:
+    """sts20 manual-close gating via phase_manager (role-based, consultation)."""
+
+    def test_manager_admin_can_select_sts20_in_consultation(self):
+        from app.services.phase_manager import (
+            LeadPhase,
+            is_status_allowed_for_phase,
+        )
+        assert is_status_allowed_for_phase(
+            LeadPhase.CONSULTATION, "sts20", "manager"
+        ) is True
+        assert is_status_allowed_for_phase(
+            LeadPhase.CONSULTATION, "sts20", "admin"
+        ) is True
+
+    def test_officer_cannot_select_sts20(self):
+        from app.services.phase_manager import (
+            LeadPhase,
+            is_status_allowed_for_phase,
+        )
+        assert is_status_allowed_for_phase(
+            LeadPhase.CONSULTATION, "sts20", "officer"
+        ) is False
+
+    def test_dropdown_includes_sts20_for_manager_only(self):
+        from app.services.phase_manager import (
+            LeadPhase,
+            get_allowed_statuses_for_phase,
+        )
+        manager_set = get_allowed_statuses_for_phase(
+            LeadPhase.CONSULTATION, "manager"
+        )
+        officer_set = get_allowed_statuses_for_phase(
+            LeadPhase.CONSULTATION, "officer"
+        )
+        assert "sts20" in manager_set
+        assert "sts20" not in officer_set

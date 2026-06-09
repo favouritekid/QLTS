@@ -126,6 +126,8 @@ const getMethodConfig = (method?: string) => {
       return { icon: MessageSquare, color: "text-cyan-600", bg: "bg-cyan-100", label: "SMS" };
     case "in_person":
       return { icon: User, color: "text-amber-600", bg: "bg-amber-100", label: "Gặp mặt" };
+    case "system":
+      return { icon: Clock, color: "text-slate-500", bg: "bg-slate-100", label: "Hệ thống tự đóng" };
     default:
       return { icon: PhoneCall, color: "text-muted-foreground", bg: "bg-muted", label: "Tư vấn" };
   }

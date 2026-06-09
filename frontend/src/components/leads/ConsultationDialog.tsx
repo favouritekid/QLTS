@@ -189,7 +189,12 @@ export function ConsultationDialog({
           : undefined,
         status_id: consultation.consultation_status_id || "",
         notes: consultation.notes || "",
-        method: consultation.method || "phone",
+        // "system" is the auto-close wire method, never user-selectable — coerce
+        // it to a real method if a system consultation is ever opened for edit.
+        method:
+          consultation.method && consultation.method !== "system"
+            ? consultation.method
+            : "phone",
         duration_minutes: consultation.duration_minutes || undefined,
         // Loss reason: stored directly on Consultation (source of truth)
         loss_reason_code: consultation.loss_reason_code || null,

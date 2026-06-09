@@ -1305,8 +1305,9 @@ async def check_lead_level_admission_eligibility(
     admission_method_id and are validated in create_admission_profile directly).
 
     Blocker codes (precedence order):
-      forbidden > already_has_profile > invalid_lead_status > missing_offering
-      > no_consultation > consultation_missing_status > consultation_universal_status
+      forbidden > already_has_profile > invalid_lead_status > consultation_terminal
+      > missing_offering > no_consultation > consultation_missing_status
+      > consultation_universal_status
 
     Requires lead.admission_profiles eager-loaded (Wave 4 #15b plural) —
     uses __dict__.get() to avoid lazy-load crash in async context.
@@ -1373,6 +1374,35 @@ async def check_lead_level_admission_eligibility(
             "invalid_lead_status",
             f"Lead đang ở trạng thái '{lead.status}', không thể tạo hồ sơ.",
         )
+
+    # 3b. CONSULTATION-phase give-up (e.g. sts20 CONSULT_GIVEUP). A lead whose
+    # current consultation status is a CONSULTATION-phase terminal has been
+    # formally ended in the tư-vấn pipeline — block any new admission profile
+    # until it is re-opened (officer request → manager/admin approval). Without
+    # this gate sts20 leaks an unintended "escape" into the admission flow.
+    #
+    # IMPORTANT: scope to phase=='consultation'. A lead whose status is an
+    # ADMISSION/FEE/ENROLLED terminal (sts16 rejected, sts08 withdrawn, sts18
+    # refunded, sts11/sts12) is_final too, but those are END of an EARLIER
+    # admission cycle — the composite (lead_id, academic_year) UNIQUE deliberately
+    # lets such a lead apply again in a LATER academic_year. Blocking on every
+    # is_final status would break multi-year re-application. Explicit DB get
+    # avoids a lazy-load crash in async context.
+    if lead.consultation_status_id:
+        current_cs = await db.get(
+            models.ConsultationStatus, lead.consultation_status_id
+        )
+        if (
+            current_cs is not None
+            and current_cs.is_final
+            and current_cs.phase == "consultation"
+        ):
+            return LeadAdmissionEligibility(
+                False,
+                "consultation_terminal",
+                f"Lead đã ở trạng thái cuối '{current_cs.name}' (đã đóng), "
+                "không thể tạo hồ sơ. Cần mở lại lead trước.",
+            )
 
     # 4-6. Consultation checks (DB query — reuse admission_repo, consultation_status eager-loaded)
     from app.repositories import AdmissionRepository  # local import (matches pattern at lines 995, 1288)
@@ -3266,8 +3296,9 @@ async def create_profile(
             )
 
     # Lead-level eligibility gate (SINGLE SOURCE OF TRUTH shared with GET /leads/{id}).
-    # Checks: already_has_profile, invalid_lead_status, missing_offering,
-    # no_consultation, consultation_missing_status, consultation_universal_status.
+    # Checks: already_has_profile, invalid_lead_status, consultation_terminal,
+    # missing_offering, no_consultation, consultation_missing_status,
+    # consultation_universal_status.
     # Role check skipped — IDOR enforced upstream by get_lead_for_user dep.
     # Wave 4 #15b: pass academic_year so the composite (lead_id, academic_
     # year) UNIQUE swap (PR #223 squash 15f52c8e) lets a lead create a new
@@ -3295,6 +3326,9 @@ async def create_profile(
                 f"Cannot create admission profile for lead with status '{lead.status}'. "
                 f"Lead must be in active pipeline (new, assigned, contacted, qualified) or be re-engaged."
             )
+        elif code == "consultation_terminal":
+            # Lead consultation is_final (e.g. sts20) — closed, must be re-opened first.
+            raise BusinessRuleViolation(msg)
         else:
             # no_consultation | consultation_missing_status | consultation_universal_status
             raise BusinessRuleViolation(msg)

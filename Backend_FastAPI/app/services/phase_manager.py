@@ -49,8 +49,13 @@ class LeadPhase(str, Enum):
 # User can only select statuses within current phase OR universal statuses.
 
 PHASE_STATUSES: dict[LeadPhase, Set[str]] = {
-    # CONSULTATION: Contact tracking before admission application
-    LeadPhase.CONSULTATION: {"sts00", "sts02", "sts03", "sts04", "sts05", "sts06"},
+    # CONSULTATION: Contact tracking before admission application.
+    # sts20 (CONSULT_GIVEUP) is the terminal give-up status — role-based, so
+    # only manager/admin can pick it (see ROLE_BASED_STATUSES below); the SLA
+    # beat reaches it via the FSM system transition instead.
+    LeadPhase.CONSULTATION: {
+        "sts00", "sts02", "sts03", "sts04", "sts05", "sts06", "sts20",
+    },
     
     # ADMISSION: Application processing statuses
     LeadPhase.ADMISSION: {"sts07", "sts08", "sts09", "sts13", "sts16", "sts17"},
@@ -75,7 +80,8 @@ SYSTEM_ONLY_STATUSES: Set[str] = {"sts09", "sts10", "sts11", "sts13", "sts18"}
 
 # Role-based statuses - only Manager/Admin can select
 # Must match DB consultation_status.selectable_mode = 'role'
-ROLE_BASED_STATUSES: Set[str] = {"sts12", "sts16"}
+# sts20 = CONSULT_GIVEUP (manual terminal close of a rejected consultation)
+ROLE_BASED_STATUSES: Set[str] = {"sts12", "sts16", "sts20"}
 
 # Phase → allowed stages mapping
 PHASE_STAGES: dict[LeadPhase, Set[str]] = {

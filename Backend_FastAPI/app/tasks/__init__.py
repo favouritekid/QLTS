@@ -46,6 +46,7 @@ from .admission_tasks import (
 from .notification_outbox_tasks import (
     dispatch_pending_outbox,  # T0-4a skeleton; T0-4b will replace body
 )
+from .sla_tasks import auto_close_stale_rejected_leads_task
 
 __all__ = [
     # Email tasks
@@ -76,4 +77,6 @@ __all__ = [
     "check_admission_confirmation_reminders_task",
     # T0-4a admission outbox skeleton (cold cutover prerequisite)
     "dispatch_pending_outbox",
+    # Lead lifecycle SLA tasks
+    "auto_close_stale_rejected_leads_task",
 ]

@@ -5,6 +5,7 @@ sts03,INTERESTED,Có nhu cầu tìm hiểu,consultation,stg02,transition,user,ne
 sts04,CONSULT_REJECTED,Từ chối tư vấn,consultation,stg02,transition,user,negative,false,false,true,true,30,Từ chối hoàn toàn,#EF4444,
 sts05,CALLBACK_LATER,Hẹn liên hệ lại,consultation,stg02,transition,user,neutral,false,false,true,false,40,Hẹn gọi lại,#A78BFA,
 sts06,CONSULT_ACCEPTED,Đồng ý tư vấn,consultation,stg02,transition,user,positive,false,false,true,true,50,Đồng ý bước tư vấn,#22C55E,
+sts20,CONSULT_GIVEUP,Đã ngừng tư vấn,consultation,stg02,transition,role,negative,true,false,true,true,35,"Lead từ chối tư vấn quá lâu không quay lại — chấm dứt tư vấn chính thức",#991B1B,
 sts07,APPLICATION_RECEIVED,Đã tiếp nhận hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,300,Đã tạo hồ sơ xét tuyển,#FB923C,
 sts17,APPLICATION_REVISION,Yêu cầu bổ sung hồ sơ,admission,stg03,transition,user,neutral,false,false,true,true,310,Yêu cầu nộp thêm giấy tờ,#0EA5E9,
 sts16,APPLICATION_REJECTED,Hồ sơ không đạt yêu cầu,admission,stg04,transition,role,negative,true,false,true,true,320,Hồ sơ bị từ chối,#B91C1C,

@@ -24,6 +24,66 @@ from .status_helper import StatusHelper, AssignmentStatus
 # Lấy logger chuẩn ở đây, dùng làm fallback
 default_log = logging.getLogger(__name__)
 
+# Ngưỡng tải an toàn (utilization). Officer có utilization >= ngưỡng này bị
+# xếp sau trong round-robin (BƯỚC 5) và bị nhánh referral né (Phần C). Tách ra
+# module-level để assignment_service + lead_service dùng chung một con số.
+SAFETY_THRESHOLD = 0.8
+
+
+def _non_final_status_filter():
+    """
+    SQL condition: a lead's consultation_status is non-final (is_final False or
+    NULL). Single source of truth for "counts as active workload", shared by
+    is_officer_at_threshold and automatically_assign_lead BƯỚC 3 so the referral
+    fast-path and the balancer can never drift on what "load" means.
+    """
+    return (
+        (models.ConsultationStatus.is_final == False) |  # noqa: E712
+        (models.ConsultationStatus.is_final.is_(None))
+    )
+
+
+def _safe_capacity(officer: models.User) -> int:
+    """Officer capacity with a safe fallback (default 100, never <= 0).
+    Shared by the referral threshold check and the assignment loop (BƯỚC 4)."""
+    capacity = officer.max_capacity if officer.max_capacity is not None else 100
+    return capacity if capacity > 0 else 1
+
+
+async def is_officer_at_threshold(
+    db: AsyncSession,
+    officer: models.User,
+    threshold: float = SAFETY_THRESHOLD,
+) -> bool:
+    """
+    Trả True nếu tải hiện tại của officer đã đạt/vượt ngưỡng an toàn
+    (workload / capacity >= threshold).
+
+    Workload được định nghĩa GIỐNG HỆT automatically_assign_lead BƯỚC 3-4: đếm
+    số lead (chưa xóa, deleted_at IS NULL) được gán cho officer mà
+    consultation_status.is_final là False hoặc NULL (một lead ở sts04 "Từ chối
+    tư vấn" is_final=false vẫn tính tải). Dùng bởi nhánh referral (lead_service)
+    để KHÔNG gán thẳng referral lead cho managing officer đã đầy tải — thay vào
+    đó fallback sang auto-assign cân bằng. Giữ cùng định nghĩa workload với thuật
+    toán né officer, nên kết luận ở đây khớp với việc officer có bị auto-assign né.
+    """
+    workload_stmt = (
+        select(func.count(models.Lead.id))
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True,  # LEFT JOIN để bao gồm cả lead chưa có status
+        )
+        .where(
+            models.Lead.assigned_officer_id == officer.id,
+            models.Lead.deleted_at.is_(None),  # lead đã xóa không tính tải
+            _non_final_status_filter(),
+        )
+    )
+    workload = (await db.execute(workload_stmt)).scalar_one() or 0
+
+    return (workload / _safe_capacity(officer)) >= threshold
+
 
 async def _log_assignment_decision(
     db: AsyncSession,
@@ -200,9 +260,10 @@ async def automatically_assign_lead(
                     )
                     .where(
                         models.Lead.assigned_officer_id.in_(officer_ids),
-                        # Chỉ đếm lead chưa kết thúc (is_final = False hoặc NULL)
-                        (models.ConsultationStatus.is_final == False) |
-                        (models.ConsultationStatus.is_final.is_(None))
+                        models.Lead.deleted_at.is_(None),  # lead đã xóa không tính tải
+                        # Chỉ đếm lead chưa kết thúc — cùng định nghĩa với
+                        # is_officer_at_threshold (referral fast-path).
+                        _non_final_status_filter(),
                     )
                     .group_by(models.Lead.assigned_officer_id)
                 )
@@ -218,14 +279,9 @@ async def automatically_assign_lead(
                 officer_loads = []
                 for officer in available_officers:
                     workload = workload_map.get(officer.id, 0)
-                    # Kiểm tra capacity (đảm bảo max_capacity không phải None và > 0)
-                    capacity = (
-                        officer.max_capacity
-                        if officer.max_capacity is not None
-                        else 100
-                    )  # Giá trị mặc định an toàn
-                    if capacity <= 0:
-                        capacity = 1  # Tránh chia cho 0
+                    # Capacity an toàn (mặc định 100, không bao giờ <= 0) —
+                    # cùng helper với is_officer_at_threshold.
+                    capacity = _safe_capacity(officer)
 
                     if workload < capacity:
                         utilization = workload / capacity
@@ -287,8 +343,8 @@ async def automatically_assign_lead(
                 # P2-2: Feature flag switches between legacy and fairness-weighted scoring
                 from ..config import settings
 
-                SAFETY_THRESHOLD = 0.8
-
+                # SAFETY_THRESHOLD is a module-level constant (shared with the
+                # referral fast-path via is_officer_at_threshold).
                 if settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT:
                     # --- FAIRNESS-WEIGHTED SCORING (P2-2) ---
                     # Score = utilization_weight + fairness_weight + recency_weight

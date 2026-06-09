@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -803,6 +804,21 @@ export function QuickConsultationSectionV2({
           </div>
         )}
       </div>
+
+      {/* ================================================================ */}
+      {/* TERMINAL WARNING (is_final status — e.g. "Đã ngừng tư vấn")      */}
+      {/* Thin-client: trust the is_final flag from the API, not a hardcoded id */}
+      {/* ================================================================ */}
+      {pendingStatus?.is_final && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 animate-in slide-in-from-top-2 duration-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <span>
+            <strong>Trạng thái cuối.</strong> Lead sẽ ngừng tư vấn và{" "}
+            <strong>không thể tiếp tục</strong> trừ khi được mở lại (cần
+            manager/admin duyệt).
+          </span>
+        </div>
+      )}
 
       {/* ================================================================ */}
       {/* LOSS REASON (Conditional)                                       */}

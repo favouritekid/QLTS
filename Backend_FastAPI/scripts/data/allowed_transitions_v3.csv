@@ -33,3 +33,5 @@ id,from_status_id,to_status_id,trigger_type,required_phase,is_active,description
 32,sts14,sts18,system,fee,true,Hoàn tiền
 33,sts10,sts11,system,enrolled,true,Nhập học
 34,sts11,sts12,role,enrolled,true,Ngừng học
+35,sts04,sts20,system,consultation,true,SLA tự đóng lead từ chối tồn ≥30 ngày
+36,sts04,sts20,role,consultation,true,Manager/Admin chủ động đóng lead từ chối
