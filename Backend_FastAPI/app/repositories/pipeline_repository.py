@@ -208,17 +208,24 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
         from_status_id: str,
         to_status_id: str
     ) -> bool:
-        """Check if a transition between two statuses exists."""
+        """Check if at least one transition between two statuses exists.
+
+        (from_status_id, to_status_id) is NOT unique — the same pair can have
+        several rows with different trigger_type (e.g. sts04->sts20 exists as
+        both 'system' for the SLA beat and 'role' for manual close). Use
+        LIMIT 1 + .first() instead of scalar_one_or_none(), which would raise
+        MultipleResultsFound on such a pair.
+        """
         from sqlalchemy import and_
-        
-        query = select(models.AllowedTransition).where(
+
+        query = select(models.AllowedTransition.id).where(
             and_(
                 models.AllowedTransition.from_status_id == from_status_id,
                 models.AllowedTransition.to_status_id == to_status_id
             )
-        )
+        ).limit(1)
         result = await self.db.execute(query)
-        return result.scalar_one_or_none() is not None
+        return result.first() is not None
 
     async def get_all_statuses_with_stage(self) -> List[models.ConsultationStatus]:
         """Get all statuses with stage relationship loaded."""
@@ -410,13 +417,15 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
             AllowedTransition object or None
         """
         from sqlalchemy import and_
-        
+
+        # (from, to) is not unique (multiple trigger_type rows possible, e.g.
+        # sts04->sts20) — return the first match rather than scalar_one_or_none.
         query = select(models.AllowedTransition).where(
             and_(
                 models.AllowedTransition.from_status_id == from_status_id,
                 models.AllowedTransition.to_status_id == to_status_id
             )
-        )
+        ).limit(1)
         result = await self.db.execute(query)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 

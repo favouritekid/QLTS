@@ -107,6 +107,14 @@ const getEventConfig = (eventType: string, method?: string) => {
           ringColor: "ring-cyan-200",
           label: "SMS",
         };
+      case "system":
+        return {
+          icon: Clock,
+          color: "text-slate-500",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Hệ thống tự đóng",
+        };
       default:
         return {
           icon: MessageSquare,

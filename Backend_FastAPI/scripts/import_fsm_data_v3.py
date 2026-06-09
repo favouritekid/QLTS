@@ -151,21 +151,33 @@ async def load_allowed_transitions_v3(db: AsyncSession, csv_path: str) -> int:
     return count
 
 
-async def validate_data(db: AsyncSession) -> bool:
-    """Validate loaded data."""
+async def validate_data(
+    db: AsyncSession,
+    expected_statuses: int,
+    expected_transitions: int,
+) -> bool:
+    """Validate loaded data. Expected counts come from the loaders (= CSV row
+    counts), so adding a status/transition needs no magic-number edit here —
+    the check is that the DB now holds exactly what was just loaded."""
     errors = []
 
     # Check 1: All statuses loaded
     result = await db.execute(select(models.ConsultationStatus))
     statuses = result.scalars().all()
-    if len(statuses) != 20:  # Expected 20 statuses from v3 (includes sts19 CANCELLED)
-        errors.append(f"Expected 20 consultation_status records, got {len(statuses)}")
+    if len(statuses) != expected_statuses:
+        errors.append(
+            f"Expected {expected_statuses} consultation_status records, "
+            f"got {len(statuses)}"
+        )
 
     # Check 2: All transitions loaded
     result = await db.execute(select(models.AllowedTransition))
     transitions = result.scalars().all()
-    if len(transitions) != 34:  # Expected 34 transitions from current seed workbook
-        errors.append(f"Expected 34 allowed_transitions records, got {len(transitions)}")
+    if len(transitions) != expected_transitions:
+        errors.append(
+            f"Expected {expected_transitions} allowed_transitions, "
+            f"got {len(transitions)}"
+        )
 
     # Check 3: All transitions have trigger_type
     for trans in transitions:
@@ -275,9 +287,9 @@ async def main():
             await db.commit()
             print("\n✅ All changes committed to database")
 
-            # Step 5: Validate data
+            # Step 5: Validate data (expected = what the loaders just inserted)
             print("\n[5/5] Validating data integrity...")
-            is_valid = await validate_data(db)
+            is_valid = await validate_data(db, status_count, transition_count)
 
             if is_valid:
                 print("\n" + "=" * 80)

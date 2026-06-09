@@ -170,6 +170,16 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- Lead Lifecycle SLA: auto-close stale rejected (sts04 -> sts20) ---
+    # 03:30 chosen so it runs after the lead cache recalc (00:05) — keeping
+    # last_consultation_at fresh — and is staggered off the 03:00 idle-session
+    # cleanup and 03:15 KPI actuals scans to spread nightly DB load.
+    "auto-close-stale-rejected-leads-daily": {
+        "task": "auto_close_stale_rejected_leads_task",
+        "schedule": crontab(hour=3, minute=30),
+        "options": {"queue": "default"},
+    },
+
     # --- CTV Attribution Expiry (Phase 2) ---
     "check-ctv-attribution-expiry-daily": {
         "task": "check_ctv_attribution_expiry_task",

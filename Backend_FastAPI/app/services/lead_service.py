@@ -967,14 +967,28 @@ async def create_lead(
         # prioritize the CTV's managing officer if they're in the target unit.
         # This preserves the CTV-Officer relationship and improves conversion rates.
         if validated_collaborator and not skip_auto_assignment:
+            # Lazy import tránh circular (assignment_service không import lead_service).
+            from ..services.assignment_service import is_officer_at_threshold
             ctv_officer_id = validated_collaborator.managed_by_officer_id
             if ctv_officer_id:
                 ctv_officer = await db.get(models.User, ctv_officer_id)
+                # Vá referral-bypass: chỉ gán THẲNG cho managing officer khi officer
+                # đang `available` VÀ chưa chạm ngưỡng tải an toàn. Nếu không thỏa →
+                # KHÔNG set direct_assignment_officer_id, giữ skip_auto_assignment=False
+                # để lead đi qua process_automatic_lead_assignment_task (cân bằng tải
+                # cho officer rảnh cùng unit) thay vì bơm tải officer đã đầy.
+                # availability check đặt trước is_officer_at_threshold để short-circuit
+                # khỏi query workload khi officer unavailable. NULL availability_status
+                # (column default là Python-side, không server_default → row tạo qua
+                # raw SQL/import có thể NULL) coi như "available" để KHÔNG regress
+                # direct-assign so với hành vi cũ; chỉ loại officer rõ ràng bận.
                 if (
                     ctv_officer
                     and ctv_officer.status == "active"
                     and ctv_officer.role == UserRole.OFFICER
                     and ctv_officer.unit_id == create_data.get("unit_id")
+                    and ctv_officer.availability_status in (None, "available")
+                    and not await is_officer_at_threshold(db, ctv_officer)
                 ):
                     direct_assignment_officer_id = ctv_officer.id
                     skip_auto_assignment = True
@@ -985,13 +999,15 @@ async def create_lead(
                         unit_id=create_data.get("unit_id"),
                     )
                 else:
+                    _avail = ctv_officer.availability_status if ctv_officer else None
                     log.info(
-                        "Smart auto-assign: CTV's officer not eligible for target unit, fallback to round-robin",
+                        "referral fast-path skipped -> fallback to auto-assign",
                         referrer_id=validated_collaborator.id,
                         ctv_officer_id=ctv_officer_id,
                         target_unit_id=create_data.get("unit_id"),
                         officer_status=ctv_officer.status if ctv_officer else "not_found",
                         officer_unit_id=ctv_officer.unit_id if ctv_officer else None,
+                        officer_availability=_avail,
                     )
 
         # ✅ P0 FIX: Email check AFTER distribution/routing determines final unit_id
