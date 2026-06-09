@@ -188,12 +188,18 @@ async def reopen_lead(
 async def _lock_request(
     db: AsyncSession, request_id: int
 ) -> models.LeadReopenRequest:
-    """Lock 1 reopen request row (FOR UPDATE). Raise 404 nếu không có."""
+    """Lock 1 reopen request row (FOR UPDATE). Raise 404 nếu không có.
+
+    populate_existing=True: dep IDOR ``get_reopen_request_for_user`` đã nạp request vào
+    identity-map (không khóa) trước handler → FOR UPDATE phải refresh để re-check status
+    đọc giá trị fresh dưới lock (cùng bài học bug #2 của lead).
+    """
     req = (
         await db.execute(
             select(models.LeadReopenRequest)
             .where(models.LeadReopenRequest.id == request_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if req is None:

@@ -130,6 +130,8 @@ from .lead import (
     LeadCreate,
     LeadDetail,
     LeadReopenRequest,  # ✅ Reopen Phase A: body POST /leads/{id}/reopen
+    ReopenReviewBody,  # ✅ Reopen Phase B: body approve/reject
+    LeadReopenRequestOut,  # ✅ Reopen Phase B: response 1 yêu cầu
     LeadImportError,
     LeadImportResult,
     LeadInsights,

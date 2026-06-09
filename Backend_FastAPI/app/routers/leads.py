@@ -1787,6 +1787,54 @@ async def reopen_lead_endpoint(
 
 
 # =============================================================================
+# REOPEN REQUEST (Phase B) — officer XIN mở lại (chờ manager/admin duyệt)
+# =============================================================================
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{lead_id}/reopen-requests",
+    response_model=schemas.LeadReopenRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_reopen_request(
+    request: Request,
+    body: schemas.LeadReopenRequest,
+    lead: models.Lead = LeadAccessDep,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Officer (assigned) XIN mở lại lead đã ngừng tư vấn — chờ manager/admin duyệt.
+
+    IDOR officer-assigned qua ``get_lead_for_user`` (404 nếu không phải lead của mình);
+    Casbin chỉ cho ``role:officer``. Manager/admin dùng ``POST /reopen`` (mở trực tiếp).
+    """
+    from ..services import lead_reopen_service
+
+    result, callback = await lead_reopen_service.request_reopen(
+        db, lead.id, current_user, body.reason
+    )
+    await db.commit()
+    if callback:
+        await callback()
+
+    return schemas.LeadReopenRequestOut(
+        id=result.id,
+        lead_id=result.lead_id,
+        requested_by_id=result.requested_by_id,
+        reason=result.reason,
+        status=result.status,
+        reviewed_by_id=result.reviewed_by_id,
+        review_note=result.review_note,
+        created_at=result.created_at,
+        reviewed_at=result.reviewed_at,
+        unit_id=result.unit_id,
+        lead_name=lead.full_name,
+        requested_by_name=current_user.full_name or current_user.username,
+    )
+
+
+# =============================================================================
 # LEAD VALIDITY STATUS (Collaborator System Phase 1)
 # =============================================================================
 

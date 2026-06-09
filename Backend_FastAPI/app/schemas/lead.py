@@ -466,6 +466,36 @@ class LeadReopenRequest(BaseModel):
     )
 
 
+class ReopenReviewBody(BaseModel):
+    """Body approve/reject reopen-request. ``note`` optional khi duyệt, BẮT BUỘC khi
+    từ chối (validate ở service)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    note: Optional[str] = Field(
+        None, max_length=500, description="Ghi chú duyệt / lý do từ chối."
+    )
+
+
+class LeadReopenRequestOut(BaseModel):
+    """Response 1 yêu cầu mở lại (inbox manager). Tên denormalized populate ở router."""
+    id: int
+    lead_id: int
+    requested_by_id: int
+    reason: str
+    status: str
+    reviewed_by_id: Optional[int] = None
+    review_note: Optional[str] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    unit_id: int
+    # Denormalized cho hiển thị inbox (router set từ selectinload):
+    lead_name: Optional[str] = None
+    requested_by_name: Optional[str] = None
+    reviewed_by_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LeadsSummary(BaseModel):
     """Aggregate stats over the entire filtered set (not just current page)."""
     new_count: int = 0
