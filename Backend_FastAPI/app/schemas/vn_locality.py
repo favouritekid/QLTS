@@ -32,6 +32,47 @@ class VnCommuneAreaMapResponse(VnCommuneAreaMapRow):
     effective_to: Optional[date] = None
 
 
+# =============================================================================
+# Admin CRUD (PR-A — UI quản lý commune KV). Temporal half-open: đổi KV đi qua
+# /replace-area (retire dòng cũ + insert dòng mới), KHÔNG update area_code tại chỗ.
+# =============================================================================
+
+
+class VnCommuneAreaMapCreate(VnCommuneAreaMapRow):
+    """Tạo dòng KV mới. Kế thừa field CSV row + cho override effective_from."""
+
+    effective_from: Optional[date] = None
+
+
+class VnCommuneAreaMapUpdate(BaseModel):
+    """PATCH metadata — KHÔNG nhận ``area_code``/``commune_code`` (đổi KV =
+    /replace-area để giữ lịch sử temporal). ``effective_to=null`` tường minh =
+    re-activate (service chặn nếu tạo 2 dòng active cùng ``commune_code``)."""
+
+    province: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    district: Optional[str] = Field(default=None, max_length=100)
+    ward: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    effective_to: Optional[date] = None
+
+
+class VnCommuneAreaMapReplaceArea(BaseModel):
+    """Đổi KV theo kiểu temporal: retire dòng active cũ (``effective_to`` =
+    ``effective_from`` mới) + insert dòng active mới cùng
+    ``commune_code/province/district/ward`` với ``area_code`` mới."""
+
+    area_code: str = Field(pattern=r"^KV[1-9](-NT)?$")
+    effective_from: Optional[date] = None
+
+
+class VnCommuneAreaMapListResponse(BaseModel):
+    """Paginated list cho bảng admin (commune ~nghìn dòng)."""
+
+    items: list[VnCommuneAreaMapResponse]
+    total: int
+    page: int
+    page_size: int
+
+
 # VnHighSchoolRow + VnHighSchoolResponse DROPPED phase1_09 (Q9 #07 PR5 v1.3).
 # Replaced by VnSchool family schemas (TBD in Phase B.1 import script
 # + Phase D candidate FE). See Documents/Q9_07_PR5_REDESIGN.md v1.3.

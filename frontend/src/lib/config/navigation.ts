@@ -23,6 +23,7 @@ import {
   Handshake,
   History,
   LayoutDashboard,
+  MapPin,
   Percent,
   Receipt,
   RotateCcw,
@@ -272,6 +273,14 @@ export const navigationConfig: NavigationConfig = {
           label: "Cấu hình Ưu tiên",
           href: "/admin/priority-config",
           icon: Calculator,
+          roles: ["admin"],
+        },
+        {
+          // PR-A — quản lý danh mục KV theo xã (vn_commune_area_map). Admin-only
+          // (BE require_admin trên mọi endpoint).
+          label: "KV theo Xã",
+          href: "/admin/commune-kv",
+          icon: MapPin,
           roles: ["admin"],
         },
         {
