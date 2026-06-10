@@ -105,6 +105,13 @@ async def _setup_audience_data(major_id: int, unit_id: int, officer_id: int) -> 
 
             # Doc types (get-or-create — bằng TN THCS có thể chưa có trong qlts_test).
             cccd = await _get_or_create_doc_type(session, "cccd", "Căn cước công dân")
+            # Optional, paper-only doc (is_mandatory=false, requires_upload=false)
+            # — mirrors prod giay_xac_nhan_cu_tru. Exercises the materialization
+            # fix: it lives in doc_configs but NOT mandatory_docs, so before the
+            # fix it got no ProfileDocument row → paper-submitted 404.
+            curtru = await _get_or_create_doc_type(
+                session, "giay_xac_nhan_cu_tru", "Giấy xác nhận cư trú / hộ khẩu"
+            )
             hb_thpt = await _get_or_create_doc_type(session, "hoc_ba_thpt", "Học bạ THPT")
             bts_thpt = await _get_or_create_doc_type(
                 session, "bang_tot_nghiep_thpt", "Bằng tốt nghiệp THPT"
@@ -139,19 +146,37 @@ async def _setup_audience_data(major_id: int, unit_id: int, officer_id: int) -> 
             g_thcs = _mk_group(f"AUD_THCS_{suffix}", ["POST_THCS"], None)
             await session.flush()
 
-            def _mk_item(group_id, dt_id, order):
+            def _mk_item(
+                group_id,
+                dt_id,
+                order,
+                is_mandatory=True,
+                requires_upload=True,
+                submission_format="photo",
+            ):
                 session.add(
                     models.DocumentGroupItem(
                         group_id=group_id,
                         document_type_id=dt_id,
-                        is_mandatory=True,
-                        requires_upload=True,
-                        submission_format="photo",
+                        is_mandatory=is_mandatory,
+                        requires_upload=requires_upload,
+                        submission_format=submission_format,
                         display_order=order,
                     )
                 )
 
             _mk_item(g_base.id, cccd, 1)
+            # Optional, paper-only doc in the ALWAYS-applicable base group → it is
+            # present in doc_configs at create regardless of audience, but absent
+            # from mandatory_docs (is_mandatory=false).
+            _mk_item(
+                g_base.id,
+                curtru,
+                4,
+                is_mandatory=False,
+                requires_upload=False,
+                submission_format="certified_copy",
+            )
             _mk_item(g_thpt.id, hb_thpt, 2)
             _mk_item(g_thpt.id, bts_thpt, 3)
             _mk_item(g_thcs.id, hb_thcs, 2)
@@ -386,3 +411,42 @@ class TestReresolveAudience:
         assert ar.get("schema_version") == 2  # N1: không bump
         assert ar.get("admission_path_id") is not None
         assert "allow_unverified_submission" in ar
+
+    async def test_create_materializes_optional_doc_row(
+        self, client, officer_user_in_db, seed_lead_dependencies
+    ):
+        """Materialization fix: optional doc (``is_mandatory=false``) trong
+        ``doc_configs`` PHẢI có ProfileDocument row ngay khi tạo hồ sơ, dù KHÔNG
+        nằm trong ``mandatory_docs``. Trước fix chỉ ``mandatory_docs`` được
+        materialize → optional row thiếu → paper-submitted 404 (prod #44)."""
+        data = await _setup_audience_data(
+            seed_lead_dependencies["major_program_id"],
+            seed_lead_dependencies["unit_id"],
+            officer_user_in_db["id"],
+        )
+        headers = await _auth(client, officer_user_in_db)
+        pid = await _create_profile(client, headers, data)
+        # Optional doc KHÔNG vào mandatory snapshot ...
+        assert await _snapshot_mandatory(pid) == {"cccd"}
+        # ... nhưng VẪN phải có ProfileDocument row được materialize.
+        assert "giay_xac_nhan_cu_tru" in await _profile_doc_codes(pid)
+
+    async def test_paper_submitted_on_optional_doc_succeeds(
+        self, client, officer_user_in_db, seed_lead_dependencies
+    ):
+        """Regression end-to-end (prod #44): officer "Xác nhận bản giấy vừa
+        nhận" cho optional paper-only doc trả 200, KHÔNG 404. Đi qua đúng route
+        ``paper-submitted`` mà bug gốc phát lỗi."""
+        data = await _setup_audience_data(
+            seed_lead_dependencies["major_program_id"],
+            seed_lead_dependencies["unit_id"],
+            officer_user_in_db["id"],
+        )
+        headers = await _auth(client, officer_user_in_db)
+        pid = await _create_profile(client, headers, data)
+        res = await client.post(
+            f"/api/admissions/{pid}/documents/giay_xac_nhan_cu_tru/paper-submitted",
+            json={"actual_submission_format": "certified_copy"},
+            headers=headers,
+        )
+        assert res.status_code == 200, res.text

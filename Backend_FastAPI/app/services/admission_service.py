@@ -3808,9 +3808,23 @@ async def create_profile(
     )
 
     # Step 16: Initialize ProfileDocument records
+    # Materialize a row for EVERY doc in the path snapshot (mandatory +
+    # optional), not just ``mandatory_docs``. The GET response builds the
+    # ``documents_checklist`` from the full ``doc_configs`` keyset (PR #394),
+    # so an optional doc (``is_mandatory=false``, e.g. ``giay_xac_nhan_cu_tru``
+    # / ``giay_kham_suc_khoe``) surfaces with a "Xác nhận bản giấy" action
+    # button. Without a row, ``paper-submitted`` has nothing to update → 404,
+    # and ``upload`` silently no-ops (orphan file). Materializing all path docs
+    # restores the invariant "every doc_configs key ⇒ one category='path'
+    # ProfileDocument row". Optional rows stay ``status=missing`` and never
+    # block submit (``_validate_documents`` filters by ``mandatory_docs``).
+    # Use the ``doc_configs`` keyset directly (not a list over ``resolved_docs``)
+    # — it is the exact set GET renders, is inherently de-duplicated (dict
+    # keys), and keeps this site symmetric with ``_reresolve_documents_snapshot``
+    # (both feed the materializer ``list(doc_configs.keys())``).
     await admission_repo.initialize_documents_for_profile(
         profile_id=new_profile.id,
-        document_type_codes=mandatory_docs
+        document_type_codes=list(applied_rules["doc_configs"].keys()),
     )
 
     # Step 17: Reload with relationships for response
@@ -4238,6 +4252,9 @@ async def _reresolve_documents_snapshot(
         return
 
     old_mandatory = set(applied.get("mandatory_docs") or [])
+    # Capture old keyset (mandatory + optional) BEFORE overwrite — the audit
+    # below tracks the FULL doc_configs delta, not just mandatory.
+    old_doc_codes = set((applied.get("doc_configs") or {}).keys())
 
     # MERGE per-key (giữ mọi key khác — KHÔNG gán dict mới).
     applied["mandatory_docs"] = new_mandatory
@@ -4245,12 +4262,26 @@ async def _reresolve_documents_snapshot(
     profile.applied_rules = applied
     flag_modified(profile, "applied_rules")
 
-    # DELTA INSERT ProfileDocument cho code mới (idempotent, không xóa upload).
-    await admission_repo.add_path_documents_delta(profile.id, new_mandatory)
+    # DELTA INSERT ProfileDocument cho MỌI doc trong snapshot mới (mandatory +
+    # optional), idempotent, không xóa upload. PHẢI dùng full doc_configs
+    # keyset — KHÔNG chỉ ``new_mandatory`` — để optional doc cũng có row; nếu
+    # không, paper-submitted/upload trên optional doc sẽ 404 / no-op (cùng
+    # invariant với bước Initialize lúc tạo hồ sơ).
+    await admission_repo.add_path_documents_delta(
+        profile.id, list(new_doc_configs.keys())
+    )
 
-    # N5 — audit entry cho mutate snapshot.
-    added = sorted(set(new_mandatory) - old_mandatory)
-    removed = sorted(old_mandatory - set(new_mandatory))
+    # N5 — audit entry cho mutate snapshot. Tính delta trên TOÀN BỘ doc_configs
+    # keyset (mandatory + optional), KHÔNG chỉ mandatory: delta INSERT giờ
+    # materialize cả optional row, nên một thay đổi CHỈ-optional (thêm/bớt giấy
+    # tùy chọn) cũng phải để lại dấu vết — nếu không sẽ có mutation tạo row mà
+    # 0 audit entry. ``docs_added``/``docs_removed`` = full keyset; thêm
+    # ``mandatory_added``/``mandatory_removed`` để giữ phân biệt độ quan trọng.
+    new_doc_codes = set(new_doc_configs.keys())
+    added = sorted(new_doc_codes - old_doc_codes)
+    removed = sorted(old_doc_codes - new_doc_codes)
+    mandatory_added = sorted(set(new_mandatory) - old_mandatory)
+    mandatory_removed = sorted(old_mandatory - set(new_mandatory))
     if added or removed:
         from ..services import audit_service
 
@@ -4266,6 +4297,8 @@ async def _reresolve_documents_snapshot(
                 ),
                 "docs_added": added,
                 "docs_removed": removed,
+                "mandatory_added": mandatory_added,
+                "mandatory_removed": mandatory_removed,
             },
             actor_user_id=current_user.id if current_user else None,
             source="system",
