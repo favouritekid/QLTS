@@ -368,6 +368,33 @@ describe("AdaptiveAddressSelect", () => {
     )
   })
 
+  it("legacy mode: hiển thị xã theo TÊN — KHÔNG nhảy khi commune_code đã canonicalize trùng mã legacy khác", async () => {
+    // Regression (bug "Xã Nam Bình → Thị trấn Đức An"): mã GSO 24717 bị tái dùng
+    // 2 thời kỳ — legacy = "Thị trấn Đức An", đồng thời là successor của legacy
+    // "Xã Nam Bình" (24721). Sau khi BE canonicalize lúc lưu, wardCodeValue=24717.
+    // Combobox legacy PHẢI khớp theo name → "Xã Nam Bình" (24721), KHÔNG được khớp
+    // theo code → "Thị trấn Đức An" (24717).
+    mockUseWards.mockReturnValue({
+      data: [
+        { code: "24717", name: "Thị trấn Đức An", province_code: "10", district_code: "10_001" },
+        { code: "24721", name: "Xã Nam Bình", province_code: "10", district_code: "10_001" },
+      ],
+      isLoading: false,
+    })
+
+    await renderComponent({
+      mode: "legacy",
+      provinceValue: "Lao Cai",
+      districtValue: "Bat Xat",
+      wardValue: "Xã Nam Bình",
+      wardCodeValue: "24717", // mã hiện hành đã canonicalize (trùng mã legacy của xã khác)
+    })
+
+    const wardSelect = screen.getByLabelText("Phường/Xã") as HTMLSelectElement
+    // Khớp theo name → 24721 (Xã Nam Bình), KHÔNG phải 24717 (Thị trấn Đức An)
+    expect(wardSelect.value).toBe("24721")
+  })
+
   it("province change clears commune code along with ward/district", async () => {
     const { props } = await renderComponent({ mode: "current" })
 

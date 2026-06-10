@@ -171,6 +171,42 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_current_province_name_for_ward(
+        self, ward_code: str
+    ) -> Optional[str]:
+        """Province name (CURRENT era) that a CURRENT-era ward code belongs to.
+
+        Resolves WARD.code → WARD.province_code → PROVINCE.name (both valid_to IS
+        NULL). Lets the resolve-ward endpoint return the full 2-level address
+        ("Xã X, Tỉnh Y") so the officer can confirm the standardized residence.
+        Returns None if the ward or its province isn't found in the current snapshot.
+        """
+        code = (ward_code or "").strip()
+        if not code:
+            return None
+        province_code = await self.db.scalar(
+            select(AdministrativeNode.province_code)
+            .where(
+                AdministrativeNode.code == code,
+                AdministrativeNode.level == AdministrativeLevel.WARD,
+                AdministrativeNode.valid_to.is_(None),
+                AdministrativeNode.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        if not province_code:
+            return None
+        return await self.db.scalar(
+            select(AdministrativeNode.name)
+            .where(
+                AdministrativeNode.code == province_code,
+                AdministrativeNode.level == AdministrativeLevel.PROVINCE,
+                AdministrativeNode.valid_to.is_(None),
+                AdministrativeNode.is_active.is_(True),
+            )
+            .limit(1)
+        )
+
     # ------------------------------------------------------------------
     # GENERIC FILTERED (admin panel)
     # ------------------------------------------------------------------

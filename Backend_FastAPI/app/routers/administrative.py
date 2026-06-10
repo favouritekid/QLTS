@@ -129,9 +129,15 @@ async def resolve_ward(
     current_name = (
         await repo.get_current_ward_name(current_code) if current_code else None
     )
+    current_province_name = (
+        await repo.get_current_province_name_for_ward(current_code)
+        if current_code
+        else None
+    )
     return ResolveWardResponse(
         input_code=code,
         current_code=current_code,
         current_name=current_name,
+        current_province_name=current_province_name,
         resolved=current_code is not None,
     )

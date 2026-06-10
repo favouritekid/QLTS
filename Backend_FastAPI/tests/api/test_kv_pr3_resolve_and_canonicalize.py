@@ -35,6 +35,8 @@ ADMISSIONS = "/api/admissions"
 # test seeds running in the same module session.
 CURRENT_CODE = "KVC01"
 CURRENT_NAME = "Phường Hiện Hành KV"
+CURRENT_PROVINCE_CODE = "95"
+CURRENT_PROVINCE_NAME = "Tỉnh Hiện Hành KV"
 LEGACY_MERGED_CODE = "KVL01"   # merged away → successor = CURRENT_CODE
 LEGACY_UNMAPPED_CODE = "KVL02"  # legacy, no successor mapped yet → fail-closed
 
@@ -56,9 +58,15 @@ async def _seed_kv_nodes(setup_test_database):
                          ward_code, valid_from, valid_to, is_active,
                          successor_ward_code)
                     VALUES
+                        -- current province (2-level) the current ward belongs to
+                        ('{CURRENT_PROVINCE_CODE}', '{CURRENT_PROVINCE_NAME}',
+                         'PROVINCE', '{CURRENT_PROVINCE_CODE}',
+                         '{CURRENT_PROVINCE_CODE}', NULL, NULL,
+                         '2025-07-01', NULL, true, NULL),
                         -- current ward (2-level): identity successor = self
                         ('{CURRENT_CODE}', '{CURRENT_NAME}', 'WARD',
-                         '95/{CURRENT_CODE}', '95', NULL,
+                         '{CURRENT_PROVINCE_CODE}/{CURRENT_CODE}',
+                         '{CURRENT_PROVINCE_CODE}', NULL,
                          '{CURRENT_CODE}', '2025-07-01', NULL, true, '{CURRENT_CODE}'),
                         -- legacy ward merged into the current commune
                         ('{LEGACY_MERGED_CODE}', 'Xã Cũ Gộp', 'WARD',
@@ -94,6 +102,7 @@ async def test_resolve_ward_current_returns_self(
         "input_code": CURRENT_CODE,
         "current_code": CURRENT_CODE,
         "current_name": CURRENT_NAME,
+        "current_province_name": CURRENT_PROVINCE_NAME,
         "resolved": True,
     }
 
@@ -114,6 +123,7 @@ async def test_resolve_ward_legacy_merged_returns_current(
     assert body["input_code"] == LEGACY_MERGED_CODE
     assert body["current_code"] == CURRENT_CODE        # ← cross-era resolve
     assert body["current_name"] == CURRENT_NAME
+    assert body["current_province_name"] == CURRENT_PROVINCE_NAME  # full 2-level addr
     assert body["resolved"] is True
 
 
@@ -132,6 +142,7 @@ async def test_resolve_ward_unmapped_legacy_fails_closed(
         "input_code": LEGACY_UNMAPPED_CODE,
         "current_code": None,
         "current_name": None,
+        "current_province_name": None,
         "resolved": False,
     }
 

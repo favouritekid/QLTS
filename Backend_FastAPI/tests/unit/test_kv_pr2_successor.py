@@ -42,6 +42,16 @@ def _ward(code, *, current, successor, dist=None):
     )
 
 
+def _province(code, *, current):
+    return AdministrativeNode(
+        code=code, name=f"Province {code}", level=AdministrativeLevel.PROVINCE,
+        path=f"{code}", province_code=code, district_code=None, ward_code=None,
+        valid_from=date(2025, 7, 1) if current else date(2010, 1, 1),
+        valid_to=None if current else date(2025, 7, 1),
+        is_active=True, successor_ward_code=None,
+    )
+
+
 async def test_resolve_current_ward_code(db) -> None:
     db.add(_ward("CUR1", current=True, successor="CUR1"))                  # current identity
     db.add(_ward("LEGSAME", current=False, successor="LEGSAME"))           # legacy survived
@@ -98,3 +108,17 @@ async def test_get_current_ward_name(db) -> None:
     assert await repo.get_current_ward_name("LEGX") is None  # legacy, not current
     assert await repo.get_current_ward_name("NOPE") is None
     assert await repo.get_current_ward_name("") is None
+
+
+async def test_get_current_province_name_for_ward(db) -> None:
+    """PR-3 + Cách B: a CURRENT ward code → its CURRENT province name (full
+    2-level address). Legacy ward / unknown / empty → None."""
+    db.add(_province("99", current=True))                   # current province 99
+    db.add(_ward("CURY", current=True, successor="CURY"))   # current ward under 99
+    db.add(_ward("LEGY", current=False, successor="CURY", dist="99_1"))  # legacy ward
+    await db.flush()
+    repo = AdministrativeRepository(db)
+    assert await repo.get_current_province_name_for_ward("CURY") == "Province 99"
+    assert await repo.get_current_province_name_for_ward("LEGY") is None  # legacy ward
+    assert await repo.get_current_province_name_for_ward("NOPE") is None
+    assert await repo.get_current_province_name_for_ward("") is None
