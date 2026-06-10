@@ -192,6 +192,12 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # deny row (same as paper-submitted — finance never reaches the
         # owning-officer scope check).
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/graduation-proof", "action": "POST"},
+        # BR3 (2026-06-09) — officer tự RESET tài liệu hồ sơ mình phụ trách khi
+        # ở draft/rejected/revision_requested (gỡ submission để sửa). Route gate
+        # cho officer chạm tới; service DocumentActionPolicy narrows owner +
+        # OWNER_DOC_MUTATION_STATES + doc non-missing. Manager/admin đã có reset
+        # ở template riêng; reset KHÔNG mở verify/reject (vẫn reviewer-only).
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/reset", "action": "POST"},
         # Phase 3 multi-NV read-only (PR-3B). Officer can VIEW result-published
         # profiles + choice list for their assigned unit; mutations stay
         # manager-only per RBAC matrix plan v0.7. Service-layer IDOR

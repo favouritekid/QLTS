@@ -55,8 +55,13 @@ missing or previously rejected.
 ``"reject"``: reviewer, status is anything past ``missing`` except
 the rejected/missing terminal states (= ``uploaded`` /
 ``paper_submitted`` / ``verified``), profile NOT blocked.
-``"reset"``: reviewer, anything except ``missing``, profile NOT
-blocked.
+``"reset"``: reviewer (admin/manager-in-scope) on any non-``missing`` doc of
+a non-enrolled profile; OR the owning officer when the profile is in
+``OWNER_DOC_MUTATION_STATES`` (draft / rejected / revision_requested) AND the
+doc is NOT yet ``verified`` — a self-service undo of the officer's OWN
+submission (uploaded / paper_submitted / rejected). The officer cannot reset
+a manager-``verified`` doc ("đã duyệt thì không cho chỉnh sửa"); only a
+reviewer can. verify/reject stay reviewer-only (review ≠ editing content).
 """
 from __future__ import annotations
 
@@ -101,6 +106,16 @@ APPLICANT_DOC_MUTATION_STATES: frozenset[str] = frozenset(
 # pre-Student so we leave reviewer access open for evidence cleanup.
 REVIEWER_DOC_MUTATION_BLOCKED_STATES: frozenset[str] = frozenset({"enrolled"})
 
+# BR3 (2026-06-09): trạng thái hồ sơ mà OWNER (officer phụ trách) được tự RESET
+# tài liệu — gỡ submission của chính mình để sửa khi hồ sơ chưa nộp/bị trả về.
+# Khớp đúng các trạng thái officer được sửa hồ sơ (``profile.permissions.edit``).
+# HẸP HƠN ``APPLICANT_DOC_MUTATION_STATES`` (vốn gồm submitted/resubmitted để
+# officer THÊM evidence sau nộp): officer upload được ở submitted NHƯNG KHÔNG
+# reset khi hồ sơ đang chờ reviewer thẩm định.
+OWNER_DOC_MUTATION_STATES: frozenset[str] = frozenset(
+    {"draft", "rejected", "revision_requested"}
+)
+
 
 # Cached derived flags — computed once per (profile, user) pair so the
 # five authorize() calls a single response makes don't re-derive them.
@@ -112,6 +127,7 @@ class _UserProfileContext:
     reviewer_scope: bool
     applicant_can_modify_docs: bool
     reviewer_can_modify_docs: bool
+    owner_can_modify_docs: bool
 
 
 def _build_context(
@@ -145,6 +161,7 @@ def _build_context(
     reviewer_can_modify_docs = (
         profile.status not in REVIEWER_DOC_MUTATION_BLOCKED_STATES
     )
+    owner_can_modify_docs = profile.status in OWNER_DOC_MUTATION_STATES
     return _UserProfileContext(
         is_admin=is_admin,
         is_owner=is_owner,
@@ -152,6 +169,7 @@ def _build_context(
         reviewer_scope=reviewer_scope,
         applicant_can_modify_docs=applicant_can_modify_docs,
         reviewer_can_modify_docs=reviewer_can_modify_docs,
+        owner_can_modify_docs=owner_can_modify_docs,
     )
 
 
@@ -237,11 +255,21 @@ class DocumentActionPolicy:
                 and doc_status in ("uploaded", "paper_submitted", "verified")
             )
         if action == "reset":
-            return (
-                ctx.reviewer_scope
-                and ctx.reviewer_can_modify_docs
-                and doc_status != "missing"
+            # BR3 (2026-06-09): reviewer (admin/manager-in-scope) reset bất kỳ
+            # doc non-missing của hồ sơ non-enrolled; HOẶC owner (officer phụ
+            # trách) tự reset khi hồ sơ ở draft/rejected/revision_requested —
+            # NHƯNG owner KHÔNG được reset doc đã ``verified`` ("đã duyệt thì
+            # không cho chỉnh sửa": officer chỉ gỡ submission CỦA CHÍNH MÌNH —
+            # uploaded/paper_submitted/rejected — không xoá verification của
+            # manager). Chỉ reviewer mới reset được doc đã verified. verify/
+            # reject vẫn reviewer-only (thẩm định ≠ sửa nội dung).
+            reviewer_ok = ctx.reviewer_scope and ctx.reviewer_can_modify_docs
+            owner_ok = (
+                ctx.is_owner
+                and ctx.owner_can_modify_docs
+                and doc_status != "verified"
             )
+            return (reviewer_ok or owner_ok) and doc_status != "missing"
 
         # Unknown action — treat as deny so a typo in calling code
         # never grants access. Service guard surfaces the bug as a

@@ -223,23 +223,21 @@ def _authorize_document_action(
     config = doc_configs.get(doc_code, {}) or {}
     requires_upload = bool(config.get("requires_upload", True))
 
-    # BR2 (2026-04-29): the document is "extra" — exists in the DB but
-    # is no longer in the current applied_rules.mandatory_docs snapshot
-    # (typically because the AdmissionPath was edited after the profile
-    # was created). The response marks these rows with ``is_extra=True``
-    # and clamps every ``can_*`` flag to False so the FE row renders
-    # read-only. The service-side gate must mirror that contract,
-    # otherwise a direct call to ``verify-format`` / ``reject`` /
-    # ``reset`` / ``upload`` / ``paper-submitted`` bypasses the
-    # read-only promise (the policy alone never sees ``is_extra``).
-    # Treat missing ``mandatory_docs`` as ``[]`` for safety: a profile
-    # without a snapshot can't tell which docs are "active" so every
-    # request is necessarily on extras.
-    mandatory_docs = applied_rules.get("mandatory_docs") or []
-    if doc_code not in mandatory_docs:
+    # BR2 (2026-04-29; fix 2026-06-09): the document is "extra" — exists in
+    # the DB but is no longer in the current ``applied_rules.doc_configs``
+    # (typically because the AdmissionPath was edited after the profile was
+    # created). The response marks these rows ``is_extra=True`` + clamps every
+    # ``can_*`` flag to False (read-only). The service-side gate must mirror
+    # that contract. MUST check ``doc_configs`` (mandatory + optional), NOT
+    # just ``mandatory_docs`` — else optional docs (``is_mandatory=false``)
+    # would be treated as extra here and a real officer/manager mutation
+    # rejected even though the FE shows action buttons. Mirrors the builder's
+    # ``_active_set`` (= doc_configs keyset). Empty config → every request is
+    # on an extra (no snapshot to tell which docs are active).
+    if doc_code not in doc_configs:
         raise PermissionDeniedError(
             f"Document '{doc_code}' is no longer in the current admission "
-            f"path's mandatory list (treated as extra / evidence-only). "
+            f"path's document config (treated as extra / evidence-only). "
             f"Direct '{action}' actions are blocked until an explicit "
             f"sync-path action ships."
         )
@@ -2316,8 +2314,19 @@ def _compute_frontend_fields(
     #       is intentionally out of scope for this PR.
     documents_checklist = []
     _mandatory_set = set(all_mandatory_docs)
+    # BR2 fix (2026-06-09): "active" = MỌI doc trong doc_configs hiện tại
+    # (mandatory + optional), KHÔNG chỉ mandatory_docs. Optional doc
+    # (is_mandatory=false trong doc_configs, vd giay_kham_suc_khoe /
+    # giay_xac_nhan_cu_tru) khi đã nộp trước đây rơi vào pass 2 →
+    # is_extra=True + read-only + nhãn "ngoài yêu cầu hiện tại" SAI (thực
+    # ra là tài liệu tùy chọn của phương thức hiện tại). Thứ tự: mandatory
+    # trước (giữ thứ tự required), optional sau (thứ tự config).
+    _active_codes = list(all_mandatory_docs) + [
+        c for c in doc_configs.keys() if c not in _mandatory_set
+    ]
+    _active_set = set(_active_codes)
 
-    for i, doc_code in enumerate(all_mandatory_docs):
+    for i, doc_code in enumerate(_active_codes):
         config = doc_configs.get(doc_code, {})
         uploaded_doc = doc_by_code.get(doc_code, {})
         _doc_status = uploaded_doc.get("status", "missing")
@@ -2327,7 +2336,7 @@ def _compute_frontend_fields(
         documents_checklist.append({
             "code": doc_code,
             "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
-            "is_mandatory": True,
+            "is_mandatory": doc_code in _mandatory_set,
             "is_extra": False,
             "requires_upload": _requires_upload,
             "submission_format": config.get("submission_format"),
@@ -2361,9 +2370,11 @@ def _compute_frontend_fields(
             **_perms,
         })
 
-    # Pass (2): extra ProfileDocument rows. Stable sort by code so
-    # repeated GETs render in a consistent order.
-    for extra_code in sorted(c for c in doc_by_code.keys() if c not in _mandatory_set):
+    # Pass (2): extra ProfileDocument rows — code KHÔNG còn trong doc_configs
+    # hiện tại (path đã đổi sau khi nộp). Stable sort by code so repeated GETs
+    # render in a consistent order. Dùng _active_set (= doc_configs keyset),
+    # KHÔNG _mandatory_set, để optional doc không bị coi nhầm là extra.
+    for extra_code in sorted(c for c in doc_by_code.keys() if c not in _active_set):
         uploaded_doc = doc_by_code[extra_code]
         _doc_status = uploaded_doc.get("status", "missing")
         # No live config for extras (path changed). Infer
@@ -6861,7 +6872,7 @@ async def update_graduation_proof_kind(
     Auth: ``get_profile`` đã chặn IDOR scope (officer=assigned+unit /
     manager=unit / admin all). Thêm 2 guard mirror ``_authorize_document_action``
     mà sibling endpoints (paper-submit/verify/reject/reset) áp:
-    - **BR2 is_extra**: doc đã rớt khỏi ``mandatory_docs`` snapshot = read-only.
+    - **BR2 is_extra**: doc đã rớt khỏi ``doc_configs`` snapshot = read-only.
     - **doc-status**: chỉ cập nhật khi giấy ĐÃ được ghi nhận
       (``paper_submitted`` / ``verified``) — không stamp lên doc chưa nhận.
     Chỉ nhận ``official_diploma``: giấy tạm thời + hạn bổ sung ghi qua paper-
@@ -6896,13 +6907,16 @@ async def update_graduation_proof_kind(
             f"Document code '{doc_code}' not found in profile documents"
         )
 
-    # BR2 — extras (dropped from the mandatory snapshot) are read-only.
+    # BR2 (fix 2026-06-09) — extras (dropped from doc_configs) are read-only.
+    # Dùng doc_configs keyset (mandatory + optional) cho NHẤT QUÁN 1 định nghĩa
+    # "extra" với builder + _authorize_document_action. Vô hại với
+    # bang_tot_nghiep_thpt (luôn mandatory) — chỉ tránh drift về sau.
     applied_rules = profile.applied_rules or {}
-    mandatory_docs = applied_rules.get("mandatory_docs") or []
-    if doc_code not in mandatory_docs:
+    doc_configs = applied_rules.get("doc_configs") or {}
+    if doc_code not in doc_configs:
         raise PermissionDeniedError(
             f"Document '{doc_code}' is no longer in the current admission "
-            f"path's mandatory list (extra / evidence-only)."
+            f"path's document config (extra / evidence-only)."
         )
 
     # Coherence — only a RECEIVED graduation doc can be upgraded to official.
@@ -7117,9 +7131,15 @@ async def reset_document(
     consistent. The caller-side pattern lives in
     ``app/routers/admissions.py::reset_document_endpoint``.
 
-    Permissions:
-    - Officer: Can reset documents for profiles in draft/rejected status
-    - Manager/Admin: Can reset any document except for enrolled profiles
+    Permissions (DocumentActionPolicy = single source of truth):
+    - Officer (owning): reset trên hồ sơ draft / rejected / revision_requested
+      (gỡ submission CỦA CHÍNH MÌNH: uploaded/paper_submitted/rejected;
+      OWNER_DOC_MUTATION_STATES). KHÔNG reset doc đã ``verified`` ("đã duyệt thì
+      không cho chỉnh sửa"); KHÔNG reset khi submitted/resubmitted (đang chờ
+      reviewer) hay approved/enrolled.
+    - Manager (in-scope) / Admin: reset bất kỳ doc non-missing (kể cả verified)
+      trừ hồ sơ enrolled.
+    - verify/reject vẫn reviewer-only (review ≠ sửa nội dung).
 
     Args:
         db: Database session

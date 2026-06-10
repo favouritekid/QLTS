@@ -290,11 +290,76 @@ class TestReset:
         policy = DocumentActionPolicy.for_(profile_draft_lead42_owner20, admin)
         assert not policy.authorize("reset", "missing", requires_upload=True)
 
-    def test_officer_cannot_reset(
+    @pytest.mark.parametrize(
+        "profile_status", ["draft", "rejected", "revision_requested"]
+    )
+    def test_owner_officer_can_reset_in_editable_states(
+        self, officer_owner, profile_status,
+    ):
+        """BR3 (2026-06-09): owning officer tự reset (gỡ submission của chính
+        mình) khi hồ sơ ở OWNER_DOC_MUTATION_STATES."""
+        profile = _StubProfile(
+            status=profile_status,
+            lead=_StubLead(unit_id=42, assigned_officer_id=20),
+        )
+        policy = DocumentActionPolicy.for_(profile, officer_owner)
+        assert policy.authorize("reset", "uploaded", requires_upload=True)
+
+    @pytest.mark.parametrize(
+        "profile_status", ["submitted", "resubmitted", "approved", "enrolled"]
+    )
+    def test_owner_officer_cannot_reset_outside_editable_states(
+        self, officer_owner, profile_status,
+    ):
+        """Officer KHÔNG reset khi hồ sơ đang chờ reviewer (submitted/
+        resubmitted) hay đã quyết định (approved/enrolled) — reviewer-only."""
+        profile = _StubProfile(
+            status=profile_status,
+            lead=_StubLead(unit_id=42, assigned_officer_id=20),
+        )
+        policy = DocumentActionPolicy.for_(profile, officer_owner)
+        assert not policy.authorize("reset", "uploaded", requires_upload=True)
+
+    def test_officer_not_owner_cannot_reset(
+        self, profile_draft_lead42_owner20, officer_not_owner,
+    ):
+        """Officer KHÁC (không phụ trách) không reset dù hồ sơ draft."""
+        policy = DocumentActionPolicy.for_(
+            profile_draft_lead42_owner20, officer_not_owner
+        )
+        assert not policy.authorize("reset", "uploaded", requires_upload=True)
+
+    def test_missing_blocks_owner_reset(
         self, profile_draft_lead42_owner20, officer_owner,
     ):
+        """reset cần doc non-missing kể cả với owner."""
         policy = DocumentActionPolicy.for_(profile_draft_lead42_owner20, officer_owner)
-        assert not policy.authorize("reset", "uploaded", requires_upload=True)
+        assert not policy.authorize("reset", "missing", requires_upload=True)
+
+    @pytest.mark.parametrize(
+        "profile_status", ["draft", "rejected", "revision_requested"]
+    )
+    def test_owner_officer_cannot_reset_verified_doc(
+        self, officer_owner, profile_status,
+    ):
+        """BR3 "đã duyệt thì không cho chỉnh sửa": owner KHÔNG reset doc đã
+        ``verified`` (manager duyệt) — chỉ reviewer mới reset được verified."""
+        profile = _StubProfile(
+            status=profile_status,
+            lead=_StubLead(unit_id=42, assigned_officer_id=20),
+        )
+        policy = DocumentActionPolicy.for_(profile, officer_owner)
+        assert not policy.authorize("reset", "verified", requires_upload=True)
+
+    @pytest.mark.parametrize(
+        "doc_status", ["uploaded", "paper_submitted", "rejected"]
+    )
+    def test_owner_officer_can_reset_own_submission(
+        self, profile_draft_lead42_owner20, officer_owner, doc_status,
+    ):
+        """Owner reset được submission CỦA CHÍNH MÌNH (chưa verified)."""
+        policy = DocumentActionPolicy.for_(profile_draft_lead42_owner20, officer_owner)
+        assert policy.authorize("reset", doc_status, requires_upload=True)
 
 
 # ---------------------------------------------------------------------------

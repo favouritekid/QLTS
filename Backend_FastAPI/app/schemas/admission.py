@@ -32,7 +32,8 @@ class FamilyMemberSchema(BaseModel):
     Family member information (stored in admission_profile.family_info JSONB array).
 
     Security:
-    - XSS Prevention: html.escape() on full_name, occupation
+    - Text fields trim-only; HTML escape ở tầng render (KHÔNG tầng lưu —
+      tránh bug double-escape "amp"). Xem ``sanitize_text``.
     - Phone Validation: Vietnam format (0 + 9-10 digits)
     """
     relationship: str = Field(
@@ -65,10 +66,17 @@ class FamilyMemberSchema(BaseModel):
     @field_validator('full_name', 'occupation', 'relationship')
     @classmethod
     def sanitize_text(cls, v: str) -> str:
-        """XSS Prevention: Escape HTML entities."""
+        """Trim khoảng trắng — KHÔNG html.escape.
+
+        Schema này dùng chung cho cả request LẪN response. html.escape
+        không idempotent (``&`` → ``&amp;``) nên escape ở tầng lưu khiến
+        giá trị tích lũy thêm một lớp ``&amp;`` mỗi vòng đọc/lưu (bug
+        "amp"). Escape HTML là việc của tầng render (React/JSX, Jinja
+        autoescape của email_service), KHÔNG phải tầng lưu.
+        """
         if not v:
             return v
-        return html.escape(v.strip())
+        return v.strip()
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -88,7 +96,8 @@ class AcademicRecordSchema(BaseModel):
       THCS, 12 for THPT). Used by `resolve_kv_for_profile()` Phase C.
 
     Security:
-    - XSS Prevention: html.escape() on school_name
+    - school_name trim-only; HTML escape ở tầng render (KHÔNG tầng lưu —
+      tránh bug double-escape "amp"). Xem ``sanitize_school_name``.
     - Year Validation: year_from <= year_to, reasonable range (1900-2100)
     - GPA Validation: 0.0 - 10.0 range
     """
@@ -140,8 +149,14 @@ class AcademicRecordSchema(BaseModel):
     @field_validator('school_name')
     @classmethod
     def sanitize_school_name(cls, v: str) -> str:
-        """XSS Prevention: Escape HTML entities."""
-        return html.escape(v.strip())
+        """Trim khoảng trắng — KHÔNG html.escape.
+
+        Xem ghi chú ``FamilyMemberSchema.sanitize_text``: ``AcademicRecordSchema``
+        dùng chung cho request + response, html.escape không idempotent nên
+        escape ở tầng lưu sinh bug "amp" (``&#x27;`` → ``&amp;#x27;`` → …).
+        Escape thuộc tầng render, không phải tầng lưu.
+        """
+        return v.strip()
 
     @field_validator('level')
     @classmethod
