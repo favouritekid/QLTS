@@ -120,28 +120,16 @@ async def test_identity_backfill_predicate(db) -> None:
     assert by[("M", False)] is None  # merged away → still NULL (needs merger CSV)
 
 
-async def test_get_current_ward_name(db) -> None:
-    """PR-3 resolve endpoint helper: name of a CURRENT-era ward by code;
-    legacy/unknown → None."""
-    db.add(_ward("CURX", current=True, successor="CURX"))
-    db.add(_ward("LEGX", current=False, successor="CURX", dist="99_1"))
-    await db.flush()
-    repo = AdministrativeRepository(db)
-    assert await repo.get_current_ward_name("CURX") == "Ward CURX"
-    assert await repo.get_current_ward_name("LEGX") is None  # legacy, not current
-    assert await repo.get_current_ward_name("NOPE") is None
-    assert await repo.get_current_ward_name("") is None
-
-
-async def test_get_current_province_name_for_ward(db) -> None:
-    """PR-3 + Cách B: a CURRENT ward code → its CURRENT province name (full
-    2-level address). Legacy ward / unknown / empty → None."""
+async def test_get_current_commune_display(db) -> None:
+    """PR-3 + Cách B (review #5): a CURRENT ward code → (ward_name, province_name)
+    cho địa chỉ 2 cấp. Legacy ward / unknown / empty → (None, None); ward hiện
+    hành nhưng tỉnh không resolve được → (name, None)."""
     db.add(_province("99", current=True))                   # current province 99
     db.add(_ward("CURY", current=True, successor="CURY"))   # current ward under 99
     db.add(_ward("LEGY", current=False, successor="CURY", dist="99_1"))  # legacy ward
     await db.flush()
     repo = AdministrativeRepository(db)
-    assert await repo.get_current_province_name_for_ward("CURY") == "Province 99"
-    assert await repo.get_current_province_name_for_ward("LEGY") is None  # legacy ward
-    assert await repo.get_current_province_name_for_ward("NOPE") is None
-    assert await repo.get_current_province_name_for_ward("") is None
+    assert await repo.get_current_commune_display("CURY") == ("Ward CURY", "Province 99")
+    assert await repo.get_current_commune_display("LEGY") == (None, None)  # legacy, not current
+    assert await repo.get_current_commune_display("NOPE") == (None, None)
+    assert await repo.get_current_commune_display("") == (None, None)

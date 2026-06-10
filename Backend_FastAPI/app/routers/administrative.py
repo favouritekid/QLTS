@@ -126,13 +126,10 @@ async def resolve_ward(
     """
     repo = AdministrativeRepository(db)
     current_code = await repo.resolve_current_ward_code(code)
-    current_name = (
-        await repo.get_current_ward_name(current_code) if current_code else None
-    )
-    current_province_name = (
-        await repo.get_current_province_name_for_ward(current_code)
+    current_name, current_province_name = (
+        await repo.get_current_commune_display(current_code)
         if current_code
-        else None
+        else (None, None)
     )
     return ResolveWardResponse(
         input_code=code,
