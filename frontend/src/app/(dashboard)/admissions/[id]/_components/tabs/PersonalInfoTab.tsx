@@ -54,7 +54,11 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   // (hydrate an existing profile) and whenever the officer re-picks — no imperative
   // state. Officer always sees which current commune+province an old/legacy ward
   // maps to (+ a warning when it can't be resolved → must pick a current commune).
-  const { data: resolvedWard } = useResolveWard(permanentCommuneCode)
+  const {
+    data: resolvedWard,
+    isLoading: resolvingWard,
+    isError: resolveWardError,
+  } = useResolveWard(permanentCommuneCode)
 
   // Address mode: local state, re-derived when profile.version changes.
   // Uses React's "adjusting state during render" pattern — no useEffect.
@@ -326,6 +330,28 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <span aria-hidden="true">⚠</span>
                 Xã/phường đã chọn không khớp địa giới hiện hành — vui lòng chọn lại
                 xã/phường hiện tại.
+              </p>
+            ) : permanentCommuneCode && resolvingWard ? (
+              // Đang gọi resolve-ward — KHÔNG hiện dấu ✓ xanh (tránh trấn an sai
+              // khi chưa biết kết quả). Trạng thái trung tính.
+              <p
+                className="text-xs text-muted-foreground flex items-center gap-1"
+                data-testid="address-resolving"
+              >
+                <span aria-hidden="true">…</span>
+                Đang kiểm tra xã/phường theo địa giới hiện hành…
+              </p>
+            ) : permanentCommuneCode && resolveWardError ? (
+              // resolve-ward lỗi mạng/5xx: mã đã được canonicalize & lưu (KV vẫn
+              // resolve được phía server), nhưng KHÔNG khẳng định bằng dấu ✓ xanh.
+              <p
+                className="text-xs text-warning-700 flex items-center gap-1"
+                data-testid="address-resolve-error"
+                role="alert"
+              >
+                <span aria-hidden="true">⚠</span>
+                Đã lưu mã xã/phường nhưng chưa kiểm tra được xã/phường hiện hành —
+                vui lòng tải lại trang.
               </p>
             ) : permanentCommuneCode ? (
               <p

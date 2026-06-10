@@ -70,6 +70,24 @@ async def test_resolve_current_ward_code(db) -> None:
     assert await repo.resolve_current_ward_code(None) is None          # None
 
 
+async def test_resolve_current_ward_code_reused_code_prefers_current(db) -> None:
+    """Regression (review #1): a GSO ward code REUSED across the 2025 reform —
+    same code present in BOTH eras with DIFFERENT successors — must resolve to the
+    CURRENT-era commune deterministically, never the legacy row's successor.
+
+    Mirrors the real 24717 collision ("Thị trấn Đức An" legacy / "Xã Đức An"
+    current). Without the era-priority ORDER BY, ``.limit(1)`` returned an
+    arbitrary row → could store a wrong permanent_commune_code on save."""
+    # current row: code is a live commune → successor = self
+    db.add(_ward("DUP", current=True, successor="DUP"))
+    # legacy row reusing the SAME code, pointing somewhere else (divergent)
+    db.add(_ward("DUP", current=False, successor="OTHER", dist="99_1"))
+    await db.flush()
+    repo = AdministrativeRepository(db)
+    # Current-era row wins → DUP (its own code), never the legacy "OTHER".
+    assert await repo.resolve_current_ward_code("DUP") == "DUP"
+
+
 async def test_identity_backfill_predicate(db) -> None:
     """Migration's identity UPDATE: code still current → successor=self;
     merged-away code (no current equivalent) → stays NULL."""

@@ -27,7 +27,7 @@ vi.mock("@/lib/hooks/useAdministrative", () => ({
   useProvinces: () => ({ data: [], isLoading: false }),
   useDistricts: () => ({ data: [], isLoading: false }),
   useWards: () => ({ data: [], isLoading: false }),
-  useResolveWard: () => ({ data: undefined, isLoading: false }),
+  useResolveWard: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 // Mock AdaptiveAddressSelect — lightweight spy that exposes key props

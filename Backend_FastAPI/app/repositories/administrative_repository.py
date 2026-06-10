@@ -147,6 +147,14 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
                 AdministrativeNode.level == AdministrativeLevel.WARD,
                 AdministrativeNode.successor_ward_code.isnot(None),
             )
+            # A GSO ward code can be REUSED across the 2025 reform (the same code
+            # exists in BOTH the legacy and current snapshots — e.g. 24717 =
+            # legacy "Thị trấn Đức An" AND current "Xã Đức An"). The CURRENT-era
+            # row (valid_to IS NULL) is authoritative: its successor is the live
+            # commune. Order current-first so resolution is DETERMINISTIC and
+            # correct regardless of row/scan order — a bare ``.limit(1)`` would
+            # pick an arbitrary era when the code collides.
+            .order_by(AdministrativeNode.valid_to.is_(None).desc())
             .limit(1)
         )
         result = await self.db.execute(stmt)
