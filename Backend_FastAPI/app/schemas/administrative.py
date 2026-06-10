@@ -44,8 +44,13 @@ class ResolveWardResponse(BaseModel):
 
     ``resolved=False`` (current_code=None) means the input couldn't be mapped to a
     current-era commune → FE keeps the officer on a current-mode pick (submit gate
-    also fail-closes)."""
+    also fail-closes).
+
+    ``current_province_name`` is the province the resolved commune now belongs to
+    (post 01/07/2025 2-level地giới) — lets the FE show the full standardized address
+    "Xã X, Tỉnh Y" so the officer can confirm the 2-level resolution at a glance."""
     input_code: str
     current_code: Optional[str] = None
     current_name: Optional[str] = None
+    current_province_name: Optional[str] = None
     resolved: bool

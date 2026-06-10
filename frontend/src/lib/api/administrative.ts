@@ -33,6 +33,9 @@ export interface ResolvedWard {
   input_code: string
   current_code: string | null
   current_name: string | null
+  /** Province (current 2-level era) the resolved commune belongs to — for showing
+   *  the full standardized address "Xã X, Tỉnh Y". */
+  current_province_name: string | null
   resolved: boolean
 }
 

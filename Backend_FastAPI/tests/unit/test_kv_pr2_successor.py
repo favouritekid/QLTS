@@ -42,6 +42,16 @@ def _ward(code, *, current, successor, dist=None):
     )
 
 
+def _province(code, *, current):
+    return AdministrativeNode(
+        code=code, name=f"Province {code}", level=AdministrativeLevel.PROVINCE,
+        path=f"{code}", province_code=code, district_code=None, ward_code=None,
+        valid_from=date(2025, 7, 1) if current else date(2010, 1, 1),
+        valid_to=None if current else date(2025, 7, 1),
+        is_active=True, successor_ward_code=None,
+    )
+
+
 async def test_resolve_current_ward_code(db) -> None:
     db.add(_ward("CUR1", current=True, successor="CUR1"))                  # current identity
     db.add(_ward("LEGSAME", current=False, successor="LEGSAME"))           # legacy survived
@@ -58,6 +68,29 @@ async def test_resolve_current_ward_code(db) -> None:
     assert await repo.resolve_current_ward_code("NOPE") is None        # unknown
     assert await repo.resolve_current_ward_code("") is None            # empty
     assert await repo.resolve_current_ward_code(None) is None          # None
+
+
+async def test_resolve_current_ward_code_reused_code_prefers_current(db) -> None:
+    """Regression (review #1): a GSO ward code REUSED across the 2025 reform —
+    same code present in BOTH eras with DIFFERENT successors — must resolve to the
+    CURRENT-era commune deterministically, never the legacy row's successor.
+
+    Mirrors the real 24717 collision ("Thị trấn Đức An" legacy / "Xã Đức An"
+    current). Without the era-priority ORDER BY, ``.limit(1)`` returned an
+    arbitrary row → could store a wrong permanent_commune_code on save.
+
+    NOTE: the LEGACY row is inserted FIRST on purpose. On a freshly truncated
+    table a bare ``LIMIT 1`` (no ORDER BY) returns heap order ≈ insert order, so
+    legacy-first makes this test FAIL if the ``ORDER BY valid_to IS NULL`` is
+    removed — i.e. it actually pins the fix instead of passing coincidentally."""
+    # legacy row reusing the SAME code, pointing somewhere else (divergent) — FIRST
+    db.add(_ward("DUP", current=False, successor="OTHER", dist="99_1"))
+    # current row: code is a live commune → successor = self
+    db.add(_ward("DUP", current=True, successor="DUP"))
+    await db.flush()
+    repo = AdministrativeRepository(db)
+    # Current-era row wins → DUP (its own code), never the legacy "OTHER".
+    assert await repo.resolve_current_ward_code("DUP") == "DUP"
 
 
 async def test_identity_backfill_predicate(db) -> None:
@@ -98,3 +131,17 @@ async def test_get_current_ward_name(db) -> None:
     assert await repo.get_current_ward_name("LEGX") is None  # legacy, not current
     assert await repo.get_current_ward_name("NOPE") is None
     assert await repo.get_current_ward_name("") is None
+
+
+async def test_get_current_province_name_for_ward(db) -> None:
+    """PR-3 + Cách B: a CURRENT ward code → its CURRENT province name (full
+    2-level address). Legacy ward / unknown / empty → None."""
+    db.add(_province("99", current=True))                   # current province 99
+    db.add(_ward("CURY", current=True, successor="CURY"))   # current ward under 99
+    db.add(_ward("LEGY", current=False, successor="CURY", dist="99_1"))  # legacy ward
+    await db.flush()
+    repo = AdministrativeRepository(db)
+    assert await repo.get_current_province_name_for_ward("CURY") == "Province 99"
+    assert await repo.get_current_province_name_for_ward("LEGY") is None  # legacy ward
+    assert await repo.get_current_province_name_for_ward("NOPE") is None
+    assert await repo.get_current_province_name_for_ward("") is None

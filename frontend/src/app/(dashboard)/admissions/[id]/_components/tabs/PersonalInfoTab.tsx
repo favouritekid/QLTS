@@ -9,11 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Combobox } from "@/components/ui/combobox"
 
 import { useMemo, useState } from "react"
-import { administrativeApi, type AddressMode, type ResolvedWard } from "@/lib/api/administrative"
+import { type AddressMode } from "@/lib/api/administrative"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
-import { useProvinces } from "@/lib/hooks/useAdministrative"
+import { useProvinces, useResolveWard } from "@/lib/hooks/useAdministrative"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
 interface PersonalInfoTabProps {
@@ -48,21 +48,17 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentResidentialGroup = useWatch({ control: form.control, name: "permanent_residential_group" }) || ""
   const permanentStreetAddress = useWatch({ control: form.control, name: "permanent_street_address" }) || ""
 
-  // PR-3: resolved CURRENT commune for the picked ward (display badge). The BE
-  // canonicalizes permanent_commune_code → current on save, so this is UX only:
-  // officer sees which current commune an old/legacy ward maps to (+ a warning
-  // when it can't be resolved → must pick a current-mode commune).
-  const [resolvedWard, setResolvedWard] = useState<ResolvedWard | null>(null)
-  const resolvePermanentWard = (code: string | null) => {
-    if (!code) {
-      setResolvedWard(null)
-      return
-    }
-    administrativeApi
-      .resolveWard(code)
-      .then(setResolvedWard)
-      .catch(() => setResolvedWard(null))
-  }
+  // PR-3 + Cách B: resolved CURRENT commune (2-cấp) for the picked ward, driven
+  // by a React Query hook keyed on permanent_commune_code. The BE canonicalizes
+  // permanent_commune_code → current on save; this hook auto-fetches both on LOAD
+  // (hydrate an existing profile) and whenever the officer re-picks — no imperative
+  // state. Officer always sees which current commune+province an old/legacy ward
+  // maps to (+ a warning when it can't be resolved → must pick a current commune).
+  const {
+    data: resolvedWard,
+    isLoading: resolvingWard,
+    isError: resolveWardError,
+  } = useResolveWard(permanentCommuneCode)
 
   // Address mode: local state, re-derived when profile.version changes.
   // Uses React's "adjusting state during render" pattern — no useEffect.
@@ -278,21 +274,20 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               onProvinceChange={(value) => {
                 form.setValue("permanent_province", value, { shouldDirty: true })
                 // Province reset clears ward chain → mã xã canonical theo đó.
+                // (useResolveWard tự clear badge khi commune_code về null.)
                 form.setValue("permanent_commune_code", null, { shouldDirty: true })
-                setResolvedWard(null)
               }}
               onDistrictChange={(value) => {
                 form.setValue("permanent_district", value || "", { shouldDirty: true })
                 form.setValue("permanent_commune_code", null, { shouldDirty: true })
-                setResolvedWard(null)
               }}
               onWardChange={(value) => form.setValue("permanent_ward", value, { shouldDirty: true })}
               // Phase E.4 KV bridge — engine đọc permanent_commune_code chuẩn,
               // KHÔNG đọc tên ward. PriorityTab hết phải hỏi officer gõ mã.
-              // PR-3: resolve picked code → current commune for the badge.
+              // Cách B: chỉ set form value; useResolveWard(permanentCommuneCode)
+              // tự fetch lại badge theo mã mới (cả lúc đổi lẫn lúc load).
               onWardCodeChange={(code) => {
                 form.setValue("permanent_commune_code", code, { shouldDirty: true })
-                resolvePermanentWard(code)
               }}
               onResidentialGroupChange={(value) => form.setValue("permanent_residential_group", value)}
               onStreetAddressChange={(value) => form.setValue("permanent_street_address", value)}
@@ -302,7 +297,6 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 // Mode switch resets cả tỉnh/quận/xã → mã xã cũng phải clear
                 // để tránh stale code orphan.
                 form.setValue("permanent_commune_code", null, { shouldDirty: true })
-                setResolvedWard(null)
               }}
               disabled={!isEditable}
             />
@@ -316,7 +310,16 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 data-testid="address-resolved-current"
               >
                 <span aria-hidden="true">✓</span>
-                Tương ứng xã/phường hiện hành: {resolvedWard.current_name} — KV tự xác định
+                <span>
+                  Đã chuẩn hóa mã xã/phường:{" "}
+                  <strong>
+                    {resolvedWard.current_name}
+                    {resolvedWard.current_province_name
+                      ? `, ${resolvedWard.current_province_name}`
+                      : ""}
+                  </strong>{" "}
+                  — KV có thể tự xác định
+                </span>
               </p>
             ) : resolvedWard && !resolvedWard.resolved ? (
               <p
@@ -327,6 +330,27 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 <span aria-hidden="true">⚠</span>
                 Xã/phường đã chọn không khớp địa giới hiện hành — vui lòng chọn lại
                 xã/phường hiện tại.
+              </p>
+            ) : permanentCommuneCode && resolvingWard ? (
+              // Đang gọi resolve-ward — KHÔNG hiện dấu ✓ xanh (tránh trấn an sai
+              // khi chưa biết kết quả). Trạng thái trung tính.
+              <p
+                className="text-xs text-muted-foreground flex items-center gap-1"
+                data-testid="address-resolving"
+              >
+                <span aria-hidden="true">…</span>
+                Đang kiểm tra xã/phường theo địa giới hiện hành…
+              </p>
+            ) : permanentCommuneCode && resolveWardError ? (
+              // resolve-ward lỗi mạng/5xx: KHÔNG khẳng định bằng dấu ✓ xanh, và
+              // KHÔNG nói "đã lưu" (giá trị có thể còn dirty/chưa submit). Trung tính.
+              <p
+                className="text-xs text-warning-700 flex items-center gap-1"
+                data-testid="address-resolve-error"
+                role="alert"
+              >
+                <span aria-hidden="true">⚠</span>
+                Chưa kiểm tra được xã/phường hiện hành — vui lòng tải lại trang.
               </p>
             ) : permanentCommuneCode ? (
               <p

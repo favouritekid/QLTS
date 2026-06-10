@@ -147,6 +147,14 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
                 AdministrativeNode.level == AdministrativeLevel.WARD,
                 AdministrativeNode.successor_ward_code.isnot(None),
             )
+            # A GSO ward code can be REUSED across the 2025 reform (the same code
+            # exists in BOTH the legacy and current snapshots — e.g. 24717 =
+            # legacy "Thị trấn Đức An" AND current "Xã Đức An"). The CURRENT-era
+            # row (valid_to IS NULL) is authoritative: its successor is the live
+            # commune. Order current-first so resolution is DETERMINISTIC and
+            # correct regardless of row/scan order — a bare ``.limit(1)`` would
+            # pick an arbitrary era when the code collides.
+            .order_by(AdministrativeNode.valid_to.is_(None).desc())
             .limit(1)
         )
         result = await self.db.execute(stmt)
@@ -170,6 +178,42 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_current_province_name_for_ward(
+        self, ward_code: str
+    ) -> Optional[str]:
+        """Province name (CURRENT era) that a CURRENT-era ward code belongs to.
+
+        Resolves WARD.code → WARD.province_code → PROVINCE.name (both valid_to IS
+        NULL). Lets the resolve-ward endpoint return the full 2-level address
+        ("Xã X, Tỉnh Y") so the officer can confirm the standardized residence.
+        Returns None if the ward or its province isn't found in the current snapshot.
+        """
+        code = (ward_code or "").strip()
+        if not code:
+            return None
+        province_code = await self.db.scalar(
+            select(AdministrativeNode.province_code)
+            .where(
+                AdministrativeNode.code == code,
+                AdministrativeNode.level == AdministrativeLevel.WARD,
+                AdministrativeNode.valid_to.is_(None),
+                AdministrativeNode.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        if not province_code:
+            return None
+        return await self.db.scalar(
+            select(AdministrativeNode.name)
+            .where(
+                AdministrativeNode.code == province_code,
+                AdministrativeNode.level == AdministrativeLevel.PROVINCE,
+                AdministrativeNode.valid_to.is_(None),
+                AdministrativeNode.is_active.is_(True),
+            )
+            .limit(1)
+        )
 
     # ------------------------------------------------------------------
     # GENERIC FILTERED (admin panel)

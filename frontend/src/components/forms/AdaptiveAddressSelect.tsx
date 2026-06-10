@@ -134,14 +134,30 @@ export function AdaptiveAddressSelect({
   //      list — backward-compat cho hồ sơ legacy chưa wire code.
   // Khi cả 2 đều miss (vd wards list chưa load, hoặc name không match) →
   // combobox shows placeholder; sẽ render đúng khi wards load và user re-pick.
+  //
+  // ⚠️ LEGACY MODE: KHÔNG dùng `wardCodeValue` để khớp option. `wardCodeValue`
+  // (= permanent_commune_code) là mã xã/phường **hiện hành** mà BE canonicalize
+  // khi lưu — nó KHÔNG phải key trong danh sách ward legacy, và mã GSO có thể bị
+  // tái sử dụng giữa 2 thời kỳ: vd legacy "Xã Nam Bình" (24721) canonicalize sang
+  // 24717, nhưng trong danh sách legacy mã 24717 lại là "Thị trấn Đức An" → field
+  // "nhảy" sang xã sai sau khi lưu. Ở legacy mode PHẢI resolve theo TÊN
+  // (`wardValue`, chính là permanent_ward officer đã chọn), không theo mã.
   const selectedWardCode = useMemo(() => {
+    if (isLegacy) {
+      if (wardValue) {
+        const matched = wards.find((w) => w.name === wardValue)
+        return matched?.code ?? ""
+      }
+      return ""
+    }
+    // Current mode: code là canonical primary key (tránh trùng tên 2 tỉnh).
     if (wardCodeValue) return wardCodeValue
     if (wardValue) {
       const matched = wards.find((w) => w.name === wardValue)
       return matched?.code ?? ""
     }
     return ""
-  }, [wardCodeValue, wardValue, wards])
+  }, [isLegacy, wardCodeValue, wardValue, wards])
 
   // ---- Handlers ----
   // Phase E.4 KV bridge: every transition that changes the selected ward
