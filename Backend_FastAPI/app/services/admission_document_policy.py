@@ -57,9 +57,11 @@ the rejected/missing terminal states (= ``uploaded`` /
 ``paper_submitted`` / ``verified``), profile NOT blocked.
 ``"reset"``: reviewer (admin/manager-in-scope) on any non-``missing`` doc of
 a non-enrolled profile; OR the owning officer when the profile is in
-``OWNER_DOC_MUTATION_STATES`` (draft / rejected / revision_requested) — a
-self-service undo of the officer's own submission. verify/reject stay
-reviewer-only (review ≠ editing content).
+``OWNER_DOC_MUTATION_STATES`` (draft / rejected / revision_requested) AND the
+doc is NOT yet ``verified`` — a self-service undo of the officer's OWN
+submission (uploaded / paper_submitted / rejected). The officer cannot reset
+a manager-``verified`` doc ("đã duyệt thì không cho chỉnh sửa"); only a
+reviewer can. verify/reject stay reviewer-only (review ≠ editing content).
 """
 from __future__ import annotations
 
@@ -255,11 +257,18 @@ class DocumentActionPolicy:
         if action == "reset":
             # BR3 (2026-06-09): reviewer (admin/manager-in-scope) reset bất kỳ
             # doc non-missing của hồ sơ non-enrolled; HOẶC owner (officer phụ
-            # trách) tự reset khi hồ sơ ở draft/rejected/revision_requested
-            # (gỡ submission của chính mình để sửa). verify/reject vẫn
-            # reviewer-only (thẩm định ≠ sửa nội dung).
+            # trách) tự reset khi hồ sơ ở draft/rejected/revision_requested —
+            # NHƯNG owner KHÔNG được reset doc đã ``verified`` ("đã duyệt thì
+            # không cho chỉnh sửa": officer chỉ gỡ submission CỦA CHÍNH MÌNH —
+            # uploaded/paper_submitted/rejected — không xoá verification của
+            # manager). Chỉ reviewer mới reset được doc đã verified. verify/
+            # reject vẫn reviewer-only (thẩm định ≠ sửa nội dung).
             reviewer_ok = ctx.reviewer_scope and ctx.reviewer_can_modify_docs
-            owner_ok = ctx.is_owner and ctx.owner_can_modify_docs
+            owner_ok = (
+                ctx.is_owner
+                and ctx.owner_can_modify_docs
+                and doc_status != "verified"
+            )
             return (reviewer_ok or owner_ok) and doc_status != "missing"
 
         # Unknown action — treat as deny so a typo in calling code

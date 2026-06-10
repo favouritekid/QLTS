@@ -7133,9 +7133,12 @@ async def reset_document(
 
     Permissions (DocumentActionPolicy = single source of truth):
     - Officer (owning): reset trên hồ sơ draft / rejected / revision_requested
-      (gỡ submission của chính mình; OWNER_DOC_MUTATION_STATES). KHÔNG reset khi
-      submitted/resubmitted (đang chờ reviewer) hay approved/enrolled.
-    - Manager (in-scope) / Admin: reset bất kỳ doc non-missing trừ hồ sơ enrolled.
+      (gỡ submission CỦA CHÍNH MÌNH: uploaded/paper_submitted/rejected;
+      OWNER_DOC_MUTATION_STATES). KHÔNG reset doc đã ``verified`` ("đã duyệt thì
+      không cho chỉnh sửa"); KHÔNG reset khi submitted/resubmitted (đang chờ
+      reviewer) hay approved/enrolled.
+    - Manager (in-scope) / Admin: reset bất kỳ doc non-missing (kể cả verified)
+      trừ hồ sơ enrolled.
     - verify/reject vẫn reviewer-only (review ≠ sửa nội dung).
 
     Args:

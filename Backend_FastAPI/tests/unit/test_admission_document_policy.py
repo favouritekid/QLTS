@@ -336,6 +336,31 @@ class TestReset:
         policy = DocumentActionPolicy.for_(profile_draft_lead42_owner20, officer_owner)
         assert not policy.authorize("reset", "missing", requires_upload=True)
 
+    @pytest.mark.parametrize(
+        "profile_status", ["draft", "rejected", "revision_requested"]
+    )
+    def test_owner_officer_cannot_reset_verified_doc(
+        self, officer_owner, profile_status,
+    ):
+        """BR3 "đã duyệt thì không cho chỉnh sửa": owner KHÔNG reset doc đã
+        ``verified`` (manager duyệt) — chỉ reviewer mới reset được verified."""
+        profile = _StubProfile(
+            status=profile_status,
+            lead=_StubLead(unit_id=42, assigned_officer_id=20),
+        )
+        policy = DocumentActionPolicy.for_(profile, officer_owner)
+        assert not policy.authorize("reset", "verified", requires_upload=True)
+
+    @pytest.mark.parametrize(
+        "doc_status", ["uploaded", "paper_submitted", "rejected"]
+    )
+    def test_owner_officer_can_reset_own_submission(
+        self, profile_draft_lead42_owner20, officer_owner, doc_status,
+    ):
+        """Owner reset được submission CỦA CHÍNH MÌNH (chưa verified)."""
+        policy = DocumentActionPolicy.for_(profile_draft_lead42_owner20, officer_owner)
+        assert policy.authorize("reset", doc_status, requires_upload=True)
+
 
 # ---------------------------------------------------------------------------
 # Defensive: unknown action denies — typo in caller never grants access
