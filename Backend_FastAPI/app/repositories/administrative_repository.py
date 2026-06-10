@@ -160,51 +160,44 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_current_ward_name(self, code: str) -> Optional[str]:
-        """Name of a CURRENT-era (valid_to IS NULL) ward by code — for the
-        resolve-ward endpoint to display the canonical commune to the officer."""
-        code = (code or "").strip()
-        if not code:
-            return None
-        stmt = (
-            select(AdministrativeNode.name)
-            .where(
-                AdministrativeNode.code == code,
-                AdministrativeNode.level == AdministrativeLevel.WARD,
-                AdministrativeNode.valid_to.is_(None),
-                AdministrativeNode.is_active == True,
-            )
-            .limit(1)
-        )
-        result = await self.db.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def get_current_province_name_for_ward(
+    async def get_current_commune_display(
         self, ward_code: str
-    ) -> Optional[str]:
-        """Province name (CURRENT era) that a CURRENT-era ward code belongs to.
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Display tuple ``(ward_name, province_name)`` for a CURRENT-era ward code.
 
-        Resolves WARD.code → WARD.province_code → PROVINCE.name (both valid_to IS
-        NULL). Lets the resolve-ward endpoint return the full 2-level address
-        ("Xã X, Tỉnh Y") so the officer can confirm the standardized residence.
-        Returns None if the ward or its province isn't found in the current snapshot.
+        ONE query for the ward row (name + province_code) + ONE for the province
+        name — both ``valid_to IS NULL``. Powers the resolve-ward endpoint's full
+        2-level address ("Xã X, Tỉnh Y") so the officer confirms the standardized
+        residence (NĐ 238/NĐ-CP KV/miễn-giảm). Was 3 sequential round-trips when
+        the ward name + province were fetched separately (review #5).
+
+        Returns ``(None, None)`` if the code isn't a current-era commune;
+        ``(name, None)`` if its current province can't be resolved.
         """
         code = (ward_code or "").strip()
         if not code:
-            return None
-        province_code = await self.db.scalar(
-            select(AdministrativeNode.province_code)
-            .where(
-                AdministrativeNode.code == code,
-                AdministrativeNode.level == AdministrativeLevel.WARD,
-                AdministrativeNode.valid_to.is_(None),
-                AdministrativeNode.is_active.is_(True),
+            return None, None
+        ward = (
+            await self.db.execute(
+                select(
+                    AdministrativeNode.name,
+                    AdministrativeNode.province_code,
+                )
+                .where(
+                    AdministrativeNode.code == code,
+                    AdministrativeNode.level == AdministrativeLevel.WARD,
+                    AdministrativeNode.valid_to.is_(None),
+                    AdministrativeNode.is_active.is_(True),
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
+        ).first()
+        if ward is None:
+            return None, None
+        ward_name, province_code = ward
         if not province_code:
-            return None
-        return await self.db.scalar(
+            return ward_name, None
+        province_name = await self.db.scalar(
             select(AdministrativeNode.name)
             .where(
                 AdministrativeNode.code == province_code,
@@ -214,6 +207,7 @@ class AdministrativeRepository(BaseRepository[AdministrativeNode]):
             )
             .limit(1)
         )
+        return ward_name, province_name
 
     # ------------------------------------------------------------------
     # GENERIC FILTERED (admin panel)

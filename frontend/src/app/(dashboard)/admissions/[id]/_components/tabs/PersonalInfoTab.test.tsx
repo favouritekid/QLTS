@@ -23,11 +23,14 @@ vi.mock("@/lib/hooks/useConfigData", () => ({
 
 // Mock useAdministrative — place_of_birth combobox uses useProvinces("legacy");
 // no network calls allowed in test (would emit MSW-style XHR errors).
+// useResolveWard is configurable per-test (badge branch coverage) via the hoisted
+// spy; default return set in beforeEach (after clearAllMocks).
+const { mockUseResolveWard } = vi.hoisted(() => ({ mockUseResolveWard: vi.fn() }));
 vi.mock("@/lib/hooks/useAdministrative", () => ({
   useProvinces: () => ({ data: [], isLoading: false }),
   useDistricts: () => ({ data: [], isLoading: false }),
   useWards: () => ({ data: [], isLoading: false }),
-  useResolveWard: () => ({ data: undefined, isLoading: false, isError: false }),
+  useResolveWard: (...args: unknown[]) => mockUseResolveWard(...args),
 }));
 
 // Mock AdaptiveAddressSelect — lightweight spy that exposes key props
@@ -168,6 +171,8 @@ describe("PersonalInfoTab", () => {
     vi.clearAllMocks();
     capturedAddressProps = {};
     capturedFormRef = null;
+    // Default: no resolve data (component destructures { data } → must not be undefined call result)
+    mockUseResolveWard.mockReturnValue({ data: undefined, isLoading: false, isError: false });
   });
 
   describe("addressMode derivation", () => {
@@ -340,6 +345,79 @@ describe("PersonalInfoTab", () => {
       });
 
       expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
+    });
+  });
+
+  // Review #8 — badge "đã chuẩn hóa" precedence theo useResolveWard state.
+  // Hồ sơ có permanent_commune_code (permanentCommuneCode truthy) để vào chuỗi nhánh.
+  describe("address normalized badge (useResolveWard branches)", () => {
+    const withCode = () =>
+      buildProfile({ permanent_commune_code: "24717", version: 1 } as Partial<AdmissionProfileResponse>);
+
+    it("resolved + province → hiện địa chỉ 2 cấp đầy đủ", () => {
+      mockUseResolveWard.mockReturnValue({
+        data: { resolved: true, current_name: "Xã Đức An", current_province_name: "Tỉnh Lâm Đồng" },
+        isLoading: false,
+        isError: false,
+      });
+      render(<TestFormHost profile={withCode()} />);
+
+      const badge = screen.getByTestId("address-resolved-current");
+      expect(badge.textContent).toContain("Xã Đức An");
+      expect(badge.textContent).toContain("Tỉnh Lâm Đồng");
+      expect(badge.textContent).toContain("KV có thể tự xác định");
+      expect(screen.queryByTestId("address-normalized-ok")).toBeNull();
+    });
+
+    it("resolved nhưng không có province → chỉ hiện tên xã", () => {
+      mockUseResolveWard.mockReturnValue({
+        data: { resolved: true, current_name: "Xã Đức An", current_province_name: null },
+        isLoading: false,
+        isError: false,
+      });
+      render(<TestFormHost profile={withCode()} />);
+
+      const badge = screen.getByTestId("address-resolved-current");
+      expect(badge.textContent).toContain("Xã Đức An");
+      expect(badge.textContent).not.toContain("Tỉnh");
+    });
+
+    it("not-resolved → cảnh báo không khớp địa giới", () => {
+      mockUseResolveWard.mockReturnValue({
+        data: { resolved: false, current_name: null, current_province_name: null },
+        isLoading: false,
+        isError: false,
+      });
+      render(<TestFormHost profile={withCode()} />);
+
+      expect(screen.getByTestId("address-resolve-warning")).toBeTruthy();
+      expect(screen.queryByTestId("address-resolved-current")).toBeNull();
+      expect(screen.queryByTestId("address-normalized-ok")).toBeNull();
+    });
+
+    it("đang loading → trạng thái trung tính, KHÔNG hiện ✓ xanh", () => {
+      mockUseResolveWard.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+      render(<TestFormHost profile={withCode()} />);
+
+      expect(screen.getByTestId("address-resolving")).toBeTruthy();
+      expect(screen.queryByTestId("address-resolved-current")).toBeNull();
+      expect(screen.queryByTestId("address-normalized-ok")).toBeNull();
+    });
+
+    it("lỗi resolve → cảnh báo, KHÔNG hiện ✓ xanh", () => {
+      mockUseResolveWard.mockReturnValue({ data: undefined, isLoading: false, isError: true });
+      render(<TestFormHost profile={withCode()} />);
+
+      expect(screen.getByTestId("address-resolve-error")).toBeTruthy();
+      expect(screen.queryByTestId("address-resolved-current")).toBeNull();
+      expect(screen.queryByTestId("address-normalized-ok")).toBeNull();
+    });
+
+    it("có mã, chưa có data resolve (fallback) → 'đã chuẩn hóa mã' generic", () => {
+      // default beforeEach: data undefined, not loading, not error
+      render(<TestFormHost profile={withCode()} />);
+
+      expect(screen.getByTestId("address-normalized-ok")).toBeTruthy();
     });
   });
 });
