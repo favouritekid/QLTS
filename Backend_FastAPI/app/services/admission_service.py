@@ -6872,7 +6872,7 @@ async def update_graduation_proof_kind(
     Auth: ``get_profile`` đã chặn IDOR scope (officer=assigned+unit /
     manager=unit / admin all). Thêm 2 guard mirror ``_authorize_document_action``
     mà sibling endpoints (paper-submit/verify/reject/reset) áp:
-    - **BR2 is_extra**: doc đã rớt khỏi ``mandatory_docs`` snapshot = read-only.
+    - **BR2 is_extra**: doc đã rớt khỏi ``doc_configs`` snapshot = read-only.
     - **doc-status**: chỉ cập nhật khi giấy ĐÃ được ghi nhận
       (``paper_submitted`` / ``verified``) — không stamp lên doc chưa nhận.
     Chỉ nhận ``official_diploma``: giấy tạm thời + hạn bổ sung ghi qua paper-

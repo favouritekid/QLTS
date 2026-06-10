@@ -232,10 +232,13 @@ async def test_officer_owner_has_upload_but_not_verify(
     for doc in upload_docs:
         # missing + owning officer + profile editable → may upload
         assert doc["can_upload"] is True, f"{doc['code']}: owning officer should upload"
-        # Verify/reject/reset belong to reviewer scope only.
+        # Verify/reject = reviewer-only. Reset: owning officer CÓ quyền ở draft
+        # (BR3) NHƯNG ở đây các doc đang 'missing' → can_reset=False vì reset cần
+        # doc non-missing, KHÔNG phải vì reviewer-only. (Officer-reset-được kiểm
+        # ở test_officer_cannot_verify_or_reject_but_can_reset.)
         assert doc["can_verify"] is False, f"{doc['code']}: officer must not verify"
         assert doc["can_reject"] is False, f"{doc['code']}: officer must not reject"
-        assert doc["can_reset"] is False, f"{doc['code']}: officer must not reset"
+        assert doc["can_reset"] is False, f"{doc['code']}: missing doc → no reset"
 
 
 @pytest.mark.asyncio
