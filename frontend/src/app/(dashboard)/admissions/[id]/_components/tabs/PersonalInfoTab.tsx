@@ -342,16 +342,15 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 Đang kiểm tra xã/phường theo địa giới hiện hành…
               </p>
             ) : permanentCommuneCode && resolveWardError ? (
-              // resolve-ward lỗi mạng/5xx: mã đã được canonicalize & lưu (KV vẫn
-              // resolve được phía server), nhưng KHÔNG khẳng định bằng dấu ✓ xanh.
+              // resolve-ward lỗi mạng/5xx: KHÔNG khẳng định bằng dấu ✓ xanh, và
+              // KHÔNG nói "đã lưu" (giá trị có thể còn dirty/chưa submit). Trung tính.
               <p
                 className="text-xs text-warning-700 flex items-center gap-1"
                 data-testid="address-resolve-error"
                 role="alert"
               >
                 <span aria-hidden="true">⚠</span>
-                Đã lưu mã xã/phường nhưng chưa kiểm tra được xã/phường hiện hành —
-                vui lòng tải lại trang.
+                Chưa kiểm tra được xã/phường hiện hành — vui lòng tải lại trang.
               </p>
             ) : permanentCommuneCode ? (
               <p

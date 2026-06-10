@@ -77,11 +77,16 @@ async def test_resolve_current_ward_code_reused_code_prefers_current(db) -> None
 
     Mirrors the real 24717 collision ("Thị trấn Đức An" legacy / "Xã Đức An"
     current). Without the era-priority ORDER BY, ``.limit(1)`` returned an
-    arbitrary row → could store a wrong permanent_commune_code on save."""
+    arbitrary row → could store a wrong permanent_commune_code on save.
+
+    NOTE: the LEGACY row is inserted FIRST on purpose. On a freshly truncated
+    table a bare ``LIMIT 1`` (no ORDER BY) returns heap order ≈ insert order, so
+    legacy-first makes this test FAIL if the ``ORDER BY valid_to IS NULL`` is
+    removed — i.e. it actually pins the fix instead of passing coincidentally."""
+    # legacy row reusing the SAME code, pointing somewhere else (divergent) — FIRST
+    db.add(_ward("DUP", current=False, successor="OTHER", dist="99_1"))
     # current row: code is a live commune → successor = self
     db.add(_ward("DUP", current=True, successor="DUP"))
-    # legacy row reusing the SAME code, pointing somewhere else (divergent)
-    db.add(_ward("DUP", current=False, successor="OTHER", dist="99_1"))
     await db.flush()
     repo = AdministrativeRepository(db)
     # Current-era row wins → DUP (its own code), never the legacy "OTHER".
