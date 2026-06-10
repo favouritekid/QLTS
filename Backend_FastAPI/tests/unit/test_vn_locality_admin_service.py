@@ -12,6 +12,8 @@ prod (index chỉ là defense-in-depth).
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
@@ -216,3 +218,47 @@ async def test_list_pagination_and_province_filter(db) -> None:
     items2, total2 = await service.list_communes(q="Xã Khác")
     assert total2 == 1
     assert items2[0].commune_code == "00060"
+
+
+# ---------------------------------------------------------------------------
+# re-activate THÀNH CÔNG (đối nghịch test_reactivate_blocked_*)
+# ---------------------------------------------------------------------------
+
+
+async def test_reactivate_succeeds_when_no_other_active(db) -> None:
+    """retire rồi update_commune(effective_to=None) PHẢI thành công khi KHÔNG
+    còn dòng active khác → dòng active trở lại + lookup trả KV."""
+    service = VnLocalityService(db)
+    row, _ = await service.create_commune(_commune("00070", "KV2"))
+    await db.flush()
+    await service.retire_commune(row.id)
+    await db.flush()
+    assert row.effective_to is not None  # đã retire
+
+    reactivated, _ = await service.update_commune(row.id, {"effective_to": None})
+    await db.flush()
+    assert reactivated.effective_to is None  # active lại
+    assert await service.lookup_commune_kv("00070") == "KV2"
+
+
+# ---------------------------------------------------------------------------
+# guard interval (effective_to/cutover >= effective_from)
+# ---------------------------------------------------------------------------
+
+
+async def test_replace_area_rejects_past_effective_from(db) -> None:
+    service = VnLocalityService(db)
+    row, _ = await service.create_commune(_commune("00071", "KV3"))
+    await db.flush()
+    past = row.effective_from - timedelta(days=1)
+    with pytest.raises(BusinessRuleViolation):
+        await service.replace_commune_area(row.id, "KV1", effective_from=past)
+
+
+async def test_retire_rejects_past_effective_to(db) -> None:
+    service = VnLocalityService(db)
+    row, _ = await service.create_commune(_commune("00072", "KV3"))
+    await db.flush()
+    past = row.effective_from - timedelta(days=1)
+    with pytest.raises(BusinessRuleViolation):
+        await service.retire_commune(row.id, effective_to=past)

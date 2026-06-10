@@ -104,9 +104,16 @@ export function ImportCommuneCsvDialog({ open, onOpenChange }: Props) {
               </p>
               {result.error_rows.length > 0 && (
                 <ul className="text-muted-foreground mt-2 max-h-32 list-disc overflow-auto pl-5 text-xs">
-                  {result.error_rows.slice(0, 20).map((row, i) => (
-                    <li key={i}>{JSON.stringify(row)}</li>
-                  ))}
+                  {result.error_rows.slice(0, 20).map((row, i) => {
+                    const rn = row.row_num
+                    const err = row.error
+                    return (
+                      <li key={i}>
+                        {rn != null ? `Dòng ${rn}: ` : ""}
+                        {typeof err === "string" ? err : JSON.stringify(row)}
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>

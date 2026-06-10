@@ -118,7 +118,8 @@ export function CommuneKvTable({ rows, isLoading }: CommuneKvTableProps) {
   const busy =
     createMutation.isPending ||
     updateMutation.isPending ||
-    replaceMutation.isPending
+    replaceMutation.isPending ||
+    retireMutation.isPending
 
   const handleCreate = async () => {
     setCreateError(null)
@@ -154,7 +155,9 @@ export function CommuneKvTable({ rows, isLoading }: CommuneKvTableProps) {
     setEditError(null)
     const parsed = communeAreaUpdateSchema.safeParse({
       province: editForm.province.trim(),
-      district: editForm.district.trim(),
+      // Empty → undefined để Pydantic exclude_unset bỏ qua (nhất quán với create
+      // form), tránh PATCH district="" thừa khi không đổi.
+      district: editForm.district.trim() || undefined,
       ward: editForm.ward.trim(),
     })
     if (!parsed.success) {
@@ -500,7 +503,10 @@ export function CommuneKvTable({ rows, isLoading }: CommuneKvTableProps) {
             <Button variant="outline" onClick={() => setReplaceRow(null)} disabled={busy}>
               Hủy
             </Button>
-            <Button onClick={handleReplace} disabled={busy}>
+            <Button
+              onClick={handleReplace}
+              disabled={busy || replaceArea === replaceRow?.area_code}
+            >
               Đổi KV
             </Button>
           </DialogFooter>

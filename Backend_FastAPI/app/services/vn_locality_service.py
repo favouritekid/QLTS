@@ -87,6 +87,18 @@ async def _noop_callback() -> None:
     return None
 
 
+def _guard_close_not_before_open(open_date: date, close_date: date) -> None:
+    """``effective_to`` / cutover phải >= ``effective_from`` — chặn khoảng
+    temporal ngược. vn_commune_area_map KHÔNG có CHECK interval ở DB (khác
+    vn_school_kv_assignment), nên guard ở service để 1 effective_from/to quá
+    khứ không tạo dòng [from, to) với to < from (làm sai lookup/audit lịch sử)."""
+    if close_date < open_date:
+        raise BusinessRuleViolation(
+            f"Ngày đóng ({close_date}) không được trước ngày bắt đầu "
+            f"({open_date}) — sẽ tạo khoảng thời gian ngược."
+        )
+
+
 # SAMPLE_HIGH_SCHOOLS DROPPED phase1_09. Demo seed for VnSchool family
 # will live in app/scripts/import_moet_schools_2025.py (Phase B.1).
 
@@ -280,6 +292,8 @@ class VnLocalityService:
                     f"Không thể re-activate: mã xã {row.commune_code!r} đã có "
                     f"dòng active khác (id={other.id})."
                 )
+        if data.get("effective_to") is not None:
+            _guard_close_not_before_open(row.effective_from, data["effective_to"])
         for key in ("province", "district", "ward", "effective_to"):
             if key in data:
                 setattr(row, key, data[key])
@@ -304,6 +318,7 @@ class VnLocalityService:
                 f"— không thể đổi KV trên dòng đã đóng."
             )
         cutover = effective_from or date.today()
+        _guard_close_not_before_open(old.effective_from, cutover)
         # Đóng dòng cũ TRƯỚC + flush để giải phóng partial-unique active slot,
         # rồi mới insert dòng mới (tránh 2 active cùng commune_code lúc INSERT).
         old.effective_to = cutover
@@ -334,6 +349,8 @@ class VnLocalityService:
                 f"Dòng {commune_id} đã retire trước đó "
                 f"(effective_to={row.effective_to})."
             )
-        row.effective_to = effective_to or date.today()
+        target = effective_to or date.today()
+        _guard_close_not_before_open(row.effective_from, target)
+        row.effective_to = target
         await self.db.flush()
         return row, _noop_callback
