@@ -32,6 +32,11 @@ class SmsCampaignExportBatch(Base):
             "'failed','purged','invalidated')",
             name="chk_sms_export_batch_status",
         ),
+        CheckConstraint(
+            "build_revision >= 0 AND recipient_count >= 0 "
+            "AND (file_size_bytes IS NULL OR file_size_bytes >= 0)",
+            name="chk_sms_export_batch_counters_nonneg",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

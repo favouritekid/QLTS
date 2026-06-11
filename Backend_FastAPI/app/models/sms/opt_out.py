@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.models.base import Base
+from app.utils.masking import mask_phone
 
 
 class SmsOptOut(Base):
@@ -63,4 +64,4 @@ class SmsOptOut(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<SmsOptOut {self.phone_normalized} src={self.source}>"
+        return f"<SmsOptOut {mask_phone(self.phone_normalized)} src={self.source}>"

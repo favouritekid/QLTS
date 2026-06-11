@@ -143,6 +143,7 @@ def upgrade() -> None:
     sa.Column('generated_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('marked_handed_off_at', sa.DateTime(timezone=True), nullable=True, comment="bấm 'Đã bàn giao' per nhà mạng"),
     sa.CheckConstraint("status IN ('pending','generated','handed_off','failed','purged','invalidated')", name='chk_sms_export_batch_status'),
+    sa.CheckConstraint("build_revision >= 0 AND recipient_count >= 0 AND (file_size_bytes IS NULL OR file_size_bytes >= 0)", name='chk_sms_export_batch_counters_nonneg'),
     sa.ForeignKeyConstraint(['campaign_id'], ['sms_campaign.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['generated_by_id'], ['user.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['group_id'], ['sms_contact_group.id'], ondelete='SET NULL'),
@@ -191,7 +192,8 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("encoding IS NULL OR encoding IN ('GSM7','UCS2')", name='chk_sms_recipient_encoding'),
     sa.CheckConstraint("excluded_reason IS NULL OR excluded_reason IN ('no_consent','opted_out','dnc_suppressed','frequency_capped','over_limit','missing_data')", name='chk_sms_recipient_excluded_reason'),
-    sa.CheckConstraint("(token_hash IS NULL AND token_ciphertext IS NULL AND token_key_version IS NULL) OR (token_hash IS NOT NULL AND token_ciphertext IS NOT NULL AND token_key_version IS NOT NULL AND length(token_hash) = 64 AND length(btrim(token_ciphertext)) > 0 AND length(btrim(token_key_version)) > 0)", name='chk_sms_recipient_token_triplet'),
+    sa.CheckConstraint("(token_hash IS NULL AND token_ciphertext IS NULL AND token_key_version IS NULL) OR (token_hash IS NOT NULL AND token_ciphertext IS NOT NULL AND token_key_version IS NOT NULL AND token_hash ~ '^[0-9a-f]{64}$' AND length(btrim(token_ciphertext)) > 0 AND length(btrim(token_key_version)) > 0)", name='chk_sms_recipient_token_triplet'),
+    sa.CheckConstraint("build_revision >= 0 AND raw_click_count >= 0 AND human_click_count >= 0 AND human_click_count <= raw_click_count AND (message_length IS NULL OR message_length >= 0) AND (segments IS NULL OR segments >= 0)", name='chk_sms_recipient_counters_nonneg'),
     sa.ForeignKeyConstraint(['campaign_id'], ['sms_campaign.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')

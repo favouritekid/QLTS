@@ -157,7 +157,10 @@ async def test_recipient_token_triplet():
         # ciphertext rỗng → reject
         await _bad(",token_hash,token_ciphertext,token_key_version) "
                    + vals + f",'{h64}','','v1')")
-        # đủ bộ ba hợp lệ (hash 64 ký tự, ciphertext/keyver non-rỗng) → OK
+        # hash 64 ký tự nhưng KHÔNG hex [0-9a-f] → reject (R5)
+        await _bad(",token_hash,token_ciphertext,token_key_version) "
+                   + vals + f",'{'z' * 64}','cipher','v1')")
+        # đủ bộ ba hợp lệ (hash 64 ký tự hex, ciphertext/keyver non-rỗng) → OK
         await s.execute(text(
             base + ",token_hash,token_ciphertext,token_key_version) "
             + vals + f",'{h64}','cipher','v1')"))
@@ -187,6 +190,52 @@ async def test_delete_contact_preserves_consent_ledger():
         assert row is not None
         assert row[0] is None  # contact_id SET NULL
         assert row[1] == '0922000001'  # bằng chứng còn
+        await s.rollback()
+
+
+async def test_recipient_export_counters_nonneg():
+    """build_revision/click-counter non-âm + human_click ≤ raw_click; export non-âm."""
+    async with AsyncSessionLocal() as s:
+        await s.execute(text(
+            "INSERT INTO sms_campaign (name,code,sms_template) "
+            "VALUES ('C','c-cnt','hi')"))
+        cid = (await s.execute(
+            text("SELECT id FROM sms_campaign WHERE code='c-cnt'"))).scalar()
+
+        async def _bad(sql):
+            sp = await s.begin_nested()
+            raised = False
+            try:
+                await s.execute(text(sql))
+            except IntegrityError:
+                raised = True
+            await sp.rollback()
+            assert raised
+
+        rc = ("campaign_id,build_revision,group_ids_snapshot,full_name_snapshot,"
+              "phone_normalized_snapshot,phone_international_snapshot,carrier_bucket")
+        rv = f"({cid},0,'{{1}}','N','0900000001','84900000001','viettel'"
+        # build_revision âm → reject
+        await _bad(f"INSERT INTO sms_campaign_recipient ({rc}) VALUES "
+                   f"({cid},-1,'{{1}}','N','0900000001','84900000001','viettel')")
+        # raw_click_count âm → reject
+        await _bad(f"INSERT INTO sms_campaign_recipient ({rc},raw_click_count) "
+                   f"VALUES {rv},-3)")
+        # human_click_count > raw_click_count → reject
+        await _bad(f"INSERT INTO sms_campaign_recipient "
+                   f"({rc},raw_click_count,human_click_count) VALUES {rv},0,7)")
+        # hợp lệ (rev=0, raw=5, human=3) → OK
+        await s.execute(text(
+            f"INSERT INTO sms_campaign_recipient "
+            f"({rc},raw_click_count,human_click_count) VALUES {rv},5,3)"))
+        # export_batch build_revision âm → reject
+        await _bad("INSERT INTO sms_campaign_export_batch "
+                   f"(campaign_id,build_revision,carrier_bucket) "
+                   f"VALUES ({cid},-1,'viettel')")
+        # export_batch file_size_bytes âm → reject
+        await _bad("INSERT INTO sms_campaign_export_batch "
+                   f"(campaign_id,build_revision,carrier_bucket,file_size_bytes) "
+                   f"VALUES ({cid},0,'viettel',-1)")
         await s.rollback()
 
 

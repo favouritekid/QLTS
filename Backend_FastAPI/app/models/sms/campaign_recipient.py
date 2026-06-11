@@ -22,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.models.base import Base
+from app.utils.masking import mask_phone
 
 
 class SmsCampaignRecipient(Base):
@@ -65,16 +66,25 @@ class SmsCampaignRecipient(Base):
             name="chk_sms_recipient_encoding",
         ),
         # Token triplet: cùng NULL (không link) HOẶC bộ ba dùng được:
-        # hash = HMAC-SHA256 hex đúng 64 ký tự, ciphertext/key_version non-rỗng.
+        # hash = HMAC hexdigest 64 ký tự [0-9a-f]; ciphertext/key_version non-rỗng.
         CheckConstraint(
             "(token_hash IS NULL AND token_ciphertext IS NULL "
             "AND token_key_version IS NULL) OR "
             "(token_hash IS NOT NULL AND token_ciphertext IS NOT NULL "
             "AND token_key_version IS NOT NULL "
-            "AND length(token_hash) = 64 "
+            "AND token_hash ~ '^[0-9a-f]{64}$' "
             "AND length(btrim(token_ciphertext)) > 0 "
             "AND length(btrim(token_key_version)) > 0)",
             name="chk_sms_recipient_token_triplet",
+        ),
+        # Revision + counter non-âm; human click ≤ raw click (CTR đúng).
+        CheckConstraint(
+            "build_revision >= 0 AND raw_click_count >= 0 "
+            "AND human_click_count >= 0 "
+            "AND human_click_count <= raw_click_count "
+            "AND (message_length IS NULL OR message_length >= 0) "
+            "AND (segments IS NULL OR segments >= 0)",
+            name="chk_sms_recipient_counters_nonneg",
         ),
     )
 
@@ -165,5 +175,5 @@ class SmsCampaignRecipient(Base):
     def __repr__(self) -> str:
         return (
             f"<SmsCampaignRecipient {self.id} campaign={self.campaign_id} "
-            f"rev={self.build_revision} {self.phone_normalized_snapshot}>"
+            f"rev={self.build_revision} {mask_phone(self.phone_normalized_snapshot)}>"
         )

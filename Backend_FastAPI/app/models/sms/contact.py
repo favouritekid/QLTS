@@ -16,6 +16,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.models.base import Base
+from app.utils.masking import mask_phone
 
 
 class SmsContact(Base):
@@ -102,6 +103,6 @@ class SmsContact(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<SmsContact {self.id} {self.phone_normalized} "
+            f"<SmsContact {self.id} {mask_phone(self.phone_normalized)} "
             f"consent={self.marketing_consent_status}>"
         )
