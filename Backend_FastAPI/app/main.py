@@ -84,6 +84,12 @@ from .routers import (
     refunds,
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
     sessions,
+    sms_contacts,  # ✅ SMS MARKETING: contact groups & contacts (routes PR-2)
+    sms_campaigns,  # ✅ SMS MARKETING: campaigns + build (routes PR-3)
+    sms_export,  # ✅ SMS MARKETING: export Excel per carrier (routes PR-4)
+    sms_reports,  # ✅ SMS MARKETING: reports/dashboard (routes PR-5)
+    sms_public,  # ✅ SMS MARKETING: public landing + opt-out (routes PR-5)
+    sms_shortlink,  # ✅ SMS MARKETING: /r/{code} resolver (routes PR-5)
     users,
     zalo_webhooks,  # ✅ PHASE C1: Zalo webhook receiver
     zalo_bot_link,  # ✅ v5 Step 19: staff Zalo Bot link API
@@ -901,6 +907,14 @@ fastapi_app.include_router(kpi_planning.router)  # ✅ PHASE A6: KPI Planning En
 fastapi_app.include_router(kpi_setup.router)  # ✅ KPI Setup: Coverage Dashboard
 fastapi_app.include_router(meta.router)  # ✅ Public metadata (KPI catalog, no auth)
 fastapi_app.include_router(public_admissions.router)  # ✅ Public admissions portal (no auth)
+# ✅ SMS MARKETING MODULE (Phase 1): router stubs wired in PR-1; routes filled PR-2..5.
+# Mỗi router tự mang prefix (/api/sms, /api/public/sms) — shortlink không prefix (/r/{code}).
+fastapi_app.include_router(sms_contacts.router)
+fastapi_app.include_router(sms_campaigns.router)
+fastapi_app.include_router(sms_export.router)
+fastapi_app.include_router(sms_reports.router)
+fastapi_app.include_router(sms_public.router)
+fastapi_app.include_router(sms_shortlink.router)
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
 # ✅ FINANCE MODULE: Phase 4 - API Layer
