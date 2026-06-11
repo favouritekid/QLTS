@@ -33,6 +33,15 @@ class SmsContact(Base):
             "('explicit_form','signed_form','recorded_call','imported_proof')",
             name="chk_sms_contact_consent_basis",
         ),
+        # Consent fail-closed: 'granted' BẮT BUỘC đủ 4 trường proof.
+        CheckConstraint(
+            "marketing_consent_status <> 'granted' OR ("
+            "marketing_consented_at IS NOT NULL "
+            "AND marketing_consent_basis IS NOT NULL "
+            "AND marketing_consent_proof_ref IS NOT NULL "
+            "AND consent_disclosure_version IS NOT NULL)",
+            name="chk_sms_contact_granted_requires_proof",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -100,6 +100,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("marketing_consent_basis IS NULL OR marketing_consent_basis IN ('explicit_form','signed_form','recorded_call','imported_proof')", name='chk_sms_contact_consent_basis'),
     sa.CheckConstraint("marketing_consent_status IN ('unknown','granted','revoked')", name='chk_sms_contact_consent_status'),
+    sa.CheckConstraint("marketing_consent_status <> 'granted' OR (marketing_consented_at IS NOT NULL AND marketing_consent_basis IS NOT NULL AND marketing_consent_proof_ref IS NOT NULL AND consent_disclosure_version IS NOT NULL)", name='chk_sms_contact_granted_requires_proof'),
     sa.ForeignKeyConstraint(['created_by_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('phone_normalized')
@@ -190,6 +191,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("encoding IS NULL OR encoding IN ('GSM7','UCS2')", name='chk_sms_recipient_encoding'),
     sa.CheckConstraint("excluded_reason IS NULL OR excluded_reason IN ('no_consent','opted_out','dnc_suppressed','frequency_capped','over_limit','missing_data')", name='chk_sms_recipient_excluded_reason'),
+    sa.CheckConstraint("(token_hash IS NULL AND token_ciphertext IS NULL AND token_key_version IS NULL) OR (token_hash IS NOT NULL AND token_ciphertext IS NOT NULL AND token_key_version IS NOT NULL)", name='chk_sms_recipient_token_triplet'),
     sa.ForeignKeyConstraint(['campaign_id'], ['sms_campaign.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
@@ -217,7 +219,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_sms_contact_group_member_group_id'), 'sms_contact_group_member', ['group_id'], unique=False)
     op.create_table('sms_contact_import_batch',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('group_id', sa.Integer(), nullable=False, comment='nhóm đích'),
+    sa.Column('group_id', sa.Integer(), nullable=True, comment='nhóm đích; SET NULL khi xóa group (giữ audit import)'),
     sa.Column('file_name', sa.String(length=255), nullable=True),
     sa.Column('file_sha256', sa.String(length=64), nullable=True),
     sa.Column('source_label', sa.String(length=255), nullable=True),
@@ -236,7 +238,12 @@ def upgrade() -> None:
     sa.Column('uploaded_by_id', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("consent_basis IS NULL OR consent_basis IN ('explicit_form','signed_form','recorded_call','imported_proof')", name='chk_sms_import_batch_consent_basis'),
-    sa.ForeignKeyConstraint(['group_id'], ['sms_contact_group.id'], ondelete='CASCADE'),
+    sa.CheckConstraint("row_count >= 0 AND valid_count >= 0 AND invalid_count >= 0 AND duplicate_contact_count >= 0 AND existing_member_count >= 0 AND inserted_contact_count >= 0 AND added_member_count >= 0 AND skipped_count >= 0", name='chk_sms_import_batch_counts_nonneg'),
+    sa.CheckConstraint("row_count = valid_count + invalid_count + duplicate_contact_count", name='chk_sms_import_batch_row_total'),
+    sa.CheckConstraint("skipped_count = invalid_count + duplicate_contact_count", name='chk_sms_import_batch_skipped_total'),
+    sa.CheckConstraint("added_member_count + existing_member_count = valid_count", name='chk_sms_import_batch_member_total'),
+    sa.CheckConstraint("inserted_contact_count <= valid_count", name='chk_sms_import_batch_inserted_le_valid'),
+    sa.ForeignKeyConstraint(['group_id'], ['sms_contact_group.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['uploaded_by_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
@@ -280,7 +287,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_sms_click_event_recipient_id'), 'sms_click_event', ['recipient_id'], unique=False)
     op.create_table('sms_marketing_consent_event',
     sa.Column('id', sa.BigInteger(), nullable=False),
-    sa.Column('contact_id', sa.Integer(), nullable=True),
+    sa.Column('contact_id', sa.Integer(), nullable=True, comment='SET NULL (KHÔNG cascade): ledger phải sống sót khi xóa contact'),
     sa.Column('phone_normalized_snapshot', sa.String(length=20), nullable=False, comment='bằng chứng vẫn đọc được nếu contact đổi/xóa'),
     sa.Column('event_type', sa.String(length=20), nullable=False),
     sa.Column('basis', sa.String(length=30), nullable=False, comment='explicit_form / signed_form / recorded_call / imported_proof'),

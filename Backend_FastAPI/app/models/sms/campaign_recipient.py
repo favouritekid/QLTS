@@ -64,6 +64,14 @@ class SmsCampaignRecipient(Base):
             "encoding IS NULL OR encoding IN ('GSM7','UCS2')",
             name="chk_sms_recipient_encoding",
         ),
+        # Token triplet: cùng NULL (không link) hoặc cùng NOT NULL (re-export được).
+        CheckConstraint(
+            "(token_hash IS NULL AND token_ciphertext IS NULL "
+            "AND token_key_version IS NULL) OR "
+            "(token_hash IS NOT NULL AND token_ciphertext IS NOT NULL "
+            "AND token_key_version IS NOT NULL)",
+            name="chk_sms_recipient_token_triplet",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
