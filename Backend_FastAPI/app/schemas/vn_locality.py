@@ -7,7 +7,7 @@ Both shape mirror the migration phase1_08b column set. Read endpoints
 from __future__ import annotations
 
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -118,3 +118,105 @@ class VnSchoolSearchResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# =============================================================================
+# Admin CRUD trường học (PR-B). Co-locate ở đây (cùng file VnSchoolSearchItem).
+# DELETE school = deactivate (is_active=false), KHÔNG hard-delete (FK
+# vn_school_kv_assignment.school_id CASCADE). merged_into_id/merge_effective_date
+# read-only (để script merger lo) — KHÔNG trong CRUD.
+# =============================================================================
+
+VnSchoolLevel = Literal["THCS", "THPT", "THCS_THPT", "TRUNG_HOC_NGHE", "OTHER"]
+_KV_CODE_PATTERN = r"^KV[1-9](-NT)?$"
+
+
+class VnSchoolCreate(BaseModel):
+    moet_school_code: str = Field(min_length=1, max_length=10)
+    moet_province_code: str = Field(min_length=1, max_length=3)
+    moet_district_code: Optional[str] = Field(default=None, max_length=5)
+    name: str = Field(min_length=1, max_length=255)
+    address: Optional[str] = None
+    province: str = Field(min_length=1, max_length=100)
+    district: Optional[str] = Field(default=None, max_length=100)
+    ward: Optional[str] = Field(default=None, max_length=100)
+    level: VnSchoolLevel
+    is_dtnt: bool = False
+
+
+class VnSchoolUpdate(BaseModel):
+    """PATCH — KHÔNG đổi moet_school_code/moet_province_code (định danh MOET) và
+    KHÔNG đổi is_active (dùng DELETE=deactivate)."""
+
+    moet_district_code: Optional[str] = Field(default=None, max_length=5)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    address: Optional[str] = None
+    province: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    district: Optional[str] = Field(default=None, max_length=100)
+    ward: Optional[str] = Field(default=None, max_length=100)
+    level: Optional[VnSchoolLevel] = None
+    is_dtnt: Optional[bool] = None
+
+
+class VnSchoolAdminResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    moet_school_code: str
+    moet_province_code: str
+    moet_district_code: Optional[str] = None
+    name: str
+    address: Optional[str] = None
+    province: str
+    district: Optional[str] = None
+    ward: Optional[str] = None
+    level: str
+    is_dtnt: bool
+    is_active: bool
+    current_kv: Optional[str] = None
+
+
+class VnSchoolListResponse(BaseModel):
+    items: list[VnSchoolAdminResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class VnSchoolProvinceItem(BaseModel):
+    """Distinct {moet_province_code, province} từ vn_school active — cho FE filter
+    (administrative getProvinces KHÔNG có moet_province_code)."""
+
+    moet_province_code: str
+    province: str
+
+
+# --- KV assignment (vn_school_kv_assignment) ---
+
+
+class VnSchoolKvAssignmentCreate(BaseModel):
+    kv_code: str = Field(pattern=_KV_CODE_PATTERN)
+    effective_from_year: int = Field(ge=2000, le=2100)
+    effective_to_year: Optional[int] = Field(default=None, ge=2000, le=2100)
+    source: str = Field(default="manual_admin", min_length=1, max_length=50)
+    notes: Optional[str] = None
+
+
+class VnSchoolKvAssignmentUpdate(BaseModel):
+    kv_code: Optional[str] = Field(default=None, pattern=_KV_CODE_PATTERN)
+    effective_from_year: Optional[int] = Field(default=None, ge=2000, le=2100)
+    effective_to_year: Optional[int] = Field(default=None, ge=2000, le=2100)
+    source: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    notes: Optional[str] = None
+
+
+class VnSchoolKvAssignmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    school_id: int
+    kv_code: str
+    effective_from_year: int
+    effective_to_year: Optional[int] = None
+    source: str
+    notes: Optional[str] = None

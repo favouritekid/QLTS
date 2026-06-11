@@ -25,6 +25,7 @@ import {
   LayoutDashboard,
   MapPin,
   Percent,
+  School,
   Receipt,
   RotateCcw,
   Settings,
@@ -281,6 +282,13 @@ export const navigationConfig: NavigationConfig = {
           label: "KV theo Xã",
           href: "/admin/commune-kv",
           icon: MapPin,
+          roles: ["admin"],
+        },
+        {
+          // PR-B — quản lý danh mục trường (vn_school) + KV theo năm. Admin-only.
+          label: "Trường THPT",
+          href: "/admin/vn-schools",
+          icon: School,
           roles: ["admin"],
         },
         {
