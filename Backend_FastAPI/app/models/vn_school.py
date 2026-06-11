@@ -82,6 +82,13 @@ class VnSchool(Base):
     )
     moet_district_code: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
 
+    # Khóa đối chiếu chuẩn hóa (schoolkv01) — nguồn: danh sách THPT MOET + QĐ 19/2025.
+    # moet_code = Mã Tỉnh(GSO 2) + Mã Trường(3) = 5 số, duy nhất toàn quốc → khóa
+    # đối chiếu CHÍNH khi cập nhật năm sau. commune_code = mã xã 5 số (QĐ 19/2025,
+    # = administrative_nodes.code) → khóa PHỤ (fallback commune+tên) + nối trường→xã.
+    moet_code: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    commune_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
     # Canonical current info
     name: Mapped[str] = mapped_column(
         String(255),
