@@ -15,7 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
 from app.core.deps import require_admin
-from app.schemas.vn_locality import CsvImportResponse
+from app.schemas.vn_locality import (
+    CsvImportResponse,
+    VnCommuneAreaMapCreate,
+    VnCommuneAreaMapListResponse,
+    VnCommuneAreaMapReplaceArea,
+    VnCommuneAreaMapResponse,
+    VnCommuneAreaMapUpdate,
+)
 from app.services.vn_locality_service import VnLocalityService
 
 
@@ -97,6 +104,143 @@ async def import_commune_csv(
         actor=user.id,
     )
     return CsvImportResponse(**result)
+
+
+# =============================================================================
+# Admin: commune KV CRUD (PR-A — UI quản lý danh mục KV theo xã)
+#
+# Tất cả ``require_admin`` (quy chế tuyển sinh, không per-unit). Đổi KV đi qua
+# ``/replace-area`` (temporal: retire cũ + insert mới), KHÔNG update tại chỗ.
+# =============================================================================
+
+
+@admin_router.get("/communes", response_model=VnCommuneAreaMapListResponse)
+async def list_communes(
+    province: str | None = None,
+    q: str | None = None,
+    active_only: bool = True,
+    page: int = 1,
+    page_size: int = 50,
+    db: AsyncSession = Depends(database.get_db),
+    _user=Depends(require_admin),
+) -> VnCommuneAreaMapListResponse:
+    """Bảng paginated + lọc tỉnh (``province`` = tên tỉnh) + search
+    (``q`` khớp ward/commune_code)."""
+    service = VnLocalityService(db)
+    rows, total = await service.list_communes(
+        province=province,
+        q=q,
+        active_only=active_only,
+        page=page,
+        page_size=page_size,
+    )
+    return VnCommuneAreaMapListResponse(
+        items=[VnCommuneAreaMapResponse.model_validate(r) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@admin_router.post(
+    "/communes",
+    response_model=VnCommuneAreaMapResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_commune(
+    payload: VnCommuneAreaMapCreate,
+    db: AsyncSession = Depends(database.get_db),
+    user=Depends(require_admin),
+) -> VnCommuneAreaMapResponse:
+    service = VnLocalityService(db)
+    row, callback = await service.create_commune(payload.model_dump())
+    await db.commit()
+    if callback:
+        await callback()
+    log.info(
+        "vn_commune_created",
+        id=row.id,
+        commune_code=row.commune_code,
+        area_code=row.area_code,
+        actor=user.id,
+    )
+    return VnCommuneAreaMapResponse.model_validate(row)
+
+
+@admin_router.patch(
+    "/communes/{commune_id}",
+    response_model=VnCommuneAreaMapResponse,
+)
+async def update_commune(
+    commune_id: int,
+    payload: VnCommuneAreaMapUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    user=Depends(require_admin),
+) -> VnCommuneAreaMapResponse:
+    """PATCH metadata (province/district/ward/effective_to). area_code KHÔNG
+    sửa được ở đây (đổi KV → /replace-area)."""
+    service = VnLocalityService(db)
+    row, callback = await service.update_commune(
+        commune_id, payload.model_dump(exclude_unset=True)
+    )
+    await db.commit()
+    if callback:
+        await callback()
+    log.info("vn_commune_updated", id=row.id, actor=user.id)
+    return VnCommuneAreaMapResponse.model_validate(row)
+
+
+@admin_router.post(
+    "/communes/{commune_id}/replace-area",
+    response_model=VnCommuneAreaMapResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def replace_commune_area(
+    commune_id: int,
+    payload: VnCommuneAreaMapReplaceArea,
+    db: AsyncSession = Depends(database.get_db),
+    user=Depends(require_admin),
+) -> VnCommuneAreaMapResponse:
+    """Đổi KV temporal: retire dòng cũ + trả dòng active MỚI (201)."""
+    service = VnLocalityService(db)
+    row, callback = await service.replace_commune_area(
+        commune_id, payload.area_code, payload.effective_from
+    )
+    await db.commit()
+    if callback:
+        await callback()
+    log.info(
+        "vn_commune_area_replaced",
+        old_id=commune_id,
+        new_id=row.id,
+        area_code=row.area_code,
+        actor=user.id,
+    )
+    return VnCommuneAreaMapResponse.model_validate(row)
+
+
+@admin_router.delete(
+    "/communes/{commune_id}",
+    response_model=VnCommuneAreaMapResponse,
+)
+async def retire_commune(
+    commune_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    user=Depends(require_admin),
+) -> VnCommuneAreaMapResponse:
+    """Retire (soft-close ``effective_to`` = hôm nay). KHÔNG hard-delete."""
+    service = VnLocalityService(db)
+    row, callback = await service.retire_commune(commune_id)
+    await db.commit()
+    if callback:
+        await callback()
+    log.info(
+        "vn_commune_retired",
+        id=row.id,
+        effective_to=str(row.effective_to),
+        actor=user.id,
+    )
+    return VnCommuneAreaMapResponse.model_validate(row)
 
 
 # =============================================================================
