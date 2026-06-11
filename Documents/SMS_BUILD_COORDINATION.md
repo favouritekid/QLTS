@@ -3,7 +3,7 @@
 > **Nguồn sự thật chung cho 2 AI agent (Claude Code + Codex CLI) cùng build trên 1 repo local D:\QLTS.**
 > Cả 2 agent **đọc file này TRƯỚC mỗi phiên** và **cập nhật §9 status sau mỗi PR**.
 > Plan thiết kế gốc: **`Documents/SMS_MARKETING_MODULE_DESIGN.md`** (§1–§19). File này KHÔNG lặp lại thiết kế — nó trả lời: *agent nào làm gì, ở đâu, theo thứ tự nào, tránh giẫm chân ra sao, và luật repo bắt buộc.*
-> Cập nhật: 2026-06-11. Trạng thái: **GO (user authorize) — PR-1 schema CODE XONG + qua 3 vòng Codex review (R1–R3), commit branch `sms/pr1-schema` CHƯA push.** Workflow: **Claude code TOÀN BỘ, Codex review TOÀN BỘ** (đổi từ chia owner cũ).
+> Cập nhật: 2026-06-11. Trạng thái: **GO (user authorize) — PR-1 schema CODE XONG + qua nhiều vòng Codex review (R1–R5), commit branch `sms/pr1-schema` (clean sau rebase) CHƯA push.** Workflow: **Claude code TOÀN BỘ, Codex review TOÀN BỘ** (đổi từ chia owner cũ).
 > Contract v4 trong `SMS_MARKETING_MODULE_DESIGN.md` supersede mọi chi tiết v3 còn sót: 12 model core, token HMAC+Fernet base62×9, consent ledger, revisioned attestations, `handed_off` thay `sent`, landing opt-out chỉ là kênh bổ sung.
 
 ---
@@ -193,7 +193,7 @@ SMS marketing là export quảng cáo, không dùng `dispatch()`/`SystemEvents`/
 
 | PR | Owner | Status | Branch | Ghi chú |
 |---|---|---|---|---|
-| PR-1 Schema | Claude | ✅ review R1–R3 xong, chờ user push | `sms/pr1-schema` | 075c8292+83fe00ca+a8d045ed+13634b46; 7/7 pytest + alembic check sạch + flake8 sạch |
+| PR-1 Schema | Claude | ✅ review R1–R5 xong, chờ user push | `sms/pr1-schema` | branch clean sau rebase (hash xem `git log`); 8/8 pytest + alembic check + flake8 sạch |
 | PR-2 Contact | Codex | 🔲 | `sms/pr2-contact` | chờ PR-1 merge |
 | PR-3 Build | Claude | 🔲 | `sms/pr3-build` | chờ PR-2 merge |
 | PR-4 Export | Codex | 🔲 | `sms/pr4-export` | chờ PR-3 merge |
@@ -212,14 +212,15 @@ SMS marketing là export quảng cáo, không dùng `dispatch()`/`SystemEvents`/
 - 2026-06-11 — Hard review v4: BLOCK code; sửa token persistence, consent ledger, opt-out legal channel, DNC revision gate, export lifecycle, log leakage, 12-model core.
 - 2026-06-11 — User AUTHORIZE GO (đủ evidence L1–L4). Workflow đổi: **Claude code all, Codex review all**.
 - 2026-06-11 — PR-1 schema code xong (12 model + migration + regression test) + Codex review **R1** (consent CASCADE→SET NULL, seed bỏ MVNO 055/087), **R2** (5 CHECK/FK invariant: granted-proof, token-triplet, import group SET NULL, count invariant, comment parity), **R3** (empty-string `coalesce`/`btrim`, ledger `revoke_source`, click_event bỏ denorm campaign/contact, regression test 7/7, fix 3 lỗ three-valued-logic). Branch `sms/pr1-schema`, CHƯA push.
-- 2026-06-11 — ⚠ Lưu ý: branch có commit lạ `81c3d5b0 fix(officer)` xen giữa R2/R3 (không thuộc SMS) — cần user xử lý trước khi squash-merge.
+- 2026-06-11 — ✅ Commit lạ `81c3d5b0 fix(officer)` ĐÃ được rebase bỏ khỏi branch (clean SMS-only); hash R3+ đổi mới.
+- 2026-06-11 — Codex review R4 (token hash-len→hex regex, `_raises` rigor 23xxx, revoke no-grant-data) + R5 (range CHECK revision/counter/export non-âm + human≤raw, hex regex `^[0-9a-f]{64}$`, mask phone trong `__repr__`). 8/8 pytest.
 
 ---
 
 ## 10. Bước tiếp theo
 1. ✅ User/chủ dự án đã chốt L1-L4 (attest đủ evidence) 2026-06-11; reference điền vào proof_reference/source_reference/attestation khi build campaign.
-2. User phát lệnh GO rõ ràng cho PR-1.
-3. Sau GO mới bootstrap worktree/branch và xác nhận production config: token hash/encryption key-ring, IP hash secret, redirect allowlist, frequency cap, opt-out instruction, private storage.
+2. ✅ User đã GO (2026-06-11); PR-1 code xong + qua review R1–R5.
+3. ✅ Branch `sms/pr1-schema` đã tạo + code; production config (token hash/encryption key-ring, IP hash secret, redirect allowlist, frequency cap, opt-out instruction, private storage) xác nhận khi deploy.
 4. Triển khai theo dependency graph; không mở PR-7 schema trước khi core ổn định.
 
 > L1-L4 đã được user attest (GO 2026-06-11) → code tiến hành. Push/merge vẫn cần approval per-lần; compliance evidence phải có thật khi build campaign.
