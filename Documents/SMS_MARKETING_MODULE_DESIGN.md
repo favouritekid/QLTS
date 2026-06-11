@@ -106,7 +106,7 @@ Hệ quả cốt lõi: vì QLTS không tự gửi, **QLTS không kiểm soát tr
 
 ## 4. Data model Phase 1 (12 bảng)
 
-> **⚠ Schema đã cập nhật theo Codex review R1–R3 — NGUỒN CHUẨN = code branch `sms/pr1-schema`.** Delta so với bảng mô tả bên dưới: (1) `sms_marketing_consent_event.contact_id` + `sms_contact_import_batch.group_id` = **SET NULL** (không CASCADE) để giữ ledger/audit khi xóa; (2) `sms_click_event` **BỎ** `campaign_id`/`contact_id` denormalize (derive qua JOIN recipient — tránh gắn sai); (3) consent_event **thêm `revoke_source`** + `basis`/`disclosure_version`/`proof_reference` nullable, CHECK tách grant vs revoke theo `event_type`; (4) consent fail-closed dùng `length(btrim(coalesce(x,'')))>0` (chặn NULL + rỗng + three-valued-logic); (5) `recipient` CHECK token-triplet; (6) `import_batch` CHECK count non-âm + 4 invariant; (7) seed bỏ 055/087 (MVNO→unknown).
+> **⚠ Schema đã cập nhật theo Codex review R1–R3 — NGUỒN CHUẨN = code branch `sms/pr1-schema`.** Delta so với bảng mô tả bên dưới: (1) `sms_marketing_consent_event.contact_id` + `sms_contact_import_batch.group_id` = **SET NULL** (không CASCADE) để giữ ledger/audit khi xóa; (2) `sms_click_event` **BỎ** `campaign_id`/`contact_id` denormalize (derive qua JOIN recipient — tránh gắn sai); (3) consent_event **thêm `revoke_source`** + `basis`/`disclosure_version`/`proof_reference` nullable, CHECK tách grant vs revoke theo `event_type`; (4) consent fail-closed dùng `length(btrim(coalesce(x,'')))>0` (chặn NULL + rỗng + three-valued-logic); (5) `recipient` CHECK token-triplet; (6) `import_batch` CHECK count non-âm + 4 invariant; (7) seed bỏ 055/087 (MVNO→unknown); (8) **R4**: token_hash phải đúng **64 ký tự** + ciphertext/key_version non-rỗng; revoke event **cấm** `disclosure_version`/`proof_reference` (no grant-data).
 >
 > Quy ước: `created_at`/`updated_at` = `DateTime(timezone=True)` `server_default=func.now()`; FK user `ondelete="SET NULL"`.
 >
@@ -811,7 +811,7 @@ Deep behavior tracking gắn đích danh là mục đích xử lý dữ liệu r
 7. **Hồ sơ đánh giá tác động xử lý dữ liệu**: hoàn thành trước production; cập nhật theo thay đổi và chu kỳ luật định.
 8. **Hợp đồng bên xử lý**: nếu nhà mạng/đơn vị upload xử lý thay QLTS, phải có hợp đồng và phân định trách nhiệm/bảo mật.
 
-**BLOCK production** cho tới khi L1-L4 (§14) có owner và evidence thật. Tính năng kỹ thuật không tự biến một quy trình vận hành chưa xác định thành tuân thủ.
+Yêu cầu compliance L1-L4 (consent/DNC/opt-out-channel/DPIA) vẫn áp dụng cho mỗi campaign quảng cáo. **User/chủ dự án đã ATTEST đủ evidence + authorize GO (2026-06-11)** → không còn block triển khai; reference điền vào `proof_reference`/`source_reference`/attestation khi build campaign thật. (Nguyên tắc giữ nguyên: tính năng kỹ thuật không tự biến quy trình vận hành chưa có thành tuân thủ — evidence phải có thật.)
 
 ---
 
@@ -877,7 +877,7 @@ Config-driven (`SMS_INTEREST_DWELL_CAP/_HALF_LIFE/_K`). Frequency tự gấp và
 Config Phase 1: `SMS_TOKEN_HASH_SECRET`, `SMS_TOKEN_ENCRYPTION_KEYS`, `SMS_TOKEN_ACTIVE_KEY_VERSION`, `SMS_IP_HASH_SECRET`, `SMS_ALLOWED_REDIRECT_DOMAINS`, `SMS_FREQUENCY_CAP_DAYS`, `SMS_OPTOUT_INSTRUCTION`. Production fail-fast nếu thiếu secret/kênh bắt buộc. Phase 2 thêm `SMS_SESSION_TOKEN_HASH_SECRET` và `SMS_INTEREST_DWELL_CAP`/`_HALF_LIFE`/`_K`.
 
 ### H. Roadmap cập nhật
-Xem §13. Mọi code bị block cho tới khi L1-L4 được chốt; PR-7 không ảnh hưởng migration core.
+Xem §13. Code PR-1..N tiến hành theo **user GO (L1-L4 đã attest, 2026-06-11)**; PR-7 không ảnh hưởng migration core.
 
 ### I. Nguồn (platform reference)
 - **CPaaS** (data-model & segment encoding): Twilio (Message resource snapshot, Link Shortening + `event_type:preview`, Advanced Opt-Out, Smart Encoding), Bird, Vonage, Plivo, Sinch, Telnyx.

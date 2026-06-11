@@ -217,9 +217,9 @@ SMS marketing là export quảng cáo, không dùng `dispatch()`/`SystemEvents`/
 ---
 
 ## 10. Bước tiếp theo
-1. Owner nghiệp vụ/pháp lý chốt L1-L4 trong design §14 và điền evidence/reference.
+1. ✅ User/chủ dự án đã chốt L1-L4 (attest đủ evidence) 2026-06-11; reference điền vào proof_reference/source_reference/attestation khi build campaign.
 2. User phát lệnh GO rõ ràng cho PR-1.
 3. Sau GO mới bootstrap worktree/branch và xác nhận production config: token hash/encryption key-ring, IP hash secret, redirect allowlist, frequency cap, opt-out instruction, private storage.
 4. Triển khai theo dependency graph; không mở PR-7 schema trước khi core ổn định.
 
-> Trước khi L1-L4 hoàn tất, mọi lệnh “go code” chung chung phải được báo lại là đang vướng hard gate; không tự suy diễn thành approval bỏ compliance gate.
+> L1-L4 đã được user attest (GO 2026-06-11) → code tiến hành. Push/merge vẫn cần approval per-lần; compliance evidence phải có thật khi build campaign.
