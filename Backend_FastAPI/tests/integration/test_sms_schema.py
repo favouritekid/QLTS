@@ -16,7 +16,7 @@ Heavy/destructive → chạy one-off container (CLAUDE.md):
 """
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError, DBAPIError
+from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal
 
@@ -29,14 +29,22 @@ async def _schema(setup_test_database):
 
 
 async def _raises(sql: str) -> bool:
-    """True nếu INSERT vi phạm constraint DB (đã rollback sạch)."""
+    """True nếu INSERT vi phạm INTEGRITY constraint (SQLSTATE 23xxx), rollback sạch.
+
+    CHỈ bắt IntegrityError — KHÔNG bắt DBAPIError chung: syntax/disconnect/lỗi DB
+    khác sẽ propagate làm test ĐỎ thay vì false-pass. Assert mã 23xxx (23502
+    not-null, 23503 FK, 23505 unique, 23514 check).
+    """
     async with AsyncSessionLocal() as s:
         try:
             await s.execute(text(sql))
             await s.rollback()
             return False
-        except (IntegrityError, DBAPIError):
+        except IntegrityError as e:
             await s.rollback()
+            code = getattr(getattr(e, "orig", None), "sqlstate", None)
+            assert code and code.startswith("23"), \
+                f"không phải integrity violation (23xxx): {code}"
             return True
 
 
@@ -95,6 +103,14 @@ async def test_consent_event_revoke_invariants():
     assert await _raises(
         _E + ",basis,revoke_source) VALUES "
         "('09','revoked',now(),'signed_form','manual')")
+    # revoke lẫn disclosure_version (grant-data) → reject (R4)
+    assert await _raises(
+        _E + ",revoke_source,disclosure_version) VALUES "
+        "('09','revoked',now(),'sms_reply','grant-v1')")
+    # revoke lẫn proof_reference (grant-data) → reject (R4)
+    assert await _raises(
+        _E + ",revoke_source,proof_reference) VALUES "
+        "('09','revoked',now(),'sms_reply','ref')")
 
 
 async def test_import_batch_count_invariants():
@@ -120,20 +136,31 @@ async def test_recipient_token_triplet():
                 "group_ids_snapshot,full_name_snapshot,phone_normalized_snapshot,"
                 "phone_international_snapshot,carrier_bucket")
         vals = f"VALUES ({cid},0,'{{1}}','N','0900000001','84900000001','viettel'"
-        # token_hash có nhưng thiếu ciphertext/key_version → reject.
-        # Dùng savepoint để rollback chỉ insert xấu, KHÔNG mất campaign.
-        sp = await s.begin_nested()
-        raised = False
-        try:
-            await s.execute(text(base + ",token_hash) " + vals + ",'h')"))
-        except (IntegrityError, DBAPIError):
-            raised = True
-        await sp.rollback()
-        assert raised
-        # đủ bộ ba token → OK (campaign vẫn còn sau savepoint rollback)
+        h64 = "a" * 64  # HMAC-SHA256 hex = đúng 64 ký tự
+
+        async def _bad(tail):
+            # savepoint: rollback chỉ insert xấu, giữ campaign cho case sau
+            sp = await s.begin_nested()
+            raised = False
+            try:
+                await s.execute(text(base + tail))
+            except IntegrityError:
+                raised = True
+            await sp.rollback()
+            assert raised
+
+        # chỉ có hash, thiếu ciphertext/key_version → reject
+        await _bad(",token_hash) " + vals + f",'{h64}')")
+        # hash sai độ dài (≠ 64) → reject
+        await _bad(",token_hash,token_ciphertext,token_key_version) "
+                   + vals + ",'h','c','v1')")
+        # ciphertext rỗng → reject
+        await _bad(",token_hash,token_ciphertext,token_key_version) "
+                   + vals + f",'{h64}','','v1')")
+        # đủ bộ ba hợp lệ (hash 64 ký tự, ciphertext/keyver non-rỗng) → OK
         await s.execute(text(
             base + ",token_hash,token_ciphertext,token_key_version) "
-            + vals + ",'h','c','v1')"))
+            + vals + f",'{h64}','cipher','v1')"))
         await s.rollback()
 
 

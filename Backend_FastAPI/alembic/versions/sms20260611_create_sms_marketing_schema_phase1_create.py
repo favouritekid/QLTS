@@ -191,7 +191,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("encoding IS NULL OR encoding IN ('GSM7','UCS2')", name='chk_sms_recipient_encoding'),
     sa.CheckConstraint("excluded_reason IS NULL OR excluded_reason IN ('no_consent','opted_out','dnc_suppressed','frequency_capped','over_limit','missing_data')", name='chk_sms_recipient_excluded_reason'),
-    sa.CheckConstraint("(token_hash IS NULL AND token_ciphertext IS NULL AND token_key_version IS NULL) OR (token_hash IS NOT NULL AND token_ciphertext IS NOT NULL AND token_key_version IS NOT NULL)", name='chk_sms_recipient_token_triplet'),
+    sa.CheckConstraint("(token_hash IS NULL AND token_ciphertext IS NULL AND token_key_version IS NULL) OR (token_hash IS NOT NULL AND token_ciphertext IS NOT NULL AND token_key_version IS NOT NULL AND length(token_hash) = 64 AND length(btrim(token_ciphertext)) > 0 AND length(btrim(token_key_version)) > 0)", name='chk_sms_recipient_token_triplet'),
     sa.ForeignKeyConstraint(['campaign_id'], ['sms_campaign.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
@@ -295,7 +295,7 @@ def upgrade() -> None:
     sa.Column('metadata_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='metadata tối thiểu, không chứa secret/PII thừa'),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("event_type <> 'granted' OR (basis IS NOT NULL AND basis IN ('explicit_form','signed_form','recorded_call','imported_proof') AND revoke_source IS NULL AND length(btrim(coalesce(disclosure_version,''))) > 0 AND length(btrim(coalesce(proof_reference,''))) > 0)", name='chk_sms_consent_event_grant'),
-    sa.CheckConstraint("event_type <> 'revoked' OR (basis IS NULL AND revoke_source IS NOT NULL AND revoke_source IN ('sms_reply','landing_optout','manual','phone_call','external_suppression'))", name='chk_sms_consent_event_revoke'),
+    sa.CheckConstraint("event_type <> 'revoked' OR (basis IS NULL AND disclosure_version IS NULL AND proof_reference IS NULL AND revoke_source IS NOT NULL AND revoke_source IN ('sms_reply','landing_optout','manual','phone_call','external_suppression'))", name='chk_sms_consent_event_revoke'),
     sa.CheckConstraint("event_type IN ('granted','revoked')", name='chk_sms_consent_event_type'),
     sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['import_batch_id'], ['sms_contact_import_batch.id'], ondelete='SET NULL'),

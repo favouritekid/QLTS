@@ -39,9 +39,11 @@ class SmsMarketingConsentEvent(Base):
             "AND length(btrim(coalesce(proof_reference,''))) > 0)",
             name="chk_sms_consent_event_grant",
         ),
-        # REVOKE: revoke_source ∈ optout-enum; basis NULL (xem CHECK revoke).
+        # REVOKE: revoke_source ∈ optout-enum; basis/disclosure/proof = NULL
+        # (revoke KHÔNG mang grant-data — tách bạch contract).
         CheckConstraint(
             "event_type <> 'revoked' OR (basis IS NULL "
+            "AND disclosure_version IS NULL AND proof_reference IS NULL "
             "AND revoke_source IS NOT NULL "
             "AND revoke_source IN ('sms_reply','landing_optout','manual',"
             "'phone_call','external_suppression'))",

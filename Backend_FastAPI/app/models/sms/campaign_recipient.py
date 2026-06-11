@@ -64,12 +64,16 @@ class SmsCampaignRecipient(Base):
             "encoding IS NULL OR encoding IN ('GSM7','UCS2')",
             name="chk_sms_recipient_encoding",
         ),
-        # Token triplet: cùng NULL (không link) hoặc cùng NOT NULL (re-export được).
+        # Token triplet: cùng NULL (không link) HOẶC bộ ba dùng được:
+        # hash = HMAC-SHA256 hex đúng 64 ký tự, ciphertext/key_version non-rỗng.
         CheckConstraint(
             "(token_hash IS NULL AND token_ciphertext IS NULL "
             "AND token_key_version IS NULL) OR "
             "(token_hash IS NOT NULL AND token_ciphertext IS NOT NULL "
-            "AND token_key_version IS NOT NULL)",
+            "AND token_key_version IS NOT NULL "
+            "AND length(token_hash) = 64 "
+            "AND length(btrim(token_ciphertext)) > 0 "
+            "AND length(btrim(token_key_version)) > 0)",
             name="chk_sms_recipient_token_triplet",
         ),
     )
