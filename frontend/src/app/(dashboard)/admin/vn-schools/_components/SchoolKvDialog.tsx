@@ -7,7 +7,7 @@
 
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Pencil, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -79,16 +79,12 @@ export function SchoolKvDialog({ school, onOpenChange }: Props) {
   const updateMutation = useUpdateKvAssignment()
   const deleteMutation = useDeleteKvAssignment()
 
+  // State khởi tạo mới mỗi lần component remount (SchoolTable truyền key=school.id
+  // → đổi trường = remount = form sạch). Tránh setState đồng bộ trong useEffect
+  // (react-hooks: cascading renders).
   const [editId, setEditId] = useState<number | null>(null)
   const [form, setForm] = useState<KvForm>(EMPTY)
   const [error, setError] = useState<string | null>(null)
-
-  // Reset form khi đổi trường (đóng/mở dialog).
-  useEffect(() => {
-    setEditId(null)
-    setForm(EMPTY)
-    setError(null)
-  }, [schoolId])
 
   const busy =
     addMutation.isPending ||

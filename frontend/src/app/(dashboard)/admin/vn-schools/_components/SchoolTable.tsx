@@ -458,8 +458,9 @@ export function SchoolTable({ rows, isLoading }: SchoolTableProps) {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* KV management */}
+      {/* KV management — key=school.id để remount (reset form) khi đổi trường */}
       <SchoolKvDialog
+        key={kvSchool?.id ?? "none"}
         school={kvSchool}
         onOpenChange={(o) => !o && setKvSchool(null)}
       />
