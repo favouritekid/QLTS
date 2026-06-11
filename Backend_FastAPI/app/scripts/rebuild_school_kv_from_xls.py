@@ -1,28 +1,26 @@
-"""PHỦ DATA MỚI: nạp toàn bộ catalog trường THPT từ XLS chính thức MOET (QĐ 60 + TT05).
+"""PHỦ DATA MỚI (nhánh TRƯỜNG): nạp catalog trường THPT từ XLS MOET chính thức.
 
 Quyết định (vì trường có ĐỔI TÊN → match-tên không tin cậy):
-  ĐỢT 1 (script này):
-    1) INSERT toàn bộ trường vùng target từ XLS — catalog SẠCH mới (moet_code +
-       commune_code + KV chuẩn, source=moet_thpt_2026_qd60).
-    2) XÓA CỨNG (DELETE) TOÀN BỘ bản ghi cũ vùng target (CASCADE kéo theo
-       kv_assignment + name_history) → dropdown chỉ còn catalog sạch; hồ sơ MỚI
-       chọn = đúng ngay. (academic_history JSONB của hồ sơ cũ KHÔNG có FK cứng →
-       school_id dangling, resolve graceful + officer chọn lại.)
-    3) FIX dòng ACTIVE + ADD commune mới vn_commune_area_map theo KV suy từ XLS
-       (khóa = mã xã; CHỈ đụng dòng effective_to IS NULL; ADD lấy ward/tỉnh từ
-       administrative_nodes hiện hành — không resolve được thì CẢNH BÁO + bỏ
-       qua để thêm tay qua /admin/commune-kv). KV3 không lưu (= default vắng mặt).
-  ĐỢT 2 (backfill — script riêng, làm SAU):
-    Re-link academic_history của các hồ sơ ĐÃ chọn (school_id cũ → bản ghi mới),
-    khớp theo commune_code + fuzzy/tay (vì đổi tên). Script này CHỈ liệt kê
-    danh sách cần backfill, KHÔNG đụng.
+  1) INSERT toàn bộ trường vùng target từ XLS — catalog mới (moet_code +
+     commune_code + KV chuẩn, source=moet_thpt_2026_qd60).
+  2) XÓA CỨNG (DELETE) TOÀN BỘ bản ghi cũ vùng target (CASCADE kéo theo
+     kv_assignment + name_history) → dropdown chỉ còn catalog mới; hồ sơ MỚI
+     chọn = đúng ngay. (academic_history JSONB của hồ sơ cũ KHÔNG có FK cứng
+     → school_id dangling, resolve graceful + officer chọn lại.)
+
+PHẠM VI: CHỈ nhánh TRƯỜNG (vn_school + vn_school_kv_assignment). KHÔNG đụng
+vn_commune_area_map — bảng thường trú (nhánh THUONG_TRU) neo nguồn riêng
+(QĐ 60 + phân loại đơn vị hành chính); tách nguồn, KV-trường vs KV-thường-trú
+không mượn chéo. Chuẩn hóa commune làm việc riêng theo QĐ 60.
 
 KV mới: effective_from_year=2000 (sentinel; KV trường hằng số; resolve được cả
 engine năm-học lẫn năm-tuyển-sinh), effective_to_year=NULL.
 
 CHẾ ĐỘ:
-  --dry-run (mặc định): đọc --source + --state-dir (dump prod), KHÔNG DB, KHÔNG ghi.
-  --apply: kết nối DB, 1 transaction, idempotent theo moet_code. Chạy sau backup+duyệt.
+  --dry-run (mặc định): đọc --source + --state-dir (dump prod), KHÔNG DB.
+  --apply: kết nối DB, 1 transaction, idempotent theo moet_code. Chạy sau
+           backup + duyệt.
+  --export-source XLS: sinh source.csv từ file XLS MOET (cần pandas+xlrd).
 """
 
 from __future__ import annotations
@@ -31,7 +29,7 @@ import argparse
 import csv
 import os
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 
 KV_EFFECTIVE_FROM = 2000
 SOURCE_OF = "moet_thpt_2026_qd60"
@@ -48,7 +46,12 @@ OLD_TO_GSO = {
 
 
 REQUIRED_SOURCE_COLS = {
-    "gso", "moet_code", "commune_code", "kv", "name", "province",
+    "gso",
+    "moet_code",
+    "commune_code",
+    "kv",
+    "name",
+    "province",
 }
 
 
@@ -65,7 +68,7 @@ def read_csv(path):
 
 def load_source(path):
     """Đọc source.csv + validate cột bắt buộc + chuẩn hóa kv NGAY khi nạp
-    (mọi downstream — dry_run/apply/commune — thấy KV canonical 'KV2-NT')."""
+    (mọi downstream — dry_run/apply — thấy KV canonical 'KV2-NT')."""
     with open(path, encoding="utf-8") as f:
         reader = csv.DictReader(f)
         missing = REQUIRED_SOURCE_COLS - set(reader.fieldnames or [])
@@ -79,31 +82,12 @@ def load_source(path):
     return rows
 
 
-def commune_plan(src_t, map_now):
-    """Trả (fix, add): sửa/thêm vn_commune_area_map theo KV suy từ XLS."""
-    sck = defaultdict(Counter)
-    for s in src_t:
-        if s["commune_code"]:
-            sck[s["commune_code"]][s["kv"]] += 1
-    fix, add = [], []
-    for cc, ctr in sck.items():
-        want = ctr.most_common(1)[0][0]
-        cur = map_now.get(cc)
-        if cur is None:
-            if want in ("KV1", "KV2", "KV2-NT"):
-                add.append((cc, want))
-        elif cur != want:
-            fix.append((cc, cur, want))
-    return fix, add
-
-
 def dry_run(args) -> int:
     src = load_source(args.source)
     provinces = set(p.strip() for p in args.provinces.split(","))
     src_t = [s for s in src if s["gso"] in provinces]
 
     schools = read_csv(os.path.join(args.state_dir, "schools.csv"))
-    cmap = read_csv(os.path.join(args.state_dir, "commune_map.csv"))
     prof = read_csv(os.path.join(args.state_dir, "profile_schools.csv"))
 
     db_region = [
@@ -112,37 +96,35 @@ def dry_run(args) -> int:
         if (r + [""] * 7)[6].lower() in ("t", "true", "1")
         and OLD_TO_GSO.get((r + [""] * 7)[2].strip()) in provinces
     ]
-    map_now = {r[0]: nkv(r[3]) for r in cmap}
-    cfix, cadd = commune_plan(src_t, map_now)
 
     sel_ids = set(r[2] for r in prof if len(r) >= 3 and r[2])
     sch_by_id = {r[0]: r for r in db_region}
     backfill = [sch_by_id[sid] for sid in sel_ids if sid in sch_by_id]
 
     print("=" * 70)
-    print(f"PHỦ DATA MỚI (blanket) — DRY-RUN | GSO={sorted(provinces)}")
+    print(f"PHỦ DATA MỚI (nhánh TRƯỜNG) — DRY-RUN | GSO={sorted(provinces)}")
     print("=" * 70)
     print(
-        f"[1] INSERT trường mới từ XLS     : {len(src_t)}  "
+        f"[1] INSERT trường từ XLS : {len(src_t)}  "
         f"(KV {dict(Counter(s['kv'] for s in src_t))})"
     )
     print(
-        f"      effective_from={KV_EFFECTIVE_FROM}, effective_to=NULL, "
-        f"source={SOURCE_OF}"
+        f"      effective_from={KV_EFFECTIVE_FROM}, "
+        f"effective_to=NULL, source={SOURCE_OF}"
     )
     print(
-        f"[2] XÓA CỨNG bản ghi cũ          : {len(db_region)} "
-        f"(toàn bộ vùng target; CASCADE kv+name_history)"
+        f"[2] XÓA CỨNG bản ghi cũ  : {len(db_region)} "
+        f"(toàn vùng target; CASCADE kv+name_history)"
     )
-    print(f"[3] commune_area_map  SỬA={len(cfix)} | THÊM={len(cadd)}")
     print(
-        f"[4] HỒ SƠ DANGLING (officer chọn lại): {len(backfill)} "
-        f"trường đã chọn sẽ mất link"
+        f"[3] HỒ SƠ DANGLING       : {len(backfill)} "
+        f"trường đã chọn sẽ mất link (officer chọn lại)"
     )
     for r in backfill:
-        print(f"        school_id={r[0]:>4} | {r[1][:40]:42} | {r[2]}")
+        print(f"        school_id={r[0]:>4} | {r[1][:46]}")
     print("-" * 70)
-    print(f"=> active sau ĐỢT 1 = {len(src_t)} (catalog XLS sạch)")
+    print("[note] vn_commune_area_map KHÔNG đụng (nguồn riêng QĐ 60).")
+    print(f"=> active vùng target sau apply = {len(src_t)}")
     print("=" * 70)
 
     out = os.path.join(args.state_dir, "phu_data_plan.csv")
@@ -153,10 +135,6 @@ def dry_run(args) -> int:
             w.writerow(["INSERT", s["moet_code"], s["name"], s["kv"]])
         for r in db_region:
             w.writerow(["DELETE", r[0], r[1], ""])
-        for cc, a, b in cfix:
-            w.writerow(["COMMUNE_FIX", cc, a, b])
-        for cc, b in cadd:
-            w.writerow(["COMMUNE_ADD", cc, "", b])
         for r in backfill:
             w.writerow(["BACKFILL_DEFER", r[0], r[1], r[2]])
     print(f"Kế hoạch -> {out}")
@@ -166,21 +144,19 @@ def dry_run(args) -> int:
 async def apply(args) -> int:
     from app.database import AsyncSessionLocal
     from app.models.vn_school import VnSchool, VnSchoolKvAssignment
-    from app.models.vn_locality import VnCommuneAreaMap
+    from sqlalchemy import delete as sa_delete
     from sqlalchemy import select, update
 
     src = load_source(args.source)
     provinces = set(p.strip() for p in args.provinces.split(","))
     src_t = [s for s in src if s["gso"] in provinces]
 
-    from sqlalchemy import delete as sa_delete
-
     old_names = [n for n, g in OLD_TO_GSO.items() if g in provinces]
     async with AsyncSessionLocal() as db:
         async with db.begin():
             # (2) XÓA CỨNG toàn bộ cũ vùng target.
-            # FK: vn_school_kv_assignment + vn_school_name_history = CASCADE (tự xóa).
-            # merged_into_id (self-ref, NO ACTION): set NULL trước để không vỡ.
+            # FK: kv_assignment + name_history = CASCADE (tự xóa).
+            # merged_into_id (self-ref, NO ACTION): set NULL trước.
             await db.execute(
                 update(VnSchool)
                 .where(VnSchool.province.in_(old_names))
@@ -226,75 +202,17 @@ async def apply(args) -> int:
                     )
                 )
                 ins += 1
-            # (3) commune_area_map: FIX dòng ACTIVE (effective_to IS NULL) + ADD
-            # commune mới (lấy ward/tỉnh hiện hành từ administrative_nodes).
-            from app.repositories.administrative_repository import (
-                AdministrativeRepository,
-            )
-
-            admin_repo = AdministrativeRepository(db)
-            cfix = 0
-            cadd = 0
-            cadd_skip = 0
-            sck = defaultdict(Counter)
-            for s in src_t:
-                if s["commune_code"]:
-                    sck[s["commune_code"]][s["kv"]] += 1
-            for cc, ctr in sck.items():
-                want = ctr.most_common(1)[0][0]
-                # KV3 = default (vắng mặt trong map) → KHÔNG add/fix về KV3.
-                if want not in ("KV1", "KV2", "KV2-NT"):
-                    continue
-                # CHỈ dòng ACTIVE (effective_to IS NULL) — KHÔNG đụng dòng retire.
-                row = await db.scalar(
-                    select(VnCommuneAreaMap)
-                    .where(
-                        VnCommuneAreaMap.commune_code == cc,
-                        VnCommuneAreaMap.effective_to.is_(None),
-                    )
-                    .limit(1)
-                )
-                if row is not None:
-                    if row.area_code != want:
-                        row.area_code = want
-                        cfix += 1
-                    continue
-                # Commune chưa có trong map → ADD (resolve ward/tỉnh hiện hành).
-                ward_name, province_name = (
-                    await admin_repo.get_current_commune_display(cc)
-                )
-                if not (ward_name and province_name):
-                    cadd_skip += 1  # không resolve → KHÔNG bỏ âm thầm, đếm + cảnh báo
-                    continue
-                db.add(
-                    VnCommuneAreaMap(
-                        commune_code=cc,
-                        province=province_name,
-                        district="",
-                        ward=ward_name,
-                        area_code=want,
-                    )
-                )
-                cadd += 1
+    print(f"[apply] insert={ins} deleted={react}")
+    print("[apply] vn_commune_area_map KHÔNG đụng (nguồn riêng QĐ 60).")
     print(
-        f"[apply] insert={ins} deleted={react} commune_fix={cfix} "
-        f"commune_add={cadd} commune_add_skip={cadd_skip}"
-    )
-    if cadd_skip:
-        print(
-            f"[apply] CẢNH BÁO: {cadd_skip} commune mới KHÔNG resolve được "
-            f"ward/tỉnh hiện hành → CHƯA thêm vào map; thêm tay qua "
-            f"/admin/commune-kv."
-        )
-    print(
-        "[apply] Hồ sơ đã chọn trường cũ -> dangling; officer chọn lại từ catalog mới."
+        "[apply] Hồ sơ chọn trường cũ -> dangling; " "officer chọn lại từ catalog mới."
     )
     return 0
 
 
 def export_source(xls_path: str, out_path: str, provinces: set[str]) -> int:
-    """XLS chính thức MOET -> source.csv (cột chuẩn cho --apply). Cần pandas+xlrd.
-    Đọc Mã Xã/Mã Tỉnh/Mã Trường dạng CHUỖI (giữ số 0 đầu)."""
+    """XLS chính thức MOET -> source.csv (cột chuẩn cho --apply). Cần
+    pandas+xlrd. Đọc Mã Xã/Mã Tỉnh/Mã Trường dạng CHUỖI (giữ số 0 đầu)."""
     import pandas as pd
 
     conv = {"Mã Xã/ Phường": str, "Mã Tỉnh/TP": str, "Mã Trường": str}
@@ -308,6 +226,7 @@ def export_source(xls_path: str, out_path: str, provinces: set[str]) -> int:
         mtr = str(r["Mã Trường"]).strip()
         mx = str(r["Mã Xã/ Phường"]).strip()
         name = str(r["Tên Trường"]).strip()
+        addr = str(r["Địa Chỉ"]).strip() if str(r["Địa Chỉ"]) != "nan" else ""
         rows.append(
             {
                 "moet_code": mt.zfill(2) + mtr.zfill(3),
@@ -315,9 +234,7 @@ def export_source(xls_path: str, out_path: str, provinces: set[str]) -> int:
                 "gso": mt,
                 "province": str(r["Tên Tỉnh/TP"]).strip(),
                 "name": name,
-                "address": (
-                    str(r["Địa Chỉ"]).strip() if str(r["Địa Chỉ"]) != "nan" else ""
-                ),
+                "address": addr,
                 "level": "THPT",
                 "is_dtnt": "1" if "DTNT" in name.upper() else "0",
                 "kv": nkv(r["Khu Vực"]),

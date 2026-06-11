@@ -24,6 +24,7 @@ Run:
 Defer to Phase B.1.b: smart dedup pairs (vd "THPT Lý Tự Trọng" Mã 052 + 107
 cùng địa chỉ) thành 1 vn_school + 2 vn_school_kv_assignment với temporal years.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,6 +44,16 @@ from app.models.vn_school import VnSchool, VnSchoolKvAssignment
 
 
 TARGET_PROVINCES = ["Lâm Đồng", "Đắk Lắk", "Gia Lai"]
+# Phase B.1.c (2026-06-10) — 4 tỉnh bị SÁP NHẬP 2025 vào 3 tỉnh storefront:
+#   Đắk Nông + Bình Thuận → Lâm Đồng mới ; Phú Yên → Đắk Lắk mới ;
+#   Bình Định → Gia Lai mới. Nhập theo TÊN+MÃ tỉnh GỐC (MOET 21/4/2025) — tìm
+#   theo tên trường nên không phụ thuộc province; KV theo từng trường.
+MERGED_2025_PROVINCES = ["Đắk Nông", "Bình Thuận", "Phú Yên", "Bình Định"]
+SCOPES = {
+    "existing-3": TARGET_PROVINCES,
+    "merged-2025": MERGED_2025_PROVINCES,
+    "all-7": TARGET_PROVINCES + MERGED_2025_PROVINCES,
+}
 EFFECTIVE_YEAR = 2025
 SOURCE = "moet_2025"
 SPECIAL_SCHOOL_CODES = {"800", "801", "802", "803", "804", "900"}
@@ -67,9 +78,9 @@ def is_special_school(ma_truong: str) -> bool:
     return str(ma_truong).strip() in SPECIAL_SCHOOL_CODES
 
 
-def build_rows(df: pd.DataFrame) -> List[Dict]:
+def build_rows(df: pd.DataFrame, target_provinces: List[str]) -> List[Dict]:
     """Filter target provinces + build dict rows."""
-    sub = df[df["ten_tinh"].isin(TARGET_PROVINCES)].copy()
+    sub = df[df["ten_tinh"].isin(target_provinces)].copy()
     rows = []
     for _, r in sub.iterrows():
         ma_t = str(r["ma_tinh"]).strip()
@@ -77,25 +88,29 @@ def build_rows(df: pd.DataFrame) -> List[Dict]:
         ma_tr = str(r["ma_truong"]).strip()
         kv = normalize_kv(r["khu_vuc"])
 
-        rows.append({
-            "moet_province_code": ma_t.zfill(3),
-            "moet_district_code": ma_q.zfill(5) if ma_q else None,
-            "moet_school_code": ma_tr,
-            "name": str(r["ten_truong"]).strip(),
-            "address": str(r["dia_chi"]).strip() if pd.notna(r["dia_chi"]) else None,
-            "province": str(r["ten_tinh"]).strip(),
-            "district": str(r["ten_huyen"]).strip() if pd.notna(r["ten_huyen"]) else None,
-            "level": "OTHER" if is_special_school(ma_tr) else "THPT",
-            "is_dtnt": pd.notna(r["dtnt"]) and str(r["dtnt"]).strip() != "",
-            "kv_code": kv,
-            "is_special": is_special_school(ma_tr),
-        })
+        rows.append(
+            {
+                "moet_province_code": ma_t.zfill(3),
+                "moet_district_code": ma_q.zfill(5) if ma_q else None,
+                "moet_school_code": ma_tr,
+                "name": str(r["ten_truong"]).strip(),
+                "address": (
+                    str(r["dia_chi"]).strip() if pd.notna(r["dia_chi"]) else None
+                ),
+                "province": str(r["ten_tinh"]).strip(),
+                "district": (
+                    str(r["ten_huyen"]).strip() if pd.notna(r["ten_huyen"]) else None
+                ),
+                "level": "OTHER" if is_special_school(ma_tr) else "THPT",
+                "is_dtnt": pd.notna(r["dtnt"]) and str(r["dtnt"]).strip() != "",
+                "kv_code": kv,
+                "is_special": is_special_school(ma_tr),
+            }
+        )
     return rows
 
 
-async def upsert_one(
-    db: AsyncSession, row: Dict, stats: Counter
-) -> Tuple[int, bool]:
+async def upsert_one(db: AsyncSession, row: Dict, stats: Counter) -> Tuple[int, bool]:
     """Upsert vn_school + ensure vn_school_kv_assignment exists.
 
     Returns: (school_id, inserted_new_school)
@@ -132,7 +147,15 @@ async def upsert_one(
     else:
         # Update existing fields if drift
         changed = False
-        for field in ("name", "address", "province", "district", "level", "is_dtnt", "moet_district_code"):
+        for field in (
+            "name",
+            "address",
+            "province",
+            "district",
+            "level",
+            "is_dtnt",
+            "moet_district_code",
+        ):
             if getattr(school, field) != row[field]:
                 setattr(school, field, row[field])
                 changed = True
@@ -154,14 +177,16 @@ async def upsert_one(
     kv_existing = kv_existing_q.scalar_one_or_none()
 
     if kv_existing is None:
-        db.add(VnSchoolKvAssignment(
-            school_id=school.id,
-            kv_code=row["kv_code"],
-            effective_from_year=EFFECTIVE_YEAR,
-            effective_to_year=None,
-            source=SOURCE,
-            notes=f"is_special={row['is_special']}",
-        ))
+        db.add(
+            VnSchoolKvAssignment(
+                school_id=school.id,
+                kv_code=row["kv_code"],
+                effective_from_year=EFFECTIVE_YEAR,
+                effective_to_year=None,
+                source=SOURCE,
+                notes=f"is_special={row['is_special']}",
+            )
+        )
         stats["kv_inserted"] += 1
     else:
         if kv_existing.kv_code != row["kv_code"]:
@@ -173,14 +198,27 @@ async def upsert_one(
     return school.id, is_new
 
 
-async def main_async(excel_path: Path):
-    print(f"=== Phase B.1.a — Import 3 tỉnh THPT từ {excel_path} ===\n")
+async def main_async(excel_path: Path, target_provinces: List[str]):
+    print(f"=== Import THPT từ {excel_path} — tỉnh: {target_provinces} ===\n")
 
     df = pd.read_excel(excel_path, sheet_name="Sheet1", header=5)
-    df.columns = ["stt", "ma_tinh", "ten_tinh", "ma_huyen", "ten_huyen",
-                  "ma_truong", "ten_truong", "dia_chi", "khu_vuc", "dtnt"]
-    rows = build_rows(df)
-    print(f"Filtered {len(rows)} rows từ 3 tỉnh: {TARGET_PROVINCES}")
+    df.columns = [
+        "stt",
+        "ma_tinh",
+        "ten_tinh",
+        "ma_huyen",
+        "ten_huyen",
+        "ma_truong",
+        "ten_truong",
+        "dia_chi",
+        "khu_vuc",
+        "dtnt",
+    ]
+    rows = build_rows(df, target_provinces)
+    print(
+        f"Filtered {len(rows)} rows từ {len(target_provinces)} tỉnh: "
+        f"{target_provinces}"
+    )
 
     by_province = Counter(r["province"] for r in rows)
     print(f"Per-province row count: {dict(by_province)}")
@@ -203,7 +241,7 @@ async def main_async(excel_path: Path):
                 print(f"  ERROR row {i} ({row['name']}): {e}")
         await db.commit()
 
-    print(f"\n=== Import done ===")
+    print("\n=== Import done ===")
     for k, v in sorted(stats.items()):
         print(f"  {k:<25} {v}")
 
@@ -216,8 +254,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=Path("/tmp/master_thpt.xls"),
         help="Path to master MOET THPT Excel",
     )
+    parser.add_argument(
+        "--scope",
+        choices=sorted(SCOPES.keys()),
+        default="existing-3",
+        help="Nhóm tỉnh import: existing-3 (3 tỉnh gốc) | "
+        "merged-2025 (4 tỉnh sáp nhập) | all-7",
+    )
     args = parser.parse_args(argv)
-    asyncio.run(main_async(args.excel))
+    asyncio.run(main_async(args.excel, SCOPES[args.scope]))
     return 0
 
 
