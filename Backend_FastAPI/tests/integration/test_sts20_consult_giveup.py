@@ -394,6 +394,43 @@ async def test_giveup_leads_do_not_count_as_workload(db: AsyncSession):
     assert await is_officer_at_threshold(db, officer) is False
 
 
+async def test_dashboard_workload_count_excludes_terminal_in_nonfinal_stage(
+    db: AsyncSession,
+):
+    """OfficerRepository.get_workload_count (nguồn của dashboard 'Đang xử lý' /
+    utilization) PHẢI loại lead terminal nằm trong stage CHƯA-final (sts20@stg02),
+    khớp với is_officer_at_threshold + get_kpi_stats realtime active_leads.
+
+    Regression guard: bản cũ lọc theo PipelineStage.is_final_stage, mà sts20 vẫn
+    ở stg02 (is_final_stage=false) nên lead give-up bị đếm nhầm vào workload — con
+    số dashboard không bao giờ giảm sau khi đóng lead. Nếu ai revert về is_final_stage
+    test này fail (stg02 là non-final stage).
+    """
+    from app.repositories.officer_repository import OfficerRepository
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+
+    # 3 active (sts04, is_final=False) + 5 terminal give-up (sts20, is_final=True).
+    for _ in range(3):
+        await _make_lead(
+            db, unit.id, consultation_status_id="sts04", officer_id=officer.id,
+        )
+    for _ in range(5):
+        await _make_lead(
+            db, unit.id, consultation_status_id="sts20", officer_id=officer.id,
+        )
+
+    repo = OfficerRepository(db)
+    # Chỉ 3 lead active được tính; 5 lead sts20 đã đóng bị loại.
+    assert await repo.get_workload_count(officer.id) == 3
+
+    # Parity: dashboard count khớp định nghĩa workload của thuật toán auto-assign.
+    # 3/10 = 0.3 < 0.8 -> officer còn dưới ngưỡng (sts20 không làm officer "đầy tải").
+    assert await is_officer_at_threshold(db, officer) is False
+
+
 # ---------------------------------------------------------------------------
 # Beat task body: moves only stale sts04 leads (predicate + transition)
 # ---------------------------------------------------------------------------

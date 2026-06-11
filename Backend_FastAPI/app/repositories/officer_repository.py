@@ -88,23 +88,31 @@ class OfficerRepository(BaseRepository[models.User]):
     
     async def get_workload_count(self, officer_id: int) -> int:
         """
-        Count active leads (non-final stage) for an officer.
-        
+        Count active leads for an officer.
+
+        "Active" = consultation_status.is_final là False hoặc NULL — KHỚP với
+        is_officer_at_threshold (assignment_service) và get_kpi_stats realtime
+        active_leads. KHÔNG dùng PipelineStage.is_final_stage: một trạng thái
+        terminal (is_final=true) có thể nằm trong stage CHƯA final
+        (sts20@stg02, sts16@stg04, sts18@stg05) — lọc theo stage sẽ đếm nhầm
+        các lead đã đóng vào workload, khiến con số dashboard không khớp với
+        thuật toán auto-assign và với manager view (get_aggregated_kpis).
+
         Optimized: Single COUNT query with LEFT JOIN.
         """
         query = (
             select(func.count(models.Lead.id))
             .join(
-                models.PipelineStage,
-                models.Lead.pipeline_stage_id == models.PipelineStage.id,
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id,
                 isouter=True,
             )
             .where(
                 models.Lead.assigned_officer_id == officer_id,
                 models.Lead.deleted_at.is_(None),
                 or_(
-                    models.PipelineStage.is_final_stage == False,
-                    models.PipelineStage.is_final_stage.is_(None),
+                    models.ConsultationStatus.is_final == False,
+                    models.ConsultationStatus.is_final.is_(None),
                 ),
             )
         )
