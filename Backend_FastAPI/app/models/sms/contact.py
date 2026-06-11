@@ -33,13 +33,14 @@ class SmsContact(Base):
             "('explicit_form','signed_form','recorded_call','imported_proof')",
             name="chk_sms_contact_consent_basis",
         ),
-        # Consent fail-closed: 'granted' BẮT BUỘC đủ 4 trường proof.
+        # Consent fail-closed: 'granted' BẮT BUỘC đủ 4 trường proof, KHÔNG rỗng
+        # (length(btrim)>0 chặn cả NULL lẫn chuỗi rỗng/space).
         CheckConstraint(
             "marketing_consent_status <> 'granted' OR ("
             "marketing_consented_at IS NOT NULL "
             "AND marketing_consent_basis IS NOT NULL "
-            "AND marketing_consent_proof_ref IS NOT NULL "
-            "AND consent_disclosure_version IS NOT NULL)",
+            "AND length(btrim(coalesce(marketing_consent_proof_ref,''))) > 0 "
+            "AND length(btrim(coalesce(consent_disclosure_version,''))) > 0)",
             name="chk_sms_contact_granted_requires_proof",
         ),
     )

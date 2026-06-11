@@ -100,7 +100,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("marketing_consent_basis IS NULL OR marketing_consent_basis IN ('explicit_form','signed_form','recorded_call','imported_proof')", name='chk_sms_contact_consent_basis'),
     sa.CheckConstraint("marketing_consent_status IN ('unknown','granted','revoked')", name='chk_sms_contact_consent_status'),
-    sa.CheckConstraint("marketing_consent_status <> 'granted' OR (marketing_consented_at IS NOT NULL AND marketing_consent_basis IS NOT NULL AND marketing_consent_proof_ref IS NOT NULL AND consent_disclosure_version IS NOT NULL)", name='chk_sms_contact_granted_requires_proof'),
+    sa.CheckConstraint("marketing_consent_status <> 'granted' OR (marketing_consented_at IS NOT NULL AND marketing_consent_basis IS NOT NULL AND length(btrim(coalesce(marketing_consent_proof_ref,''))) > 0 AND length(btrim(coalesce(consent_disclosure_version,''))) > 0)", name='chk_sms_contact_granted_requires_proof'),
     sa.ForeignKeyConstraint(['created_by_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('phone_normalized')
@@ -269,20 +269,15 @@ def upgrade() -> None:
     )
     op.create_table('sms_click_event',
     sa.Column('id', sa.Integer(), nullable=False),
-    sa.Column('recipient_id', sa.Integer(), nullable=False),
-    sa.Column('campaign_id', sa.Integer(), nullable=False, comment='denormalize query nhanh'),
-    sa.Column('contact_id', sa.Integer(), nullable=True),
+    sa.Column('recipient_id', sa.Integer(), nullable=False, comment='khóa thật; campaign/contact derive qua JOIN recipient'),
     sa.Column('clicked_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('ip_hash', sa.String(length=64), nullable=True, comment='HMAC-SHA256(ip, SMS_IP_HASH_SECRET); KHÔNG lưu IP thô/prefix'),
     sa.Column('user_agent', sa.String(length=512), nullable=True),
     sa.Column('is_suspected_bot', sa.Boolean(), server_default='false', nullable=False),
     sa.Column('bot_reason', sa.String(length=50), nullable=True, comment='known_scanner_ua / prefetch_head / instant_after_send'),
-    sa.ForeignKeyConstraint(['campaign_id'], ['sms_campaign.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['recipient_id'], ['sms_campaign_recipient.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_sms_click_event_campaign_id'), 'sms_click_event', ['campaign_id'], unique=False)
     op.create_index(op.f('ix_sms_click_event_clicked_at'), 'sms_click_event', ['clicked_at'], unique=False)
     op.create_index(op.f('ix_sms_click_event_recipient_id'), 'sms_click_event', ['recipient_id'], unique=False)
     op.create_table('sms_marketing_consent_event',
@@ -290,15 +285,17 @@ def upgrade() -> None:
     sa.Column('contact_id', sa.Integer(), nullable=True, comment='SET NULL (KHÔNG cascade): ledger phải sống sót khi xóa contact'),
     sa.Column('phone_normalized_snapshot', sa.String(length=20), nullable=False, comment='bằng chứng vẫn đọc được nếu contact đổi/xóa'),
     sa.Column('event_type', sa.String(length=20), nullable=False),
-    sa.Column('basis', sa.String(length=30), nullable=False, comment='explicit_form / signed_form / recorded_call / imported_proof'),
-    sa.Column('disclosure_version', sa.String(length=50), nullable=False, comment='nội dung đồng ý áp dụng'),
-    sa.Column('proof_reference', sa.String(length=512), nullable=False, comment='tham chiếu artifact bên ngoài hoặc object private'),
+    sa.Column('basis', sa.String(length=30), nullable=True, comment='cách GRANT (NULL khi revoke); enum ở CHECK grant'),
+    sa.Column('revoke_source', sa.String(length=30), nullable=True, comment='nguồn REVOKE (NULL khi grant); enum ở CHECK revoke'),
+    sa.Column('disclosure_version', sa.String(length=50), nullable=True, comment='non-rỗng khi grant; NULL khi revoke'),
+    sa.Column('proof_reference', sa.String(length=512), nullable=True, comment='non-rỗng khi grant'),
     sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False, comment='thời điểm sự kiện thực'),
     sa.Column('recorded_by_id', sa.Integer(), nullable=True),
     sa.Column('import_batch_id', sa.Integer(), nullable=True),
     sa.Column('metadata_json', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='metadata tối thiểu, không chứa secret/PII thừa'),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.CheckConstraint("basis IN ('explicit_form','signed_form','recorded_call','imported_proof')", name='chk_sms_consent_event_basis'),
+    sa.CheckConstraint("event_type <> 'granted' OR (basis IS NOT NULL AND basis IN ('explicit_form','signed_form','recorded_call','imported_proof') AND revoke_source IS NULL AND length(btrim(coalesce(disclosure_version,''))) > 0 AND length(btrim(coalesce(proof_reference,''))) > 0)", name='chk_sms_consent_event_grant'),
+    sa.CheckConstraint("event_type <> 'revoked' OR (basis IS NULL AND revoke_source IS NOT NULL AND revoke_source IN ('sms_reply','landing_optout','manual','phone_call','external_suppression'))", name='chk_sms_consent_event_revoke'),
     sa.CheckConstraint("event_type IN ('granted','revoked')", name='chk_sms_consent_event_type'),
     sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['import_batch_id'], ['sms_contact_import_batch.id'], ondelete='SET NULL'),

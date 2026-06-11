@@ -3,6 +3,10 @@
 SMS click event — mỗi lần bấm /r/{code} ghi 1 row (gồm bot, giữ audit).
 CTR chính = COUNT(DISTINCT recipient_id) WHERE is_suspected_bot=FALSE /
 tổng recipient handed_off. Không lưu IP thô → ip_hash HMAC.
+
+⚠ CHỈ giữ `recipient_id` làm khóa thật; campaign/contact DERIVE qua JOIN
+`sms_campaign_recipient` (report đã JOIN sẵn). KHÔNG denormalize campaign_id/
+contact_id ở đây vì 3 FK độc lập cho phép gắn sai campaign/contact → hỏng CTR.
 Xem `Documents/SMS_MARKETING_MODULE_DESIGN.md` §4.10.
 """
 from datetime import datetime
@@ -26,13 +30,7 @@ class SmsClickEvent(Base):
     recipient_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("sms_campaign_recipient.id", ondelete="CASCADE"),
         nullable=False, index=True,
-    )
-    campaign_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sms_campaign.id", ondelete="CASCADE"),
-        nullable=False, index=True, comment="denormalize query nhanh",
-    )
-    contact_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("sms_contact.id", ondelete="SET NULL"), nullable=True,
+        comment="khóa thật; campaign/contact derive qua JOIN recipient",
     )
     clicked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True,

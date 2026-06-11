@@ -30,9 +30,22 @@ class SmsMarketingConsentEvent(Base):
             "event_type IN ('granted','revoked')",
             name="chk_sms_consent_event_type",
         ),
+        # GRANT: basis ∈ grant-enum + disclosure/proof KHÔNG rỗng; revoke_source NULL.
         CheckConstraint(
-            "basis IN ('explicit_form','signed_form','recorded_call','imported_proof')",
-            name="chk_sms_consent_event_basis",
+            "event_type <> 'granted' OR (basis IS NOT NULL AND basis IN "
+            "('explicit_form','signed_form','recorded_call','imported_proof') "
+            "AND revoke_source IS NULL "
+            "AND length(btrim(coalesce(disclosure_version,''))) > 0 "
+            "AND length(btrim(coalesce(proof_reference,''))) > 0)",
+            name="chk_sms_consent_event_grant",
+        ),
+        # REVOKE: revoke_source ∈ optout-enum; basis NULL (xem CHECK revoke).
+        CheckConstraint(
+            "event_type <> 'revoked' OR (basis IS NULL "
+            "AND revoke_source IS NOT NULL "
+            "AND revoke_source IN ('sms_reply','landing_optout','manual',"
+            "'phone_call','external_suppression'))",
+            name="chk_sms_consent_event_revoke",
         ),
     )
 
@@ -47,16 +60,20 @@ class SmsMarketingConsentEvent(Base):
         comment="bằng chứng vẫn đọc được nếu contact đổi/xóa",
     )
     event_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    basis: Mapped[str] = mapped_column(
-        String(30), nullable=False,
-        comment="explicit_form / signed_form / recorded_call / imported_proof",
+    basis: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True,
+        comment="cách GRANT (NULL khi revoke); enum ở CHECK grant",
     )
-    disclosure_version: Mapped[str] = mapped_column(
-        String(50), nullable=False, comment="nội dung đồng ý áp dụng",
+    revoke_source: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True,
+        comment="nguồn REVOKE (NULL khi grant); enum ở CHECK revoke",
     )
-    proof_reference: Mapped[str] = mapped_column(
-        String(512), nullable=False,
-        comment="tham chiếu artifact bên ngoài hoặc object private",
+    disclosure_version: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True,
+        comment="non-rỗng khi grant; NULL khi revoke",
+    )
+    proof_reference: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, comment="non-rỗng khi grant",
     )
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, comment="thời điểm sự kiện thực",
