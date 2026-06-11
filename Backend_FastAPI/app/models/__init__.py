@@ -151,6 +151,22 @@ from .finance import (
     OverpaymentRecord,
 )
 
+# SMS Marketing Module (Phase 1: schema) — 12 model. SMS_MARKETING_MODULE_DESIGN.md §4.
+from .sms import (
+    SmsContactGroup,
+    SmsContact,
+    SmsContactGroupMember,
+    SmsContactImportBatch,
+    SmsPrefixCarrierRule,
+    SmsCampaign,
+    SmsCampaignGroup,
+    SmsCampaignRecipient,
+    SmsCampaignExportBatch,
+    SmsClickEvent,
+    SmsOptOut,
+    SmsMarketingConsentEvent,
+)
+
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
 
@@ -273,4 +289,17 @@ __all__ = [
     "PaymentTransaction",
     "RefundRequest",
     "OverpaymentRecord",
+    # SMS Marketing Module (Phase 1: schema)
+    "SmsContactGroup",
+    "SmsContact",
+    "SmsContactGroupMember",
+    "SmsContactImportBatch",
+    "SmsPrefixCarrierRule",
+    "SmsCampaign",
+    "SmsCampaignGroup",
+    "SmsCampaignRecipient",
+    "SmsCampaignExportBatch",
+    "SmsClickEvent",
+    "SmsOptOut",
+    "SmsMarketingConsentEvent",
 ]
