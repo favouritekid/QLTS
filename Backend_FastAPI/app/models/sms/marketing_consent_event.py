@@ -37,9 +37,10 @@ class SmsMarketingConsentEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    contact_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sms_contact.id", ondelete="CASCADE"),
-        nullable=False, index=True,
+    contact_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sms_contact.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="SET NULL (KHÔNG cascade): ledger phải sống sót khi xóa contact",
     )
     phone_normalized_snapshot: Mapped[str] = mapped_column(
         String(20), nullable=False,

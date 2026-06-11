@@ -280,7 +280,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_sms_click_event_recipient_id'), 'sms_click_event', ['recipient_id'], unique=False)
     op.create_table('sms_marketing_consent_event',
     sa.Column('id', sa.BigInteger(), nullable=False),
-    sa.Column('contact_id', sa.Integer(), nullable=False),
+    sa.Column('contact_id', sa.Integer(), nullable=True),
     sa.Column('phone_normalized_snapshot', sa.String(length=20), nullable=False, comment='bằng chứng vẫn đọc được nếu contact đổi/xóa'),
     sa.Column('event_type', sa.String(length=20), nullable=False),
     sa.Column('basis', sa.String(length=30), nullable=False, comment='explicit_form / signed_form / recorded_call / imported_proof'),
@@ -293,7 +293,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint("basis IN ('explicit_form','signed_form','recorded_call','imported_proof')", name='chk_sms_consent_event_basis'),
     sa.CheckConstraint("event_type IN ('granted','revoked')", name='chk_sms_consent_event_type'),
-    sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['contact_id'], ['sms_contact.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['import_batch_id'], ['sms_contact_import_batch.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['recorded_by_id'], ['user.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')

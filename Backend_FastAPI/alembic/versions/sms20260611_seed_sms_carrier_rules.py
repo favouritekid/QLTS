@@ -24,7 +24,7 @@ _PREFIXES = (
     "'081','082','083','084','085','088','091','094',"  # VinaPhone
     "'070','076','077','078','079','089','090','093',"  # MobiFone
     "'052','056','058','092',"  # Vietnamobile
-    "'059','099','055','087'"  # Gmobile/khác
+    "'059','099'"  # Gmobile (055=Reddi/087=iTel MVNO KHÔNG seed → unknown)
 )
 
 
@@ -53,9 +53,9 @@ def upgrade() -> None:
           -- Vietnamobile: 052, 056, 058, 092
           ('052','vietnamobile','Vietnamobile',TRUE,NOW(),NOW()),('056','vietnamobile','Vietnamobile',TRUE,NOW(),NOW()),
           ('058','vietnamobile','Vietnamobile',TRUE,NOW(),NOW()),('092','vietnamobile','Vietnamobile',TRUE,NOW(),NOW()),
-          -- Gmobile/khác: 059, 099, 055, 087
-          ('059','gmobile','Gmobile',TRUE,NOW(),NOW()),('099','gmobile','Gmobile',TRUE,NOW(),NOW()),
-          ('055','gmobile','Gmobile',TRUE,NOW(),NOW()),('087','gmobile','Gmobile',TRUE,NOW(),NOW())
+          -- Gmobile: 059, 099. (055=Reddi/Wintel, 087=iTel = MVNO → KHÔNG gộp Gmobile;
+          -- để unmatched → bucket 'unknown' xử lý thủ công theo format portal đã duyệt)
+          ('059','gmobile','Gmobile',TRUE,NOW(),NOW()),('099','gmobile','Gmobile',TRUE,NOW(),NOW())
         ON CONFLICT (prefix) DO NOTHING;
         """
     )
