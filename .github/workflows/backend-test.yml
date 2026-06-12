@@ -175,6 +175,7 @@ jobs:
           tests/api/test_magic_link_3_actions_wire.py
           tests/services/test_phase3_create_profile_inherits_multi_nv.py
           tests/unit/test_admission_path_service_field_drift.py
+          tests/integration/test_admission_path_method_filter_and_activator.py
           -q --tb=short --timeout=60
 
       # =====================================================================

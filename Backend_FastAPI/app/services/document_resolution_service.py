@@ -46,6 +46,20 @@ _CULTURAL_TO_AUDIENCE: Dict[str, str] = {
     "graduated_gdtx": "POST_THPT",
 }
 
+
+def cultural_to_audience(cultural: Optional[str]) -> Optional[str]:
+    """Map ``cultural_education_level`` → ``admission_audience`` chiều VĂN HÓA.
+
+    Public wrapper quanh ``_CULTURAL_TO_AUDIENCE`` (nguồn sự thật DUY NHẤT,
+    dùng chung document-resolution + filter phương thức ở AddChoiceDialog) →
+    caller KHÔNG import symbol private xuyên module. Trả ``None`` nếu cultural
+    là None / rỗng / không nằm trong map → caller KHÔNG lọc theo audience.
+    """
+    if not cultural:
+        return None
+    return _CULTURAL_TO_AUDIENCE.get(cultural)
+
+
 # cultural "completed_*" = hoàn thành chương trình nhưng CHƯA có bằng → mã bằng
 # TN cần LOẠI khỏi bộ hồ sơ (§6 GĐ1; doc type bằng TN tồn tại prod 2026-05-29).
 _COMPLETED_DIPLOMA_TO_REMOVE: Dict[str, str] = {

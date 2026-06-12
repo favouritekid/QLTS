@@ -43,6 +43,10 @@ from app.services.document_resolution_service import (
     derive_audience_set,
     filter_shared_by_audience,
     mandatory_wins_merge,
+    # Map cultural_education_level → admission_audience chiều văn hóa (public
+    # helper, nguồn chung document-resolution). AddChoiceDialog lọc phương
+    # thức theo trình độ văn hóa của hồ sơ.
+    cultural_to_audience,
 )
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -131,13 +135,28 @@ class AdmissionPathService:
         return paths, _noop_callback
 
     async def list_active_paths_by_round(
-        self, admission_round_id: int
+        self,
+        admission_round_id: int,
+        cultural: Optional[str] = None,
     ) -> Tuple[List[AdmissionPath], PostCommitCallback]:
         """List active paths trong 1 round. Dùng cho AddChoiceDialog
         candidate-side: render dropdown ngành/method khả dụng để thêm NV
         mới trong cùng đợt đang xét tuyển.
+
+        ``cultural`` (optional ``cultural_education_level``): tầng deps
+        (``get_optional_profile_cultural_for_audience``) đã đọc + scope IDOR
+        theo hồ sơ officer được phép xem trước khi truyền vào đây. Service suy
+        ``admission_audience`` chiều văn hóa rồi lọc path — TN THCS chỉ thấy
+        phương thức phù hợp (ẩn đường gắn bậc văn hóa ĐỐI LẬP). ``cultural``
+        None / không map → audience None → KHÔNG lọc (hồ sơ chưa khai trình độ
+        hoặc không truyền profile_id). Path gắn loại hình (liên thông/VLVH)
+        hoặc ``applicable_to`` NULL/``[]`` KHÔNG bị ẩn — xem
+        ``AdmissionPathRepository._audience_visibility_filter``.
         """
-        paths = await self.repo.get_active_paths_by_round(admission_round_id)
+        audience = cultural_to_audience(cultural)
+        paths = await self.repo.get_active_paths_by_round(
+            admission_round_id, audience=audience
+        )
         return paths, _noop_callback
 
     async def get_distinct_years(self) -> Tuple[List[int], PostCommitCallback]:
