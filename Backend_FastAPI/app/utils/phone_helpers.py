@@ -20,7 +20,14 @@ log = structlog.get_logger(__name__)
 
 # Regex for normalized Vietnam phone (after removing +84/84 prefix)
 # Format: 0 + (3|5|7|8|9|2) + 8-9 digits = 10-11 total
-VIETNAM_PHONE_REGEX = re.compile(r"^0(3|5|7|8|9|2)\d{8,9}$")
+# ⚠ Dùng [0-9] (KHÔNG \d): \d của Python khớp cả Unicode digit (full-width
+# ０-９, Arabic ٠-٩) → 2 chuỗi cùng "số" nhưng khác byte sẽ lọt UNIQUE,
+# phá dedupe global + sinh số export không hợp lệ.
+VIETNAM_PHONE_REGEX = re.compile(r"^0(3|5|7|8|9|2)[0-9]{8,9}$")
+
+# Mobile-ONLY: 0 + (3|5|7|8|9) + 8 digits = đúng 10 chữ số (ASCII).
+# Loại đầu số 02x (landline) mà VIETNAM_PHONE_REGEX vẫn chấp nhận.
+VIETNAM_MOBILE_REGEX = re.compile(r"^0[35789][0-9]{8}$")
 
 # Characters to strip from phone input
 PHONE_STRIP_CHARS = " \t\n\r.-()/"
@@ -165,6 +172,24 @@ def normalize_and_validate_vietnam_phone(phone: Optional[str]) -> tuple[Optional
     normalized = normalize_vietnam_phone(phone)
     if normalized is None:
         return None, False
-    
+
     is_valid = bool(VIETNAM_PHONE_REGEX.match(normalized))
     return normalized, is_valid
+
+
+def is_vietnam_mobile(phone_normalized: Optional[str]) -> bool:
+    """
+    True nếu là số DI ĐỘNG Việt Nam (0[35789]xxxxxxxx — đúng 10 chữ số).
+
+    Khác ``validate_vietnam_phone`` (chấp nhận cả landline 02x). SMS
+    Marketing chỉ gửi tới di động nên import phải lọc mobile-only.
+
+    Args:
+        phone_normalized: Số đã normalize (0xxxxxxxxx); KHÔNG tự normalize.
+
+    Returns:
+        True nếu khớp đầu số di động VN.
+    """
+    if not phone_normalized:
+        return False
+    return bool(VIETNAM_MOBILE_REGEX.match(phone_normalized))
