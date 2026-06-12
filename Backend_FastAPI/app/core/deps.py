@@ -5,7 +5,7 @@ import casbin
 import structlog
 
 from .constants import UserRole
-from fastapi import Cookie, Depends, Header, Path, Request, HTTPException, status
+from fastapi import Cookie, Depends, Header, Path, Query, Request, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2610,6 +2610,83 @@ async def get_admission_for_user_read(
                 raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
     return profile
+
+
+async def get_optional_profile_cultural_for_audience(
+    profile_id: Optional[int] = Query(
+        None,
+        ge=1,
+        # INT4 max của AdmissionProfile.id — chặn 500 asyncpg out-of-range.
+        le=2_147_483_647,
+        description=(
+            "Hồ sơ đang thêm nguyện vọng. Khi truyền, BE lọc phương thức theo "
+            "trình độ văn hóa (cultural_education_level) của hồ sơ. Bỏ trống = "
+            "không lọc (hiện tất cả)."
+        ),
+    ),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> Optional[str]:
+    """IDOR-scoped đọc ``cultural_education_level`` cho bộ lọc phương thức theo
+    trình độ văn hóa (AddChoiceDialog / GET /paths/by-round).
+
+    - ``profile_id`` không truyền → trả ``None`` → KHÔNG lọc.
+    - Scope 3-tier MIRROR ``get_admission_for_user_read``: admin mọi hồ sơ;
+      manager cùng unit; officer cùng unit + được phân công. Ngoài phạm vi /
+      không tồn tại → **404 fake** (không leak existence) — chặn oracle suy
+      trình độ văn hóa hồ sơ người khác qua chênh lệch danh sách path.
+
+    Trả ``cultural_education_level`` (có thể ``None`` nếu hồ sơ chưa khai) — KHÔNG
+    trả object hồ sơ, để router/service không vô tình lộ field khác.
+    """
+    if profile_id is None:
+        return None
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    # Fake 404 dùng chung mọi nhánh — không leak existence/role (404 chứ 403).
+    not_found = f"Admission profile {profile_id} not found"
+
+    # Defense-in-depth role gate.
+    if current_user.role not in _ADMISSION_READ_ALLOWED_ROLES:
+        log.warning(
+            "IDOR attempt: non-admission role read profile cultural for filter",
+            user_id=current_user.id,
+            user_role=str(current_user.role),
+            profile_id=profile_id,
+        )
+        raise ResourceNotFoundError(detail=not_found)
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+    )
+    profile = (await db.execute(stmt)).scalar_one_or_none()
+    if not profile:
+        raise ResourceNotFoundError(detail=not_found)
+
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            log.warning(
+                "IDOR attempt: user read profile cultural from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+            )
+            raise ResourceNotFoundError(detail=not_found)
+        if current_user.role == UserRole.OFFICER:
+            if profile.lead.assigned_officer_id != current_user.id:
+                log.warning(
+                    "IDOR attempt: officer read profile cultural not assigned",
+                    user_id=current_user.id,
+                    profile_id=profile_id,
+                    assigned_officer_id=profile.lead.assigned_officer_id,
+                )
+                raise ResourceNotFoundError(detail=not_found)
+
+    return profile.cultural_education_level
 
 
 # ==============================================================================

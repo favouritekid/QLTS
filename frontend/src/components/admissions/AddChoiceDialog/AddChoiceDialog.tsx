@@ -120,11 +120,19 @@ export function AddChoiceDialog({
     return currentPathDetail?.admission_round_id ?? null
   }, [roundIdOverride, currentPathDetail])
 
-  // Step 2: Load list paths in round
+  // Step 2: Load list paths in round.
+  // Truyền profileId → BE lọc phương thức theo trình độ văn hóa của hồ sơ
+  // (TN THCS không thấy đường yêu cầu THPT). Hồ sơ chưa khai trình độ →
+  // BE giữ nguyên toàn bộ danh sách. profileId trong queryKey để cache
+  // tách theo hồ sơ.
   const { data: pathsData, isLoading: loadingPaths } = useQuery({
-    queryKey: ["paths-by-round", roundId],
-    queryFn: () => getPathsByRound(roundId as number),
+    queryKey: ["paths-by-round", roundId, profileId],
+    queryFn: () => getPathsByRound(roundId as number, profileId),
     enabled: open && roundId !== null,
+    // staleTime 0: cultural_education_level (yếu tố BE lọc) KHÔNG nằm trong
+    // queryKey, nên luôn fetch lại khi dialog mở để lọc theo trình độ mới
+    // nhất; useUpdateAdmission cũng invalidate key này sau khi lưu trình độ.
+    staleTime: 0,
   })
 
   // Step 3: Load sg_configs khi user picks path
@@ -152,6 +160,23 @@ export function AddChoiceDialog({
       setScores([])
       setServerError(null)
     }
+  }
+
+  // Reset selection nếu path đang chọn biến mất khỏi danh sách sau refetch
+  // (vd bộ lọc trình độ văn hóa thu hẹp list). Render-time, idempotent: sau
+  // reset selectedPathId=null → điều kiện sai → dừng. Tránh hiển thị tổ hợp /
+  // fetch sg-configs / submit cho path không còn khả dụng. Chỉ chạy khi list
+  // đã load (pathsData !== undefined) để không reset nhầm lúc đang tải.
+  if (
+    selectedPathId !== null &&
+    pathsData !== undefined &&
+    !pathsData.items.some((p) => p.id === selectedPathId)
+  ) {
+    setSelectedPathId(null)
+    setSelectedConfigId(null)
+    setScores([])
+    // Xóa luôn lỗi server của path đã biến mất (nhất quán với khối reset-on-open).
+    setServerError(null)
   }
 
   // Initialize scores rows when sg_config changes — same pattern.

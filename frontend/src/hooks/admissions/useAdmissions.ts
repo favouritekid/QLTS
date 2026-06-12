@@ -181,6 +181,11 @@ export function useUpdateAdmission(id: number) {
       // Invalidate to refetch fresh data from server
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      // Trình độ văn hóa (cultural_education_level) lưu qua mutation này lọc
+      // danh sách phương thức ở AddChoiceDialog (BE lọc theo audience suy từ
+      // cultural). Invalidate ["paths-by-round"] để dropdown lọc lại theo
+      // trình độ mới — tránh stale (queryKey không gồm cultural).
+      queryClient.invalidateQueries({ queryKey: ["paths-by-round"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       // Phase 7: Use centralized handler with 409 conflict support

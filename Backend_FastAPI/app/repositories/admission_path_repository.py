@@ -9,7 +9,7 @@ Provides data access for AdmissionPath entities with:
 """
 
 from typing import Iterable, List, Optional, Sequence, Tuple
-from sqlalchemy import select, func, distinct, or_, cast
+from sqlalchemy import select, func, distinct, or_, not_, cast
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -46,6 +46,36 @@ _AUDIENCE_ENUM_TYPE = postgresql.ENUM(
     create_type=False,
 )
 _AUDIENCE_ARRAY_TYPE = postgresql.ARRAY(_AUDIENCE_ENUM_TYPE)
+
+# Audience values thuộc CHIỀU VĂN HÓA = tập giá trị range của
+# ``_CULTURAL_TO_AUDIENCE`` (document_resolution_service). Path gắn loại hình
+# (LIEN_THONG_TC/CD, VLVH) KHÔNG chứa giá trị nào ở đây → KHÔNG bị filter chiều
+# văn hóa loại bỏ. Giữ đồng bộ nếu thêm bậc văn hóa mới (enum audience ổn định).
+_CULTURAL_AUDIENCE_VALUES = ("POST_THCS", "POST_THPT")
+
+
+def _audience_visibility_filter(audience: str):
+    """Predicate "path khả kiến cho 1 audience chiều VĂN HÓA" (AddChoiceDialog).
+
+    SHOW path khi:
+      - ``applicable_to IS NULL`` (legacy = áp mọi đối tượng), HOẶC
+      - ``applicable_to @> [audience]`` (gắn đúng bậc văn hóa của hồ sơ), HOẶC
+      - ``NOT (applicable_to && [POST_THCS, POST_THPT])`` — path KHÔNG gắn tag
+        chiều văn hóa nào (chỉ gắn loại hình LIEN_THONG_*/VLVH, hoặc ``[]``
+        rỗng) → không bị lọc theo văn hóa.
+
+    ⟹ CHỈ ẩn path gắn tag bậc văn hóa ĐỐI LẬP (vd hồ sơ POST_THCS không thấy
+    đường gắn POST_THPT). NULL khớp nhánh 1; ``[]`` và path loại-hình-thuần
+    khớp nhánh 3. Dùng ``@>``/``&&`` qua typed cast để hit GIN index
+    ``ix_admission_path_applicable_to`` (KHÔNG ``= ANY()``).
+    """
+    aud_array = cast([audience], _AUDIENCE_ARRAY_TYPE)
+    cultural_tags = cast(list(_CULTURAL_AUDIENCE_VALUES), _AUDIENCE_ARRAY_TYPE)
+    return or_(
+        AdmissionPath.applicable_to.is_(None),
+        AdmissionPath.applicable_to.op("@>")(aud_array),
+        not_(AdmissionPath.applicable_to.op("&&")(cultural_tags)),
+    )
 
 
 class AdmissionPathRepository(BaseRepository[AdmissionPath]):
@@ -175,22 +205,34 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     async def get_active_paths_by_round(
         self,
         admission_round_id: int,
+        audience: Optional[str] = None,
     ) -> List[AdmissionPath]:
         """List active paths trong 1 round, dùng cho AddChoiceDialog
         candidate-side: chọn ngành/method để thêm NV mới trong cùng đợt
         đang xét. Filter status='active' (cloned draft paths bị skip).
+
+        ``audience`` (optional ``admission_audience`` chiều VĂN HÓA, vd
+        ``POST_THCS``): khi set, ẩn path gắn tag bậc văn hóa ĐỐI LẬP — xem
+        ``_audience_visibility_filter``. Path ``applicable_to`` NULL / ``[]`` /
+        chỉ gắn loại hình (LIEN_THONG_*/VLVH) VẪN hiện. Caller (service) suy
+        audience từ ``cultural_education_level`` của hồ sơ (vd TN THCS không
+        thấy đường "Xét học bạ THPT"). ``audience=None`` → KHÔNG lọc (hồ sơ
+        chưa khai trình độ văn hóa).
 
         Eager-load chain match ``get_paths_by_academic_info`` đủ cho
         ``build_path_response`` Pydantic serialize (criteria + activator +
         academic_info chain). Without full chain, MissingGreenlet fires
         khi Pydantic getattr trên unloaded relations trong async context.
         """
+        conditions = [
+            AdmissionPath.admission_round_id == admission_round_id,
+            AdmissionPath.status == "active",
+        ]
+        if audience is not None:
+            conditions.append(_audience_visibility_filter(audience))
         query = (
             select(AdmissionPath)
-            .where(
-                AdmissionPath.admission_round_id == admission_round_id,
-                AdmissionPath.status == "active",
-            )
+            .where(*conditions)
             .options(
                 selectinload(AdmissionPath.academic_info)
                 .selectinload(OfferingAcademicInfo.offering)
@@ -382,6 +424,13 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 # Round contract hardening (plan v4 Section D) — round
                 # metadata drives the officer create-page round dropdown.
                 selectinload(AdmissionPath.admission_round),
+                # build_path_response serializes AdmissionPathResponse.activator
+                # (Optional[UserNested]); without this eager-load a path whose
+                # ``activated_by`` is NOT NULL triggers a lazy load at Pydantic
+                # serialize time → MissingGreenlet → 500. Mirrors the sibling
+                # get_active_paths_by_round (officer create-page hit 500 for any
+                # offering with an activated path, e.g. TS2026 TC-THCS paths).
+                selectinload(AdmissionPath.activator),
                 # Eager load criteria with subject groups (for LeadApplicationForm)
                 selectinload(AdmissionPath.criteria).selectinload(
                     AdmissionCriteria.subject_group_mappings

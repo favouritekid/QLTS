@@ -21,6 +21,7 @@ from app import database, models
 from app.core.constants import UserRole
 from app.core.deps import (
     get_current_active_user,
+    get_optional_profile_cultural_for_audience,
     check_permission,
     require_admin,
     require_admin_or_manager,
@@ -334,6 +335,10 @@ async def list_path_subject_group_configs(
 )
 async def get_paths_by_round(
     round_id: int = PathParam(..., description="Admission round ID"),
+    # IDOR-scoped: dependency đọc query ``profile_id`` + scope theo hồ sơ
+    # officer được phép xem, trả cultural_education_level (hoặc None khi không
+    # truyền / chưa khai). 404 fake nếu profile_id ngoài phạm vi.
+    cultural: Optional[str] = Depends(get_optional_profile_cultural_for_audience),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -350,7 +355,9 @@ async def get_paths_by_round(
     (uses_choice_engine, allow_multi_nv, max_choices) áp dụng tại POST.
     """
     service = AdmissionPathService(db)
-    paths, callback = await service.list_active_paths_by_round(round_id)
+    paths, callback = await service.list_active_paths_by_round(
+        round_id, cultural=cultural
+    )
     # Read-only endpoint — KHÔNG cần db.commit() (nit fix #8)
     await callback()
 

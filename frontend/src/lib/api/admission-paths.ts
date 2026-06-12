@@ -197,10 +197,15 @@ export async function getCoverageMatrix(
  * Cross-academic_info — candidate có thể thêm NV ở ngành khác cùng đợt.
  */
 export async function getPathsByRound(
-  roundId: number
+  roundId: number,
+  profileId?: number,
 ): Promise<{ total: number; items: AdmissionPathResponse[] }> {
+  // profileId (optional): BE lọc phương thức theo trình độ văn hóa
+  // (cultural_education_level) của hồ sơ → TN THCS không thấy đường yêu cầu
+  // THPT. Bỏ trống / hồ sơ chưa khai trình độ → BE không lọc.
   const response = await api.get<{ total: number; items: AdmissionPathResponse[] }>(
-    `/api/admission-config/paths/by-round/${roundId}`
+    `/api/admission-config/paths/by-round/${roundId}`,
+    profileId != null ? { params: { profile_id: profileId } } : undefined,
   )
   return response.data
 }
