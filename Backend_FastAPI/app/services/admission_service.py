@@ -1556,6 +1556,108 @@ async def _resolve_verifier_names(
     return out
 
 
+def _strict_int(value) -> Optional[int]:
+    """Ép int NGHIÊM + AN TOÀN (KHÔNG bao giờ raise).
+
+    Loại bool (subclass int → int(True)==1) và float (int(9.7) cắt cụt).
+    Với str: CHỈ nhận chuỗi-integer ASCII — loại '²' (isdigit()=True nhưng
+    int() ném ValueError) + chữ số Unicode khác; giới hạn độ dài (tránh
+    ValueError "integer string conversion limit" với chuỗi cực dài). Bọc
+    try/except phòng hờ. Dùng cho JSONB academic_history (grade_to/year_to)
+    vốn có thể lẫn bool/float/rác do nhập tay.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        core = s[1:] if s.startswith("-") else s
+        if core.isascii() and core.isdigit() and 0 < len(core) <= 9:
+            try:
+                return int(s)
+            except ValueError:
+                return None
+    return None
+
+
+def _coerce_year(value) -> Optional[int]:
+    """Như ``_strict_int`` nhưng CHẤP NHẬN thêm float nguyên (2026.0 → 2026)
+    cho year_to — số trong JSONB có thể là float. Loại bool, float lẻ
+    (2026.5), NaN/inf. Chuỗi-integer ASCII đi qua ``_strict_int``.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None  # NaN / inf
+        return int(value) if value == int(value) else None
+    return _strict_int(value)
+
+
+def _thcs_grade9_completion_year(academic_history) -> Optional[int]:
+    """Năm hoàn thành lớp 9 = max(year_to) của các record THCS lớp 9.
+
+    academic_history = JSONB list[dict] (AcademicRecordSchema). Nhận record
+    khi ``grade_to == 9`` HOẶC ``level == 'THCS'`` — officer có thể điền 1
+    trong 2 (cả hai đều Optional); 'THCS_THPT' KHÔNG tính (year_to là năm TN
+    THPT, không phải lớp 9). Trả None nếu không có record lớp 9 hợp lệ →
+    caller KHÔNG cảnh báo (tránh false-positive khi thiếu dữ liệu).
+    """
+    if not academic_history:
+        return None
+    years: List[int] = []
+    for rec in academic_history:
+        if not isinstance(rec, dict):
+            continue
+        level = rec.get("level")
+        is_thcs = _strict_int(rec.get("grade_to")) == 9 or (
+            isinstance(level, str) and level.strip().upper() == "THCS"
+        )
+        if not is_thcs:
+            continue
+        year_to = _coerce_year(rec.get("year_to"))
+        # Chỉ nhận năm hợp lệ (mirror AcademicRecordSchema ge=1900 le=2100) —
+        # applied JSONB có thể bẩn (không qua schema validate khi đọc lại).
+        if year_to is not None and 1900 <= year_to <= 2100:
+            years.append(year_to)
+    return max(years) if years else None
+
+
+def _thcs_diploma_review_warning(
+    cultural: Optional[str],
+    academic_history,
+    review_from_year: Optional[int],
+) -> Optional[dict]:
+    """Cảnh báo MỀM rà soát nhãn THCS (KHÔNG chặn submit).
+
+    Bật khi hồ sơ ghi `graduated_thcs` (có bằng TN THCS) nhưng học sinh
+    hoàn thành lớp 9 TỪ `review_from_year` trở đi — diện Thông tư
+    10/2026/TT-BGDĐT (từ 15/04/2026 không cấp bằng TN THCS, thay bằng xác
+    nhận hoàn thành chương trình trong học bạ). `review_from_year=None` →
+    no-op (pure-test / chưa cấu hình). Trả None nếu không áp dụng.
+    """
+    if cultural != "graduated_thcs" or review_from_year is None:
+        return None
+    year9 = _thcs_grade9_completion_year(academic_history)
+    if year9 is None or year9 < review_from_year:
+        return None
+    return {
+        "code": "thcs_diploma_review",
+        "message": (
+            f"Hoàn thành lớp 9 năm {year9} — theo Thông tư 10/2026/TT-BGDĐT, "
+            "học sinh hoàn thành chương trình THCS được xác nhận trong học bạ "
+            "thay cho cấp Bằng tốt nghiệp THCS. Vui lòng kiểm tra lại trình độ "
+            "đã chọn."
+        ),
+        "step": 4,
+        "section": "priority",
+        "severity": "warning",
+    }
+
+
 def _build_executive_summary_items(
     *,
     personal_error_count: int,
@@ -1565,6 +1667,9 @@ def _build_executive_summary_items(
     has_family: bool,
     has_academic: bool,
     docs_format_confirmed: bool,
+    cultural: Optional[str] = None,
+    academic_history=None,
+    thcs_review_from_year: Optional[int] = None,
 ) -> tuple[list[dict], list[dict]]:
     """Build executive_summary ``(critical_blockers, warnings)`` as structured items.
 
@@ -1640,6 +1745,15 @@ def _build_executive_summary_items(
             "section": "documents",
             "severity": "warning",
         })
+
+    # Cảnh báo MỀM rà soát nhãn THCS (Thông tư 10/2026 — bỏ bằng TN THCS từ
+    # 15/04/2026). KHÔNG chặn submit; chỉ append vào warnings để FE nhắc officer.
+    thcs_warn = _thcs_diploma_review_warning(
+        cultural, academic_history, thcs_review_from_year
+    )
+    if thcs_warn:
+        warnings.append(thcs_warn)
+
     return critical_blockers, warnings
 
 
@@ -2476,6 +2590,9 @@ def _compute_frontend_fields(
     # to its exact step). Built by a pure helper for unit-testability. Semantics
     # UNCHANGED vs the old string form (same conditions, same blocker/warning
     # split). Transient field (no DB migration).
+    # Local import (mirror :777) — KHÔNG global để pure-test import sạch.
+    from app.config import settings
+
     critical_blockers, warning_messages = _build_executive_summary_items(
         personal_error_count=personal_error_count,
         missing_doc_count=len(missing_doc_codes),
@@ -2484,6 +2601,9 @@ def _compute_frontend_fields(
         has_family=bool(has_family),
         has_academic=bool(has_academic),
         docs_format_confirmed=bool(docs_format_confirmed),
+        cultural=profile.cultural_education_level,
+        academic_history=profile.academic_history,
+        thcs_review_from_year=settings.THCS_DIPLOMA_REVIEW_FROM_GRADE9_YEAR,
     )
 
     # Suggest next action (Phase E.4 — 8-step model: Step 4=Priority, 5=Scores, 6=Documents)

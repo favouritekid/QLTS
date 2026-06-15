@@ -666,6 +666,17 @@ class Settings(BaseSettings):
     SCHOOL_BANK_ACCOUNT: str = Field(default="", validation_alias="SCHOOL_BANK_ACCOUNT")
     SCHOOL_BANK_HOLDER: str = Field(default="", validation_alias="SCHOOL_BANK_HOLDER")
 
+    # -- THCS diploma policy (Thông tư 10/2026/TT-BGDĐT) --
+    # Từ 15/04/2026 bỏ cấp Bằng tốt nghiệp THCS, thay bằng xác nhận hoàn thành
+    # chương trình trong học bạ. Học sinh hoàn thành lớp 9 (year_to) TỪ năm này
+    # trở đi rơi vào diện mới → nếu hồ sơ vẫn ghi 'graduated_thcs' (có bằng) thì
+    # bật cảnh báo MỀM rà soát nhãn. Chỉ lưu NĂM nên đây là heuristic rà soát,
+    # KHÔNG khẳng định tuyệt đối. Nguồn 2026 DUY NHẤT ở đây (live caller truyền
+    # tường minh; pure helper nhận None = no-op).
+    THCS_DIPLOMA_REVIEW_FROM_GRADE9_YEAR: int = Field(
+        default=2026, validation_alias="THCS_DIPLOMA_REVIEW_FROM_GRADE9_YEAR"
+    )
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

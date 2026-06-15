@@ -496,3 +496,91 @@ describe("useSubmissionReadiness — data consistency (eligible but warnings)", 
     expect(r.documentTone).toBe("warning")
   })
 })
+
+describe("useSubmissionReadiness — THCS diploma review warning (Thông tư 10/2026)", () => {
+  const thcsExecSummary = () => ({
+    overall_status: "warning" as const,
+    completion_percent: 100,
+    step_summary: {},
+    critical_blockers: [],
+    warnings: [
+      {
+        code: "thcs_diploma_review",
+        message:
+          "Hoàn thành lớp 9 năm 2026, có thể thuộc diện áp dụng quy định " +
+          "từ 15/04/2026...",
+        step: 4,
+        section: "priority",
+        severity: "warning" as const,
+      },
+    ],
+    next_action: "Kiểm tra trình độ văn hóa đã chọn",
+    can_submit: true,
+  })
+
+  function withThcsWarning(
+    overrides: Partial<AdmissionProfileResponse> = {},
+  ): AdmissionProfileResponse {
+    return buildProfile({
+      cultural_education_level: "graduated_thcs",
+      executive_summary: thcsExecSummary(),
+      ...overrides,
+    } as Partial<AdmissionProfileResponse>)
+  }
+
+  it("warning step 4 → ActionItem step 4 (warning) + verdict 'Còn cảnh báo', submit KHÔNG bị chặn", () => {
+    const r = run(buildParams({ profile: withThcsWarning(), canSubmit: true, isEligible: true }))
+
+    // 1. executive_summary.warnings được route thành ActionItem Step 4 (warning).
+    const item = r.actionItems.find((i) => i.id === "thcs_diploma_review")
+    expect(item).toBeDefined()
+    expect(item?.step).toBe(4)
+    expect(item?.severity).toBe("warning")
+    expect(r.actionItemCount).toBeGreaterThan(0)
+
+    // 2. Verdict đổi thành "Còn cảnh báo" (warning) — KHÔNG còn success.
+    expect(r.verdictLabel).toBe("Còn cảnh báo")
+    expect(r.verdictTone).toBe("warning")
+
+    // 3. QUAN TRỌNG: cảnh báo KHÔNG chặn submit — primaryAction giữ "submit".
+    expect(r.primaryAction).toBe("submit")
+  })
+
+  it("không có cảnh báo THCS → verdict 'Có thể nộp' (success) [đối chứng]", () => {
+    const r = run(buildParams({ canSubmit: true, isEligible: true }))
+    expect(r.primaryAction).toBe("submit")
+    expect(r.verdictLabel).toBe("Có thể nộp")
+    expect(r.verdictTone).toBe("success")
+    expect(r.actionItems.find((i) => i.id === "thcs_diploma_review")).toBeUndefined()
+  })
+
+  // Blocker: warning THCS (Step 4) KHÔNG được che derivePriorityIssues (cũng Step
+  // 4 nhưng id="step-4"). Cả hai phải cùng hiện — dedupe theo id, không theo step.
+  it("warning THCS + thiếu minh chứng UT → CẢ 2 item Step 4 (không che nhau)", () => {
+    const r = run(
+      buildParams({
+        profile: withThcsWarning({ missing_priority_evidence_codes: ["UT07"] }),
+        canSubmit: true,
+        isEligible: true,
+      }),
+    )
+    const ids = r.actionItems.map((i) => i.id)
+    expect(ids).toContain("thcs_diploma_review") // structured warning từ BE
+    expect(ids).toContain("step-4") // FE-derived (thiếu UT) — KHÔNG bị che
+  })
+
+  it("warning THCS + requires_manual_override → CẢ 2 item Step 4 (không che nhau)", () => {
+    const r = run(
+      buildParams({
+        profile: withThcsWarning({
+          priority_resolution_snapshot: { requires_manual_override: true },
+        } as Partial<AdmissionProfileResponse>),
+        canSubmit: true,
+        isEligible: true,
+      }),
+    )
+    const ids = r.actionItems.map((i) => i.id)
+    expect(ids).toContain("thcs_diploma_review")
+    expect(ids).toContain("step-4")
+  })
+})

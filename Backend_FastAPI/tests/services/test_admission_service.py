@@ -1838,3 +1838,98 @@ class TestCreateProfileResponseFields:
                 f"create={create_body.get(field)!r}, get={get_body.get(field)!r}. "
                 f"_populate_response_fields may be missing from create_profile."
             )
+
+
+class TestThcsDiplomaReviewWarning:
+    """GO #3 — projection qua endpoint: chứng minh _compute_frontend_fields
+    NỐI profile.cultural_education_level + academic_history vào cảnh báo THCS
+    (Thông tư 10/2026), không chỉ test pure helper. Cảnh báo là warning →
+    KHÔNG chặn submit (không vào critical_blockers).
+    """
+
+    async def test_graduated_thcs_grade9_2026_emits_review_warning(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+        # academic_year (năm TUYỂN SINH) = 2025, KHÁC năm lớp 9 → chứng minh
+        # cảnh báo dùng năm hoàn thành lớp 9, không phải năm tuyển sinh.
+        data = await setup_admission_api_data(
+            major_id=major_id,
+            unit_id=unit_id,
+            officer_id=officer_user_in_db["id"],
+            academic_year=2025,
+        )
+        headers = await get_auth_headers(client, officer_user_in_db)
+
+        create_response = await client.post(
+            "/api/admissions",
+            json={
+                "lead_id": data["lead_id"],
+                "admission_method_id": data["admission_method_id"],
+                "admission_round_id": data["admission_round_id"],
+                "academic_year": data["academic_year"],
+            },
+            headers=headers,
+        )
+        assert create_response.status_code == 201, create_response.text
+        profile_id = create_response.json()["id"]
+        version = create_response.json()["version"]
+
+        # graduated_thcs + hoàn thành lớp 9 năm 2026 → cảnh báo rà soát.
+        put_2026 = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={
+                "version": version,
+                "cultural_education_level": "graduated_thcs",
+                "academic_history": [
+                    {
+                        "school_name": "THCS Kiểm Thử",
+                        "year_from": 2022,
+                        "year_to": 2026,
+                        "grade_to": 9,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert put_2026.status_code == 200, put_2026.text
+        es = put_2026.json()["executive_summary"]
+        warn_codes = {w["code"] for w in es["warnings"]}
+        blocker_codes = {b["code"] for b in es["critical_blockers"]}
+        # Wiring proven: field từ profile → cảnh báo xuất hiện qua endpoint.
+        assert "thcs_diploma_review" in warn_codes, es["warnings"]
+        # Là warning, KHÔNG phải blocker → không chặn submit.
+        assert "thcs_diploma_review" not in blocker_codes
+        assert "can_submit" in es
+        can_submit_with_warning = es["can_submit"]
+
+        # Đối chứng wiring: cùng graduated_thcs nhưng lớp 9 năm 2020 (có bằng
+        # thật) → KHÔNG cảnh báo. Chứng minh dùng academic_history THẬT từ
+        # profile, không hardcode theo cultural.
+        version2 = put_2026.json()["version"]
+        put_2020 = await client.put(
+            f"/api/admissions/{profile_id}",
+            json={
+                "version": version2,
+                "academic_history": [
+                    {
+                        "school_name": "THCS Kiểm Thử",
+                        "year_from": 2016,
+                        "year_to": 2020,
+                        "grade_to": 9,
+                    }
+                ],
+            },
+            headers=headers,
+        )
+        assert put_2020.status_code == 200, put_2020.text
+        es2 = put_2020.json()["executive_summary"]
+        warn_codes2 = {w["code"] for w in es2["warnings"]}
+        assert "thcs_diploma_review" not in warn_codes2, es2["warnings"]
+        # can_submit KHÔNG đổi giữa có cảnh báo (lớp 9 2026) và không (2020) →
+        # cảnh báo là warning thuần, không tác động quyền nộp hồ sơ.
+        assert es2["can_submit"] == can_submit_with_warning
