@@ -8,7 +8,7 @@ constraint ở model (app/models/sms/) để validate fail-fast (400) trước k
 chạm DB. Xem `Documents/SMS_MARKETING_MODULE_DESIGN.md` §4 + §10.
 """
 from datetime import datetime, timedelta, timezone
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -44,6 +44,26 @@ def validate_consent_datetime(dt, *, label="thời điểm"):
     if dt > datetime.now(timezone.utc) + timedelta(minutes=5):
         raise ValueError(f"{label} không được ở tương lai")
     return dt
+
+
+def validate_future_datetime(dt, *, label="thời điểm"):
+    """Yêu cầu tz-aware + PHẢI ở tương lai (link hết hạn không được quá khứ/
+    naive → tránh tạo link chết hoặc expiry lệch 7h). Raise → 422."""
+    if dt is None:
+        return dt
+    if dt.tzinfo is None:
+        raise ValueError(f"{label} phải kèm timezone (vd +07:00 hoặc Z)")
+    if dt <= datetime.now(timezone.utc):
+        raise ValueError(f"{label} phải ở tương lai")
+    return dt
+
+
+def _strip_optional_url(v):
+    """Strip URL optional; chuỗi rỗng sau strip → None (chống lưu whitespace)."""
+    if v is None:
+        return v
+    v = v.strip()
+    return v or None
 
 
 # --- Enum literal (mirror CHECK constraint model) ---
@@ -292,3 +312,171 @@ class SmsImportResult(BaseModel):
         "trong lô (theo occurred_at; revoke mới hơn không bị override)",
     )
     errors: List[SmsImportRowError] = Field(default_factory=list)
+
+
+# =====================================================================
+# Campaign (PR-3 — build BE)
+# =====================================================================
+SmsLandingType = Literal["qlts_hosted", "external"]
+SmsAttestationKind = Literal["consent", "dnc", "optout_channel"]
+# Lý do loại recipient (mirror CHECK chk_sms_recipient_excluded_reason)
+SmsExcludedReason = Literal[
+    "no_consent", "opted_out", "dnc_suppressed", "frequency_capped",
+    "over_limit", "missing_data",
+]
+
+
+class SmsCampaignCreate(BaseModel):
+    """Tạo campaign. Validate cross-field (biến template, external+{link},
+    allowlist host) ở service (cần config + candidate state)."""
+
+    name: str = Field(..., min_length=1, max_length=200)
+    code: Optional[str] = Field(
+        None, max_length=50, pattern=r"^[a-z0-9][a-z0-9-]*$",
+        description="slug duy nhất; bỏ trống để tự sinh từ name",
+    )
+    sms_template: str = Field(..., min_length=1, max_length=2000)
+    landing_type: SmsLandingType = "qlts_hosted"
+    landing_url: Optional[str] = Field(None, max_length=2000)
+    landing_headline: Optional[str] = Field(None, max_length=200)
+    landing_body: Optional[str] = Field(None, max_length=10000)
+    landing_cta_label: Optional[str] = Field(None, max_length=100)
+    landing_cta_url: Optional[str] = Field(None, max_length=2000)
+    frequency_cap_days: Optional[int] = Field(None, ge=0, le=3650)
+    link_expires_at: Optional[datetime] = None
+
+    @field_validator("name", "sms_template")
+    @classmethod
+    def _v_text(cls, v):
+        return _strip_required_text(v)
+
+    @field_validator("landing_url", "landing_cta_url")
+    @classmethod
+    def _v_url(cls, v):
+        return _strip_optional_url(v)
+
+    @field_validator("link_expires_at")
+    @classmethod
+    def _v_expiry(cls, v):
+        return validate_future_datetime(v, label="link_expires_at")
+
+
+class SmsCampaignUpdate(BaseModel):
+    """Sửa campaign — chỉ khi status=draft (gate ở service). KHÔNG đổi code."""
+
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    sms_template: Optional[str] = Field(None, min_length=1, max_length=2000)
+    landing_type: Optional[SmsLandingType] = None
+    landing_url: Optional[str] = Field(None, max_length=2000)
+    landing_headline: Optional[str] = Field(None, max_length=200)
+    landing_body: Optional[str] = Field(None, max_length=10000)
+    landing_cta_label: Optional[str] = Field(None, max_length=100)
+    landing_cta_url: Optional[str] = Field(None, max_length=2000)
+    frequency_cap_days: Optional[int] = Field(None, ge=0, le=3650)
+    link_expires_at: Optional[datetime] = None
+
+    @field_validator("name", "sms_template")
+    @classmethod
+    def _v_text(cls, v):
+        return _strip_required_text(v)
+
+    @field_validator("landing_url", "landing_cta_url")
+    @classmethod
+    def _v_url(cls, v):
+        return _strip_optional_url(v)
+
+    @field_validator("link_expires_at")
+    @classmethod
+    def _v_expiry(cls, v):
+        return validate_future_datetime(v, label="link_expires_at")
+
+
+class SmsCampaignOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    code: str
+    status: str
+    sms_template: str
+    frequency_cap_days: Optional[int] = None
+    landing_type: str
+    landing_url: Optional[str] = None
+    landing_headline: Optional[str] = None
+    landing_body: Optional[str] = None
+    landing_cta_label: Optional[str] = None
+    landing_cta_url: Optional[str] = None
+    build_revision: int
+    link_expires_at: Optional[datetime] = None
+    optout_instruction_snapshot: Optional[str] = None
+    # Attestation (khớp build_revision mới hợp lệ)
+    consent_checked_at: Optional[datetime] = None
+    consent_checked_by_id: Optional[int] = None
+    consent_reference: Optional[str] = None
+    consent_checked_build_revision: Optional[int] = None
+    dnc_checked_at: Optional[datetime] = None
+    dnc_checked_by_id: Optional[int] = None
+    dnc_reference: Optional[str] = None
+    dnc_checked_build_revision: Optional[int] = None
+    optout_channel_checked_at: Optional[datetime] = None
+    optout_channel_checked_by_id: Optional[int] = None
+    optout_channel_reference: Optional[str] = None
+    optout_channel_checked_build_revision: Optional[int] = None
+    created_by_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    handed_off_marked_at: Optional[datetime] = None
+    # Computed (service điền)
+    has_link: Optional[bool] = None
+    group_count: Optional[int] = None
+
+
+class SmsCampaignList(BaseModel):
+    total: int
+    items: List[SmsCampaignOut]
+
+
+class SmsCampaignGroupAttach(BaseModel):
+    group_id: int = Field(..., ge=1, le=2147483647)  # int4 — chặn overflow
+
+
+class SmsOverLimitRow(BaseModel):
+    """1 recipient vượt 1 segment (admin cần rút gọn template/dữ liệu)."""
+
+    phone_normalized: str
+    full_name: str
+    encoding: Optional[str] = None
+    length: Optional[int] = None
+    segments: Optional[int] = None
+
+
+class SmsPreflightReport(BaseModel):
+    """Báo cáo build/preflight: tổng/exportable/loại theo lý do + phân bố
+    nhà mạng + danh sách over_limit + cảnh báo. Dùng cho POST build và
+    GET preflight."""
+
+    campaign_id: int
+    build_revision: int
+    status: str
+    has_link: bool
+    total: int
+    exportable: int
+    excluded_by_reason: Dict[str, int]
+    carrier_distribution: Dict[str, int]
+    over_limit: List[SmsOverLimitRow] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    # ≤5 dòng tin cuối MẪU từ segment thực (sentinel link → URL mẫu) — §D6.
+    preview: List[str] = Field(default_factory=list)
+
+
+class SmsAttestationCreate(BaseModel):
+    """Ghi attestation consent/DNC/opt-out-channel cho build_revision hiện
+    tại (gate export PR-4)."""
+
+    kind: SmsAttestationKind
+    reference: str = Field(..., min_length=1, max_length=512)
+
+    @field_validator("reference")
+    @classmethod
+    def _v_reference(cls, v):
+        return _strip_required_text(v)
