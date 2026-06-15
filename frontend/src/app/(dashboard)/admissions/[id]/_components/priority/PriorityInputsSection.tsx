@@ -42,8 +42,11 @@ import type { AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 // Mirror BE app/services/priority_service.py _derive_kv_basis_level enum.
 const CULTURAL_OPTIONS = [
-  { value: "completed_thcs",  label: "Hoàn thành chương trình THCS (chưa tốt nghiệp)" },
-  { value: "graduated_thcs",  label: "Tốt nghiệp THCS" },
+  // THCS: từ NH 2025-2026 (Thông tư 10/2026) không còn cấp Bằng TN THCS, thay
+  // bằng xác nhận hoàn thành chương trình trong học bạ. Nhãn tránh "(chưa tốt
+  // nghiệp)" (gây hiểu nhầm là trượt) → phân biệt rõ "có bằng" vs "không cấp bằng".
+  { value: "completed_thcs",  label: "Hoàn thành chương trình THCS (không cấp bằng TN)" },
+  { value: "graduated_thcs",  label: "Tốt nghiệp THCS (có bằng)" },
   { value: "completed_thpt",  label: "Hoàn thành chương trình THPT (chưa tốt nghiệp)" },
   { value: "graduated_thpt",  label: "Tốt nghiệp THPT" },
   { value: "graduated_gdtx",  label: "Tốt nghiệp GDTX (Giáo dục thường xuyên cấp 3)" },

@@ -223,8 +223,12 @@ export function buildReadinessActionItems(
   }
 
   // Priority (Step 4) is FE-derived (derivePriorityIssues) — NEVER in
-  // executive_summary. Add once, unless a Step 4 item is already present.
-  if (!items.some((i) => i.step === 4)) {
+  // executive_summary. The BE MAY also emit a structured Step-4 warning with a
+  // DIFFERENT id (e.g. thcs_diploma_review): that must NOT suppress the
+  // FE-derived priority issues (missing UT / manual-override / unresolved KV) —
+  // they are distinct concerns and dedupe is by id (below). Guard only against
+  // re-adding the SAME FE-derived "step-4" item, not against ANY Step-4 item.
+  if (!items.some((i) => i.id === "step-4")) {
     const priorityIssues = derivePriorityIssues(profile)
     if (priorityIssues.length > 0) {
       items.push({
