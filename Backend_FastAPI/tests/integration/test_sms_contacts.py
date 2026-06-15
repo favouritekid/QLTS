@@ -12,9 +12,11 @@ Chạy one-off container (CLAUDE.md):
   docker compose run --rm --no-deps backend \
     python -m pytest tests/integration/test_sms_contacts.py -q
 """
+import pytest
 from httpx import AsyncClient
 
 API = "/api/sms"
+_TOO_LARGE_INT4 = 2147483648
 
 
 # ---------------------------------------------------------------------
@@ -802,3 +804,101 @@ async def test_import_rejects_unicode_digit_phone(
 async def test_requires_auth(client: AsyncClient):
     res = await client.get(f"{API}/contact-groups")
     assert res.status_code == 401
+
+
+# ---------------------------------------------------------------------
+# PR-2 hotfix — reject values outside PostgreSQL int4 before DB access
+# ---------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("method", "path", "request_kwargs"),
+    [
+        ("GET", f"/contact-groups/{_TOO_LARGE_INT4}", {}),
+        (
+            "PATCH",
+            f"/contact-groups/{_TOO_LARGE_INT4}",
+            {"json": {"description": "x"}},
+        ),
+        (
+            "POST",
+            f"/contact-groups/{_TOO_LARGE_INT4}/contacts/upload",
+            {
+                "files": _upload_files(
+                    "full_name,phone\nA,0901234567\n"
+                )
+            },
+        ),
+        ("GET", f"/contact-groups/{_TOO_LARGE_INT4}/contacts", {}),
+        (
+            "PATCH",
+            f"/contacts/{_TOO_LARGE_INT4}",
+            {"json": {"note": "x"}},
+        ),
+        (
+            "POST",
+            f"/contacts/{_TOO_LARGE_INT4}/consent-events",
+            {
+                "json": {
+                    "event_type": "revoked",
+                    "occurred_at": "2026-06-01T00:00:00+07:00",
+                    "revoke_source": "manual",
+                }
+            },
+        ),
+        ("GET", f"/contacts/{_TOO_LARGE_INT4}/consent-events", {}),
+        (
+            "POST",
+            f"/contacts/{_TOO_LARGE_INT4}/groups",
+            {"json": {"group_id": 1}},
+        ),
+        ("DELETE", f"/contacts/{_TOO_LARGE_INT4}/groups/1", {}),
+        ("DELETE", f"/contacts/1/groups/{_TOO_LARGE_INT4}", {}),
+    ],
+)
+async def test_path_ids_reject_values_outside_int4(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    method: str,
+    path: str,
+    request_kwargs: dict,
+):
+    res = await client.request(
+        method,
+        f"{API}{path}",
+        headers=admin_token_headers,
+        **request_kwargs,
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/contact-groups",
+        "/contact-groups/1/contacts",
+        "/contacts",
+        "/contacts/1/consent-events",
+    ],
+)
+async def test_skip_rejects_values_outside_int4(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    path: str,
+):
+    res = await client.get(
+        f"{API}{path}",
+        params={"skip": _TOO_LARGE_INT4},
+        headers=admin_token_headers,
+    )
+    assert res.status_code == 422, res.text
+
+
+async def test_membership_group_id_rejects_values_outside_int4(
+    client: AsyncClient,
+    admin_token_headers: dict,
+):
+    res = await client.post(
+        f"{API}/contacts/1/groups",
+        json={"group_id": _TOO_LARGE_INT4},
+        headers=admin_token_headers,
+    )
+    assert res.status_code == 422, res.text
