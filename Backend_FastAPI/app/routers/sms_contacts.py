@@ -9,13 +9,14 @@ main.py (đã wire ở PR-1).
 """
 import hashlib
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import (
     APIRouter,
     Depends,
     File,
     Form,
+    Path,
     Query,
     UploadFile,
     status,
@@ -28,6 +29,10 @@ from app.schemas import sms as sms_schemas
 from app.services.sms_contact_service import SmsContactService
 
 router = APIRouter(prefix="/api/sms", tags=["SMS Contacts"])
+
+# PostgreSQL Integer is int4. Reject oversized path/query values before asyncpg
+# receives them and turns an invalid API input into a 500 response.
+_MAX_ID = 2147483647
 
 
 # =====================================================================
@@ -54,7 +59,7 @@ async def create_contact_group(
 async def list_contact_groups(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=_MAX_ID),
     limit: int = Query(50, ge=1, le=200),
     group_type: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
@@ -75,7 +80,7 @@ async def list_contact_groups(
     response_model=sms_schemas.SmsContactGroupOut,
 )
 async def get_contact_group(
-    group_id: int,
+    group_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
 ):
@@ -87,7 +92,7 @@ async def get_contact_group(
     response_model=sms_schemas.SmsContactGroupOut,
 )
 async def update_contact_group(
-    group_id: int,
+    group_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     payload: sms_schemas.SmsContactGroupUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
@@ -102,7 +107,7 @@ async def update_contact_group(
     response_model=sms_schemas.SmsImportResult,
 )
 async def upload_contacts_to_group(
-    group_id: int,
+    group_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     file: UploadFile = File(..., description="File .csv hoặc .xlsx"),
     source_label: Optional[str] = Form(None),
     consent_basis: Optional[str] = Form(None),
@@ -135,10 +140,10 @@ async def upload_contacts_to_group(
     response_model=sms_schemas.SmsContactList,
 )
 async def list_group_contacts(
-    group_id: int,
+    group_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=_MAX_ID),
     limit: int = Query(50, ge=1, le=200),
     search: Optional[str] = Query(None),
     consent_status: Optional[str] = Query(None),
@@ -162,7 +167,7 @@ async def list_group_contacts(
 async def list_contacts(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=_MAX_ID),
     limit: int = Query(50, ge=1, le=200),
     search: Optional[str] = Query(None),
     consent_status: Optional[str] = Query(None),
@@ -197,7 +202,7 @@ async def create_contact(
     "/contacts/{contact_id}", response_model=sms_schemas.SmsContactOut
 )
 async def update_contact(
-    contact_id: int,
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     payload: sms_schemas.SmsContactUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
@@ -215,7 +220,7 @@ async def update_contact(
     status_code=status.HTTP_201_CREATED,
 )
 async def append_consent_event(
-    contact_id: int,
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     payload: sms_schemas.SmsConsentEventCreate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
@@ -232,10 +237,10 @@ async def append_consent_event(
     response_model=sms_schemas.SmsConsentEventList,
 )
 async def list_consent_events(
-    contact_id: int,
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
-    skip: int = Query(0, ge=0),
+    skip: int = Query(0, ge=0, le=_MAX_ID),
     limit: int = Query(50, ge=1, le=200),
 ):
     total, items = await SmsContactService(db).list_consent_events(
@@ -250,7 +255,7 @@ async def list_consent_events(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_contact_to_group(
-    contact_id: int,
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     payload: sms_schemas.SmsGroupMembershipAdd,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
@@ -269,8 +274,8 @@ async def add_contact_to_group(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def remove_contact_from_group(
-    contact_id: int,
-    group_id: int,
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
+    group_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
 ):

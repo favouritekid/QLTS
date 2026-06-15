@@ -179,7 +179,7 @@ class SmsContactList(BaseModel):
 class SmsGroupMembershipAdd(BaseModel):
     """Thêm contact vào 1 nhóm (note riêng trong nhóm tùy chọn)."""
 
-    group_id: int = Field(..., ge=1)
+    group_id: int = Field(..., ge=1, le=2147483647)
     note: Optional[str] = Field(None, max_length=2000)
 
 
