@@ -42,6 +42,13 @@ os.makedirs(_AVATAR_UPLOAD_FOLDER, exist_ok=True)
 # # --- KẾT THÚC TÍNH TOÁN TRƯỚC ---
 
 
+# Default placeholder hướng dẫn từ chối (SMS/điện thoại) — prod PHẢI đặt
+# kênh từ chối THẬT; build refuse nếu còn placeholder này trong production.
+SMS_OPTOUT_INSTRUCTION_DEFAULT = (
+    "Tu choi QC: soan TC gui 1900xxxx hoac goi 1900xxxx."
+)
+
+
 class Settings(BaseSettings):
     # Application Settings
     # Pydantic tự đọc APP_ENV từ môi trường
@@ -226,6 +233,44 @@ class Settings(BaseSettings):
     MFA_ENFORCE_ROLES: List[str] = Field(
         default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
     )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
+
+    # -- SMS Marketing: token + build (PR-3) --
+    # Short-link token: HMAC hash secret (lookup) + Fernet keyring (re-export).
+    # Prod cần giá trị thật. CỐ Ý KHÔNG fail-fast startup (để không gãy backend
+    # prod khi SMS chưa cấu hình) — thiếu/invalid sẽ lỗi tại thời điểm BUILD
+    # campaign có {link} (lazy, app/utils/sms_token.py). Dev/test: helper dẫn
+    # xuất key từ default → chạy được không cần env.
+    SMS_TOKEN_HASH_SECRET: str = Field(
+        default="dev-sms-token-hash-secret-change-in-prod",
+        validation_alias="SMS_TOKEN_HASH_SECRET",
+    )
+    # JSON string {version: fernet_key}, vd {"v1":"<Fernet.generate_key()>"}.
+    SMS_TOKEN_ENCRYPTION_KEYS: str = Field(
+        default="", validation_alias="SMS_TOKEN_ENCRYPTION_KEYS",
+    )
+    SMS_TOKEN_ACTIVE_KEY_VERSION: str = Field(
+        default="", validation_alias="SMS_TOKEN_ACTIVE_KEY_VERSION",
+    )
+    SMS_IP_HASH_SECRET: str = Field(
+        default="dev-sms-ip-hash-secret-change-in-prod",
+        validation_alias="SMS_IP_HASH_SECRET",
+    )  # click ip_hash (PR-5) — thêm sẵn cho keyring nhất quán
+    SMS_PUBLIC_BASE_URL: str = Field(
+        default="https://qlts.tnpc.edu.vn",
+        validation_alias="SMS_PUBLIC_BASE_URL",
+    )  # link {SMS_PUBLIC_BASE_URL}/r/{code}
+    SMS_ALLOWED_REDIRECT_DOMAINS: str = Field(
+        default="qlts.tnpc.edu.vn,tnpc.edu.vn",
+        validation_alias="SMS_ALLOWED_REDIRECT_DOMAINS",
+    )  # CSV host cho landing_type=external (§6.2)
+    SMS_FREQUENCY_CAP_DAYS: int = Field(
+        default=0, ge=0, le=3650, validation_alias="SMS_FREQUENCY_CAP_DAYS",
+    )  # 0 = tắt; ge=0 chống âm; le=3650 trần (khớp campaign cap, chống 1e9)
+    # [QC] LUÔN được chèn ở build (advertising NĐ91 Đ15) — không có toggle.
+    SMS_OPTOUT_INSTRUCTION: str = Field(
+        default=SMS_OPTOUT_INSTRUCTION_DEFAULT,
+        validation_alias="SMS_OPTOUT_INSTRUCTION",
+    )  # hướng dẫn từ chối SMS/điện thoại — org BẮT BUỘC đặt nội dung thật
 
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.
