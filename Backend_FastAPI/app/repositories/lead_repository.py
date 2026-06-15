@@ -183,6 +183,14 @@ class LeadRepository(BaseRepository[models.Lead]):
         loss_reason: Optional[str] = None,
         is_final: Optional[bool] = None,
         counts_for_funnel: Optional[bool] = None,
+        # === LEAD_FILTER_UX_PLAN §4: actionable + consultation_status filters ===
+        unassigned: Optional[bool] = None,
+        overdue: Optional[bool] = None,
+        next_activity_from: Optional[datetime] = None,
+        next_activity_to: Optional[datetime] = None,
+        no_consultation: Optional[bool] = None,
+        is_hot: Optional[bool] = None,
+        consultation_status_id: Optional[str] = None,
     ) -> list:
         """Build reusable filter list for leads queries (shared by get_filtered + get_summary)."""
         filters = []
@@ -230,9 +238,23 @@ class LeadRepository(BaseRepository[models.Lead]):
         # Example: "Hùng" NFD = "Hu" + combining accent vs NFC = single char "ù"
         if search:
             normalized_search = unicodedata.normalize('NFC', search.strip())
-            search_term = f"%{normalized_search}%"
+            # Escape LIKE wildcards so a literal % / _ typed by the user matches
+            # literally instead of acting as a wildcard (mirror vn_school_service
+            # search). Backslash is PostgreSQL's default LIKE/ILIKE escape char.
+            escaped_search = (
+                normalized_search.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            search_term = f"%{escaped_search}%"
+            # Name: diacritic-insensitive via f_unaccent on both sides ("nguyen
+            # van" → "Nguyễn Văn"), backed by ix_lead_fullname_unaccent_trgm
+            # (migration leadsrch01). email/phone: plain ilike (email rarely has
+            # diacritics, phone is digits) — see LEAD_FILTER_UX_PLAN §3.1/§10.5.
             search_conditions = or_(
-                models.Lead.full_name.ilike(search_term),
+                func.f_unaccent(models.Lead.full_name).ilike(
+                    func.f_unaccent(search_term)
+                ),
                 models.Lead.email.ilike(search_term),
                 models.Lead.phone.ilike(search_term),
             )
@@ -314,6 +336,44 @@ class LeadRepository(BaseRepository[models.Lead]):
             )
             filters.append(sa_exists(funnel_subq))
 
+        # === ACTIONABLE FILTERS (LEAD_FILTER_UX_PLAN §4) ===
+        # Bool convention: only add a predicate when the param is True.
+        # None/False ⇒ no filter (avoid "inverting" the meaning — memory
+        # empty-filter-falsy-check-audit; use `is True`, not `if param`).
+        if unassigned is True:
+            filters.append(models.Lead.assigned_officer_id.is_(None))
+
+        if overdue is True:
+            # Realtime predicate via func.now() (DB-side, tz-correct).
+            # Deliberately NOT the materialized is_overdue column (can go stale).
+            filters.append(
+                and_(
+                    models.Lead.next_activity_at.is_not(None),
+                    models.Lead.next_activity_at < func.now(),
+                )
+            )
+
+        if next_activity_from is not None:
+            filters.append(models.Lead.next_activity_at >= next_activity_from)
+        if next_activity_to is not None:
+            filters.append(models.Lead.next_activity_at <= next_activity_to)
+
+        if no_consultation is True:
+            # consultation_count is NOT NULL default 0 (lead.py:169) → no OR IS NULL.
+            filters.append(models.Lead.consultation_count == 0)
+
+        if is_hot is True:
+            filters.append(models.Lead.is_hot_lead.is_(True))
+
+        # Multi-select: consultation_status_id (mirror pipeline_stage_id above)
+        if consultation_status_id:
+            cs_ids = [s.strip() for s in consultation_status_id.split(",") if s.strip()]
+            if cs_ids:
+                if len(cs_ids) == 1:
+                    filters.append(models.Lead.consultation_status_id == cs_ids[0])
+                else:
+                    filters.append(models.Lead.consultation_status_id.in_(cs_ids))
+
         return filters
 
     async def get_summary(self, filters: list) -> dict:
@@ -369,6 +429,14 @@ class LeadRepository(BaseRepository[models.Lead]):
         loss_reason: Optional[str] = None,
         is_final: Optional[bool] = None,
         counts_for_funnel: Optional[bool] = None,
+        # === LEAD_FILTER_UX_PLAN §4: actionable + consultation_status filters ===
+        unassigned: Optional[bool] = None,
+        overdue: Optional[bool] = None,
+        next_activity_from: Optional[datetime] = None,
+        next_activity_to: Optional[datetime] = None,
+        no_consultation: Optional[bool] = None,
+        is_hot: Optional[bool] = None,
+        consultation_status_id: Optional[str] = None,
     ) -> Tuple[int, List[models.Lead]]:
         """Get filtered list of leads with pagination and eager loading."""
         filters = self._build_filters(
@@ -381,6 +449,11 @@ class LeadRepository(BaseRepository[models.Lead]):
             score_min=score_min, score_max=score_max, lead_ids=lead_ids,
             loss_reason=loss_reason,
             is_final=is_final, counts_for_funnel=counts_for_funnel,
+            unassigned=unassigned, overdue=overdue,
+            next_activity_from=next_activity_from,
+            next_activity_to=next_activity_to,
+            no_consultation=no_consultation, is_hot=is_hot,
+            consultation_status_id=consultation_status_id,
         )
 
         base_query = select(models.Lead)
