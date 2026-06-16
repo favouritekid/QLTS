@@ -627,6 +627,10 @@ def _get_lead_audit_state(lead: models.Lead) -> dict:
         "consultation_status_id": lead.consultation_status_id,
         "pipeline_stage_id": lead.pipeline_stage_id,
         "assigned_officer_id": lead.assigned_officer_id,
+        # ✅ ANTIFRAUD: track referrer_id — vector hoa hồng CTV (trước là điểm mù:
+        # officer gán/đổi CTV không để dấu vết). validity_status KHÔNG track ở đây vì
+        # update_lead không đổi nó (mutation thật ở collaborator_service).
+        "referrer_id": lead.referrer_id,
     }
 
 
@@ -1572,6 +1576,58 @@ async def update_lead(
                 db_lead.referrer_id = new_referrer_id
                 if new_referrer_id is not None:
                     db_lead.source = "referral"
+
+            # =========================================================================
+            # ✅ ANTIFRAUD SOFT-WARN (V1): officer gán/đổi CTV hoặc đổi nguồn sang
+            # 'referral' trên lead của mình (mở khóa hoa hồng CTV). KHÔNG chặn — chỉ
+            # đánh dấu (audit action="flagged" + log.warning) để giám sát.
+            #   - Chỉ cần điều kiện actor là OFFICER: officer chỉ tới được đây với lead
+            #     ĐƯỢC PHÂN CHO MÌNH (đã qua permission check ở trên), nên kiểm tra
+            #     assigned_officer_id ở đây là thừa.
+            #   - Bắt MỌI thay đổi referrer sang một CTV: NULL→X *và* swap X→Y
+            #     (chuyển hướng hoa hồng), HOẶC source vừa chuyển sang 'referral'.
+            # Giám sát rộng có chủ đích (kể cả lead officer tự tạo) — false-positive chỉ
+            # là 1 dòng audit để soi, không chặn. Xem LEAD_ANTIFRAUD_PLAN.md §6.1.
+            # =========================================================================
+            if updated_by.role == UserRole.OFFICER:
+                _old_ref = old_audit_state.get("referrer_id")
+                _old_src = old_audit_state.get("source")
+                _ref_changed_to_ctv = (
+                    db_lead.referrer_id is not None
+                    and db_lead.referrer_id != _old_ref
+                )
+                _src_to_referral = (
+                    _old_src != "referral" and db_lead.source == "referral"
+                )
+                if _ref_changed_to_ctv or _src_to_referral:
+                    log.warning(
+                        "antifraud_referral_set_after_autoassign",
+                        lead_id=lead_id,
+                        actor_user_id=updated_by.id,
+                        old_referrer_id=_old_ref,
+                        new_referrer_id=db_lead.referrer_id,
+                        old_source=_old_src,
+                        new_source=db_lead.source,
+                    )
+                    await audit_service.log_audit(
+                        db,
+                        entity_type="Lead",
+                        entity_id=lead_id,
+                        action="flagged",
+                        actor_user_id=updated_by.id,
+                        reason=(
+                            "Officer gán CTV / đổi nguồn sang 'referral' trên lead đã "
+                            "được phân tự động (nghi vấn hoa hồng) — soft-warn"
+                        ),
+                        changes={
+                            "referrer_id": {
+                                "old": _old_ref,
+                                "new": db_lead.referrer_id,
+                            },
+                            "source": {"old": _old_src, "new": db_lead.source},
+                        },
+                        source="api",
+                    )
 
             # === NEW FEATURE: Auto-Reassign when Offering Changes ===
             # If offering_id changed, re-route Lead to new Unit and reset assignment

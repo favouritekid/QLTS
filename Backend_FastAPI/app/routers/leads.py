@@ -717,7 +717,11 @@ async def update_existing_lead(
     current_user: models.User = CasbinAuth,  # <<< LẤY USER TỪ DEPENDENCY
     db: AsyncSession = Depends(database.get_db),
 ):
-    """Cập nhật một Lead (chỉ Admin/Manager)."""
+    """Cập nhật một Lead.
+
+    Quyền: Admin/Manager sửa lead theo scope; Officer chỉ sửa lead ĐƯỢC PHÂN
+    cho mình (enforced ở lead_service.update_lead + IDOR tại LeadAccessDep).
+    """
     # <<< SỬA Ở ĐÂY: Truyền current_user vào service >>>
 
     # Track which fields are being updated
