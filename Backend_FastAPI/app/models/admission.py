@@ -316,6 +316,34 @@ class AdmissionProfile(Base):
         comment="Snapshot of admission rules: {min_gpa, mandatory_docs[], admission_method}"
     )
 
+    # Document debt (nợ giấy tờ) — fast-track prepay/giữ chỗ (C1).
+    #
+    # Snapshot captured ONCE when an officer submits a profile that is
+    # otherwise eligible but still missing mandatory documents (the
+    # "Nộp kèm nợ giấy tờ" flow). Shape:
+    #   {"codes": [...], "reason": str, "by_user_id": int, "at": iso8601}
+    #
+    # ⚠️ DELIBERATELY a SEPARATE mutable column, NOT a key inside
+    # ``applied_rules``. The ``prevent_applied_rules_update`` trigger
+    # (ardockeys01) whitelists only 7 keys; any new applied_rules key
+    # RAISEs on UPDATE. A standalone column has no such guard.
+    #
+    # The badge/count the FE renders is the COMPUTED
+    # ``outstanding_debt_codes`` (this snapshot's codes ∩ docs still
+    # missing now) — so once the officer uploads the owed docs the debt
+    # self-resolves; this snapshot is retained only as an audit record of
+    # "was once owed + why".
+    document_debt: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "Nợ giấy tờ snapshot {codes, reason, by_user_id, at} captured "
+            "at staff submit-with-debt. NULL = no debt ever recorded. "
+            "Separate column (NOT applied_rules) to dodge the immutability "
+            "trigger."
+        ),
+    )
+
     # Family Information (Array of FamilyMember objects)
     # Structure: [{relationship, full_name, occupation, phone}, ...]
     family_info: Mapped[list] = mapped_column(

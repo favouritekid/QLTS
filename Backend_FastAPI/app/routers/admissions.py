@@ -761,12 +761,19 @@ async def submit_admission_profile(
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
+    body: Optional[schemas.AdmissionSubmitRequest] = None,
 ):
     """
     Submit AdmissionProfile for review.
 
     Transitions profile from draft → submitted. Validation checks
     document completeness and data integrity against snapshot rules.
+
+    **Request Body (optional — fast-track C1):**
+    - acknowledge_missing_docs: staff may submit with mandatory docs still
+      missing (nợ giấy tờ)
+    - document_debt_reason: required reason when acknowledging the debt
+    Omitting the body reproduces the original no-body behaviour.
 
     **On Success:**
     - Profile.status = 'submitted'
@@ -784,11 +791,16 @@ async def submit_admission_profile(
     - 404: Profile not found (or IDOR protection)
     - 400: Profile is not in draft status
     """
+    # Body is optional; default to an empty request so the no-body call path
+    # is preserved (Router stays dumb — the service owns all the waiver logic).
+    submit_body = body or schemas.AdmissionSubmitRequest()
     try:
         result, post_commit = await admission_service.submit_and_evaluate(
             db=db,
             profile_id=profile_id,
             current_user=current_user,
+            acknowledge_missing_docs=submit_body.acknowledge_missing_docs,
+            document_debt_reason=submit_body.document_debt_reason,
         )
 
         # Transaction commit

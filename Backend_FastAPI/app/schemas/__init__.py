@@ -161,6 +161,7 @@ from .admission import (
     AdmissionsPage,
     PendingDiplomaItem,  # PR #13.7 — nợ bằng reminder
     PendingDiplomaResponse,  # PR #13.7 — nợ bằng reminder
+    AdmissionSubmitRequest,  # Fast-track C1 — submit-with-document-debt body
     AdmissionSubmitResponse,
     # Phase 3 PR-3C Sub-3 — choice-engine endpoint schemas
     AdmissionPublishResultResponse,

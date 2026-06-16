@@ -2088,6 +2088,58 @@ def _compute_frontend_fields(
     
     profile.validation_errors = validation_errors
 
+    # =========================================================================
+    # Fast-track prepay/giữ chỗ — nợ giấy tờ contract (C1)
+    # =========================================================================
+    # SUBTRACTION (not enumeration): "other_errors" = every validation error
+    # EXCEPT the truly-missing-mandatory-document ones. We can submit-with-debt
+    # only when other_errors is empty (eligible apart from missing docs).
+    #
+    # The missing-doc messages produced by _validate_documents are exactly
+    # ``"Thiếu tài liệu bắt buộc: {code}"`` for each code in missing_doc_codes
+    # (uploaded-but-pending-verify docs use a DIFFERENT "chưa được xác minh"
+    # message and stay in other_errors → they still block, honouring B2:
+    # only truly-missing docs are waivable, never unverified ones).
+    _missing_doc_messages = {
+        f"Thiếu tài liệu bắt buộc: {code}" for code in missing_doc_codes
+    }
+    _other_errors = [
+        err for err in validation_errors if err not in _missing_doc_messages
+    ]
+
+    # Snapshot of a previously-recorded debt (persisted column). The badge the
+    # FE renders is the COMPUTED intersection with docs STILL missing now, so
+    # it self-resolves once the owed docs are uploaded. document_debt may be a
+    # dict {codes, reason, ...} or None.
+    _debt_snapshot = getattr(profile, "document_debt", None)
+    _debt_codes = (
+        _debt_snapshot.get("codes", [])
+        if isinstance(_debt_snapshot, dict)
+        else []
+    )
+    _missing_now = set(missing_doc_codes)
+    profile.outstanding_debt_codes = [
+        code for code in _debt_codes if code in _missing_now
+    ]
+    # Expose the currently-missing mandatory doc codes so the FE can list them
+    # in the submit-with-debt dialog (B3).
+    profile.missing_doc_codes = list(missing_doc_codes)
+
+    # Staff-only gate mirrors submit_and_evaluate: a candidate/magic-link
+    # actor (current_user=None) never reaches here (helper is a no-op for
+    # None), but accountant/user roles can — so require officer/manager/admin
+    # explicitly. The button shows only when the draft is eligible apart from
+    # missing docs (other_errors empty + ≥1 missing doc) and is not a
+    # multi-NV profile lacking choices.
+    _is_staff_actor = is_admin or is_manager or is_officer
+    profile.can_submit_with_document_debt = bool(
+        status == "draft"
+        and _is_staff_actor
+        and not _other_errors
+        and missing_doc_codes
+        and not _multi_nv_no_choice
+    )
+
     # F7 fix 2026-05-16: surface bypass-eligibility hazard to FE.
     # When `applied_rules.allow_unverified_submission=True`, applicant can
     # submit a profile despite missing required data (per Decision 1 in
@@ -5337,6 +5389,9 @@ async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
     current_user: Optional[models.User],
+    *,
+    acknowledge_missing_docs: bool = False,
+    document_debt_reason: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """
     Submit AdmissionProfile for evaluation (auto-approve or return errors).
@@ -5357,6 +5412,15 @@ async def submit_and_evaluate(
         profile_id: AdmissionProfile ID
         current_user: Current authenticated user, or None for magic-link
             self-service candidate path (CCCD already verified upstream).
+        acknowledge_missing_docs: Fast-track C1 — when True AND the actor is
+            staff (officer/manager/admin) AND ``document_debt_reason`` is set
+            AND the only outstanding errors are truly-missing mandatory
+            documents, the profile transitions to ``submitted`` and a
+            ``document_debt`` snapshot is recorded. Candidate/magic-link
+            (current_user=None) can never use this. Defaults False (original
+            no-body behaviour: missing docs block submit).
+        document_debt_reason: Officer's reason for allowing the document debt;
+            required when ``acknowledge_missing_docs`` is honoured.
 
     Returns:
         Tuple of (result_dict, post_commit_callback):
@@ -5651,22 +5715,42 @@ async def submit_and_evaluate(
     ]
     if allow_unverified:
         uploaded_doc_codes = {doc.document_type.code for doc in path_uploaded_docs}
+        # Lax mode: anything not in uploaded_doc_codes has no file → truly missing.
+        pending_verify_codes: set[str] = set()
     else:
         uploaded_doc_codes = {
             doc.document_type.code for doc in path_uploaded_docs
             if doc.status in ("verified", "paper_submitted")
         }
+        # Strict mode: a mandatory doc with a file but status='uploaded' is
+        # uploaded-but-pending-verify, NOT truly missing. Mirror
+        # _validate_documents (:1114) so the nợ-giấy-tờ waiver only ever
+        # waives TRULY-missing docs (B2) — unverified docs still block.
+        pending_verify_codes = {
+            doc.document_type.code for doc in path_uploaded_docs
+            if doc.file_path and doc.status == "uploaded"
+        }
 
+    # Fast-track C1 — collect TRULY-missing mandatory doc codes + their error
+    # messages separately so the submit-with-debt path can waive ONLY these
+    # (uploaded-pending-verify errors stay in ``errors`` and keep blocking).
+    missing_doc_codes: List[str] = []
+    missing_doc_errors: List[str] = []
     for doc_code in mandatory_docs:
         if doc_code not in uploaded_doc_codes:
             doc = await admission_repo.get_document_by_type(profile.id, doc_code)
             label = doc.document_type.name if doc else doc_code
-            if allow_unverified:
-                errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
-            else:
+            if not allow_unverified and doc_code in pending_verify_codes:
+                # Uploaded but not yet verified — NOT waivable; blocks submit.
                 errors.append(
                     f"Tài liệu {label} ({doc_code}) chưa được xác minh. "
                     f"Liên hệ quản lý để verify trước khi nộp hồ sơ."
+                )
+            else:
+                # Truly missing (no file). Waivable via document debt.
+                missing_doc_codes.append(doc_code)
+                missing_doc_errors.append(
+                    f"Thiếu tài liệu bắt buộc: {label} ({doc_code})"
                 )
 
     # Validation 3: Check citizen_id uniqueness
@@ -5781,6 +5865,63 @@ async def submit_and_evaluate(
             "Phường/Xã thường trú phải theo địa giới hiện hành (2 cấp, sau "
             "01/07/2025). Vui lòng chọn lại Phường/Xã hiện tại."
         )
+
+    # =========================================================================
+    # Fast-track prepay/giữ chỗ — submit-with-document-debt waiver (C1)
+    # =========================================================================
+    # SUBTRACTION (not enumeration): ``errors`` already holds EVERY blocking
+    # validation error EXCEPT truly-missing mandatory docs (those were split
+    # into ``missing_doc_errors`` / ``missing_doc_codes`` above). The early
+    # hard ``raise`` gates (multi-NV-no-choice :5426, round cutoff :5454,
+    # status!=draft :5433, eligibility :5483, atomic quota below) already
+    # fired and are NOT document errors → still block regardless.
+    #
+    # We may transition to ``submitted`` + record a document_debt snapshot
+    # ONLY when ALL of:
+    #   - acknowledge_missing_docs is True
+    #   - a non-empty document_debt_reason is supplied
+    #   - the actor is STAFF (officer/manager/admin) — never candidate/
+    #     magic-link (current_user=None) nor accountant/user roles
+    #   - there is at least one truly-missing mandatory doc to waive
+    #   - ``errors`` (all other validation) is empty
+    # Otherwise the missing-doc errors are folded back into ``errors`` and the
+    # profile stays in draft exactly as before (defaults reproduce old flow).
+    _actor_is_staff = current_user is not None and current_user.role in (
+        UserRole.OFFICER,
+        UserRole.MANAGER,
+        UserRole.ADMIN,
+    )
+    _reason_clean = (document_debt_reason or "").strip()
+    _waive_document_debt = bool(
+        acknowledge_missing_docs
+        and _reason_clean
+        and _actor_is_staff
+        and missing_doc_codes
+        and not errors
+    )
+
+    if _waive_document_debt:
+        # Persist the debt snapshot on the dedicated column (NOT applied_rules
+        # — see model comment / ardockeys01 trigger). The FE badge counts the
+        # COMPUTED outstanding_debt_codes (codes ∩ docs still missing), so the
+        # debt self-resolves once the owed docs are uploaded; this snapshot is
+        # the audit record of "was once owed + why".
+        profile.document_debt = {
+            "codes": list(missing_doc_codes),
+            "reason": _reason_clean,
+            "by_user_id": current_user.id,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        log.info(
+            "admission_submit_with_document_debt",
+            profile_id=profile_id,
+            user_id=current_user.id,
+            waived_doc_codes=missing_doc_codes,
+        )
+    else:
+        # Not a valid waiver → missing docs block submit like every other
+        # error. Combine so the FE sees the full list (missing docs included).
+        errors = errors + missing_doc_errors
 
     # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
     # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
