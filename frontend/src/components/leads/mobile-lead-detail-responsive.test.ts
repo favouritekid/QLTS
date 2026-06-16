@@ -35,6 +35,7 @@ const insightsDrawer = read("./InsightsHelperDrawer.tsx");
 const statusSelector = read("../common/selectors/SmartConsultationStatusSelector.tsx");
 const bulkBar = read("./command-center/BulkActionsBar.tsx");
 const filterBar = read("./command-center/LeadFilterBar.tsx");
+const filterPanel = read("./command-center/LeadFilterPanel.tsx");
 const mobileCard = read("./command-center/MobileLeadCard.tsx");
 const detailClient = read("../../app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx");
 const infoTabs = read("../../app/(dashboard)/leads/[id]/_components/LeadInfoTabs.tsx");
@@ -124,11 +125,14 @@ describe("Round 2 #8 — command-center touch targets + bulk-bar overflow", () =
     expect(bulkBar).toMatch(/h-11 w-11 sm:h-6 sm:w-6/); // clear button
   });
 
-  it("LeadFilterBar bumps trigger + officer inputs + collapse pills", () => {
-    expect(filterBar).toMatch(/h-11 md:h-8/);                      // filter trigger
-    expect(filterBar).toMatch(/h-11 text-base sm:h-7 sm:text-xs/); // officer search (text-base = no iOS zoom)
-    expect(filterBar).toMatch(/h-9 sm:h-6 cursor-pointer/);        // +X-more / Thu-gon
-    expect(filterBar).not.toMatch(/"h-9 md:h-8 gap-1/);            // old trigger gone
+  it("LeadFilterBar (slim) keeps 44px mobile targets; old dropdowns removed", () => {
+    // Slim bar = search + "Bộ lọc" + "Thêm Lead" + presets + chips (§5.0-A).
+    expect(filterBar).toMatch(/h-11 shrink-0 gap-1\.5 md:h-9/);  // Bộ lọc + Thêm Lead
+    expect(filterBar).toContain("LeadQuickPresets");            // quick presets row
+    expect(filterBar).toContain("SlidersHorizontal");          // open-drawer trigger
+    // Inline officer search + the 9 FilterDropdowns moved into LeadFilterPanel.
+    expect(filterBar).not.toMatch(/h-11 text-base sm:h-7 sm:text-xs/);
+    expect(filterBar).not.toMatch(/FilterDropdown/);
   });
 
   it("MobileLeadCard action button 44px + labelled", () => {
@@ -165,10 +169,8 @@ describe("Round 3 #10 — /leads list + pipeline touch targets", () => {
 });
 
 describe("Round 3 #11 — filter bar + multi-offering selector mobile controls", () => {
-  it("LeadFilterBar mobile controls bump to 44px (compact on md+)", () => {
-    expect(filterBar).toMatch(/h-11 pl-9 pr-8 text-base sm:text-sm md:h-8/); // search
-    expect(filterBar).toMatch(/h-11 gap-1\.5 md:hidden/);                    // filter toggle / add-lead
-    expect(filterBar).toMatch(/h-11 md:h-8 gap-1/);                          // unit trigger
+  it("LeadFilterBar search is 44px on mobile (no iOS zoom), compact on md+", () => {
+    expect(filterBar).toMatch(/h-11 pl-9 pr-8 text-base sm:text-sm md:h-9/); // search
   });
 
   it("MultiOfferingSelector mobile search + header + badges", () => {
@@ -193,5 +195,27 @@ describe("Round 3 #12 — lead-detail readiness CTA + timeline menu + scoring", 
 
   it("LeadScoringCollapsible off micro-px token", () => {
     expect(scoringCollapsible).not.toMatch(/text-\[10px\]/);
+  });
+});
+
+describe("LEAD_FILTER_UX_PLAN §5.0 — filter drawer panel", () => {
+  it("LeadFilterPanel body contains scroll-overflow (no chaining to page)", () => {
+    expect(filterPanel).toContain("overflow-y-auto");
+    expect(filterPanel).toContain("overscroll-contain");
+  });
+
+  it("LeadFilterPanel sticky footer respects mobile safe-area", () => {
+    expect(filterPanel).toMatch(/env\(safe-area-inset-bottom\)/);
+  });
+
+  it("LeadFilterPanel renders the actionable controls, sort options + grouped statuses", () => {
+    // Assert JSX-only strings (NOT present in the file's header comment) so the
+    // test fails if the rendered markup is removed — `toContain("Phân công")`
+    // alone would pass on the JSDoc header even with the group deleted.
+    expect(filterPanel).toContain("Quá hạn liên hệ");   // group 1 control (JSX)
+    expect(filterPanel).toContain("Chưa có lần tư vấn"); // group 1 control (JSX)
+    expect(filterPanel).toContain("Cán bộ phụ trách");   // group 3 sub-heading (JSX)
+    expect(filterPanel).toContain("Ưu tiên follow-up");  // sort option (JSX)
+    expect(filterPanel).toContain("Mọi giai đoạn");      // universal consultation bucket (JSX)
   });
 });

@@ -88,6 +88,20 @@ export function parseSearchParamsToApiParams(
   if (get("counts_for_funnel") === "true") params.counts_for_funnel = true;
   else if (get("counts_for_funnel") === "false") params.counts_for_funnel = false;
 
+  // LEAD_FILTER_UX_PLAN §5.1 — actionable + consultation-status filters.
+  // URL keys differ from API field names (2 separate namespaces). Bools only
+  // set when truthy (mirror the BE `is True` convention). na_from/na_to MUST
+  // go through the +07:00 formatter (same as date_from/to) so SSR and client
+  // produce byte-identical strings.
+  const isTrue = (v: string | undefined) => v === "1" || v === "true";
+  if (isTrue(get("overdue"))) params.overdue = true;
+  if (isTrue(get("unassigned"))) params.unassigned = true;
+  if (isTrue(get("hot"))) params.is_hot = true;
+  if (isTrue(get("no_contact"))) params.no_consultation = true;
+  if (get("na_from")) params.next_activity_from = formatLeadsDateFromApiParam(get("na_from")!);
+  if (get("na_to")) params.next_activity_to = formatLeadsDateToApiParam(get("na_to")!);
+  if (get("cstatus")) params.consultation_status_id = get("cstatus");
+
   return params;
 }
 
@@ -126,6 +140,14 @@ const LEADS_LIST_PARAM_KEYS = [
   "loss_reason",
   "is_final",
   "counts_for_funnel",
+  // LEAD_FILTER_UX_PLAN §5.1 — actionable + consultation-status filters
+  "unassigned",
+  "overdue",
+  "next_activity_from",
+  "next_activity_to",
+  "no_consultation",
+  "is_hot",
+  "consultation_status_id",
 ] as const satisfies readonly (keyof LeadListParams)[];
 
 function normalizeValue(value: unknown): unknown {

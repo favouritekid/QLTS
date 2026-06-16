@@ -31,7 +31,7 @@ import { useLeadsFilter } from "./useLeadsFilter";
 
 function makeStoredFilters(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    version: 5,
+    version: 6,
     data: {
       page: 1,
       search: "",
@@ -49,6 +49,14 @@ function makeStoredFilters(overrides: Record<string, unknown> = {}) {
       scoreMax: 100,
       sortBy: "created_at",
       sortOrder: "desc",
+      // v6: actionable + consultation-status filters
+      overdue: false,
+      unassigned: false,
+      isHot: false,
+      noConsultation: false,
+      nextActivityFrom: "",
+      nextActivityTo: "",
+      consultationStatusFilters: [],
       ...overrides,
     },
   });
@@ -297,5 +305,127 @@ describe("useLeadsFilter", () => {
 
     expect(replaceStateSpy).toHaveBeenCalledWith(window.history.state, "", "/leads");
     expect(result.current.dashboardContext).toBeNull();
+  });
+
+  // ==========================================================================
+  // LEAD_FILTER_UX_PLAN §4-§5.6 — actionable + consultation-status filters
+  // ==========================================================================
+  describe("actionable + consultation-status filters", () => {
+    it("maps actionable bool filters into apiFilters only when active", () => {
+      const { result } = renderHook(() => useLeadsFilter());
+      // default: none present
+      expect(result.current.apiFilters.overdue).toBeUndefined();
+      expect(result.current.apiFilters.is_hot).toBeUndefined();
+
+      act(() => {
+        result.current.handlers.handleOverdueChange(true);
+        result.current.handlers.handleIsHotChange(true);
+        result.current.handlers.handleNoConsultationChange(true);
+      });
+
+      expect(result.current.apiFilters.overdue).toBe(true);
+      expect(result.current.apiFilters.is_hot).toBe(true);
+      expect(result.current.apiFilters.no_consultation).toBe(true);
+    });
+
+    it("formats next_activity bounds with +07:00 (parity with SSR parser)", () => {
+      useSearchParamsMock.mockReturnValue(
+        new URLSearchParams("na_from=2026-06-16&na_to=2026-06-20"),
+      );
+      const { result } = renderHook(() => useLeadsFilter());
+      expect(result.current.apiFilters.next_activity_from).toBe("2026-06-16T00:00:00+07:00");
+      expect(result.current.apiFilters.next_activity_to).toBe("2026-06-20T23:59:59.999+07:00");
+    });
+
+    it("joins multi-select consultation_status_id", () => {
+      const { result } = renderHook(() => useLeadsFilter());
+      act(() => {
+        result.current.handlers.handleConsultationStatusChange(["sts06", "sts20"]);
+      });
+      expect(result.current.apiFilters.consultation_status_id).toBe("sts06,sts20");
+    });
+
+    it("enforces unassigned XOR officer (conflict policy §5.3)", () => {
+      const { result } = renderHook(() => useLeadsFilter());
+      // pick an officer first
+      act(() => {
+        result.current.handlers.handleOfficerChange(["5"]);
+      });
+      expect(result.current.apiFilters.assigned_officer_id).toBe("5");
+      // turning on unassigned must clear the officer filter
+      act(() => {
+        result.current.handlers.handleUnassignedChange(true);
+      });
+      expect(result.current.apiFilters.unassigned).toBe(true);
+      expect(result.current.apiFilters.assigned_officer_id).toBeUndefined();
+      // selecting an officer again clears unassigned
+      act(() => {
+        result.current.handlers.handleOfficerChange(["7"]);
+      });
+      expect(result.current.apiFilters.assigned_officer_id).toBe("7");
+      expect(result.current.apiFilters.unassigned).toBeUndefined();
+    });
+
+    it("resetFilters clears the new fields", () => {
+      const { result } = renderHook(() => useLeadsFilter());
+      act(() => {
+        result.current.handlers.handleOverdueChange(true);
+        result.current.handlers.handleConsultationStatusChange(["sts06"]);
+        result.current.handlers.handleNextActivityFromChange("2026-06-16");
+      });
+      act(() => {
+        result.current.handlers.resetFilters();
+      });
+      expect(result.current.state.overdue).toBe(false);
+      expect(result.current.state.consultationStatusFilters).toEqual([]);
+      expect(result.current.state.nextActivityFrom).toBe("");
+      expect(result.current.apiFilters.overdue).toBeUndefined();
+    });
+
+    it("drawerFilterCount excludes search but counts drawer filters", () => {
+      const { result } = renderHook(() => useLeadsFilter());
+      act(() => {
+        result.current.handlers.handleSearchChange("nguyen");
+      });
+      // search is on the bar, not the drawer → not counted
+      expect(result.current.drawerFilterCount).toBe(0);
+      act(() => {
+        result.current.handlers.handleOverdueChange(true);
+        result.current.handlers.handleConsultationStatusChange(["sts06", "sts20"]);
+      });
+      // overdue (1) + consultation status group (1) = 2; search still excluded
+      expect(result.current.drawerFilterCount).toBe(2);
+    });
+
+    it("restores v6 actionable + consultation-status fields from storage", async () => {
+      // Guards the v6 restore effect: a dropped setter (e.g. setOverdue /
+      // setConsultationStatusFilters) would silently lose persisted filters on
+      // reload. The old restore test only covered v5 fields.
+      useSearchParamsMock.mockReturnValue(new URLSearchParams());
+      getItemSpy.mockReturnValue(
+        makeStoredFilters({
+          overdue: true,
+          isHot: true,
+          noConsultation: true,
+          nextActivityFrom: "2026-06-16",
+          nextActivityTo: "2026-06-20",
+          consultationStatusFilters: ["sts06", "sts20"],
+        }),
+      );
+
+      const { result } = renderHook(() => useLeadsFilter());
+
+      await waitFor(() => {
+        expect(result.current.state.overdue).toBe(true);
+      });
+      expect(result.current.state.isHot).toBe(true);
+      expect(result.current.state.noConsultation).toBe(true);
+      expect(result.current.state.nextActivityFrom).toBe("2026-06-16");
+      expect(result.current.state.nextActivityTo).toBe("2026-06-20");
+      expect(result.current.state.consultationStatusFilters).toEqual(["sts06", "sts20"]);
+      // …and they flow into apiFilters
+      expect(result.current.apiFilters.overdue).toBe(true);
+      expect(result.current.apiFilters.consultation_status_id).toBe("sts06,sts20");
+    });
   });
 });

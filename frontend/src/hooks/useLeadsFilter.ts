@@ -43,6 +43,14 @@ export interface StoredFilters {
   scoreMax: number;
   sortBy: string;
   sortOrder: "asc" | "desc";
+  // LEAD_FILTER_UX_PLAN §4-§5.6: actionable + consultation-status filters
+  overdue: boolean;
+  unassigned: boolean;
+  isHot: boolean;
+  noConsultation: boolean;
+  nextActivityFrom: string;
+  nextActivityTo: string;
+  consultationStatusFilters: string[];
 }
 
 export interface LeadsFilterState extends StoredFilters {
@@ -67,6 +75,15 @@ export interface LeadsFilterHandlers {
   handleDateFieldChange: (field: "created_at" | "last_consultation_at") => void;
   handleUnitIdChange: (unitId: string) => void;
   handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void;
+  // LEAD_FILTER_UX_PLAN §4-§5.6: actionable + consultation-status filters.
+  // unassigned XOR officer enforced here (§5.3 conflict policy).
+  handleOverdueChange: (value: boolean) => void;
+  handleUnassignedChange: (value: boolean) => void;
+  handleIsHotChange: (value: boolean) => void;
+  handleNoConsultationChange: (value: boolean) => void;
+  handleNextActivityFromChange: (date: string) => void;
+  handleNextActivityToChange: (date: string) => void;
+  handleConsultationStatusChange: (ids: string[]) => void;
   resetFilters: () => void;
   /** V12: Exit dashboard context, navigate to plain /leads */
   exitDashboardContext: () => void;
@@ -87,6 +104,9 @@ export interface UseLeadsFilterReturn {
   state: LeadsFilterState;
   handlers: LeadsFilterHandlers;
   hasActiveFilters: boolean;
+  /** §5.0-C: number of filters active INSIDE the drawer (excludes search +
+   * sort which live on the bar). Drives the "Bộ lọc (N)" badge. */
+  drawerFilterCount: number;
   apiFilters: LeadListParams;
   /** V12: Dashboard context from URL (read-only) */
   dashboardContext: DashboardContext | null;
@@ -98,7 +118,9 @@ export interface UseLeadsFilterReturn {
 
 const LEADS_FILTERS_STORAGE_KEY = "leads_filters";
 // ✅ VERSIONING: Increment when StoredFilters schema changes
-const STORAGE_VERSION = 5;
+// v6: + actionable filters (overdue/unassigned/isHot/noConsultation/
+//     nextActivityFrom/To) + consultationStatusFilters (LEAD_FILTER_UX_PLAN)
+const STORAGE_VERSION = 6;
 
 interface VersionedStorage {
   version: number;
@@ -122,6 +144,13 @@ const DEFAULT_FILTERS: StoredFilters = {
   scoreMax: 100,
   sortBy: "created_at",
   sortOrder: "desc",
+  overdue: false,
+  unassigned: false,
+  isHot: false,
+  noConsultation: false,
+  nextActivityFrom: "",
+  nextActivityTo: "",
+  consultationStatusFilters: [],
 };
 
 // =============================================================================
@@ -187,7 +216,7 @@ function arraysEqual<T>(a: readonly T[], b: readonly T[]): boolean {
 const CONTEXT_PARAMS = ["nav_source", "action", "scope", "scope_officer_id", "scope_unit_id", "include_descendants"] as const;
 
 // V12: Recognized filter params (user-editable filters)
-const FILTER_PARAMS = ["page", "q", "status", "source", "validity", "offering", "stage", "officer", "unit_id", "from", "to", "date_field", "score_min", "score_max", "sort_by", "order", "loss_reason", "is_final", "counts_for_funnel"] as const;
+const FILTER_PARAMS = ["page", "q", "status", "source", "validity", "offering", "stage", "officer", "unit_id", "from", "to", "date_field", "score_min", "score_max", "sort_by", "order", "loss_reason", "is_final", "counts_for_funnel", "overdue", "unassigned", "hot", "no_contact", "na_from", "na_to", "cstatus"] as const;
 
 function hasRecognizedContextParams(searchParams: URLSearchParams): boolean {
   return CONTEXT_PARAMS.some(p => searchParams.has(p));
@@ -240,6 +269,14 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
     scoreMax: parseInt(searchParams.get("score_max") || "100"),
     sortBy: searchParams.get("sort_by") || "created_at",
     sortOrder: (searchParams.get("order") === "asc" ? "asc" : "desc") as "asc" | "desc",
+    // LEAD_FILTER_UX_PLAN §5.1 — URL keys differ from API field names
+    overdue: searchParams.get("overdue") === "1" || searchParams.get("overdue") === "true",
+    unassigned: searchParams.get("unassigned") === "1" || searchParams.get("unassigned") === "true",
+    isHot: searchParams.get("hot") === "1" || searchParams.get("hot") === "true",
+    noConsultation: searchParams.get("no_contact") === "1" || searchParams.get("no_contact") === "true",
+    nextActivityFrom: searchParams.get("na_from") || "",
+    nextActivityTo: searchParams.get("na_to") || "",
+    consultationStatusFilters: searchParams.get("cstatus")?.split(",").filter(Boolean) || [],
   };
 }
 
@@ -309,6 +346,14 @@ export function useLeadsFilter(
   );
   const [sortBy, setSortBy] = useState(initialValues.sortBy || LEADS_DEFAULT_SORT_BY);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">(initialValues.sortOrder || LEADS_DEFAULT_SORT_ORDER);
+  // LEAD_FILTER_UX_PLAN §4-§5.6: actionable + consultation-status filters
+  const [overdue, setOverdue] = useState<boolean>(initialValues.overdue);
+  const [unassigned, setUnassigned] = useState<boolean>(initialValues.unassigned);
+  const [isHot, setIsHot] = useState<boolean>(initialValues.isHot);
+  const [noConsultation, setNoConsultation] = useState<boolean>(initialValues.noConsultation);
+  const [nextActivityFrom, setNextActivityFrom] = useState(initialValues.nextActivityFrom);
+  const [nextActivityTo, setNextActivityTo] = useState(initialValues.nextActivityTo);
+  const [consultationStatusFilters, setConsultationStatusFilters] = useState<string[]>(initialValues.consultationStatusFilters);
 
   // ==========================================================================
   // POST-HYDRATION STORAGE RESTORE
@@ -362,6 +407,15 @@ export function useLeadsFilter(
     });
     setSortBy((current) => (current === stored.sortBy ? current : stored.sortBy));
     setSortOrder((current) => (current === stored.sortOrder ? current : stored.sortOrder));
+    setOverdue((current) => (current === !!stored.overdue ? current : !!stored.overdue));
+    setUnassigned((current) => (current === !!stored.unassigned ? current : !!stored.unassigned));
+    setIsHot((current) => (current === !!stored.isHot ? current : !!stored.isHot));
+    setNoConsultation((current) => (current === !!stored.noConsultation ? current : !!stored.noConsultation));
+    setNextActivityFrom((current) => (current === (stored.nextActivityFrom || "") ? current : (stored.nextActivityFrom || "")));
+    setNextActivityTo((current) => (current === (stored.nextActivityTo || "") ? current : (stored.nextActivityTo || "")));
+    setConsultationStatusFilters((current) =>
+      arraysEqual(current, stored.consultationStatusFilters || []) ? current : [...(stored.consultationStatusFilters || [])],
+    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -452,6 +506,16 @@ export function useLeadsFilter(
     if (urlFilters.sortOrder && urlFilters.sortOrder !== sortOrder) {
       setSortOrder(urlFilters.sortOrder);
     }
+    // LEAD_FILTER_UX_PLAN §4-§5.6 actionable + consultation-status filters
+    if (urlFilters.overdue !== overdue) setOverdue(urlFilters.overdue);
+    if (urlFilters.unassigned !== unassigned) setUnassigned(urlFilters.unassigned);
+    if (urlFilters.isHot !== isHot) setIsHot(urlFilters.isHot);
+    if (urlFilters.noConsultation !== noConsultation) setNoConsultation(urlFilters.noConsultation);
+    if (urlFilters.nextActivityFrom !== nextActivityFrom) setNextActivityFrom(urlFilters.nextActivityFrom);
+    if (urlFilters.nextActivityTo !== nextActivityTo) setNextActivityTo(urlFilters.nextActivityTo);
+    if (JSON.stringify(urlFilters.consultationStatusFilters) !== JSON.stringify(consultationStatusFilters)) {
+      setConsultationStatusFilters(urlFilters.consultationStatusFilters);
+    }
   }, [
     searchParams,
     dashboardContext,
@@ -470,6 +534,13 @@ export function useLeadsFilter(
     scoreRange,
     sortBy,
     sortOrder,
+    overdue,
+    unassigned,
+    isHot,
+    noConsultation,
+    nextActivityFrom,
+    nextActivityTo,
+    consultationStatusFilters,
   ]);
 
   // ==========================================================================
@@ -507,6 +578,16 @@ export function useLeadsFilter(
       if (scoreRange[1] < 100) params.set("score_max", scoreRange[1].toString());
       if (sortBy !== "created_at") params.set("sort_by", sortBy);
       if (sortOrder !== "desc") params.set("order", sortOrder);
+
+      // LEAD_FILTER_UX_PLAN §5.1 — URL keys (na_from/na_to stay YYYY-MM-DD;
+      // the +07:00 formatting happens only when mapping to API params).
+      if (overdue) params.set("overdue", "1");
+      if (unassigned) params.set("unassigned", "1");
+      if (isHot) params.set("hot", "1");
+      if (noConsultation) params.set("no_contact", "1");
+      if (nextActivityFrom) params.set("na_from", nextActivityFrom);
+      if (nextActivityTo) params.set("na_to", nextActivityTo);
+      if (consultationStatusFilters.length > 0) params.set("cstatus", consultationStatusFilters.join(","));
 
       if (dashboardContext?.navSource) params.set("nav_source", dashboardContext.navSource);
       if (dashboardContext?.action) params.set("action", dashboardContext.action);
@@ -546,6 +627,8 @@ export function useLeadsFilter(
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
     sortBy, sortOrder, pathname, dashboardContext,
+    overdue, unassigned, isHot, noConsultation, nextActivityFrom, nextActivityTo,
+    consultationStatusFilters,
   ]);
 
   // ==========================================================================
@@ -570,6 +653,13 @@ export function useLeadsFilter(
       scoreMax: scoreRange[1],
       sortBy,
       sortOrder,
+      overdue,
+      unassigned,
+      isHot,
+      noConsultation,
+      nextActivityFrom,
+      nextActivityTo,
+      consultationStatusFilters,
     };
 
     // Save if any filter is active OR if not on page 1
@@ -588,6 +678,13 @@ export function useLeadsFilter(
       dateFrom ||
       dateTo ||
       hasScoreFilterActive ||
+      overdue ||
+      unassigned ||
+      isHot ||
+      noConsultation ||
+      nextActivityFrom ||
+      nextActivityTo ||
+      consultationStatusFilters.length > 0 ||
       sortBy !== LEADS_DEFAULT_SORT_BY ||
       sortOrder !== LEADS_DEFAULT_SORT_ORDER;
 
@@ -611,6 +708,8 @@ export function useLeadsFilter(
     page, search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField, scoreRange,
     sortBy, sortOrder,
+    overdue, unassigned, isHot, noConsultation, nextActivityFrom, nextActivityTo,
+    consultationStatusFilters,
   ]);
 
   // ==========================================================================
@@ -649,6 +748,9 @@ export function useLeadsFilter(
 
   const handleOfficerChange = useCallback((officers: string[]) => {
     setOfficerFilters(officers);
+    // §5.3 conflict policy: officer XOR unassigned. Selecting an officer
+    // clears "unassigned" (BE ANDs them → would be empty otherwise).
+    if (officers.length > 0) setUnassigned(false);
     setPage(1);
   }, []);
 
@@ -687,6 +789,49 @@ export function useLeadsFilter(
     setPage(1);
   }, []);
 
+  // === LEAD_FILTER_UX_PLAN §4-§5.6 handlers ===
+  const handleOverdueChange = useCallback((value: boolean) => {
+    setOverdue(value);
+    setPage(1);
+  }, []);
+
+  const handleUnassignedChange = useCallback((value: boolean) => {
+    setUnassigned(value);
+    // §5.3 conflict policy: unassigned XOR officer. Turning on "unassigned"
+    // clears any officer filter so the BE AND doesn't yield an empty set.
+    if (value) setOfficerFilters([]);
+    setPage(1);
+  }, []);
+
+  const handleIsHotChange = useCallback((value: boolean) => {
+    setIsHot(value);
+    setPage(1);
+  }, []);
+
+  const handleNoConsultationChange = useCallback((value: boolean) => {
+    setNoConsultation(value);
+    setPage(1);
+  }, []);
+
+  const handleNextActivityFromChange = useCallback((date: string) => {
+    setNextActivityFrom(date);
+    // Auto-clear "to" if it falls before the new "from"
+    setNextActivityTo(prev => (prev && date && prev < date) ? "" : prev);
+    setPage(1);
+  }, []);
+
+  const handleNextActivityToChange = useCallback((date: string) => {
+    setNextActivityTo(date);
+    // Auto-clear "from" if it falls after the new "to"
+    setNextActivityFrom(prev => (prev && date && prev > date) ? "" : prev);
+    setPage(1);
+  }, []);
+
+  const handleConsultationStatusChange = useCallback((ids: string[]) => {
+    setConsultationStatusFilters(ids);
+    setPage(1);
+  }, []);
+
   const resetFilters = useCallback(() => {
     // V12: resetFilters only resets user filters, NOT dashboard context
     setSearch("");
@@ -703,6 +848,13 @@ export function useLeadsFilter(
     setDateField("created_at");
     setSortBy("created_at");
     setSortOrder("desc");
+    setOverdue(false);
+    setUnassigned(false);
+    setIsHot(false);
+    setNoConsultation(false);
+    setNextActivityFrom("");
+    setNextActivityTo("");
+    setConsultationStatusFilters([]);
     setPage(1);
     clearFiltersFromStorage();
   }, []);
@@ -734,11 +886,48 @@ export function useLeadsFilter(
       !!unitId ||
       hasScoreFilter ||
       dateFrom ||
-      dateTo
+      dateTo ||
+      overdue ||
+      unassigned ||
+      isHot ||
+      noConsultation ||
+      nextActivityFrom ||
+      nextActivityTo ||
+      consultationStatusFilters.length > 0
     );
   }, [
     search, statusFilters, sourceFilters, validityFilters, offeringFilters,
     stageFilters, officerFilters, unitId, hasScoreFilter, dateFrom, dateTo,
+    overdue, unassigned, isHot, noConsultation, nextActivityFrom, nextActivityTo,
+    consultationStatusFilters,
+  ]);
+
+  // §5.0-C: count of filters active INSIDE the drawer. Search + sort live on
+  // the bar and are excluded. Each active group counts once (a preset that
+  // flips `overdue=true` counts as that 1 filter — no separate preset unit).
+  const drawerFilterCount = useMemo(() => {
+    let n = 0;
+    if (statusFilters.length > 0) n++;
+    if (sourceFilters.length > 0) n++;
+    if (validityFilters.length > 0) n++;
+    if (offeringFilters.length > 0) n++;
+    if (stageFilters.length > 0) n++;
+    if (officerFilters.length > 0) n++;
+    if (unitId) n++;
+    if (hasScoreFilter) n++;
+    if (dateFrom || dateTo) n++;
+    if (consultationStatusFilters.length > 0) n++;
+    if (overdue) n++;
+    if (unassigned) n++;
+    if (isHot) n++;
+    if (noConsultation) n++;
+    if (nextActivityFrom || nextActivityTo) n++;
+    return n;
+  }, [
+    statusFilters, sourceFilters, validityFilters, offeringFilters, stageFilters,
+    officerFilters, unitId, hasScoreFilter, dateFrom, dateTo,
+    consultationStatusFilters, overdue, unassigned, isHot, noConsultation,
+    nextActivityFrom, nextActivityTo,
   ]);
 
   const apiFilters = useMemo<LeadListParams>(() => {
@@ -755,7 +944,11 @@ export function useLeadsFilter(
     if (validityFilters.length > 0) params.validity_status = validityFilters.join(",");
     if (offeringFilters.length > 0) params.offering_id = offeringFilters.join(",");
     if (stageFilters.length > 0) params.pipeline_stage_id = stageFilters.join(",");
-    if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
+    // §5.3 conflict policy (defensive): `unassigned` and an officer filter are
+    // mutually exclusive (BE ANDs them → empty). Handlers enforce this on user
+    // input, but a deep-link / shared URL / stale localStorage can carry both —
+    // so here `unassigned` wins and we drop assigned_officer_id.
+    if (officerFilters.length > 0 && !unassigned) params.assigned_officer_id = officerFilters.join(",");
     if (unitId) params.unit_id = parseInt(unitId, 10);
 
     // Use the shared +07:00 formatter so SSR prefetch and client query keys
@@ -769,6 +962,19 @@ export function useLeadsFilter(
     // === SCORE RANGE FILTER (server-side) ===
     if (scoreRange[0] > 0) params.score_min = scoreRange[0];
     if (scoreRange[1] < 100) params.score_max = scoreRange[1];
+
+    // === LEAD_FILTER_UX_PLAN §4-§5.6: actionable + consultation-status ===
+    // Bools only set when active (mirror BE `is True`). na_from/na_to MUST use
+    // the shared +07:00 formatter (same as date_from/to) so SSR prefetch and
+    // client query keys are byte-identical — otherwise na_to drops most of the
+    // day. URL stores YYYY-MM-DD; the offset is applied only here.
+    if (overdue) params.overdue = true;
+    if (unassigned) params.unassigned = true;
+    if (isHot) params.is_hot = true;
+    if (noConsultation) params.no_consultation = true;
+    if (nextActivityFrom) params.next_activity_from = formatLeadsDateFromApiParam(nextActivityFrom);
+    if (nextActivityTo) params.next_activity_to = formatLeadsDateToApiParam(nextActivityTo);
+    if (consultationStatusFilters.length > 0) params.consultation_status_id = consultationStatusFilters.join(",");
 
     // V12: Consultation status pass-through (from dashboard deep-link only)
     const isFinalParam = searchParams.get("is_final");
@@ -793,6 +999,8 @@ export function useLeadsFilter(
     page, pageSize, search, statusFilters, sourceFilters, validityFilters,
     offeringFilters, stageFilters, officerFilters, unitId, dateFrom, dateTo, dateField,
     sortBy, sortOrder, scoreRange, dashboardContext, searchParams,
+    overdue, unassigned, isHot, noConsultation, nextActivityFrom, nextActivityTo,
+    consultationStatusFilters,
   ]);
 
   // ==========================================================================
@@ -819,6 +1027,13 @@ export function useLeadsFilter(
       dateField,
       sortBy,
       sortOrder,
+      overdue,
+      unassigned,
+      isHot,
+      noConsultation,
+      nextActivityFrom,
+      nextActivityTo,
+      consultationStatusFilters,
     },
     handlers: {
       setPage,
@@ -835,10 +1050,18 @@ export function useLeadsFilter(
       handleDateToChange,
       handleDateFieldChange,
       handleSortChange,
+      handleOverdueChange,
+      handleUnassignedChange,
+      handleIsHotChange,
+      handleNoConsultationChange,
+      handleNextActivityFromChange,
+      handleNextActivityToChange,
+      handleConsultationStatusChange,
       resetFilters,
       exitDashboardContext,
     },
     hasActiveFilters,
+    drawerFilterCount,
     apiFilters,
     dashboardContext,
   };

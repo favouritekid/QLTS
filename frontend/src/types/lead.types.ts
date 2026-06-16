@@ -635,6 +635,14 @@ export interface LeadListParams extends PaginationParams {
   pipeline_stage_id?: string;
   is_final?: boolean;
   counts_for_funnel?: boolean;
+  // LEAD_FILTER_UX_PLAN §4-§4.5: actionable + consultation-status filters
+  unassigned?: boolean;
+  overdue?: boolean;
+  next_activity_from?: string;
+  next_activity_to?: string;
+  no_consultation?: boolean;
+  is_hot?: boolean;
+  consultation_status_id?: string;
 }
 
 /**
