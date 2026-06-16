@@ -702,6 +702,14 @@ async def get_leads(
     loss_reason: Optional[str] = None,
     is_final: Optional[bool] = None,
     counts_for_funnel: Optional[bool] = None,
+    # === LEAD_FILTER_UX_PLAN §4: actionable + consultation_status filters ===
+    unassigned: Optional[bool] = None,
+    overdue: Optional[bool] = None,
+    next_activity_from: Optional[datetime] = None,
+    next_activity_to: Optional[datetime] = None,
+    no_consultation: Optional[bool] = None,
+    is_hot: Optional[bool] = None,
+    consultation_status_id: Optional[str] = None,
     include_summary: bool = True,
 ) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
@@ -723,6 +731,11 @@ async def get_leads(
         validity_status=validity_status, lead_ids=lead_ids,
         loss_reason=loss_reason,
         is_final=is_final, counts_for_funnel=counts_for_funnel,
+        unassigned=unassigned, overdue=overdue,
+        next_activity_from=next_activity_from,
+        next_activity_to=next_activity_to,
+        no_consultation=no_consultation, is_hot=is_hot,
+        consultation_status_id=consultation_status_id,
     )
 
     summary = None

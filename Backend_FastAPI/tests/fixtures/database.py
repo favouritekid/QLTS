@@ -222,6 +222,20 @@ async def init_schema_once(settings, AppBase, CasbinBase=None):
                 "WHERE deleted_at IS NULL"
             ))
 
+            # Diacritic-insensitive lead name search (migration leadsrch01).
+            # Test DB uses create_all() (no Alembic), so the unaccent extension
+            # + f_unaccent() wrapper must be created here — otherwise the lead
+            # search branch (lead_repository._build_filters), which always
+            # evaluates f_unaccent(full_name), fails with "function does not
+            # exist" on ANY lead list/search query. pg_trgm + GIN trgm index
+            # are skipped (perf-only; seq scan is fine at test scale).
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+            await conn.execute(text(
+                "CREATE OR REPLACE FUNCTION f_unaccent(text) "
+                "RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT "
+                "AS $func$ SELECT public.unaccent('public.unaccent', $1) $func$"
+            ))
+
             if CasbinBase:
                 await conn.run_sync(CasbinBase.metadata.create_all)
                 await conn.execute(text("""

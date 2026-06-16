@@ -278,6 +278,28 @@ async def get_all_leads(
     counts_for_funnel: Optional[bool] = Query(
         None, description="Filter by funnel-relevant consultation statuses only"
     ),
+    # === ACTIONABLE FILTERS (LEAD_FILTER_UX_PLAN §4) ===
+    unassigned: Optional[bool] = Query(
+        None, description="Only unassigned leads (assigned_officer_id IS NULL)"
+    ),
+    overdue: Optional[bool] = Query(
+        None, description="Only leads past their next_activity_at (realtime)"
+    ),
+    next_activity_from: Optional[datetime] = Query(
+        None, description="Follow-up scheduled from this datetime (ISO format)"
+    ),
+    next_activity_to: Optional[datetime] = Query(
+        None, description="Follow-up scheduled until this datetime (ISO format)"
+    ),
+    no_consultation: Optional[bool] = Query(
+        None, description="Only leads with no consultation yet (consultation_count = 0)"
+    ),
+    is_hot: Optional[bool] = Query(
+        None, description="Only hot leads (is_hot_lead = TRUE)"
+    ),
+    consultation_status_id: Optional[str] = Query(
+        None, description="Consultation status IDs (comma-separated, e.g. sts04,sts20)"
+    ),
 ):
     """
     Lấy danh sách Leads (có phân trang, filter, search, sort).
@@ -313,6 +335,13 @@ async def get_all_leads(
         loss_reason=lead_filter.loss_reason,
         is_final=is_final,
         counts_for_funnel=counts_for_funnel,
+        unassigned=unassigned,
+        overdue=overdue,
+        next_activity_from=next_activity_from,
+        next_activity_to=next_activity_to,
+        no_consultation=no_consultation,
+        is_hot=is_hot,
+        consultation_status_id=consultation_status_id,
     )
     return {
         "total_count": total,
@@ -387,6 +416,28 @@ async def export_leads(
     counts_for_funnel: Optional[bool] = Query(
         None, description="Filter by funnel-relevant consultation statuses only"
     ),
+    # === ACTIONABLE FILTERS (LEAD_FILTER_UX_PLAN §4 — mirror list endpoint) ===
+    unassigned: Optional[bool] = Query(
+        None, description="Only unassigned leads (assigned_officer_id IS NULL)"
+    ),
+    overdue: Optional[bool] = Query(
+        None, description="Only leads past their next_activity_at (realtime)"
+    ),
+    next_activity_from: Optional[datetime] = Query(
+        None, description="Follow-up scheduled from this datetime (ISO format)"
+    ),
+    next_activity_to: Optional[datetime] = Query(
+        None, description="Follow-up scheduled until this datetime (ISO format)"
+    ),
+    no_consultation: Optional[bool] = Query(
+        None, description="Only leads with no consultation yet (consultation_count = 0)"
+    ),
+    is_hot: Optional[bool] = Query(
+        None, description="Only hot leads (is_hot_lead = TRUE)"
+    ),
+    consultation_status_id: Optional[str] = Query(
+        None, description="Consultation status IDs (comma-separated, e.g. sts04,sts20)"
+    ),
     # === SELECTIVE EXPORT ===
     lead_ids: Optional[str] = Query(None, description="Comma-separated lead IDs to export"),
 ):
@@ -440,6 +491,13 @@ async def export_leads(
         loss_reason=lead_filter.loss_reason,
         is_final=is_final,
         counts_for_funnel=counts_for_funnel,
+        unassigned=unassigned,
+        overdue=overdue,
+        next_activity_from=next_activity_from,
+        next_activity_to=next_activity_to,
+        no_consultation=no_consultation,
+        is_hot=is_hot,
+        consultation_status_id=consultation_status_id,
         include_summary=False,
     )
 

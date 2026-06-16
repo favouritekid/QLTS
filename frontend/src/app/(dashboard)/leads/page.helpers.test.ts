@@ -44,6 +44,27 @@ describe("parseSearchParamsToApiParams", () => {
     expect(params.counts_for_funnel).toBe(true);
     expect(params.pipeline_stage_id).toBe("stg01");
   });
+
+  it("parses actionable + consultation-status filters (URL keys → API fields)", () => {
+    const params = parseSearchParamsToApiParams({
+      overdue: "1",
+      unassigned: "1",
+      hot: "1",
+      no_contact: "1",
+      na_from: "2026-06-16",
+      na_to: "2026-06-20",
+      cstatus: "sts06,sts20",
+    });
+
+    expect(params.overdue).toBe(true);
+    expect(params.unassigned).toBe(true);
+    expect(params.is_hot).toBe(true);
+    expect(params.no_consultation).toBe(true);
+    // na_from/na_to must go through the +07:00 formatter (same as date_from/to)
+    expect(params.next_activity_from).toBe("2026-06-16T00:00:00+07:00");
+    expect(params.next_activity_to).toBe("2026-06-20T23:59:59.999+07:00");
+    expect(params.consultation_status_id).toBe("sts06,sts20");
+  });
 });
 
 describe("lead date formatters", () => {
@@ -129,5 +150,16 @@ describe("areLeadsListParamsEqual", () => {
     expect(areLeadsListParamsEqual(undefined, defaults)).toBe(false);
     expect(areLeadsListParamsEqual(defaults, undefined)).toBe(false);
     expect(areLeadsListParamsEqual(undefined, undefined)).toBe(true);
+  });
+
+  it("returns false when consultation_status_id differs (new key in allow-list)", () => {
+    expect(
+      areLeadsListParamsEqual(defaults, { ...defaults, consultation_status_id: "sts06" }),
+    ).toBe(false);
+  });
+
+  it("returns false when an actionable filter differs (new key in allow-list)", () => {
+    expect(areLeadsListParamsEqual(defaults, { ...defaults, overdue: true })).toBe(false);
+    expect(areLeadsListParamsEqual(defaults, { ...defaults, is_hot: true })).toBe(false);
   });
 });

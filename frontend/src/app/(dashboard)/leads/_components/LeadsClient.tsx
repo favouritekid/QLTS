@@ -54,6 +54,7 @@ import {
   LeadStats,
   LeadDetailPanel,
   LeadFilterBar,
+  LeadFilterPanel,
   LeadsTable,
   BulkStageDialog,
   BulkDeleteDialog,
@@ -82,7 +83,7 @@ interface LeadsClientProps {
 
 export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProps) {
   // ✅ Option D: Use extracted filter hook
-  const { state: filterState, handlers: filterHandlers, apiFilters, dashboardContext } = useLeadsFilter();
+  const { state: filterState, handlers: filterHandlers, apiFilters, dashboardContext, hasActiveFilters, drawerFilterCount } = useLeadsFilter();
 
   // ✅ Phase 1: Query client for prefetching
   const queryClient = useQueryClient();
@@ -92,6 +93,8 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
 
   // Mobile detail sheet state
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  // Filter drawer (Sheet) state — shared desktop + mobile (§5.0-B)
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   // Global "close mobile overlays" signal (bumped by MobileBottomNav taps).
   // The bottom nav is rendered above the modal sheet but can't reach this
@@ -140,20 +143,12 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
   const importMutation = useImportLeads();
   const templateMutation = useDownloadImportTemplate();
 
-  // ✅ PERF FIX: Extract hasFilters to avoid recomputing complex boolean inline in JSX
-  const hasFilters = useMemo(() => !!(
-    filterState.statusFilters.length ||
-    filterState.sourceFilters.length ||
-    filterState.validityFilters.length ||
-    filterState.offeringFilters.length ||
-    filterState.stageFilters.length ||
-    filterState.officerFilters.length ||
-    filterState.unitId ||
-    filterState.dateFrom ||
-    filterState.dateTo ||
-    filterState.scoreRange[0] > 0 ||
-    filterState.scoreRange[1] < 100
-  ), [filterState.statusFilters.length, filterState.sourceFilters.length, filterState.validityFilters.length, filterState.offeringFilters.length, filterState.stageFilters.length, filterState.officerFilters.length, filterState.unitId, filterState.dateFrom, filterState.dateTo, filterState.scoreRange]);
+  // Single source of truth for "has any non-search filter active" — drives
+  // LeadsTable's empty state ("không khớp bộ lọc" + reset context). Previously a
+  // hand-maintained enumeration that drifted from the filter set; drawerFilterCount
+  // already counts EVERY filter group (incl. the new actionable + consultation-
+  // status ones) and excludes search/sort, which is exactly what this needs.
+  const hasFilters = drawerFilterCount > 0;
 
   // ✅ Score filtering now done server-side via score_min/score_max params
   const filteredLeads = useMemo(() => {
@@ -187,7 +182,10 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
   useEffect(() => {
     if (mobileOverlayCloseNonce > 0) {
       // Defer off the effect's synchronous path to avoid cascading renders.
-      queueMicrotask(() => setMobileDetailOpen(false));
+      queueMicrotask(() => {
+        setMobileDetailOpen(false);
+        setFilterSheetOpen(false);
+      });
     }
   }, [mobileOverlayCloseNonce]);
 
@@ -439,33 +437,13 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
         />
       </div>
 
-      {/* Filter Bar */}
+      {/* Filter Bar (slim) — search + presets + "Bộ lọc (N)" + chips */}
       <LeadFilterBar
-        search={filterState.search}
-        onSearchChange={filterHandlers.handleSearchChange}
-        statusFilters={filterState.statusFilters}
-        onStatusChange={filterHandlers.handleStatusChange}
-        sourceFilters={filterState.sourceFilters}
-        onSourceChange={filterHandlers.handleSourceChange}
-        validityFilters={filterState.validityFilters}
-        onValidityChange={filterHandlers.handleValidityChange}
-        offeringFilters={filterState.offeringFilters}
-        onOfferingChange={filterHandlers.handleOfferingChange}
-        stageFilters={filterState.stageFilters}
-        onStageChange={filterHandlers.handleStageChange}
-        officerFilters={filterState.officerFilters}
-        onOfficerChange={filterHandlers.handleOfficerChange}
-        unitId={filterState.unitId}
-        onUnitIdChange={filterHandlers.handleUnitIdChange}
-        scoreRange={filterState.scoreRange}
-        onScoreRangeChange={filterHandlers.handleScoreRangeChange}
-        dateFrom={filterState.dateFrom}
-        dateTo={filterState.dateTo}
-        dateField={filterState.dateField}
-        onDateFromChange={filterHandlers.handleDateFromChange}
-        onDateToChange={filterHandlers.handleDateToChange}
-        onDateFieldChange={filterHandlers.handleDateFieldChange}
-        onReset={filterHandlers.resetFilters}
+        state={filterState}
+        handlers={filterHandlers}
+        hasActiveFilters={hasActiveFilters}
+        drawerFilterCount={drawerFilterCount}
+        onOpenFilters={() => setFilterSheetOpen(true)}
         onAddLead={handleAddLead}
         totalCount={leadsPage?.total_count || 0}
       />
@@ -614,6 +592,25 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
                 setMobileDetailOpen(false);
                 handleAssign(lead);
               }}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Filter Drawer Sheet (desktop + mobile, owned here) */}
+      <Sheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen}>
+        <SheetContent
+          side="right"
+          className="flex w-[calc(100vw-1rem)] max-w-none flex-col p-0 sm:max-w-md lg:max-w-lg"
+        >
+          <SheetHeader className="shrink-0 border-b px-4 py-3 text-left">
+            <SheetTitle>Bộ lọc</SheetTitle>
+          </SheetHeader>
+          <div className="min-h-0 flex-1">
+            <LeadFilterPanel
+              state={filterState}
+              handlers={filterHandlers}
+              onClose={() => setFilterSheetOpen(false)}
             />
           </div>
         </SheetContent>
