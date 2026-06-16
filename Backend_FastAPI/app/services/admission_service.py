@@ -58,7 +58,11 @@ from .admission_correction_helpers import (
     post_parse_business_check,
     safe_serialize,
 )
-from ..utils.admission_status import is_admitted_like, is_confirmation_eligible
+from ..utils.admission_status import (
+    is_admitted_like,
+    is_confirmation_eligible,
+    is_fee_eligible,
+)
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -1197,16 +1201,14 @@ def _compute_outstanding_debt_codes(
     if not debt_codes:
         return []
 
-    satisfied_now: set[str] = set()
-    if documents is not None:
-        satisfied_now = {
-            doc.document_type.code
-            for doc in documents
-            if doc.document_type is not None
-            and getattr(doc, "category", None) != "priority_evidence"
-            and doc.status in ("verified", "paper_submitted")
-        }
+    # Shared "verified/paper_submitted, priority_evidence filtered out" logic —
+    # single source of truth in ``admission_document_policy`` so the satisfied-
+    # doc definition can't drift from the doc-policy layer. Local import keeps
+    # this leaf helper cycle-free (matches the other ``admission_document_policy``
+    # imports in this module).
+    from .admission_document_policy import _satisfied_doc_codes
 
+    satisfied_now = _satisfied_doc_codes(documents)
     return [code for code in debt_codes if code not in satisfied_now]
 
 
@@ -2008,21 +2010,14 @@ def _compute_frontend_fields(
         ),
         # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
         # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
-        # manager/accountant same-unit, officer same-unit AND assigned.
-        # Status-gated to fee-eligible states: C2 fast-track adds ``submitted``
-        # (prepay/hold-spot before the decision) on top of post-decision
-        # (approved/confirmed/enrolled). draft stays blocked. ``submitted`` is
-        # gated to SINGLE-PATH profiles only: a multi-NV profile
-        # (``uses_choice_engine``) at ``submitted`` has not locked its admitted
-        # choice yet (đợi công bố), so calculating tuition would pick the wrong
-        # ngành. Multi-NV qualifies after publish → ``admitted`` via
-        # ``is_admitted_like``. Must stay mirrored with _fee_calc_authorized.
+        # manager/accountant same-unit, officer same-unit AND assigned. The
+        # fee-eligible STATE gate is the shared ``is_fee_eligible`` helper
+        # (anti-drift, single source of truth with _fee_calc_authorized): C2
+        # fast-track adds ``submitted`` (prepay/hold-spot before the decision,
+        # single-path only) on top of post-decision (admitted-like/confirmed/
+        # enrolled); draft stays blocked.
         "calculate_fee": (
-            (
-                is_admitted_like(profile)
-                or status in ("confirmed", "enrolled")
-                or (status == "submitted" and not profile.uses_choice_engine)
-            )
+            is_fee_eligible(profile)
             and (
                 is_admin
                 or (

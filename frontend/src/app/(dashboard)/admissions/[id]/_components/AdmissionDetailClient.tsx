@@ -363,11 +363,14 @@ export function AdmissionDetailClient({
   // with a document debt. The dialog (SubmitWithDebtDialog) collects the
   // mandatory reason; here we just forward the payload to the same submit
   // mutation, which records the document_debt snapshot server-side.
-  const handleSubmitWithDebt = (payload: {
+  const handleSubmitWithDebt = async (payload: {
     acknowledge_missing_docs: true
     document_debt_reason: string
   }) => {
-    submitMutation.mutate(payload)
+    // Return the promise so SubmitWithDebtDialog can close + clear ONLY on
+    // success; on failure it rethrows → the dialog keeps the reason text (the
+    // mutation's onError toast surfaces the error).
+    await submitMutation.mutateAsync(payload)
   }
 
   const handleResubmit = () => {

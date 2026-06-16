@@ -101,6 +101,37 @@ def is_admitted_like(profile: "AdmissionProfile") -> bool:
     return profile.status in ADMITTED_LIKE_STATUSES
 
 
+def is_fee_eligible(profile: "AdmissionProfile") -> bool:
+    """True iff an official Fee/Invoice may be created for ``profile``.
+
+    Single source of truth for the fee-eligible state gate, shared by
+    ``routers/fees.py:_fee_calc_authorized`` (the service-side authorization)
+    and the ``calculate_fee`` permission flag in
+    ``admission_service._compute_frontend_fields`` (the FE button). Both
+    previously inlined the SAME three-way predicate kept in sync by a
+    "must stay mirrored" comment; lifting it here removes the drift risk.
+
+    Fee-eligible states:
+      * admitted-like (legacy ``approved`` / ``overridden`` + choice-engine
+        ``admitted``) — the post-decision happy path,
+      * ``confirmed`` / ``enrolled`` — later post-decision milestones,
+      * ``submitted`` ONLY for single-path profiles (C2 fast-track prepay /
+        giữ chỗ). A multi-NV profile (``uses_choice_engine``) at ``submitted``
+        has not locked its admitted choice yet (all choices ``pending`` until
+        publish), so calculating tuition would risk the wrong ngành — it
+        qualifies later via ``admitted`` (``is_admitted_like``).
+
+    Earlier states (``draft`` etc.) are NOT eligible (a fee would be premature).
+    Behaviour-preserving extraction — keep this in lockstep with both call
+    sites if the gate ever changes.
+    """
+    return (
+        is_admitted_like(profile)
+        or profile.status in ("confirmed", "enrolled")
+        or (profile.status == "submitted" and not profile.uses_choice_engine)
+    )
+
+
 def is_confirmation_eligible(profile: "AdmissionProfile") -> bool:
     """True iff the profile is eligible to issue / redeem a magic-link
     confirmation token.

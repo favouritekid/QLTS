@@ -66,10 +66,34 @@ reviewer can. verify/reject stay reviewer-only (review ≠ editing content).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Iterable, Literal
 
 from app.core.constants import UserRole
 from app import models
+
+
+def _satisfied_doc_codes(documents: "Iterable | None") -> set[str]:
+    """Codes of documents that count as SATISFIED (verified or paper_submitted).
+
+    Single source of truth for "a required document has actually been confirmed
+    by a reviewer". A ``priority_evidence`` row maps 1:1 with a priority object
+    (no ``document_type`` FK), so it is filtered out before reading
+    ``doc.document_type.code`` — exactly the guard
+    ``_compute_outstanding_debt_codes`` and ``_validate_documents`` both apply.
+
+    STRICT by design: merely ``uploaded`` (file present, not yet verified) does
+    NOT satisfy — the fast-track nợ giấy tờ rule is "hết nợ chỉ khi VERIFY"
+    (PLAN §C1.5). Returns ``set()`` for ``None`` (nothing satisfied).
+    """
+    if documents is None:
+        return set()
+    return {
+        doc.document_type.code
+        for doc in documents
+        if doc.document_type is not None
+        and getattr(doc, "category", None) != "priority_evidence"
+        and doc.status in ("verified", "paper_submitted")
+    }
 
 
 DocumentAction = Literal[

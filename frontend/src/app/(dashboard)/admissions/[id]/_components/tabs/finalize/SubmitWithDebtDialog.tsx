@@ -148,6 +148,9 @@ export function SubmitWithDebtDialog({
               onChange={(e) => setReason(e.target.value)}
               placeholder="VD: HS đang xin cấp lại học bạ, hẹn nộp 30/06"
               rows={3}
+              // Mirrors the backend `document_debt_reason` Field(max_length=500)
+              // so the client can't compose a reason the API would 422-reject.
+              maxLength={500}
               aria-required="true"
             />
             {reasonEmpty && (

@@ -460,9 +460,13 @@ function DocumentDebtBanner({ profile }: { profile: AdmissionProfileResponse }) 
   }
 
   const reason = debt?.reason?.trim() || null
-  const atFormatted = debt?.at
-    ? VI_DATETIME_FORMATTER.format(new Date(debt.at))
-    : null
+  // Guard against a malformed `debt.at` (Invalid Date → Intl.format throws a
+  // RangeError that would crash the whole tab). Only format a valid date.
+  const debtAt = debt?.at ? new Date(debt.at) : null
+  const atFormatted =
+    debtAt && !Number.isNaN(debtAt.getTime())
+      ? VI_DATETIME_FORMATTER.format(debtAt)
+      : null
 
   return (
     <div

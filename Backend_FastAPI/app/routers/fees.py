@@ -37,7 +37,7 @@ from app.schemas import finance as finance_schemas
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
 from app.repositories.fee_repository import FeeRepository
-from app.utils.admission_status import is_admitted_like
+from app.utils.admission_status import is_fee_eligible
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -80,22 +80,13 @@ def _fee_calc_authorized(
       can't spin up invoices for profiles they don't own.
     * everyone else: denied.
     """
-    # Fee-eligible states gate: admitted-like (legacy approved/overridden +
-    # choice-engine admitted) plus the post-confirmation milestones
-    # (confirmed/enrolled). C2 fast-track: ``submitted`` is also eligible so
-    # officers can calculate tuition + collect a prepay/hold-spot payment
-    # before the decision — but ONLY for single-path profiles. A multi-NV
-    # profile (``uses_choice_engine``) at ``submitted`` has not yet locked its
-    # admitted choice (all choices decision="pending" until publish), so
-    # ``_resolve_academic_info_id`` would pick ONE config-driven ngành and
-    # could auto-issue tuition for the WRONG ngành (different fees per ngành).
-    # Multi-NV becomes eligible only after publish → ``admitted`` (covered by
-    # ``is_admitted_like``). Earlier states (draft) stay blocked.
-    if not (
-        is_admitted_like(profile)
-        or profile.status in ("confirmed", "enrolled")
-        or (profile.status == "submitted" and not profile.uses_choice_engine)
-    ):
+    # Fee-eligible states gate — shared with the ``calculate_fee`` permission
+    # flag in ``admission_service._compute_frontend_fields`` via the single
+    # ``is_fee_eligible`` helper (anti-drift): admitted-like + confirmed/enrolled
+    # + ``submitted`` for SINGLE-PATH profiles only (C2 fast-track prepay / giữ
+    # chỗ). A multi-NV profile at ``submitted`` qualifies only after publish →
+    # ``admitted``. Earlier states (draft) stay blocked.
+    if not is_fee_eligible(profile):
         return False
 
     if user.role == UserRole.ADMIN:
