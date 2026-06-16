@@ -1349,3 +1349,139 @@ describe("DocumentsTab — Phase E.4 eligibility summary footer", () => {
     ).toHaveTextContent(/0\/1 đã tải lên.*UT08 thiếu/);
   });
 });
+
+// =============================================================================
+// FAST-TRACK NỢ GIẤY TỜ — "Nợ giấy tờ" BANNER (TUITION_PREPAY_FASTTRACK_PLAN.md §4b ③)
+// =============================================================================
+
+/** buildProfile + the fast-track debt fields the banner reads. */
+function buildProfileWithDebt(opts: {
+  docs: DocRow[];
+  outstanding_debt_codes?: string[];
+  missing_doc_codes?: string[];
+  document_debt?: {
+    codes: string[];
+    reason: string;
+    by_user_id: number;
+    at: string;
+  } | null;
+}) {
+  const base = buildProfile(opts.docs) as Record<string, unknown>;
+  base.outstanding_debt_codes = opts.outstanding_debt_codes ?? [];
+  base.missing_doc_codes = opts.missing_doc_codes ?? [];
+  base.document_debt = opts.document_debt ?? null;
+  return base;
+}
+
+describe("DocumentsTab — fast-track nợ giấy tờ banner", () => {
+  it("hides the banner when outstanding_debt_codes is empty", () => {
+    const profile = buildProfileWithDebt({
+      docs: [
+        {
+          code: "hoc_ba_thpt",
+          label: "Học bạ THPT",
+          status: "verified",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      outstanding_debt_codes: [],
+      document_debt: {
+        codes: ["hoc_ba_thpt"],
+        reason: "đã bổ sung",
+        by_user_id: 7,
+        at: "2026-06-16T03:00:00+00:00",
+      },
+    });
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    expect(screen.queryByText(/Nợ giấy tờ/)).not.toBeInTheDocument();
+  });
+
+  it("renders the banner with count + owed-doc labels + reason/when when outstanding", () => {
+    const profile = buildProfileWithDebt({
+      docs: [
+        {
+          code: "hoc_ba_thpt",
+          label: "Học bạ THPT",
+          status: "missing",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "cccd",
+          label: "CCCD bản sao",
+          status: "uploaded",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      outstanding_debt_codes: ["hoc_ba_thpt", "cccd"],
+      missing_doc_codes: ["hoc_ba_thpt"],
+      document_debt: {
+        codes: ["hoc_ba_thpt", "cccd"],
+        reason: "HS xin cấp lại học bạ, hẹn 30/06",
+        by_user_id: 7,
+        at: "2026-06-16T03:00:00+00:00",
+      },
+    });
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const banner = screen.getByRole("status");
+    expect(within(banner).getByText("Nợ giấy tờ (2)")).toBeInTheDocument();
+    expect(within(banner).getByText("Học bạ THPT")).toBeInTheDocument();
+    expect(within(banner).getByText("CCCD bản sao")).toBeInTheDocument();
+    expect(within(banner).getByText(/HS xin cấp lại học bạ/)).toBeInTheDocument();
+  });
+
+  it("L5: labels a still-missing code 'Chưa nộp' and an uploaded-pending code 'Chờ xác minh'", () => {
+    const profile = buildProfileWithDebt({
+      docs: [
+        {
+          code: "hoc_ba_thpt",
+          label: "Học bạ THPT",
+          status: "missing",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+        {
+          code: "cccd",
+          label: "CCCD bản sao",
+          status: "uploaded",
+          is_mandatory: true,
+          requires_upload: true,
+        },
+      ],
+      // Both still owed (verified-based); only hoc_ba is still fully missing.
+      outstanding_debt_codes: ["hoc_ba_thpt", "cccd"],
+      missing_doc_codes: ["hoc_ba_thpt"],
+      document_debt: {
+        codes: ["hoc_ba_thpt", "cccd"],
+        reason: "cho nợ",
+        by_user_id: 7,
+        at: "2026-06-16T03:00:00+00:00",
+      },
+    });
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const banner = screen.getByRole("status");
+    // hoc_ba_thpt ∈ missing_doc_codes → "Chưa nộp".
+    expect(within(banner).getByText("Chưa nộp")).toBeInTheDocument();
+    // cccd ∈ outstanding but NOT missing (uploaded, awaiting verify) → "Chờ xác minh".
+    expect(within(banner).getByText("Chờ xác minh")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw code when documents_checklist has no matching label", () => {
+    const profile = buildProfileWithDebt({
+      docs: [],
+      outstanding_debt_codes: ["mystery_doc"],
+      missing_doc_codes: ["mystery_doc"],
+      document_debt: {
+        codes: ["mystery_doc"],
+        reason: "cho nợ",
+        by_user_id: 7,
+        at: "2026-06-16T03:00:00+00:00",
+      },
+    });
+    render(<DocumentsTab profile={profile as never} isEditable />);
+    const banner = screen.getByRole("status");
+    expect(within(banner).getByText("mystery_doc")).toBeInTheDocument();
+  });
+});

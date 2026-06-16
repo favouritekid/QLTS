@@ -440,6 +440,81 @@ function KpiTile({ label, value, hint, accent = "default" }: KpiTileProps) {
   )
 }
 
+// ADM fast-track nợ giấy tờ (TUITION_PREPAY_FASTTRACK_PLAN.md §4b ③).
+// Render the "Nợ giấy tờ" banner ONLY when there are still-outstanding debt
+// codes. The banner self-hides once `outstanding_debt_codes` empties (it goes
+// empty once every owed doc is verified/paper_submitted — VERIFIED-based, see
+// `_compute_outstanding_debt_codes` BE). L5: each code is labelled either
+// "Chưa nộp" (still in `missing_doc_codes`) or "Chờ xác minh" (uploaded but not
+// yet verified — in `outstanding_debt_codes` but NOT in `missing_doc_codes`),
+// so an officer who just uploaded isn't confused that the badge persists.
+function DocumentDebtBanner({ profile }: { profile: AdmissionProfileResponse }) {
+  const outstanding = profile.outstanding_debt_codes ?? []
+  if (outstanding.length === 0) return null
+
+  const debt = profile.document_debt
+  const missingSet = new Set(profile.missing_doc_codes ?? [])
+  const codeLabel = new Map<string, string>()
+  for (const doc of profile.documents_checklist ?? []) {
+    if (doc.code && doc.label) codeLabel.set(doc.code, doc.label)
+  }
+
+  const reason = debt?.reason?.trim() || null
+  const atFormatted = debt?.at
+    ? VI_DATETIME_FORMATTER.format(new Date(debt.at))
+    : null
+
+  return (
+    <div
+      role="status"
+      className="mb-4 rounded-lg border border-warning-300 bg-warning-50 p-4"
+    >
+      <div className="flex items-center gap-2 text-warning-800">
+        <AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />
+        <h3 className="font-semibold">Nợ giấy tờ ({outstanding.length})</h3>
+      </div>
+      <p className="mt-1 text-sm text-warning-700">
+        Officer đã cho nợ — học sinh bổ sung sau. Phải bổ sung và được xác minh
+        đủ trước khi duyệt hồ sơ.
+      </p>
+      <ul className="mt-3 space-y-1.5">
+        {outstanding.map((code) => {
+          // L5 — distinguish not-yet-submitted vs uploaded-pending-verify.
+          const pendingVerify = !missingSet.has(code)
+          return (
+            <li
+              key={code}
+              className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-warning-800"
+            >
+              <span className="font-medium break-words">
+                {codeLabel.get(code) ?? code}
+              </span>
+              <Badge
+                className={
+                  pendingVerify
+                    ? "bg-info-100 text-info-700"
+                    : "bg-muted text-muted-foreground"
+                }
+              >
+                {pendingVerify ? "Chờ xác minh" : "Chưa nộp"}
+              </Badge>
+            </li>
+          )
+        })}
+      </ul>
+      {(reason || atFormatted) && (
+        <p className="mt-3 text-xs text-warning-700 break-words">
+          {reason && <span>Lý do: {reason}</span>}
+          {reason && atFormatted && <span> · </span>}
+          {atFormatted && (
+            <span className="tabular-nums">Ghi nhận {atFormatted}</span>
+          )}
+        </p>
+      )}
+    </div>
+  )
+}
+
 interface ActionsCellProps {
   doc: DocumentItem
   state: RowState
@@ -1076,6 +1151,9 @@ export function DocumentsTab({ profile }: DocumentsTabProps) {
     // (DocumentRowActions has its own provider for legacy reasons; nested
     // is harmless) both have a context.
     <TooltipProvider delayDuration={150}>
+      {/* Fast-track nợ giấy tờ banner — self-hides when no outstanding debt. */}
+      <DocumentDebtBanner profile={profile} />
+
       {/* KPI strip — 4 tiles so officer reads the global state at a glance.
           Counts use tabular-nums so the digits stay aligned across columns. */}
       <div

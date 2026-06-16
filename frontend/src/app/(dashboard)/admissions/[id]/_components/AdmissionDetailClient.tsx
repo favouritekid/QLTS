@@ -356,7 +356,18 @@ export function AdmissionDetailClient({
   }
 
   const handleSubmit = async () => {
-    await submitMutation.mutateAsync()
+    await submitMutation.mutateAsync(undefined)
+  }
+
+  // Fast-track nợ giấy tờ (TUITION_PREPAY_FASTTRACK_PLAN.md C4): officer submits
+  // with a document debt. The dialog (SubmitWithDebtDialog) collects the
+  // mandatory reason; here we just forward the payload to the same submit
+  // mutation, which records the document_debt snapshot server-side.
+  const handleSubmitWithDebt = (payload: {
+    acknowledge_missing_docs: true
+    document_debt_reason: string
+  }) => {
+    submitMutation.mutate(payload)
   }
 
   const handleResubmit = () => {
@@ -535,6 +546,8 @@ export function AdmissionDetailClient({
               onSubmit={handleSubmit}
               isSubmitting={submitMutation.isPending}
               canSubmit={can('submit')}
+              onSubmitWithDebt={handleSubmitWithDebt}
+              canSubmitWithDocumentDebt={profile.can_submit_with_document_debt ?? false}
               onResubmit={handleResubmit}
               isResubmitting={resubmitMutation.isPending}
               canResubmit={can('resubmit')}

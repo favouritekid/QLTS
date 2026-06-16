@@ -231,11 +231,22 @@ export function useRecordApplicationFeePayment(id: number) {
   })
 }
 
+/**
+ * Submit Admission hook.
+ *
+ * Accepts an OPTIONAL payload so the same hook drives both the plain submit
+ * (no args / undefined → legacy no-body request) and the fast-track
+ * submit-with-debt flow (`{ acknowledge_missing_docs, document_debt_reason }`).
+ * Parity (memory react-query-mutation-cache-parity): invalidate the detail key
+ * on success so `document_debt` / `outstanding_debt_codes` / status refetch.
+ */
 export function useSubmitAdmission(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: () => admissionsApi.submitAdmission(id),
+    mutationFn: (
+      payload?: { acknowledge_missing_docs?: boolean; document_debt_reason?: string }
+    ) => admissionsApi.submitAdmission(id, payload),
     onSuccess: (data) => {
       // Phase 7: Use status-config for async-first workflow (ADR-FE-003)
       // Backend only returns "draft" (validation failed) or "submitted" (success)
