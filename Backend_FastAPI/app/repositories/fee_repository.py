@@ -118,6 +118,25 @@ class FeeRepository(BaseRepository[Fee]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def sum_paid_amount_by_profile(self, profile_id: int) -> Decimal:
+        """Sum of ``paid_amount`` across all fees of an admission profile.
+
+        Because a processed refund DECREMENTS ``fee.paid_amount``
+        (``payment_service.process_approved_refund``), this sum is exactly the
+        money currently HELD against the profile (i.e. collected and NOT yet
+        refunded). Used to flag "đã thu học phí nhưng chưa hoàn" on a
+        rejected/withdrawn profile (no IDOR filter needed — the caller has
+        already authorized access to the profile).
+
+        Returns ``Decimal("0")`` when the profile has no fees.
+        """
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(Fee.paid_amount), 0)).where(
+                Fee.admission_profile_id == profile_id
+            )
+        )
+        return Decimal(str(result.scalar() or 0))
+
     async def get_for_update(
         self,
         fee_id: int,

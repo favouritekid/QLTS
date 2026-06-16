@@ -1369,6 +1369,20 @@ class AdmissionProfileResponse(BaseModel):
             "document debt (eligible apart from missing docs)."
         ),
     )
+    # COMPUTED (transient): true only when a rejected/withdrawn profile still
+    # holds collected (unrefunded) tuition (SUM(fee.paid_amount) > 0). A prepaid
+    # hold-spot fee survives reject/withdraw and is NOT auto-refunded → the FE
+    # shows a "cần hoàn tiền" warning. False for every non-terminal status (no
+    # DB hit). Self-resolves to False once the money is refunded (refund
+    # decrements paid_amount).
+    has_unrefunded_payment: bool = Field(
+        default=False,
+        description=(
+            "True when a rejected/withdrawn profile still holds collected, "
+            "not-yet-refunded tuition (SUM(fee.paid_amount) > 0). Drives the "
+            "'cần hoàn tiền' warning banner."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

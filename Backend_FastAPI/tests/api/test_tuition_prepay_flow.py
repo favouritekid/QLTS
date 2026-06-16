@@ -399,6 +399,61 @@ async def _calculate_tuition(
     return res.json()
 
 
+async def _ensure_consultation_status(
+    status_id: str, name: str, stage_id: str, color_code: str = "#888888"
+) -> None:
+    """Get-or-create a ConsultationStatus row.
+
+    ``seed_lead_dependencies`` (conftest) seeds most statuses but NOT ``sts08``
+    (withdrawn → "Từ chối tư vấn"), so the withdraw lead-sync 404s without it.
+    Idempotent so parallel modules don't collide on the PK.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            existing = await session.get(models.ConsultationStatus, status_id)
+            if existing is None:
+                session.add(
+                    models.ConsultationStatus(
+                        id=status_id,
+                        name=name,
+                        color_code=color_code,
+                        stage_id=stage_id,
+                    )
+                )
+
+
+async def _reject(
+    client: AsyncClient, manager_headers: dict, pid: int, reason: str
+) -> dict:
+    """Reject a submitted profile (manager). Reads the live version first."""
+    body = await _get(client, manager_headers, pid)
+    res = await client.post(
+        f"{ADMISSIONS}/{pid}/reject",
+        headers=manager_headers,
+        json={"reason": reason, "version": body["version"]},
+    )
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["status"] == "rejected", out
+    return out
+
+
+async def _withdraw(
+    client: AsyncClient, headers: dict, pid: int, reason: str
+) -> dict:
+    """Withdraw a profile (officer/manager). Reads the live version first."""
+    body = await _get(client, headers, pid)
+    res = await client.post(
+        f"{ADMISSIONS}/{pid}/withdraw",
+        headers=headers,
+        json={"reason": reason, "version": body["version"]},
+    )
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["status"] == "withdrawn", out
+    return out
+
+
 async def _record_and_verify_payment(
     client: AsyncClient,
     accountant_headers: dict,
@@ -722,3 +777,164 @@ class TestNoDebtNonRegression:
         fee = (await client.get(f"/api/fees/{fee_id}", headers=accountant)).json()
         assert fee["status"] == FeeStatusEnum.partial.value, fee
         assert Decimal(str(fee["paid_amount"])) == PREPAY
+
+
+# ===========================================================================
+# Scenario 5 — finding #1: has_unrefunded_payment flag + log.warning on
+#              reject/withdraw of a hold-spot profile that prepaid tuition.
+# ===========================================================================
+
+async def _submit_and_prepay(
+    client: AsyncClient,
+    officer: dict,
+    manager: dict,
+    accountant: dict,
+    unit_id: int,
+    officer_id: int,
+) -> int:
+    """Build → submit-with-debt → calculate tuition → record+verify a PARTIAL
+    prepay so the profile is ``submitted`` with ``SUM(fee.paid_amount) > 0``.
+    Returns the profile id."""
+    _doc_id, doc_code = await _create_doc_type("hocba")
+    lead_id = await _create_lead(unit_id, officer_id)
+    pid, _oac = await _build_draft_profile(lead_id, mandatory_docs=[doc_code])
+    await _submit_with_debt(client, officer, pid, "giữ chỗ — chờ học bạ")
+    fee_detail = await _calculate_tuition(client, officer, pid)
+    invoice_id = fee_detail["invoices"][0]["id"]
+    await _record_and_verify_payment(client, accountant, manager, invoice_id, PREPAY)
+    return pid
+
+
+class TestUnrefundedPaymentFlag:
+    async def test_reject_with_prepay_sets_flag_and_warns(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """(a) Reject a profile that holds a verified prepay → response +
+        subsequent GET both carry ``has_unrefunded_payment=True`` (parity).
+        Reject is NOT blocked; the flag being True proves the warning branch
+        (``if has_unrefunded_payment: log.warning(...)``) was reached — the log
+        line itself is trivial and structlog routing is config-dependent, so we
+        assert the contract (the flag) rather than the caplog text."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+
+        # Before the terminal transition the flag is False (submitted holds
+        # money but is not rejected/withdrawn → no warning, no query cost).
+        pre = await _get(client, manager, pid)
+        assert pre["has_unrefunded_payment"] is False, pre
+
+        rejected = await _reject(client, manager, pid, "Không đủ điều kiện xét tuyển")
+
+        # Mutation response parity.
+        assert rejected["has_unrefunded_payment"] is True, rejected
+        # GET parity (get_profile sets the flag independently).
+        after = await _get(client, manager, pid)
+        assert after["has_unrefunded_payment"] is True, after
+
+    async def test_reject_without_prepay_flag_false(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """(b) Reject a submitted profile with NO collected fee → flag False."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        _doc_id, doc_code = await _create_doc_type("hocba")
+        lead_id = await _create_lead(unit_id, officer_user_in_db["id"])
+        pid, _oac = await _build_draft_profile(lead_id, mandatory_docs=[doc_code])
+
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        await _submit_with_debt(client, officer, pid, "giữ chỗ không trả trước")
+
+        rejected = await _reject(client, manager, pid, "Hồ sơ không hợp lệ lần này")
+        assert rejected["has_unrefunded_payment"] is False, rejected
+        after = await _get(client, manager, pid)
+        assert after["has_unrefunded_payment"] is False, after
+
+    async def test_withdraw_with_prepay_sets_flag(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """(c) Withdraw a profile that holds a verified prepay → flag True on
+        the mutation response AND a subsequent GET."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+
+        # withdraw lead-sync advances the lead to sts08 (not in the conftest
+        # seed list) — seed it so the sync resolves.
+        await _ensure_consultation_status(
+            "sts08", "Tu choi tu van", "stg07", "#CC0000"
+        )
+
+        withdrawn = await _withdraw(client, manager, pid, "Học sinh đổi nguyện vọng")
+        assert withdrawn["has_unrefunded_payment"] is True, withdrawn
+        after = await _get(client, manager, pid)
+        assert after["has_unrefunded_payment"] is True, after
+
+    async def test_nonterminal_statuses_flag_false(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """(d) submitted (with money) and approved both keep the flag False —
+        the flag is gated on terminal rejected/withdrawn only (no DB cost on
+        the hot read path)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("hocba")
+        lead_id = await _create_lead(unit_id, officer_user_in_db["id"])
+        pid, _oac = await _build_draft_profile(lead_id, mandatory_docs=[doc_code])
+
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+
+        await _submit_with_debt(client, officer, pid, "giữ chỗ — chờ học bạ")
+        fee_detail = await _calculate_tuition(client, officer, pid)
+        invoice_id = fee_detail["invoices"][0]["id"]
+        await _record_and_verify_payment(
+            client, accountant, manager, invoice_id, PREPAY
+        )
+
+        # submitted + holds money → still False (not terminal).
+        submitted = await _get(client, manager, pid)
+        assert submitted["status"] == "submitted", submitted
+        assert submitted["has_unrefunded_payment"] is False, submitted
+
+        # Verify the owed doc so approve is allowed, then approve → False.
+        await _add_uploaded_doc(pid, doc_type_id)
+        await _verify_doc(pid, doc_type_id)
+        body = await _get(client, manager, pid)
+        ok = await client.post(
+            f"{ADMISSIONS}/{pid}/approve",
+            headers=manager,
+            json={"notes": "đủ giấy tờ", "version": body["version"]},
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["status"] == "approved", ok.json()
+        assert ok.json()["has_unrefunded_payment"] is False, ok.json()

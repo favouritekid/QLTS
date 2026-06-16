@@ -3132,6 +3132,44 @@ async def _populate_response_fields(
     # documents lazy-load fails.
     await _populate_priority_evidence_projections(db, profile, documents)
 
+    # TUITION_PREPAY_FASTTRACK finding #1 — flag học phí trả trước chưa hoàn
+    # khi hồ sơ đã rejected/withdrawn (giữ-chỗ rồi từ chối/rút). Parity:
+    # also set on the GET path (``get_profile``) which does NOT call this
+    # helper — keep both in lockstep.
+    await _populate_unrefunded_payment_flag(db, profile)
+
+
+async def _populate_unrefunded_payment_flag(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Set transient ``has_unrefunded_payment`` for the FE warning badge.
+
+    A profile can be charged + collect a PREPAID tuition while ``submitted``
+    (hold-spot flow). If it is later ``rejected`` (manager) or ``withdrawn``
+    (candidate) — both valid from ``submitted`` — any money already collected
+    becomes orphaned: it is NOT auto-refunded and is easy to forget. This flag
+    lets ops see "cần hoàn tiền" on the detail page (refund stays manual via
+    the existing maker-checker flow).
+
+    ``SUM(fee.paid_amount)`` is the currently-HELD amount: a processed refund
+    decrements ``paid_amount`` (``payment_service.process_approved_refund``),
+    so the sum is exactly the unrefunded balance.
+
+    Cost guard: ONLY queries when ``status in (rejected, withdrawn)``; every
+    other status short-circuits to ``False`` with no DB hit. Idempotent — safe
+    to call from both ``_populate_response_fields`` (mutations) and
+    ``get_profile`` (GET detail) for parity.
+    """
+    if profile.status not in ("rejected", "withdrawn"):
+        profile.has_unrefunded_payment = False
+        return
+
+    from app.repositories.fee_repository import FeeRepository
+
+    total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+    profile.has_unrefunded_payment = total_paid > 0
+
 
 async def _load_priority_audit_log(
     db: AsyncSession,
@@ -4455,6 +4493,12 @@ async def get_profile(
     # ``_populate_response_fields`` callers, leaving the read-side dark.
     profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
     await _populate_priority_evidence_projections(db, profile, documents)
+
+    # Parity with mutation responses (reject/withdraw go through
+    # ``_populate_response_fields``): GET detail builds via
+    # ``_compute_frontend_fields`` directly, so set the unrefunded-payment
+    # flag here too — otherwise GET would default it to False.
+    await _populate_unrefunded_payment_flag(db, profile)
 
     return profile
 
@@ -8536,6 +8580,21 @@ async def reject_profile(
         reason_length=len(data["reason"]),
     )
 
+    # TUITION_PREPAY_FASTTRACK finding #1 — surface orphaned prepaid tuition.
+    # ``_populate_response_fields`` above already computed the flag; only hit
+    # the DB for the exact amount when there IS something held (rare path).
+    # We do NOT block reject — refund stays manual via the maker-checker flow.
+    if getattr(profile, "has_unrefunded_payment", False):
+        from app.repositories.fee_repository import FeeRepository
+
+        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        log.warning(
+            "Profile reject với khoản học phí chưa hoàn",
+            profile_id=profile.id,
+            total_paid=str(_total_paid),
+            status=profile.status,
+        )
+
     # Path C / Arch-3: paired notification bundle + commission callback.
     # Mirrors router admissions.py:1606+1621 (paired dispatch) + 1636
     # (commission). new_status="rejected" / lead "sts16".
@@ -10469,6 +10528,23 @@ async def withdraw_profile(
         actor_id=_actor_id,
         old_status=_old_status_for_audit,
     )
+
+    # TUITION_PREPAY_FASTTRACK finding #1 — flag + warn về học phí trả trước
+    # chưa hoàn khi rút hồ sơ. ``withdraw_profile`` không gọi
+    # ``_populate_response_fields`` (response tối giản theo thiết kế), nên set
+    # cờ trực tiếp qua helper nhẹ để mutation response có parity với GET. KHÔNG
+    # chặn rút — hoàn tiền vẫn thủ công qua maker-checker.
+    await _populate_unrefunded_payment_flag(db, profile)
+    if getattr(profile, "has_unrefunded_payment", False):
+        from app.repositories.fee_repository import FeeRepository
+
+        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        log.warning(
+            "Profile withdraw với khoản học phí chưa hoàn",
+            profile_id=profile.id,
+            total_paid=str(_total_paid),
+            status=profile.status,
+        )
 
     # Path C / Arch-3: build atomic notification bundle for the paired
     # transition (APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED).

@@ -1221,6 +1221,15 @@ export const admissionProfileResponseSchema = z.object({
     .boolean()
     .default(false)
     .describe("True when the acting staff user may submit with a document debt."),
+  // COMPUTED flag — a rejected/withdrawn profile still holds collected,
+  // not-yet-refunded tuition (SUM(fee.paid_amount) > 0). Drives the
+  // "cần hoàn tiền" warning banner. False for every non-terminal status.
+  has_unrefunded_payment: z
+    .boolean()
+    .default(false)
+    .describe(
+      "True when a rejected/withdrawn profile still holds unrefunded tuition."
+    ),
 })
 
 export type AdmissionProfileResponse = z.infer<

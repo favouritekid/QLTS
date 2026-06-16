@@ -524,6 +524,27 @@ export function AdmissionDetailClient({
           </div>
         )}
 
+        {/* Tuition prepay fast-track finding #1: a rejected/withdrawn profile
+            that still holds collected (unrefunded) tuition. BE flag combines
+            status ∈ {rejected, withdrawn} + SUM(fee.paid_amount) > 0, so FE
+            just renders. Refund stays manual via the existing maker-checker
+            flow (this is only a reminder, not an action). */}
+        {profile.has_unrefunded_payment && (
+          <div
+            role="alert"
+            className="mb-4 rounded-lg border-2 border-error-300 bg-error-50 p-4 text-error-900"
+          >
+            <p className="font-semibold mb-1">
+              ⚠️ Hồ sơ đã hủy/từ chối nhưng còn khoản học phí đã thu chưa hoàn
+            </p>
+            <p className="text-sm">
+              Hồ sơ đã <strong>{profile.status === "withdrawn" ? "rút" : "từ chối"}</strong>{" "}
+              nhưng vẫn còn khoản học phí đã thu (trả trước/giữ chỗ) chưa được hoàn.
+              Vui lòng xử lý <strong>hoàn tiền</strong> ở tab Học phí (quy trình hoàn tiền thủ công).
+            </p>
+          </div>
+        )}
+
         {/* TAB CONTENT */}
         <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
