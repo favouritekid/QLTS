@@ -1200,7 +1200,7 @@ export const admissionProfileResponseSchema = z.object({
       codes: z.array(z.string()).default([]),
       reason: z.string(),
       by_user_id: z.number().int(),
-      at: z.string(),
+      at: z.string().datetime({ offset: true }),
     })
     .nullable()
     .optional()

@@ -1137,7 +1137,7 @@ def _validate_documents(
                     f"để verify trước khi nộp hồ sơ."
                 )
             else:
-                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+                validation_errors.append(_missing_doc_error_message(doc_code))
 
     return (
         doc_errors,
@@ -1146,6 +1146,19 @@ def _validate_documents(
         upload_required_docs,
         unverified_doc_codes,
     )
+
+
+def _missing_doc_error_message(code: str) -> str:
+    """Single source of truth for the "missing mandatory document" message.
+
+    Emitted by ``_validate_documents`` when a required doc is absent and
+    reconstructed by ``_compute_frontend_fields`` to SUBTRACT those messages
+    from ``validation_errors`` (computing ``_other_errors`` for
+    ``can_submit_with_document_debt``). Both sites MUST use this helper so the
+    format can never drift apart — a drift would break the subtraction and
+    silently kill ``can_submit_with_document_debt`` (fast-track nợ giấy tờ).
+    """
+    return f"Thiếu tài liệu bắt buộc: {code}"
 
 
 def _compute_outstanding_debt_codes(
@@ -1195,6 +1208,22 @@ def _compute_outstanding_debt_codes(
         }
 
     return [code for code in debt_codes if code not in satisfied_now]
+
+
+async def _outstanding_debt_for_approval(db, profile) -> list[str]:
+    """Outstanding (verified-based) debt codes for an approval gate; [] if no debt.
+
+    Shared by ``approve_profile`` and ``bulk_approve`` so both approve gates
+    compute the same thing: load the profile's documents and intersect the
+    ``document_debt`` snapshot with docs not yet verified/paper_submitted. A
+    profile without a debt snapshot returns ``[]`` (no query, never gates).
+    """
+    if not getattr(profile, "document_debt", None):
+        return []
+    from app.repositories import AdmissionRepository
+
+    documents = await AdmissionRepository(db).get_all_documents(profile.id)
+    return _compute_outstanding_debt_codes(profile, documents)
 
 
 def _validate_personal_info(
@@ -2174,7 +2203,7 @@ def _compute_frontend_fields(
     # message and stay in other_errors → they still block, honouring B2:
     # only truly-missing docs are waivable, never unverified ones).
     _missing_doc_messages = {
-        f"Thiếu tài liệu bắt buộc: {code}" for code in missing_doc_codes
+        _missing_doc_error_message(code) for code in missing_doc_codes
     }
     _other_errors = [
         err for err in validation_errors if err not in _missing_doc_messages
@@ -8225,26 +8254,18 @@ async def approve_profile(
     # gate agree). Profiles without a debt snapshot have no outstanding codes →
     # this is a no-op (no regression). Runs BEFORE the irreversible quota
     # increment so a blocked approve never consumes a seat.
-    if getattr(profile, "document_debt", None):
-        from app.repositories import AdmissionRepository as _ApproveAdmissionRepo
-
-        _approve_documents = await _ApproveAdmissionRepo(db).get_all_documents(
-            profile.id
+    _approve_outstanding = await _outstanding_debt_for_approval(db, profile)
+    if _approve_outstanding:
+        log.warning(
+            "Attempt to approve profile with outstanding document debt",
+            profile_id=profile.id,
+            approver_id=approver.id,
+            outstanding_debt_codes=_approve_outstanding,
         )
-        _approve_outstanding = _compute_outstanding_debt_codes(
-            profile, _approve_documents
+        raise BusinessRuleViolation(
+            "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể "
+            "duyệt. Cần verify đủ giấy tờ trước khi duyệt."
         )
-        if _approve_outstanding:
-            log.warning(
-                "Attempt to approve profile with outstanding document debt",
-                profile_id=profile.id,
-                approver_id=approver.id,
-                outstanding_debt_codes=_approve_outstanding,
-            )
-            raise BusinessRuleViolation(
-                "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể "
-                "duyệt. Cần verify đủ giấy tờ trước khi duyệt."
-            )
 
     # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
     # counting committed seats so concurrent approve calls cannot blow the
@@ -11657,20 +11678,14 @@ async def bulk_approve(
             # approve_profile: a profile with an unresolved document debt may
             # NOT be (bulk-)approved. Per-item skip (not a batch abort) to match
             # the other bulk gates. No-op for profiles without a debt snapshot.
-            if getattr(profile, "document_debt", None):
-                from app.repositories import AdmissionRepository as _BulkRepo
-
-                _bulk_docs = await _BulkRepo(db).get_all_documents(profile.id)
-                _bulk_outstanding = _compute_outstanding_debt_codes(
-                    profile, _bulk_docs
+            _bulk_outstanding = await _outstanding_debt_for_approval(db, profile)
+            if _bulk_outstanding:
+                failed_ids.append(profile_id)
+                errors[profile_id] = (
+                    "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
+                    "không thể duyệt."
                 )
-                if _bulk_outstanding:
-                    failed_ids.append(profile_id)
-                    errors[profile_id] = (
-                        "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
-                        "không thể duyệt."
-                    )
-                    continue
+                continue
 
             # ADM-026: per-item quota gate. Per-item bypass fields let admin
             # selectively override the cap for some profiles in the batch
