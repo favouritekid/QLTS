@@ -69,9 +69,10 @@ def _fee_calc_authorized(
     any drift will surface as "FE hides button / API 404s" or vice versa.
 
     Rules:
-    * Profile must be in a post-decision state
-      (``approved`` | ``confirmed`` | ``enrolled``). Earlier states would
-      create a fee for a profile that might still be rejected.
+    * Profile must be in a fee-eligible state: ``submitted`` (fast-track
+      prepay / hold-spot — C2) plus the post-decision states
+      (``approved`` | ``confirmed`` | ``enrolled``). Earlier states
+      (``draft`` etc.) would create a fee prematurely.
     * admin: any profile.
     * manager / accountant: profile whose lead is in the user's unit.
     * officer: lead in the user's unit AND assigned to the user — matches
@@ -79,11 +80,12 @@ def _fee_calc_authorized(
       can't spin up invoices for profiles they don't own.
     * everyone else: denied.
     """
-    # Post-decision states gate: admitted-like (legacy approved/overridden +
+    # Fee-eligible states gate: admitted-like (legacy approved/overridden +
     # choice-engine admitted) plus the post-confirmation milestones
-    # (confirmed/enrolled) are eligible for fee creation. Earlier states
-    # would create a fee for a profile that might still flip to rejected.
-    if not (is_admitted_like(profile) or profile.status in ("confirmed", "enrolled")):
+    # (confirmed/enrolled). C2 fast-track: ``submitted`` is also eligible so
+    # officers can calculate tuition + collect a prepay/hold-spot payment
+    # before the decision. Earlier states (draft) stay blocked.
+    if not (is_admitted_like(profile) or profile.status in ("submitted", "confirmed", "enrolled")):
         return False
 
     if user.role == UserRole.ADMIN:
@@ -350,20 +352,30 @@ async def calculate_fee(
             if approved_at is not None:
                 invoice_anchor = approved_at.date() if hasattr(approved_at, "date") else approved_at
 
-        invoices, _ = await invoice_service.generate_invoices_for_fee(
+        # C2 fast-track (B4): auto-issue tuition invoices so the prepay/
+        # hold-spot payment can be collected immediately. Only tuition is
+        # auto-issued — other fee types keep the legacy draft->issue-by-hand
+        # flow. CAPTURE invoice_cb (was discarded with `_`): the issue path
+        # builds an INVOICE_ISSUED post-commit fanout that must be awaited,
+        # otherwise the invoice is issued silently with no notification/sync.
+        invoices, invoice_cb = await invoice_service.generate_invoices_for_fee(
             fee_id=fee.id,
             due_date_base=date.today() + timedelta(days=30),
             user_id=current_user.id,
             unit_id=unit_id,
-            auto_issue=False,
+            auto_issue=(data.fee_type == FeeTypeEnum.tuition),
             anchor_date=invoice_anchor,
         )
 
         await db.commit()
 
-        # Execute post-commit callback
+        # Execute post-commit callbacks: fee creation (post_commit) AND, when
+        # tuition was auto-issued, the INVOICE_ISSUED fanout (invoice_cb).
+        # invoice_cb is None for non-auto-issue fee types.
         if post_commit:
             await post_commit()
+        if invoice_cb:
+            await invoice_cb()
 
         # Refresh to load relationships
         await db.refresh(fee)

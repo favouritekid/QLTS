@@ -1970,11 +1970,11 @@ def _compute_frontend_fields(
         # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
         # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
         # manager/accountant same-unit, officer same-unit AND assigned.
-        # Status-gated to post-decision (approved/confirmed/enrolled) so we
-        # don't create finance records for profiles that might still flip
-        # to rejected.
+        # Status-gated to fee-eligible states: C2 fast-track adds ``submitted``
+        # (prepay/hold-spot before the decision) on top of post-decision
+        # (approved/confirmed/enrolled). draft stays blocked.
         "calculate_fee": (
-            (is_admitted_like(profile) or status in ("confirmed", "enrolled"))
+            (is_admitted_like(profile) or status in ("submitted", "confirmed", "enrolled"))
             and (
                 is_admin
                 or (
