@@ -149,6 +149,30 @@ class AdmissionProfileShallow(BaseModel):
 # -----------------
 
 
+def _validate_lead_source(v: Optional[str]) -> Optional[str]:
+    """Chặn giá trị ``source`` ngoài ``LeadSourceEnum`` (chống officer SỬA nguồn
+    rác / thổi attribution — xem Documents/LEAD_ANTIFRAUD_PLAN.md §5.2).
+
+    CỐ Ý chỉ áp cho ``LeadUpdate`` (đường officer chỉnh sửa lead). KHÔNG gắn lên
+    ``LeadBase`` (vì response schema ``Lead``/``LeadDetail`` kế thừa → sẽ raise
+    500 khi đọc lead legacy có source ngoài enum) và KHÔNG gắn lên ``LeadCreate``
+    (vì bulk-import dựng ``LeadCreate`` → sẽ chặn nhãn nguồn tự do trong file).
+
+    Lazy-import enum để tránh circular import schemas <-> models (cùng pattern
+    với ``phone_helpers`` đã dùng trong file này).
+    """
+    if v is None:
+        return v
+    from app.models.lead import LeadSourceEnum
+
+    allowed = {e.value for e in LeadSourceEnum}
+    if v not in allowed:
+        raise ValueError(
+            "Nguồn không hợp lệ. Giá trị cho phép: " + ", ".join(sorted(allowed))
+        )
+    return v
+
+
 class LeadBase(BaseModel):
     # ✅ SỬA: Thêm validation cho tất cả các trường string
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
@@ -324,6 +348,12 @@ class LeadUpdate(BaseModel):
             )
 
         return normalized
+
+    @field_validator("source")
+    @classmethod
+    def _check_source(cls, v):
+        """Chống nhập nguồn rác (chỉ chấp nhận LeadSourceEnum)."""
+        return _validate_lead_source(v)
 
     @model_validator(mode="after")
     def phone2_must_differ_from_phone(self):
