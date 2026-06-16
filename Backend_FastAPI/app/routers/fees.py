@@ -84,8 +84,18 @@ def _fee_calc_authorized(
     # choice-engine admitted) plus the post-confirmation milestones
     # (confirmed/enrolled). C2 fast-track: ``submitted`` is also eligible so
     # officers can calculate tuition + collect a prepay/hold-spot payment
-    # before the decision. Earlier states (draft) stay blocked.
-    if not (is_admitted_like(profile) or profile.status in ("submitted", "confirmed", "enrolled")):
+    # before the decision — but ONLY for single-path profiles. A multi-NV
+    # profile (``uses_choice_engine``) at ``submitted`` has not yet locked its
+    # admitted choice (all choices decision="pending" until publish), so
+    # ``_resolve_academic_info_id`` would pick ONE config-driven ngành and
+    # could auto-issue tuition for the WRONG ngành (different fees per ngành).
+    # Multi-NV becomes eligible only after publish → ``admitted`` (covered by
+    # ``is_admitted_like``). Earlier states (draft) stay blocked.
+    if not (
+        is_admitted_like(profile)
+        or profile.status in ("confirmed", "enrolled")
+        or (profile.status == "submitted" and not profile.uses_choice_engine)
+    ):
         return False
 
     if user.role == UserRole.ADMIN:

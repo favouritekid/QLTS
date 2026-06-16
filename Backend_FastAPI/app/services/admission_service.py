@@ -1972,9 +1972,18 @@ def _compute_frontend_fields(
         # manager/accountant same-unit, officer same-unit AND assigned.
         # Status-gated to fee-eligible states: C2 fast-track adds ``submitted``
         # (prepay/hold-spot before the decision) on top of post-decision
-        # (approved/confirmed/enrolled). draft stays blocked.
+        # (approved/confirmed/enrolled). draft stays blocked. ``submitted`` is
+        # gated to SINGLE-PATH profiles only: a multi-NV profile
+        # (``uses_choice_engine``) at ``submitted`` has not locked its admitted
+        # choice yet (đợi công bố), so calculating tuition would pick the wrong
+        # ngành. Multi-NV qualifies after publish → ``admitted`` via
+        # ``is_admitted_like``. Must stay mirrored with _fee_calc_authorized.
         "calculate_fee": (
-            (is_admitted_like(profile) or status in ("submitted", "confirmed", "enrolled"))
+            (
+                is_admitted_like(profile)
+                or status in ("confirmed", "enrolled")
+                or (status == "submitted" and not profile.uses_choice_engine)
+            )
             and (
                 is_admin
                 or (
@@ -2184,16 +2193,19 @@ def _compute_frontend_fields(
     # in the submit-with-debt dialog (B3).
     profile.missing_doc_codes = list(missing_doc_codes)
 
-    # Staff-only gate mirrors submit_and_evaluate: a candidate/magic-link
-    # actor (current_user=None) never reaches here (helper is a no-op for
-    # None), but accountant/user roles can — so require officer/manager/admin
-    # explicitly. The button shows only when the draft is eligible apart from
-    # missing docs (other_errors empty + ≥1 missing doc) and is not a
-    # multi-NV profile lacking choices.
-    _is_staff_actor = is_admin or is_manager or is_officer
+    # L1 owner-consistency: gate the submit-with-debt button on the SAME actor
+    # set as ``permissions["submit"]`` (is_owner or is_manager or is_admin) to
+    # prevent drift — submit-with-debt is just submit + a doc-debt snapshot, so
+    # an actor who can't submit must not see the debt variant either. (Previous
+    # ``is_admin or is_manager or is_officer`` admitted any officer, including
+    # one not assigned to the lead, which submit itself rejects via is_owner.)
+    # The server-side submit gate in submit_and_evaluate is role+IDOR based and
+    # unchanged — this only aligns the FE flag. The button shows only when the
+    # draft is eligible apart from missing docs (other_errors empty + ≥1 missing
+    # doc) and is not a multi-NV profile lacking choices.
     profile.can_submit_with_document_debt = bool(
         status == "draft"
-        and _is_staff_actor
+        and (is_owner or is_manager or is_admin)
         and not _other_errors
         and missing_doc_codes
         and not _multi_nv_no_choice

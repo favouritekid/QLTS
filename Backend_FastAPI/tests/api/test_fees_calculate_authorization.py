@@ -723,3 +723,204 @@ async def test_accountant_same_unit_can_calculate_at_submitted(
         f"Same-unit accountant should calculate fee at submitted, got "
         f"{resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ==============================================================================
+# L2 — submitted gate is single-path ONLY (multi-NV awaits publish)
+# ==============================================================================
+#
+# C2 opened the ``submitted`` state for fee calculation, but a MULTI-NV profile
+# (``uses_choice_engine=True``) at ``submitted`` has not yet locked its admitted
+# choice (all choices decision="pending" until the round is published). The fee
+# service's ``_resolve_academic_info_id`` would pick ONE config-driven ngành and
+# could auto-issue tuition for the WRONG ngành. L2 therefore tightens BOTH gate
+# sites so ``submitted`` is eligible only when ``not uses_choice_engine``:
+#   * routers/fees.py::_fee_calc_authorized               (route gate, 404)
+#   * admission_service.py _compute_*["calculate_fee"]    (FE flag)
+# A multi-NV profile becomes eligible again only after publish → admitted-like
+# (covered by ``is_admitted_like``), which these tests also assert is NOT over-
+# tightened.
+#
+# ``uses_choice_engine`` is a real Boolean COLUMN on AdmissionProfile (not a
+# computed property), so the tests flip it directly in the DB — mirroring how
+# the cross-unit / unassigned tests above mutate User.unit_id / Lead.assigned_
+# officer_id. This isolates the gate under test from the choice-engine
+# evaluation pipeline.
+
+
+async def _set_choice_engine(pid: int, *, value: bool, status: str | None = None):
+    """Flip ``uses_choice_engine`` (and optionally ``status``) on a profile.
+
+    Direct DB mutation keeps the L2 gate tests deterministic without driving the
+    full multi-NV publish workflow. ``status`` is constrained by the model
+    CheckConstraint — pass an allowed value (e.g. ``approved`` for an
+    admitted-like state).
+    """
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            from sqlalchemy import update
+            values = {"uses_choice_engine": value}
+            if status is not None:
+                values["status"] = status
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == pid)
+                .values(**values)
+            )
+
+
+@pytest.mark.asyncio
+async def test_calculate_fee_hidden_for_multi_nv_at_submitted(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Site B mirror: a MULTI-NV profile (``uses_choice_engine=True``) at
+    ``submitted`` must NOT expose calculate_fee — it awaits publish.
+
+    The owning officer would otherwise see the button and be able to auto-issue
+    tuition for an as-yet-undecided ngành.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="L2 MultiNV Submitted Hidden", approve=False,
+    )
+    await _set_choice_engine(pid, value=True)
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert detail["status"] == "submitted", detail.get("status")
+    assert (
+        "calculate_fee" not in detail["available_actions"]
+    ), detail["available_actions"]
+    assert detail["permissions"]["calculate_fee"] is False
+
+
+@pytest.mark.asyncio
+async def test_calculate_fee_route_404_for_multi_nv_at_submitted(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Site A mirror: the route gate (_fee_calc_authorized) rejects a multi-NV
+    profile at ``submitted`` with 404 even for the owning officer.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="L2 MultiNV Submitted 404", approve=False,
+    )
+    await _set_choice_engine(pid, value=True)
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 404, (
+        f"Multi-NV profile at submitted must be blocked by the route gate, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_path_calculate_fee_at_submitted_still_ok(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Control for L2: a SINGLE-PATH profile (``uses_choice_engine=False`` — the
+    fixture default) at ``submitted`` is still admitted (201). Confirms L2 only
+    narrows multi-NV, not the single-path fast-track C2 opened.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="L2 SinglePath Submitted OK", approve=False,
+    )
+    # Assert the precondition explicitly so the control can't silently pass via
+    # a future default flip.
+    async with AsyncSessionLocal() as s:
+        prof = (await s.execute(
+            select(models.AdmissionProfile).where(models.AdmissionProfile.id == pid)
+        )).scalar_one()
+        assert (
+            prof.uses_choice_engine is False
+        ), "fixture should default to single-path"
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, (
+        f"Single-path profile at submitted should still calculate fee, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_nv_calculate_fee_at_admitted_not_over_tightened(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """A MULTI-NV profile that has reached an admitted-like state (post-publish)
+    must STILL be able to calculate fee — L2 only narrows ``submitted``, it must
+    not regress the admitted/confirmed/enrolled path that ``is_admitted_like``
+    already authorizes.
+
+    Uses ``approved`` (admitted-like, allowed by the status CheckConstraint) to
+    simulate the post-publish decision while keeping ``uses_choice_engine=True``.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="L2 MultiNV Admitted OK", approve=False,
+    )
+    # Flip to multi-NV AND advance to an admitted-like decision state.
+    await _set_choice_engine(pid, value=True, status="approved")
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    # FE flag visible.
+    detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert detail["status"] == "approved", detail.get("status")
+    assert "calculate_fee" in detail["available_actions"], detail["available_actions"]
+    assert detail["permissions"]["calculate_fee"] is True
+
+    # Route admits → 201.
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, (
+        f"Multi-NV at admitted-like state should still calculate fee, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
