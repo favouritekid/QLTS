@@ -190,6 +190,28 @@ async def _verify_doc(profile_id: int, doc_type_id: int) -> None:
             pd.verified_at = datetime.now(timezone.utc)
 
 
+async def _set_doc_status(profile_id: int, doc_type_id: int, status: str) -> None:
+    """Set a ProfileDocument to an arbitrary status (e.g. paper_submitted)."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            pd = (
+                await session.execute(
+                    select(models.ProfileDocument).where(
+                        models.ProfileDocument.profile_id == profile_id,
+                        models.ProfileDocument.document_type_id == doc_type_id,
+                    )
+                )
+            ).scalar_one()
+            pd.status = status
+
+
+async def _ver(client: AsyncClient, headers: dict, profile_id: int) -> int:
+    """Current profile version (for optimistic-lock-guarded actions)."""
+    res = await client.get(f"/api/admissions/{profile_id}", headers=headers)
+    assert res.status_code == 200, res.text
+    return res.json()["version"]
+
+
 async def _auth(client: AsyncClient, user: dict) -> dict:
     res = await client.post(
         "/api/auth/login",
@@ -451,3 +473,285 @@ class TestSubmitWithDocumentDebt:
         ]
         # snapshot retained for audit ("đã từng nợ")
         assert get_body2["document_debt"]["codes"] == [doc_code]
+
+
+class TestOutstandingDebtVerifiedBased:
+    """outstanding_debt_codes resolves on VERIFY, not on mere upload (C1.5).
+
+    The regression these guard: when the path is in LAX mode
+    (``allow_unverified_submission=True``), an uploaded-but-unverified doc
+    LEAVES ``missing_doc_codes`` (lax counts an uploaded file as present). The
+    OLD outstanding logic (``codes ∩ missing_doc_codes``) therefore emptied the
+    debt the instant the officer uploaded — before any reviewer verified. The
+    decision is "hết nợ chỉ khi VERIFY", so outstanding must stay non-empty
+    until the doc is verified/paper_submitted.
+    """
+
+    async def test_upload_without_verify_keeps_debt_outstanding_lax_mode(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """LAX mode: officer uploads owed doc (status uploaded, NOT verified)
+        → outstanding_debt_codes STILL lists it. Verify → it clears."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        # allow_unverified=True (lax) is the case that exposed the bug.
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=True
+        )
+        headers = await _auth(client, officer_user_in_db)
+
+        submit_res = await client.post(
+            f"/api/admissions/{pid}/submit",
+            headers=headers,
+            json={
+                "acknowledge_missing_docs": True,
+                "document_debt_reason": "cho nợ học bạ",
+            },
+        )
+        assert submit_res.status_code == 200, submit_res.text
+        assert submit_res.json()["status"] == "submitted", submit_res.json()
+
+        # Officer uploads the owed doc but it is NOT yet verified.
+        await _add_uploaded_doc(pid, doc_type_id)
+
+        get_res = await client.get(f"/api/admissions/{pid}", headers=headers)
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        # VERIFIED-based: still outstanding despite the upload (the bug fix).
+        assert body["outstanding_debt_codes"] == [doc_code], body[
+            "outstanding_debt_codes"
+        ]
+        # In lax mode the uploaded doc is no longer "missing" — proving the
+        # outstanding set is NOT derived from missing_doc_codes anymore.
+        assert doc_code not in body["missing_doc_codes"], body["missing_doc_codes"]
+
+        # Reviewer verifies → debt clears.
+        await _verify_doc(pid, doc_type_id)
+        get_res2 = await client.get(f"/api/admissions/{pid}", headers=headers)
+        assert get_res2.status_code == 200, get_res2.text
+        assert get_res2.json()["outstanding_debt_codes"] == [], get_res2.json()[
+            "outstanding_debt_codes"
+        ]
+
+    async def test_paper_submitted_resolves_debt(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """A doc marked paper_submitted (bản giấy) also clears the debt."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=False
+        )
+        headers = await _auth(client, officer_user_in_db)
+
+        submit_res = await client.post(
+            f"/api/admissions/{pid}/submit",
+            headers=headers,
+            json={
+                "acknowledge_missing_docs": True,
+                "document_debt_reason": "cho nợ",
+            },
+        )
+        assert submit_res.status_code == 200, submit_res.text
+        assert submit_res.json()["status"] == "submitted"
+
+        await _add_uploaded_doc(pid, doc_type_id)
+        # Still outstanding until verify/paper_submitted.
+        get_a = await client.get(f"/api/admissions/{pid}", headers=headers)
+        assert get_a.json()["outstanding_debt_codes"] == [doc_code]
+
+        await _set_doc_status(pid, doc_type_id, "paper_submitted")
+        get_b = await client.get(f"/api/admissions/{pid}", headers=headers)
+        assert get_b.json()["outstanding_debt_codes"] == [], get_b.json()[
+            "outstanding_debt_codes"
+        ]
+
+
+class TestApproveGateDocumentDebt:
+    """Approve is BLOCKED while a document debt is outstanding (C1.5)."""
+
+    async def _submit_with_debt(
+        self,
+        client: AsyncClient,
+        officer_headers: dict,
+        pid: int,
+        reason: str = "cho nợ giấy tờ",
+    ) -> None:
+        res = await client.post(
+            f"/api/admissions/{pid}/submit",
+            headers=officer_headers,
+            json={
+                "acknowledge_missing_docs": True,
+                "document_debt_reason": reason,
+            },
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "submitted", res.json()
+
+    async def test_approve_blocked_while_debt_outstanding(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """submitted-with-debt + owed doc unverified → manager approve is
+        rejected with a 400 BusinessRuleViolation; the FE approve flag is off."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=False
+        )
+        officer_headers = await _auth(client, officer_user_in_db)
+        await self._submit_with_debt(client, officer_headers, pid)
+
+        manager_headers = await _auth(client, manager_user_in_db)
+
+        # FE contract: the approve permission/action is suppressed.
+        get_res = await client.get(f"/api/admissions/{pid}", headers=manager_headers)
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        assert body["outstanding_debt_codes"] == [doc_code]
+        assert body["permissions"].get("approve") is False, body["permissions"]
+        assert "approve" not in body["available_actions"], body["available_actions"]
+
+        # Server gate: attempting approve anyway → 400.
+        version = body["version"]
+        approve_res = await client.post(
+            f"/api/admissions/{pid}/approve",
+            headers=manager_headers,
+            json={"notes": "duyệt", "version": version},
+        )
+        assert approve_res.status_code == 400, approve_res.text
+        assert "nợ giấy tờ" in approve_res.json()["detail"], approve_res.json()
+
+        # Profile stayed submitted (no seat consumed, no transition).
+        profile = await _load_profile(pid)
+        assert profile.status == "submitted"
+
+    async def test_approve_ok_after_debt_verified(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Once the owed doc is verified (outstanding empties) approve works."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=False
+        )
+        officer_headers = await _auth(client, officer_user_in_db)
+        await self._submit_with_debt(client, officer_headers, pid)
+
+        # Officer supplies + reviewer verifies the owed doc.
+        await _add_uploaded_doc(pid, doc_type_id)
+        await _verify_doc(pid, doc_type_id)
+
+        manager_headers = await _auth(client, manager_user_in_db)
+        get_res = await client.get(f"/api/admissions/{pid}", headers=manager_headers)
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        assert body["outstanding_debt_codes"] == [], body["outstanding_debt_codes"]
+        assert body["permissions"].get("approve") is True, body["permissions"]
+
+        version = body["version"]
+        approve_res = await client.post(
+            f"/api/admissions/{pid}/approve",
+            headers=manager_headers,
+            json={"notes": "đủ giấy tờ", "version": version},
+        )
+        assert approve_res.status_code == 200, approve_res.text
+        assert approve_res.json()["status"] == "approved", approve_res.json()
+
+    async def test_approve_unaffected_without_document_debt(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """No-regression: a profile submitted WITHOUT a debt (all docs present)
+        approves exactly as before — the gate is a no-op when document_debt is
+        NULL."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=True
+        )
+        # Upload the mandatory doc up-front so a plain submit (no debt) passes.
+        await _add_uploaded_doc(pid, doc_type_id)
+        officer_headers = await _auth(client, officer_user_in_db)
+
+        submit_res = await client.post(
+            f"/api/admissions/{pid}/submit", headers=officer_headers
+        )
+        assert submit_res.status_code == 200, submit_res.text
+        assert submit_res.json()["status"] == "submitted", submit_res.json()
+
+        profile = await _load_profile(pid)
+        assert profile.document_debt is None
+
+        manager_headers = await _auth(client, manager_user_in_db)
+        version = await _ver(client, manager_headers, pid)
+        approve_res = await client.post(
+            f"/api/admissions/{pid}/approve",
+            headers=manager_headers,
+            json={"notes": "ok", "version": version},
+        )
+        assert approve_res.status_code == 200, approve_res.text
+        assert approve_res.json()["status"] == "approved", approve_res.json()
+
+    async def test_bulk_approve_skips_profile_with_outstanding_debt(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """bulk_approve must NOT bypass the debt gate — the debt-laden item is
+        skipped (recorded in errors), not approved."""
+        from app.services import admission_service
+
+        unit_id = seed_lead_dependencies["unit_id"]
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        lead_id = await _create_test_lead(unit_id, officer_user_in_db["id"])
+        pid = await _build_profile(
+            lead_id, mandatory_docs=[doc_code], allow_unverified=False
+        )
+        officer_headers = await _auth(client, officer_user_in_db)
+        await self._submit_with_debt(client, officer_headers, pid)
+
+        profile = await _load_profile(pid)
+        version = profile.version
+
+        async with AsyncSessionLocal() as session:
+            manager = await session.get(models.User, manager_user_in_db["id"])
+            result, post_commit = await admission_service.bulk_approve(
+                db=session,
+                items=[{"profile_id": pid, "version": version}],
+                approver=manager,
+            )
+            await session.commit()
+            if post_commit is not None:
+                await post_commit()
+
+        assert result["success_count"] == 0, result
+        assert pid in result["failed_ids"], result
+        assert "nợ giấy tờ" in result["errors"][pid], result["errors"]
+
+        # Profile stayed submitted (not approved).
+        profile_after = await _load_profile(pid)
+        assert profile_after.status == "submitted"

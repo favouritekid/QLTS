@@ -1148,6 +1148,55 @@ def _validate_documents(
     )
 
 
+def _compute_outstanding_debt_codes(
+    profile: models.AdmissionProfile,
+    documents: list | None,
+) -> list[str]:
+    """Fast-track nợ giấy tờ — VERIFIED-based resolution of a document debt.
+
+    A debt code is "satisfied" (no longer outstanding) ONLY once the
+    corresponding document reaches ``verified`` or ``paper_submitted`` — i.e.
+    an officer/reviewer has actually confirmed it. Merely UPLOADING the file
+    (status ``uploaded``) does NOT clear the debt; the decision is "hết nợ chỉ
+    khi VERIFY" (PLAN §C1.5).
+
+    This is intentionally STRICTER than ``missing_doc_codes`` (which, in lax
+    ``allow_unverified=True`` mode, counts an uploaded-but-unverified doc as
+    present and would prematurely empty the debt). Mirrors the priority_evidence
+    filter from ``_validate_documents`` so a priority-evidence row (no
+    ``document_type`` FK) never crashes on ``doc.document_type.code``.
+
+    Args:
+        profile: AdmissionProfile carrying the ``document_debt`` snapshot.
+        documents: Eager-loaded ProfileDocument list (or None → nothing
+            satisfied, every debt code stays outstanding).
+
+    Returns:
+        The subset of ``document_debt['codes']`` not yet verified/paper_submitted.
+        ``[]`` when there is no debt snapshot (NULL column → never gates approve).
+    """
+    debt_snapshot = getattr(profile, "document_debt", None)
+    debt_codes = (
+        debt_snapshot.get("codes", [])
+        if isinstance(debt_snapshot, dict)
+        else []
+    )
+    if not debt_codes:
+        return []
+
+    satisfied_now: set[str] = set()
+    if documents is not None:
+        satisfied_now = {
+            doc.document_type.code
+            for doc in documents
+            if doc.document_type is not None
+            and getattr(doc, "category", None) != "priority_evidence"
+            and doc.status in ("verified", "paper_submitted")
+        }
+
+    return [code for code in debt_codes if code not in satisfied_now]
+
+
 def _validate_personal_info(
     profile: models.AdmissionProfile,
 ) -> tuple[list[str], list[str]]:
@@ -1805,11 +1854,26 @@ def _compute_frontend_fields(
         and _loaded_choices is not None
         and len(_loaded_choices) == 0
     )
+    # Fast-track nợ giấy tờ (C1.5) — compute the VERIFIED-based outstanding debt
+    # FIRST so the approve permission below can be gated on it. A code stays
+    # outstanding until the doc is verified/paper_submitted (NOT merely
+    # uploaded). No debt snapshot → [] → approve is unaffected. Mirror of the
+    # service-side gate in ``approve_profile``; assigned to the profile lower
+    # down (single source of truth for the FE badge + parity with GET).
+    _outstanding_debt_codes = _compute_outstanding_debt_codes(profile, documents)
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "submit": status == "draft" and (is_owner or is_manager or is_admin) and not _multi_nv_no_choice,
-        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        # Approve is BLOCKED while any owed doc is unverified (nợ giấy tờ): the
+        # FE hides/disables the button and the service raises BusinessRuleViolation
+        # if it is attempted anyway. ``_outstanding_debt_codes`` is [] for every
+        # profile without a debt snapshot → no behaviour change there.
+        "approve": (
+            status in ["submitted", "resubmitted"]
+            and (is_manager or is_admin)
+            and not _outstanding_debt_codes
+        ),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
         # "Công bố kết quả" trực tiếp từ submitted/reviewing → engine cascade
@@ -2107,20 +2171,15 @@ def _compute_frontend_fields(
         err for err in validation_errors if err not in _missing_doc_messages
     ]
 
-    # Snapshot of a previously-recorded debt (persisted column). The badge the
-    # FE renders is the COMPUTED intersection with docs STILL missing now, so
-    # it self-resolves once the owed docs are uploaded. document_debt may be a
-    # dict {codes, reason, ...} or None.
-    _debt_snapshot = getattr(profile, "document_debt", None)
-    _debt_codes = (
-        _debt_snapshot.get("codes", [])
-        if isinstance(_debt_snapshot, dict)
-        else []
-    )
-    _missing_now = set(missing_doc_codes)
-    profile.outstanding_debt_codes = [
-        code for code in _debt_codes if code in _missing_now
-    ]
+    # The badge the FE renders is the COMPUTED set of debt codes whose docs are
+    # STILL not VERIFIED — it self-resolves once a reviewer verifies (or marks
+    # paper_submitted) each owed doc. VERIFIED-based, NOT missing-based: a doc
+    # that was merely uploaded (status ``uploaded``, not yet verified) still
+    # counts as outstanding (PLAN §C1.5 — hết nợ chỉ khi VERIFY). Computed via
+    # the shared ``_compute_outstanding_debt_codes`` helper above so the FE
+    # badge, the gated ``approve`` permission here, and the service-side approve
+    # gate all agree on one definition.
+    profile.outstanding_debt_codes = list(_outstanding_debt_codes)
     # Expose the currently-missing mandatory doc codes so the FE can list them
     # in the submit-with-debt dialog (B3).
     profile.missing_doc_codes = list(missing_doc_codes)
@@ -8146,6 +8205,35 @@ async def approve_profile(
             "Vui lòng xác nhận thanh toán lệ phí trước khi duyệt hồ sơ."
         )
 
+    # Fast-track nợ giấy tờ (C1.5) — APPROVE GATE. A profile submitted with a
+    # document debt may NOT be approved until every owed doc is VERIFIED (or
+    # paper_submitted). Computed from the persisted ``document_debt`` snapshot ∩
+    # docs-not-yet-verified, via the same helper the FE-facing
+    # ``_compute_frontend_fields`` uses (so the disabled button + the server
+    # gate agree). Profiles without a debt snapshot have no outstanding codes →
+    # this is a no-op (no regression). Runs BEFORE the irreversible quota
+    # increment so a blocked approve never consumes a seat.
+    if getattr(profile, "document_debt", None):
+        from app.repositories import AdmissionRepository as _ApproveAdmissionRepo
+
+        _approve_documents = await _ApproveAdmissionRepo(db).get_all_documents(
+            profile.id
+        )
+        _approve_outstanding = _compute_outstanding_debt_codes(
+            profile, _approve_documents
+        )
+        if _approve_outstanding:
+            log.warning(
+                "Attempt to approve profile with outstanding document debt",
+                profile_id=profile.id,
+                approver_id=approver.id,
+                outstanding_debt_codes=_approve_outstanding,
+            )
+            raise BusinessRuleViolation(
+                "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể "
+                "duyệt. Cần verify đủ giấy tờ trước khi duyệt."
+            )
+
     # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
     # counting committed seats so concurrent approve calls cannot blow the
     # cap. Admin can override with bypass_quota + bypass_reason; manager
@@ -11552,6 +11640,25 @@ async def bulk_approve(
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
                 continue
+
+            # Fast-track nợ giấy tờ (C1.5) — same approve gate as single
+            # approve_profile: a profile with an unresolved document debt may
+            # NOT be (bulk-)approved. Per-item skip (not a batch abort) to match
+            # the other bulk gates. No-op for profiles without a debt snapshot.
+            if getattr(profile, "document_debt", None):
+                from app.repositories import AdmissionRepository as _BulkRepo
+
+                _bulk_docs = await _BulkRepo(db).get_all_documents(profile.id)
+                _bulk_outstanding = _compute_outstanding_debt_codes(
+                    profile, _bulk_docs
+                )
+                if _bulk_outstanding:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = (
+                        "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
+                        "không thể duyệt."
+                    )
+                    continue
 
             # ADM-026: per-item quota gate. Per-item bypass fields let admin
             # selectively override the cap for some profiles in the batch
