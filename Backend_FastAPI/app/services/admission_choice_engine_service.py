@@ -1161,6 +1161,39 @@ async def publish_result(
             f"trạng thái hiện tại: '{profile.status}'"
         )
 
+    # Fast-track nợ giấy tờ (C1.5) — DECISION GATE. A multi-NV profile can be
+    # submitted WITH a document debt (acknowledge + reason), so it may sit at
+    # ``submitted`` with owed docs still unverified. ``publish_result`` is the
+    # multi-NV decision site (it runs the admit/reject cascade), so it must obey
+    # the same "no decision while docs are owed" rule the legacy ``approve``
+    # gate enforces — otherwise a manager could publish/admit a profile that has
+    # not had its documents verified, side-stepping C1.5. Computed from the
+    # persisted ``document_debt`` snapshot ∩ docs-not-yet-verified via the same
+    # helper the FE-facing ``_compute_frontend_fields`` + the approve gate use
+    # (one definition everywhere). A profile without a debt snapshot has no
+    # outstanding codes → this is a no-op (no regression). Placed BEFORE the
+    # auto-transition + any cascade so a blocked publish never mutates state.
+    #
+    # Local import: ``admission_service`` imports ``admission_choice_engine_
+    # service`` (lazily, at call time) for the submit cascade, so a module-level
+    # import here would risk a circular import. Importing the helper inside the
+    # function defers resolution to call time, when both modules are fully
+    # loaded — guaranteed cycle-free.
+    from .admission_service import _outstanding_debt_for_approval
+
+    outstanding = await _outstanding_debt_for_approval(db, profile)
+    if outstanding:
+        log.warning(
+            "admission_choice_engine.publish_result_blocked_document_debt",
+            profile_id=profile.id,
+            actor_id=getattr(actor, "id", None),
+            outstanding_debt_codes=outstanding,
+        )
+        raise BusinessRuleViolation(
+            "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể công bố "
+            "kết quả. Cần verify đủ giấy tờ trước khi công bố."
+        )
+
     # Auto-transition submitted → reviewing trước engine cascade. Engine
     # vẫn cần reviewing state làm intermediate (per state_machine T6 edge:
     # reviewing → result_published only). transition() handle audit log

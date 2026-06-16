@@ -20,6 +20,7 @@ ONLY remaining submit gate is the document one under test.
 """
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
@@ -28,6 +29,7 @@ from sqlalchemy import select
 from app import models
 from app.database import AsyncSessionLocal
 from tests.fixtures.builders import (
+    AdmissionRoundBuilder,
     ensure_submittable_ward,
     seed_submittable_offering_config,
     submittable_profile_fields,
@@ -755,3 +757,263 @@ class TestApproveGateDocumentDebt:
         # Profile stayed submitted (not approved).
         profile_after = await _load_profile(pid)
         assert profile_after.status == "submitted"
+
+
+# ---------------------------------------------------------------------------
+# Choice-engine (multi-NV) seed helper — for the publish_result gate (C1.5).
+# ---------------------------------------------------------------------------
+
+
+async def _build_choice_engine_profile_submitted(
+    unit_id: int,
+    stage_id: str,
+    major_program_id: int,
+    *,
+    mandatory_docs: list[str],
+    document_debt_codes: list[str] | None,
+) -> tuple[int, int]:
+    """Seed a multi-NV (``uses_choice_engine=True``) profile already at
+    ``submitted`` with ≥1 choice + a full path/config chain the publish cascade
+    can evaluate.
+
+    Mirrors the proven ``pr3a_seed`` chain (lead → profile + path +
+    path_subject_group_config + subject_group_subject + 1 choice). When
+    ``document_debt_codes`` is non-empty a ``document_debt`` snapshot is written
+    directly (simulating an earlier staff submit-with-debt) so the publish gate
+    sees an outstanding debt — keeping this test isolated to the gate (the
+    submit-with-debt path itself is covered above for single-path profiles).
+
+    Returns ``(profile_id, path_id)``.
+    """
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            offering = models.ProgramOffering(
+                program_id=major_program_id,
+                offering_type="full_time",
+                duration_semesters=8,
+            )
+            s.add(offering)
+            await s.flush()
+            ai = models.OfferingAcademicInfo(
+                offering_id=offering.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=1_000_000,
+            )
+            s.add(ai)
+            await s.flush()
+
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                s, academic_year=2026,
+            )
+
+            method = models.AdmissionMethod(
+                code=f"MDEBT_{ts}",
+                name=f"Debt method {ts}",
+                requires_subject_scores=True,
+                is_active=True,
+            )
+            s.add(method)
+            await s.flush()
+
+            path = models.AdmissionPath(
+                academic_info_id=ai.id,
+                admission_method_id=method.id,
+                admission_round_id=round_id,
+                status="active",
+            )
+            s.add(path)
+            await s.flush()
+
+            sg = models.SubjectGroup(code=f"SGD{ts}"[:20], name=f"SG debt {ts}")
+            s.add(sg)
+            await s.flush()
+            subj = models.Subject(code=f"SUD{ts}"[:20], name_vi=f"Subj debt {ts}")
+            s.add(subj)
+            await s.flush()
+            s.add(
+                models.SubjectGroupSubject(
+                    subject_group_id=sg.id, subject_id=subj.id, position=1
+                )
+            )
+            await s.flush()
+            config = models.PathSubjectGroupConfig(
+                admission_path_id=path.id,
+                subject_group_id=sg.id,
+                min_score=Decimal("18.00"),
+            )
+            s.add(config)
+            await s.flush()
+
+            round_obj = await s.get(models.OfferingAdmissionRound, round_id)
+            round_obj.allow_multi_nv = True
+            await s.flush()
+
+            lead = models.Lead(
+                full_name=f"Debt MultiNV Lead {ts}",
+                phone=f"098{ts:07d}"[:10],
+                unit_id=unit_id,
+                pipeline_stage_id=stage_id,
+                source="walkin",
+            )
+            s.add(lead)
+            await s.flush()
+
+            document_debt = None
+            if document_debt_codes:
+                document_debt = {
+                    "codes": list(document_debt_codes),
+                    "reason": "Multi-NV nộp kèm nợ giấy tờ",
+                    "by_user_id": None,
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=f"6{ts:08d}2"[:12],
+                status="submitted",
+                applied_rules={"mandatory_docs": list(mandatory_docs)},
+                academic_year=2026,
+                uses_choice_engine=True,
+                document_debt=document_debt,
+            )
+            s.add(profile)
+            await s.flush()
+
+            choice = models.AdmissionProfileChoice(
+                admission_profile_id=profile.id,
+                admission_path_id=path.id,
+                path_subject_group_config_id=config.id,
+                display_order=1,
+                decision="pending",
+            )
+            s.add(choice)
+            await s.flush()
+
+            return profile.id, path.id
+
+
+class TestPublishResultGateDocumentDebt:
+    """publish_result (multi-NV decision site) is BLOCKED while a document debt
+    is outstanding (C1.5 — closes the choice-engine gap).
+
+    A multi-NV profile can submit WITH a document debt, so it can sit at
+    ``submitted`` with owed docs unverified. ``publish-result`` is the multi-NV
+    admit/reject cascade — it must obey the same "no decision while docs are
+    owed" gate as legacy ``approve``; otherwise a manager could publish/admit a
+    profile whose documents were never verified.
+    """
+
+    async def test_publish_blocked_while_debt_outstanding(
+        self,
+        client: AsyncClient,
+        manager_token_headers: dict,
+        seed_lead_dependencies: dict,
+    ):
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        pid, _path_id = await _build_choice_engine_profile_submitted(
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            seed_lead_dependencies["major_program_id"],
+            mandatory_docs=[doc_code],
+            document_debt_codes=[doc_code],
+        )
+
+        # FE contract: publish_result permission is suppressed + outstanding listed.
+        get_res = await client.get(
+            f"/api/admissions/{pid}", headers=manager_token_headers
+        )
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        assert body["outstanding_debt_codes"] == [doc_code], body[
+            "outstanding_debt_codes"
+        ]
+        assert body["permissions"].get("publish_result") is False, body[
+            "permissions"
+        ]
+
+        # Server gate: attempting publish anyway → 400 BusinessRuleViolation.
+        pub = await client.post(
+            f"/api/v2/admissions/{pid}/publish-result",
+            headers=manager_token_headers,
+        )
+        assert pub.status_code == 400, pub.text
+        assert "nợ giấy tờ" in pub.json()["detail"], pub.json()
+
+        # Blocked publish must NOT have mutated state (no transition/cascade).
+        profile = await _load_profile(pid)
+        assert profile.status == "submitted"
+
+    async def test_publish_ok_after_debt_verified(
+        self,
+        client: AsyncClient,
+        manager_token_headers: dict,
+        seed_lead_dependencies: dict,
+    ):
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        pid, _path_id = await _build_choice_engine_profile_submitted(
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            seed_lead_dependencies["major_program_id"],
+            mandatory_docs=[doc_code],
+            document_debt_codes=[doc_code],
+        )
+        # Officer supplies + reviewer verifies the owed doc → outstanding empties.
+        await _add_uploaded_doc(pid, doc_type_id)
+        await _verify_doc(pid, doc_type_id)
+
+        get_res = await client.get(
+            f"/api/admissions/{pid}", headers=manager_token_headers
+        )
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        assert body["outstanding_debt_codes"] == [], body["outstanding_debt_codes"]
+        assert body["permissions"].get("publish_result") is True, body[
+            "permissions"
+        ]
+
+        # Gate cleared → publish runs the cascade (200; decision admit/reject
+        # depends on scores, but the gate no longer blocks).
+        pub = await client.post(
+            f"/api/v2/admissions/{pid}/publish-result",
+            headers=manager_token_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        assert pub.json()["final_status"] in {"admitted", "rejected", "waitlisted"}
+
+    async def test_publish_unaffected_without_document_debt(
+        self,
+        client: AsyncClient,
+        manager_token_headers: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """No-regression: a multi-NV profile WITHOUT a debt publishes exactly as
+        before — the gate is a no-op when ``document_debt`` is NULL."""
+        doc_type_id, doc_code = await _create_doc_type("needdoc")
+        pid, _path_id = await _build_choice_engine_profile_submitted(
+            seed_lead_dependencies["unit_id"],
+            seed_lead_dependencies["stage_id"],
+            seed_lead_dependencies["major_program_id"],
+            mandatory_docs=[doc_code],
+            document_debt_codes=None,  # no debt snapshot
+        )
+
+        profile = await _load_profile(pid)
+        assert profile.document_debt is None
+
+        get_res = await client.get(
+            f"/api/admissions/{pid}", headers=manager_token_headers
+        )
+        assert get_res.status_code == 200, get_res.text
+        body = get_res.json()
+        assert body["outstanding_debt_codes"] == []
+        assert body["permissions"].get("publish_result") is True, body[
+            "permissions"
+        ]
+
+        pub = await client.post(
+            f"/api/v2/admissions/{pid}/publish-result",
+            headers=manager_token_headers,
+        )
+        assert pub.status_code == 200, pub.text
+        assert pub.json()["final_status"] in {"admitted", "rejected", "waitlisted"}

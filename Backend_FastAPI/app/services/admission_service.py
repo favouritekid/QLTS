@@ -1910,10 +1910,20 @@ def _compute_frontend_fields(
         # Bỏ T2 start-review explicit step (YAGNI per user clarification).
         # Mirror BE service guard publish_result(): uses_choice_engine=True +
         # status IN (submitted, reviewing) + manager/admin role.
+        #
+        # Fast-track nợ giấy tờ (C1.5) — publish_result is the multi-NV DECISION
+        # site (admit/reject cascade), so it must obey the same "no decision
+        # while docs are owed" gate as ``approve``: a multi-NV profile can submit
+        # WITH a document debt, so it could reach ``submitted`` with a non-empty
+        # ``_outstanding_debt_codes``. Block the FE button (and the
+        # ``admission_choice_engine_service.publish_result`` service guard raises
+        # BusinessRuleViolation if attempted anyway). No debt snapshot → [] → no
+        # behaviour change for the common path.
         "publish_result": (
             getattr(profile, "uses_choice_engine", False)
             and status in ["submitted", "reviewing"]
             and (is_manager or is_admin)
+            and not _outstanding_debt_codes
         ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
