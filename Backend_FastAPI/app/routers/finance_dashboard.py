@@ -117,7 +117,7 @@ async def get_dashboard_stats(
     - IDOR protection: Only accessible for user's unit
     - Requires 'finance:read' permission
     """
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
     today = date.today()
     month_start = date(today.year, today.month, 1)
     today_start = datetime.combine(today, datetime.min.time())
