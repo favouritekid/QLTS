@@ -29,3 +29,28 @@ def to_bank_transfer_note(raw: Optional[str], max_len: int = 90) -> str:
     ascii_str = re.sub(r"[^a-zA-Z0-9 ]+", " ", ascii_str)
     ascii_str = re.sub(r"\s+", " ", ascii_str).strip()
     return ascii_str[:max_len]
+
+
+# Escape character used by ``escape_like_pattern``. Repositories MUST pass
+# the same character to ``.ilike(..., escape=LIKE_ESCAPE_CHAR)`` so the
+# escaped wildcards are honoured by PostgreSQL.
+LIKE_ESCAPE_CHAR = "\\"
+
+
+def escape_like_pattern(value: str) -> str:
+    """Escape ``%`` and ``_`` so user input is treated as a literal in LIKE.
+
+    Without this, a search for ``"a%"`` collapses any LIKE filter into
+    "match-everything-after-a", letting an attacker either expand a result
+    set past the intended scope or trigger a worst-case backtracking
+    pattern (DoS). Always pair the returned value with
+    ``.ilike(f"%{escape_like_pattern(v)}%", escape=LIKE_ESCAPE_CHAR)``.
+
+    The backslash itself is escaped first so the user-controlled string
+    cannot smuggle a stray ``\\%`` past the second pass.
+    """
+    return (
+        value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR + LIKE_ESCAPE_CHAR)
+        .replace("%", LIKE_ESCAPE_CHAR + "%")
+        .replace("_", LIKE_ESCAPE_CHAR + "_")
+    )

@@ -199,6 +199,9 @@ class PaymentMethodResponse(PaymentMethodBase):
     """Response schema for payment method."""
     id: int
     created_at: datetime
+    # QW-B: expose the model's free-text description (admin-managed note shown
+    # next to the method in the FE picker). None when not set.
+    description: Optional[str] = None
 
 
 # ==============================================================================
@@ -361,6 +364,11 @@ class InvoiceResponse(InvoiceBase):
     status: InvoiceStatusEnum
     paid_amount: Decimal
     remaining_amount: Decimal  # Computed property
+    # QW-B: penalty applied to this invoice + the grand total the payer owes.
+    # Both come straight off the ORM (penalty_amount column + total_due
+    # property = amount + penalty_amount) via from_attributes.
+    penalty_amount: Decimal
+    total_due: Decimal  # Computed property (amount + penalty_amount)
     issued_at: Optional[datetime]
     paid_at: Optional[datetime]
     cancelled_at: Optional[datetime]

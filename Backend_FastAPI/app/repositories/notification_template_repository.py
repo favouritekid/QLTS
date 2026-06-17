@@ -4,6 +4,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.utils.text_helpers import LIKE_ESCAPE_CHAR, escape_like_pattern
 from .base import BaseRepository
 
 
@@ -71,10 +72,11 @@ class NotificationTemplateRepository(BaseRepository[models.NotificationTemplate]
             count_query = count_query.where(self.model.is_system == is_system)
 
         if search:
-            search_pattern = f"%{search}%"
+            # Escape LIKE wildcards (% _) so user input is treated as literal.
+            search_pattern = f"%{escape_like_pattern(search)}%"
             search_filter = (
-                self.model.name.ilike(search_pattern) |
-                self.model.description.ilike(search_pattern)
+                self.model.name.ilike(search_pattern, escape=LIKE_ESCAPE_CHAR) |
+                self.model.description.ilike(search_pattern, escape=LIKE_ESCAPE_CHAR)
             )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)

@@ -384,6 +384,7 @@ async def get_payment_methods(
             id=m.id,
             code=m.code,
             name=m.name,
+            description=m.description,
             is_online=m.is_online,
             requires_verification=m.requires_verification,
             gateway_code=m.gateway_code,

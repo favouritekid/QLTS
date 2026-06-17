@@ -1,5 +1,9 @@
 """Tests for app.utils.text_helpers."""
-from app.utils.text_helpers import to_bank_transfer_note
+from app.utils.text_helpers import (
+    LIKE_ESCAPE_CHAR,
+    escape_like_pattern,
+    to_bank_transfer_note,
+)
 
 
 class TestToBankTransferNote:
@@ -47,3 +51,47 @@ class TestToBankTransferNote:
             "Phạm Thái Hà HS000042 thanh toán học phí Điều dưỡng"
         )
         assert composed == "Pham Thai Ha HS000042 thanh toan hoc phi Dieu duong"
+
+
+class TestEscapeLikePattern:
+    """Anchor for the LIKE-injection fix shipped alongside the
+    repository search hardening. Each test pins a behaviour the
+    repository code now relies on; if any assertion breaks, callers
+    of ``.ilike(escape=LIKE_ESCAPE_CHAR)`` need re-auditing.
+    """
+
+    def test_empty_string_passes_through(self):
+        assert escape_like_pattern("") == ""
+
+    def test_plain_text_unchanged(self):
+        assert escape_like_pattern("hello") == "hello"
+
+    def test_percent_escaped(self):
+        # ``%`` becomes ``\%`` so it matches literally inside ilike.
+        assert escape_like_pattern("a%b") == "a\\%b"
+
+    def test_underscore_escaped(self):
+        # ``_`` would otherwise match any single character.
+        assert escape_like_pattern("a_b") == "a\\_b"
+
+    def test_backslash_escaped_first(self):
+        # Backslash must double up BEFORE we add escape chars; otherwise
+        # ``a\b`` becomes ``a\b`` and a smuggled ``\%`` would slip
+        # through as a wildcard.
+        assert escape_like_pattern("a\\b") == "a\\\\b"
+
+    def test_smuggled_escape_sequence_neutralised(self):
+        # Worst case: input is literally ``\%``. The backslash gets
+        # doubled, so the ``%`` ends up as ``\\\%`` — ``%`` is escaped,
+        # backslash is a literal pair. The user-provided backslash
+        # cannot disarm our own escape.
+        result = escape_like_pattern("\\%")
+        assert result == "\\\\\\%"
+
+    def test_combined_wildcards_all_escaped(self):
+        assert escape_like_pattern("100% off_now") == "100\\% off\\_now"
+
+    def test_escape_char_constant_is_single_backslash(self):
+        # Sanity: callers pass this verbatim to ilike(escape=...).
+        # If this changes the helper output must match.
+        assert LIKE_ESCAPE_CHAR == "\\"

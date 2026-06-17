@@ -15,12 +15,13 @@ describe("reason-templates", () => {
     window.localStorage.clear()
   })
 
-  it("AUDIT_ACTION_CONFIG covers all 4 audit actions", () => {
+  it("AUDIT_ACTION_CONFIG covers all 5 audit actions", () => {
     const actions: Array<keyof typeof AUDIT_ACTION_CONFIG> = [
       "waitlist_promote",
       "waitlist_reject",
       "manual_decision",
       "admin_rollback",
+      "request_revision",
     ]
     actions.forEach((a) => {
       const cfg = AUDIT_ACTION_CONFIG[a]

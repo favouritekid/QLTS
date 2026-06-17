@@ -16,6 +16,7 @@ export type AuditAction =
   | "waitlist_reject"
   | "manual_decision"
   | "admin_rollback"
+  | "request_revision"
 
 export interface ActionConfig {
   /** Display title — set as DialogTitle when opened. */
@@ -103,6 +104,18 @@ export const AUDIT_ACTION_CONFIG: Record<AuditAction, ActionConfig> = {
         value: "rollback_system_test",
         label: "Test hệ thống / migration verification",
       },
+    ],
+  },
+  request_revision: {
+    title: "Yêu cầu sửa hồ sơ",
+    description:
+      "Hồ sơ chuyển về trạng thái cần sửa; thí sinh/cán bộ nhận thông báo kèm lý do để bổ sung hoặc chỉnh sửa.",
+    minLength: 10,
+    maxLength: 1000,
+    templates: [
+      { value: "revision_docs_missing", label: "Thiếu/sai giấy tờ cần bổ sung" },
+      { value: "revision_info_mismatch", label: "Thông tin cá nhân chưa khớp giấy tờ" },
+      { value: "revision_scores", label: "Điểm/học lực cần kiểm tra lại" },
     ],
   },
 }
