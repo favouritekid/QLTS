@@ -81,7 +81,7 @@ export interface PaymentMethod {
   display_order: number
   is_active: boolean
   created_at: string
-  // [TODO_BACKEND] Add: description
+  description: string | null
 }
 
 // ============================================================================
@@ -155,7 +155,9 @@ export interface Invoice {
   due_date: string // date in backend, ISO string in JSON
   status: InvoiceStatus
   paid_amount: string
-  remaining_amount: string // Computed
+  remaining_amount: string // Computed (includes penalty)
+  penalty_amount: string
+  total_due: string // Computed (amount + penalty_amount)
   issued_at: string | null
   paid_at: string | null
   cancelled_at: string | null

@@ -150,7 +150,7 @@ export const paymentMethodSchema = z.object({
   display_order: z.number().int().min(0),
   is_active: z.boolean(),
   created_at: z.string(),
-  // [TODO_BACKEND] Add: description
+  description: z.string().nullable(),
 })
 
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>
@@ -252,7 +252,9 @@ export const invoiceSchema = z.object({
   due_date: z.string(), // date in backend, ISO string in JSON
   status: invoiceStatusSchema,
   paid_amount: z.string(),
-  remaining_amount: z.string(), // Computed
+  remaining_amount: z.string(), // Computed (includes penalty)
+  penalty_amount: z.string(),
+  total_due: z.string(), // Computed (amount + penalty_amount)
   issued_at: z.string().nullable(),
   paid_at: z.string().nullable(),
   cancelled_at: z.string().nullable(),

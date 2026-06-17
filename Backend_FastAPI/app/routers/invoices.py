@@ -493,7 +493,11 @@ def _build_invoice_response(
     status_value = (
         invoice.status.value if hasattr(invoice.status, "value") else invoice.status
     )
-    remaining_amount = invoice.amount - invoice.paid_amount
+    # QW-B fix #1: use the model's remaining_amount property (= amount +
+    # penalty_amount - paid_amount) so the response is internally consistent
+    # with total_due (= amount + penalty). The old `amount - paid_amount`
+    # ignored penalty → contradicted total_due when penalty > 0.
+    remaining_amount = invoice.remaining_amount
 
     # Role-aware permission computation
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
@@ -517,6 +521,12 @@ def _build_invoice_response(
         status=invoice.status,
         paid_amount=invoice.paid_amount,
         remaining_amount=remaining_amount,
+        # QW-B fix #1: these are now REQUIRED on InvoiceResponse. This builder
+        # constructs the schema by explicit kwargs (NOT model_validate), so
+        # from_attributes does NOT fill them → must pass explicitly or every
+        # invoice endpoint 500s.
+        penalty_amount=invoice.penalty_amount,
+        total_due=invoice.total_due,
         issued_at=invoice.issued_at,
         paid_at=invoice.paid_at,
         cancelled_at=invoice.cancelled_at,

@@ -36,9 +36,8 @@ export interface InvoiceViewModel extends Omit<InvoiceDetail, "status"> {
   amount_formatted: string
   paid_amount_formatted: string
   remaining_amount_formatted: string
-  // [TODO_BACKEND] Add penalty_amount, total_due to InvoiceResponse
-  // penalty_amount_formatted: string
-  // total_due_formatted: string
+  penalty_amount_formatted: string
+  total_due_formatted: string
 
   // Progress percentage (0-100)
   payment_progress: number
@@ -116,6 +115,8 @@ export function toInvoiceViewModel(invoice: InvoiceDetail): InvoiceViewModel {
     amount_formatted: formatVND(invoice.amount),
     paid_amount_formatted: formatVND(invoice.paid_amount),
     remaining_amount_formatted: formatVND(invoice.remaining_amount),
+    penalty_amount_formatted: formatVND(invoice.penalty_amount),
+    total_due_formatted: formatVND(invoice.total_due),
 
     // Progress
     payment_progress: paymentProgress,
