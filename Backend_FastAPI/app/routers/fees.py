@@ -30,7 +30,12 @@ import structlog
 from app import database, models, schemas
 from app.core import deps
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, RequireAdmin, RequireManager
+from app.core.deps import (
+    CasbinAuth,
+    RequireAdmin,
+    RequireManager,
+    finance_scope_unit_id,
+)
 from app.core.rate_limits import limiter, RateLimits
 from app.models.finance import FeeTypeEnum
 from app.schemas import finance as finance_schemas
@@ -73,8 +78,10 @@ def _fee_calc_authorized(
       prepay / hold-spot — C2) plus the post-decision states
       (``approved`` | ``confirmed`` | ``enrolled``). Earlier states
       (``draft`` etc.) would create a fee prematurely.
-    * admin: any profile.
-    * manager / accountant: profile whose lead is in the user's unit.
+    * admin / accountant: any profile. Both are central finance roles; Casbin
+      grants accountant ``/api/fees/calculate`` with no unit qualifier, so a
+      central accountant must be able to raise fees for every unit.
+    * manager: profile whose lead is in the user's unit.
     * officer: lead in the user's unit AND assigned to the user — matches
       the existing ``get_admission_for_user`` IDOR convention so officers
       can't spin up invoices for profiles they don't own.
@@ -89,14 +96,14 @@ def _fee_calc_authorized(
     if not is_fee_eligible(profile):
         return False
 
-    if user.role == UserRole.ADMIN:
+    if user.role in (UserRole.ADMIN, UserRole.ACCOUNTANT):
         return True
 
     lead = profile.lead
     if lead is None or lead.unit_id is None:
         return False
 
-    if user.role in (UserRole.MANAGER, UserRole.ACCOUNTANT):
+    if user.role == UserRole.MANAGER:
         return lead.unit_id == user.unit_id
 
     if user.role == UserRole.OFFICER:
@@ -139,7 +146,7 @@ async def list_fees(
     - Requires 'fees:read' permission
     """
     fee_repo = FeeRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -270,7 +277,7 @@ async def calculate_fee(
         # calculate_fee / generate_invoices_for_fee — admin skips, everyone
         # else passes their unit. This mirrors what the function did before;
         # only the profile lookup is unscoped now.
-        unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+        unit_id = finance_scope_unit_id(current_user)
 
         # Resolve base_amount + discount_policy_ids depending on fee type.
         # For tuition: service looks up amount from offering_semester_tuition
@@ -428,7 +435,7 @@ async def get_fee(
     - Requires 'fees:read' permission
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         fee = await fee_service.get_fee(fee_id, unit_id)
@@ -466,7 +473,7 @@ async def get_fees_by_profile(
     - Requires 'fees:read' permission
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     fees = await fee_service.get_fees_for_profile(profile_id, unit_id, fee_type)
 
@@ -506,7 +513,7 @@ async def get_profile_finance_summary(
     - Count of pending and overdue invoices
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     summary = await fee_service.get_fee_summary(profile_id, unit_id)
 
@@ -573,7 +580,7 @@ async def waive_fee(
     - Role enforced via RequireManager dependency
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         fee, _ = await fee_service.waive_fee(
@@ -685,7 +692,7 @@ async def recalculate_fee(
     - Role enforced via RequireManager dependency
     """
     fee_service = FeeCalculationService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         fee, _ = await fee_service.recalculate_fee(
@@ -755,7 +762,13 @@ def _build_fee_response(
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in terminal_statuses
 
-    # Role-aware permission computation
+    # Role-aware permission computation. Waive + recalculate are gated at the
+    # route by RequireManager (admin + manager only); accountant is intentionally
+    # NOT admitted (separation of duties — a central accountant verifies/records
+    # cash and reads finance org-wide, but does not waive or recalculate fees).
+    # Fee cancel is admin-only (RequireAdmin). Keeping these flags aligned with
+    # the route gate is the thin-client contract: a True flag the route would 403
+    # is a broken button.
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
     is_admin = current_user_role == UserRole.ADMIN
 
