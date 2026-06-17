@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app import models
 from app.repositories.base import BaseRepository
+from app.utils.text_helpers import LIKE_ESCAPE_CHAR, escape_like_pattern
 
 
 ALLOWED_SORT_COLUMNS = {"created_at", "updated_at", "full_name", "code", "status", "phone"}
@@ -131,13 +132,14 @@ class CollaboratorRepository(BaseRepository[models.Collaborator]):
 
         if search:
             normalized_search = unicodedata.normalize('NFC', search.strip())
-            search_term = f"%{normalized_search}%"
+            # Escape LIKE wildcards (% _) so user input is treated as literal.
+            search_term = f"%{escape_like_pattern(normalized_search)}%"
             filters.append(
                 or_(
-                    models.Collaborator.full_name.ilike(search_term),
-                    models.Collaborator.phone.ilike(search_term),
-                    models.Collaborator.email.ilike(search_term),
-                    models.Collaborator.code.ilike(search_term),
+                    models.Collaborator.full_name.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                    models.Collaborator.phone.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                    models.Collaborator.email.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                    models.Collaborator.code.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
                 )
             )
 

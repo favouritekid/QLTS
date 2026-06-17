@@ -1694,12 +1694,16 @@ async def stream_users_csv(
     # Sao chép logic sort từ hàm get_users
     sort = params.get("sort", "id")
     order = params.get("order", "asc")
-    if hasattr(models.User, sort):
-        sort_column = getattr(models.User, sort)
-        if order.lower() == "desc":
-            query = query.order_by(sort_column.desc())
-        else:
-            query = query.order_by(sort_column.asc())
+    # QW-A fix #5: second sort-injection sink (CSV export). `sort` is a
+    # user-controlled query param → route through the SAME allowlist guard the
+    # repository uses (unknown/sensitive cols fall back to id). The old
+    # hasattr+getattr allowed ORDER BY <secret col> + .desc() on a relationship.
+    from app.repositories.user_repository import _safe_user_sort_column
+    sort_column = _safe_user_sort_column(sort)
+    if order.lower() == "desc":
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
 
     # --- 2. Yield dòng Header ---
     headers = [
