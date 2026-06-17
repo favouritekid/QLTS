@@ -61,7 +61,7 @@ export function AdmissionsBulkActionsBar({
         "fixed bottom-[calc(var(--bottom-nav-height-safe)_+_0.5rem)] lg:bottom-6 left-1/2 z-50 -translate-x-1/2",
         "animate-in slide-in-from-bottom-4 fade-in-0 duration-200",
         "bg-background/95 supports-[backdrop-filter]:bg-background/80 backdrop-blur",
-        "flex flex-wrap items-center gap-2 sm:gap-3 rounded-lg border px-3 sm:px-4 py-2 sm:py-3 shadow-lg",
+        "flex flex-wrap items-center gap-2 sm:gap-3 rounded-2xl border px-3 sm:px-4 py-2 sm:py-3 shadow-lg",
         "max-w-[95vw] sm:max-w-none"
       )}
     >
