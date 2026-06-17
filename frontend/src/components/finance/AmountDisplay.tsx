@@ -3,7 +3,7 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { formatVND } from "@/lib/zod/finance"
+import { formatVND, parseAmountInput } from "@/lib/zod/finance"
 
 // =============================================================================
 // TYPES
@@ -64,13 +64,13 @@ export function AmountDisplay({
   className,
   ...props
 }: AmountDisplayProps) {
-  // Parse amount to number for comparison
-  const numericAmount = typeof amount === "string"
-    ? parseFloat(amount.replace(/[^\d.-]/g, "")) || 0
-    : amount
-
-  // Format the amount
-  const formattedAmount = formatVND(amount)
+  // ``amount`` may arrive raw ("3000000.00") OR already formatted by formatVND
+  // ("3.000.000 ₫") — many call sites pass a *_formatted view-model field.
+  // Re-running formatVND on a formatted string truncates it (parseFloat reads
+  // "3.000.000" as 3), so reuse the pre-formatted value and only format raw.
+  const isPreformatted = typeof amount === "string" && amount.includes("₫")
+  const numericAmount = parseAmountInput(amount)
+  const formattedAmount = isPreformatted ? (amount as string) : formatVND(amount)
 
   // Remove the default ₫ suffix if we're adding our own
   const displayAmount = showCurrency
@@ -118,9 +118,7 @@ export function RemainingAmount({
   className,
   ...props
 }: Omit<AmountDisplayProps, "colorize" | "highlightNegative">) {
-  const numericAmount = typeof amount === "string"
-    ? parseFloat(amount.replace(/[^\d.-]/g, "")) || 0
-    : amount
+  const numericAmount = parseAmountInput(amount)
 
   return (
     <AmountDisplay
@@ -144,14 +142,8 @@ export function PaidAmount({
   className,
   ...props
 }: Omit<AmountDisplayProps, "colorize"> & { totalAmount?: string | number }) {
-  const paid = typeof amount === "string"
-    ? parseFloat(amount.replace(/[^\d.-]/g, "")) || 0
-    : amount
-  const total = totalAmount
-    ? typeof totalAmount === "string"
-      ? parseFloat(totalAmount.replace(/[^\d.-]/g, "")) || 0
-      : totalAmount
-    : null
+  const paid = parseAmountInput(amount)
+  const total = totalAmount ? parseAmountInput(totalAmount) : null
 
   const isFullyPaid = total !== null && paid >= total
 

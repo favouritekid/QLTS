@@ -21,6 +21,48 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.core.constants import UserRole
 from app.repositories.base import BaseRepository
+from app.utils.text_helpers import LIKE_ESCAPE_CHAR, escape_like_pattern
+
+
+# Whitelist of columns clients are allowed to sort by. Anything else
+# (e.g. ``password_hash``, ``totp_secret_encrypted``, ``backup_codes_hashed``,
+# ``active_jti``, ``search_vector``) collapses to ``id`` so an attacker
+# cannot turn ``ORDER BY`` into a timing oracle for sensitive bytes.
+#
+# Only real columns of ``models.User`` are listed here. Note: the User
+# model does NOT define ``created_at`` / ``updated_at``; legacy callers
+# that pass those names hit the fallback (sort by ``id``), which matches
+# the prior behaviour from ``getattr(models.User, sort_by, models.User.id)``.
+# Non-sensitive profile columns (#9) are included so legit sorts still work;
+# only sensitive bytes (password_hash/totp/backup_codes/active_jti/...) are
+# excluded → they collapse to id.
+_ALLOWED_USER_SORT_FIELDS = frozenset({
+    "id",
+    "username",
+    "email",
+    "full_name",
+    "role",
+    "status",
+    "unit_id",
+    "max_capacity",
+    "total_lead_score",
+    "last_assigned_at",
+    "phone_number",
+    "company",
+    "availability_status",
+    "address",
+    "avatar_url",
+})
+
+
+def _safe_user_sort_column(sort_by: str):
+    """Return the User column for ``sort_by`` if whitelisted, else id.
+
+    Centralises the guard so every call site of ``ORDER BY <user-supplied>``
+    in this repository goes through the same allowlist.
+    """
+    field = sort_by if sort_by in _ALLOWED_USER_SORT_FIELDS else "id"
+    return getattr(models.User, field)
 
 
 class UserRepository(BaseRepository[models.User]):
@@ -83,6 +125,9 @@ class UserRepository(BaseRepository[models.User]):
         # Full-text search using search_vector (optimized)
         if search:
             search_term = search.strip()
+            # Escape % and _ wildcards so user input matches as a literal.
+            # Without this, "a%" would expand to match-anything in ilike.
+            like_pattern = f"%{escape_like_pattern(search_term)}%"
             # Use PostgreSQL full-text search if search_vector exists
             # Otherwise fallback to ILIKE (slower but works)
             filters.append(
@@ -90,9 +135,9 @@ class UserRepository(BaseRepository[models.User]):
                     models.User.search_vector.op("@@")(
                         func.plainto_tsquery("english", search_term)
                     ),
-                    models.User.username.ilike(f"%{search_term}%"),
-                    models.User.email.ilike(f"%{search_term}%"),
-                    models.User.full_name.ilike(f"%{search_term}%"),
+                    models.User.username.ilike(like_pattern, escape=LIKE_ESCAPE_CHAR),
+                    models.User.email.ilike(like_pattern, escape=LIKE_ESCAPE_CHAR),
+                    models.User.full_name.ilike(like_pattern, escape=LIKE_ESCAPE_CHAR),
                 )
             )
 
@@ -108,8 +153,8 @@ class UserRepository(BaseRepository[models.User]):
         if total_count == 0:
             return 0, []
 
-        # Apply sorting
-        sort_column = getattr(models.User, sort_by, models.User.id)
+        # Apply sorting (sort_by passes through the whitelist guard)
+        sort_column = _safe_user_sort_column(sort_by)
 
         if order.lower() == "desc":
             users_query = base_query.order_by(sort_column.desc())
@@ -271,8 +316,8 @@ class UserRepository(BaseRepository[models.User]):
         if total_count == 0:
             return 0, []
         
-        # Apply sorting
-        sort_column = getattr(models.User, sort_by, models.User.id)
+        # Apply sorting (sort_by passes through the whitelist guard)
+        sort_column = _safe_user_sort_column(sort_by)
         if order.lower() == "desc":
             query = query.order_by(sort_column.desc())
         else:

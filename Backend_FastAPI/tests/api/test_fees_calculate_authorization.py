@@ -6,7 +6,7 @@ Matrix:
 * officer on draft profile they own → 404 (status gate)
 * admin on any profile → 201
 * manager on same-unit profile → 201
-* accountant on cross-unit profile → 404
+* accountant on cross-unit profile → 201 (central finance — global scope)
 
 The 4 permission points are asserted via ``available_actions`` on
 ``GET /admissions/{id}``; the full end-to-end fee creation is
@@ -515,7 +515,8 @@ async def test_calculate_fee_route_404_for_cross_unit_officer(
 #   * admission_service.py _compute_permissions["calculate_fee"] (FE flag)
 # Before C2 both required post-decision status (approved/confirmed/enrolled);
 # C2 adds ``submitted`` so officers can collect a tuition prepay before the
-# decision. Quyền giữ nguyên: officer phụ trách + manager/accountant cùng unit.
+# decision. Scope: officer phụ trách + manager cùng unit + accountant/admin
+# toàn hệ thống (accountant is a central finance role — unit-agnostic).
 
 
 @pytest.mark.asyncio
@@ -723,6 +724,123 @@ async def test_accountant_same_unit_can_calculate_at_submitted(
         f"Same-unit accountant should calculate fee at submitted, got "
         f"{resp.status_code}: {resp.text[:300]}"
     )
+
+
+@pytest.mark.asyncio
+async def test_accountant_cross_unit_can_calculate_at_submitted(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Accountant in a DIFFERENT unit can STILL calculate fee — accountant is a
+    central finance role with global scope (unlike officer/manager which are
+    unit-bound). Locks the accountant-global behaviour so a future refactor
+    can't silently re-scope accountant back to their own unit — the exact bug
+    this guards: a central accountant in 'Phòng Hành chính' must be able to
+    raise fees for profiles owned by 'Phòng Tuyển Sinh'.
+
+    Mirror of ``test_calculate_fee_route_404_for_cross_unit_officer`` (which
+    asserts 404 for a cross-unit OFFICER) — same setup, opposite expectation
+    for the accountant role.
+    """
+    from sqlalchemy import text as sa_text
+    from tests.conftest import _create_user_and_role
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Accountant CrossUnit", approve=False,
+    )
+
+    # Brand-new org unit distinct from the profile's unit; bump the id past the
+    # fixture-seeded max (test DB uses create_all(), sequence isn't synced).
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            max_id = (await s.execute(
+                sa_text("SELECT COALESCE(MAX(id), 0) FROM organization_unit")
+            )).scalar_one()
+            other_unit = models.OrganizationUnit(
+                id=max_id + 1,
+                name="Accountant cross-unit probe",
+                type="department",
+                is_active=True,
+            )
+            s.add(other_unit)
+            await s.flush()
+            other_unit_id = other_unit.id
+
+    acct = await _create_user_and_role(
+        {
+            "username": "xunit_accountant",
+            "email": "xunit_accountant@example.com",
+            "password": "AccountantPassword!345",
+            "role": "accountant",
+            "status": "active",
+        },
+        "role:accountant",
+        unit_id=other_unit_id,
+    )
+    ah = await _login(client, acct["username"], acct["password"])
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=ah,
+    )
+    assert resp.status_code == 201, (
+        f"Cross-unit accountant should still calculate fee (global finance), "
+        f"got {resp.status_code}: {resp.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_accountant_denied_heavy_finance_mutations(
+    client: AsyncClient,
+    accountant_same_unit: dict,
+):
+    """Separation of duties: accountant verifies/records cash + reads finance
+    org-wide, but is NOT admitted to the 4 'heavy' mutations — waive/recalculate
+    fee, cancel/apply-penalty invoice. Those routes gate RequireManager
+    (admin + manager only), so accountant must get 403.
+
+    Locks the can_*-vs-route-gate alignment (thin-client contract): the fee/
+    invoice builders must NOT expose these actions to accountant, otherwise the
+    FE renders a button whose every click 403s. RequireManager rejects before
+    any resource load, so arbitrary ids suffice.
+    """
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+
+    waive = await client.post(
+        "/api/fees/1/waive",
+        json={"waive_amount": "1000", "reason": "x"},
+        headers=ah,
+    )
+    assert waive.status_code == 403, f"waive: {waive.text[:200]}"
+
+    recalc = await client.post(
+        "/api/fees/1/recalculate",
+        params={"new_base_amount": "1000", "reason": "x"},
+        headers=ah,
+    )
+    assert recalc.status_code == 403, f"recalc: {recalc.text[:200]}"
+
+    cancel = await client.put(
+        "/api/invoices/1/cancel", params={"reason": "x"}, headers=ah
+    )
+    assert cancel.status_code == 403, f"cancel: {cancel.text[:200]}"
+
+    penalty = await client.post(
+        "/api/invoices/1/apply-penalty",
+        params={"penalty_amount": "1000"},
+        headers=ah,
+    )
+    assert penalty.status_code == 403, f"penalty: {penalty.text[:200]}"
 
 
 # ==============================================================================

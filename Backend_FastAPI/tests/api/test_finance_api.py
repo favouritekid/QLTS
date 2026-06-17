@@ -121,6 +121,8 @@ def mock_invoice():
     invoice.amount = Decimal("9000000")
     invoice.paid_amount = Decimal("0")
     invoice.remaining_amount = Decimal("9000000")
+    invoice.penalty_amount = Decimal("0")
+    invoice.total_due = Decimal("9000000")
     invoice.due_date = date.today() + timedelta(days=30)
     invoice.status = InvoiceStatusEnum.draft.value
     invoice.issued_at = None
@@ -445,6 +447,8 @@ class TestResponseFormats:
             status=mock_invoice.status,
             paid_amount=mock_invoice.paid_amount,
             remaining_amount=mock_invoice.remaining_amount,
+            penalty_amount=mock_invoice.penalty_amount,
+            total_due=mock_invoice.total_due,
             issued_at=None,
             paid_at=None,
             cancelled_at=None,

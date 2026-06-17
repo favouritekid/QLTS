@@ -2009,8 +2009,10 @@ def _compute_frontend_fields(
             and profile.lead.unit_id == current_user.unit_id
         ),
         # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
-        # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
-        # manager/accountant same-unit, officer same-unit AND assigned. The
+        # Mirrors _fee_calc_authorized in routers/fees.py: admin + accountant
+        # always (central finance roles, Casbin grants accountant /fees/calculate
+        # with no unit qualifier), manager same-unit, officer same-unit AND
+        # assigned. The
         # fee-eligible STATE gate is the shared ``is_fee_eligible`` helper
         # (anti-drift, single source of truth with _fee_calc_authorized): C2
         # fast-track adds ``submitted`` (prepay/hold-spot before the decision,
@@ -2020,11 +2022,12 @@ def _compute_frontend_fields(
             is_fee_eligible(profile)
             and (
                 is_admin
+                or user_role == UserRole.ACCOUNTANT
                 or (
                     profile.lead is not None
                     and profile.lead.unit_id is not None
                     and (
-                        (user_role in (UserRole.MANAGER, UserRole.ACCOUNTANT)
+                        (user_role == UserRole.MANAGER
                          and profile.lead.unit_id == current_user.unit_id)
                         or (
                             is_officer

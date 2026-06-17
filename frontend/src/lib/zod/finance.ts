@@ -150,7 +150,7 @@ export const paymentMethodSchema = z.object({
   display_order: z.number().int().min(0),
   is_active: z.boolean(),
   created_at: z.string(),
-  // [TODO_BACKEND] Add: description
+  description: z.string().nullable(),
 })
 
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>
@@ -252,7 +252,9 @@ export const invoiceSchema = z.object({
   due_date: z.string(), // date in backend, ISO string in JSON
   status: invoiceStatusSchema,
   paid_amount: z.string(),
-  remaining_amount: z.string(), // Computed
+  remaining_amount: z.string(), // Computed (includes penalty)
+  penalty_amount: z.string(),
+  total_due: z.string(), // Computed (amount + penalty_amount)
   issued_at: z.string().nullable(),
   paid_at: z.string().nullable(),
   cancelled_at: z.string().nullable(),
@@ -901,6 +903,23 @@ export function parseAmount(amount: string): number {
 export function parseVNDDisplayAmount(amount: string): number {
   const digitsOnly = amount.replace(/[^\d-]/g, "")
   return digitsOnly ? parseInt(digitsOnly, 10) : 0
+}
+
+/**
+ * Parse an amount that may be RAW from the API ("3000000.00") OR already
+ * formatted by formatVND ("3.000.000 ₫") into a number — without the
+ * double-format pitfall. A formatted VN string uses '.' as a thousands
+ * separator, so feeding "3.000.000" back through parseFloat reads it as the
+ * decimal 3. Detect the formatted case (it carries the ₫ suffix) and strip
+ * separators with parseVNDDisplayAmount; otherwise parse the raw decimal.
+ *
+ * Use this anywhere a value might be a *_formatted view-model field OR a raw
+ * Decimal string — e.g. AmountDisplay and the finance list color thresholds.
+ */
+export function parseAmountInput(amount: string | number): number {
+  if (typeof amount !== "string") return amount
+  if (amount.includes("₫")) return parseVNDDisplayAmount(amount)
+  return parseFloat(amount.replace(/[^\d.-]/g, "")) || 0
 }
 
 /**

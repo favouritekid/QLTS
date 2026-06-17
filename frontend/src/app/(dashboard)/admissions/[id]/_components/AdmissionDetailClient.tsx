@@ -29,6 +29,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { AuditReasonDialog, pushRecentReason } from "@/components/admissions/AuditReasonDialog"
 
 // T3.3 Fix: Use ViewModel hook instead of separate hooks
 import {
@@ -135,6 +136,7 @@ export function AdmissionDetailClient({
   const [pendingStep, setPendingStep] = useState<number | null>(null)
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState("")
+  const [requestRevisionDialogOpen, setRequestRevisionDialogOpen] = useState(false)
 
   // =========================================================================
   // 6. Form Setup
@@ -443,16 +445,30 @@ export function AdmissionDetailClient({
     publishResultMutation.mutate()
   }, [publishResultMutation])
 
-  // E2E #10 — Request revision handler (manager → officer fix flow).
-  // Reason placeholder satisfies BE Pydantic min_length=10. FU PR sẽ
-  // thêm textarea input dialog cho manager nhập reason cụ thể.
+  // QW-C — Request revision: open AuditReasonDialog so the manager types a
+  // concrete reason (BE RevisionRequest.reason min_length=10), replacing the
+  // old hardcoded placeholder. Dialog closes only on success so a failed
+  // mutation keeps the typed reason + surfaces its error toast.
   const handleRequestRevision = useCallback(() => {
-    if (!vm?.version) return
-    requestRevisionMutation.mutate({
-      reason: "Vui lòng chỉnh sửa hồ sơ theo yêu cầu của Manager",
-      version: vm.version,
-    })
-  }, [requestRevisionMutation, vm?.version])
+    setRequestRevisionDialogOpen(true)
+  }, [])
+
+  const handleConfirmRequestRevision = useCallback(
+    (reason: string) => {
+      if (!vm?.version) return
+      requestRevisionMutation.mutate(
+        { reason, version: vm.version },
+        {
+          onSuccess: () => {
+            // #8: remember the reason for this action's "recent reasons" dropdown.
+            pushRecentReason("request_revision", reason)
+            setRequestRevisionDialogOpen(false)
+          },
+        }
+      )
+    },
+    [requestRevisionMutation, vm?.version]
+  )
 
   // Claim/Unclaim Handlers
   const handleClaim = () => {
@@ -675,6 +691,14 @@ export function AdmissionDetailClient({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AuditReasonDialog
+        action="request_revision"
+        open={requestRevisionDialogOpen}
+        onOpenChange={setRequestRevisionDialogOpen}
+        onConfirm={handleConfirmRequestRevision}
+        isSubmitting={requestRevisionMutation.isPending}
+      />
     </FormProvider>
   )
 }

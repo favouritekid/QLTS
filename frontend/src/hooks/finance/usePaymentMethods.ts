@@ -99,7 +99,7 @@ export function usePaymentMethodById(
 export interface PaymentMethodOption {
   value: number
   label: string
-  // [TODO_BACKEND] Add description to PaymentMethodResponse
+  description: string | null
   is_online: boolean
   gateway_code: string | null
   disabled: boolean
@@ -126,6 +126,7 @@ export function toPaymentMethodOptions(
     .map((m) => ({
       value: m.id,
       label: m.name,
+      description: m.description,
       is_online: m.is_online,
       gateway_code: m.gateway_code,
       disabled: !m.is_active,

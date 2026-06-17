@@ -84,7 +84,7 @@ async def list_invoices(
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -161,7 +161,7 @@ async def get_invoice(
     - Requires 'invoices:read' permission
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         invoice = await invoice_service.get_invoice(invoice_id, unit_id)
@@ -194,7 +194,7 @@ async def get_invoices_by_fee(
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     invoices = await invoice_repo.get_by_fee_id(fee_id, unit_id)
 
@@ -330,7 +330,7 @@ async def issue_invoice(
     - Requires 'invoices:issue' permission
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         invoice, _ = await invoice_service.issue_invoice(
@@ -385,7 +385,7 @@ async def cancel_invoice(
     - Role enforced via RequireManager dependency
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         invoice, _ = await invoice_service.cancel_invoice(
@@ -441,7 +441,7 @@ async def apply_penalty(
     - Role enforced via RequireManager dependency
     """
     invoice_service = InvoiceService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         invoice, _ = await invoice_service.apply_penalty(
@@ -493,9 +493,19 @@ def _build_invoice_response(
     status_value = (
         invoice.status.value if hasattr(invoice.status, "value") else invoice.status
     )
-    remaining_amount = invoice.amount - invoice.paid_amount
+    # QW-B fix #1: use the model's remaining_amount property (= amount +
+    # penalty_amount - paid_amount) so the response is internally consistent
+    # with total_due (= amount + penalty). The old `amount - paid_amount`
+    # ignored penalty → contradicted total_due when penalty > 0.
+    remaining_amount = invoice.remaining_amount
 
-    # Role-aware permission computation
+    # Role-aware permission computation. Cancel + apply-penalty are gated at the
+    # route by RequireManager (admin + manager only); accountant is intentionally
+    # NOT admitted (separation of duties). can_issue is NOT role-gated here — the
+    # issue route uses CasbinAuth, which DOES grant accountant, so a central
+    # accountant can issue org-wide; can_record_payment is open to any finance
+    # role. Keeping cancel/penalty aligned with RequireManager preserves the
+    # thin-client contract (no button the route would 403).
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
 
     can_issue = status_value == "draft"
@@ -517,6 +527,12 @@ def _build_invoice_response(
         status=invoice.status,
         paid_amount=invoice.paid_amount,
         remaining_amount=remaining_amount,
+        # QW-B fix #1: these are now REQUIRED on InvoiceResponse. This builder
+        # constructs the schema by explicit kwargs (NOT model_validate), so
+        # from_attributes does NOT fill them → must pass explicitly or every
+        # invoice endpoint 500s.
+        penalty_amount=invoice.penalty_amount,
+        total_due=invoice.total_due,
         issued_at=invoice.issued_at,
         paid_at=invoice.paid_at,
         cancelled_at=invoice.cancelled_at,

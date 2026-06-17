@@ -31,7 +31,7 @@ import structlog
 from app import database, models, schemas
 from app.core import deps
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth
+from app.core.deps import CasbinAuth, finance_scope_unit_id
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import PaymentService
@@ -81,7 +81,7 @@ async def list_payments(
     - Requires 'payments:read' permission
     """
     payment_repo = PaymentRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -126,9 +126,13 @@ async def list_payments(
         status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
         is_pending = status_value == "pending"
         is_different_user = payment.created_by_id != current_user.id
-        is_manager_or_admin = current_user.role in [UserRole.ADMIN, UserRole.MANAGER]
-        can_verify = is_pending and is_different_user and is_manager_or_admin
-        can_reject = is_pending and is_different_user and is_manager_or_admin
+        is_finance_reviewer = current_user.role in [
+            UserRole.ADMIN,
+            UserRole.MANAGER,
+            UserRole.ACCOUNTANT,
+        ]
+        can_verify = is_pending and is_different_user and is_finance_reviewer
+        can_reject = is_pending and is_different_user and is_finance_reviewer
 
         items.append(finance_schemas.PaymentListItem(
             id=payment.id,
@@ -182,7 +186,7 @@ async def record_payment(
     - Requires 'payments:create' permission
     """
     payment_service = PaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         payment, callback = await payment_service.record_manual_payment(
@@ -252,7 +256,7 @@ async def verify_payment(
     - Requires 'payments:verify' permission (Casbin RBAC)
     """
     payment_service = PaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         payment, callback = await payment_service.verify_payment(
@@ -314,7 +318,7 @@ async def reject_payment(
     - Requires 'payments:reject' permission (Casbin RBAC)
     """
     payment_service = PaymentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         payment, callback = await payment_service.reject_payment(
@@ -384,6 +388,7 @@ async def get_payment_methods(
             id=m.id,
             code=m.code,
             name=m.name,
+            description=m.description,
             is_online=m.is_online,
             requires_verification=m.requires_verification,
             gateway_code=m.gateway_code,
@@ -419,7 +424,7 @@ async def get_payments_by_invoice(
     - Requires 'payments:read' permission
     """
     payment_repo = PaymentRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     payments = await payment_repo.get_by_invoice_id(invoice_id, unit_id)
 
@@ -460,7 +465,7 @@ async def get_payment(
     - Requires 'payments:read' permission
     """
     payment_repo = PaymentRepository(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     # Use get_by_id_with_relations to load user relationships for P2 denormalized names
     payment = await payment_repo.get_by_id_with_relations(payment_id, unit_id)
@@ -511,7 +516,7 @@ async def create_payment_intent(
     - Requires 'payments:create' permission
     """
     intent_service = PaymentIntentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         intent, is_existing = await intent_service.create_or_get_intent(
@@ -564,7 +569,7 @@ async def get_payment_intent(
     - Requires 'payments:read' permission
     """
     intent_service = PaymentIntentService(db)
-    unit_id = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    unit_id = finance_scope_unit_id(current_user)
 
     try:
         intent = await intent_service.get_intent(intent_id, unit_id)
@@ -672,8 +677,8 @@ def _build_payment_response(
         current_user_role: Current user's role for role-aware permission flags
 
     Permission Flags (Maker-Checker + Role-Aware):
-        - can_verify: pending AND different_user AND role in [admin, manager]
-        - can_reject: pending AND different_user AND role in [admin, manager]
+        - can_verify: pending, different user, role in [admin/manager/accountant]
+        - can_reject: pending, different user, role in [admin/manager/accountant]
 
     Denormalized Names (P2):
         - Extracted from payment.created_by and payment.verified_by relationships
@@ -683,11 +688,17 @@ def _build_payment_response(
     is_pending = status_value == "pending"
     is_different_user = current_user_id is not None and payment.created_by_id != current_user_id
 
-    # Role-aware permission computation
-    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    # Role-aware permission computation. Accountant is a central finance role
+    # that Casbin grants payments verify/reject on every unit — mirror that here
+    # so the FE surfaces the action buttons (parity with refunds/overpayments).
+    is_finance_reviewer = current_user_role in [
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+        UserRole.ACCOUNTANT,
+    ]
 
-    can_verify = is_pending and is_different_user and is_manager_or_admin
-    can_reject = is_pending and is_different_user and is_manager_or_admin
+    can_verify = is_pending and is_different_user and is_finance_reviewer
+    can_reject = is_pending and is_different_user and is_finance_reviewer
 
     # P2: Extract denormalized user names from relationships
     created_by_name = None
