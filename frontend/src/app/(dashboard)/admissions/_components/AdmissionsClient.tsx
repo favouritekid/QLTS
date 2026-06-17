@@ -1,21 +1,17 @@
 // src/app/(dashboard)/admissions/_components/AdmissionsClient.tsx
 /**
- * AdmissionsClient - Main client component for admissions list
+ * AdmissionsClient — danh sách hồ sơ tuyển sinh ("Operations desk" v2).
  *
- * Features:
- * - TanStack Table with sorting and selection
- * - Advanced filters: status, major, academic year, degree level, payment status, date range
- * - Status tabs with count badges
- * - Stats cards (totals, conversion rate, avg completion)
- * - Mobile card view
- * - Bulk actions (approve, reject, assign, export)
- * - URL sync + localStorage persistence (via useAdmissionsFilter)
- * - Next page prefetch for instant pagination
+ * Redesign thuần presentation: metric rail · filter bar (search + Năm + popover
+ * Bộ lọc + Sắp xếp + chips) · status tabs gạch chân · roster bảng + card mobile
+ * (status chấm, progress ngưỡng, monogram, avatar chip) · density Thoáng/Gọn
+ * (localStorage). GIỮ NGUYÊN data layer: useAdmissionsFilter (URL+localStorage),
+ * TanStack table (sort + selection), SSR initialData, prefetch, bulk + permission.
  */
 
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, memo } from "react"
+import { useState, useMemo, useCallback, useEffect } from "react"
 import {
   useReactTable,
   getCoreRowModel,
@@ -26,75 +22,19 @@ import {
 } from "@tanstack/react-table"
 import { useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
-import { format } from "date-fns"
-import { vi } from "date-fns/locale"
-import {
-  ClipboardCheck,
-  Search,
-  X,
-  Calendar,
-  Filter,
-  MoreVertical,
-  FileText,
-  Users,
-  CheckCircle2,
-  GraduationCap,
-  TrendingUp,
-  BarChart3,
-} from "lucide-react"
+import { ClipboardCheck } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  BaseCard,
-  CardHeader as BaseCardHeader,
-  CardBody,
-  CardMeta,
-  CardTime,
-  CardActions,
-} from "@/components/ui/base-card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-  DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 import { Pagination } from "@/components/common/table/Pagination"
 import { cn } from "@/lib/utils"
+import { formatDate } from "@/lib/utils/admission-helpers"
 import { hasAction } from "@/lib/admission/permissions"
 
 import {
@@ -119,92 +59,29 @@ import {
 import { admissionsApi } from "@/lib/api/admissions"
 import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
 import type { AdmissionListParams, AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
-import { getColumns, STATUS_CONFIG, ELIGIBILITY_CONFIG } from "./columns"
+
+import { getColumns } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
 import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
-
-// =============================================================================
-// CONSTANTS
-// =============================================================================
+import { AdmissionsMetricRail, type MetricItem } from "./AdmissionsMetricRail"
+import { AdmissionsFilterBar } from "./AdmissionsFilterBar"
+import { AdmissionsStatusTabs } from "./AdmissionsStatusTabs"
+import { Monogram, StatusDot, ProgressBar, EligibilityToken, RowActionsMenu } from "./roster-parts"
 
 const CURRENT_YEAR = CURRENT_ADMISSIONS_YEAR
+const DENSITY_STORAGE_KEY = "admissions:density"
 
-const STATUS_OPTIONS = [
-  { value: "draft", label: "Nháp" },
-  { value: "submitted", label: "Chờ duyệt" },
-  { value: "resubmitted", label: "Đã nộp lại" },
-  // phase1_11 (#184 Wave 3 PR-3A) — 4 status mới + 3 status
-  // legacy bị thiếu trong filter chooser cũ. Listed in workflow
-  // order (draft → submit → review → approve/admit/waitlist/
-  // publish → reject → revise → confirm → enroll → withdraw +
-  // override side-channel).
-  { value: "reviewing", label: "Đang xét" },
-  { value: "approved", label: "Đã duyệt" },
-  { value: "admitted", label: "Đậu" },
-  { value: "waitlisted", label: "Chờ ghế" },
-  { value: "result_published", label: "Đã công bố KQ" },
-  { value: "rejected", label: "Từ chối" },
-  { value: "revision_requested", label: "Yêu cầu bổ sung" },
-  { value: "confirmed", label: "Đã xác nhận" },
-  { value: "overridden", label: "Đã override" },
-  { value: "enrolled", label: "Đã nhập học" },
-  { value: "withdrawn", label: "Đã rút" },
-]
+type Density = "comfortable" | "compact"
 
-const PAYMENT_STATUS_OPTIONS = [
-  { value: "paid", label: "Đã thanh toán" },
-  { value: "unpaid", label: "Chưa thanh toán" },
-  { value: "partial", label: "Thanh toán một phần" },
-  { value: "no_fee", label: "Chưa có học phí" },
-]
-
-// Status tabs (rendered here) come from the SHARED `ADMISSION_STATUS_TABS`
-// (imported as STATUS_TABS) so the tab→status filter mapping in
-// useAdmissionsFilter.handleTabClick can never drift from these rendered tabs.
-
-// =============================================================================
-// STAT CARD COMPONENT
-// =============================================================================
-
-interface StatCardProps {
-  label: string
-  value: number | string
-  icon: React.ReactNode
-  className?: string
-}
-
-const StatCard = memo(function StatCard({ label, value, icon, className }: StatCardProps) {
-  return (
-    <Card className={cn("p-4", className)}>
-      <div className="flex items-center gap-3">
-        <div className="flex-shrink-0 rounded-lg bg-muted p-2">
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <p className="text-2xl font-bold tracking-tight">{value}</p>
-          <p className="text-xs text-muted-foreground truncate">{label}</p>
-        </div>
-      </div>
-    </Card>
-  )
-})
-
-// =============================================================================
-// DATE HELPERS
-// =============================================================================
-
-/** Parse yyyy-MM-dd string to Date (noon to avoid timezone issues) */
-function parseDate(str: string): Date | undefined {
-  if (!str) return undefined
-  return new Date(str + "T12:00:00")
-}
-
-/** Format Date to dd/MM display string */
-function formatShortDate(str: string): string {
-  if (!str) return "…"
-  // str is "yyyy-MM-dd"
-  return str.slice(8, 10) + "/" + str.slice(5, 7)
+/** Enter/Space kích hoạt row, bỏ qua khi focus ở element interactive bên trong. */
+function activateRow(e: React.KeyboardEvent, fn: () => void) {
+  if (e.key !== "Enter" && e.key !== " ") return
+  const target = e.target as HTMLElement
+  const inner = target.closest("button, a, input, [role='checkbox']")
+  if (inner && inner !== e.currentTarget) return
+  e.preventDefault()
+  fn()
 }
 
 // =============================================================================
@@ -223,10 +100,28 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   // ── Filter state (URL sync + localStorage) ────────────────────────────
   const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useAdmissionsFilter()
 
-  // ── Table state (local only — not persisted) ──────────────────────────
+  // ── View state (local) ────────────────────────────────────────────────
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false)
+  const [rowRejectTarget, setRowRejectTarget] = useState<AdmissionProfileResponse | null>(null)
+
+  // Density: default 'comfortable' (SSR-safe), đọc localStorage SAU mount
+  // để tránh hydration mismatch.
+  const [density, setDensity] = useState<Density>("comfortable")
+  useEffect(() => {
+    const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY)
+    if (stored === "compact" || stored === "comfortable") setDensity(stored)
+  }, [])
+  const handleDensityChange = useCallback((value: Density) => {
+    setDensity(value)
+    try {
+      window.localStorage.setItem(DENSITY_STORAGE_KEY, value)
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+  const compact = density === "compact"
 
   // Derive TanStack sorting from hook state
   const tableSorting: SortingState = useMemo(() => {
@@ -236,8 +131,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
   const handleSortingChange = useCallback(
     (updaterOrValue: SortingState | ((prev: SortingState) => SortingState)) => {
-      const newSorting =
-        typeof updaterOrValue === "function" ? updaterOrValue(tableSorting) : updaterOrValue
+      const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(tableSorting) : updaterOrValue
       if (newSorting.length > 0) {
         handlers.handleSortChange(newSorting[0].id, newSorting[0].desc ? "desc" : "asc")
       } else {
@@ -247,7 +141,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     [tableSorting, handlers],
   )
 
-  // ── Reference data queries ────────────────────────────────────────────
+  // ── Reference data ────────────────────────────────────────────────────
   const { data: majorPrograms } = useAdmissionPrograms()
   const { data: academicYears } = useAcademicYears()
   const { data: degreeLevels } = useDegreeLevelsPublic()
@@ -258,8 +152,6 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   }, [academicYears])
 
   // ── Data queries ──────────────────────────────────────────────────────
-  // Only attach SSR data while the current query still matches the server query.
-  // After localStorage hydration or user edits, a new query must fetch its own data.
   const safeInitialData = areAdmissionsListParamsEqual(apiFilters, initialQueryParams) ? initialData : undefined
   const { data, isLoading, isError, isFetching } = useListAdmissions(apiFilters, { initialData: safeInitialData })
   const { data: statusCounts } = useAdmissionStatusCounts(countFilters)
@@ -288,22 +180,75 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     }
   }, [state.page, state.pageSize, totalCount, apiFilters, queryClient, data])
 
-  // ── Claim handler (list view) ────────────────────────────────────────
-  const handleClaimFromList = useCallback(async (profile: AdmissionProfileResponse) => {
-    if (profile.version == null) return
-    try {
-      await admissionsApi.claimAdmissionProfile(profile.id, { version: profile.version })
-      toast.success("Đã nhận duyệt hồ sơ")
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
-    } catch (error) {
-      handleApiError(error as AxiosError<ApiErrorResponse>, { context: "nhận duyệt hồ sơ" })
-    }
-  }, [queryClient])
+  // Đổi bộ lọc/tab/trang → xóa selection để không "rò rỉ" lựa chọn vô hình sang
+  // view khác (apiFilters đổi tham chiếu khi bất kỳ filter/page/sort đổi).
+  useEffect(() => {
+    setRowSelection({})
+  }, [apiFilters])
+
+  // ── Claim handler ─────────────────────────────────────────────────────
+  const handleClaimFromList = useCallback(
+    async (profile: AdmissionProfileResponse) => {
+      if (profile.version == null) return
+      try {
+        await admissionsApi.claimAdmissionProfile(profile.id, { version: profile.version })
+        toast.success("Đã nhận duyệt hồ sơ")
+        queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      } catch (error) {
+        handleApiError(error as AxiosError<ApiErrorResponse>, { context: "nhận duyệt hồ sơ" })
+      }
+    },
+    [queryClient],
+  )
+
+  const openProfile = useCallback(
+    (id: number) => router.push(`/admissions/${id}`),
+    [router],
+  )
+
+  // ── Single-row approve/reject (row menu) — gated by hasAction ──────────
+  const handleRowApprove = useCallback(
+    async (profile: AdmissionProfileResponse) => {
+      try {
+        await bulkApprove.mutateAsync({
+          items: [{ profile_id: profile.id, version: profile.version ?? 1 }],
+        })
+      } catch (error) {
+        // Hook đã toast theo result 2xx; catch này phủ path ném (network/HTTP lỗi).
+        handleApiError(error as AxiosError<ApiErrorResponse>, { context: "phê duyệt hồ sơ" })
+      }
+    },
+    [bulkApprove],
+  )
+
+  // Reject cần lý do → mở dialog cho đúng 1 hồ sơ.
+  const requestRowReject = useCallback((profile: AdmissionProfileResponse) => {
+    setRowRejectTarget(profile)
+  }, [])
+
+  const handleRowReject = useCallback(
+    async (reason: string) => {
+      if (!rowRejectTarget) return
+      await bulkReject.mutateAsync({
+        items: [{ profile_id: rowRejectTarget.id, version: rowRejectTarget.version ?? 1 }],
+        reason,
+      })
+      setRowRejectTarget(null)
+    },
+    [rowRejectTarget, bulkReject],
+  )
 
   // ── Table instance ────────────────────────────────────────────────────
-  const columns = useMemo(() => getColumns({
-    onClaim: handleClaimFromList,
-  }), [handleClaimFromList])
+  const columns = useMemo(
+    () =>
+      getColumns({
+        onClaim: handleClaimFromList,
+        onApprove: handleRowApprove,
+        onReject: requestRowReject,
+        density,
+      }),
+    [handleClaimFromList, handleRowApprove, requestRowReject, density],
+  )
 
   const table = useReactTable({
     data: profiles,
@@ -319,23 +264,19 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
   const selectedProfiles = useMemo(() => {
     return table.getSelectedRowModel().rows.map((row) => row.original)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, rowSelection])
+    // `data` ở deps: re-derive khi refetch nền đổi profiles/available_actions → tránh
+    // bulkPermissions stale (table identity ổn định nên không tự recompute).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [table, rowSelection, data])
 
-  const selectedIds = useMemo(() => {
-    return selectedProfiles.map((p) => p.id)
-  }, [selectedProfiles])
+  const selectedIds = useMemo(() => selectedProfiles.map((p) => p.id), [selectedProfiles])
 
-  // Backend-driven bulk permissions: a bulk action is exposed only when EVERY
-  // selected row grants it. One profile without `approve` collapses the whole
-  // selection — avoids triggering a 404 on the first ineligible item.
+  // Backend-driven bulk permissions: chỉ lộ action khi MỌI dòng chọn đều cho phép.
   const bulkPermissions = useMemo(() => {
     if (selectedProfiles.length === 0) {
       return { canApprove: false, canReject: false, canAssign: false }
     }
-    // PR-3D-A Sub-1: hasAction() helper — v2 typed shape preferred, legacy fallback
-    const every = (action: string) =>
-      selectedProfiles.every((p) => hasAction(p, action))
+    const every = (action: string) => selectedProfiles.every((p) => hasAction(p, action))
     return {
       canApprove: every("approve"),
       canReject: every("reject"),
@@ -343,17 +284,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     }
   }, [selectedProfiles])
 
-  const clearSelection = useCallback(() => {
-    setRowSelection({})
-  }, [])
-
-  // ── Status toggle handler (dropdown multi-select) ─────────────────────
-  const handleStatusToggle = useCallback((status: string) => {
-    const newStatuses = state.statusFilters.includes(status)
-      ? state.statusFilters.filter((s) => s !== status)
-      : [...state.statusFilters, status]
-    handlers.handleStatusChange(newStatuses)
-  }, [state.statusFilters, handlers])
+  const clearSelection = useCallback(() => setRowSelection({}), [])
 
   // ── Tab counts ────────────────────────────────────────────────────────
   const tabCounts = useMemo(() => {
@@ -367,6 +298,20 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     return result
   }, [statusCounts])
 
+  // ── Metric rail items (từ useAdmissionStats) ──────────────────────────
+  const metricItems: MetricItem[] = useMemo(() => {
+    if (!stats) return []
+    const fmt = (n: number) => n.toLocaleString("vi-VN")
+    return [
+      { key: "total", label: "Tổng hồ sơ", value: fmt(stats.total_profiles ?? 0), dot: "bg-primary" },
+      { key: "pending", label: "Chờ duyệt", value: fmt(stats.submitted_count ?? 0), dot: "bg-info-500" },
+      { key: "approved", label: "Đã duyệt", value: fmt(stats.approved_count ?? 0), dot: "bg-success-500" },
+      { key: "enrolled", label: "Đã nhập học", value: fmt(stats.enrolled_count ?? 0), dot: "bg-blue-500" },
+      { key: "conversion", label: "Tỷ lệ chuyển đổi", value: `${stats.conversion_rate ?? 0}%`, dot: "bg-emerald-500", trend: true },
+      { key: "completion", label: "TB hoàn thiện", value: `${stats.avg_completion ?? 0}%`, dot: "bg-amber-500" },
+    ]
+  }, [stats])
+
   // ── Bulk actions ──────────────────────────────────────────────────────
   const handleBulkApprove = useCallback(async () => {
     if (selectedProfiles.length === 0) return
@@ -376,22 +321,28 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
     clearSelection()
   }, [selectedProfiles, bulkApprove, clearSelection])
 
-  const handleBulkReject = useCallback(async (reason: string) => {
-    if (selectedProfiles.length === 0) return
-    await bulkReject.mutateAsync({
-      items: selectedProfiles.map((p) => ({ profile_id: p.id, version: p.version ?? 1 })),
-      reason,
-    })
-    clearSelection()
-    setRejectDialogOpen(false)
-  }, [selectedProfiles, bulkReject, clearSelection])
+  const handleBulkReject = useCallback(
+    async (reason: string) => {
+      if (selectedProfiles.length === 0) return
+      await bulkReject.mutateAsync({
+        items: selectedProfiles.map((p) => ({ profile_id: p.id, version: p.version ?? 1 })),
+        reason,
+      })
+      clearSelection()
+      setRejectDialogOpen(false)
+    },
+    [selectedProfiles, bulkReject, clearSelection],
+  )
 
-  const handleBulkAssign = useCallback(async (officerId: number) => {
-    if (selectedIds.length === 0) return
-    await bulkAssign.mutateAsync({ profile_ids: selectedIds, officer_id: officerId })
-    clearSelection()
-    setAssignDialogOpen(false)
-  }, [selectedIds, bulkAssign, clearSelection])
+  const handleBulkAssign = useCallback(
+    async (officerId: number) => {
+      if (selectedIds.length === 0) return
+      await bulkAssign.mutateAsync({ profile_ids: selectedIds, officer_id: officerId })
+      clearSelection()
+      setAssignDialogOpen(false)
+    },
+    [selectedIds, bulkAssign, clearSelection],
+  )
 
   const handleExport = useCallback(() => {
     exportCsv.mutate({
@@ -408,453 +359,175 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 
+  const allVisibleSelected =
+    table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")
+
   return (
     <PageContainer maxWidth="xl">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <ClipboardCheck className="h-7 w-7 md:h-8 md:w-8 text-primary" aria-hidden="true" />
-          <div>
-            <h1 className="text-xl md:text-2xl font-bold font-display">Hồ sơ tuyển sinh</h1>
-            <p className="text-sm text-muted-foreground">
-              Quản lý và theo dõi hồ sơ tuyển sinh
-              {totalCount > 0 && ` (${totalCount} hồ sơ)`}
-            </p>
+      <div className="space-y-5">
+        {/* Header */}
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <ClipboardCheck className="size-6" aria-hidden="true" />
+            </div>
+            <div>
+              <h1 className="font-display text-xl font-bold tracking-tight md:text-2xl">Hồ sơ tuyển sinh</h1>
+              <p className="text-sm text-muted-foreground">
+                Quản lý và theo dõi hồ sơ tuyển sinh
+                {totalCount > 0 && (
+                  <>
+                    {" · "}
+                    <span className="font-medium tabular-nums text-foreground">{totalCount}</span> hồ sơ
+                  </>
+                )}
+              </p>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Stats Cards */}
-      {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
-          <StatCard
-            label="Tổng hồ sơ"
-            value={stats.total_profiles ?? 0}
-            icon={<FileText className="h-4 w-4 text-muted-foreground" />}
-          />
-          <StatCard
-            label="Chờ duyệt"
-            value={stats.submitted_count ?? 0}
-            icon={<Users className="h-4 w-4 text-info-600" />}
-          />
-          <StatCard
-            label="Đã duyệt"
-            value={stats.approved_count ?? 0}
-            icon={<CheckCircle2 className="h-4 w-4 text-success-600" />}
-          />
-          <StatCard
-            label="Đã nhập học"
-            value={stats.enrolled_count ?? 0}
-            icon={<GraduationCap className="h-4 w-4 text-blue-600" />}
-          />
-          <StatCard
-            label="Tỷ lệ chuyển đổi"
-            value={`${stats.conversion_rate ?? 0}%`}
-            icon={<TrendingUp className="h-4 w-4 text-emerald-600" />}
-          />
-          <StatCard
-            label="TB hoàn thiện"
-            value={`${stats.avg_completion ?? 0}%`}
-            icon={<BarChart3 className="h-4 w-4 text-amber-600" />}
-          />
-        </div>
-      )}
-
-      {/* Toolbar */}
-      <div className="flex flex-col gap-3 mt-4">
-        {/* Row 1: Search + Primary Filters */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          {/* Search */}
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              placeholder="Tìm kiếm theo tên, email, CCCD…"
-              aria-label="Tìm kiếm hồ sơ tuyển sinh"
-              name="admissions-search"
-              autoComplete="off"
-              spellCheck={false}
-              value={state.search}
-              onChange={(e) => handlers.handleSearchChange(e.target.value)}
-              className="pl-10"
-            />
-            {state.search && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-                onClick={() => handlers.handleSearchChange("")}
-                aria-label="Xóa tìm kiếm"
+          <div className="inline-flex self-start rounded-full border border-border bg-card p-0.5 sm:self-auto">
+            {(["comfortable", "compact"] as const).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => handleDensityChange(d)}
+                aria-pressed={density === d}
+                className={cn(
+                  "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
               >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            )}
+                {d === "comfortable" ? "Thoáng" : "Gọn"}
+              </button>
+            ))}
           </div>
+        </header>
 
-          {/* Academic Year */}
-          <Select
-            value={state.academicYear !== undefined ? String(state.academicYear) : "all"}
-            onValueChange={(val) => handlers.handleYearChange(val === "all" ? undefined : Number(val))}
-          >
-            <SelectTrigger className="w-full sm:w-[140px]" aria-label="Lọc theo năm học">
-              <SelectValue placeholder="Năm học" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tất cả năm</SelectItem>
-              {yearOptions.map((year) => (
-                <SelectItem key={year} value={String(year)}>
-                  {year}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Metric rail */}
+        {metricItems.length > 0 && <AdmissionsMetricRail items={metricItems} />}
 
-          {/* Major Program */}
-          <Select
-            value={state.majorFilter || "all"}
-            onValueChange={(val) => handlers.handleMajorChange(val === "all" ? "" : val)}
-          >
-            <SelectTrigger className="w-full sm:w-[180px]" aria-label="Lọc theo ngành học">
-              <SelectValue placeholder="Ngành" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tất cả ngành</SelectItem>
-              {majorPrograms?.map((program: { id: number; name: string }) => (
-                <SelectItem key={program.id} value={String(program.id)}>
-                  {program.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Filter bar */}
+        <AdmissionsFilterBar
+          search={state.search}
+          onSearchChange={handlers.handleSearchChange}
+          academicYear={state.academicYear}
+          yearOptions={yearOptions}
+          onYearChange={handlers.handleYearChange}
+          statusFilters={state.statusFilters}
+          onStatusChange={handlers.handleStatusChange}
+          majorFilter={state.majorFilter}
+          majorPrograms={majorPrograms}
+          onMajorChange={handlers.handleMajorChange}
+          degreeLevelFilter={state.degreeLevelFilter}
+          degreeLevels={degreeLevels}
+          onDegreeLevelChange={handlers.handleDegreeLevelChange}
+          paymentStatusFilter={state.paymentStatusFilter}
+          onPaymentStatusChange={handlers.handlePaymentStatusChange}
+          dateFrom={state.dateFrom}
+          dateTo={state.dateTo}
+          onDateFromChange={handlers.handleDateFromChange}
+          onDateToChange={handlers.handleDateToChange}
+          sortBy={state.sortBy}
+          sortOrder={state.sortOrder}
+          onSortChange={handlers.handleSortChange}
+          onReset={handlers.resetFilters}
+        />
 
-          {/* Status Filter (dropdown multi-select) */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="w-full sm:w-auto gap-2" aria-label="Lọc theo trạng thái hồ sơ">
-                <Filter className="h-4 w-4" aria-hidden="true" />
-                Trạng thái
-                {state.statusFilters.length > 0 && (
-                  <Badge variant="secondary" className="ml-1 h-5 px-1.5">
-                    {state.statusFilters.length}
-                  </Badge>
-                )}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Lọc theo trạng thái</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {STATUS_OPTIONS.map((option) => (
-                <DropdownMenuCheckboxItem
-                  key={option.value}
-                  checked={state.statusFilters.includes(option.value)}
-                  onCheckedChange={() => handleStatusToggle(option.value)}
-                >
-                  {option.label}
-                </DropdownMenuCheckboxItem>
-              ))}
-              {state.statusFilters.length > 0 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => handlers.handleStatusChange([])}>
+        {/* Status tabs */}
+        <AdmissionsStatusTabs
+          tabs={STATUS_TABS}
+          activeTab={state.activeTab}
+          counts={tabCounts}
+          onTabClick={handlers.handleTabClick}
+        />
+
+        {/* Content */}
+        {isLoading ? (
+          <LoadingState />
+        ) : isError ? (
+          <div className="rounded-2xl border border-border bg-card">
+            <ErrorEmptyState message="Không thể tải danh sách hồ sơ. Vui lòng thử lại." />
+          </div>
+        ) : profiles.length === 0 ? (
+          <div className="rounded-2xl border border-border bg-card">
+            <EmptyState
+              icon={<ClipboardCheck className="h-12 w-12" />}
+              title={hasActiveFilters ? "Không tìm thấy kết quả" : "Chưa có hồ sơ nào"}
+              description={
+                hasActiveFilters
+                  ? "Thử thay đổi bộ lọc để xem kết quả khác"
+                  : "Để tạo hồ sơ mới, vào trang chi tiết Lead và nhấn 'Tạo hồ sơ tuyển sinh'"
+              }
+              action={
+                hasActiveFilters && (
+                  <Button variant="outline" onClick={handlers.resetFilters}>
                     Xóa bộ lọc
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {/* Row 2: Secondary Filters */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          {/* Degree Level */}
-          <Select
-            value={state.degreeLevelFilter || "all"}
-            onValueChange={(val) => handlers.handleDegreeLevelChange(val === "all" ? "" : val)}
-          >
-            <SelectTrigger className="w-full sm:w-[160px]" aria-label="Lọc theo trình độ đào tạo">
-              <SelectValue placeholder="Trình độ" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tất cả trình độ</SelectItem>
-              {/* Filter value MUST be the degree-level NAME ("Cao đẳng"), not the
-                  code ("cao_dang"): the BE matches it against the MajorProgram.degree_level
-                  TEXT column, which stores the name. Sending the code matched nothing. */}
-              {degreeLevels?.map((level) => (
-                <SelectItem key={level.code} value={level.name}>
-                  {level.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* Payment Status */}
-          <Select
-            value={state.paymentStatusFilter || "all"}
-            onValueChange={(val) => handlers.handlePaymentStatusChange(val === "all" ? "" : val)}
-          >
-            <SelectTrigger className="w-full sm:w-[180px]" aria-label="Lọc theo trạng thái học phí">
-              <SelectValue placeholder="Học phí" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Tất cả học phí</SelectItem>
-              {PAYMENT_STATUS_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* Date Range Filter */}
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full sm:w-auto gap-2">
-                <Calendar className="h-4 w-4" aria-hidden="true" />
-                {state.dateFrom || state.dateTo ? (
-                  <span className="text-xs">
-                    {formatShortDate(state.dateFrom)} -{" "}
-                    {formatShortDate(state.dateTo)}
-                  </span>
-                ) : (
-                  "Ngày tạo"
-                )}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <div className="flex flex-col sm:flex-row">
-                <div className="p-2">
-                  <p className="text-xs font-medium mb-2 text-muted-foreground">Từ ngày</p>
-                  <CalendarComponent
-                    mode="single"
-                    selected={parseDate(state.dateFrom)}
-                    onSelect={(date) =>
-                      handlers.handleDateFromChange(date ? format(date, "yyyy-MM-dd") : "")
-                    }
-                    locale={vi}
-                  />
-                </div>
-                <div className="p-2 border-t sm:border-t-0 sm:border-l">
-                  <p className="text-xs font-medium mb-2 text-muted-foreground">Đến ngày</p>
-                  <CalendarComponent
-                    mode="single"
-                    selected={parseDate(state.dateTo)}
-                    onSelect={(date) =>
-                      handlers.handleDateToChange(date ? format(date, "yyyy-MM-dd") : "")
-                    }
-                    locale={vi}
-                  />
-                </div>
-              </div>
-              {(state.dateFrom || state.dateTo) && (
-                <div className="p-2 border-t">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full"
-                    onClick={() => {
-                      handlers.handleDateFromChange("")
-                      handlers.handleDateToChange("")
-                    }}
-                  >
-                    Xóa bộ lọc ngày
                   </Button>
-                </div>
-              )}
-            </PopoverContent>
-          </Popover>
-
-          {/* Clear all filters */}
-          {hasActiveFilters && (
-            <Button variant="ghost" size="sm" onClick={handlers.resetFilters} className="gap-1">
-              <X className="h-4 w-4" aria-hidden="true" />
-              Xóa bộ lọc
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Status Tabs */}
-      <div className="flex items-center gap-1 mt-4 overflow-x-auto pb-1" role="tablist">
-        {STATUS_TABS.map((tab) => {
-          const count = tabCounts?.[tab.key]
-          const isActive = state.activeTab === tab.key
-          return (
-            <button
-              key={tab.key}
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => handlers.handleTabClick(tab.key)}
+                )
+              }
+            />
+          </div>
+        ) : (
+          <>
+            {/* Desktop: roster table */}
+            <div
               className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap transition-colors",
-                isActive
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                "hidden overflow-hidden rounded-2xl border border-border bg-card shadow-xs md:block",
+                isFetching && "opacity-60",
               )}
             >
-              {tab.label}
-              {count !== undefined && (
-                <span className={cn(
-                  "inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-medium",
-                  isActive
-                    ? "bg-primary-foreground/20 text-primary-foreground"
-                    : "bg-muted text-muted-foreground"
-                )}>
-                  {count}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Content */}
-      <div className="mt-4">
-        {/* Loading state */}
-        {isLoading && (
-          <div className="space-y-3">
-            <div className="hidden md:block rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {Array.from({ length: 7 }).map((_, i) => (
-                      <TableHead key={i}>
-                        <Skeleton className="h-4 w-20" />
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <TableRow key={i}>
-                      {Array.from({ length: 7 }).map((_, j) => (
-                        <TableCell key={j}>
-                          <Skeleton className="h-4 w-full" />
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="md:hidden grid gap-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i}>
-                  <CardHeader className="pb-2">
-                    <Skeleton className="h-5 w-32" />
-                    <Skeleton className="h-4 w-24" />
-                  </CardHeader>
-                  <CardContent>
-                    <Skeleton className="h-4 w-full mb-2" />
-                    <Skeleton className="h-2 w-3/4" />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Error state */}
-        {isError && (
-          <Card>
-            <CardContent className="p-0">
-              <ErrorEmptyState message="Không thể tải danh sách hồ sơ. Vui lòng thử lại." />
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Empty state */}
-        {!isLoading && !isError && profiles.length === 0 && (
-          <Card>
-            <CardContent className="p-0">
-              <EmptyState
-                icon={<ClipboardCheck className="h-12 w-12" />}
-                title={hasActiveFilters ? "Không tìm thấy kết quả" : "Chưa có hồ sơ nào"}
-                description={
-                  hasActiveFilters
-                    ? "Thử thay đổi bộ lọc để xem kết quả khác"
-                    : "Để tạo hồ sơ mới, vào trang chi tiết Lead và nhấn 'Tạo hồ sơ tuyển sinh'"
-                }
-                action={
-                  hasActiveFilters && (
-                    <Button variant="outline" onClick={handlers.resetFilters}>
-                      Xóa bộ lọc
-                    </Button>
-                  )
-                }
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Data */}
-        {!isLoading && !isError && profiles.length > 0 && (
-          <>
-            {/* Desktop: Table View */}
-            <div className={cn("hidden md:block rounded-md border", isFetching && "opacity-60")}>
-              <Table>
-                <TableHeader>
+              <table className="w-full text-sm">
+                <thead>
                   {table.getHeaderGroups().map((headerGroup) => (
-                    <TableRow key={headerGroup.id}>
+                    <tr
+                      key={headerGroup.id}
+                      className="border-b border-border bg-muted/30 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground"
+                    >
                       {headerGroup.headers.map((header) => (
-                        <TableHead key={header.id}>
+                        <th key={header.id} className="px-3 py-3 font-medium">
                           {header.isPlaceholder
                             ? null
                             : flexRender(header.column.columnDef.header, header.getContext())}
-                        </TableHead>
+                        </th>
                       ))}
-                    </TableRow>
+                    </tr>
                   ))}
-                </TableHeader>
-                <TableBody>
+                </thead>
+                <tbody>
                   {table.getRowModel().rows.map((row) => {
-                    const profileId = (row.original as { id?: number })?.id
-                    const handleRowActivate = () => {
-                      if (profileId !== undefined) {
-                        router.push(`/admissions/${profileId}`)
-                      }
-                    }
+                    const profileId = row.original.id
+                    const sel = row.getIsSelected()
                     return (
-                      <TableRow
+                      <tr
                         key={row.id}
-                        data-state={row.getIsSelected() && "selected"}
-                        className="cursor-pointer"
-                        // Web Interface Guidelines: clickable row cần keyboard
-                        // a11y. tabIndex + Enter/Space handler để keyboard
-                        // users navigate được. Cells nội bộ có button/link
-                        // riêng vẫn focusable bình thường.
-                        tabIndex={profileId !== undefined ? 0 : -1}
-                        role={profileId !== undefined ? "link" : undefined}
-                        onKeyDown={(e) => {
-                          if (profileId === undefined) return
-                          if (e.key === "Enter" || e.key === " ") {
-                            // Skip nếu focus đang ở element interactive bên trong (button/link/input/checkbox)
-                            const target = e.target as HTMLElement
-                            const isInner = target.closest("button, a, input, [role='checkbox']")
-                            if (isInner && isInner !== e.currentTarget) return
-                            e.preventDefault()
-                            handleRowActivate()
-                          }
-                        }}
+                        data-state={sel && "selected"}
+                        role="link"
+                        tabIndex={0}
+                        aria-label={`Hồ sơ ${row.original.lead?.full_name ?? `Lead #${row.original.lead_id}`}`}
+                        onClick={() => openProfile(profileId)}
+                        onKeyDown={(e) => activateRow(e, () => openProfile(profileId))}
+                        className={cn(
+                          "group cursor-pointer border-b border-l-2 border-border/60 border-l-transparent outline-none transition-colors last:border-b-0 hover:bg-muted/40 hover:border-l-primary focus-visible:bg-muted/40",
+                          sel && "border-l-primary bg-primary/5",
+                        )}
                       >
                         {row.getVisibleCells().map((cell) => (
-                          <TableCell key={cell.id}>
+                          <td key={cell.id} className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
                             {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                          </TableCell>
+                          </td>
                         ))}
-                      </TableRow>
+                      </tr>
                     )
                   })}
-                </TableBody>
-              </Table>
+                </tbody>
+              </table>
             </div>
 
-            {/* Mobile: Card View */}
-            <div className={cn("md:hidden space-y-2", isFetching && "opacity-60")}>
-              <div className="flex items-center gap-2 px-1 py-2">
+            {/* Mobile: roster tiles */}
+            <div className={cn("space-y-2 md:hidden", isFetching && "opacity-60")}>
+              <div className="flex items-center gap-2 px-1 py-1">
                 <Checkbox
-                  checked={
-                    table.getIsAllPageRowsSelected() ||
-                    (table.getIsSomePageRowsSelected() && "indeterminate")
-                  }
+                  checked={allVisibleSelected}
                   onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
                   aria-label="Chọn tất cả"
                 />
@@ -866,12 +539,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
                   key={profile.id}
                   profile={profile}
                   isSelected={rowSelection[String(profile.id)] ?? false}
-                  onSelect={(checked) => {
-                    setRowSelection((prev) => ({
-                      ...prev,
-                      [String(profile.id)]: checked,
-                    }))
-                  }}
+                  onSelect={(checked) => table.getRow(String(profile.id)).toggleSelected(checked)}
+                  onClaim={handleClaimFromList}
+                  onApprove={handleRowApprove}
+                  onReject={requestRowReject}
+                  onOpen={() => openProfile(profile.id)}
                 />
               ))}
             </div>
@@ -885,7 +557,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
                 onPageChange={handlers.setPage}
                 isLoading={isFetching}
                 showTotal
-                className="border-t mt-4"
+                className="border-t pt-4"
               />
             )}
           </>
@@ -922,81 +594,127 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         onConfirm={handleBulkAssign}
         isLoading={bulkAssign.isPending}
       />
+
+      {/* Single-row reject (mở từ row menu) — tái dùng dialog có lý do */}
+      <BulkRejectDialog
+        open={!!rowRejectTarget}
+        onOpenChange={(open) => {
+          if (!open) setRowRejectTarget(null)
+        }}
+        selectedCount={1}
+        onConfirm={handleRowReject}
+        isLoading={bulkReject.isPending}
+      />
     </PageContainer>
   )
 }
 
 // =============================================================================
-// MOBILE CARD COMPONENT - Using BaseCard System
+// LOADING STATE
+// =============================================================================
+
+function LoadingState() {
+  return (
+    <div className="space-y-3">
+      <div className="hidden rounded-2xl border border-border bg-card p-4 md:block">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 py-2.5">
+            <Skeleton className="size-9 shrink-0 rounded-xl" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="hidden h-2 w-28 sm:block" />
+            <Skeleton className="hidden h-5 w-20 rounded-full lg:block" />
+          </div>
+        ))}
+      </div>
+      <div className="space-y-2 md:hidden">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-2xl border border-border bg-card p-4">
+            <div className="flex items-center gap-3">
+              <Skeleton className="size-9 shrink-0 rounded-xl" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            </div>
+            <Skeleton className="mt-3 h-2 w-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// MOBILE CARD
 // =============================================================================
 
 interface AdmissionCardProps {
   profile: AdmissionProfileResponse
   isSelected: boolean
   onSelect: (checked: boolean) => void
+  onClaim: (profile: AdmissionProfileResponse) => void
+  onApprove: (profile: AdmissionProfileResponse) => void
+  onReject: (profile: AdmissionProfileResponse) => void
+  onOpen: () => void
 }
 
-function AdmissionCard({ profile, isSelected, onSelect }: AdmissionCardProps) {
-  const statusConfig = STATUS_CONFIG[profile.status] ?? { label: profile.status, color: "bg-muted" }
-  const eligibilityConfig = ELIGIBILITY_CONFIG[profile.eligibility_status] ?? { label: "-", color: "bg-muted" }
-
+function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onReject, onOpen }: AdmissionCardProps) {
+  const name = profile.lead?.full_name ?? `Lead #${profile.lead_id}`
   return (
-    <BaseCard
-      selected={isSelected}
-      onSelect={onSelect}
-      showCheckbox
+    <article
+      role="link"
+      tabIndex={0}
+      aria-label={`Hồ sơ ${name}`}
+      onClick={onOpen}
+      onKeyDown={(e) => activateRow(e, onOpen)}
+      className={cn(
+        "rounded-2xl border bg-card p-4 shadow-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        isSelected ? "border-primary/40 bg-primary/5" : "border-border",
+      )}
     >
-      {/* Header: Name + Status Badge */}
-      <BaseCardHeader
-        title={
-          <Link
-            href={`/admissions/${profile.id}`}
-            className="hover:underline"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {profile.lead?.full_name ?? `Lead #${profile.lead_id}`}
-          </Link>
-        }
-        subtitle={`Hồ sơ #${profile.id}`}
-        badge={<Badge className={statusConfig.color}>{statusConfig.label}</Badge>}
-      />
-
-      {/* Body: Progress bar */}
-      <CardBody>
-        <div className="flex items-center gap-2">
-          <Progress value={profile.completion_percent} className="h-2 flex-1" />
-          <span className="text-xs text-muted-foreground w-8">
-            {profile.completion_percent}%
-          </span>
-        </div>
-      </CardBody>
-
-      {/* Meta: Date + Eligibility */}
-      <CardMeta>
-        <CardTime date={profile.created_at} format="date" showIcon />
-        <Badge variant="outline" className={cn("text-xs", eligibilityConfig.color)}>
-          {eligibilityConfig.label}
-        </Badge>
-      </CardMeta>
-
-      {/* Actions */}
-      <CardActions>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Thao tác">
-              <MoreVertical className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild>
-              <Link href={`/admissions/${profile.id}`}>
-                Xem chi tiết
+      <div className="flex items-start gap-3">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={(value) => onSelect(!!value)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Chọn ${name}`}
+          className="mt-0.5"
+        />
+        <Monogram name={name} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <Link
+                href={`/admissions/${profile.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="block truncate font-display font-semibold text-foreground hover:underline"
+              >
+                {name}
               </Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </CardActions>
-    </BaseCard>
+              <div className="truncate text-xs tabular-nums text-muted-foreground">
+                #{profile.id} · {profile.program_name ?? "—"}
+              </div>
+            </div>
+            <StatusDot status={profile.status} />
+          </div>
+
+          <div className="mt-3">
+            <ProgressBar value={profile.completion_percent} />
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-xs tabular-nums text-muted-foreground">{formatDate(profile.created_at)}</span>
+            <div className="flex items-center gap-2">
+              <EligibilityToken status={profile.eligibility_status} />
+              <RowActionsMenu profile={profile} onClaim={onClaim} onApprove={onApprove} onReject={onReject} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
   )
 }
 

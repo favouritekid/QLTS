@@ -163,6 +163,35 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   },
 }
 
+/**
+ * Status dot color — màu chấm trạng thái cho redesign trang danh sách hồ sơ.
+ *
+ * Co-located với ADMISSION_STATUS_CONFIG để giữ SINGLE SOURCE (status →
+ * label/badge/dot ở cùng một module), tránh fork một map màu riêng trong
+ * columns.tsx. Class PHẢI là literal static (Tailwind JIT không thấy chuỗi ghép).
+ */
+export const ADMISSION_STATUS_DOT_COLOR: Record<string, string> = {
+  draft: 'bg-gray-400',
+  submitted: 'bg-info-500',
+  resubmitted: 'bg-info-600',
+  reviewing: 'bg-sky-500',
+  revision_requested: 'bg-orange-500',
+  approved: 'bg-success-500',
+  admitted: 'bg-green-500',
+  overridden: 'bg-purple-500',
+  waitlisted: 'bg-amber-500',
+  confirmed: 'bg-emerald-500',
+  enrolled: 'bg-blue-500',
+  rejected: 'bg-error-500',
+  withdrawn: 'bg-gray-400',
+  result_published: 'bg-sky-500',
+}
+
+/** Lấy class màu chấm cho 1 admission status (fallback xám trung tính). */
+export function getStatusDotColor(status: string): string {
+  return ADMISSION_STATUS_DOT_COLOR[status] ?? 'bg-gray-400'
+}
+
 // =============================================================================
 // LEAD STATUS CONFIG (for future use)
 // =============================================================================
