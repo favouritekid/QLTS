@@ -49,6 +49,7 @@ import { toInvoiceListViewModel, type InvoiceListItemViewModel } from "@/hooks/f
 import { AmountDisplay, InvoiceStatusBadge } from "@/components/finance"
 import { INVOICE_STATUS_LABELS, type InvoiceStatus } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
+import { parseAmountInput } from "@/lib/zod/finance"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
 
 // =============================================================================
@@ -370,7 +371,7 @@ function InvoiceTable({
                   amount={invoice.remaining_amount_formatted}
                   showCurrency={false}
                   className={cn(
-                    parseFloat(invoice.remaining_amount_formatted.replace(/[^\d]/g, "")) > 0 &&
+                    parseAmountInput(invoice.remaining_amount_formatted) > 0 &&
                       "text-warning-600"
                   )}
                 />
@@ -568,7 +569,7 @@ function InvoiceCard({
               size="md"
               showCurrency={false}
               className={cn(
-                parseFloat(invoice.remaining_amount_formatted.replace(/[^\d]/g, "")) > 0 &&
+                parseAmountInput(invoice.remaining_amount_formatted) > 0 &&
                   "text-warning-600"
               )}
             />

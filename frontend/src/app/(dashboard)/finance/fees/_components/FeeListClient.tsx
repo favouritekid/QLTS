@@ -52,6 +52,7 @@ import {
   type FeeStatus,
 } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
+import { parseAmountInput } from "@/lib/zod/finance"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { FeeCalculateDialog } from "./FeeCalculateDialog"
 
@@ -441,7 +442,7 @@ function FeeTable({ fees, onView, onWaive, onCancel, onRecalculate }: FeeTablePr
                   amount={fee.remaining_amount_formatted}
                   showCurrency={false}
                   className={cn(
-                    parseFloat(fee.remaining_amount_formatted.replace(/[^\d.-]/g, "")) > 0 &&
+                    parseAmountInput(fee.remaining_amount_formatted) > 0 &&
                       "text-warning-600"
                   )}
                 />

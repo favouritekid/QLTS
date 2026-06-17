@@ -3,25 +3,7 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-/**
- * Parse an amount that may be RAW from the API ("3000000.00") OR already
- * formatted by formatVND ("3.000.000 ₫") into a number — without the
- * double-format pitfall. A formatted VN string uses '.' as a thousands
- * separator, so feeding it back through parseFloat would read "3.000.000" as
- * the decimal 3. Detect the formatted case (it carries the ₫ suffix) and strip
- * separators with parseVNDDisplayAmount instead.
- */
-function parseAmountInput(amount: string | number): number {
-  if (typeof amount !== "string") return amount
-  if (amount.includes("₫")) return parseVNDDisplayAmount(amount)
-  return parseFloat(amount.replace(/[^\d.-]/g, "")) || 0
-}
+import { formatVND, parseAmountInput } from "@/lib/zod/finance"
 
 // =============================================================================
 // TYPES

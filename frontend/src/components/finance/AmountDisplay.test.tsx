@@ -36,6 +36,20 @@ describe("AmountDisplay", () => {
     const { container } = render(<AmountDisplay amount="70000" />)
     expect(container.textContent).toContain("70.000")
   })
+
+  it("applies muted styling for zero when colorize is on", () => {
+    const { container } = render(<AmountDisplay amount="0" colorize />)
+    expect(container.textContent).toContain("0")
+    expect(container.querySelector(".text-muted-foreground")).not.toBeNull()
+  })
+
+  it("renders a negative amount with its sign and destructive highlight", () => {
+    const { container } = render(
+      <AmountDisplay amount="-5000" highlightNegative />,
+    )
+    expect(container.textContent).toContain("-5.000")
+    expect(container.querySelector(".text-destructive")).not.toBeNull()
+  })
 })
 
 // RemainingAmount / PaidAmount were also migrated to parseAmountInput; their
