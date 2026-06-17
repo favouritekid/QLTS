@@ -1188,6 +1188,48 @@ export const admissionProfileResponseSchema = z.object({
     min_subject_score: z.number(),
     min_score: z.number(),
   }).nullable().optional().describe("Backend-computed score pass/fail status for each subject and total"),
+
+  // =========================================================================
+  // Fast-track prepay/giữ chỗ — nợ giấy tờ contract (C1). Mirror of BE
+  // AdmissionProfileResponse. C1 adds only the contract; the dialog + badge
+  // that consume these land in C4.
+  // =========================================================================
+  // Persisted snapshot captured at staff submit-with-debt. null = no debt.
+  document_debt: z
+    .object({
+      codes: z.array(z.string()).default([]),
+      reason: z.string(),
+      by_user_id: z.number().int(),
+      at: z.string().datetime({ offset: true }),
+    })
+    .nullable()
+    .optional()
+    .describe("Snapshot {codes, reason, by_user_id, at} of nợ giấy tờ. null when none."),
+  // COMPUTED: snapshot codes that are STILL missing now → the badge counts
+  // this (self-resolves to [] once owed docs uploaded).
+  outstanding_debt_codes: z
+    .array(z.string())
+    .default([])
+    .describe("document_debt codes still missing now; empty when resolved."),
+  // Mandatory doc codes currently missing (excludes uploaded-pending-verify).
+  missing_doc_codes: z
+    .array(z.string())
+    .default([])
+    .describe("Currently-missing mandatory doc codes for the submit-with-debt dialog."),
+  // COMPUTED flag — staff may submit this draft with a document debt.
+  can_submit_with_document_debt: z
+    .boolean()
+    .default(false)
+    .describe("True when the acting staff user may submit with a document debt."),
+  // COMPUTED flag — a rejected/withdrawn profile still holds collected,
+  // not-yet-refunded tuition (SUM(fee.paid_amount) > 0). Drives the
+  // "cần hoàn tiền" warning banner. False for every non-terminal status.
+  has_unrefunded_payment: z
+    .boolean()
+    .default(false)
+    .describe(
+      "True when a rejected/withdrawn profile still holds unrefunded tuition."
+    ),
 })
 
 export type AdmissionProfileResponse = z.infer<

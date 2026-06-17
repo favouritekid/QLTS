@@ -92,12 +92,25 @@ export async function recordApplicationFeePayment(
 // ============================================
 
 /**
- * Submit admission profile
+ * Submit admission profile.
+ *
+ * Fast-track nợ giấy tờ (TUITION_PREPAY_FASTTRACK_PLAN.md C1): the backend
+ * submit endpoint now accepts an OPTIONAL body. A plain submit (no payload)
+ * keeps the legacy no-body behaviour. When the acting staff user submits with
+ * a document debt, pass `{ acknowledge_missing_docs: true, document_debt_reason }`
+ * — the backend waives the missing-doc validation errors (only when every OTHER
+ * validation passes) and records a `document_debt` snapshot.
  */
 export async function submitAdmission(
-  id: number
+  id: number,
+  payload?: { acknowledge_missing_docs?: boolean; document_debt_reason?: string }
 ): Promise<AdmissionSubmitResponse> {
-  const response = await api.post<AdmissionSubmitResponse>(`/api/admissions/${id}/submit`)
+  const response = await api.post<AdmissionSubmitResponse>(
+    `/api/admissions/${id}/submit`,
+    // Preserve the legacy no-body call when no payload is supplied; only send a
+    // JSON body for the submit-with-debt flow.
+    payload ?? undefined
+  )
   return response.data
 }
 

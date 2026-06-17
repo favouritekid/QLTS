@@ -58,7 +58,11 @@ from .admission_correction_helpers import (
     post_parse_business_check,
     safe_serialize,
 )
-from ..utils.admission_status import is_admitted_like, is_confirmation_eligible
+from ..utils.admission_status import (
+    is_admitted_like,
+    is_confirmation_eligible,
+    is_fee_eligible,
+)
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -1137,7 +1141,7 @@ def _validate_documents(
                     f"để verify trước khi nộp hồ sơ."
                 )
             else:
-                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+                validation_errors.append(_missing_doc_error_message(doc_code))
 
     return (
         doc_errors,
@@ -1146,6 +1150,82 @@ def _validate_documents(
         upload_required_docs,
         unverified_doc_codes,
     )
+
+
+def _missing_doc_error_message(code: str) -> str:
+    """Single source of truth for the "missing mandatory document" message.
+
+    Emitted by ``_validate_documents`` when a required doc is absent and
+    reconstructed by ``_compute_frontend_fields`` to SUBTRACT those messages
+    from ``validation_errors`` (computing ``_other_errors`` for
+    ``can_submit_with_document_debt``). Both sites MUST use this helper so the
+    format can never drift apart — a drift would break the subtraction and
+    silently kill ``can_submit_with_document_debt`` (fast-track nợ giấy tờ).
+    """
+    return f"Thiếu tài liệu bắt buộc: {code}"
+
+
+def _compute_outstanding_debt_codes(
+    profile: models.AdmissionProfile,
+    documents: list | None,
+) -> list[str]:
+    """Fast-track nợ giấy tờ — VERIFIED-based resolution of a document debt.
+
+    A debt code is "satisfied" (no longer outstanding) ONLY once the
+    corresponding document reaches ``verified`` or ``paper_submitted`` — i.e.
+    an officer/reviewer has actually confirmed it. Merely UPLOADING the file
+    (status ``uploaded``) does NOT clear the debt; the decision is "hết nợ chỉ
+    khi VERIFY" (PLAN §C1.5).
+
+    This is intentionally STRICTER than ``missing_doc_codes`` (which, in lax
+    ``allow_unverified=True`` mode, counts an uploaded-but-unverified doc as
+    present and would prematurely empty the debt). Mirrors the priority_evidence
+    filter from ``_validate_documents`` so a priority-evidence row (no
+    ``document_type`` FK) never crashes on ``doc.document_type.code``.
+
+    Args:
+        profile: AdmissionProfile carrying the ``document_debt`` snapshot.
+        documents: Eager-loaded ProfileDocument list (or None → nothing
+            satisfied, every debt code stays outstanding).
+
+    Returns:
+        The subset of ``document_debt['codes']`` not yet verified/paper_submitted.
+        ``[]`` when there is no debt snapshot (NULL column → never gates approve).
+    """
+    debt_snapshot = getattr(profile, "document_debt", None)
+    debt_codes = (
+        debt_snapshot.get("codes", [])
+        if isinstance(debt_snapshot, dict)
+        else []
+    )
+    if not debt_codes:
+        return []
+
+    # Shared "verified/paper_submitted, priority_evidence filtered out" logic —
+    # single source of truth in ``admission_document_policy`` so the satisfied-
+    # doc definition can't drift from the doc-policy layer. Local import keeps
+    # this leaf helper cycle-free (matches the other ``admission_document_policy``
+    # imports in this module).
+    from .admission_document_policy import _satisfied_doc_codes
+
+    satisfied_now = _satisfied_doc_codes(documents)
+    return [code for code in debt_codes if code not in satisfied_now]
+
+
+async def _outstanding_debt_for_approval(db, profile) -> list[str]:
+    """Outstanding (verified-based) debt codes for an approval gate; [] if no debt.
+
+    Shared by ``approve_profile`` and ``bulk_approve`` so both approve gates
+    compute the same thing: load the profile's documents and intersect the
+    ``document_debt`` snapshot with docs not yet verified/paper_submitted. A
+    profile without a debt snapshot returns ``[]`` (no query, never gates).
+    """
+    if not getattr(profile, "document_debt", None):
+        return []
+    from app.repositories import AdmissionRepository
+
+    documents = await AdmissionRepository(db).get_all_documents(profile.id)
+    return _compute_outstanding_debt_codes(profile, documents)
 
 
 def _validate_personal_info(
@@ -1805,11 +1885,26 @@ def _compute_frontend_fields(
         and _loaded_choices is not None
         and len(_loaded_choices) == 0
     )
+    # Fast-track nợ giấy tờ (C1.5) — compute the VERIFIED-based outstanding debt
+    # FIRST so the approve permission below can be gated on it. A code stays
+    # outstanding until the doc is verified/paper_submitted (NOT merely
+    # uploaded). No debt snapshot → [] → approve is unaffected. Mirror of the
+    # service-side gate in ``approve_profile``; assigned to the profile lower
+    # down (single source of truth for the FE badge + parity with GET).
+    _outstanding_debt_codes = _compute_outstanding_debt_codes(profile, documents)
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "submit": status == "draft" and (is_owner or is_manager or is_admin) and not _multi_nv_no_choice,
-        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        # Approve is BLOCKED while any owed doc is unverified (nợ giấy tờ): the
+        # FE hides/disables the button and the service raises BusinessRuleViolation
+        # if it is attempted anyway. ``_outstanding_debt_codes`` is [] for every
+        # profile without a debt snapshot → no behaviour change there.
+        "approve": (
+            status in ["submitted", "resubmitted"]
+            and (is_manager or is_admin)
+            and not _outstanding_debt_codes
+        ),
         "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
         # "Công bố kết quả" trực tiếp từ submitted/reviewing → engine cascade
@@ -1817,10 +1912,20 @@ def _compute_frontend_fields(
         # Bỏ T2 start-review explicit step (YAGNI per user clarification).
         # Mirror BE service guard publish_result(): uses_choice_engine=True +
         # status IN (submitted, reviewing) + manager/admin role.
+        #
+        # Fast-track nợ giấy tờ (C1.5) — publish_result is the multi-NV DECISION
+        # site (admit/reject cascade), so it must obey the same "no decision
+        # while docs are owed" gate as ``approve``: a multi-NV profile can submit
+        # WITH a document debt, so it could reach ``submitted`` with a non-empty
+        # ``_outstanding_debt_codes``. Block the FE button (and the
+        # ``admission_choice_engine_service.publish_result`` service guard raises
+        # BusinessRuleViolation if attempted anyway). No debt snapshot → [] → no
+        # behaviour change for the common path.
         "publish_result": (
             getattr(profile, "uses_choice_engine", False)
             and status in ["submitted", "reviewing"]
             and (is_manager or is_admin)
+            and not _outstanding_debt_codes
         ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -1905,12 +2010,14 @@ def _compute_frontend_fields(
         ),
         # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
         # Mirrors _fee_calc_authorized in routers/fees.py: admin always,
-        # manager/accountant same-unit, officer same-unit AND assigned.
-        # Status-gated to post-decision (approved/confirmed/enrolled) so we
-        # don't create finance records for profiles that might still flip
-        # to rejected.
+        # manager/accountant same-unit, officer same-unit AND assigned. The
+        # fee-eligible STATE gate is the shared ``is_fee_eligible`` helper
+        # (anti-drift, single source of truth with _fee_calc_authorized): C2
+        # fast-track adds ``submitted`` (prepay/hold-spot before the decision,
+        # single-path only) on top of post-decision (admitted-like/confirmed/
+        # enrolled); draft stays blocked.
         "calculate_fee": (
-            (is_admitted_like(profile) or status in ("confirmed", "enrolled"))
+            is_fee_eligible(profile)
             and (
                 is_admin
                 or (
@@ -2087,6 +2194,56 @@ def _compute_frontend_fields(
         profile.is_qualified = True
     
     profile.validation_errors = validation_errors
+
+    # =========================================================================
+    # Fast-track prepay/giữ chỗ — nợ giấy tờ contract (C1)
+    # =========================================================================
+    # SUBTRACTION (not enumeration): "other_errors" = every validation error
+    # EXCEPT the truly-missing-mandatory-document ones. We can submit-with-debt
+    # only when other_errors is empty (eligible apart from missing docs).
+    #
+    # The missing-doc messages produced by _validate_documents are exactly
+    # ``"Thiếu tài liệu bắt buộc: {code}"`` for each code in missing_doc_codes
+    # (uploaded-but-pending-verify docs use a DIFFERENT "chưa được xác minh"
+    # message and stay in other_errors → they still block, honouring B2:
+    # only truly-missing docs are waivable, never unverified ones).
+    _missing_doc_messages = {
+        _missing_doc_error_message(code) for code in missing_doc_codes
+    }
+    _other_errors = [
+        err for err in validation_errors if err not in _missing_doc_messages
+    ]
+
+    # The badge the FE renders is the COMPUTED set of debt codes whose docs are
+    # STILL not VERIFIED — it self-resolves once a reviewer verifies (or marks
+    # paper_submitted) each owed doc. VERIFIED-based, NOT missing-based: a doc
+    # that was merely uploaded (status ``uploaded``, not yet verified) still
+    # counts as outstanding (PLAN §C1.5 — hết nợ chỉ khi VERIFY). Computed via
+    # the shared ``_compute_outstanding_debt_codes`` helper above so the FE
+    # badge, the gated ``approve`` permission here, and the service-side approve
+    # gate all agree on one definition.
+    profile.outstanding_debt_codes = list(_outstanding_debt_codes)
+    # Expose the currently-missing mandatory doc codes so the FE can list them
+    # in the submit-with-debt dialog (B3).
+    profile.missing_doc_codes = list(missing_doc_codes)
+
+    # L1 owner-consistency: gate the submit-with-debt button on the SAME actor
+    # set as ``permissions["submit"]`` (is_owner or is_manager or is_admin) to
+    # prevent drift — submit-with-debt is just submit + a doc-debt snapshot, so
+    # an actor who can't submit must not see the debt variant either. (Previous
+    # ``is_admin or is_manager or is_officer`` admitted any officer, including
+    # one not assigned to the lead, which submit itself rejects via is_owner.)
+    # The server-side submit gate in submit_and_evaluate is role+IDOR based and
+    # unchanged — this only aligns the FE flag. The button shows only when the
+    # draft is eligible apart from missing docs (other_errors empty + ≥1 missing
+    # doc) and is not a multi-NV profile lacking choices.
+    profile.can_submit_with_document_debt = bool(
+        status == "draft"
+        and (is_owner or is_manager or is_admin)
+        and not _other_errors
+        and missing_doc_codes
+        and not _multi_nv_no_choice
+    )
 
     # F7 fix 2026-05-16: surface bypass-eligibility hazard to FE.
     # When `applied_rules.allow_unverified_submission=True`, applicant can
@@ -2974,6 +3131,44 @@ async def _populate_response_fields(
     # G2 defensive: helper wraps each compute in try/except → no crash if
     # documents lazy-load fails.
     await _populate_priority_evidence_projections(db, profile, documents)
+
+    # TUITION_PREPAY_FASTTRACK finding #1 — flag học phí trả trước chưa hoàn
+    # khi hồ sơ đã rejected/withdrawn (giữ-chỗ rồi từ chối/rút). Parity:
+    # also set on the GET path (``get_profile``) which does NOT call this
+    # helper — keep both in lockstep.
+    await _populate_unrefunded_payment_flag(db, profile)
+
+
+async def _populate_unrefunded_payment_flag(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Set transient ``has_unrefunded_payment`` for the FE warning badge.
+
+    A profile can be charged + collect a PREPAID tuition while ``submitted``
+    (hold-spot flow). If it is later ``rejected`` (manager) or ``withdrawn``
+    (candidate) — both valid from ``submitted`` — any money already collected
+    becomes orphaned: it is NOT auto-refunded and is easy to forget. This flag
+    lets ops see "cần hoàn tiền" on the detail page (refund stays manual via
+    the existing maker-checker flow).
+
+    ``SUM(fee.paid_amount)`` is the currently-HELD amount: a processed refund
+    decrements ``paid_amount`` (``payment_service.process_approved_refund``),
+    so the sum is exactly the unrefunded balance.
+
+    Cost guard: ONLY queries when ``status in (rejected, withdrawn)``; every
+    other status short-circuits to ``False`` with no DB hit. Idempotent — safe
+    to call from both ``_populate_response_fields`` (mutations) and
+    ``get_profile`` (GET detail) for parity.
+    """
+    if profile.status not in ("rejected", "withdrawn"):
+        profile.has_unrefunded_payment = False
+        return
+
+    from app.repositories.fee_repository import FeeRepository
+
+    total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+    profile.has_unrefunded_payment = total_paid > 0
 
 
 async def _load_priority_audit_log(
@@ -4299,6 +4494,12 @@ async def get_profile(
     profile.priority_audit_log = await _load_priority_audit_log(db, profile.id)
     await _populate_priority_evidence_projections(db, profile, documents)
 
+    # Parity with mutation responses (reject/withdraw go through
+    # ``_populate_response_fields``): GET detail builds via
+    # ``_compute_frontend_fields`` directly, so set the unrefunded-payment
+    # flag here too — otherwise GET would default it to False.
+    await _populate_unrefunded_payment_flag(db, profile)
+
     return profile
 
 
@@ -5337,6 +5538,9 @@ async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
     current_user: Optional[models.User],
+    *,
+    acknowledge_missing_docs: bool = False,
+    document_debt_reason: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """
     Submit AdmissionProfile for evaluation (auto-approve or return errors).
@@ -5357,6 +5561,15 @@ async def submit_and_evaluate(
         profile_id: AdmissionProfile ID
         current_user: Current authenticated user, or None for magic-link
             self-service candidate path (CCCD already verified upstream).
+        acknowledge_missing_docs: Fast-track C1 — when True AND the actor is
+            staff (officer/manager/admin) AND ``document_debt_reason`` is set
+            AND the only outstanding errors are truly-missing mandatory
+            documents, the profile transitions to ``submitted`` and a
+            ``document_debt`` snapshot is recorded. Candidate/magic-link
+            (current_user=None) can never use this. Defaults False (original
+            no-body behaviour: missing docs block submit).
+        document_debt_reason: Officer's reason for allowing the document debt;
+            required when ``acknowledge_missing_docs`` is honoured.
 
     Returns:
         Tuple of (result_dict, post_commit_callback):
@@ -5651,22 +5864,42 @@ async def submit_and_evaluate(
     ]
     if allow_unverified:
         uploaded_doc_codes = {doc.document_type.code for doc in path_uploaded_docs}
+        # Lax mode: anything not in uploaded_doc_codes has no file → truly missing.
+        pending_verify_codes: set[str] = set()
     else:
         uploaded_doc_codes = {
             doc.document_type.code for doc in path_uploaded_docs
             if doc.status in ("verified", "paper_submitted")
         }
+        # Strict mode: a mandatory doc with a file but status='uploaded' is
+        # uploaded-but-pending-verify, NOT truly missing. Mirror
+        # _validate_documents (:1114) so the nợ-giấy-tờ waiver only ever
+        # waives TRULY-missing docs (B2) — unverified docs still block.
+        pending_verify_codes = {
+            doc.document_type.code for doc in path_uploaded_docs
+            if doc.file_path and doc.status == "uploaded"
+        }
 
+    # Fast-track C1 — collect TRULY-missing mandatory doc codes + their error
+    # messages separately so the submit-with-debt path can waive ONLY these
+    # (uploaded-pending-verify errors stay in ``errors`` and keep blocking).
+    missing_doc_codes: List[str] = []
+    missing_doc_errors: List[str] = []
     for doc_code in mandatory_docs:
         if doc_code not in uploaded_doc_codes:
             doc = await admission_repo.get_document_by_type(profile.id, doc_code)
             label = doc.document_type.name if doc else doc_code
-            if allow_unverified:
-                errors.append(f"Thiếu tài liệu bắt buộc: {label} ({doc_code})")
-            else:
+            if not allow_unverified and doc_code in pending_verify_codes:
+                # Uploaded but not yet verified — NOT waivable; blocks submit.
                 errors.append(
                     f"Tài liệu {label} ({doc_code}) chưa được xác minh. "
                     f"Liên hệ quản lý để verify trước khi nộp hồ sơ."
+                )
+            else:
+                # Truly missing (no file). Waivable via document debt.
+                missing_doc_codes.append(doc_code)
+                missing_doc_errors.append(
+                    f"Thiếu tài liệu bắt buộc: {label} ({doc_code})"
                 )
 
     # Validation 3: Check citizen_id uniqueness
@@ -5781,6 +6014,63 @@ async def submit_and_evaluate(
             "Phường/Xã thường trú phải theo địa giới hiện hành (2 cấp, sau "
             "01/07/2025). Vui lòng chọn lại Phường/Xã hiện tại."
         )
+
+    # =========================================================================
+    # Fast-track prepay/giữ chỗ — submit-with-document-debt waiver (C1)
+    # =========================================================================
+    # SUBTRACTION (not enumeration): ``errors`` already holds EVERY blocking
+    # validation error EXCEPT truly-missing mandatory docs (those were split
+    # into ``missing_doc_errors`` / ``missing_doc_codes`` above). The early
+    # hard ``raise`` gates (multi-NV-no-choice :5426, round cutoff :5454,
+    # status!=draft :5433, eligibility :5483, atomic quota below) already
+    # fired and are NOT document errors → still block regardless.
+    #
+    # We may transition to ``submitted`` + record a document_debt snapshot
+    # ONLY when ALL of:
+    #   - acknowledge_missing_docs is True
+    #   - a non-empty document_debt_reason is supplied
+    #   - the actor is STAFF (officer/manager/admin) — never candidate/
+    #     magic-link (current_user=None) nor accountant/user roles
+    #   - there is at least one truly-missing mandatory doc to waive
+    #   - ``errors`` (all other validation) is empty
+    # Otherwise the missing-doc errors are folded back into ``errors`` and the
+    # profile stays in draft exactly as before (defaults reproduce old flow).
+    _actor_is_staff = current_user is not None and current_user.role in (
+        UserRole.OFFICER,
+        UserRole.MANAGER,
+        UserRole.ADMIN,
+    )
+    _reason_clean = (document_debt_reason or "").strip()
+    _waive_document_debt = bool(
+        acknowledge_missing_docs
+        and _reason_clean
+        and _actor_is_staff
+        and missing_doc_codes
+        and not errors
+    )
+
+    if _waive_document_debt:
+        # Persist the debt snapshot on the dedicated column (NOT applied_rules
+        # — see model comment / ardockeys01 trigger). The FE badge counts the
+        # COMPUTED outstanding_debt_codes (codes ∩ docs still missing), so the
+        # debt self-resolves once the owed docs are uploaded; this snapshot is
+        # the audit record of "was once owed + why".
+        profile.document_debt = {
+            "codes": list(missing_doc_codes),
+            "reason": _reason_clean,
+            "by_user_id": current_user.id,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+        log.info(
+            "admission_submit_with_document_debt",
+            profile_id=profile_id,
+            user_id=current_user.id,
+            waived_doc_codes=missing_doc_codes,
+        )
+    else:
+        # Not a valid waiver → missing docs block submit like every other
+        # error. Combine so the FE sees the full list (missing docs included).
+        errors = errors + missing_doc_errors
 
     # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
     # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
@@ -8005,6 +8295,27 @@ async def approve_profile(
             "Vui lòng xác nhận thanh toán lệ phí trước khi duyệt hồ sơ."
         )
 
+    # Fast-track nợ giấy tờ (C1.5) — APPROVE GATE. A profile submitted with a
+    # document debt may NOT be approved until every owed doc is VERIFIED (or
+    # paper_submitted). Computed from the persisted ``document_debt`` snapshot ∩
+    # docs-not-yet-verified, via the same helper the FE-facing
+    # ``_compute_frontend_fields`` uses (so the disabled button + the server
+    # gate agree). Profiles without a debt snapshot have no outstanding codes →
+    # this is a no-op (no regression). Runs BEFORE the irreversible quota
+    # increment so a blocked approve never consumes a seat.
+    _approve_outstanding = await _outstanding_debt_for_approval(db, profile)
+    if _approve_outstanding:
+        log.warning(
+            "Attempt to approve profile with outstanding document debt",
+            profile_id=profile.id,
+            approver_id=approver.id,
+            outstanding_debt_codes=_approve_outstanding,
+        )
+        raise BusinessRuleViolation(
+            "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, không thể "
+            "duyệt. Cần verify đủ giấy tờ trước khi duyệt."
+        )
+
     # ADM-026: quota gate. Locks the OfferingAcademicInfo row before
     # counting committed seats so concurrent approve calls cannot blow the
     # cap. Admin can override with bypass_quota + bypass_reason; manager
@@ -8268,6 +8579,21 @@ async def reject_profile(
         rejector_id=rejector.id,
         reason_length=len(data["reason"]),
     )
+
+    # TUITION_PREPAY_FASTTRACK finding #1 — surface orphaned prepaid tuition.
+    # ``_populate_response_fields`` above already computed the flag; only hit
+    # the DB for the exact amount when there IS something held (rare path).
+    # We do NOT block reject — refund stays manual via the maker-checker flow.
+    if getattr(profile, "has_unrefunded_payment", False):
+        from app.repositories.fee_repository import FeeRepository
+
+        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        log.warning(
+            "Profile reject với khoản học phí chưa hoàn",
+            profile_id=profile.id,
+            total_paid=str(_total_paid),
+            status=profile.status,
+        )
 
     # Path C / Arch-3: paired notification bundle + commission callback.
     # Mirrors router admissions.py:1606+1621 (paired dispatch) + 1636
@@ -10203,6 +10529,23 @@ async def withdraw_profile(
         old_status=_old_status_for_audit,
     )
 
+    # TUITION_PREPAY_FASTTRACK finding #1 — flag + warn về học phí trả trước
+    # chưa hoàn khi rút hồ sơ. ``withdraw_profile`` không gọi
+    # ``_populate_response_fields`` (response tối giản theo thiết kế), nên set
+    # cờ trực tiếp qua helper nhẹ để mutation response có parity với GET. KHÔNG
+    # chặn rút — hoàn tiền vẫn thủ công qua maker-checker.
+    await _populate_unrefunded_payment_flag(db, profile)
+    if getattr(profile, "has_unrefunded_payment", False):
+        from app.repositories.fee_repository import FeeRepository
+
+        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        log.warning(
+            "Profile withdraw với khoản học phí chưa hoàn",
+            profile_id=profile.id,
+            total_paid=str(_total_paid),
+            status=profile.status,
+        )
+
     # Path C / Arch-3: build atomic notification bundle for the paired
     # transition (APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED).
     # Withdraw is the one paired flow that does NOT have a commission
@@ -11410,6 +11753,19 @@ async def bulk_approve(
             if requires_fee and fee_status == "pending":
                 failed_ids.append(profile_id)
                 errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
+                continue
+
+            # Fast-track nợ giấy tờ (C1.5) — same approve gate as single
+            # approve_profile: a profile with an unresolved document debt may
+            # NOT be (bulk-)approved. Per-item skip (not a batch abort) to match
+            # the other bulk gates. No-op for profiles without a debt snapshot.
+            _bulk_outstanding = await _outstanding_debt_for_approval(db, profile)
+            if _bulk_outstanding:
+                failed_ids.append(profile_id)
+                errors[profile_id] = (
+                    "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
+                    "không thể duyệt."
+                )
                 continue
 
             # ADM-026: per-item quota gate. Per-item bypass fields let admin

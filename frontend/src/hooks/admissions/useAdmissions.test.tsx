@@ -115,7 +115,7 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       act(() => {
-        result.current.mutate();
+        result.current.mutate(undefined);
       });
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -152,7 +152,7 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       act(() => {
-        result.current.mutate();
+        result.current.mutate(undefined);
       });
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -190,7 +190,7 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       act(() => {
-        result.current.mutate();
+        result.current.mutate(undefined);
       });
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -234,7 +234,7 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
       );
 
       act(() => {
-        result.current.mutate();
+        result.current.mutate(undefined);
       });
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));

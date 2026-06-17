@@ -39,6 +39,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { ApprovalDecisionButton } from "../../ApprovalDecisionButton"
+import { SubmitWithDebtDialog } from "./SubmitWithDebtDialog"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import type { PrimaryAction } from "./useSubmissionReadiness"
 
@@ -58,6 +59,18 @@ export interface DecisionActionsPanelProps {
   onSubmit: () => void
   isSubmitting: boolean
   canSubmit: boolean
+
+  /**
+   * Fast-track nợ giấy tờ — confirm a document debt and submit
+   * (TUITION_PREPAY_FASTTRACK_PLAN.md §4). Surfaced as a distinct
+   * "Nộp kèm nợ giấy tờ" CTA, gated by `canSubmitWithDocumentDebt`
+   * (= `profile.can_submit_with_document_debt`, an API flag — NOT role).
+   */
+  onSubmitWithDebt?: (payload: {
+    acknowledge_missing_docs: true
+    document_debt_reason: string
+  }) => void
+  canSubmitWithDocumentDebt?: boolean
 
   onResubmit?: () => void
   isResubmitting?: boolean
@@ -107,6 +120,8 @@ export function DecisionActionsPanel({
   onSubmit,
   isSubmitting,
   canSubmit,
+  onSubmitWithDebt,
+  canSubmitWithDocumentDebt = false,
   onResubmit,
   isResubmitting = false,
   canResubmit,
@@ -333,12 +348,26 @@ export function DecisionActionsPanel({
     return <Shell className={className}>{enrollButton()}</Shell>
   }
   if (primaryAction === "submit" && canSubmit) {
+    // Fast-track: when the profile is eligible on every axis EXCEPT missing
+    // mandatory docs, the backend grants `can_submit_with_document_debt`. Offer
+    // "Nộp kèm nợ giấy tờ" alongside the (disabled) normal submit. The reason
+    // line then points at the debt option instead of a dead "chưa đủ điều kiện".
+    const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt
+    const reasonNode = showDebt ? (
+      <Reason>Còn thiếu giấy tờ — có thể nộp kèm nợ giấy tờ.</Reason>
+    ) : !isEligible ? (
+      <Reason>Chưa đủ điều kiện để nộp.</Reason>
+    ) : undefined
     return (
-      <Shell
-        className={className}
-        reason={!isEligible ? <Reason>Chưa đủ điều kiện để nộp.</Reason> : undefined}
-      >
+      <Shell className={className} reason={reasonNode}>
         {submitButton()}
+        {showDebt && (
+          <SubmitWithDebtDialog
+            profile={profile}
+            onConfirm={onSubmitWithDebt!}
+            isSubmitting={isSubmitting}
+          />
+        )}
       </Shell>
     )
   }

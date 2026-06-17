@@ -191,6 +191,66 @@ class TestInvoiceGeneration:
         assert invoices[0].issued_at is not None
         assert invoices[0].issued_by_id == admin_user.id
 
+    async def test_auto_issue_returns_invoice_issued_callback(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """C2 / B4: auto_issue=True returns a non-None, awaitable post_commit
+        callback (the INVOICE_ISSUED fanout).
+
+        The router (POST /api/fees/calculate) must CAPTURE and await this
+        callback; previously it discarded it (``invoices, _ = ...``) so the
+        invoice was issued silently with no notification/sync. This guards the
+        callback wiring at the service boundary. The actual dispatch is
+        guarded on ``payload['user_id']`` (assigned officer) — this fixture's
+        lead has no owner, so no dispatch fires; the end-to-end dispatch is
+        asserted at the route level in test_fees_calculate_authorization.py
+        where the lead has an assigned officer.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]
+        due = date.today() + timedelta(days=30)
+
+        invoices, invoice_cb = await service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=due,
+            user_id=admin_user.id,
+            unit_id=invoice_fixtures["unit_id"],
+            auto_issue=True,
+        )
+        await db.commit()
+
+        assert invoices[0].status == InvoiceStatusEnum.issued.value
+        # B4: callback must be captured, not None, and awaitable without error.
+        assert invoice_cb is not None and callable(invoice_cb)
+        with patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new_callable=AsyncMock,
+        ):
+            await invoice_cb()  # must not raise
+
+    async def test_no_auto_issue_returns_none_callback(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """C2 regression guard: without auto_issue, no callback is returned and
+        invoices stay draft → no INVOICE_ISSUED for non-tuition fee types."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]
+        due = date.today() + timedelta(days=30)
+
+        invoices, invoice_cb = await service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=due,
+            user_id=admin_user.id,
+            unit_id=invoice_fixtures["unit_id"],
+            auto_issue=False,
+        )
+        await db.commit()
+
+        assert invoices[0].status == InvoiceStatusEnum.draft.value
+        assert invoice_cb is None
+
     async def test_generate_invoices_wrong_status(self, db, invoice_fixtures, admin_user):
         """H8: Cannot generate invoices for cancelled fee."""
         service = InvoiceService(db)

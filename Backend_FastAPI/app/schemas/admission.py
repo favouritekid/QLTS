@@ -1326,6 +1326,64 @@ class AdmissionProfileResponse(BaseModel):
         description="Backend-computed score pass/fail status: {total_status, subject_statuses: {code: status}}"
     )
 
+    # =========================================================================
+    # Fast-track prepay/giữ chỗ — nợ giấy tờ contract (C1)
+    # =========================================================================
+    # Persisted snapshot captured at staff submit-with-debt. Shape:
+    # {codes, reason, by_user_id, at}. None = no debt ever recorded.
+    document_debt: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Snapshot of nợ giấy tờ captured at submit-with-debt: "
+            "{codes, reason, by_user_id, at}. None when no debt recorded."
+        ),
+    )
+    # COMPUTED (transient): the snapshot's codes that are STILL missing now.
+    # Self-resolves to [] once the officer uploads the owed docs — this is
+    # what the FE badge counts (NOT document_debt.codes which is frozen).
+    outstanding_debt_codes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Document codes from document_debt that are still missing now "
+            "(document_debt.codes ∩ currently-missing docs). Empty when the "
+            "debt has been fully resolved."
+        ),
+    )
+    # Mandatory document codes currently missing (truly-missing, excluding
+    # uploaded-pending-verify). FE lists these in the submit-with-debt dialog.
+    missing_doc_codes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Mandatory document codes currently missing (excludes "
+            "uploaded-but-pending-verify). Drives the submit-with-debt dialog."
+        ),
+    )
+    # COMPUTED flag — true only when a staff actor could submit this draft
+    # with a document debt: draft + staff + no non-document errors + at least
+    # one missing doc + not a multi-NV-without-choice. FE gates the "Nộp kèm
+    # nợ giấy tờ" button on this.
+    can_submit_with_document_debt: bool = Field(
+        default=False,
+        description=(
+            "True when the acting staff user may submit this draft with a "
+            "document debt (eligible apart from missing docs)."
+        ),
+    )
+    # COMPUTED (transient): true only when a rejected/withdrawn profile still
+    # holds collected (unrefunded) tuition (SUM(fee.paid_amount) > 0). A prepaid
+    # hold-spot fee survives reject/withdraw and is NOT auto-refunded → the FE
+    # shows a "cần hoàn tiền" warning. False for every non-terminal status (no
+    # DB hit). Self-resolves to False once the money is refunded (refund
+    # decrements paid_amount).
+    has_unrefunded_payment: bool = Field(
+        default=False,
+        description=(
+            "True when a rejected/withdrawn profile still holds collected, "
+            "not-yet-refunded tuition (SUM(fee.paid_amount) > 0). Drives the "
+            "'cần hoàn tiền' warning banner."
+        ),
+    )
+
     @model_validator(mode="before")
     @classmethod
     def _safely_handle_unloaded_choices(cls, data: Any) -> Any:
@@ -1499,6 +1557,44 @@ class BulkActionResponse(BaseModel):
     failed_ids: List[int] = Field(default_factory=list, description="IDs of profiles that failed")
     errors: Optional[Dict[int, str]] = Field(None, description="Error messages per failed profile ID")
     message: str = Field(..., description="Summary message")
+
+
+class AdmissionSubmitRequest(BaseModel):
+    """Request body for ``POST /api/admissions/{id}/submit`` (fast-track C1).
+
+    The endpoint historically took no body. The two optional fields enable
+    the staff-only "Nộp kèm nợ giấy tờ" flow: when a profile is eligible in
+    every respect except missing mandatory documents, an officer/manager/
+    admin may acknowledge the missing docs and supply a reason; the service
+    then transitions the profile to ``submitted`` and records a
+    ``document_debt`` snapshot.
+
+    Defaults (``acknowledge_missing_docs=False``, ``document_debt_reason=
+    None``) reproduce the original no-body behaviour exactly, so existing
+    callers (including the magic-link candidate path) are unaffected. The
+    service enforces the staff-only gate + reason requirement; this schema
+    only carries the inputs.
+    """
+
+    acknowledge_missing_docs: bool = Field(
+        default=False,
+        description=(
+            "Staff acknowledges submitting with mandatory documents still "
+            "missing (nợ giấy tờ). Ignored unless the actor is staff and "
+            "the only outstanding errors are missing documents."
+        ),
+    )
+    document_debt_reason: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Required when acknowledge_missing_docs=True — officer's reason "
+            "for allowing the document debt (e.g. 'HS xin cấp lại học bạ, "
+            "hẹn nộp 30/06')."
+        ),
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class AdmissionSubmitResponse(BaseModel):

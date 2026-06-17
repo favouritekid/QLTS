@@ -33,6 +33,13 @@ interface FinalizeTabProps {
   isSubmitting: boolean
   canSubmit: boolean
 
+  // Submit-with-debt (fast-track nợ giấy tờ — officer/owner, state draft)
+  onSubmitWithDebt?: (payload: {
+    acknowledge_missing_docs: true
+    document_debt_reason: string
+  }) => void
+  canSubmitWithDocumentDebt?: boolean
+
   // Resubmit (officer — state rejected/revision_requested)
   onResubmit?: () => void
   isResubmitting?: boolean
@@ -77,6 +84,8 @@ export function FinalizeTab({
   onSubmit,
   isSubmitting,
   canSubmit,
+  onSubmitWithDebt,
+  canSubmitWithDocumentDebt = false,
   onResubmit,
   isResubmitting = false,
   canResubmit,
@@ -135,6 +144,8 @@ export function FinalizeTab({
       onSubmit={onSubmit}
       isSubmitting={isSubmitting}
       canSubmit={canSubmit}
+      onSubmitWithDebt={onSubmitWithDebt}
+      canSubmitWithDocumentDebt={canSubmitWithDocumentDebt}
       onResubmit={onResubmit}
       isResubmitting={isResubmitting}
       canResubmit={canResubmit}

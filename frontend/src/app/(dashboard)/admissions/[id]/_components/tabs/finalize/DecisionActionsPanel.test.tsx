@@ -32,6 +32,18 @@ vi.mock("@/components/ui/alert-dialog", () => ({
   ),
 }))
 
+// Pass-through Dialog mock (no Radix portal) so the SubmitWithDebtDialog body is
+// always in the tree for the submit-with-debt assertions below.
+vi.mock("@/components/ui/dialog", () => ({
+  Dialog: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DialogTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => <>{children}</>,
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div data-testid="debt-dialog-content">{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}))
+
 import { DecisionActionsPanel } from "./DecisionActionsPanel"
 
 function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): AdmissionProfileResponse {
@@ -251,5 +263,73 @@ describe("DecisionActionsPanel — no send-link (D1/D3)", () => {
   it("does not render any 'Gửi link' utility action", () => {
     renderPanel(buildProfile(), { primaryAction: "submit", canSubmit: true, canApprove: true })
     expect(screen.queryByText(/Gửi link/i)).not.toBeInTheDocument()
+  })
+})
+
+describe("DecisionActionsPanel — submit-with-debt (fast-track nợ giấy tờ)", () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it("shows 'Nộp kèm nợ giấy tờ' alongside the normal submit when canSubmitWithDocumentDebt", () => {
+    renderPanel(
+      buildProfile({
+        eligibility_status: "ineligible",
+        missing_doc_codes: ["hoc_ba_thpt"],
+        documents_checklist: [
+          { code: "hoc_ba_thpt", label: "Học bạ THPT", status: "missing" },
+        ],
+      }),
+      {
+        primaryAction: "submit",
+        canSubmit: true,
+        isEligible: false,
+        canSubmitWithDocumentDebt: true,
+        onSubmitWithDebt: vi.fn(),
+      },
+    )
+    // Normal submit still present (disabled, since ineligible) — distinct CTA.
+    expect(screen.getByText("Nộp hồ sơ chính thức").closest("button")).toBeDisabled()
+    // The fast-track debt CTA is the actionable one.
+    expect(screen.getByText("Nộp kèm nợ giấy tờ")).toBeInTheDocument()
+    // Reason line points at the debt path, not a dead "chưa đủ điều kiện".
+    expect(screen.getByText(/có thể nộp kèm nợ giấy tờ/i)).toBeInTheDocument()
+  })
+
+  it("does NOT show the debt CTA when canSubmitWithDocumentDebt is false", () => {
+    renderPanel(buildProfile({ eligibility_status: "ineligible" }), {
+      primaryAction: "submit",
+      canSubmit: true,
+      isEligible: false,
+      canSubmitWithDocumentDebt: false,
+    })
+    expect(screen.queryByText("Nộp kèm nợ giấy tờ")).not.toBeInTheDocument()
+    expect(screen.getByText("Chưa đủ điều kiện để nộp.")).toBeInTheDocument()
+  })
+
+  it("confirming the dialog fires onSubmitWithDebt with the acknowledge + reason payload", () => {
+    const onSubmitWithDebt = vi.fn()
+    renderPanel(
+      buildProfile({
+        eligibility_status: "ineligible",
+        missing_doc_codes: ["hoc_ba_thpt"],
+        documents_checklist: [
+          { code: "hoc_ba_thpt", label: "Học bạ THPT", status: "missing" },
+        ],
+      }),
+      {
+        primaryAction: "submit",
+        canSubmit: true,
+        isEligible: false,
+        canSubmitWithDocumentDebt: true,
+        onSubmitWithDebt,
+      },
+    )
+    fireEvent.change(screen.getByLabelText(/Lý do cho nợ/), {
+      target: { value: "cấp lại học bạ" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Xác nhận nộp" }))
+    expect(onSubmitWithDebt).toHaveBeenCalledWith({
+      acknowledge_missing_docs: true,
+      document_debt_reason: "cấp lại học bạ",
+    })
   })
 })
