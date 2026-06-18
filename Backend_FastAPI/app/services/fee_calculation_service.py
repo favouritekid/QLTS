@@ -123,6 +123,12 @@ async def resolve_fee_academic_info(
     e.g. under the fee-create lock that loads only lead + choices) →
     ``applied_rules['academic_info_id']``. Choice-engine profiles never fall
     through to this path.
+
+    COUPLING (do not let drift): the "exactly 1 choice" branch is the PRICING
+    counterpart of the submitted-prepay GATE in
+    ``admission_status.is_fee_eligible`` (multi-NV ⇒ exactly 1 NV). Keep both in
+    lockstep; the end-to-end anchor is
+    ``tests/api/test_phase3_pr3d_b_choice_crud.py``.
     """
     if getattr(profile, "uses_choice_engine", False):
         stmt = (
