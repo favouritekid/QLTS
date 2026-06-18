@@ -23,7 +23,6 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -279,61 +278,25 @@ async def calculate_fee(
         # only the profile lookup is unscoped now.
         unit_id = finance_scope_unit_id(current_user)
 
-        # Resolve base_amount + discount_policy_ids depending on fee type.
-        # For tuition: service looks up amount from offering_semester_tuition
-        # (PR 3 — ADR-002). Router only needs discount policy IDs.
-        # For non-tuition: keep existing path via academic_info.tuition_fee_per_year.
+        # Resolve academic_info via the SHARED resolver (single source of truth
+        # with FeeCalculationService) so the discount ngành matches the ngành the
+        # service prices the tuition against — handles legacy single-path AND
+        # multi-NV (admitted-choice / single-choice). For tuition the service
+        # looks up the amount from offering_semester_tuition (PR 3 — ADR-002);
+        # the router only needs discount policy IDs. For non-tuition the base
+        # amount still comes from academic_info.tuition_fee_per_year.
+        from app.services.fee_calculation_service import resolve_fee_academic_info
+
+        academic_info = await resolve_fee_academic_info(db, profile)
+        discount_policy_ids = list(academic_info.applied_discount_policy_ids or [])
+
         base_amount = Decimal("0")
-        discount_policy_ids: list = []
-        academic_info = None
-
         if data.fee_type != FeeTypeEnum.tuition:
-            # Non-tuition: existing path — look up from academic_info
-            oac = profile.offering_admission_config
-            if oac and oac.academic_info:
-                academic_info = oac.academic_info
-
-            if not academic_info and profile.applied_rules:
-                ai_id = profile.applied_rules.get("academic_info_id")
-                if ai_id:
-                    from app.models.offering_academic_info import OfferingAcademicInfo
-                    ai_result = await db.execute(
-                        sa.select(OfferingAcademicInfo).where(
-                            OfferingAcademicInfo.id == int(ai_id)
-                        )
-                    )
-                    academic_info = ai_result.scalars().first()
-
-            if academic_info:
-                base_amount = academic_info.tuition_fee_per_year or Decimal("0")
-
+            base_amount = academic_info.tuition_fee_per_year or Decimal("0")
             if base_amount <= 0:
                 raise BadRequest(
                     "Cannot calculate fee: No fee amount configured for this offering"
                 )
-
-            if academic_info:
-                discount_policy_ids = academic_info.applied_discount_policy_ids or []
-        else:
-            # Tuition: service will look up amount from offering_semester_tuition.
-            # Router still resolves discount policy IDs from academic_info.
-            oac = profile.offering_admission_config
-            if oac and oac.academic_info:
-                academic_info = oac.academic_info
-
-            if not academic_info and profile.applied_rules:
-                ai_id = profile.applied_rules.get("academic_info_id")
-                if ai_id:
-                    from app.models.offering_academic_info import OfferingAcademicInfo
-                    ai_result = await db.execute(
-                        sa.select(OfferingAcademicInfo).where(
-                            OfferingAcademicInfo.id == int(ai_id)
-                        )
-                    )
-                    academic_info = ai_result.scalars().first()
-
-            if academic_info:
-                discount_policy_ids = academic_info.applied_discount_policy_ids or []
 
         # Calculate fee
         fee, post_commit = await fee_service.calculate_fee(

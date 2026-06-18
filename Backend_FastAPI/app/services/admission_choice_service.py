@@ -40,6 +40,8 @@ from app.repositories.admission_profile_choice_repository import (
     AdmissionProfileChoiceRepository,
 )
 from app.repositories.admission_path_repository import AdmissionPathRepository
+from app.repositories.admission_repository import AdmissionRepository
+from app.repositories.fee_repository import FeeRepository
 from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
 from app.utils.admission_round_guards import assert_round_open
@@ -77,6 +79,8 @@ class AdmissionChoiceService:
         self.choice_repo = AdmissionProfileChoiceRepository(db)
         self.path_repo = AdmissionPathRepository(db)
         self.sysconfig = SystemConfigService(db)
+        self.admission_repo = AdmissionRepository(db)
+        self.fee_repo = FeeRepository(db)
 
     async def add_choice(
         self,
@@ -103,6 +107,14 @@ class AdmissionChoiceService:
             BusinessRuleViolation: violation any precheck
             ResourceNotFoundError: path/config not found
         """
+        # ============================================================
+        # Finance lock: lock the profile row FIRST (the same row
+        # calculate_fee locks) then freeze NV edits if a tuition fee already
+        # exists. Serializes "fee sees N choices" vs add-NV; see helpers.
+        # ============================================================
+        await self._lock_profile(profile)
+        await self._assert_no_finance_lock(profile, action="thêm nguyện vọng")
+
         # ============================================================
         # Precheck 1: uses_choice_engine flag — Phase 3 gate
         # ============================================================
@@ -323,6 +335,8 @@ class AdmissionChoiceService:
         (draft / revision_requested) leaves no forensic record for a
         "where did NV 3 go?" complaint months later.
         """
+        await self._lock_profile(profile)
+        await self._assert_no_finance_lock(profile, action="xoá nguyện vọng")
         self._assert_choice_editable(profile, action="xoá nguyện vọng")
 
         # Snapshot the row + score children BEFORE the cascade delete so
@@ -399,6 +413,8 @@ class AdmissionChoiceService:
           410). Load round qua choice.admission_path_id (lazy add — single
           extra query, paths này low-traffic vs add_choice).
         """
+        await self._lock_profile(profile)
+        await self._assert_no_finance_lock(profile, action="đổi thứ tự nguyện vọng")
         self._assert_choice_editable(profile, action="đổi thứ tự nguyện vọng")
 
         round_obj = await self.choice_repo.get_round_by_path_id(
@@ -459,6 +475,8 @@ class AdmissionChoiceService:
         update_choice_display_order — load round qua admission_path_id
         + assert open. RoundClosedError → 410.
         """
+        await self._lock_profile(profile)
+        await self._assert_no_finance_lock(profile, action="cập nhật điểm nguyện vọng")
         self._assert_choice_editable(profile, action="cập nhật điểm nguyện vọng")
 
         round_obj = await self.choice_repo.get_round_by_path_id(
@@ -515,6 +533,41 @@ class AdmissionChoiceService:
                 f"Không thể {action} khi hồ sơ ở trạng thái "
                 f"'{profile.status}'. Chỉ cho phép khi 'draft' hoặc "
                 f"'revision_requested'."
+            )
+
+    async def _lock_profile(self, profile: AdmissionProfile) -> None:
+        """Acquire the AdmissionProfile row lock + refresh in-session attrs.
+
+        Serializes NV-structure mutations against fee creation, which locks the
+        SAME row first (``FeeCalculationService.calculate_fee``).
+        ``populate_existing`` overwrites the (non-locking) IDOR-loaded instance
+        so the finance-lock + status re-checks read committed state under the
+        lock rather than a stale identity-map copy.
+        """
+        await self.admission_repo.get_by_id_for_update(
+            profile.id, populate_existing=True
+        )
+
+    async def _assert_no_finance_lock(
+        self, profile: AdmissionProfile, *, action: str
+    ) -> None:
+        """Freeze NV-structure edits once ANY tuition fee exists for the profile.
+
+        ``cancel_fee`` only flips status→cancelled; the tuition partial-unique
+        index ``uq_fee_profile_type_semester_tuition`` + ``check_duplicate``
+        ignore status, so a cancelled HK1 still holds the
+        ``(profile, tuition, semester_no)`` slot and the ngành cannot be
+        re-priced in-flow. There is no fee supersede/recreate flow, so ANY
+        tuition row (incl. cancelled) freezes add/delete/reorder/score-replace —
+        finance changes must go through a separate void/supersede process.
+        """
+        tuition_fees = await self.fee_repo.get_by_profile_id(
+            profile.id, fee_type="tuition"
+        )
+        if tuition_fees:
+            raise BusinessRuleViolation(
+                f"Hồ sơ đã phát sinh học phí, không thể {action}; "
+                "cần xử lý tài chính bằng quy trình riêng."
             )
 
     async def _snapshot_and_store_scores(

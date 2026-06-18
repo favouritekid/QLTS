@@ -115,21 +115,32 @@ def is_fee_eligible(profile: "AdmissionProfile") -> bool:
       * admitted-like (legacy ``approved`` / ``overridden`` + choice-engine
         ``admitted``) — the post-decision happy path,
       * ``confirmed`` / ``enrolled`` — later post-decision milestones,
-      * ``submitted`` ONLY for single-path profiles (C2 fast-track prepay /
-        giữ chỗ). A multi-NV profile (``uses_choice_engine``) at ``submitted``
-        has not locked its admitted choice yet (all choices ``pending`` until
-        publish), so calculating tuition would risk the wrong ngành — it
-        qualifies later via ``admitted`` (``is_admitted_like``).
+      * ``submitted`` for single-path profiles (C2 fast-track prepay / giữ chỗ),
+      * ``submitted`` for a multi-NV profile (``uses_choice_engine``) that has
+        EXACTLY ONE nguyện vọng. With a single choice the ngành is already
+        determined (publish can only admit that one choice or reject the whole
+        profile — ``add_choice`` is locked at ``submitted``), so prepay / giữ
+        chỗ is as safe as the single-path case. A multi-NV profile with ≥2
+        choices at ``submitted`` has not locked its admitted choice (all choices
+        ``pending`` until publish) → calculating tuition would risk the wrong
+        ngành, so it qualifies later via ``admitted`` (``is_admitted_like``).
+
+    The multi-NV single-choice branch reads ``profile.__dict__`` (no lazy-load
+    → no MissingGreenlet) and FAILS CLOSED when ``choices`` is not eager-loaded:
+    the fee-create path re-validates this under a row lock anyway, so a missing
+    eager-load degrades to "not eligible" rather than a wrong-ngành fee.
 
     Earlier states (``draft`` etc.) are NOT eligible (a fee would be premature).
-    Behaviour-preserving extraction — keep this in lockstep with both call
-    sites if the gate ever changes.
+    Keep this in lockstep with both call sites if the gate ever changes.
     """
-    return (
-        is_admitted_like(profile)
-        or profile.status in ("confirmed", "enrolled")
-        or (profile.status == "submitted" and not profile.uses_choice_engine)
-    )
+    if is_admitted_like(profile) or profile.status in ("confirmed", "enrolled"):
+        return True
+    if profile.status == "submitted":
+        if not profile.uses_choice_engine:
+            return True
+        choices = profile.__dict__.get("choices")
+        return choices is not None and len(choices) == 1
+    return False
 
 
 def is_confirmation_eligible(profile: "AdmissionProfile") -> bool:

@@ -786,3 +786,424 @@ async def test_delete_choice_allowed_when_round_closed(
             models.AdmissionProfileChoice, pr3d_b_seed_with_choice["choice_id"]
         )
         assert gone is None, "Choice phải bị xoá khỏi DB sau DELETE thành công"
+
+
+# ============================================================================
+# Multi-NV single-choice fee carve-out + finance-lock freeze
+# ----------------------------------------------------------------------------
+# Two coupled behaviours:
+#   1. A multi-NV profile with EXACTLY ONE nguyện vọng may calculate tuition at
+#      ``submitted`` (ngành is already determined; prepay / giữ chỗ) — the fee
+#      service resolves the ngành from that single choice, NOT the profile
+#      snapshot (which would be the wrong ngành for a multi-NV admit).
+#   2. Once a tuition fee exists, NV-structure edits (add/delete/reorder/
+#      score-replace) are frozen — there is no fee supersede/recreate flow, so
+#      changing the ngành after pricing would orphan / mis-price the fee.
+# ============================================================================
+
+
+async def _insert_tuition_fee(profile_id: int) -> int:
+    """Insert a minimal tuition Fee row so the finance-lock guard fires.
+
+    The freeze guard only checks EXISTENCE of a tuition fee for the profile
+    (any status), so a calculated row with HK1 semester_no is enough.
+    """
+    from app.models.finance import Fee
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            fee = Fee(
+                admission_profile_id=profile_id,
+                fee_type="tuition",
+                academic_year=2026,
+                semester_no=1,
+                base_amount=Decimal("1000000"),
+                total_discount=Decimal("0"),
+                final_amount=Decimal("1000000"),
+                paid_amount=Decimal("0"),
+                waived_amount=Decimal("0"),
+                status="calculated",
+                version=1,
+            )
+            s.add(fee)
+            await s.flush()
+            return fee.id
+
+
+@pytest_asyncio.fixture
+async def multinv_submitted_fee_ready(pr3d_b_seed_with_choice: dict) -> dict:
+    """``pr3d_b_seed_with_choice`` (multi-NV, exactly 1 choice) + HK1 tuition
+    amount + FULL installment plan, profile flipped to ``submitted`` — ready for
+    POST /api/fees/calculate to exercise the single-choice carve-out end-to-end.
+    """
+    seed = pr3d_b_seed_with_choice
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            from sqlalchemy import select, update
+
+            path = await s.get(models.AdmissionPath, seed["path_id"])
+            ai_id = path.academic_info_id
+            # ADR-002: tuition amount comes from offering_semester_tuition (HK1).
+            s.add(models.OfferingSemesterTuition(
+                academic_info_id=ai_id, semester_no=1, amount=1_000_000,
+            ))
+            # FULL single-payment plan — the route rejects unknown plan codes.
+            full = (await s.execute(
+                select(models.InstallmentPlan).where(
+                    models.InstallmentPlan.code == "FULL"
+                )
+            )).scalar_one_or_none()
+            if full is None:
+                s.add(models.InstallmentPlan(
+                    code="FULL", name="Thanh toán 1 lần", installment_count=1,
+                    schedule=[{
+                        "installment_no": 1, "due_days_offset": 0,
+                        "percent": 100.0, "description": "Toàn bộ",
+                    }],
+                    is_active=True,
+                ))
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == seed["profile_id"])
+                .values(status="submitted")
+            )
+    return {**seed, "academic_info_id": ai_id}
+
+
+@pytest.mark.asyncio
+async def test_multinv_single_choice_calculate_fee_at_submitted_201(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    multinv_submitted_fee_ready: dict,
+):
+    """A multi-NV profile with EXACTLY ONE nguyện vọng at ``submitted`` →
+    /api/fees/calculate returns 201 and prices against THAT choice's ngành
+    (amount from the choice's offering_semester_tuition HK1 = 1,000,000).
+    """
+    pid = multinv_submitted_fee_ready["profile_id"]
+    resp = await client.post(
+        "/api/fees/calculate",
+        headers=manager_token_headers,
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+    )
+    assert resp.status_code == 201, (
+        f"Multi-NV single-choice at submitted should calculate fee, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert Decimal(str(body["final_amount"])) == Decimal("1000000"), body
+
+
+@pytest.mark.asyncio
+async def test_add_choice_blocked_when_tuition_fee_exists(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3a_seed: dict,
+):
+    """Finance lock: once a tuition fee exists, adding a NV is blocked (400)
+    even while the profile is still ``draft`` — the ngành is frozen for finance.
+    """
+    await _insert_tuition_fee(pr3a_seed["profile_id"])
+    resp = await client.post(
+        f"/api/v2/admissions/{pr3a_seed['profile_id']}/choices",
+        headers=manager_token_headers,
+        json={
+            "admission_path_id": pr3a_seed["path_id"],
+            "path_subject_group_config_id": pr3a_seed["config_id"],
+            "display_order": 1,
+            "scores": [{"subject_id": pr3a_seed["subject_id"], "score": "8.50"}],
+        },
+    )
+    assert resp.status_code == 400, (
+        f"add_choice must be blocked when a tuition fee exists, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    assert "đã phát sinh học phí" in resp.text, resp.text
+
+
+@pytest.mark.asyncio
+async def test_delete_choice_blocked_when_tuition_fee_exists(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """Finance lock: deleting a NV is blocked (400) once a tuition fee exists."""
+    await _insert_tuition_fee(pr3d_b_seed_with_choice["profile_id"])
+    resp = await client.delete(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}"
+        f"/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+    )
+    assert resp.status_code == 400, (
+        f"delete_choice must be blocked when a tuition fee exists, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    assert "đã phát sinh học phí" in resp.text, resp.text
+    # Choice must survive the blocked delete.
+    async with AsyncSessionLocal() as s:
+        still = await s.get(
+            models.AdmissionProfileChoice, pr3d_b_seed_with_choice["choice_id"]
+        )
+        assert still is not None
+
+
+@pytest.mark.asyncio
+async def test_reorder_choice_blocked_when_tuition_fee_exists(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """Finance lock: reordering a NV is blocked (400) once a tuition fee exists."""
+    await _insert_tuition_fee(pr3d_b_seed_with_choice["profile_id"])
+    resp = await client.patch(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}"
+        f"/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+        json={"display_order": 2},
+    )
+    assert resp.status_code == 400, (
+        f"reorder must be blocked when a tuition fee exists, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    assert "đã phát sinh học phí" in resp.text, resp.text
+
+
+@pytest.mark.asyncio
+async def test_replace_scores_blocked_when_tuition_fee_exists(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """Finance lock: replacing scores is blocked (400) once a tuition fee
+    exists — 'đã chốt finance thì không đổi dữ liệu xét tuyển'.
+    """
+    await _insert_tuition_fee(pr3d_b_seed_with_choice["profile_id"])
+    resp = await client.patch(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}"
+        f"/choices/{pr3d_b_seed_with_choice['choice_id']}/scores",
+        headers=manager_token_headers,
+        json={
+            "scores": [
+                {"subject_id": pr3d_b_seed_with_choice["subject_id"], "score": "9.00"}
+            ]
+        },
+    )
+    assert resp.status_code == 400, (
+        f"score-replace must be blocked when a tuition fee exists, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    assert "đã phát sinh học phí" in resp.text, resp.text
+
+
+# ============================================================================
+# Resolver bug-fix — multi-NV fee priced against the ADMITTED choice, NOT the
+# stale profile snapshot (NV gốc). evaluate_cascade writes only choice.decision
+# at publish, so the profile snapshot (applied_rules / OAC) still points at NV1;
+# resolve_fee_academic_info must prefer the admitted choice.
+# ============================================================================
+
+
+@pytest_asyncio.fixture
+async def multinv_bugfix_seed(
+    pr3a_seed: dict, seed_lead_dependencies: dict
+) -> dict:
+    """pr3a_seed (NV1 ngành, HK1 = 1,000,000) + a 2nd ngành NV2 (HK1 =
+    2,000,000) + FULL plan + a STALE NV1 snapshot written onto the profile
+    (``applied_rules.academic_info_id`` = NV1 ngành).
+
+    If the resolver wrongly used the snapshot it would price NV1 (1,000,000);
+    the admitted-choice fix prices the admitted NV2 (2,000,000).
+    """
+    from sqlalchemy import select, update
+
+    seed = pr3a_seed
+    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            path1 = await s.get(models.AdmissionPath, seed["path_id"])
+            ai1_id = path1.academic_info_id
+            method_id = path1.admission_method_id
+            round_id = seed["round_id"]
+            config1 = await s.get(
+                models.PathSubjectGroupConfig, seed["config_id"]
+            )
+            sg_id = config1.subject_group_id
+
+            # HK1 tuition for the NV1 ngành (snapshot would price this).
+            s.add(models.OfferingSemesterTuition(
+                academic_info_id=ai1_id, semester_no=1, amount=1_000_000,
+            ))
+
+            # 2nd ngành (NV2): offering2 + ai2 (tuition 2,000,000) + path2 +
+            # config2 (reuse the existing subject_group).
+            offering2 = models.ProgramOffering(
+                program_id=seed_lead_dependencies["major_program_id"],
+                offering_type=f"ft2_{ts}",
+                duration_semesters=8,
+            )
+            s.add(offering2)
+            await s.flush()
+            ai2 = models.OfferingAcademicInfo(
+                offering_id=offering2.id,
+                academic_year=2026,
+                annual_admission_quota=20,
+                tuition_fee_per_year=2_000_000,
+            )
+            s.add(ai2)
+            await s.flush()
+            s.add(models.OfferingSemesterTuition(
+                academic_info_id=ai2.id, semester_no=1, amount=2_000_000,
+            ))
+            path2 = models.AdmissionPath(
+                academic_info_id=ai2.id,
+                admission_method_id=method_id,
+                admission_round_id=round_id,
+                status="active",
+            )
+            s.add(path2)
+            await s.flush()
+            config2 = models.PathSubjectGroupConfig(
+                admission_path_id=path2.id,
+                subject_group_id=sg_id,
+                min_score=Decimal("18.00"),
+            )
+            s.add(config2)
+            await s.flush()
+            ai2_id = ai2.id
+            path2_id = path2.id
+            config2_id = config2.id
+
+            full = (await s.execute(
+                select(models.InstallmentPlan).where(
+                    models.InstallmentPlan.code == "FULL"
+                )
+            )).scalar_one_or_none()
+            if full is None:
+                s.add(models.InstallmentPlan(
+                    code="FULL", name="Thanh toán 1 lần", installment_count=1,
+                    schedule=[{
+                        "installment_no": 1, "due_days_offset": 0,
+                        "percent": 100.0, "description": "Toàn bộ",
+                    }],
+                    is_active=True,
+                ))
+
+            # Stale NV1 snapshot — the wrong ngành the resolver must NOT use.
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == seed["profile_id"])
+                .values(applied_rules={"academic_info_id": ai1_id})
+            )
+    return {
+        **seed,
+        "ai1_id": ai1_id,
+        "ai2_id": ai2_id,
+        "path2_id": path2_id,
+        "config2_id": config2_id,
+    }
+
+
+async def _set_choices_and_status(
+    profile_id: int, choices: list[tuple[int, int, int, str]], status: str
+) -> None:
+    """Insert ``(path_id, config_id, display_order, decision)`` choices and set
+    the profile status (direct DB — bypasses the choice-engine workflow to set
+    up resolver scenarios deterministically)."""
+    from sqlalchemy import update
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            for path_id, config_id, order, decision in choices:
+                s.add(models.AdmissionProfileChoice(
+                    admission_profile_id=profile_id,
+                    admission_path_id=path_id,
+                    path_subject_group_config_id=config_id,
+                    display_order=order,
+                    decision=decision,
+                ))
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == profile_id)
+                .values(status=status)
+            )
+
+
+@pytest.mark.asyncio
+async def test_resolver_prices_against_admitted_choice_not_snapshot(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    multinv_bugfix_seed: dict,
+):
+    """NV1 (pending, snapshot ngành = 1,000,000) + NV2 (admitted, ngành =
+    2,000,000), profile admitted-like → /api/fees/calculate prices the ADMITTED
+    NV2 ngành (2,000,000), NOT the stale snapshot. This is the wrong-ngành bug
+    fix: a 201 with amount 1,000,000 would mean the resolver used the snapshot.
+    """
+    seed = multinv_bugfix_seed
+    await _set_choices_and_status(
+        seed["profile_id"],
+        choices=[
+            (seed["path_id"], seed["config_id"], 1, "pending"),
+            (seed["path2_id"], seed["config2_id"], 2, "admitted"),
+        ],
+        status="approved",  # admitted-like (CHECK-allowed); NV2 decision drives it
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        headers=manager_token_headers,
+        json={
+            "admission_profile_id": seed["profile_id"],
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+    )
+    assert resp.status_code == 201, (
+        f"admitted multi-NV should calculate fee, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    assert Decimal(str(body["final_amount"])) == Decimal("2000000"), (
+        f"Fee must be priced against the ADMITTED NV2 ngành (2,000,000), not "
+        f"the stale NV1 snapshot (1,000,000): {body}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_multiple_admitted_fails_closed(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    multinv_bugfix_seed: dict,
+):
+    """Two choices both ``decision="admitted"`` (corrupt — the cascade admits
+    at most one) → fee creation FAILS CLOSED (400), never guesses a ngành.
+    """
+    seed = multinv_bugfix_seed
+    await _set_choices_and_status(
+        seed["profile_id"],
+        choices=[
+            (seed["path_id"], seed["config_id"], 1, "admitted"),
+            (seed["path2_id"], seed["config2_id"], 2, "admitted"),
+        ],
+        status="approved",
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        headers=manager_token_headers,
+        json={
+            "admission_profile_id": seed["profile_id"],
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+    )
+    assert resp.status_code == 400, (
+        f">1 admitted choice must fail closed, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    assert "nhiều hơn 1 nguyện vọng trúng tuyển" in resp.text, resp.text

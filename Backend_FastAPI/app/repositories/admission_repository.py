@@ -99,6 +99,49 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         """
         super().__init__(db, models.AdmissionProfile)
 
+    async def get_by_id_for_update(
+        self,
+        profile_id: int,
+        *,
+        populate_existing: bool = False,
+        with_choices: bool = False,
+    ) -> Optional[models.AdmissionProfile]:
+        """Lock the AdmissionProfile row (``SELECT ... FOR UPDATE``).
+
+        Serializes the "fee sees N choices" vs "add/delete/reorder choice"
+        race: both fee creation (``FeeCalculationService.calculate_fee``) and
+        every NV-structure mutation acquire THIS row lock first, then
+        re-validate state under it within the same transaction.
+
+        ``lead`` is ``selectinload``-ed (a separate SELECT) instead of the
+        mapper-default ``lazy="joined"`` so the locking query carries no OUTER
+        JOIN — Postgres rejects ``FOR UPDATE`` on the nullable side of an outer
+        join. ``with_choices`` adds a ``selectinload`` of ``choices`` so the
+        caller can re-check ``is_fee_eligible`` under the lock.
+
+        Args:
+            profile_id: AdmissionProfile ID.
+            populate_existing: overwrite any in-session instance's attributes
+                from the freshly-locked row (otherwise the identity-map copy
+                loaded by a non-locking IDOR dependency stays stale on re-check).
+            with_choices: eager-load ``choices`` for an under-lock eligibility
+                re-check.
+        """
+        query = (
+            select(models.AdmissionProfile)
+            .where(models.AdmissionProfile.id == profile_id)
+            .options(selectinload(models.AdmissionProfile.lead))
+            .with_for_update(of=models.AdmissionProfile)
+        )
+        if with_choices:
+            query = query.options(
+                selectinload(models.AdmissionProfile.choices)
+            )
+        if populate_existing:
+            query = query.execution_options(populate_existing=True)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_filtered(
         self,
         skip: int = 0,
