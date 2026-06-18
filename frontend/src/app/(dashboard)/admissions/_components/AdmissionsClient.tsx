@@ -671,11 +671,11 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
       onClick={onOpen}
       onKeyDown={(e) => activateRow(e, onOpen)}
       className={cn(
-        "touch-manipulation rounded-2xl border bg-card p-4 shadow-xs outline-none transition-colors [contain-intrinsic-size:auto_132px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring",
+        "touch-manipulation rounded-2xl border bg-card p-3 shadow-xs outline-none transition-colors [contain-intrinsic-size:auto_104px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring",
         isSelected ? "border-primary/40 bg-primary/5" : "border-border",
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2.5">
         <Checkbox
           checked={isSelected}
           onCheckedChange={(value) => onSelect(!!value)}
@@ -690,7 +690,7 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
               <Link
                 href={`/admissions/${profile.id}`}
                 onClick={(e) => e.stopPropagation()}
-                className="block truncate font-display font-semibold text-foreground hover:underline"
+                className="block truncate font-display text-sm font-semibold text-foreground hover:underline"
               >
                 {name}
               </Link>
@@ -698,19 +698,21 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
                 #{profile.id} · {profile.program_name ?? "—"}
               </div>
             </div>
-            <StatusDot status={profile.status} />
+            {/* Menu lên góc phải hàng tên → bỏ hàng action 40px riêng cho card gọn hơn */}
+            <RowActionsMenu profile={profile} onClaim={onClaim} onApprove={onApprove} onReject={onReject} />
           </div>
 
-          <div className="mt-3">
+          <div className="mt-2">
             <ProgressBar value={profile.completion_percent} />
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="text-xs tabular-nums text-muted-foreground">{formatDate(profile.created_at)}</span>
-            <div className="flex items-center gap-2">
-              <EligibilityToken status={profile.eligibility_status} />
-              <RowActionsMenu profile={profile} onClaim={onClaim} onApprove={onApprove} onReject={onReject} />
-            </div>
+          {/* Status + eligibility + ngày gộp 1 hàng (flex-wrap an toàn màn hẹp) */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <StatusDot status={profile.status} />
+            <EligibilityToken status={profile.eligibility_status} />
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {formatDate(profile.created_at)}
+            </span>
           </div>
         </div>
       </div>
