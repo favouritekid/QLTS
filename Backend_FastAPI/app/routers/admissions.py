@@ -1412,7 +1412,7 @@ async def delete_admission_profile(
             if _lead:
                 _snapshot_lead_name = _lead.full_name
 
-        await admission_service.delete_profile(
+        _deleted, _cleanup_orphaned_files = await admission_service.delete_profile(
             db=db,
             profile_id=profile_id,
             current_user=current_user,
@@ -1420,6 +1420,12 @@ async def delete_admission_profile(
 
         # Transaction commit
         await db.commit()
+
+        # Post-commit best-effort: drop the physical uploaded files. The
+        # profile_document rows already cascade-deleted with the profile;
+        # this removes their files on disk so they don't leak as orphans.
+        if _cleanup_orphaned_files:
+            await _cleanup_orphaned_files()
 
         # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
         if _snapshot_lead_id:

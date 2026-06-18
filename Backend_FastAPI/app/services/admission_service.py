@@ -10289,11 +10289,77 @@ async def finalize_profile(
     return profile, final_callback
 
 
+def _remove_orphaned_document_files(file_paths: List[str]) -> None:
+    """Best-effort removal of uploaded files left behind by a deleted profile.
+
+    ``profile_document`` rows cascade-delete with the profile via the FK
+    (``ondelete=CASCADE``), but the physical uploads on disk are NOT touched
+    by the database — a deleted draft would otherwise leak its files. Mirrors
+    the post-commit old-file cleanup in ``update_document``: a leftover file
+    is storage waste, not a correctness issue, so every failure is swallowed
+    and logged.
+
+    MUST run AFTER the deleting transaction commits (the rows must be gone
+    for good before we drop the bytes).
+    """
+    import os
+
+    for path in file_paths:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            os.remove(path)
+            log.info(
+                "Orphaned profile document file deleted post-commit",
+                path=path,
+            )
+        except OSError as e:
+            log.warning(
+                "Failed to delete orphaned profile document file",
+                path=path,
+                error=str(e),
+            )
+
+
+# Lead consultation status that ``create_profile`` bumps a lead to via the
+# ``profile_created`` milestone (== ADMISSION_TO_LEAD_STATUS_MAP["draft"] in
+# lead_admission_sync.py). sts06 is reached ONLY through profile creation.
+_CREATE_MILESTONE_STATUS = "sts06"
+
+
+def _resolve_lead_revert_status(
+    has_other_profile: bool,
+    current_consultation_status_id: Optional[str],
+    prev_consultation_status_id: Optional[str],
+) -> Optional[str]:
+    """Decide which consultation status a lead reverts to when its last draft
+    profile is deleted — or ``None`` to leave the lead untouched.
+
+    Pure policy (no DB) so the rule is exhaustively unit-testable. Revert ONLY
+    when ALL hold:
+      * the lead has NO other admission profile (this was the last one), AND
+      * the lead is still exactly at the create-milestone status (sts06) — i.e.
+        nothing advanced it further (another profile's submit, an officer
+        manual change, fee payment, …), AND
+      * we know the status held BEFORE creation, and it differs from sts06
+        (a self-revert would be a no-op).
+    """
+    if has_other_profile:
+        return None
+    if current_consultation_status_id != _CREATE_MILESTONE_STATUS:
+        return None
+    if not prev_consultation_status_id:
+        return None
+    if prev_consultation_status_id == _CREATE_MILESTONE_STATUS:
+        return None
+    return prev_consultation_status_id
+
+
 async def delete_profile(
     db: AsyncSession,
     profile_id: int,
     current_user: models.User,
-) -> bool:
+) -> Tuple[bool, Callable[[], Awaitable[None]]]:
     """
     Delete AdmissionProfile (only when status='draft').
 
@@ -10302,8 +10368,14 @@ async def delete_profile(
     - State Locking: Only draft profiles can be deleted
 
     Behavior:
-    - Does NOT revert Lead status (Lead already showed interest)
-    - Creates a consultation record noting the deletion
+    - Conditionally reverts the lead's consultation status to its
+      pre-creation value — ONLY when this was the lead's last profile AND
+      the lead is still at the create-milestone status (sts06). Otherwise
+      the lead status is preserved (it advanced on its own or another
+      profile justifies it).
+    - Keeps ALL existing consultation history (real data); ADDS a system
+      consultation record noting the deletion, plus a LeadStatusHistory
+      row when a revert actually happens.
     - Maintains full audit trail in timeline
 
     IMPORTANT: This function does NOT commit the transaction.
@@ -10315,7 +10387,10 @@ async def delete_profile(
         current_user: Current authenticated user
 
     Returns:
-        True if deleted successfully
+        Tuple of (True, post_commit_callback). The callback removes the
+        orphaned uploaded files (best-effort) and MUST be awaited by the
+        router AFTER ``db.commit()`` — the profile_document rows cascade
+        away with the profile but their files on disk do not.
 
     Raises:
         ResourceNotFoundError: Profile not found
@@ -10346,22 +10421,102 @@ async def delete_profile(
     lead_id = profile.lead_id
 
     # ==========================================================================
-    # CREATE CONSULTATION RECORD: Log the deletion event (no status revert)
+    # LEAD STATUS REVERT (conditional) + deletion consultation record
     # ==========================================================================
-    # Following the Golden Rule: Every admission event must have a consultation record
-    # Lead status stays the same (they already showed interest by creating profile)
-    
+    # Creating a draft profile bumps the lead to sts06 "Đồng ý tư vấn" via the
+    # ``profile_created`` milestone. Deleting that draft should undo the bump —
+    # but ONLY when it is safe:
+    #   (a) the lead has NO other admission profile left, AND
+    #   (b) the lead is still exactly at the create-milestone status (sts06),
+    #       i.e. nothing advanced it further (another profile's submit, an
+    #       officer manual change, fee payment, etc.).
+    # Otherwise the lead state is preserved. Consultation history is always
+    # KEPT (it is real history); we only ADD a system record per the Golden
+    # Rule, plus a LeadStatusHistory row when a revert actually happens.
+    from ..core.status_mapping import sync_lead_status_from_consultation
+    from .lead_service import _get_current_lead_state, _log_lead_state_change
+
+    _other_profile_count = await db.scalar(
+        select(func.count())
+        .select_from(models.AdmissionProfile)
+        .where(
+            models.AdmissionProfile.lead_id == lead_id,
+            models.AdmissionProfile.id != profile_id,
+        )
+    )
+
+    # Cheap-gate the history lookup: only query when the rule could possibly
+    # fire. The authoritative decision lives in _resolve_lead_revert_status,
+    # which re-checks these conditions on the values it is given.
+    _prev_status_id = None
+    if (
+        not _other_profile_count
+        and lead.consultation_status_id == _CREATE_MILESTONE_STATUS
+    ):
+        _bump = await db.scalar(
+            select(models.LeadStatusHistory)
+            .where(
+                models.LeadStatusHistory.lead_id == lead_id,
+                models.LeadStatusHistory.new_consultation_status_id
+                == _CREATE_MILESTONE_STATUS,
+            )
+            .order_by(models.LeadStatusHistory.id.desc())
+            .limit(1)
+        )
+        _prev_status_id = _bump.old_consultation_status_id if _bump else None
+
+    _revert_target = _resolve_lead_revert_status(
+        has_other_profile=bool(_other_profile_count),
+        current_consultation_status_id=lead.consultation_status_id,
+        prev_consultation_status_id=_prev_status_id,
+    )
+
+    reverted_status_id = None
+    if _revert_target:
+        _target_cs = await db.get(
+            models.ConsultationStatus,
+            _revert_target,
+            options=[selectinload(models.ConsultationStatus.stage)],
+        )
+        if _target_cs:
+            _old_state = _get_current_lead_state(lead)
+            lead.consultation_status_id = _revert_target
+            lead.pipeline_stage_id = _target_cs.stage_id
+            sync_lead_status_from_consultation(lead, _target_cs)
+            _new_state = _get_current_lead_state(lead)
+            await _log_lead_state_change(
+                db=db,
+                lead=lead,
+                old_state=_old_state,
+                new_state=_new_state,
+                changed_by=current_user,
+                reason=f"Hoàn trạng thái sau khi xóa hồ sơ draft #{profile_id}",
+            )
+            reverted_status_id = _revert_target
+
+    if reverted_status_id:
+        _deletion_note = (
+            f"[HỆ THỐNG] Hồ sơ xét tuyển #{profile_id} đã bị xóa — "
+            "hoàn trạng thái tư vấn về trước khi tạo hồ sơ."
+        )
+    else:
+        _deletion_note = (
+            f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}"
+        )
+
+    # Golden Rule: every admission event gets a consultation record. The record
+    # reflects the lead's CURRENT (possibly reverted) consultation status.
     system_consultation = models.Consultation(
         lead_id=lead_id,
         officer_id=current_user.id,
-        consultation_status_id=lead.consultation_status_id,  # Keep current status
+        consultation_status_id=lead.consultation_status_id,
         consultation_date=datetime.now(timezone.utc),
         method="system",
-        notes=f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}",
+        notes=_deletion_note,
         duration_minutes=0,
     )
     db.add(system_consultation)
-    
+
     # Update lead timestamp
     lead.updated_at = datetime.now(timezone.utc)
 
@@ -10370,6 +10525,7 @@ async def delete_profile(
         lead_id=lead_id,
         profile_id=profile_id,
         consultation_status_id=lead.consultation_status_id,
+        reverted_status_id=reverted_status_id,
         actor_id=current_user.id,
     )
 
@@ -10382,6 +10538,19 @@ async def delete_profile(
         source="api",
     )
 
+    # Collect physical upload paths BEFORE the cascade removes the rows.
+    # ``profile_document.profile_id`` is ondelete=CASCADE, so the rows vanish
+    # with the profile; the files on disk must be cleaned up separately
+    # (post-commit, best-effort) to avoid orphaned uploads. Covers both
+    # path documents and priority_evidence uploads.
+    _doc_paths_result = await db.execute(
+        select(models.ProfileDocument.file_path).where(
+            models.ProfileDocument.profile_id == profile_id,
+            models.ProfileDocument.file_path.isnot(None),
+        )
+    )
+    orphaned_file_paths = [p for (p,) in _doc_paths_result.all() if p]
+
     # Delete the profile
     await db.delete(profile)
     await db.flush()
@@ -10391,9 +10560,14 @@ async def delete_profile(
         profile_id=profile_id,
         lead_id=lead_id,
         user_id=current_user.id,
+        orphaned_files=len(orphaned_file_paths),
     )
 
-    return True
+    async def _post_commit_cleanup() -> None:
+        # Drop the uploaded files only after the delete is durably committed.
+        _remove_orphaned_document_files(orphaned_file_paths)
+
+    return True, _post_commit_cleanup
 
 
 # ==============================================================================

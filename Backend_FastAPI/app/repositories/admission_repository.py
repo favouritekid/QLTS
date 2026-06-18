@@ -38,6 +38,7 @@ from app.models.admission_profile_choice import (
     ProfileChoiceScore,
 )
 from app.repositories.base import BaseRepository
+from app.utils.text_helpers import LIKE_ESCAPE_CHAR, escape_like_pattern
 
 
 # Phase 3 multi-NV: eager-load chain cho AdmissionProfile.choices + nested
@@ -207,11 +208,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if search:
             # Normalize Unicode for Vietnamese diacritics
             normalized_search = unicodedata.normalize('NFC', search.strip())
-            search_term = f"%{normalized_search}%"
+            # Escape LIKE wildcards (% _) so user input (incl. citizen_id) is
+            # treated literally — prevents wildcard-injection / DoS backtracking.
+            search_term = f"%{escape_like_pattern(normalized_search)}%"
             search_conditions = or_(
-                models.Lead.full_name.ilike(search_term),
-                models.Lead.email.ilike(search_term),
-                models.AdmissionProfile.citizen_id.ilike(search_term),
+                models.Lead.full_name.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                models.Lead.email.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                models.AdmissionProfile.citizen_id.ilike(
+                    search_term, escape=LIKE_ESCAPE_CHAR
+                ),
             )
             base_conditions.append(search_conditions)
 
@@ -376,11 +381,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             conditions.append(models.Lead.unit_id == unit_id)
         if search:
             normalized_search = unicodedata.normalize('NFC', search.strip())
-            search_term = f"%{normalized_search}%"
+            # Escape LIKE wildcards (% _) so user input (incl. citizen_id) is
+            # treated literally — prevents wildcard-injection / DoS backtracking.
+            search_term = f"%{escape_like_pattern(normalized_search)}%"
             conditions.append(or_(
-                models.Lead.full_name.ilike(search_term),
-                models.Lead.email.ilike(search_term),
-                models.AdmissionProfile.citizen_id.ilike(search_term),
+                models.Lead.full_name.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                models.Lead.email.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
+                models.AdmissionProfile.citizen_id.ilike(
+                    search_term, escape=LIKE_ESCAPE_CHAR
+                ),
             ))
         if major_ids and len(major_ids) > 0:
             conditions.append(models.ProgramOffering.program_id.in_(major_ids))
