@@ -55,14 +55,16 @@ async def _seed_revert_statuses(db) -> None:
             db.add(models.PipelineStage(id=stage_id, name=name, order=order))
     await db.flush()
 
-    # id,      stage,    outcome,                   is_final
+    # (id, stage, outcome, is_final). Labels: sts03 Có nhu cầu tìm hiểu,
+    # sts04 Từ chối tư vấn (neg), sts05 Hẹn liên hệ lại, sts06 Đồng ý tư vấn
+    # (create target), sts07 Đã tiếp nhận, sts20 Đã ngừng tư vấn (terminal).
     rows = [
-        ("sts03", "stg02", OutcomeTypeEnum.neutral, False),   # Có nhu cầu tìm hiểu
-        ("sts04", "stg02", OutcomeTypeEnum.negative, False),  # Từ chối tư vấn (negative)
-        ("sts05", "stg02", OutcomeTypeEnum.neutral, False),   # Hẹn liên hệ lại
-        ("sts06", "stg02", OutcomeTypeEnum.positive, False),  # Đồng ý tư vấn (create target)
-        ("sts07", "stg03", OutcomeTypeEnum.neutral, False),   # Đã tiếp nhận hồ sơ
-        ("sts20", "stg02", OutcomeTypeEnum.negative, True),   # Đã ngừng tư vấn (terminal)
+        ("sts03", "stg02", OutcomeTypeEnum.neutral, False),
+        ("sts04", "stg02", OutcomeTypeEnum.negative, False),
+        ("sts05", "stg02", OutcomeTypeEnum.neutral, False),
+        ("sts06", "stg02", OutcomeTypeEnum.positive, False),
+        ("sts07", "stg03", OutcomeTypeEnum.neutral, False),
+        ("sts20", "stg02", OutcomeTypeEnum.negative, True),
     ]
     for sid, stage_id, outcome, is_final in rows:
         if await db.get(models.ConsultationStatus, sid) is None:
@@ -373,3 +375,81 @@ class TestDeleteProfileLeadRevert:
         assert lead.consultation_status_id == "sts07"
         assert delta is None
         await cleanup()
+
+    async def test_revert_not_blocked_by_old_year_completed_profile(
+        self, db, seeded_dependencies, officer_user, revert_statuses
+    ):
+        """P2-A: a re-engaged lead keeps a prior-year COMPLETED (non-draft)
+        profile. Deleting the new draft must STILL revert — only drafts map to
+        sts06, so an enrolled old-year profile must not count as 'other' and
+        block the revert."""
+        lead = await _make_lead(
+            db, seeded_dependencies["unit_id"], officer_user.id, "sts06", "stg02"
+        )
+        await _add_history(
+            db, lead.id, old_cs="sts03", new_cs="sts06",
+            reason=PROFILE_CREATED_REASON, user_id=officer_user.id,
+        )
+        old = await _make_draft(db, lead.id, academic_year=2025)
+        old.status = "enrolled"  # prior-year completed, no longer a draft
+        await db.flush()
+        draft = await _make_draft(db, lead.id, academic_year=2026)
+
+        ok, cleanup, delta = await admission_service.delete_profile(
+            db=db, profile_id=draft.id, current_user=officer_user
+        )
+
+        assert ok is True
+        await db.refresh(lead)
+        assert lead.consultation_status_id == "sts03"  # reverted despite old profile
+        assert delta is not None
+        # the completed prior-year profile is untouched
+        assert await db.get(models.AdmissionProfile, old.id) is not None
+        await cleanup()
+
+    async def test_post_delete_fanout_survives_dispatch_rollback(
+        self, db, seeded_dependencies, officer_user, revert_statuses, monkeypatch
+    ):
+        """P2-B (incl. residual): the post-commit fanout snapshots every scalar
+        BEFORE the first safe_dispatch, so a dispatch that rolls back / expires
+        the session cannot break the second dispatch's payload/rooms or any
+        later read. The first dispatch here calls ``expire_all()`` — exactly
+        what ``safe_dispatch``'s ``rollback()`` does to loaded ORM instances; on
+        the pre-fix code the second payload would touch the expired lead →
+        MissingGreenlet → 500. The fanout lives in a request-free helper so it
+        needs no rate-limiter/Request machinery and the function-scoped rollback
+        keeps it isolated."""
+        from app.routers import admissions
+
+        lead = await _make_lead(
+            db, seeded_dependencies["unit_id"], officer_user.id, "sts06", "stg02"
+        )
+
+        calls = {"n": 0}
+
+        async def _fake_safe_dispatch(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                db.expire_all()  # mimic rollback() expiring loaded ORM attrs
+            return []
+
+        monkeypatch.setattr(admissions, "safe_dispatch", _fake_safe_dispatch)
+
+        # Must NOT raise even though the lead row is expired after the first
+        # dispatch — payload/rooms come from scalars snapshotted beforehand.
+        await admissions._emit_post_delete_events(
+            db,
+            profile_id=999999,
+            lead_id=lead.id,
+            lead_name="Snapshot Name",
+            lead_revert={
+                "old_status": "sts06",
+                "new_status": "sts03",
+                "old_stage": "stg02",
+                "new_stage": "stg02",
+            },
+            actor_id=officer_user.id,
+            actor_name="Officer X",
+        )
+
+        assert calls["n"] == 2  # APPLICATION_DELETED + LEAD_STATUS_CHANGED
