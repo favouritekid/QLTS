@@ -4186,7 +4186,7 @@ async def create_profile(
         await _create_admission_milestone_consultation(
             db=db,
             lead=new_profile.lead,
-            event="profile_created",
+            event=_PROFILE_CREATED_EVENT,
             actor=current_user,
             profile_id=new_profile.id,
         )
@@ -10326,6 +10326,11 @@ def _remove_profile_upload_dir(profile_id: int) -> None:
 # sts06 and silently demote the lead.
 _CREATE_MILESTONE_STATUS = "sts06"
 
+# Admission milestone event that bumps a lead to _CREATE_MILESTONE_STATUS.
+# Shared by create_profile (fires the milestone) and delete_profile (detects it
+# in the latest LeadStatusHistory.reason) so a rename can't silently desync them.
+_PROFILE_CREATED_EVENT = "profile_created"
+
 
 def _resolve_lead_revert_status(
     has_other_profile: bool,
@@ -10458,15 +10463,23 @@ async def delete_profile(
     # record per the Golden Rule, plus a LeadStatusHistory row on revert.
     from ..core.status_mapping import sync_lead_status_from_consultation
     from .lead_service import _get_current_lead_state, _log_lead_state_change
+    from ..models.pipeline import OutcomeTypeEnum
 
     _status_at_delete = lead.consultation_status_id
 
-    _other_profile_count = await db.scalar(
+    # Only OTHER DRAFT profiles justify keeping the lead at the create milestone
+    # (sts06 ↔ status 'draft' in ADMISSION_TO_LEAD_STATUS_MAP). A submitted/
+    # approved/enrolled profile advanced the lead (caught by the latest-history
+    # check below), and a completed prior-year profile (create dedups per
+    # (lead_id, academic_year), so a re-engaged lead keeps old-year rows) is
+    # historical — neither should block the revert.
+    _other_draft_count = await db.scalar(
         select(func.count())
         .select_from(models.AdmissionProfile)
         .where(
             models.AdmissionProfile.lead_id == lead_id,
             models.AdmissionProfile.id != profile_id,
+            models.AdmissionProfile.status == "draft",
         )
     )
 
@@ -10483,7 +10496,7 @@ async def delete_profile(
     if (
         _latest_history is not None
         and _latest_history.new_consultation_status_id == _CREATE_MILESTONE_STATUS
-        and "profile_created" in (_latest_history.reason or "")
+        and _PROFILE_CREATED_EVENT in (_latest_history.reason or "")
     ):
         _prev_status_id = _latest_history.old_consultation_status_id
 
@@ -10492,23 +10505,19 @@ async def delete_profile(
     _target_cs = None
     _prev_is_terminal_or_negative = False
     if _prev_status_id and _prev_status_id != _CREATE_MILESTONE_STATUS:
-        _target_cs = await db.get(
-            models.ConsultationStatus,
-            _prev_status_id,
-            options=[selectinload(models.ConsultationStatus.stage)],
-        )
+        # Only columns (stage_id / is_final / outcome_type) are read below, so a
+        # bare db.get suffices — no need to eager-load the .stage relationship.
+        _target_cs = await db.get(models.ConsultationStatus, _prev_status_id)
         if _target_cs is None:
             _prev_status_id = None  # unknown status — cannot revert safely
         else:
-            _outcome = getattr(
-                _target_cs.outcome_type, "value", _target_cs.outcome_type
-            )
             _prev_is_terminal_or_negative = (
-                bool(_target_cs.is_final) or _outcome == "negative"
+                bool(_target_cs.is_final)
+                or _target_cs.outcome_type == OutcomeTypeEnum.negative
             )
 
     _revert_target = _resolve_lead_revert_status(
-        has_other_profile=bool(_other_profile_count),
+        has_other_profile=bool(_other_draft_count),
         current_consultation_status_id=lead.consultation_status_id,
         prev_consultation_status_id=_prev_status_id,
         prev_is_terminal_or_negative=_prev_is_terminal_or_negative,

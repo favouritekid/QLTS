@@ -42,6 +42,8 @@ from ..services.magic_link_rate_limit import (
 )
 from ..services.notification_dispatcher import safe_dispatch, rooms_for_admission, rooms_for_lead
 from ..services.notification_payloads import EventPayload
+from sqlalchemy.orm import selectinload
+from types import SimpleNamespace
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
@@ -1426,9 +1428,41 @@ async def delete_admission_profile(
 
         # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
         if _snapshot_lead_id:
-            # Lead row still exists (FK was profile→lead, profile gone but lead kept).
-            # Fetch it so scoped emit can include unit + assigned officer rooms.
-            _deleted_lead = await db.get(models.Lead, _snapshot_lead_id)
+            # Lead row still exists (FK was profile→lead, profile gone but lead
+            # kept). Eager-load the officer so officer_name can be stamped
+            # without a lazy load.
+            _deleted_lead = await db.get(
+                models.Lead,
+                _snapshot_lead_id,
+                options=[selectinload(models.Lead.assigned_officer)],
+            )
+            # Snapshot EVERY scalar we need BEFORE the first safe_dispatch: on
+            # failure safe_dispatch rolls back the session, expiring ORM attrs —
+            # reading _deleted_lead / current_user afterwards would async
+            # lazy-load and 500 an already-committed delete before cleanup runs.
+            _lead_full_name = (
+                getattr(_deleted_lead, "full_name", None) or _snapshot_lead_name
+            )
+            _officer_name = (
+                _deleted_lead.assigned_officer.full_name
+                if _deleted_lead is not None and _deleted_lead.assigned_officer
+                else "Unknown"
+            )
+            _actor_id = current_user.id
+            _actor_name = current_user.full_name or current_user.username
+            # One namespace serves both rooms_for_lead (unit_id/officer_id) and
+            # for_lead_status_changed (id/full_name/email/officer_id).
+            _lead_ns = SimpleNamespace(
+                id=_snapshot_lead_id,
+                full_name=_lead_full_name,
+                email=None,
+                unit_id=getattr(_deleted_lead, "unit_id", None),
+                assigned_officer_id=getattr(
+                    _deleted_lead, "assigned_officer_id", None
+                ),
+            )
+            _lead_rooms = rooms_for_lead(_lead_ns)
+
             await safe_dispatch(
                 db=db,
                 event=SystemEvents.APPLICATION_DELETED,
@@ -1436,35 +1470,39 @@ async def delete_admission_profile(
                     "application_id": profile_id,
                     "lead_id": _snapshot_lead_id,
                     "lead_name": _snapshot_lead_name,
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
                 },
                 dedupe_key=f"admission_profile_deleted:{profile_id}",
-                rooms=rooms_for_lead(_deleted_lead),
+                rooms=_lead_rooms,
             )
 
-            # Deleting the last draft may have reverted the lead's status — surface
-            # that to lead-pipeline subscribers/notifications (parity with other
-            # status transitions). The DB is already consistent (history + lead
-            # row updated); this is the realtime/notification event.
-            if _lead_revert and _deleted_lead is not None:
+            # Deleting the last draft may have reverted the lead's status —
+            # surface it to lead-pipeline subscribers/notifications (parity with
+            # other transitions). Built from the scalar snapshot so a failed
+            # dispatch above (session rolled back) cannot break or skip this one.
+            if _lead_revert:
+                _actor_ns = SimpleNamespace(
+                    id=_actor_id, full_name=_actor_name, username=_actor_name
+                )
                 await safe_dispatch(
                     db=db,
                     event=SystemEvents.LEAD_STATUS_CHANGED,
                     payload=EventPayload.for_lead_status_changed(
-                        _deleted_lead,
-                        current_user,
+                        _lead_ns,
+                        _actor_ns,
                         old_status=_lead_revert["old_status"] or "none",
                         new_status=_lead_revert["new_status"] or "none",
+                        officer_name=_officer_name,
                         old_stage=_lead_revert.get("old_stage"),
                         new_stage=_lead_revert.get("new_stage"),
                         updated_fields=["consultation_status_id", "pipeline_stage_id"],
                     ),
                     dedupe_key=(
-                        f"lead_status_changed:{_deleted_lead.id}:"
+                        f"lead_status_changed:{_snapshot_lead_id}:"
                         f"{_lead_revert['new_status']}"
                     ),
-                    rooms=rooms_for_lead(_deleted_lead),
+                    rooms=_lead_rooms,
                 )
 
         # Post-commit best-effort file cleanup LAST so it can never block the

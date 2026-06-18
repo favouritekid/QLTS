@@ -12,11 +12,15 @@ without a DB:
 2. ``_resolve_lead_revert_status`` — the pure policy deciding whether (and to
    what) a lead's consultation status reverts when its last draft is deleted.
 """
+import pytest
+
 from app.services.admission_service import (
     _CREATE_MILESTONE_STATUS,
     _remove_profile_upload_dir,
     _resolve_lead_revert_status,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class TestRemoveProfileUploadDir:
