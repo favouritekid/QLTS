@@ -278,33 +278,19 @@ async def calculate_fee(
         # only the profile lookup is unscoped now.
         unit_id = finance_scope_unit_id(current_user)
 
-        # Resolve academic_info via the SHARED resolver (single source of truth
-        # with FeeCalculationService) so the discount ngành matches the ngành the
-        # service prices the tuition against — handles legacy single-path AND
-        # multi-NV (admitted-choice / single-choice). For tuition the service
-        # looks up the amount from offering_semester_tuition (PR 3 — ADR-002);
-        # the router only needs discount policy IDs. For non-tuition the base
-        # amount still comes from academic_info.tuition_fee_per_year.
-        from app.services.fee_calculation_service import resolve_fee_academic_info
-
-        academic_info = await resolve_fee_academic_info(db, profile)
-        discount_policy_ids = list(academic_info.applied_discount_policy_ids or [])
-
-        base_amount = Decimal("0")
-        if data.fee_type != FeeTypeEnum.tuition:
-            base_amount = academic_info.tuition_fee_per_year or Decimal("0")
-            if base_amount <= 0:
-                raise BadRequest(
-                    "Cannot calculate fee: No fee amount configured for this offering"
-                )
-
-        # Calculate fee
+        # #7/#9: pricing is resolved ONCE, UNDER THE ROW LOCK, inside
+        # calculate_fee. Pass base_amount/discount_policy_ids = None so the
+        # service derives BOTH the amount and the discount policies from a single
+        # resolve_fee_academic_info held under the lock — removing the pre-lock
+        # resolve here (no double resolve) and closing the race where the router
+        # resolved discount pre-lock while the service resolved amount post-lock
+        # (a concurrent waitlist-promote could have mismatched the two ngành).
         fee, post_commit = await fee_service.calculate_fee(
             admission_profile_id=data.admission_profile_id,
             fee_type=data.fee_type,
-            base_amount=base_amount,
+            base_amount=None,
             academic_year=profile.academic_year,
-            discount_policy_ids=discount_policy_ids,
+            discount_policy_ids=None,
             installment_plan_id=plan_id,
             user_id=current_user.id,
             unit_id=unit_id,

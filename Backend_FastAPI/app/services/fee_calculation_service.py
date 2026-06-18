@@ -123,6 +123,12 @@ async def resolve_fee_academic_info(
     e.g. under the fee-create lock that loads only lead + choices) →
     ``applied_rules['academic_info_id']``. Choice-engine profiles never fall
     through to this path.
+
+    COUPLING (do not let drift): the "exactly 1 choice" branch is the PRICING
+    counterpart of the submitted-prepay GATE in
+    ``admission_status.is_fee_eligible`` (multi-NV ⇒ exactly 1 NV). Keep both in
+    lockstep; the end-to-end anchor is
+    ``tests/api/test_phase3_pr3d_b_choice_crud.py``.
     """
     if getattr(profile, "uses_choice_engine", False):
         stmt = (
@@ -259,12 +265,23 @@ class FeeCalculationService:
     async def _lookup_semester_tuition_amount(
         self, profile: models.AdmissionProfile, semester_no: int,
     ) -> Decimal:
-        """Look up canonical tuition amount from offering_semester_tuition.
+        """Resolve the ngành then look up its HK tuition amount.
 
         Direct query — does NOT navigate ORM relationships to avoid
         async lazy-load issues.
         """
         academic_info_id = await self._resolve_academic_info_id(profile)
+        return await self._semester_tuition_amount_for_ai(
+            academic_info_id, semester_no
+        )
+
+    async def _semester_tuition_amount_for_ai(
+        self, academic_info_id: int, semester_no: int,
+    ) -> Decimal:
+        """HK tuition amount from ``offering_semester_tuition`` for an ALREADY
+        resolved ``academic_info_id`` — lets ``calculate_fee`` reuse a single
+        ``resolve_fee_academic_info`` call (amount + discount from the SAME
+        ngância) instead of resolving twice (#7)."""
         result = await self.db.execute(
             select(models.OfferingSemesterTuition.amount).where(
                 models.OfferingSemesterTuition.academic_info_id == academic_info_id,
@@ -284,7 +301,7 @@ class FeeCalculationService:
         self,
         admission_profile_id: int,
         fee_type: FeeTypeEnum,
-        base_amount: Decimal,
+        base_amount: Optional[Decimal],
         academic_year: str,
         discount_policy_ids: Optional[List[int]] = None,
         installment_plan_id: Optional[int] = None,
@@ -300,6 +317,14 @@ class FeeCalculationService:
         ``base_amount`` parameter is ignored for tuition — the caller need
         not provide it. For non-tuition fees, ``base_amount`` is used as
         before and ``semester_no`` stays None.
+
+        Pricing resolution (#7/#9): pass ``base_amount=None`` (the HTTP router
+        does) to have the service resolve the ngành ONCE under the row lock and
+        derive BOTH the amount and ``discount_policy_ids`` from the same
+        ``resolve_fee_academic_info`` — no pre-lock resolve, no double resolve,
+        no discount/amount ngành mismatch. Direct/test callers pass an explicit
+        ``base_amount`` → values used as-is (``discount_policy_ids=None`` keeps
+        the legacy "no discount" meaning, not auto-derive).
 
         Args:
             admission_profile_id: Profile to create fee for
@@ -329,6 +354,18 @@ class FeeCalculationService:
             semester_no = 1
         elif fee_type != FeeTypeEnum.tuition:
             semester_no = None
+
+        # #5 review: ``base_amount=None`` is the "service resolves pricing"
+        # sentinel (router path) and it also derives discount_policy_ids, so an
+        # explicit discount_policy_ids alongside it is contradictory. Reject the
+        # ambiguous combo fail-fast — a programming/contract error; no real
+        # caller mixes them (router passes both None, direct callers pass both).
+        if base_amount is None and discount_policy_ids is not None:
+            raise ValueError(
+                "calculate_fee: base_amount=None (service-resolve mode) cannot "
+                "be combined with an explicit discount_policy_ids — pass both "
+                "None (router) or both explicit (direct caller)."
+            )
 
         # Profile-first row lock — serialize vs choice mutation. Acquiring the
         # AdmissionProfile row lock BEFORE reading choices closes the race where
@@ -363,8 +400,34 @@ class FeeCalculationService:
                 "chưa công bố kết quả, hoặc nguyện vọng đã thay đổi)."
             )
 
-        # For tuition: look up canonical amount from offering_semester_tuition
-        if fee_type == FeeTypeEnum.tuition:
+        # #7/#9: when base_amount is None (the HTTP router path) resolve the
+        # ngành ONCE under the lock and derive BOTH the amount and the discount
+        # policies from the SAME academic_info — closing the race where the
+        # router resolved discount pre-lock while the service resolved amount
+        # post-lock (a concurrent waitlist-promote could mismatch the two), and
+        # removing the double resolve. Direct/test callers pass an explicit
+        # base_amount → their values are used as-is; a ``discount_policy_ids`` of
+        # None then keeps the legacy "no discount" meaning (NOT auto-derive).
+        if base_amount is None:
+            academic_info = await resolve_fee_academic_info(self.db, profile)
+            if discount_policy_ids is None:
+                discount_policy_ids = list(
+                    academic_info.applied_discount_policy_ids or []
+                )
+            if fee_type == FeeTypeEnum.tuition:
+                base_amount = await self._semester_tuition_amount_for_ai(
+                    academic_info.id, semester_no
+                )
+            else:
+                base_amount = academic_info.tuition_fee_per_year or Decimal("0")
+                if base_amount <= 0:
+                    raise BadRequest(
+                        "Cannot calculate fee: No fee amount configured "
+                        "for this offering"
+                    )
+        elif fee_type == FeeTypeEnum.tuition:
+            # Explicit base_amount provided, but tuition's amount is always the
+            # canonical offering_semester_tuition value (base_amount ignored).
             base_amount = await self._lookup_semester_tuition_amount(
                 profile, semester_no
             )

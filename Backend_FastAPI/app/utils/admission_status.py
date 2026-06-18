@@ -132,6 +132,14 @@ def is_fee_eligible(profile: "AdmissionProfile") -> bool:
 
     Earlier states (``draft`` etc.) are NOT eligible (a fee would be premature).
     Keep this in lockstep with both call sites if the gate ever changes.
+
+    COUPLING (do not let drift): the "multi-NV ⇒ exactly 1 NV" rule here is the
+    GATE (may a fee be created at all?). Its PRICING counterpart — which NV's
+    ngành the fee is computed against — lives in
+    ``fee_calculation_service.resolve_fee_academic_info``. Change one ⇒ change
+    the other. The end-to-end anchor that fails on drift:
+    ``tests/api/test_phase3_pr3d_b_choice_crud.py`` (single-choice→201;
+    ≥2-pending / 0-choice → fail-closed).
     """
     if is_admitted_like(profile) or profile.status in ("confirmed", "enrolled"):
         return True

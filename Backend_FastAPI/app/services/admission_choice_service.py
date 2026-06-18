@@ -29,6 +29,7 @@ Tighten ngăn typosquat `/api/v2/admissions/abc/choices` đụng route khác.
 """
 from typing import Any, Callable, Optional, Tuple  # noqa: F401
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,7 +41,6 @@ from app.repositories.admission_profile_choice_repository import (
     AdmissionProfileChoiceRepository,
 )
 from app.repositories.admission_path_repository import AdmissionPathRepository
-from app.repositories.admission_repository import AdmissionRepository
 from app.repositories.fee_repository import FeeRepository
 from app.services.activity_service import log_activity
 from app.services.system_config_service import SystemConfigService
@@ -79,7 +79,6 @@ class AdmissionChoiceService:
         self.choice_repo = AdmissionProfileChoiceRepository(db)
         self.path_repo = AdmissionPathRepository(db)
         self.sysconfig = SystemConfigService(db)
-        self.admission_repo = AdmissionRepository(db)
         self.fee_repo = FeeRepository(db)
 
     async def add_choice(
@@ -335,9 +334,7 @@ class AdmissionChoiceService:
         (draft / revision_requested) leaves no forensic record for a
         "where did NV 3 go?" complaint months later.
         """
-        await self._lock_profile(profile)
-        await self._assert_no_finance_lock(profile, action="xoá nguyện vọng")
-        self._assert_choice_editable(profile, action="xoá nguyện vọng")
+        await self._assert_choice_mutable(profile, action="xoá nguyện vọng")
 
         # Snapshot the row + score children BEFORE the cascade delete so
         # the audit log carries the full forensic state. Resolve the
@@ -413,9 +410,7 @@ class AdmissionChoiceService:
           410). Load round qua choice.admission_path_id (lazy add — single
           extra query, paths này low-traffic vs add_choice).
         """
-        await self._lock_profile(profile)
-        await self._assert_no_finance_lock(profile, action="đổi thứ tự nguyện vọng")
-        self._assert_choice_editable(profile, action="đổi thứ tự nguyện vọng")
+        await self._assert_choice_mutable(profile, action="đổi thứ tự nguyện vọng")
 
         round_obj = await self.choice_repo.get_round_by_path_id(
             choice.admission_path_id
@@ -475,9 +470,7 @@ class AdmissionChoiceService:
         update_choice_display_order — load round qua admission_path_id
         + assert open. RoundClosedError → 410.
         """
-        await self._lock_profile(profile)
-        await self._assert_no_finance_lock(profile, action="cập nhật điểm nguyện vọng")
-        self._assert_choice_editable(profile, action="cập nhật điểm nguyện vọng")
+        await self._assert_choice_mutable(profile, action="cập nhật điểm nguyện vọng")
 
         round_obj = await self.choice_repo.get_round_by_path_id(
             choice.admission_path_id
@@ -536,16 +529,25 @@ class AdmissionChoiceService:
             )
 
     async def _lock_profile(self, profile: AdmissionProfile) -> None:
-        """Acquire the AdmissionProfile row lock + refresh in-session attrs.
+        """Acquire the AdmissionProfile row lock + refresh ALL scalar columns.
 
         Serializes NV-structure mutations against fee creation, which locks the
-        SAME row first (``FeeCalculationService.calculate_fee``).
-        ``populate_existing`` overwrites the (non-locking) IDOR-loaded instance
-        so the finance-lock + status re-checks read committed state under the
-        lock rather than a stale identity-map copy.
+        SAME row first (``FeeCalculationService.calculate_fee``). Uses
+        ``db.refresh(..., with_for_update=True)`` over the model's mapped COLUMN
+        attributes only — ONE ``SELECT … FOR UPDATE`` that locks the row and
+        refreshes every scalar (status / uses_choice_engine / academic_year /
+        applied_rules / …) WITHOUT touching relationships, so the ~12
+        ``lazy="selectin"`` relations a full entity reload would re-fire stay
+        untouched (no fan-out). Refreshing the WHOLE column set — not just the
+        columns today's re-checks happen to read — is the lock contract: any
+        present OR future under-lock read of a scalar sees committed state,
+        never a stale identity-map value from the non-locking IDOR load.
         """
-        await self.admission_repo.get_by_id_for_update(
-            profile.id, populate_existing=True
+        column_attrs = [
+            attr.key for attr in sa_inspect(type(profile)).column_attrs
+        ]
+        await self.db.refresh(
+            profile, attribute_names=column_attrs, with_for_update=True
         )
 
     async def _assert_no_finance_lock(
@@ -571,6 +573,23 @@ class AdmissionChoiceService:
                 f"Hồ sơ đã phát sinh học phí, không thể {action}; "
                 "cần xử lý tài chính bằng quy trình riêng."
             )
+
+    async def _assert_choice_mutable(
+        self, profile: AdmissionProfile, *, action: str
+    ) -> None:
+        """Single gate for NV-structure mutations: lock → finance-freeze →
+        editable, IN THAT ORDER.
+
+        Bundling the three so a future NV-structure mutation can't silently skip
+        the finance freeze (the failure mode this consolidation guards). Order
+        matters: the finance freeze fires BEFORE the editable/status check so
+        error messages stay stable for the existing tests. ``add_choice`` keeps
+        its own inline prechecks (different wording + extra round/quota checks)
+        but still runs ``_lock_profile`` + ``_assert_no_finance_lock`` first.
+        """
+        await self._lock_profile(profile)
+        await self._assert_no_finance_lock(profile, action=action)
+        self._assert_choice_editable(profile, action=action)
 
     async def _snapshot_and_store_scores(
         self,

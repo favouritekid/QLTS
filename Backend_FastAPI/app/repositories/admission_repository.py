@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 from sqlalchemy import select, or_, and_, func, desc, asc, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, raiseload, selectinload
 
 from app import models
 from app.models import ProfileSubjectScore, ProfileDocument
@@ -119,6 +119,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         join. ``with_choices`` adds a ``selectinload`` of ``choices`` so the
         caller can re-check ``is_fee_eligible`` under the lock.
 
+        ``raiseload("*")`` suppresses the AdmissionProfile mapper's ~12 other
+        ``lazy="selectin"`` relations (student / documents / fees / audit
+        ``*_by`` …) that would otherwise all re-fire on this entity load — the
+        only consumer (``calculate_fee``) needs just ``lead`` + ``choices``. Any
+        stray access to a non-eager-loaded relation then RAISES (caught in
+        tests) instead of silently lazy-loading (runtime-only MissingGreenlet in
+        async). Scalar columns + ``__dict__.get`` reads are unaffected.
+
         Args:
             profile_id: AdmissionProfile ID.
             populate_existing: overwrite any in-session instance's attributes
@@ -130,7 +138,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         query = (
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
-            .options(selectinload(models.AdmissionProfile.lead))
+            .options(
+                raiseload("*"),
+                selectinload(models.AdmissionProfile.lead),
+            )
             .with_for_update(of=models.AdmissionProfile)
         )
         if with_choices:
