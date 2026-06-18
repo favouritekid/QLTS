@@ -41,6 +41,9 @@ from ..services.magic_link_rate_limit import (
     consume_attempt,
 )
 from ..services.notification_dispatcher import safe_dispatch, rooms_for_admission, rooms_for_lead
+from ..services.notification_payloads import EventPayload
+from sqlalchemy.orm import selectinload
+from types import SimpleNamespace
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
@@ -1379,6 +1382,84 @@ async def enroll_student(
         )
 
 
+async def _emit_post_delete_events(
+    db,
+    *,
+    profile_id: int,
+    lead_id: int,
+    lead_name: str,
+    lead_revert: dict | None,
+    actor_id: int,
+    actor_name: str,
+) -> None:
+    """Post-commit fanout for a deleted admission profile.
+
+    Snapshots every scalar from the (still-attached) lead BEFORE the first
+    ``safe_dispatch``: a failed dispatch rolls back the session and expires ORM
+    instances, so the second dispatch's payload/rooms must come from plain
+    scalars — never from a (possibly expired) ORM object. Request-free so it is
+    unit-testable without the endpoint's rate-limiter/Request machinery.
+    """
+    _deleted_lead = await db.get(
+        models.Lead, lead_id, options=[selectinload(models.Lead.assigned_officer)]
+    )
+    _lead_full_name = getattr(_deleted_lead, "full_name", None) or lead_name
+    _officer_name = (
+        _deleted_lead.assigned_officer.full_name
+        if _deleted_lead is not None and _deleted_lead.assigned_officer
+        else "Unknown"
+    )
+    # One namespace serves both rooms_for_lead (unit_id/officer_id) and
+    # for_lead_status_changed (id/full_name/email/officer_id).
+    _lead_ns = SimpleNamespace(
+        id=lead_id,
+        full_name=_lead_full_name,
+        email=None,
+        unit_id=getattr(_deleted_lead, "unit_id", None),
+        assigned_officer_id=getattr(_deleted_lead, "assigned_officer_id", None),
+    )
+    _lead_rooms = rooms_for_lead(_lead_ns)
+
+    await safe_dispatch(
+        db=db,
+        event=SystemEvents.APPLICATION_DELETED,
+        payload={
+            "application_id": profile_id,
+            "lead_id": lead_id,
+            "lead_name": lead_name,
+            "actor_id": actor_id,
+            "actor_name": actor_name,
+        },
+        dedupe_key=f"admission_profile_deleted:{profile_id}",
+        rooms=_lead_rooms,
+    )
+
+    # Deleting the last draft may have reverted the lead's status — surface it to
+    # lead-pipeline subscribers/notifications (parity with other transitions).
+    # Built from the scalar snapshot so a failed dispatch above (session rolled
+    # back) cannot break or skip this one.
+    if lead_revert:
+        _actor_ns = SimpleNamespace(
+            id=actor_id, full_name=actor_name, username=actor_name
+        )
+        await safe_dispatch(
+            db=db,
+            event=SystemEvents.LEAD_STATUS_CHANGED,
+            payload=EventPayload.for_lead_status_changed(
+                _lead_ns,
+                _actor_ns,
+                old_status=lead_revert["old_status"] or "none",
+                new_status=lead_revert["new_status"] or "none",
+                officer_name=_officer_name,
+                old_stage=lead_revert.get("old_stage"),
+                new_stage=lead_revert.get("new_stage"),
+                updated_fields=["consultation_status_id", "pipeline_stage_id"],
+            ),
+            dedupe_key=f"lead_status_changed:{lead_id}:{lead_revert['new_status']}",
+            rooms=_lead_rooms,
+        )
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete(
     "/{profile_id}",
@@ -1412,38 +1493,53 @@ async def delete_admission_profile(
             if _lead:
                 _snapshot_lead_name = _lead.full_name
 
-        await admission_service.delete_profile(
-            db=db,
-            profile_id=profile_id,
-            current_user=current_user,
+        _deleted, _cleanup_orphaned_files, _lead_revert = (
+            await admission_service.delete_profile(
+                db=db,
+                profile_id=profile_id,
+                current_user=current_user,
+            )
         )
+
+        # Snapshot actor scalars BEFORE commit/dispatch: a failed safe_dispatch
+        # below rolls back the session and expires current_user, so any later
+        # read (the LEAD_STATUS_CHANGED payload or the final log) would async
+        # lazy-load on an expired instance and 500 an already-committed delete.
+        _actor_id = current_user.id
+        _actor_name = current_user.full_name or current_user.username
 
         # Transaction commit
         await db.commit()
 
-        # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
+        # Post-commit fanout via a request-free helper that snapshots all
+        # scalars BEFORE the first safe_dispatch (a failed dispatch rolls back
+        # the session and expires ORM attrs). See _emit_post_delete_events.
         if _snapshot_lead_id:
-            # Lead row still exists (FK was profile→lead, profile gone but lead kept).
-            # Fetch it so scoped emit can include unit + assigned officer rooms.
-            _deleted_lead = await db.get(models.Lead, _snapshot_lead_id)
-            await safe_dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_DELETED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": _snapshot_lead_id,
-                    "lead_name": _snapshot_lead_name,
-                    "actor_id": current_user.id,
-                    "actor_name": current_user.full_name or current_user.username,
-                },
-                dedupe_key=f"admission_profile_deleted:{profile_id}",
-                rooms=rooms_for_lead(_deleted_lead),
+            await _emit_post_delete_events(
+                db,
+                profile_id=profile_id,
+                lead_id=_snapshot_lead_id,
+                lead_name=_snapshot_lead_name,
+                lead_revert=_lead_revert,
+                actor_id=_actor_id,
+                actor_name=_actor_name,
             )
+
+        # Post-commit best-effort file cleanup LAST so it can never block the
+        # dispatches above (helper already swallows errors; belt-and-suspenders).
+        if _cleanup_orphaned_files:
+            try:
+                await _cleanup_orphaned_files()
+            except Exception:  # noqa: BLE001 — best-effort storage cleanup
+                log.warning(
+                    "Profile upload cleanup failed post-commit",
+                    profile_id=profile_id,
+                )
 
         log.info(
             "Admission profile deleted via API",
             profile_id=profile_id,
-            user_id=current_user.id,
+            user_id=_actor_id,
         )
 
         return None

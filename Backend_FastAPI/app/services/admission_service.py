@@ -4186,7 +4186,7 @@ async def create_profile(
         await _create_admission_milestone_consultation(
             db=db,
             lead=new_profile.lead,
-            event="profile_created",
+            event=_PROFILE_CREATED_EVENT,
             actor=current_user,
             profile_id=new_profile.id,
         )
@@ -10289,11 +10289,89 @@ async def finalize_profile(
     return profile, final_callback
 
 
+def _remove_profile_upload_dir(profile_id: int) -> None:
+    """Best-effort removal of a deleted profile's entire upload directory.
+
+    All of a profile's uploads — path documents, priority-evidence files and
+    the hidden ``.staging.{uuid}`` temp files — live under
+    ``uploads/admissions/{id}/`` and can never escape it (see
+    ``upload_document``). ``profile_document`` rows cascade-delete with the
+    profile, but the files and the now-empty directory are not touched by the
+    DB. ``shutil.rmtree`` drops docs + staging + the directory in one shot
+    (the per-file loop used to leak staging files and the empty dir).
+
+    A leftover file is storage waste, not a correctness issue — and this runs
+    AFTER the delete commits — so EVERY failure is swallowed (post-commit
+    cleanup must never raise and turn a successful delete into a 500).
+    """
+    import shutil
+
+    upload_dir = f"uploads/admissions/{profile_id}"
+    try:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+    except Exception as e:  # noqa: BLE001 — best-effort, must never raise
+        log.warning(
+            "Failed to remove profile upload dir post-commit",
+            upload_dir=upload_dir,
+            error=str(e),
+        )
+
+
+# Lead consultation status the ``profile_created`` milestone moves a lead to
+# (== ADMISSION_TO_LEAD_STATUS_MAP["draft"] in lead_admission_sync.py).
+# IMPORTANT: sts06 is ALSO reachable via ``lead_agrees`` / a manual "Đồng ý
+# tư vấn" — so being at sts06 does NOT imply this profile caused it. A revert
+# must confirm the *most recent* lead status change was the profile-created
+# bump (see delete_profile), otherwise it would mis-attribute an independent
+# sts06 and silently demote the lead.
+_CREATE_MILESTONE_STATUS = "sts06"
+
+# Admission milestone event that bumps a lead to _CREATE_MILESTONE_STATUS.
+# Shared by create_profile (fires the milestone) and delete_profile (detects it
+# in the latest LeadStatusHistory.reason) so a rename can't silently desync them.
+_PROFILE_CREATED_EVENT = "profile_created"
+
+
+def _resolve_lead_revert_status(
+    has_other_profile: bool,
+    current_consultation_status_id: Optional[str],
+    prev_consultation_status_id: Optional[str],
+    prev_is_terminal_or_negative: bool = False,
+) -> Optional[str]:
+    """Decide which consultation status a lead reverts to when its last draft
+    profile is deleted — or ``None`` to leave the lead untouched.
+
+    Pure policy (no DB) so the rule is exhaustively unit-testable. Revert ONLY
+    when ALL hold:
+      * the lead has NO other admission profile (this was the last one), AND
+      * the lead is still exactly at the create-milestone status (sts06) — i.e.
+        nothing advanced it further (another profile's submit, an officer
+        manual change, fee payment, …), AND
+      * we know the status held BEFORE creation, it differs from sts06 (a
+        self-revert would be a no-op), AND
+      * that prior status is NOT terminal/negative — deleting a draft must
+        never re-close a lead (e.g. a lost lead reopened to sts06 then a
+        draft created+deleted should stay at sts06, not regress to sts20/
+        "Đã ngừng tư vấn").
+    """
+    if has_other_profile:
+        return None
+    if current_consultation_status_id != _CREATE_MILESTONE_STATUS:
+        return None
+    if not prev_consultation_status_id:
+        return None
+    if prev_consultation_status_id == _CREATE_MILESTONE_STATUS:
+        return None
+    if prev_is_terminal_or_negative:
+        return None
+    return prev_consultation_status_id
+
+
 async def delete_profile(
     db: AsyncSession,
     profile_id: int,
     current_user: models.User,
-) -> bool:
+) -> Tuple[bool, Callable[[], Awaitable[None]], Optional[dict]]:
     """
     Delete AdmissionProfile (only when status='draft').
 
@@ -10302,8 +10380,14 @@ async def delete_profile(
     - State Locking: Only draft profiles can be deleted
 
     Behavior:
-    - Does NOT revert Lead status (Lead already showed interest)
-    - Creates a consultation record noting the deletion
+    - Conditionally reverts the lead's consultation status to its
+      pre-creation value — ONLY when this was the lead's last profile AND
+      the lead is still at the create-milestone status (sts06). Otherwise
+      the lead status is preserved (it advanced on its own or another
+      profile justifies it).
+    - Keeps ALL existing consultation history (real data); ADDS a system
+      consultation record noting the deletion, plus a LeadStatusHistory
+      row when a revert actually happens.
     - Maintains full audit trail in timeline
 
     IMPORTANT: This function does NOT commit the transaction.
@@ -10315,7 +10399,13 @@ async def delete_profile(
         current_user: Current authenticated user
 
     Returns:
-        True if deleted successfully
+        Tuple of (True, post_commit_callback, lead_revert_delta):
+        - post_commit_callback: removes the profile's upload dir (best-effort);
+          MUST be awaited by the router AFTER ``db.commit()``.
+        - lead_revert_delta: ``None``, or a dict
+          ``{old_status, new_status, old_stage, new_stage}`` when the lead's
+          status was reverted — the router uses it to dispatch
+          LEAD_STATUS_CHANGED post-commit.
 
     Raises:
         ResourceNotFoundError: Profile not found
@@ -10345,23 +10435,145 @@ async def delete_profile(
     lead = profile.lead
     lead_id = profile.lead_id
 
+    # Serialize concurrent deletes on the SAME lead. Without this, two
+    # simultaneous last-profile deletes each see the other profile still
+    # present (READ COMMITTED) → both skip the revert → lead stuck at sts06
+    # with zero profiles. Locking the lead row makes the count + revert
+    # decision below run one-at-a-time per lead.
+    await db.execute(
+        select(models.Lead.id).where(models.Lead.id == lead_id).with_for_update()
+    )
+
     # ==========================================================================
-    # CREATE CONSULTATION RECORD: Log the deletion event (no status revert)
+    # LEAD STATUS REVERT (conditional) + deletion consultation record
     # ==========================================================================
-    # Following the Golden Rule: Every admission event must have a consultation record
-    # Lead status stays the same (they already showed interest by creating profile)
-    
+    # Creating a draft profile bumps the lead to sts06 "Đồng ý tư vấn" via the
+    # ``profile_created`` milestone. Deleting that draft undoes the bump — but
+    # ONLY when it is provably safe:
+    #   (a) the lead has NO other admission profile left, AND
+    #   (b) the lead's MOST RECENT status change was THIS profile's create bump
+    #       (latest LeadStatusHistory row: new==sts06 + reason profile_created).
+    #       This one check rules out both mis-attribution traps: a lead already
+    #       at sts06 before creation (lead_agrees / manual) writes NO history
+    #       row on create, and any intervening status change makes the create
+    #       bump no longer the latest row — both ⇒ no revert, AND
+    #   (c) the pre-creation status is known, differs from sts06, and is NOT
+    #       terminal/negative (never re-close a lead by deleting a draft).
+    # Consultation history is always KEPT (real data); we only ADD a system
+    # record per the Golden Rule, plus a LeadStatusHistory row on revert.
+    from ..core.status_mapping import sync_lead_status_from_consultation
+    from .lead_service import _get_current_lead_state, _log_lead_state_change
+    from ..models.pipeline import OutcomeTypeEnum
+
+    _status_at_delete = lead.consultation_status_id
+
+    # Only OTHER DRAFT profiles justify keeping the lead at the create milestone
+    # (sts06 ↔ status 'draft' in ADMISSION_TO_LEAD_STATUS_MAP). A submitted/
+    # approved/enrolled profile advanced the lead (caught by the latest-history
+    # check below), and a completed prior-year profile (create dedups per
+    # (lead_id, academic_year), so a re-engaged lead keeps old-year rows) is
+    # historical — neither should block the revert.
+    _other_draft_count = await db.scalar(
+        select(func.count())
+        .select_from(models.AdmissionProfile)
+        .where(
+            models.AdmissionProfile.lead_id == lead_id,
+            models.AdmissionProfile.id != profile_id,
+            models.AdmissionProfile.status == "draft",
+        )
+    )
+
+    # The pre-creation status is recoverable ONLY when the lead's most recent
+    # status change is this profile's create bump (sts06 also comes from
+    # lead_agrees / manual consultation, so we must not key on sts06 alone).
+    _latest_history = await db.scalar(
+        select(models.LeadStatusHistory)
+        .where(models.LeadStatusHistory.lead_id == lead_id)
+        .order_by(models.LeadStatusHistory.id.desc())
+        .limit(1)
+    )
+    _prev_status_id = None
+    if (
+        _latest_history is not None
+        and _latest_history.new_consultation_status_id == _CREATE_MILESTONE_STATUS
+        and _PROFILE_CREATED_EVENT in (_latest_history.reason or "")
+    ):
+        _prev_status_id = _latest_history.old_consultation_status_id
+
+    # Load the candidate target once (reused on apply) + flag terminal/negative
+    # so the policy helper can refuse to re-close a lead.
+    _target_cs = None
+    _prev_is_terminal_or_negative = False
+    if _prev_status_id and _prev_status_id != _CREATE_MILESTONE_STATUS:
+        # Only columns (stage_id / is_final / outcome_type) are read below, so a
+        # bare db.get suffices — no need to eager-load the .stage relationship.
+        _target_cs = await db.get(models.ConsultationStatus, _prev_status_id)
+        if _target_cs is None:
+            _prev_status_id = None  # unknown status — cannot revert safely
+        else:
+            _prev_is_terminal_or_negative = (
+                bool(_target_cs.is_final)
+                or _target_cs.outcome_type == OutcomeTypeEnum.negative
+            )
+
+    _revert_target = _resolve_lead_revert_status(
+        has_other_profile=bool(_other_draft_count),
+        current_consultation_status_id=lead.consultation_status_id,
+        prev_consultation_status_id=_prev_status_id,
+        prev_is_terminal_or_negative=_prev_is_terminal_or_negative,
+    )
+
+    reverted_status_id = None
+    lead_revert_delta = None
+    if _revert_target and _target_cs is not None:
+        _old_state = _get_current_lead_state(lead)
+        _old_stage_id = lead.pipeline_stage_id
+        lead.consultation_status_id = _revert_target
+        lead.pipeline_stage_id = _target_cs.stage_id
+        sync_lead_status_from_consultation(lead, _target_cs)
+        _new_state = _get_current_lead_state(lead)
+        await _log_lead_state_change(
+            db=db,
+            lead=lead,
+            old_state=_old_state,
+            new_state=_new_state,
+            changed_by=current_user,
+            reason=f"Hoàn trạng thái sau khi xóa hồ sơ draft #{profile_id}",
+        )
+        reverted_status_id = _revert_target
+        # Surfaced to the router so it dispatches LEAD_STATUS_CHANGED
+        # post-commit (lead pipeline subscribers must see the revert).
+        lead_revert_delta = {
+            "old_status": _status_at_delete,
+            "new_status": _revert_target,
+            "old_stage": _old_stage_id,
+            "new_stage": _target_cs.stage_id,
+        }
+
+    if reverted_status_id:
+        _deletion_note = (
+            f"[HỆ THỐNG] Hồ sơ xét tuyển #{profile_id} đã bị xóa — "
+            "hoàn trạng thái tư vấn về trước khi tạo hồ sơ."
+        )
+    else:
+        _deletion_note = (
+            f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}"
+        )
+
+    # Golden Rule: every admission event gets a consultation record. Stamp it
+    # with the status the lead held AT deletion time (pre-revert), so the
+    # timeline reflects the state when the action happened.
     system_consultation = models.Consultation(
         lead_id=lead_id,
         officer_id=current_user.id,
-        consultation_status_id=lead.consultation_status_id,  # Keep current status
+        consultation_status_id=_status_at_delete,
         consultation_date=datetime.now(timezone.utc),
         method="system",
-        notes=f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}",
+        notes=_deletion_note,
         duration_minutes=0,
     )
     db.add(system_consultation)
-    
+
     # Update lead timestamp
     lead.updated_at = datetime.now(timezone.utc)
 
@@ -10369,7 +10581,8 @@ async def delete_profile(
         "Profile deletion consultation record created",
         lead_id=lead_id,
         profile_id=profile_id,
-        consultation_status_id=lead.consultation_status_id,
+        status_at_delete=_status_at_delete,
+        reverted_status_id=reverted_status_id,
         actor_id=current_user.id,
     )
 
@@ -10382,7 +10595,7 @@ async def delete_profile(
         source="api",
     )
 
-    # Delete the profile
+    # Delete the profile (profile_document rows cascade via FK ondelete=CASCADE).
     await db.delete(profile)
     await db.flush()
 
@@ -10393,7 +10606,11 @@ async def delete_profile(
         user_id=current_user.id,
     )
 
-    return True
+    async def _post_commit_cleanup() -> None:
+        # Drop the whole upload dir only after the delete is durably committed.
+        _remove_profile_upload_dir(profile_id)
+
+    return True, _post_commit_cleanup, lead_revert_delta
 
 
 # ==============================================================================

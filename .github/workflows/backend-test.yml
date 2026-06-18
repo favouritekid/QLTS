@@ -176,6 +176,7 @@ jobs:
           tests/services/test_phase3_create_profile_inherits_multi_nv.py
           tests/unit/test_admission_path_service_field_drift.py
           tests/integration/test_admission_path_method_filter_and_activator.py
+          tests/unit/test_delete_profile_file_cleanup.py
           -q --tb=short --timeout=60
 
       # =====================================================================
@@ -247,6 +248,7 @@ jobs:
           tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
           tests/unit/test_admission_state_machine.py
           tests/unit/test_b2_1_admission_milestone_events.py
+          tests/integration/test_delete_profile_revert.py
           -q --tb=short --timeout=60
 
       # =====================================================================
