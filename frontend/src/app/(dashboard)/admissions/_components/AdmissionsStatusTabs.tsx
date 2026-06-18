@@ -6,6 +6,7 @@
 
 "use client"
 
+import { useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
 
 interface TabItem {
@@ -24,6 +25,13 @@ export function AdmissionsStatusTabs({
   counts?: Record<string, number>
   onTabClick: (key: string) => void
 }) {
+  // Cuộn tab active vào tầm nhìn khi đổi bằng code (vd filter set activeTab sang
+  // tab khuất phải) — block:nearest tránh cuộn dọc trang.
+  const activeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [activeTab])
+
   return (
     <div className="scroll-shadow-x min-w-0 snap-x overflow-x-auto border-b border-border">
       <div className="flex w-max items-center gap-1" role="tablist" aria-label="Lọc nhanh theo trạng thái">
@@ -33,6 +41,7 @@ export function AdmissionsStatusTabs({
           return (
             <button
               key={t.key}
+              ref={active ? activeRef : undefined}
               type="button"
               role="tab"
               aria-selected={active}

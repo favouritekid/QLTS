@@ -373,12 +373,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             </div>
             <div>
               <h1 className="font-display text-xl font-bold tracking-tight md:text-2xl">Hồ sơ tuyển sinh</h1>
-              <p className="text-sm text-muted-foreground">
+              {/* aria-live trên <p> LUÔN mount → announce cả 0→N (live region phải
+                  tồn tại trước khi nội dung đổi; đặt trên span trong điều kiện sẽ câm 0→N). */}
+              <p className="text-sm text-muted-foreground" aria-live="polite">
                 Quản lý và theo dõi hồ sơ tuyển sinh
                 {totalCount > 0 && (
                   <>
                     {" · "}
-                    <span className="font-medium tabular-nums text-foreground" aria-live="polite">{totalCount}</span> hồ sơ
+                    <span className="font-medium tabular-nums text-foreground">{totalCount}</span> hồ sơ
                   </>
                 )}
               </p>
@@ -671,7 +673,7 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
       onClick={onOpen}
       onKeyDown={(e) => activateRow(e, onOpen)}
       className={cn(
-        "touch-manipulation rounded-2xl border bg-card p-3 shadow-xs outline-none transition-colors [contain-intrinsic-size:auto_104px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring",
+        "touch-manipulation virtual-card rounded-2xl border bg-card p-3 shadow-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isSelected ? "border-primary/40 bg-primary/5" : "border-border",
       )}
     >
