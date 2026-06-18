@@ -84,7 +84,7 @@ export const LeadStats = React.memo(function LeadStats({
             <p className="text-[10px] sm:text-xs font-medium text-muted-foreground truncate">
               {stat.title}
             </p>
-            <p className="text-base sm:text-lg font-bold leading-tight">
+            <p className="text-base sm:text-lg font-bold leading-tight tabular-nums">
               {stat.value}
             </p>
           </div>

@@ -198,7 +198,10 @@ export function DashboardLayout({
           {/* Main content area */}
           <div
             className={cn(
-              "flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
+              // min-w-0: cột main là flex item — KHÔNG có min-w-0 thì min-width:auto = min-content
+              // của child rộng nhất (vd tablist/list) thổi phồng `main` vượt viewport → bị shell
+              // overflow-hidden xén ("cắt mép" mobile). Xác nhận runtime: 618/864px → 390px.
+              "flex min-w-0 flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
               // Uses CSS vars: --sidebar-width-collapsed (72px), --sidebar-width (256px)
               "lg:ml-[var(--sidebar-width-collapsed)]",
               !isSidebarCollapsed && "lg:ml-[var(--sidebar-width)]"

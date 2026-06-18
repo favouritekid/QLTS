@@ -137,7 +137,7 @@ export function RowActionsMenu({
         <Button
           variant="ghost"
           size="icon"
-          className="size-8"
+          className="size-10 touch-manipulation md:size-8"
           aria-label="Thao tác"
           onClick={(e) => e.stopPropagation()}
         >

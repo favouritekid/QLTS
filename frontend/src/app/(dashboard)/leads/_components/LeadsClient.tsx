@@ -43,6 +43,7 @@ import {
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useUIStore } from "@/lib/stores/ui.store";
+import { cn } from "@/lib/utils";
 
 import { useLeads, useDeleteLead, useExportLeads, useImportLeads, useDownloadImportTemplate, leadsKeys } from "@/hooks/useLeads";
 import { leadsApi } from "@/lib/api/leads";
@@ -356,10 +357,14 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
   const hasDashboardContext = dashboardContext !== null;
   
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      {/* Header - Sticky */}
+    // Mobile (<lg): document-flow — cuộn qua `Main` (single-scroll), bỏ app-shell
+    // h-full/overflow-hidden để khỏi lồng scroll (đứt momentum "tê"). Desktop giữ
+    // app-shell cho ResizablePanel split view + scroll panel độc lập.
+    <div className={cn("flex flex-col", isDesktop ? "h-full overflow-hidden" : "min-w-0")}>
+      {/* Header — sticky chỉ trên desktop (app-shell). Mobile document-flow:
+          để header cuộn đi (list-first), tránh sticky tucking dưới fixed top bar. */}
       <PageHeader
-        variant="sticky"
+        variant={isDesktop ? "sticky" : "default"}
         title="Trung Tâm Quản Lý Lead"
         icon={<Command className="text-primary h-5 w-5" />}
         description={headerDescription}
@@ -502,6 +507,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
                   sortBy={filterState.sortBy}
                   sortOrder={filterState.sortOrder}
                   onSortChange={filterHandlers.handleSortChange}
+                  isMobileLayout={false}
                 />
               )}
             </div>
@@ -522,8 +528,9 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
           </ResizablePanel>
         </ResizablePanelGroup>
       ) : (
-        // Mobile: Full-width table (detail panel in Sheet)
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        // Mobile: document-flow — KHÔNG tạo scroll container riêng; danh sách chảy
+        // theo trang, cuộn qua `Main` (single-scroll).
+        <div className="min-w-0">
           {isLoading ? (
             <div className="space-y-2 p-4">
               {Array.from({ length: 10 }).map((_, i) => (
@@ -566,6 +573,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
               searchQuery={filterState.search}
               onResetFilters={filterHandlers.resetFilters}
               onCreateLead={handleAddLead}
+              isMobileLayout
             />
           )}
         </div>

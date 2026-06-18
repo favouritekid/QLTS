@@ -44,7 +44,7 @@ function FilterPill({ label, onRemove }: { label: string; onRemove: () => void }
       {label}
       <button
         onClick={onRemove}
-        className="hover:bg-muted ml-0.5 rounded-full p-0.5 transition-colors"
+        className="hover:bg-muted ml-0.5 rounded-full p-1 transition-colors"
         aria-label={`Xóa bộ lọc ${label}`}
       >
         <X className="h-3 w-3" />
@@ -213,7 +213,8 @@ export function LeadFilterBar({
           variant="outline"
           size="sm"
           onClick={onOpenFilters}
-          className="h-11 shrink-0 gap-1.5 md:h-9"
+          aria-label="Bộ lọc"
+          className="h-11 shrink-0 gap-1.5 md:h-9 touch-manipulation"
         >
           <SlidersHorizontal className="h-4 w-4" />
           <span className="hidden sm:inline">Bộ lọc</span>
@@ -224,7 +225,7 @@ export function LeadFilterBar({
           )}
         </Button>
 
-        <Button size="sm" onClick={onAddLead} className="h-11 shrink-0 gap-1.5 md:h-9">
+        <Button size="sm" onClick={onAddLead} aria-label="Thêm Lead" className="h-11 shrink-0 gap-1.5 md:h-9 touch-manipulation">
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Thêm Lead</span>
         </Button>

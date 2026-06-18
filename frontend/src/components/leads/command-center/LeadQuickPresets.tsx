@@ -111,7 +111,7 @@ export const LeadQuickPresets = React.memo(function LeadQuickPresets({
             onClick={p.onClick}
             aria-pressed={p.active}
             className={cn(
-              "h-9 shrink-0 rounded-full border px-3 text-sm font-medium transition-colors md:h-8",
+              "h-11 shrink-0 touch-manipulation rounded-full border px-3 text-sm font-medium transition-colors md:h-8",
               p.active
                 ? "border-primary bg-primary text-primary-foreground"
                 : "bg-background hover:bg-accent text-foreground",

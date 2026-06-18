@@ -368,8 +368,8 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         {/* Header */}
         <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-              <ClipboardCheck className="size-6" aria-hidden="true" />
+            <div className="flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary sm:size-11">
+              <ClipboardCheck className="size-5 sm:size-6" aria-hidden="true" />
             </div>
             <div>
               <h1 className="font-display text-xl font-bold tracking-tight md:text-2xl">Hồ sơ tuyển sinh</h1>
@@ -378,14 +378,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
                 {totalCount > 0 && (
                   <>
                     {" · "}
-                    <span className="font-medium tabular-nums text-foreground">{totalCount}</span> hồ sơ
+                    <span className="font-medium tabular-nums text-foreground" aria-live="polite">{totalCount}</span> hồ sơ
                   </>
                 )}
               </p>
             </div>
           </div>
 
-          <div className="inline-flex self-start rounded-full border border-border bg-card p-0.5 sm:self-auto">
+          <div className="hidden self-start rounded-full border border-border bg-card p-0.5 sm:inline-flex sm:self-auto">
             {(["comfortable", "compact"] as const).map((d) => (
               <button
                 key={d}
@@ -525,14 +525,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
             {/* Mobile: roster tiles */}
             <div className={cn("space-y-2 md:hidden", isFetching && "opacity-60")}>
-              <div className="flex items-center gap-2 px-1 py-1">
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 px-1 py-2 touch-manipulation">
                 <Checkbox
                   checked={allVisibleSelected}
                   onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
                   aria-label="Chọn tất cả"
                 />
                 <span className="text-sm text-muted-foreground">Chọn tất cả</span>
-              </div>
+              </label>
 
               {profiles.map((profile) => (
                 <AdmissionCard
@@ -671,7 +671,7 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
       onClick={onOpen}
       onKeyDown={(e) => activateRow(e, onOpen)}
       className={cn(
-        "rounded-2xl border bg-card p-4 shadow-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        "touch-manipulation rounded-2xl border bg-card p-4 shadow-xs outline-none transition-colors [contain-intrinsic-size:auto_132px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring",
         isSelected ? "border-primary/40 bg-primary/5" : "border-border",
       )}
     >
