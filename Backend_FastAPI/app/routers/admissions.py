@@ -41,6 +41,7 @@ from ..services.magic_link_rate_limit import (
     consume_attempt,
 )
 from ..services.notification_dispatcher import safe_dispatch, rooms_for_admission, rooms_for_lead
+from ..services.notification_payloads import EventPayload
 from ..services.user_service import emit_data_updated as _emit_realtime_update
 from ..core.events import SystemEvents
 from ..utils.exceptions import (
@@ -1412,20 +1413,16 @@ async def delete_admission_profile(
             if _lead:
                 _snapshot_lead_name = _lead.full_name
 
-        _deleted, _cleanup_orphaned_files = await admission_service.delete_profile(
-            db=db,
-            profile_id=profile_id,
-            current_user=current_user,
+        _deleted, _cleanup_orphaned_files, _lead_revert = (
+            await admission_service.delete_profile(
+                db=db,
+                profile_id=profile_id,
+                current_user=current_user,
+            )
         )
 
         # Transaction commit
         await db.commit()
-
-        # Post-commit best-effort: drop the physical uploaded files. The
-        # profile_document rows already cascade-deleted with the profile;
-        # this removes their files on disk so they don't leak as orphans.
-        if _cleanup_orphaned_files:
-            await _cleanup_orphaned_files()
 
         # Dispatch APPLICATION_DELETED (profile is gone, use snapshot)
         if _snapshot_lead_id:
@@ -1445,6 +1442,41 @@ async def delete_admission_profile(
                 dedupe_key=f"admission_profile_deleted:{profile_id}",
                 rooms=rooms_for_lead(_deleted_lead),
             )
+
+            # Deleting the last draft may have reverted the lead's status — surface
+            # that to lead-pipeline subscribers/notifications (parity with other
+            # status transitions). The DB is already consistent (history + lead
+            # row updated); this is the realtime/notification event.
+            if _lead_revert and _deleted_lead is not None:
+                await safe_dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_STATUS_CHANGED,
+                    payload=EventPayload.for_lead_status_changed(
+                        _deleted_lead,
+                        current_user,
+                        old_status=_lead_revert["old_status"] or "none",
+                        new_status=_lead_revert["new_status"] or "none",
+                        old_stage=_lead_revert.get("old_stage"),
+                        new_stage=_lead_revert.get("new_stage"),
+                        updated_fields=["consultation_status_id", "pipeline_stage_id"],
+                    ),
+                    dedupe_key=(
+                        f"lead_status_changed:{_deleted_lead.id}:"
+                        f"{_lead_revert['new_status']}"
+                    ),
+                    rooms=rooms_for_lead(_deleted_lead),
+                )
+
+        # Post-commit best-effort file cleanup LAST so it can never block the
+        # dispatches above (helper already swallows errors; belt-and-suspenders).
+        if _cleanup_orphaned_files:
+            try:
+                await _cleanup_orphaned_files()
+            except Exception:  # noqa: BLE001 — best-effort storage cleanup
+                log.warning(
+                    "Profile upload cleanup failed post-commit",
+                    profile_id=profile_id,
+                )
 
         log.info(
             "Admission profile deleted via API",

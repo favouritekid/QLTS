@@ -1,68 +1,60 @@
-"""Unit tests for the orphaned-file cleanup wired into ``delete_profile``.
+"""Unit tests for the post-delete cleanup + lead-status revert policy wired
+into ``delete_profile``.
 
-``profile_document.profile_id`` is ``ondelete=CASCADE`` so deleting a draft
-profile removes the rows, but the physical uploads were previously left on
-disk. ``delete_profile`` now returns a post-commit callback that drops those
-files via ``_remove_orphaned_document_files``.
+Two pure/low-level pieces are pinned here so the riskiest logic is covered
+without a DB:
 
-These tests pin the helper's best-effort contract — it must NEVER raise, even
-on a missing/None/undeletable path — so a future change can't silently turn
-file cleanup into a request-failing exception after the profile is already
-gone from the DB.
+1. ``_remove_profile_upload_dir`` — best-effort removal of a deleted profile's
+   ``uploads/admissions/{id}/`` directory (docs + staging + the dir). It runs
+   AFTER the delete commits, so it must NEVER raise — otherwise a successful
+   delete becomes a 500 and the router's realtime dispatch is skipped.
+
+2. ``_resolve_lead_revert_status`` — the pure policy deciding whether (and to
+   what) a lead's consultation status reverts when its last draft is deleted.
 """
 from app.services.admission_service import (
     _CREATE_MILESTONE_STATUS,
-    _remove_orphaned_document_files,
+    _remove_profile_upload_dir,
     _resolve_lead_revert_status,
 )
 
 
-class TestRemoveOrphanedDocumentFiles:
-    def test_removes_existing_files(self, tmp_path):
-        f1 = tmp_path / "doc1.pdf"
-        f2 = tmp_path / "doc2.pdf"
-        f1.write_text("x")
-        f2.write_text("y")
+class TestRemoveProfileUploadDir:
+    def test_removes_dir_with_docs_and_staging(self, tmp_path, monkeypatch):
+        prof_id = 4242
+        target = tmp_path / "uploads" / "admissions" / str(prof_id)
+        (target / "docs").mkdir(parents=True)
+        (target / "docs" / "hocba.pdf").write_text("x")
+        (target / ".staging.abc.pdf").write_text("y")  # staging temp file
+        monkeypatch.chdir(tmp_path)
 
-        _remove_orphaned_document_files([str(f1), str(f2)])
+        _remove_profile_upload_dir(prof_id)
 
-        assert not f1.exists()
-        assert not f2.exists()
+        assert not target.exists()  # docs + staging + dir all gone
 
-    def test_missing_path_is_ignored(self, tmp_path):
-        missing = str(tmp_path / "nope.pdf")
-        # Must not raise even though the file does not exist.
-        _remove_orphaned_document_files([missing])
+    def test_missing_dir_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # No uploads/ tree at all → must not raise.
+        _remove_profile_upload_dir(999999)
 
-    def test_none_and_empty_paths_ignored(self):
-        # None / "" entries (file_path is nullable) must be skipped silently.
-        _remove_orphaned_document_files([None, "", None])
+    def test_never_raises_even_if_rmtree_throws(self, monkeypatch):
+        # Pins the regression flagged in review: the helper must swallow ANY
+        # error (not just OSError) — e.g. a ValueError("embedded null byte").
+        def _boom(*args, **kwargs):
+            raise ValueError("embedded null byte")
 
-    def test_partial_failure_does_not_stop_others(self, tmp_path):
-        good = tmp_path / "good.pdf"
-        good.write_text("z")
-        # A directory cannot be removed by os.remove → OSError; it must be
-        # swallowed and the good file must still be deleted.
-        a_dir = tmp_path / "subdir"
-        a_dir.mkdir()
-
-        _remove_orphaned_document_files([str(a_dir), str(good)])
-
-        assert not good.exists()
-        assert a_dir.exists()  # directory left intact, error swallowed
-
-    def test_empty_list_noop(self):
-        # No paths → no-op, no raise.
-        _remove_orphaned_document_files([])
+        monkeypatch.setattr("shutil.rmtree", _boom)
+        # Must not propagate.
+        _remove_profile_upload_dir(123)
 
 
 class TestResolveLeadRevertStatus:
-    """Exhaustive policy tests for the lead-status revert decision when a
-    draft profile is deleted (the business edge case: deleting a profile must
-    not leave the lead stranded at sts06 'Đồng ý tư vấn' with no profile).
+    """Exhaustive policy tests for the lead-status revert decision when a draft
+    profile is deleted (the business edge case: deleting a profile must not
+    leave the lead stranded at sts06 with no profile — nor mis-attribute an
+    independent sts06, nor re-close a lead).
 
-    Pure function → every branch is covered cheaply without a DB. The revert
-    fires ONLY when all three conditions hold; any single failing condition
+    Revert fires ONLY when all conditions hold; any single failing condition
     must preserve the lead (return None).
     """
 
@@ -79,7 +71,6 @@ class TestResolveLeadRevertStatus:
         )
 
     def test_no_revert_when_other_profile_exists(self):
-        # Another profile justifies the lead's status → keep it.
         assert (
             _resolve_lead_revert_status(
                 has_other_profile=True,
@@ -90,8 +81,7 @@ class TestResolveLeadRevertStatus:
         )
 
     def test_no_revert_when_lead_advanced_past_milestone(self):
-        # Lead moved beyond sts06 (e.g. sts07 submitted, sts09 approved, or an
-        # officer manual change) → do not regress it.
+        # Lead moved beyond sts06 (submit/approve/fee/manual) → don't regress.
         for advanced in ("sts07", "sts09", "sts13", "sts05"):
             assert (
                 _resolve_lead_revert_status(
@@ -103,7 +93,8 @@ class TestResolveLeadRevertStatus:
             ), f"Should not revert when lead is at {advanced}"
 
     def test_no_revert_when_prev_status_unknown(self):
-        # No history of the pre-creation status → cannot safely revert.
+        # No recoverable pre-creation status (e.g. lead was already at sts06
+        # before creation, so the create milestone wrote no history row).
         assert (
             _resolve_lead_revert_status(
                 has_other_profile=False,
@@ -133,4 +124,29 @@ class TestResolveLeadRevertStatus:
                 prev_consultation_status_id=self.PREV,
             )
             is None
+        )
+
+    def test_no_revert_when_prev_is_terminal_or_negative(self):
+        # A lost lead (sts20 "Đã ngừng tư vấn", terminal/negative) reopened to
+        # sts06 then create+delete must NOT be re-closed by the delete.
+        assert (
+            _resolve_lead_revert_status(
+                has_other_profile=False,
+                current_consultation_status_id=_CREATE_MILESTONE_STATUS,
+                prev_consultation_status_id="sts20",
+                prev_is_terminal_or_negative=True,
+            )
+            is None
+        )
+
+    def test_reverts_to_non_terminal_prev(self):
+        # Sanity: the terminal flag defaulting False still allows normal revert.
+        assert (
+            _resolve_lead_revert_status(
+                has_other_profile=False,
+                current_consultation_status_id=_CREATE_MILESTONE_STATUS,
+                prev_consultation_status_id="sts03",
+                prev_is_terminal_or_negative=False,
+            )
+            == "sts03"
         )
