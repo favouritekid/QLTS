@@ -29,7 +29,9 @@ export function AdmissionsStatusTabs({
   // tab khuất phải) — block:nearest tránh cuộn dọc trang.
   const activeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" })
+    // optional-call: jsdom KHÔNG implement scrollIntoView → `?.()` no-op trong
+    // test (tránh throw vỡ render), vẫn chạy thật trên trình duyệt.
+    activeRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
   }, [activeTab])
 
   return (
