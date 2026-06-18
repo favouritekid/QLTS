@@ -16,6 +16,7 @@ downstream fee service is unit-tested elsewhere.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 import pytest_asyncio
@@ -1046,3 +1047,120 @@ async def test_multi_nv_zero_choice_at_admitted_fails_closed(
         f"0-choice admitted multi-NV must fail closed at fee creation (no "
         f"snapshot fallback), got {resp.status_code}: {resp.text[:300]}"
     )
+
+
+# ==============================================================================
+# Follow-up #1/#2 — service-resolved pricing branches (base_amount=None path)
+# ==============================================================================
+# After the resolve-once refactor the router passes base_amount=None /
+# discount_policy_ids=None and the SERVICE derives both under the lock. These
+# two branches are prod-reachable but were uncovered (every other test passes an
+# explicit base_amount → the legacy elif path).
+
+
+@pytest.mark.asyncio
+async def test_calculate_nontuition_fee_derives_base_from_academic_info(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """A NON-tuition fee via POST /api/fees/calculate exercises the service's
+    ``base_amount=None`` → ``academic_info.tuition_fee_per_year`` derive branch
+    (the router no longer pre-resolves base/discount). Locks that branch — no
+    other test POSTs a non-tuition fee through this route.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="NonTuition Derive",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "enrollment",
+            "installment_plan_code": "FULL",
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, (
+        f"non-tuition fee should derive base from academic_info, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    # academic_info.tuition_fee_per_year (5,000,000); no discount configured.
+    assert Decimal(str(body["base_amount"])) == Decimal("5000000"), body
+    assert Decimal(str(body["final_amount"])) == Decimal("5000000"), body
+
+
+@pytest.mark.asyncio
+async def test_calculate_tuition_auto_derives_discount_from_academic_info(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Tuition via POST (``base_amount=None``) auto-derives ``discount_policy_ids``
+    from the resolved academic_info under the lock. Seed a fixed 500k discount +
+    link it to the ngành → the created fee must reflect ``total_discount>0``
+    (final < base). Guards against the auto-derive silently returning ``[]`` (the
+    discount vanishing from a tuition prepay).
+    """
+    from sqlalchemy import update as sa_update
+    from app.models.tuition_discount_policy import TuitionDiscountPolicy
+
+    ts = str(int(datetime.now().timestamp() * 1000) % 10**9)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            policy = TuitionDiscountPolicy(
+                code=f"DISC_{ts}"[:50],
+                name=f"Follow-up smoke discount {ts}",
+                discount_type="amount",
+                discount_value=Decimal("500000"),
+                is_active=True,
+                applicable_scope={},
+                target_criteria={},
+            )
+            s.add(policy)
+            await s.flush()
+            ai_id = (await s.execute(
+                select(models.OfferingAcademicInfo.id).where(
+                    models.OfferingAcademicInfo.offering_id
+                    == fee_calc_config["offering_id"]
+                )
+            )).scalar_one()
+            await s.execute(
+                sa_update(models.OfferingAcademicInfo)
+                .where(models.OfferingAcademicInfo.id == ai_id)
+                .values(applied_discount_policy_ids=[policy.id])
+            )
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Discount Derive",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, (
+        f"tuition with a linked discount policy should auto-derive it, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    body = resp.json()
+    # HK1 tuition 5,000,000 − fixed 500,000 = 4,500,000 (discount auto-derived
+    # under the lock from the resolved academic_info).
+    assert Decimal(str(body["total_discount"])) == Decimal("500000"), body
+    assert Decimal(str(body["final_amount"])) == Decimal("4500000"), body

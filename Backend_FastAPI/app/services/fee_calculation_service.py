@@ -355,6 +355,18 @@ class FeeCalculationService:
         elif fee_type != FeeTypeEnum.tuition:
             semester_no = None
 
+        # #5 review: ``base_amount=None`` is the "service resolves pricing"
+        # sentinel (router path) and it also derives discount_policy_ids, so an
+        # explicit discount_policy_ids alongside it is contradictory. Reject the
+        # ambiguous combo fail-fast — a programming/contract error; no real
+        # caller mixes them (router passes both None, direct callers pass both).
+        if base_amount is None and discount_policy_ids is not None:
+            raise ValueError(
+                "calculate_fee: base_amount=None (service-resolve mode) cannot "
+                "be combined with an explicit discount_policy_ids — pass both "
+                "None (router) or both explicit (direct caller)."
+            )
+
         # Profile-first row lock — serialize vs choice mutation. Acquiring the
         # AdmissionProfile row lock BEFORE reading choices closes the race where
         # another request adds/removes a NV between the router's authz check and

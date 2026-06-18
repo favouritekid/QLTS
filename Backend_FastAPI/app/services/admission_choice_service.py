@@ -29,6 +29,7 @@ Tighten ngăn typosquat `/api/v2/admissions/abc/choices` đụng route khác.
 """
 from typing import Any, Callable, Optional, Tuple  # noqa: F401
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -528,22 +529,25 @@ class AdmissionChoiceService:
             )
 
     async def _lock_profile(self, profile: AdmissionProfile) -> None:
-        """Acquire the AdmissionProfile row lock + refresh the re-check columns.
+        """Acquire the AdmissionProfile row lock + refresh ALL scalar columns.
 
         Serializes NV-structure mutations against fee creation, which locks the
         SAME row first (``FeeCalculationService.calculate_fee``). Uses
-        ``db.refresh(..., with_for_update=True)`` — ONE ``SELECT … FOR UPDATE``
-        that both locks the row and refreshes ONLY the two columns the
-        downstream re-checks read (``status`` + ``uses_choice_engine``). This
-        avoids re-hydrating the whole entity (the ``AdmissionProfile`` mapper
-        has ~12 ``lazy="selectin"`` relations that a full entity reload would
-        all re-fire), while still reading committed state under the lock rather
-        than a stale identity-map copy.
+        ``db.refresh(..., with_for_update=True)`` over the model's mapped COLUMN
+        attributes only — ONE ``SELECT … FOR UPDATE`` that locks the row and
+        refreshes every scalar (status / uses_choice_engine / academic_year /
+        applied_rules / …) WITHOUT touching relationships, so the ~12
+        ``lazy="selectin"`` relations a full entity reload would re-fire stay
+        untouched (no fan-out). Refreshing the WHOLE column set — not just the
+        columns today's re-checks happen to read — is the lock contract: any
+        present OR future under-lock read of a scalar sees committed state,
+        never a stale identity-map value from the non-locking IDOR load.
         """
+        column_attrs = [
+            attr.key for attr in sa_inspect(type(profile)).column_attrs
+        ]
         await self.db.refresh(
-            profile,
-            attribute_names=["status", "uses_choice_engine"],
-            with_for_update=True,
+            profile, attribute_names=column_attrs, with_for_update=True
         )
 
     async def _assert_no_finance_lock(
