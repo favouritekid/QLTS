@@ -844,20 +844,23 @@ async def test_accountant_denied_heavy_finance_mutations(
 
 
 # ==============================================================================
-# L2 — submitted gate is single-path ONLY (multi-NV awaits publish)
+# L2 — submitted gate for multi-NV is gated on the NV count
 # ==============================================================================
 #
-# C2 opened the ``submitted`` state for fee calculation, but a MULTI-NV profile
-# (``uses_choice_engine=True``) at ``submitted`` has not yet locked its admitted
-# choice (all choices decision="pending" until the round is published). The fee
-# service's ``_resolve_academic_info_id`` would pick ONE config-driven ngành and
-# could auto-issue tuition for the WRONG ngành. L2 therefore tightens BOTH gate
-# sites so ``submitted`` is eligible only when ``not uses_choice_engine``:
+# C2 opened the ``submitted`` state for fee calculation. A MULTI-NV profile
+# (``uses_choice_engine=True``) at ``submitted`` with ≥2 nguyện vọng — or none
+# added yet — has not locked its admitted ngành (all choices decision="pending"
+# until publish), so pricing tuition now risks the WRONG ngành. BUT a multi-NV
+# profile with EXACTLY ONE nguyện vọng has its ngành already determined, so it
+# IS eligible (single-choice carve-out — see is_fee_eligible + the multi-NV
+# single-choice 201 test in test_phase3_pr3d_b_choice_crud.py). The gate is
+# shared across BOTH sites:
 #   * routers/fees.py::_fee_calc_authorized               (route gate, 404)
 #   * admission_service.py _compute_*["calculate_fee"]    (FE flag)
-# A multi-NV profile becomes eligible again only after publish → admitted-like
-# (covered by ``is_admitted_like``), which these tests also assert is NOT over-
-# tightened.
+# The tests below flip ``uses_choice_engine`` WITHOUT adding choices, so they
+# exercise the 0-NV case (blocked); a multi-NV profile also becomes eligible
+# after publish → admitted-like (covered by ``is_admitted_like``), which these
+# tests assert is NOT over-tightened.
 #
 # ``uses_choice_engine`` is a real Boolean COLUMN on AdmissionProfile (not a
 # computed property), so the tests flip it directly in the DB — mirroring how
@@ -894,8 +897,9 @@ async def test_calculate_fee_hidden_for_multi_nv_at_submitted(
     officer_user_in_db: dict,
     fee_calc_config: dict,
 ):
-    """Site B mirror: a MULTI-NV profile (``uses_choice_engine=True``) at
-    ``submitted`` must NOT expose calculate_fee — it awaits publish.
+    """Site B mirror: a MULTI-NV profile (``uses_choice_engine=True``) with no
+    nguyện vọng yet (0 choices) at ``submitted`` must NOT expose calculate_fee —
+    the ngành is undetermined (only the EXACTLY-ONE-choice case is eligible).
 
     The owning officer would otherwise see the button and be able to auto-issue
     tuition for an as-yet-undecided ngành.
@@ -925,7 +929,8 @@ async def test_calculate_fee_route_404_for_multi_nv_at_submitted(
     fee_calc_config: dict,
 ):
     """Site A mirror: the route gate (_fee_calc_authorized) rejects a multi-NV
-    profile at ``submitted`` with 404 even for the owning officer.
+    profile with no nguyện vọng yet (0 choices) at ``submitted`` with 404 even
+    for the owning officer (only the EXACTLY-ONE-choice case is eligible).
     """
     pid = await _create_approved_profile(
         client, admin_token_headers, officer_user_in_db, fee_calc_config,
@@ -997,37 +1002,36 @@ async def test_single_path_calculate_fee_at_submitted_still_ok(
 
 
 @pytest.mark.asyncio
-async def test_multi_nv_calculate_fee_at_admitted_not_over_tightened(
+async def test_multi_nv_zero_choice_at_admitted_fails_closed(
     client: AsyncClient,
     admin_token_headers: dict,
     officer_user_in_db: dict,
     fee_calc_config: dict,
 ):
-    """A MULTI-NV profile that has reached an admitted-like state (post-publish)
-    must STILL be able to calculate fee — L2 only narrows ``submitted``, it must
-    not regress the admitted/confirmed/enrolled path that ``is_admitted_like``
-    already authorizes.
+    """A multi-NV profile in an admitted-like state but with ZERO choices
+    (corrupt data / direct flag flip) must FAIL CLOSED at fee creation (400) —
+    the resolver refuses to price an undetermined ngành and must NOT silently
+    fall back to the profile snapshot (offering_admission_config / applied_rules).
 
-    Uses ``approved`` (admitted-like, allowed by the status CheckConstraint) to
-    simulate the post-publish decision while keeping ``uses_choice_engine=True``.
+    Note: ``_create_approved_profile`` DOES leave a valid snapshot
+    (offering_admission_config_id set at create), so a 201 here would mean the
+    resolver used the stale NV-gốc snapshot — exactly the wrong-ngành bug. The
+    state gate (is_fee_eligible) is choice-agnostic for admitted-like (a *real*
+    admitted multi-NV has an admitted choice and resolves fine — covered by the
+    resolver-picks-admitted-choice test in test_phase3_pr3d_b_choice_crud.py);
+    the resolver is the safety net for the corrupt 0-choice case.
     """
     pid = await _create_approved_profile(
         client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="L2 MultiNV Admitted OK", approve=False,
+        lead_name="L2 MultiNV ZeroChoice FailClosed", approve=False,
     )
-    # Flip to multi-NV AND advance to an admitted-like decision state.
+    # Flip to multi-NV AND advance to an admitted-like decision state, WITHOUT
+    # creating any choice — the corrupt/degenerate shape the resolver guards.
     await _set_choice_engine(pid, value=True, status="approved")
 
     oh = await _login(
         client, officer_user_in_db["username"], officer_user_in_db["password"]
     )
-    # FE flag visible.
-    detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
-    assert detail["status"] == "approved", detail.get("status")
-    assert "calculate_fee" in detail["available_actions"], detail["available_actions"]
-    assert detail["permissions"]["calculate_fee"] is True
-
-    # Route admits → 201.
     resp = await client.post(
         "/api/fees/calculate",
         json={
@@ -1038,7 +1042,7 @@ async def test_multi_nv_calculate_fee_at_admitted_not_over_tightened(
         },
         headers=oh,
     )
-    assert resp.status_code == 201, (
-        f"Multi-NV at admitted-like state should still calculate fee, got "
-        f"{resp.status_code}: {resp.text[:300]}"
+    assert resp.status_code == 400, (
+        f"0-choice admitted multi-NV must fail closed at fee creation (no "
+        f"snapshot fallback), got {resp.status_code}: {resp.text[:300]}"
     )

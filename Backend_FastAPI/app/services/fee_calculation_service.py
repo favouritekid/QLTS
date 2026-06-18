@@ -73,6 +73,155 @@ def is_hk1_cleared(
     return False
 
 
+def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:
+    """OfferingAcademicInfo behind a choice's admission_path (or None).
+
+    Reads ``admission_path`` → ``academic_info`` from ALREADY-LOADED state. The
+    caller MUST eager-load that chain (``resolve_fee_academic_info`` does, via
+    ``selectinload(admission_path).selectinload(academic_info)``). This helper
+    does NOT guard against an async lazy-load — ``getattr(..., None)`` only
+    swallows a genuinely-absent attribute (AttributeError), NOT the
+    ``MissingGreenlet`` a lazy relationship access raises in async context. So
+    only reuse it with an eager-loaded ``choice``.
+    """
+    path = getattr(choice, "admission_path", None)
+    if path is None:
+        return None
+    return getattr(path, "academic_info", None)
+
+
+async def resolve_fee_academic_info(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> Any:
+    """Resolve the OfferingAcademicInfo a fee must be priced against.
+
+    SINGLE SOURCE OF TRUTH shared by ``routers/fees.py`` (discount policy IDs +
+    non-tuition base amount) and ``FeeCalculationService`` (tuition amount
+    lookup), so the ngành used for the amount, the discount and the eligibility
+    gate never drift apart.
+
+    The choice engine stores the ngành PER CHOICE; ``evaluate_cascade`` writes
+    only ``choice.decision`` at publish — it does NOT update
+    ``profile.offering_admission_config_id`` / ``applied_rules``. Resolving from
+    the profile snapshot would therefore price a multi-NV admit against NV gốc
+    (NV1), not the NV actually admitted. So for choice-engine profiles we
+    resolve from the choices themselves:
+
+      * exactly one choice ``decision == "admitted"`` → that choice's ngành
+        (post-publish — the correct admitted ngành; fixes the snapshot bug),
+      * more than one admitted → fail-closed (corrupt data: the cascade admits
+        at most one NV — never guess),
+      * not yet published + exactly one choice → that single choice's ngành
+        (prepay / giữ chỗ at ``submitted`` — mirrors ``is_fee_eligible``),
+      * otherwise (≥2 pending, or zero choices) → BadRequest.
+
+    Legacy single-path profiles resolve from the profile snapshot, in order:
+    eager-loaded ``offering_admission_config.academic_info`` (read via
+    ``__dict__`` to avoid a lazy-load) → an OAC lookup by
+    ``offering_admission_config_id`` (when the relationship is not eager-loaded,
+    e.g. under the fee-create lock that loads only lead + choices) →
+    ``applied_rules['academic_info_id']``. Choice-engine profiles never fall
+    through to this path.
+    """
+    if getattr(profile, "uses_choice_engine", False):
+        stmt = (
+            select(models.AdmissionProfileChoice)
+            .where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+            .options(
+                selectinload(
+                    models.AdmissionProfileChoice.admission_path
+                ).selectinload(models.AdmissionPath.academic_info)
+            )
+            .order_by(models.AdmissionProfileChoice.display_order)
+        )
+        choices = list((await db.execute(stmt)).scalars().all())
+        admitted = [c for c in choices if c.decision == "admitted"]
+        if len(admitted) > 1:
+            raise BadRequest(
+                "Dữ liệu lỗi: hồ sơ có nhiều hơn 1 nguyện vọng trúng tuyển — "
+                "không thể xác định ngành để tính học phí."
+            )
+        if len(admitted) == 1:
+            chosen = admitted[0]
+        elif len(choices) == 1:
+            chosen = choices[0]
+        else:
+            # 0 choices (degenerate / corrupt) OR ≥2 still pending: the ngành is
+            # NOT determinable. FAIL CLOSED — a choice-engine profile must NEVER
+            # fall back to the profile snapshot here, which could price a
+            # multi-NV profile against the wrong (NV gốc) ngành. This is the
+            # exact wrong-ngành case the fee gate exists to prevent.
+            raise BadRequest(
+                "Hồ sơ đa nguyện vọng chưa xác định được ngành để tính học phí "
+                "(chưa có nguyện vọng, hoặc nhiều nguyện vọng chưa công bố kết "
+                "quả). Cần công bố kết quả trước."
+            )
+        academic_info = _academic_info_of_choice(chosen)
+        if academic_info is None:
+            raise BadRequest(
+                "Không tìm được thông tin tuyển sinh (academic_info) cho "
+                "nguyện vọng đã chọn."
+            )
+        return academic_info
+
+    # Legacy single-path snapshot. Choice-engine profiles NEVER reach here —
+    # they resolve from choices or fail closed above.
+    oac = profile.__dict__.get("offering_admission_config")
+    if oac is not None and oac.__dict__.get("academic_info") is not None:
+        return oac.__dict__["academic_info"]
+    # OAC relationship not eager-loaded (the fee-create lock loads only lead +
+    # choices) — resolve the "modern" OAC path by its scalar FK so a direct
+    # service call / fresh session still works when applied_rules lacks
+    # academic_info_id (preserves the pre-existing Step-1 OAC behaviour).
+    oac_id = getattr(profile, "offering_admission_config_id", None)
+    if oac_id is not None:
+        academic_info = (
+            await db.execute(
+                select(models.OfferingAcademicInfo)
+                .join(
+                    models.OfferingAdmissionConfig,
+                    models.OfferingAdmissionConfig.academic_info_id
+                    == models.OfferingAcademicInfo.id,
+                )
+                .where(models.OfferingAdmissionConfig.id == oac_id)
+            )
+        ).scalars().first()
+        if academic_info is not None:
+            return academic_info
+
+    applied = profile.applied_rules or {}
+    ai_id = applied.get("academic_info_id")
+    if ai_id is not None:
+        # applied_rules is JSONB — academic_info_id may be a non-numeric string
+        # on legacy/corrupt data. Convert defensively so a bad value yields a
+        # 400 (BadRequest) rather than an unhandled ValueError → 500.
+        try:
+            ai_id_int = int(ai_id)
+        except (TypeError, ValueError):
+            raise BadRequest(
+                "Không xác định được ngành: applied_rules.academic_info_id "
+                f"không phải số hợp lệ ({ai_id!r})."
+            )
+        academic_info = (
+            await db.execute(
+                select(models.OfferingAcademicInfo).where(
+                    models.OfferingAcademicInfo.id == ai_id_int
+                )
+            )
+        ).scalars().first()
+        if academic_info is not None:
+            return academic_info
+
+    raise BadRequest(
+        "Không tìm được thông tin tuyển sinh cho hồ sơ này. "
+        "Profile thiếu cả offering_admission_config lẫn "
+        "applied_rules.academic_info_id."
+    )
+
+
 class FeeCalculationService:
     """
     Service for fee calculation and lifecycle management.
@@ -97,26 +246,15 @@ class FeeCalculationService:
     async def _resolve_academic_info_id(
         self, profile: models.AdmissionProfile,
     ) -> int:
-        """Resolve academic_info_id from profile via 2-step fallback.
+        """Resolve academic_info_id for the tuition-amount lookup.
 
-        Step 1: profile.offering_admission_config.academic_info_id (modern)
-        Step 2: profile.applied_rules["academic_info_id"] (legacy, matches
-                current fees.py:203-211)
+        Delegates to the shared module-level ``resolve_fee_academic_info``
+        (single source of truth with ``routers/fees.py``) and returns its id.
+        Handles legacy single-path AND choice-engine (admitted-choice /
+        single-choice) profiles — see that resolver's docstring.
         """
-        oac = getattr(profile, "offering_admission_config", None)
-        if oac is not None and getattr(oac, "academic_info_id", None):
-            return oac.academic_info_id
-
-        applied = profile.applied_rules or {}
-        ai_id = applied.get("academic_info_id")
-        if ai_id is not None:
-            return int(ai_id)
-
-        raise BadRequest(
-            "Không tìm được thông tin tuyển sinh cho hồ sơ này. "
-            "Profile thiếu cả offering_admission_config lẫn "
-            "applied_rules.academic_info_id."
-        )
+        academic_info = await resolve_fee_academic_info(self.db, profile)
+        return academic_info.id
 
     async def _lookup_semester_tuition_amount(
         self, profile: models.AdmissionProfile, semester_no: int,
@@ -192,10 +330,38 @@ class FeeCalculationService:
         elif fee_type != FeeTypeEnum.tuition:
             semester_no = None
 
-        # Validate profile exists and is accessible
-        profile = await self._get_profile(admission_profile_id, unit_id)
+        # Profile-first row lock — serialize vs choice mutation. Acquiring the
+        # AdmissionProfile row lock BEFORE reading choices closes the race where
+        # another request adds/removes a NV between the router's authz check and
+        # this fee insert. ``with_choices`` loads choices so the eligibility
+        # re-check below counts the committed NVs under the lock; choice
+        # mutations acquire this SAME row lock first (admission_choice_service).
+        from app.repositories.admission_repository import AdmissionRepository
+        from app.utils.admission_status import is_fee_eligible
+
+        admission_repo = AdmissionRepository(self.db)
+        profile = await admission_repo.get_by_id_for_update(
+            admission_profile_id, populate_existing=True, with_choices=True
+        )
         if not profile:
             raise ResourceNotFoundError("Admission profile not found")
+
+        # IDOR parity with the previous _get_profile(unit_id) filter: the router
+        # already authorized, but keep the service-layer unit scope as
+        # defense-in-depth.
+        if unit_id is not None:
+            lead = profile.__dict__.get("lead")
+            if lead is None or lead.unit_id != unit_id:
+                raise ResourceNotFoundError("Admission profile not found")
+
+        # Re-validate the fee-eligible STATE under the lock. A multi-NV profile
+        # that gained a 2nd NV — or left a fee-eligible state — since the router
+        # check now fails closed instead of pricing the wrong ngành.
+        if not is_fee_eligible(profile):
+            raise BadRequest(
+                "Hồ sơ không ở trạng thái cho phép tạo học phí (đa nguyện vọng "
+                "chưa công bố kết quả, hoặc nguyện vọng đã thay đổi)."
+            )
 
         # For tuition: look up canonical amount from offering_semester_tuition
         if fee_type == FeeTypeEnum.tuition:
@@ -612,6 +778,10 @@ class FeeCalculationService:
                 selectinload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.offering_admission_config)
                 .selectinload(models.OfferingAdmissionConfig.academic_info),
+                # Needed by _fee_calc_authorized → is_fee_eligible to count NVs
+                # (multi-NV single-choice prepay gate). Without this the gate
+                # reads __dict__['choices'] as unset and fails closed.
+                selectinload(models.AdmissionProfile.choices),
             )
             .where(models.AdmissionProfile.id == profile_id)
         )

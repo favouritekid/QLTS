@@ -118,6 +118,26 @@ class FeeRepository(BaseRepository[Fee]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def has_active_tuition_fee(self, profile_id: int) -> bool:
+        """True if a NON-cancelled tuition fee exists for the profile.
+
+        Used by the choice-mutation finance lock. Excludes ``cancelled`` — a
+        cancelled fee no longer commits the profile to a ngành, so it must not
+        freeze NV edits (otherwise a prepay→cancel→rollback profile is locked
+        out of editing its own NVs forever). EXISTS-style (``LIMIT 1``, id only)
+        so it does not hydrate fee children / discounts / invoices.
+        """
+        result = await self.db.execute(
+            select(Fee.id)
+            .where(
+                Fee.admission_profile_id == profile_id,
+                Fee.fee_type == "tuition",
+                Fee.status != "cancelled",
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def sum_paid_amount_by_profile(self, profile_id: int) -> Decimal:
         """Sum of ``paid_amount`` across all fees of an admission profile.
 
