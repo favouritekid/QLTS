@@ -76,7 +76,7 @@ export function MobileLeadCard({
       onSelect={(checked) => onCheck?.(checked)}
       showCheckbox={showCheckbox}
       onClick={handleCardClick}
-      className="active:bg-muted/50"
+      className="touch-manipulation virtual-card active:bg-muted/50"
     >
       {/* Header: Name + Urgency Badge */}
       <CardHeader

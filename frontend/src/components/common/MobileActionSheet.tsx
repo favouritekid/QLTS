@@ -126,7 +126,7 @@ function MobileActionSheet({
         )}
 
         {/* Actions */}
-        <div className="px-2 pb-4 space-y-1">{children}</div>
+        <div className="overflow-y-auto overscroll-contain px-2 pb-4 space-y-1">{children}</div>
       </SheetContent>
     </Sheet>
   );

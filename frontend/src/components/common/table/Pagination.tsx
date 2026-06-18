@@ -157,7 +157,7 @@ export function Pagination({
               onValueChange={handlePageSizeChange}
               disabled={isLoading}
             >
-              <SelectTrigger className="h-8 w-[70px]">
+              <SelectTrigger className="h-10 w-[70px] md:h-8">
                 <SelectValue placeholder={pageSize} />
               </SelectTrigger>
               <SelectContent side="top">

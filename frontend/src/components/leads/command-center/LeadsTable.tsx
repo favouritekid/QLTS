@@ -119,6 +119,13 @@ interface LeadsTableProps {
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
+  /**
+   * Layout-mode override from the parent (LeadsClient uses `!isDesktop`). Drives
+   * the card-vs-table branch WITHOUT touching the shared `useIsMobile()` hook
+   * (đổi hook global sẽ regression ResponsiveDialog/DataDisplay/ActionMenu).
+   * Fallback về `useIsMobile()` khi undefined để không vỡ caller/test cũ.
+   */
+  isMobileLayout?: boolean;
 }
 
 // =============================================================================
@@ -272,6 +279,7 @@ export function LeadsTable({
   sortBy = "created_at",
   sortOrder = "desc",
   onSortChange,
+  isMobileLayout,
 }: LeadsTableProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -762,12 +770,14 @@ export function LeadsTable({
   // ==========================================================================
   // MOBILE VIEW - Card-based layout for better touch experience
   // ==========================================================================
-  if (isMobile) {
+  // Layout-mode: prop từ LeadsClient (!isDesktop) ưu tiên; fallback useIsMobile().
+  if (isMobileLayout ?? isMobile) {
     return (
-      <div className="flex h-full flex-col">
+      // Document-flow: KHÔNG h-full/scroll riêng — cuộn qua `Main` (single-scroll).
+      <div className="flex flex-col">
         {/* Mobile Header */}
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-muted-foreground text-sm tabular-nums">
+          <span className="text-muted-foreground text-sm tabular-nums" aria-live="polite">
             {selectedLeads.length > 0 ? (
               <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
             ) : (
@@ -776,8 +786,8 @@ export function LeadsTable({
           </span>
         </div>
 
-        {/* Mobile List */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Mobile List — flows trong trang (cuộn qua Main), không scroll container riêng */}
+        <div className="min-w-0">
           {leads.length === 0 ? (
             <div className="p-4">
               <EmptyLeadsState

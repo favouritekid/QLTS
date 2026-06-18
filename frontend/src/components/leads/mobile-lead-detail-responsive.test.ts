@@ -198,6 +198,28 @@ describe("Round 3 #12 — lead-detail readiness CTA + timeline menu + scoring", 
   });
 });
 
+describe("Single-scroll contract — /leads mobile is document-flow (no nested scroll)", () => {
+  // Gốc "tê": LeadsClient app-shell (h-full overflow-hidden) + wrapper mobile
+  // (overflow-y-auto) + LeadsTable mobile (flex-1 overflow-y-auto) → 3 tầng cuộn
+  // lồng trong `Main` (vốn đã overflow-y-auto) làm đứt momentum. Mobile phải
+  // document-flow: 1 lớp cuộn duy nhất = Main. (red trước refactor, green sau.)
+  it("LeadsClient root app-shell (h-full overflow-hidden) chỉ bật khi isDesktop", () => {
+    expect(leadsClient).toMatch(/isDesktop\s*\?\s*"h-full overflow-hidden"\s*:\s*"min-w-0"/);
+    // root app-shell luôn-bật cũ phải biến mất
+    expect(leadsClient).not.toMatch(/className="flex h-full flex-col overflow-hidden"/);
+  });
+
+  it("LeadsClient wrapper mobile KHÔNG còn tự tạo scroll container", () => {
+    expect(leadsClient).not.toMatch(/min-h-0 flex-1 overflow-y-auto/);
+  });
+
+  it("LeadsTable nhận isMobileLayout + nhánh mobile flow (không h-full / không inner overflow-y-auto)", () => {
+    expect(leadsTable).toMatch(/isMobileLayout\?:\s*boolean/);
+    // inner list mobile cũ `flex-1 overflow-y-auto` (khác desktop `overflow-x-auto overflow-y-auto`) phải biến mất
+    expect(leadsTable).not.toMatch(/className="flex-1 overflow-y-auto"/);
+  });
+});
+
 describe("LEAD_FILTER_UX_PLAN §5.0 — filter drawer panel", () => {
   it("LeadFilterPanel body contains scroll-overflow (no chaining to page)", () => {
     expect(filterPanel).toContain("overflow-y-auto");

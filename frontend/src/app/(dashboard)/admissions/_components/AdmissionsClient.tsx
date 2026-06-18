@@ -368,12 +368,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         {/* Header */}
         <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-              <ClipboardCheck className="size-6" aria-hidden="true" />
+            <div className="flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary sm:size-11">
+              <ClipboardCheck className="size-5 sm:size-6" aria-hidden="true" />
             </div>
             <div>
               <h1 className="font-display text-xl font-bold tracking-tight md:text-2xl">Hồ sơ tuyển sinh</h1>
-              <p className="text-sm text-muted-foreground">
+              {/* aria-live trên <p> LUÔN mount → announce cả 0→N (live region phải
+                  tồn tại trước khi nội dung đổi; đặt trên span trong điều kiện sẽ câm 0→N). */}
+              <p className="text-sm text-muted-foreground" aria-live="polite">
                 Quản lý và theo dõi hồ sơ tuyển sinh
                 {totalCount > 0 && (
                   <>
@@ -385,7 +387,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
             </div>
           </div>
 
-          <div className="inline-flex self-start rounded-full border border-border bg-card p-0.5 sm:self-auto">
+          <div className="hidden self-start rounded-full border border-border bg-card p-0.5 sm:inline-flex sm:self-auto">
             {(["comfortable", "compact"] as const).map((d) => (
               <button
                 key={d}
@@ -525,14 +527,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
             {/* Mobile: roster tiles */}
             <div className={cn("space-y-2 md:hidden", isFetching && "opacity-60")}>
-              <div className="flex items-center gap-2 px-1 py-1">
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 px-1 py-2 touch-manipulation">
                 <Checkbox
                   checked={allVisibleSelected}
                   onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
                   aria-label="Chọn tất cả"
                 />
                 <span className="text-sm text-muted-foreground">Chọn tất cả</span>
-              </div>
+              </label>
 
               {profiles.map((profile) => (
                 <AdmissionCard
@@ -671,11 +673,11 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
       onClick={onOpen}
       onKeyDown={(e) => activateRow(e, onOpen)}
       className={cn(
-        "rounded-2xl border bg-card p-4 shadow-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        "touch-manipulation virtual-card rounded-2xl border bg-card p-3 shadow-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
         isSelected ? "border-primary/40 bg-primary/5" : "border-border",
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2.5">
         <Checkbox
           checked={isSelected}
           onCheckedChange={(value) => onSelect(!!value)}
@@ -690,7 +692,7 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
               <Link
                 href={`/admissions/${profile.id}`}
                 onClick={(e) => e.stopPropagation()}
-                className="block truncate font-display font-semibold text-foreground hover:underline"
+                className="block truncate font-display text-sm font-semibold text-foreground hover:underline"
               >
                 {name}
               </Link>
@@ -698,19 +700,21 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
                 #{profile.id} · {profile.program_name ?? "—"}
               </div>
             </div>
-            <StatusDot status={profile.status} />
+            {/* Menu lên góc phải hàng tên → bỏ hàng action 40px riêng cho card gọn hơn */}
+            <RowActionsMenu profile={profile} onClaim={onClaim} onApprove={onApprove} onReject={onReject} />
           </div>
 
-          <div className="mt-3">
+          <div className="mt-2">
             <ProgressBar value={profile.completion_percent} />
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="text-xs tabular-nums text-muted-foreground">{formatDate(profile.created_at)}</span>
-            <div className="flex items-center gap-2">
-              <EligibilityToken status={profile.eligibility_status} />
-              <RowActionsMenu profile={profile} onClaim={onClaim} onApprove={onApprove} onReject={onReject} />
-            </div>
+          {/* Status + eligibility + ngày gộp 1 hàng (flex-wrap an toàn màn hẹp) */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <StatusDot status={profile.status} />
+            <EligibilityToken status={profile.eligibility_status} />
+            <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+              {formatDate(profile.created_at)}
+            </span>
           </div>
         </div>
       </div>

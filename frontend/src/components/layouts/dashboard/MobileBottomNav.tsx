@@ -34,6 +34,21 @@ const MOBILE_PRIORITY_HREFS = [
   "/notifications",
 ];
 
+/**
+ * Nhãn NGẮN riêng cho bottom nav — nhãn sidebar đầy đủ ("Performance Dashboard",
+ * "Hồ sơ tuyển sinh"…) wrap 2-3 dòng trong ô ~70px → cao lệch + lệch tâm. Map về
+ * 1 từ/cụm ngắn để mỗi tab gói gọn 1 dòng. Fallback về label gốc nếu thiếu key.
+ */
+const MOBILE_LABELS: Record<string, string> = {
+  "/dashboard/officer": "Hiệu suất",
+  "/dashboard": "Quản trị",
+  "/leads": "Lead",
+  "/admissions": "Hồ sơ TS",
+  "/finance": "Tài chính",
+  "/notifications": "Thông báo",
+  "/profile": "Tài khoản",
+};
+
 export function MobileBottomNav() {
   const pathname = usePathname();
   const { navigation } = useAppNavigation();
@@ -96,14 +111,14 @@ export function MobileBottomNav() {
         items.push({
           href: found.href,
           icon: found.icon,
-          label: found.label,
+          label: MOBILE_LABELS[found.href] ?? found.label,
           badge: found.href === "/notifications" && unreadCount > 0 ? unreadCount : undefined,
         });
       }
     }
 
     // Always add profile as the last (5th) item
-    items.push({ href: "/profile", icon: User, label: "Hồ sơ" });
+    items.push({ href: "/profile", icon: User, label: MOBILE_LABELS["/profile"] ?? "Hồ sơ" });
 
     return items;
   }, [allNavItems, unreadCount]);
@@ -138,7 +153,7 @@ export function MobileBottomNav() {
         "lg:hidden"
       )}
     >
-      <div className="flex items-center justify-around h-16 px-2">
+      <div className="flex items-stretch h-16 px-1">
         {mobileItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.href);
@@ -152,9 +167,9 @@ export function MobileBottomNav() {
               // does NOT change pathname, so a route-based close never fires).
               onClick={() => requestCloseMobileOverlays()}
               className={cn(
-                // Base styles - 44px touch target
-                "flex flex-col items-center justify-center",
-                "min-w-[56px] min-h-[44px] px-2 py-1",
+                // Cột đều nhau (flex-1 min-w-0) để label truncate 1 dòng, căn giữa.
+                "flex flex-1 min-w-0 flex-col items-center justify-center",
+                "min-h-[44px] px-1 py-1",
                 "rounded-lg transition-colors",
                 // Active/inactive states
                 active
@@ -182,7 +197,7 @@ export function MobileBottomNav() {
                 )}
               </div>
               <span className={cn(
-                "text-[10px] mt-1 font-medium",
+                "mt-1 w-full truncate text-center text-[10px] font-medium leading-tight",
                 active && "text-primary"
               )}>
                 {item.label}

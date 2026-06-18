@@ -28,9 +28,9 @@ export function AdmissionsMetricRail({ items }: { items: MetricItem[] }) {
       className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border bg-border shadow-xs sm:grid-cols-3 lg:grid-cols-6"
     >
       {items.map((m) => (
-        <div key={m.key} className="bg-card p-4 sm:p-5">
+        <div key={m.key} className="min-w-0 bg-card p-3 sm:p-5">
           <div className="flex items-baseline gap-1.5">
-            <span className="font-display text-2xl font-semibold tracking-tight tabular-nums">{m.value}</span>
+            <span className="font-display text-xl font-semibold tracking-tight tabular-nums sm:text-2xl">{m.value}</span>
             {m.trend && <TrendingUp className="size-4 text-emerald-600" aria-hidden="true" />}
           </div>
           <div className="mt-1.5 flex items-center gap-1.5">

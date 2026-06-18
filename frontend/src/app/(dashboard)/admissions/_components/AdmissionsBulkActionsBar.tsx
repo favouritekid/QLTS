@@ -76,11 +76,11 @@ export function AdmissionsBulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={onClearSelection}
-          className="h-6 w-6 p-0"
+          aria-label="Bỏ chọn"
+          className="h-10 w-10 touch-manipulation p-0 md:h-8 md:w-8"
           disabled={isLoading}
         >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Bỏ chọn</span>
+          <X className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
 
@@ -94,7 +94,8 @@ export function AdmissionsBulkActionsBar({
             variant="ghost"
             size="sm"
             onClick={onBulkApprove}
-            className="h-8 gap-1.5 text-success-600 hover:text-success-700"
+            aria-label="Duyệt"
+            className="h-10 touch-manipulation gap-1.5 text-success-600 hover:text-success-700 md:h-8"
             disabled={isLoading}
           >
             <CheckCircle className="h-4 w-4" aria-hidden="true" />
@@ -107,7 +108,8 @@ export function AdmissionsBulkActionsBar({
             variant="ghost"
             size="sm"
             onClick={onBulkReject}
-            className="h-8 gap-1.5 text-error-600 hover:text-error-700"
+            aria-label="Từ chối"
+            className="h-10 touch-manipulation gap-1.5 text-error-600 hover:text-error-700 md:h-8"
             disabled={isLoading}
           >
             <XCircle className="h-4 w-4" aria-hidden="true" />
@@ -120,7 +122,8 @@ export function AdmissionsBulkActionsBar({
             variant="ghost"
             size="sm"
             onClick={onBulkAssign}
-            className="h-8 gap-1.5"
+            aria-label="Gán officer"
+            className="h-10 touch-manipulation gap-1.5 md:h-8"
             disabled={isLoading}
           >
             <UserPlus className="h-4 w-4" aria-hidden="true" />
@@ -132,7 +135,8 @@ export function AdmissionsBulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={onExport}
-          className="h-8 gap-1.5"
+          aria-label="Xuất CSV"
+          className="h-10 touch-manipulation gap-1.5 md:h-8"
           disabled={isLoading}
         >
           <Download className="h-4 w-4" aria-hidden="true" />

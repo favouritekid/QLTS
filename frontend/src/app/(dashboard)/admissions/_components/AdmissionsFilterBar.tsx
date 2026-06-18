@@ -72,7 +72,7 @@ const SORT_OPTIONS: readonly { by: string; order: "asc" | "desc"; label: string 
 ]
 
 const NATIVE_SELECT_CLASS =
-  "h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+  "h-10 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9"
 
 function parseDate(str: string): Date | undefined {
   if (!str) return undefined
@@ -248,14 +248,14 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
                 )}
               </Button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-[340px] p-0">
+            <PopoverContent align="end" className="w-[min(340px,calc(100vw-2rem))] p-0">
               <div className="max-h-[60vh] overflow-y-auto">
                 {/* Trạng thái */}
                 <div className="border-b border-border p-3">
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Trạng thái</p>
                   <div className="grid grid-cols-1 gap-0.5">
                     {STATUS_OPTIONS.map((o) => (
-                      <label key={o.value} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted">
+                      <label key={o.value} className="flex min-h-10 cursor-pointer items-center gap-2 rounded-md px-2 py-2 hover:bg-muted">
                         <Checkbox
                           checked={statusFilters.includes(o.value)}
                           onCheckedChange={() => toggleStatus(o.value)}

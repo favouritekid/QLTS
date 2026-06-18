@@ -44,7 +44,7 @@ function FilterPill({ label, onRemove }: { label: string; onRemove: () => void }
       {label}
       <button
         onClick={onRemove}
-        className="hover:bg-muted ml-0.5 rounded-full p-0.5 transition-colors"
+        className="hover:bg-muted ml-0.5 rounded-full p-1 transition-colors"
         aria-label={`Xóa bộ lọc ${label}`}
       >
         <X className="h-3 w-3" />
@@ -181,11 +181,11 @@ export function LeadFilterBar({
 
   return (
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur">
-      {/* Row 1: search + quick presets + open-filters + add — all on one line
-          to save vertical space. Search shrinks; presets take the remaining
-          width and horizontal-scroll when tight. */}
-      <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4">
-        <div className="relative w-40 shrink-0 sm:w-56 md:w-72">
+      {/* Mobile: 2 hàng — search full-width (gõ thoải mái) + hàng dưới gồm
+          presets-cuộn + Bộ lọc + Thêm. Desktop (md): gộp lại 1 hàng. Trước đây
+          dồn tất cả 1 hàng → search 160px + presets bị bóp ~50px, không thao tác được. */}
+      <div className="flex flex-col gap-2 px-3 py-2 md:flex-row md:items-center md:gap-3 md:px-4">
+        <div className="relative w-full md:w-72 md:shrink-0">
           <Search className="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
           <Input
             placeholder="Tìm kiếm tên / SĐT / email…"
@@ -204,6 +204,9 @@ export function LeadFilterBar({
           )}
         </div>
 
+        {/* Hàng điều khiển: presets (cuộn ngang) + Bộ lọc + Thêm. md:flex-1 để
+            chiếm phần còn lại cạnh search trên desktop; mobile là hàng thứ 2. */}
+        <div className="flex min-w-0 items-center gap-2 md:flex-1">
         {/* Quick presets — fill the middle, horizontal-scroll when space is tight */}
         <div className="min-w-0 flex-1">
           <LeadQuickPresets state={state} handlers={handlers} hasActiveFilters={hasActiveFilters} />
@@ -213,7 +216,8 @@ export function LeadFilterBar({
           variant="outline"
           size="sm"
           onClick={onOpenFilters}
-          className="h-11 shrink-0 gap-1.5 md:h-9"
+          aria-label="Bộ lọc"
+          className="h-11 shrink-0 gap-1.5 md:h-9 touch-manipulation"
         >
           <SlidersHorizontal className="h-4 w-4" />
           <span className="hidden sm:inline">Bộ lọc</span>
@@ -224,10 +228,11 @@ export function LeadFilterBar({
           )}
         </Button>
 
-        <Button size="sm" onClick={onAddLead} className="h-11 shrink-0 gap-1.5 md:h-9">
+        <Button size="sm" onClick={onAddLead} aria-label="Thêm Lead" className="h-11 shrink-0 gap-1.5 md:h-9 touch-manipulation">
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Thêm Lead</span>
         </Button>
+        </div>
       </div>
 
       {/* Row 3: active chips */}
