@@ -551,20 +551,22 @@ class AdmissionChoiceService:
     async def _assert_no_finance_lock(
         self, profile: AdmissionProfile, *, action: str
     ) -> None:
-        """Freeze NV-structure edits once ANY tuition fee exists for the profile.
+        """Freeze NV-structure edits while a NON-cancelled tuition fee exists.
 
-        ``cancel_fee`` only flips status→cancelled; the tuition partial-unique
-        index ``uq_fee_profile_type_semester_tuition`` + ``check_duplicate``
-        ignore status, so a cancelled HK1 still holds the
-        ``(profile, tuition, semester_no)`` slot and the ngành cannot be
-        re-priced in-flow. There is no fee supersede/recreate flow, so ANY
-        tuition row (incl. cancelled) freezes add/delete/reorder/score-replace —
-        finance changes must go through a separate void/supersede process.
+        A live tuition fee pins the ngành (changing NVs would orphan / mis-price
+        it). A ``cancelled`` fee voids that obligation, so it must NOT freeze NV
+        edits — otherwise a prepay→``cancel_fee``→rollback (T17) profile would be
+        locked out of editing its own NVs forever (``cancel_fee`` keeps the row;
+        there is no fee delete/supersede flow). Hence only non-cancelled tuition
+        fees freeze add/delete/reorder/score-replace.
+
+        Residual (tracked as debt): re-creating an HK1 fee AFTER a cancel is
+        still blocked by ``check_duplicate`` + the partial-unique index
+        ``uq_fee_profile_type_semester_tuition`` (both ignore status, so the
+        cancelled row keeps the ``(profile, tuition, semester_no)`` slot) — that
+        needs a dedicated void/supersede flow.
         """
-        tuition_fees = await self.fee_repo.get_by_profile_id(
-            profile.id, fee_type="tuition"
-        )
-        if tuition_fees:
+        if await self.fee_repo.has_active_tuition_fee(profile.id):
             raise BusinessRuleViolation(
                 f"Hồ sơ đã phát sinh học phí, không thể {action}; "
                 "cần xử lý tài chính bằng quy trình riêng."

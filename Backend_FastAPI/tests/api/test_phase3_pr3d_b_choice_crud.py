@@ -802,11 +802,12 @@ async def test_delete_choice_allowed_when_round_closed(
 # ============================================================================
 
 
-async def _insert_tuition_fee(profile_id: int) -> int:
-    """Insert a minimal tuition Fee row so the finance-lock guard fires.
+async def _insert_tuition_fee(profile_id: int, status: str = "calculated") -> int:
+    """Insert a minimal tuition Fee row (default status ``calculated``).
 
-    The freeze guard only checks EXISTENCE of a tuition fee for the profile
-    (any status), so a calculated row with HK1 semester_no is enough.
+    The finance-lock guard freezes NV edits only for a NON-cancelled tuition
+    fee, so pass ``status="cancelled"`` to model a voided fee that must NOT
+    freeze.
     """
     from app.models.finance import Fee
 
@@ -822,7 +823,7 @@ async def _insert_tuition_fee(profile_id: int) -> int:
                 final_amount=Decimal("1000000"),
                 paid_amount=Decimal("0"),
                 waived_amount=Decimal("0"),
-                status="calculated",
+                status=status,
                 version=1,
             )
             s.add(fee)
@@ -1000,6 +1001,38 @@ async def test_replace_scores_blocked_when_tuition_fee_exists(
     assert "đã phát sinh học phí" in resp.text, resp.text
 
 
+@pytest.mark.asyncio
+async def test_cancelled_tuition_fee_does_not_freeze_choices(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """Escape-hatch: a CANCELLED tuition fee must NOT freeze NV edits.
+
+    cancel_fee voids the obligation but keeps the row; without this carve-out a
+    prepay→cancel→rollback profile would be locked out of editing its own NVs
+    forever. delete_choice on a draft profile that has only a cancelled tuition
+    fee must succeed (200), not 400.
+    """
+    await _insert_tuition_fee(
+        pr3d_b_seed_with_choice["profile_id"], status="cancelled"
+    )
+    resp = await client.delete(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}"
+        f"/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+    )
+    assert resp.status_code == 200, (
+        f"cancelled tuition fee must NOT freeze NV edits, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+    async with AsyncSessionLocal() as s:
+        gone = await s.get(
+            models.AdmissionProfileChoice, pr3d_b_seed_with_choice["choice_id"]
+        )
+        assert gone is None, "choice should be deleted (no active fee freeze)"
+
+
 # ============================================================================
 # Resolver bug-fix — multi-NV fee priced against the ADMITTED choice, NOT the
 # stale profile snapshot (NV gốc). evaluate_cascade writes only choice.decision
@@ -1139,10 +1172,17 @@ async def test_resolver_prices_against_admitted_choice_not_snapshot(
     manager_token_headers: dict,
     multinv_bugfix_seed: dict,
 ):
-    """NV1 (pending, snapshot ngành = 1,000,000) + NV2 (admitted, ngành =
-    2,000,000), profile admitted-like → /api/fees/calculate prices the ADMITTED
-    NV2 ngành (2,000,000), NOT the stale snapshot. This is the wrong-ngành bug
-    fix: a 201 with amount 1,000,000 would mean the resolver used the snapshot.
+    """NV1 (pending, ngành = 1,000,000) + NV2 (admitted, ngành = 2,000,000),
+    profile admitted-like → /api/fees/calculate prices the ADMITTED NV2 ngành
+    (2,000,000). Proves the observable bug fix: the fee is priced from the
+    admitted choice, not NV1.
+
+    The profile also carries a stale ``applied_rules.academic_info_id`` = NV1
+    (1,000,000) as a REGRESSION TRIPWIRE: a 1,000,000 result would mean the
+    resolver leaked to the snapshot. (Today the choice-engine branch returns
+    before the snapshot path, so this guards against a future change that
+    reintroduces snapshot consultation for choice-engine profiles — it does NOT
+    prove a runtime precedence between two live code paths.)
     """
     seed = multinv_bugfix_seed
     await _set_choices_and_status(
@@ -1182,6 +1222,11 @@ async def test_resolver_multiple_admitted_fails_closed(
 ):
     """Two choices both ``decision="admitted"`` (corrupt — the cascade admits
     at most one) → fee creation FAILS CLOSED (400), never guesses a ngành.
+
+    The 400 is raised by the SHARED ``resolve_fee_academic_info`` helper. Both
+    entry points call it: the router (fees.py, resolving discount IDs) hits it
+    first, and ``calculate_fee`` (service, under the row lock) calls the same
+    helper — so the >1-admitted guard is covered regardless of which runs.
     """
     seed = multinv_bugfix_seed
     await _set_choices_and_status(

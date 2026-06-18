@@ -76,9 +76,13 @@ def is_hk1_cleared(
 def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:
     """OfferingAcademicInfo behind a choice's admission_path (or None).
 
-    Reads only attributes the caller eager-loaded (``admission_path`` →
-    ``academic_info``); returns None on an incomplete chain instead of
-    triggering a lazy-load (MissingGreenlet in async).
+    Reads ``admission_path`` → ``academic_info`` from ALREADY-LOADED state. The
+    caller MUST eager-load that chain (``resolve_fee_academic_info`` does, via
+    ``selectinload(admission_path).selectinload(academic_info)``). This helper
+    does NOT guard against an async lazy-load — ``getattr(..., None)`` only
+    swallows a genuinely-absent attribute (AttributeError), NOT the
+    ``MissingGreenlet`` a lazy relationship access raises in async context. So
+    only reuse it with an eager-loaded ``choice``.
     """
     path = getattr(choice, "admission_path", None)
     if path is None:
@@ -191,10 +195,20 @@ async def resolve_fee_academic_info(
     applied = profile.applied_rules or {}
     ai_id = applied.get("academic_info_id")
     if ai_id is not None:
+        # applied_rules is JSONB — academic_info_id may be a non-numeric string
+        # on legacy/corrupt data. Convert defensively so a bad value yields a
+        # 400 (BadRequest) rather than an unhandled ValueError → 500.
+        try:
+            ai_id_int = int(ai_id)
+        except (TypeError, ValueError):
+            raise BadRequest(
+                "Không xác định được ngành: applied_rules.academic_info_id "
+                f"không phải số hợp lệ ({ai_id!r})."
+            )
         academic_info = (
             await db.execute(
                 select(models.OfferingAcademicInfo).where(
-                    models.OfferingAcademicInfo.id == int(ai_id)
+                    models.OfferingAcademicInfo.id == ai_id_int
                 )
             )
         ).scalars().first()
