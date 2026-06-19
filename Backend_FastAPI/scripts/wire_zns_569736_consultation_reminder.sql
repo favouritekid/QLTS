@@ -1,5 +1,5 @@
 -- ============================================================================
--- Wire ZNS template 333738 (Nhắc lịch hẹn) into consultation_reminder pipeline
+-- Wire ZNS template 569736 (Nhắc lịch hẹn) into consultation_reminder pipeline
 -- ============================================================================
 --
 -- Target row: notification_action.id = 63
@@ -26,8 +26,8 @@
 --   (verified at notification_dispatcher.py:580-613).
 --
 -- Template param mapping (see Documents/ZNS_PHASE_AB_PLAN_2026-04-19.md):
---   schedule_time  ← $scheduled_time_vn  (DD/MM/YYYY HH:MM, ≤16 chars)
---   customer_name  ← $lead_name           (≤30 chars; cap in builder if needed)
+--   schedule_time  ← $schedule_time       (HH:MM:SS DD/MM/YYYY, 19 chars — Zalo DATE)
+--   customer_name  ← $customer_name        (≤30 chars, cap in builder)
 --   address        ← literal SCHOOL_ADDRESS (Phase A default)
 --   booking_code   ← $booking_code        (CONS-{id:06d})
 --   ten_nganh_hoc  ← $major_name          (≤30 chars, cap in builder)
@@ -48,10 +48,10 @@ BEGIN;
 UPDATE notification_action
 SET config = (COALESCE(config::jsonb, '{}'::jsonb) || jsonb_build_object(
     'external_resolver', 'lead_contact',
-    'zalo_template_id', 333738,
+    'zalo_template_id', 569736,
     'zalo_template_data', jsonb_build_object(
-        'schedule_time', '$scheduled_time_vn',
-        'customer_name', '$lead_name',
+        'schedule_time', '$schedule_time',
+        'customer_name', '$customer_name',
         'address',       '02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk',
         'booking_code',  '$booking_code',
         'ten_nganh_hoc', '$major_name',

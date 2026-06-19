@@ -74,3 +74,17 @@ def format_vn_datetime(dt: Optional[datetime]) -> str:
     if dt is None:
         return ""
     return _to_display(dt).strftime("%d/%m/%Y %H:%M")
+
+
+def format_zalo_schedule_time(dt: Optional[datetime]) -> str:
+    """Return ``HH:MM:SS DD/MM/YYYY`` (19 chars) for the Zalo ZNS DATE param.
+
+    Zalo ZBS template DATE param (e.g. template 569736 ``schedule_time``) only
+    accepts this time-first layout; ``DD/MM/YYYY HH:MM`` is rejected with error
+    -1124 "schedule_time has invalid format" (verified by a real prod send
+    2026-06-19). Same TZ semantics as ``format_vn_datetime`` (naive = app TZ,
+    aware → Asia/Ho_Chi_Minh).
+    """
+    if dt is None:
+        return ""
+    return _to_display(dt).strftime("%H:%M:%S %d/%m/%Y")

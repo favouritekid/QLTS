@@ -519,10 +519,12 @@ _CONSULTATION_EVENTS: tuple = (
             _var("officer_id", "integer", "ID officer"),
             _var("scheduled_at", "datetime", "Thời gian hẹn (ISO)"),
             _var("minutes_until", "integer", "Số phút còn lại"),
-            _var("scheduled_time_vn", "string", "Thời gian hẹn VN (dd/mm/yyyy HH:MM)"),
+            _var("scheduled_time_vn", "string", "Giờ hẹn hiển thị DD/MM/YYYY HH:MM"),
             _var("booking_code", "string", "Mã booking (CONS-{id})"),
             _var("lead_code", "string", "Mã lead pseudo (LEAD-{id})"),
             _var("major_name", "string", "Tên ngành (tối đa 30 ký tự)"),
+            _var("customer_name", "string", "Tên lead cho Zalo (cap 30 ký tự)"),
+            _var("schedule_time", "string", "Giờ hẹn Zalo HH:MM:SS DD/MM/YYYY"),
         ),
         condition_fields=_LEAD_CONDS + _CONSULTATION_CONDS + (
             _cond("event.minutes_until", "integer", "Số phút còn lại", _OPS_NUM),
@@ -531,7 +533,7 @@ _CONSULTATION_EVENTS: tuple = (
         default_resolver="lead_owner",
         allowed_resolvers=_LEAD_RESOLVERS,
         # NOTE: prod runtime enriches this rule with a zalo action
-        # (zalo_template_id=333738, external_resolver=lead_contact) via
+        # (zalo_template_id=569736, external_resolver=lead_contact) via
         # admin UI — that per-action config cannot be expressed in the
         # catalog's channel-list-only schema. Seed default stays
         # browser-only; Zalo is a post-seed DB customization.

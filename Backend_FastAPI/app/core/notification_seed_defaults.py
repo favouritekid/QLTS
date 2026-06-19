@@ -150,7 +150,7 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         },
     },
     # NOTE: seed default stays browser-only. Prod enriches this rule
-    # with a Zalo action (zalo_template_id=333738, external resolver)
+    # with a Zalo action (zalo_template_id=569736, external resolver)
     # via admin UI — that per-action config is not representable in
     # this dict today. See inline comment at
     # event_catalog.py::CONSULTATION_REMINDER.
