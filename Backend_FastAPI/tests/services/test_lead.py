@@ -2767,6 +2767,103 @@ class TestNextActivityAggregation:
         assert agg["pending_next_activity"] is not None
         assert abs((agg["pending_next_activity"] - sched01).total_seconds()) < 1
 
+    async def test_aggregates_past_appointment_superseded_not_counted(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """B1: hẹn QUÁ KHỨ ở consultation cũ + có liên hệ MỚI HƠN không đặt lịch
+        → coi như đã xử lý, KHÔNG bubble (đây là 'quá hạn' giả mà B1 dập)."""
+        from app.repositories.lead_repository import LeadRepository
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+
+        # C1: hẹn quá khứ (đã diễn ra) ở consultation cũ.
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=now - timedelta(days=2),
+            consultation_date=now - timedelta(days=3),
+        )
+        # C2 mới nhất: liên hệ lại nhưng không đặt lịch mới → hẹn C1 đã xử lý.
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=None,
+            consultation_date=now - timedelta(hours=1),
+        )
+
+        repo = LeadRepository(db)
+        agg = await repo.get_consultation_aggregates(seeded_lead.id)
+
+        assert agg["pending_next_activity"] is None
+
+    async def test_aggregates_past_appointment_on_latest_still_counted(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """B1: hẹn QUÁ KHỨ ở consultation MỚI NHẤT (officer chưa liên hệ lại)
+        → VẪN tính (quá hạn thật, B1 không bỏ sót), dù có consultation cũ hơn."""
+        from app.repositories.lead_repository import LeadRepository
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+        past_appt = now - timedelta(hours=2)
+
+        # C1 cũ: không đặt lịch.
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=None,
+            consultation_date=now - timedelta(days=1),
+        )
+        # C2 mới nhất: hẹn quá khứ chưa được xử lý sau đó → overdue thật.
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=past_appt,
+            consultation_date=now,
+        )
+
+        repo = LeadRepository(db)
+        agg = await repo.get_consultation_aggregates(seeded_lead.id)
+
+        assert agg["pending_next_activity"] is not None
+        assert abs((agg["pending_next_activity"] - past_appt).total_seconds()) < 1
+
+    async def test_update_lead_cache_past_superseded_not_overdue(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """B1 end-to-end (regression prod 0→41): hẹn quá khứ bị liên hệ mới hơn
+        vượt qua → cache ``is_overdue=False`` + ``next_activity_at=None``."""
+        from app.services import lead_cache_service
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=now - timedelta(days=2),
+            consultation_date=now - timedelta(days=3),
+        )
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=None,
+            consultation_date=now - timedelta(hours=1),
+        )
+
+        await lead_cache_service.update_lead_cache(db, seeded_lead.id)
+        await db.refresh(seeded_lead)
+
+        assert seeded_lead.is_overdue is False
+        assert seeded_lead.next_activity_at is None
+
     async def test_update_lead_cache_overdue_from_min_pending(
         self,
         db: AsyncSession,
