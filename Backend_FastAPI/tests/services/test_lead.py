@@ -1239,6 +1239,65 @@ class TestConsultation:
         # Assert
         assert updated.notes == "Updated notes"
 
+    async def test_update_latest_consultation_to_universal_keeps_lead_stage(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Fix bug 2997: sửa consultation MỚI NHẤT sang status universal
+        (updates_pipeline=false — vd sts19 'Đã hủy lịch hẹn', stage_id=NULL) CHỈ
+        đổi consultation row, KHÔNG null/đổi ``pipeline_stage_id`` +
+        ``consultation_status_id`` của lead. Nền tảng an toàn cho nút 'Hủy lịch
+        hẹn' (A-safe). Trước fix: 2997 set thẳng stage = new_status.stage_id (NULL)."""
+        stage_id = seeded_dependencies["stage_id"]
+
+        piped = models.ConsultationStatus(
+            id="sts_pipe_guard", name="Pipeline Guard", color_code="#0b0b0b",
+            stage_id=stage_id, is_universal=False, updates_pipeline=True,
+        )
+        # sts19 ∈ UNIVERSAL_STATUSES (bypass phase guard) · updates_pipeline=False · stage NULL.
+        uni = models.ConsultationStatus(
+            id="sts19", name="Đã hủy lịch hẹn", color_code="#0c0c0c",
+            stage_id=None, is_universal=True, updates_pipeline=False,
+        )
+        db.add_all([piped, uni])
+        await db.flush()
+
+        # Lead đang ở stage pipeline; consultation mới nhất = piped.
+        seeded_lead.pipeline_stage_id = stage_id
+        seeded_lead.consultation_status_id = "sts_pipe_guard"
+        db.add(seeded_lead)
+        c = models.Consultation(
+            lead_id=seeded_lead.id, officer_id=officer_user.id,
+            consultation_date=datetime.now(timezone.utc),
+            method="phone", consultation_status_id="sts_pipe_guard",
+        )
+        db.add(c)
+        await db.flush()
+
+        class _Upd:
+            def model_dump(self, **kwargs):
+                return {"status_id": "sts19"}
+
+        with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
+             patch(
+                 "app.services.lead_service.pipeline_service.validate_status_transition",
+                 new_callable=AsyncMock,
+             ) as m:
+            m.return_value = True
+            updated = await lead_service.update_consultation(
+                db, seeded_lead.id, c.id, _Upd(), admin_user
+            )
+            await db.flush()
+
+        await db.refresh(seeded_lead)
+        assert updated.consultation_status_id == "sts19"               # row ĐÃ đổi
+        assert seeded_lead.pipeline_stage_id == stage_id               # ✅ stage GIỮ NGUYÊN
+        assert seeded_lead.consultation_status_id == "sts_pipe_guard"  # ✅ status lead giữ nguyên
+
     async def test_add_consultation_stores_loss_reason_on_consultation(
         self,
         db: AsyncSession,

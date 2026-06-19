@@ -2993,21 +2993,37 @@ async def update_consultation(
                         # ✅ SECURITY FIX: Status already validated above, use validated_status
                         # No need for redundant db.get() - status existence is guaranteed
                         new_status = validated_status  # Reuse from validation above
-                        lead.consultation_status_id = new_status.id
-                        lead.pipeline_stage_id = new_status.stage_id
-                        # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-                        sync_lead_status_from_consultation(lead, new_status)
-                        lead.version = (lead.version or 1) + 1
-                        db.add(lead)
-                        status_changed = True
+                        # ✅ Guard updates_pipeline (fix bug stage→NULL): CHỈ sync lead
+                        # status/stage khi status THẬT SỰ đẩy pipeline. Universal
+                        # (sts01/15/19: updates_pipeline=false, stage_id=NULL ở prod)
+                        # → CHỈ đổi consultation row (đã set ở trên), KHÔNG đụng lead —
+                        # khớp luồng add_new_consultation. Trước đây set thẳng
+                        # lead.pipeline_stage_id = new_status.stage_id bất kể cờ → sửa
+                        # tay consultation mới nhất sang universal làm NULL stage lead.
+                        if new_status.updates_pipeline:
+                            lead.consultation_status_id = new_status.id
+                            lead.pipeline_stage_id = new_status.stage_id
+                            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                            sync_lead_status_from_consultation(lead, new_status)
+                            lead.version = (lead.version or 1) + 1
+                            db.add(lead)
+                            status_changed = True
 
-                        log.info(
-                            "Lead status updated via consultation update",
-                            lead_id=lead_id,
-                            consultation_id=consultation_id,
-                            old_status=old_consultation_status_id,
-                            new_status=new_status.id,
-                        )
+                            log.info(
+                                "Lead status updated via consultation update",
+                                lead_id=lead_id,
+                                consultation_id=consultation_id,
+                                old_status=old_consultation_status_id,
+                                new_status=new_status.id,
+                            )
+                        else:
+                            log.info(
+                                "Latest consultation set to non-pipeline (universal) "
+                                "status — lead status/stage giữ nguyên (no NULL stage)",
+                                lead_id=lead_id,
+                                consultation_id=consultation_id,
+                                new_status=new_status.id,
+                            )
 
             # Clear loss_reason if status is no longer negative
             effective_status = validated_status or (
