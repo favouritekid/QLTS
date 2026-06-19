@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { isLeadOverdue } from "@/lib/leads/overdue";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -131,6 +132,17 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
     setDaysSinceContact(days);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [lead?.last_consultation_at]);
+
+  // ✅ Tính is_overdue ở client (theo next_activity_at) thay vì tin field cache
+  // lead.is_overdue — cache đó chỉ refresh ở mutation/nightly nên có thể "tàng
+  // hình" tới ~14h. useState(false) khớp SSR (tránh hydration mismatch); effect
+  // đồng bộ theo system time, chạy lại khi mốc hẹn đổi.
+  const [isOverdue, setIsOverdue] = useState(false);
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setIsOverdue(isLeadOverdue({ next_activity_at: lead?.next_activity_at ?? null }));
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [lead?.next_activity_at]);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
@@ -413,7 +425,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     🔥 Hot
                   </Badge>
                 )}
-                {lead.is_overdue && (
+                {isOverdue && (
                   <Badge variant="destructive" className="text-xs px-1.5 py-0 h-5">
                     Quá hạn
                   </Badge>
@@ -458,12 +470,12 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               </div>
 
               {/* Action Suggestions - Softer design */}
-              {(lead.is_hot_lead || lead.cached_urgency_score >= 60 || lead.is_overdue) && (
+              {(lead.is_hot_lead || lead.cached_urgency_score >= 60 || isOverdue) && (
                 <div className="rounded-md px-3 py-2 text-xs bg-amber-50/80 border border-amber-200/60 dark:bg-amber-950/30 dark:border-amber-800/50">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300">
                       <Zap className="h-3.5 w-3.5" />
-                      {lead.is_overdue ? "Quá hạn liên hệ!" : lead.is_hot_lead ? "Lead nóng cần chú ý" : "Ưu tiên liên hệ sớm"}
+                      {isOverdue ? "Quá hạn liên hệ!" : lead.is_hot_lead ? "Lead nóng cần chú ý" : "Ưu tiên liên hệ sớm"}
                     </span>
                     <Button
                       size="sm"

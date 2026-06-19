@@ -22,6 +22,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { isLeadOverdue } from "@/lib/leads/overdue";
+import { useClientNow } from "@/hooks/useClientNow";
 import type { Lead } from "@/types/lead.types";
 
 interface ActionBannerProps {
@@ -87,17 +89,21 @@ function formatScheduledTime(date: Date): string {
   return format(date, "dd/MM HH:mm");
 }
 
-function getActionBannerConfig(lead: Lead): BannerConfig | null {
-  const now = new Date();
+function getActionBannerConfig(lead: Lead, now: number | null): BannerConfig | null {
+  // Hydration-safe: chờ client (useClientNow trả null khi SSR + first render) mới
+  // tính các nhánh phụ thuộc thời gian — tránh server render 1 loại banner còn
+  // client render loại khác (khung/icon/border đổi, ngoài suppressHydrationWarning).
+  if (now === null) return null;
 
   // Hard-terminal leads (enrolled + final) should never show action banners
   // Soft-terminal leads (final but not enrolled) can still receive consultations
   const isHardTerminal = lead.consultation_status?.is_final && lead.consultation_status?.phase === "enrolled";
   if (isHardTerminal) return null;
 
-  // Priority 1: Overdue check (from cached field)
-  // is_overdue = next_activity_at has passed
-  if (lead.is_overdue && lead.next_activity_at) {
+  // Priority 1: Overdue check — tính trực tiếp từ next_activity_at (KHÔNG tin
+  // field cache lead.is_overdue, vốn stale tới nightly recalc). isLeadOverdue
+  // đã ngụ ý next_activity_at có giá trị + đã qua; giữ điều kiện sau để TS narrow.
+  if (isLeadOverdue(lead, now) && lead.next_activity_at) {
     const overdueDate = new Date(lead.next_activity_at);
     return {
       type: "overdue",
@@ -118,11 +124,11 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
   // Priority 2: Scheduled appointment (next_activity_at is in the future)
   // NOTE: We use next_activity_at instead of scanning consultations array
   // because Lead API response doesn't include consultations by default
-  if (lead.next_activity_at && !lead.is_overdue) {
+  if (lead.next_activity_at && !isLeadOverdue(lead, now)) {
     const scheduledDate = new Date(lead.next_activity_at);
     // Only show if the scheduled date is in the future
-    if (scheduledDate > now) {
-      const diffHours = (scheduledDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+    if (scheduledDate.getTime() > now) {
+      const diffHours = (scheduledDate.getTime() - now) / (1000 * 60 * 60);
       const isSoon = diffHours <= 2 && diffHours > 0;
 
       return {
@@ -146,7 +152,7 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
   // is_hot_lead = lead_score >= 70 (set by LeadCacheService)
   // Show banner if lead is hot AND no recent contact (within 24h)
   const hasRecentContact = lead.consultation_count > 0 && lead.last_consultation_at &&
-    (now.getTime() - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000;
+    (now - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000;
 
   if (lead.is_hot_lead && !hasRecentContact) {
     return {
@@ -169,7 +175,10 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
 }
 
 export function ActionBanner({ lead, onCall, onMarkComplete, className }: ActionBannerProps) {
-  const config = useMemo(() => getActionBannerConfig(lead), [lead]);
+  // useClientNow(): null khi SSR + first render → ActionBanner chỉ tính banner sau
+  // hydration, tránh mismatch khung/icon khi next_activity_at sát "now".
+  const now = useClientNow();
+  const config = useMemo(() => getActionBannerConfig(lead, now), [lead, now]);
 
   if (!config) {
     return null;

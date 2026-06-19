@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead, LeadInsights } from "@/types/lead.types";
 
 // =============================================================================
@@ -121,7 +122,7 @@ export function LeadActionSuggestions({
     }
 
     // 2. High: Overdue follow-up
-    if (lead.is_overdue) {
+    if (isLeadOverdue(lead)) {
       items.push({
         priority: "high",
         action: "followup",

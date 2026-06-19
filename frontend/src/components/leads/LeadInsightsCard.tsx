@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
+import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
 
 // =============================================================================
@@ -136,7 +137,7 @@ export function LeadInsightsCard({
       });
     }
 
-    if (lead.is_overdue) {
+    if (isLeadOverdue(lead)) {
       items.push({
         priority: "high",
         message: "Đã quá hạn liên hệ theo lịch hẹn",

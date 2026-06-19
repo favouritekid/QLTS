@@ -24,6 +24,28 @@ from app import models
 from app.repositories.base import BaseRepository
 
 
+def pending_followup_status_subquery():
+    """``select(ConsultationStatus.id)`` của các status đủ điều kiện FOLLOW-UP.
+
+    Follow-up = non-final AND không thuộc ``CANCELLED_FOLLOWUP_STATUS_IDS``.
+    MỘT nguồn predicate dùng chung cho ``next_activity_at``
+    (``LeadRepository._earliest_pending_scheduled``) và reminder task
+    (``notification_tasks.check_consultation_reminders_task``) — KHÔNG copy
+    logic để tránh lệch nhau âm thầm khi đổi định nghĩa.
+
+    Lưu ý: is_universal KHÔNG phải tiêu chí loại — sts01/sts15 (không nghe máy /
+    nhắn tin không phản hồi) là universal nhưng có scheduled_at vẫn là retry
+    follow-up hợp lệ. Chỉ trạng thái HỦY (sts19) bị loại vì cancel giữ nguyên
+    scheduled_at cũ (sẽ gửi nhắc lịch đã hủy nếu không loại).
+    """
+    from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
+
+    return select(models.ConsultationStatus.id).where(
+        models.ConsultationStatus.is_final == False,
+        models.ConsultationStatus.id.not_in(CANCELLED_FOLLOWUP_STATUS_IDS),
+    )
+
+
 class LeadRepository(BaseRepository[models.Lead]):
     """Repository for Lead model operations."""
 
@@ -583,6 +605,68 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         return result.scalars().first()
 
+    async def _earliest_pending_scheduled(
+        self,
+        lead_id: int
+    ) -> Optional[datetime]:
+        """
+        MIN(scheduled_at) của các consultation còn FOLLOW-UP (cần liên hệ tiếp).
+
+        Nguồn sự thật DUY NHẤT cho ``next_activity_at`` — dùng chung bởi
+        ``update_next_activity`` (ghi thẳng field) và
+        ``get_consultation_aggregates`` (cache service đọc để set
+        ``next_activity_at`` + ``is_overdue``), và CÙNG predicate với reminder
+        task (``pending_followup_status_subquery``) → một nguồn duy nhất.
+
+        Follow-up = ``ConsultationStatus`` non-final AND không thuộc
+        ``CANCELLED_FOLLOWUP_STATUS_IDS``. is_universal KHÔNG phải tiêu chí:
+        sts01/sts15 (không nghe máy / nhắn tin không phản hồi) có scheduled_at
+        VẪN là hẹn gọi lại cần tính; chỉ sts19 (đã hủy) bị loại. KHÔNG dùng
+        ``reminder_sent``.
+
+        ✅ B1 — "hẹn còn sống": consultation là append-only và backend KHÔNG bao
+        giờ tự clear ``scheduled_at``, nên một hẹn QUÁ KHỨ ở consultation cũ có
+        thể đã được xử lý bằng một lần liên hệ MỚI HƠN (dòng mới không đặt lịch).
+        Nếu tính hết mọi hẹn quá khứ → hồi sinh hẹn đã xong thành "quá hạn" giả
+        (đo prod 2026-06-19: 0 → 41 lead, 100% giả). Quy tắc:
+        - ``scheduled_at`` TƯƠNG LAI (>= now) → luôn tính (hẹn sắp tới).
+        - ``scheduled_at`` QUÁ KHỨ → chỉ tính nếu thuộc consultation MỚI NHẤT
+          của lead (``consultation_date`` = MAX) — tức officer chưa liên hệ lại
+          sau đó. "Latest" theo ``consultation_date`` (cùng định nghĩa với
+          update-consultation flow + get_consultation_aggregates cũ).
+
+        Returns:
+            ``datetime`` sớm nhất, hoặc ``None`` nếu không có hẹn còn sống.
+        """
+        # consultation_date mới nhất của lead = mốc "lần liên hệ gần nhất".
+        latest_consultation_date = (
+            select(func.max(models.Consultation.consultation_date))
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .scalar_subquery()
+        )
+
+        result = await self.db.execute(
+            select(func.min(models.Consultation.scheduled_at)).where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.scheduled_at.isnot(None),
+                models.Consultation.consultation_status_id.in_(
+                    pending_followup_status_subquery()
+                ),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+                or_(
+                    # Hẹn tương lai luôn còn sống.
+                    models.Consultation.scheduled_at >= func.now(),
+                    # Hẹn quá khứ chỉ còn sống nếu CHƯA bị liên hệ mới hơn vượt qua.
+                    models.Consultation.consultation_date
+                    == latest_consultation_date,
+                ),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def update_next_activity(
         self,
         lead_id: int
@@ -590,51 +674,22 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         Update lead's next_activity_at field.
 
-        ✅ FIXED: Finds earliest PENDING consultation regardless of time.
-        Task quá hạn vẫn là next activity (nhưng overdue).
-        
-        Logic mới:
-        - Tìm consultation có scheduled_at AND status chưa hoàn thành
-        - KHÔNG filter theo time (>= now)
+        Hẹn quá hạn (ở consultation mới nhất) vẫn là next activity — chỉ là overdue.
+
+        Logic (xem ``_earliest_pending_scheduled`` — nguồn dùng chung):
+        - MIN(scheduled_at) của hẹn follow-up "còn sống" (non-final, KHÔNG hủy)
+        - Hẹn tương lai luôn tính; hẹn quá khứ chỉ tính nếu thuộc consultation
+          MỚI NHẤT của lead (B1 — tránh hồi sinh hẹn đã xử lý thành quá hạn giả)
         - KHÔNG dùng reminder_sent
 
         Args:
             lead_id: Lead ID to update
         """
-        from sqlalchemy import and_
-
         lead = await self.db.get(models.Lead, lead_id)
         if not lead:
             return
 
-        # Query pending status IDs dynamically (non-final, non-universal)
-        pending_result = await self.db.execute(
-            select(models.ConsultationStatus.id).where(
-                models.ConsultationStatus.is_final == False,
-                models.ConsultationStatus.is_universal == False,
-            )
-        )
-        pending_status_ids = [row[0] for row in pending_result.all()]
-
-        if not pending_status_ids:
-            lead.next_activity_at = None
-            await self.db.flush()
-            return
-
-        result = await self.db.execute(
-            select(func.min(models.Consultation.scheduled_at))
-            .where(
-                and_(
-                    models.Consultation.lead_id == lead_id,
-                    models.Consultation.scheduled_at.isnot(None),
-                    models.Consultation.consultation_status_id.in_(pending_status_ids),
-                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
-                )
-            )
-        )
-        earliest_scheduled = result.scalar_one_or_none()
-
-        lead.next_activity_at = earliest_scheduled
+        lead.next_activity_at = await self._earliest_pending_scheduled(lead_id)
         await self.db.flush()
 
     async def get_stale_leads(
@@ -756,8 +811,10 @@ class LeadRepository(BaseRepository[models.Lead]):
             lead_id: Lead ID
             
         Returns:
-            Dict with: last_consultation_at, consultation_count, 
-                       pending_next_activity (earliest pending task)
+            Dict with: last_consultation_at, consultation_count,
+                       pending_next_activity (earliest PENDING scheduled_at;
+                       xem _earliest_pending_scheduled — cùng nguồn với
+                       update_next_activity)
         """
         # Query 1: Get consultation stats (exclude soft-deleted)
         stats_query = select(
@@ -771,35 +828,14 @@ class LeadRepository(BaseRepository[models.Lead]):
         stats_result = await self.db.execute(stats_query)
         stats = stats_result.one()
 
-        # Query 2: Get scheduled_at from the LATEST consultation only
-        # ✅ FIX: Return scheduled_at regardless of past/future
-        # If there's a newer consultation without scheduled_at, it means the follow-up was done
-        # LeadCacheService will determine if it's overdue (past) or pending (future)
+        # Query 2: earliest PENDING scheduled_at — CÙNG NGUỒN với
+        # update_next_activity (qua _earliest_pending_scheduled) nên cache
+        # service và đường ghi trực tiếp luôn nhất quán next_activity_at.
+        # Trước đây lấy scheduled_at của consultation MỚI NHẤT (bất kể status,
+        # thiếu filter is_universal) → lệch với update_next_activity và bỏ sót
+        # hẹn pending cũ khi có consultation mới hơn không đặt lịch. Đã hợp nhất.
+        pending_next_activity = await self._earliest_pending_scheduled(lead_id)
 
-        # Subquery: Get the latest consultation for this lead
-        latest_consult_subq = (
-            select(models.Consultation.id)
-            .where(
-                models.Consultation.lead_id == lead_id,
-                models.Consultation.deleted_at.is_(None),
-            )
-            .order_by(models.Consultation.consultation_date.desc())
-            .limit(1)
-            .scalar_subquery()
-        )
-
-        # Get scheduled_at from the latest consultation (if it exists)
-        # Don't filter by time - let LeadCacheService handle past/future logic
-        pending_query = select(
-            models.Consultation.scheduled_at
-        ).where(
-            models.Consultation.id == latest_consult_subq,
-            models.Consultation.scheduled_at.isnot(None),
-        )
-
-        pending_result = await self.db.execute(pending_query)
-        pending_next_activity = pending_result.scalar_one_or_none()
-        
         return {
             "last_consultation_at": stats.last_consultation_at,
             "consultation_count": stats.consultation_count or 0,

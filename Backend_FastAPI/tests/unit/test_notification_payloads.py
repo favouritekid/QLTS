@@ -508,10 +508,12 @@ class TestConsultationReminder:
             "officer_id": 5,  # lead.assigned_officer_id
             "scheduled_at": "2026-04-01T10:00:00",
             "minutes_until": 10,
-            "scheduled_time_vn": "01/04/2026 10:00",
+            "scheduled_time_vn": "01/04/2026 10:00",  # display
             "booking_code": "CONS-000100",
             "lead_code": "LEAD-000042",
             "major_name": "Công nghệ thông tin",
+            "customer_name": "Nguyen Van A",  # Zalo (cap 30)
+            "schedule_time": "10:00:00 01/04/2026",  # Zalo DATE
         }
 
     def test_uses_lead_owner_not_consultation_creator(self):
@@ -552,7 +554,7 @@ class TestConsultationReminder:
         assert payload["major_name"] == "N/A"
 
     def test_major_name_truncated_to_30_chars(self):
-        """Zalo STRING params cap at 30 chars for template 333738 `ten_nganh_hoc`."""
+        """Zalo STRING params cap at 30 chars for template 569736 `ten_nganh_hoc`."""
         consultation = _make_consultation()
         lead = _make_lead()
         long_name = "Công nghệ thông tin và truyền thông đa phương tiện"
@@ -562,6 +564,19 @@ class TestConsultationReminder:
         assert len(payload["major_name"]) <= 30
         assert payload["major_name"] == long_name[:30]
 
+    def test_customer_name_capped_but_lead_name_full(self):
+        """Zalo param `customer_name` cap 30 ký tự (template 569736); còn
+        `lead_name` GIỮ đầy đủ cho browser/in-app + LeadOwnerResolver."""
+        consultation = _make_consultation()
+        long_name = "Nguyễn Trần Hoàng Gia Bảo Minh Khôi Anh Tuấn Phương Nam"
+        lead = _make_lead(full_name=long_name)
+        payload = EventPayload.for_consultation_reminder(
+            consultation, lead, minutes_until=10
+        )
+        assert payload["lead_name"] == long_name  # full, KHÔNG cap
+        assert len(payload["customer_name"]) <= 30
+        assert payload["customer_name"] == long_name[:30]
+
     def test_derived_code_formats(self):
         consultation = _make_consultation(id=7)
         lead = _make_lead(id=3)
@@ -569,13 +584,18 @@ class TestConsultationReminder:
         assert payload["booking_code"] == "CONS-000007"
         assert payload["lead_code"] == "LEAD-000003"
 
-    def test_scheduled_time_vn_format_locked(self):
-        """Must be DD/MM/YYYY HH:MM (≤20 chars, fits Zalo DATE param)."""
+    def test_schedule_time_display_vs_zalo_format(self):
+        """scheduled_time_vn = hiển thị DD/MM/YYYY HH:MM; schedule_time = Zalo ZNS
+        DATE 'HH:MM:SS DD/MM/YYYY' (verified gửi thật 06-19; DD/MM/YYYY HH:MM bị
+        reject -1124). Tách 2 field để không ép constraint Zalo lên hiển thị."""
         consultation = _make_consultation(scheduled_at=datetime(2026, 4, 20, 15, 30, 0))
         lead = _make_lead()
-        payload = EventPayload.for_consultation_reminder(consultation, lead, minutes_until=10)
-        assert payload["scheduled_time_vn"] == "20/04/2026 15:30"
-        assert len(payload["scheduled_time_vn"]) <= 20
+        payload = EventPayload.for_consultation_reminder(
+            consultation, lead, minutes_until=10
+        )
+        assert payload["scheduled_time_vn"] == "20/04/2026 15:30"  # display
+        assert payload["schedule_time"] == "15:30:00 20/04/2026"  # Zalo DATE
+        assert len(payload["schedule_time"]) <= 20
 
 
 # ===========================================================================

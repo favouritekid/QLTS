@@ -74,6 +74,15 @@ PHASE_STATUSES: dict[LeadPhase, Set[str]] = {
 # sts19: CANCELLED (Đã hủy lịch hẹn)
 UNIVERSAL_STATUSES: Set[str] = {"sts01", "sts15", "sts19"}
 
+# Statuses that CANCEL a scheduled appointment — excluded from the follow-up /
+# next_activity_at / reminder predicate even though non-final. Cancel giữ NGUYÊN
+# scheduled_at cũ, nên nếu KHÔNG loại sẽ bubble + gửi nhắc cho lịch ĐÃ HỦY.
+# ⚠️ KHÁC is_final (terminal chung) và KHÁC is_universal: sts01/sts15 (không nghe
+# máy / nhắn tin không phản hồi) là universal NHƯNG vẫn là retry follow-up hợp lệ
+# → KHÔNG loại. Chỉ trạng thái HỦY follow-up mới vào set này.
+# sts19 = CANCELLED ("Đã hủy lịch hẹn").
+CANCELLED_FOLLOWUP_STATUS_IDS: Set[str] = {"sts19"}
+
 # System-only statuses - cannot be selected manually (set by system events only)
 # Must match DB consultation_status.selectable_mode = 'system'
 SYSTEM_ONLY_STATUSES: Set[str] = {"sts09", "sts10", "sts11", "sts13", "sts18"}

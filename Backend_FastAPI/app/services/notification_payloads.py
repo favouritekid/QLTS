@@ -269,12 +269,17 @@ class EventPayload:
         eager-loads ``lead.offering.program.name``) and passed in — this
         builder never touches ORM relationships per module contract.
         """
-        from app.utils.datetime_helpers import format_vn_datetime
+        from app.utils.datetime_helpers import (
+            format_vn_datetime,
+            format_zalo_schedule_time,
+        )
         from app.utils.id_helpers import format_booking_code, format_lead_code
 
         return {
             "consultation_id": consultation.id,
             "lead_id": lead.id,
+            # lead_name giữ ĐẦY ĐỦ — browser/in-app notification + LeadOwnerResolver
+            # dùng tên đủ. Constraint Zalo (≤30) tách sang customer_name bên dưới.
             "lead_name": lead.full_name or "Unknown",
             "lead_phone": lead.phone or "",
             # Use lead owner (not consultation creator) so LeadOwnerResolver
@@ -282,11 +287,17 @@ class EventPayload:
             "officer_id": lead.assigned_officer_id or consultation.officer_id,
             "scheduled_at": consultation.scheduled_at.isoformat(),
             "minutes_until": minutes_until,
-            # Channel-specific derived fields (e.g. Zalo ZNS 333738 params).
+            # Hiển thị chung (browser/in-app): DD/MM/YYYY HH:MM.
             "scheduled_time_vn": format_vn_datetime(consultation.scheduled_at),
             "booking_code": format_booking_code(consultation.id),
             "lead_code": format_lead_code(lead.id),
             "major_name": (major_name or "N/A")[:30],
+            # === Zalo ZNS 569736 params — constraint RIÊNG của Zalo, tách field để
+            # KHÔNG ép lên field hiển thị chung ở trên ===
+            # customer_name ≤30 (cap); schedule_time = HH:MM:SS DD/MM/YYYY (verified
+            # gửi thật prod 06-19; DD/MM/YYYY HH:MM → reject -1124).
+            "customer_name": (lead.full_name or "Unknown")[:30],
+            "schedule_time": format_zalo_schedule_time(consultation.scheduled_at),
         }
 
     @staticmethod
