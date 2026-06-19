@@ -37,6 +37,7 @@ import { DateTimePicker } from "@/components/common/form";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -914,6 +915,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Dời lịch hẹn</DialogTitle>
+            <DialogDescription>Chọn giờ hẹn mới cho lịch hẹn này.</DialogDescription>
           </DialogHeader>
           <div className="py-2">
             <DateTimePicker
