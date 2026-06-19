@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -19,6 +20,8 @@ import {
   Mail,
   MessageSquare,
   Calendar,
+  CalendarClock,
+  CalendarX2,
   UserPlus,
   Video,
   Trash2,
@@ -26,7 +29,18 @@ import {
   MoreVertical,
   AlertTriangle,
 } from "lucide-react";
-import { useLeadTimeline, useDeleteConsultation } from "@/hooks/useLeads";
+import { useLeadTimeline, useDeleteConsultation, useUpdateConsultation } from "@/hooks/useLeads";
+import { useConsultationStatuses } from "@/hooks/usePipeline";
+import { useAuthStore } from "@/lib/stores/auth.store";
+import { useClientNow } from "@/hooks/useClientNow";
+import { DateTimePicker } from "@/components/common/form";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import { cn, sanitizeColorCode } from "@/lib/utils";
@@ -220,11 +234,19 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   const { data: timeline, isLoading } = useLeadTimeline(leadId);
   const effectiveLimit = limit ?? maxItems;
   const deleteMutation = useDeleteConsultation();
+  const updateMutation = useUpdateConsultation();
+  const { user } = useAuthStore();
+  const { data: allStatuses = [] } = useConsultationStatuses();
+  // Hydration-safe client time (null khi SSR) — gate hiển thị action theo "hẹn tương lai".
+  const now = useClientNow();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingConsultation, setEditingConsultation] = useState<Consultation | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [reschedulingConsultation, setReschedulingConsultation] = useState<Consultation | null>(null);
+  const [rescheduleDate, setRescheduleDate] = useState<Date | undefined>(undefined);
 
   if (isLoading || !timeline) {
     return (
@@ -393,6 +415,30 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   const itemsToShow = hasLimit ? maxItems : totalItems;
   let itemCount = 0;
 
+  // Quyền thao tác lịch hẹn: officer chỉ sửa được consultation MỚI NHẤT (khớp
+  // BE leads.py:1091 → tránh bấm rồi ăn 403); manager/admin sửa bất kỳ.
+  const userRole = user?.role;
+  const isPrivilegedActor = userRole === "admin" || userRole === "manager";
+  // Status "Đã hủy lịch hẹn" (sts19) — không hardcode, lấy động từ catalog.
+  const cancelStatusId = allStatuses.find(
+    (s) => s.id === "sts19" || s.name === "Đã hủy lịch hẹn",
+  )?.id;
+  // Consultation mới nhất của lead (theo consultation_date) — để gate officer.
+  const latestConsultationId = (() => {
+    let best: { id: number; t: number } | null = null;
+    for (const ev of timeline as TimelineItem[]) {
+      const et = ev.type || "";
+      const d = ev.data as Consultation | undefined;
+      const isConsult =
+        et === "consultation" || et === "consultation_added" || et === "consultation_updated";
+      if (isConsult && d?.id && d?.consultation_date) {
+        const ms = new Date(d.consultation_date).getTime();
+        if (!best || ms > best.t) best = { id: d.id, t: ms };
+      }
+    }
+    return best?.id ?? null;
+  })();
+
   const handleEditConsultation = (consultation: Consultation) => {
     setEditingConsultation(consultation);
     setEditDialogOpen(true);
@@ -413,6 +459,57 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             setSelectedConsultationId(null);
           },
         }
+      );
+    }
+  };
+
+  const openReschedule = (consultation: Consultation) => {
+    setReschedulingConsultation(consultation);
+    setRescheduleDate(
+      consultation.scheduled_at ? new Date(consultation.scheduled_at) : undefined,
+    );
+  };
+
+  const confirmReschedule = () => {
+    if (reschedulingConsultation?.id && rescheduleDate) {
+      updateMutation.mutate(
+        {
+          leadId,
+          consultationId: reschedulingConsultation.id,
+          data: { scheduled_at: rescheduleDate.toISOString() },
+        },
+        {
+          onSuccess: () => {
+            setReschedulingConsultation(null);
+            setRescheduleDate(undefined);
+          },
+        },
+      );
+    }
+  };
+
+  // "Hủy lịch hẹn": đổi status → sts19 + xóa giờ hẹn. AN TOÀN nhờ BE guard
+  // updates_pipeline (universal KHÔNG null stage lead). Sửa in-place đúng cái
+  // hẹn → hết "sống" → hết nhắc phụ huynh; ghi nhận vẫn giữ trong lịch sử.
+  const openCancelAppointment = (consultationId: number) => {
+    setSelectedConsultationId(consultationId);
+    setCancelDialogOpen(true);
+  };
+
+  const confirmCancelAppointment = () => {
+    if (selectedConsultationId && cancelStatusId) {
+      updateMutation.mutate(
+        {
+          leadId,
+          consultationId: selectedConsultationId,
+          data: { status_id: cancelStatusId, scheduled_at: null },
+        },
+        {
+          onSuccess: () => {
+            setCancelDialogOpen(false);
+            setSelectedConsultationId(null);
+          },
+        },
       );
     }
   };
@@ -600,6 +697,36 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                {(() => {
+                                  // Chỉ hiện khi: hẹn ở TƯƠNG LAI (client-time, tránh
+                                  // hydration) + có quyền (privileged, hoặc officer trên
+                                  // consultation MỚI NHẤT — khớp BE, tránh 403).
+                                  const schedMs = consultData?.scheduled_at
+                                    ? new Date(consultData.scheduled_at).getTime()
+                                    : null;
+                                  const isFutureAppt =
+                                    now !== null && schedMs !== null && schedMs > now;
+                                  const canActOnAppt =
+                                    isPrivilegedActor ||
+                                    consultData?.id === latestConsultationId;
+                                  if (!isFutureAppt || !canActOnAppt || !consultData?.id) {
+                                    return null;
+                                  }
+                                  const cid = consultData.id;
+                                  return (
+                                    <>
+                                      <DropdownMenuItem onClick={() => openReschedule(consultData)}>
+                                        <CalendarClock className="h-4 w-4 mr-2" />
+                                        Dời lịch
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => openCancelAppointment(cid)}>
+                                        <CalendarX2 className="h-4 w-4 mr-2" />
+                                        Hủy lịch hẹn
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                    </>
+                                  );
+                                })()}
                                 <DropdownMenuItem
                                   onClick={() => handleEditConsultation(consultData)}
                                 >
@@ -750,6 +877,69 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Cancel Appointment Confirmation */}
+      <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hủy lịch hẹn này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Lịch hẹn sẽ được đánh dấu &quot;Đã hủy lịch hẹn&quot; và gỡ giờ hẹn —
+              KHÔNG gửi nhắc tới phụ huynh nữa. Ghi nhận tư vấn vẫn giữ trong lịch sử.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Không</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmCancelAppointment}
+              disabled={!cancelStatusId}
+              className="bg-error-600 hover:bg-error-700"
+            >
+              Hủy lịch hẹn
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reschedule Appointment (gọn — chỉ chọn giờ mới, không mở full form) */}
+      <Dialog
+        open={Boolean(reschedulingConsultation)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setReschedulingConsultation(null);
+            setRescheduleDate(undefined);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Dời lịch hẹn</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <DateTimePicker
+              value={rescheduleDate ?? null}
+              onChange={(d) => setRescheduleDate(d)}
+              minDate={now !== null ? new Date(now) : undefined}
+              placeholder="Chọn giờ hẹn mới"
+              clearable={false}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setReschedulingConsultation(null);
+                setRescheduleDate(undefined);
+              }}
+            >
+              Hủy
+            </Button>
+            <Button onClick={confirmReschedule} disabled={!rescheduleDate}>
+              Lưu
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Consultation Dialog */}
       <ConsultationDialog
