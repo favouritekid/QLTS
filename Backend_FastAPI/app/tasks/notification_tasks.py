@@ -205,6 +205,7 @@ def check_consultation_reminders_task(self):
         from ..core.events import SystemEvents
         from ..models.lead import Consultation, Lead
         from ..models.program_offering import ProgramOffering
+        from ..repositories.lead_repository import pending_followup_status_subquery
         from ..services import notification_dispatcher
         from ..services.notification_payloads import EventPayload
 
@@ -231,9 +232,19 @@ def check_consultation_reminders_task(self):
                         Lead.deleted_at.is_(None),
                         Consultation.deleted_at.is_(None),
                         Consultation.scheduled_at.isnot(None),
-                        Consultation.scheduled_at > now,
+                        # Grace 30 phút (KHÔNG phải `> now`): bắt mốc VỪA trôi qua do
+                        # beat trễ / jitter / hẹn đặt ở quá khứ gần — KHÔNG nới tới
+                        # hàng giờ. Template là "lịch hẹn sắp tới" + minutes_until bị
+                        # clamp về 0, nới rộng → gửi nhắc SAI cho hẹn đã qua lâu.
+                        Consultation.scheduled_at > now - timedelta(minutes=30),
                         Consultation.scheduled_at <= reminder_window,
                         Consultation.reminder_sent == False,
+                        # Chỉ hẹn còn FOLLOW-UP — CÙNG predicate với next_activity_at
+                        # (non-final, không thuộc CANCELLED_FOLLOWUP_STATUS_IDS; xem
+                        # pending_followup_status_subquery). NULL status cũng bị loại.
+                        Consultation.consultation_status_id.in_(
+                            pending_followup_status_subquery()
+                        ),
                     )
                 )
             )
@@ -241,6 +252,11 @@ def check_consultation_reminders_task(self):
             db_result = await session.execute(query)
             consultations_with_leads = db_result.all()
             result["checked"] = len(consultations_with_leads)
+
+            # Dedupe lead: 1 lead có thể có NHIỀU hẹn đáo hạn cùng lượt beat —
+            # recompute next_activity_at + emit lead_updated 1 lần/lead SAU vòng lặp
+            # (tránh N lần recompute + N event trùng).
+            affected_lead_ids = set()
 
             for consultation, lead in consultations_with_leads:
                 try:
@@ -274,16 +290,22 @@ def check_consultation_reminders_task(self):
                     consultation.reminder_sent = True
                     result["sent"] += 1
                     await session.flush()
-
-                    from ..services.lead_service import update_lead_next_activity
-                    await update_lead_next_activity(session, lead.id)
-                    await _emit_lead_updated(lead.id)
+                    affected_lead_ids.add(lead.id)
 
                 except Exception as e:
                     task_log.error(f"Failed to send reminder for consultation #{consultation.id}: {e}")
                     result["failed"] += 1
 
+            # Recompute next_activity_at 1 lần/lead (trong transaction, trước commit).
+            from ..services.lead_service import update_lead_next_activity
+            for lead_id in affected_lead_ids:
+                await update_lead_next_activity(session, lead_id)
+
             await session.commit()
+
+            # Post-commit: emit lead_updated 1 lần/lead (dedupe) + notif callbacks.
+            for lead_id in affected_lead_ids:
+                await _emit_lead_updated(lead_id)
             for cb in post_commit_callbacks:
                 await cb()
 

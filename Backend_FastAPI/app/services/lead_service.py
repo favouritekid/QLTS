@@ -200,14 +200,18 @@ async def update_lead_next_activity(
     lead_id: int
 ) -> None:
     """
-    Cập nhật lead.next_activity_at = scheduled_at sớm nhất chưa gửi reminder.
+    Cập nhật lead.next_activity_at = MIN(scheduled_at) của hẹn còn pending.
 
-    Logic:
-    - Tìm MIN(scheduled_at) trong consultations WHERE:
+    Delegate sang LeadRepository.update_next_activity (dùng chung helper
+    _earliest_pending_scheduled với cache service → một nguồn sự thật).
+
+    Logic thực tế:
+    - MIN(scheduled_at) trong consultations WHERE:
       - lead_id = lead_id
-      - reminder_sent = False
-      - scheduled_at >= NOW (chỉ tương lai, không lấy quá khứ)
-      - scheduled_at IS NOT NULL
+      - consultation pending: ConsultationStatus non-final AND non-universal
+      - scheduled_at IS NOT NULL, chưa soft-delete
+    - KHÔNG filter theo thời gian (mốc quá khứ vẫn tính — chỉ là quá hạn)
+    - KHÔNG dùng reminder_sent
     - Set lead.next_activity_at = giá trị tìm được (hoặc NULL nếu không có)
 
     Args:

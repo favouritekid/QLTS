@@ -2609,3 +2609,324 @@ class TestLeadAdmissionEligibility:
         assert result.eligible is False
         assert result.blocker_code == "missing_offering"  # NOT "forbidden"
 
+
+class TestNextActivityAggregation:
+    """BE-1/BE-2 follow-up fix (plan ``lead-followup-fix-plan``).
+
+    BE-1: ``next_activity_at`` hợp nhất về MIN hẹn FOLLOW-UP qua
+    ``LeadRepository._earliest_pending_scheduled`` (trước đây
+    ``get_consultation_aggregates`` lấy ``scheduled_at`` của consultation MỚI
+    NHẤT, lệch với ``update_next_activity``).
+
+    Follow-up = non-final AND không thuộc ``CANCELLED_FOLLOWUP_STATUS_IDS``
+    (sts19). is_universal KHÔNG loại: sts01/sts15 (không nghe máy / nhắn tin
+    không phản hồi) có scheduled_at vẫn là hẹn gọi lại cần tính; chỉ sts19 (đã
+    hủy) bị loại — xem phase_manager.
+
+    BE-2: reminder dùng CÙNG predicate + grace 30 phút (chỉ bắt mốc vừa trôi qua
+    do beat trễ/jitter, KHÔNG nhắc hẹn đã qua hàng giờ với "sau 0 phút").
+    """
+
+    async def _consultation(
+        self,
+        db: AsyncSession,
+        lead: models.Lead,
+        officer: models.User,
+        *,
+        status_id: str,
+        scheduled_at: Optional[datetime],
+        consultation_date: datetime,
+        reminder_sent: bool = False,
+    ) -> models.Consultation:
+        c = models.Consultation(
+            lead_id=lead.id,
+            officer_id=officer.id,
+            consultation_date=consultation_date,
+            method="phone",
+            consultation_status_id=status_id,
+            scheduled_at=scheduled_at,
+            reminder_sent=reminder_sent,
+        )
+        db.add(c)
+        await db.flush()
+        return c
+
+    async def test_aggregates_use_min_pending_not_latest_consultation(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """C1 hẹn tương lai (pending) + C2 mới nhất KHÔNG đặt lịch →
+        ``pending_next_activity`` = mốc C1 (KHÔNG phải None/latest)."""
+        from app.repositories.lead_repository import LeadRepository
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+        sched = now + timedelta(days=1)
+
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=sched,
+            consultation_date=now - timedelta(days=2),
+        )
+        # C2 mới nhất: follow-up đã xong nên không đặt lịch mới (scheduled_at None)
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=None,
+            consultation_date=now,
+        )
+
+        repo = LeadRepository(db)
+        agg = await repo.get_consultation_aggregates(seeded_lead.id)
+
+        assert agg["consultation_count"] == 2
+        assert agg["pending_next_activity"] is not None
+        assert abs((agg["pending_next_activity"] - sched).total_seconds()) < 1
+
+    async def test_aggregates_exclude_final_and_cancelled(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Hẹn gắn status FINAL hoặc CANCELLED (sts19) KHÔNG tính follow-up."""
+        from app.repositories.lead_repository import LeadRepository
+
+        stage_id = seeded_dependencies["stage_id"]
+        now = datetime.now(timezone.utc)
+        fin = models.ConsultationStatus(
+            id="sts_fin_followup", name="Final FU",
+            color_code="#222222", stage_id=stage_id, is_final=True,
+        )
+        # sts19 = CANCELLED: universal NHƯNG thuộc CANCELLED_FOLLOWUP_STATUS_IDS.
+        cancelled = models.ConsultationStatus(
+            id="sts19", name="Đã hủy lịch hẹn",
+            color_code="#333333", stage_id=stage_id, is_universal=True,
+        )
+        db.add_all([fin, cancelled])
+        await db.flush()
+
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id="sts_fin_followup", scheduled_at=now + timedelta(hours=2),
+            consultation_date=now,
+        )
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id="sts19", scheduled_at=now + timedelta(hours=1),
+            consultation_date=now,
+        )
+
+        repo = LeadRepository(db)
+        agg = await repo.get_consultation_aggregates(seeded_lead.id)
+
+        assert agg["pending_next_activity"] is None
+
+    async def test_aggregates_include_universal_retry(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """P2: sts01/sts15 (universal, KHÔNG hủy) có scheduled_at VẪN là follow-up
+        → bubble vào pending_next_activity (is_universal không phải tiêu chí loại)."""
+        from app.repositories.lead_repository import LeadRepository
+
+        stage_id = seeded_dependencies["stage_id"]
+        now = datetime.now(timezone.utc)
+        sts01 = models.ConsultationStatus(
+            id="sts01", name="Không nghe máy",
+            color_code="#101010", stage_id=stage_id, is_universal=True,
+        )
+        sts15 = models.ConsultationStatus(
+            id="sts15", name="Nhắn tin không phản hồi",
+            color_code="#202020", stage_id=stage_id, is_universal=True,
+        )
+        db.add_all([sts01, sts15])
+        await db.flush()
+
+        sched01 = now + timedelta(hours=1)
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id="sts01", scheduled_at=sched01, consultation_date=now,
+        )
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id="sts15", scheduled_at=now + timedelta(hours=3),
+            consultation_date=now,
+        )
+
+        repo = LeadRepository(db)
+        agg = await repo.get_consultation_aggregates(seeded_lead.id)
+
+        # MIN của 2 hẹn retry universal → sched01 (sớm hơn).
+        assert agg["pending_next_activity"] is not None
+        assert abs((agg["pending_next_activity"] - sched01).total_seconds()) < 1
+
+    async def test_update_lead_cache_overdue_from_min_pending(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Mốc pending quá khứ → ``is_overdue=True`` + ``next_activity_at`` = mốc đó."""
+        from app.services import lead_cache_service
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+        past = now - timedelta(hours=1)
+
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=past,
+            consultation_date=now,
+        )
+
+        await lead_cache_service.update_lead_cache(db, seeded_lead.id)
+        await db.refresh(seeded_lead)
+
+        assert seeded_lead.is_overdue is True
+        assert seeded_lead.next_activity_at is not None
+        assert abs((seeded_lead.next_activity_at - past).total_seconds()) < 1
+
+    async def test_update_lead_cache_future_not_overdue(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Mốc pending tương lai → is_overdue=False, next_activity_at = mốc."""
+        from app.services import lead_cache_service
+
+        pending_status = seeded_dependencies["initial_status_id"]
+        now = datetime.now(timezone.utc)
+        future = now + timedelta(hours=3)
+
+        await self._consultation(
+            db, seeded_lead, officer_user,
+            status_id=pending_status, scheduled_at=future,
+            consultation_date=now,
+        )
+
+        await lead_cache_service.update_lead_cache(db, seeded_lead.id)
+        await db.refresh(seeded_lead)
+
+        assert seeded_lead.is_overdue is False
+        assert seeded_lead.next_activity_at is not None
+        assert abs((seeded_lead.next_activity_at - future).total_seconds()) < 1
+
+    async def test_update_lead_cache_cancelled_clears_next_activity(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Status sts19 (đã hủy) dù GIỮ scheduled_at tương lai → cache
+        next_activity_at=None (cancel không còn là follow-up). Khóa P2."""
+        from app.services import lead_cache_service
+
+        stage_id = seeded_dependencies["stage_id"]
+        now = datetime.now(timezone.utc)
+        cancelled = models.ConsultationStatus(
+            id="sts19", name="Đã hủy lịch hẹn",
+            color_code="#333333", stage_id=stage_id, is_universal=True,
+        )
+        db.add(cancelled)
+        await db.flush()
+
+        await self._consultation(
+            db, seeded_lead, officer_user, status_id="sts19",
+            scheduled_at=now + timedelta(hours=2), consultation_date=now,
+        )
+
+        await lead_cache_service.update_lead_cache(db, seeded_lead.id)
+        await db.refresh(seeded_lead)
+
+        assert seeded_lead.next_activity_at is None
+        assert seeded_lead.is_overdue is False
+
+    async def test_reminder_task_filters_followup_and_30min_grace(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """BE-2 + P2 — gọi task THẬT: dispatch hẹn FOLLOW-UP trong
+        [now-30ph, now+15ph]; loại final / CANCELLED(sts19) / ngoài cửa sổ;
+        universal retry (sts01) VẪN được nhắc.
+
+        run_async_task chạy thread+loop riêng (async test) + task_db_session tạo
+        engine RIÊNG → gọi .run() thật, không cross-loop. db.commit() trước vì
+        task đọc qua engine riêng (chỉ thấy data đã commit).
+        """
+        from unittest.mock import patch, AsyncMock
+        from app.tasks.notification_tasks import check_consultation_reminders_task
+
+        pending = seeded_dependencies["initial_status_id"]
+        stage_id = seeded_dependencies["stage_id"]
+        now = datetime.now(timezone.utc)
+
+        fin = models.ConsultationStatus(
+            id="sts_fin_rem", name="Final Rem",
+            color_code="#444444", stage_id=stage_id, is_final=True,
+        )
+        sts01 = models.ConsultationStatus(
+            id="sts01", name="Không nghe máy",
+            color_code="#101010", stage_id=stage_id, is_universal=True,
+        )
+        sts19 = models.ConsultationStatus(
+            id="sts19", name="Đã hủy lịch hẹn",
+            color_code="#333333", stage_id=stage_id, is_universal=True,
+        )
+        db.add_all([fin, sts01, sts19])
+        await db.flush()
+
+        async def _c(status_id, mins):
+            return await self._consultation(
+                db, seeded_lead, officer_user, status_id=status_id,
+                scheduled_at=now + timedelta(minutes=mins), consultation_date=now,
+            )
+
+        c_recent = await _c(pending, -10)      # trong grace 30ph → gửi
+        c_future = await _c(pending, 5)         # +5ph trong window → gửi
+        c_retry = await _c("sts01", 10)         # universal retry → VẪN gửi (P2)
+        c_outside = await _c(pending, -45)      # ngoài grace 30ph → KHÔNG
+        c_final = await _c("sts_fin_rem", 5)    # final → KHÔNG
+        c_cancelled = await _c("sts19", 5)      # đã hủy → KHÔNG
+        keep = {c_recent.id, c_future.id, c_retry.id}
+        drop = {c_outside.id, c_final.id, c_cancelled.id}
+        await db.commit()  # task đọc qua engine riêng → chỉ thấy data đã commit
+
+        dispatched = []
+
+        async def fake_dispatch(db, event, payload, **kwargs):
+            dispatched.append(payload.get("consultation_id"))
+
+            async def _cb():
+                pass
+
+            return [], _cb
+
+        with patch(
+            "app.services.notification_dispatcher.dispatch", fake_dispatch
+        ), patch(
+            "app.tasks.notification_tasks._emit_lead_updated", new=AsyncMock()
+        ), patch(
+            "app.services.lead_service.update_lead_next_activity", new=AsyncMock()
+        ):
+            result = check_consultation_reminders_task.run()
+
+        sent = set(dispatched)
+        assert keep <= sent, f"phải gửi follow-up trong grace: thiếu {keep - sent}"
+        assert not (drop & sent), f"KHÔNG gửi final/cancelled/ngoài-grace: {drop & sent}"
+        assert sent == keep
+        assert result["sent"] == 3
+
