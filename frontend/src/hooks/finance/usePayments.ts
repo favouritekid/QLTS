@@ -90,6 +90,21 @@ const invalidatePaymentQueries = async (
     invalidations.push(
       queryClient.invalidateQueries({ queryKey: invoicesKeys.detail(invoiceDetail) })
     )
+    // A verified/rejected payment changes the invoice's status + remaining → the
+    // collection workspace list rows + tab counts must refresh too, not just the
+    // invoice detail.
+    invalidations.push(
+      queryClient.invalidateQueries({
+        queryKey: invoicesKeys.lists(),
+        refetchType: "active",
+      })
+    )
+    invalidations.push(
+      queryClient.invalidateQueries({
+        queryKey: [...invoicesKeys.all, "status-counts"],
+        refetchType: "active",
+      })
+    )
   }
   if (feeDetail) {
     invalidations.push(

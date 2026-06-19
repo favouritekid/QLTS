@@ -350,6 +350,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
 
         # INVOICES - Full CRUD (except delete)
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},
+        # Workspace tab badges — EXPLICIT (don't rely on the keyMatch4 collision
+        # with /api/invoices/{id}); mirrors /api/admissions/status-counts.
+        {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
@@ -573,6 +576,11 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Collection workspace ("Thu học phí") — manager is in FINANCE_ROLES (FE),
+        # but does NOT inherit accountant, so grant the list + tab badges here or
+        # the workspace list 403s for manager.
+        {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
+        {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice

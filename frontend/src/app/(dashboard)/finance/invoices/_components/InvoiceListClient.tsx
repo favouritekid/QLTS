@@ -1,662 +1,379 @@
 // src/app/(dashboard)/finance/invoices/_components/InvoiceListClient.tsx
+/**
+ * InvoiceListClient — workspace "Thu học phí" (collection desk).
+ *
+ * Redesign đồng nhất "Operations desk v2" (admission): command header + density
+ * → metric rail TIỀN (4 ô) → status tabs gạch chân → InvoiceFilterBar → desktop
+ * table (status spine + "Thu tiền" hàng nhất) / mobile cards → Pagination.
+ *
+ * Thin-client: hiển thị đúng những gì BE trả (status, can_* flags, is_overdue).
+ * KHÔNG business logic, KHÔNG bulk-select. Spine đỏ + tab "Quá hạn" + status-pill
+ * đều lấy từ is_overdue + overdue_derived (BE-owned) — một định nghĩa quá hạn.
+ */
+
 "use client"
 
-import * as React from "react"
-import { useRouter, useSearchParams } from "next/navigation"
-import Link from "next/link"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Card, CardContent } from "@/components/ui/card"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { Receipt } from "lucide-react"
+
+import { PageContainer } from "@/components/layouts/PageContainer"
+import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
+import { Pagination } from "@/components/common/table/Pagination"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Progress } from "@/components/ui/progress"
-import { Badge } from "@/components/ui/badge"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Search,
-  MoreHorizontal,
-  Eye,
-  FileText,
-  XCircle,
-  CreditCard,
-  AlertTriangle,
-  Filter,
-  X,
-  Clock,
-} from "lucide-react"
-import { useInvoices } from "@/hooks/finance/useInvoices"
-import { toInvoiceListViewModel, type InvoiceListItemViewModel } from "@/hooks/finance/useInvoiceViewModel"
-import { AmountDisplay, InvoiceStatusBadge } from "@/components/finance"
-import { INVOICE_STATUS_LABELS, type InvoiceStatus } from "@/types/finance.types"
 import { cn } from "@/lib/utils"
-import { parseAmountInput } from "@/lib/zod/finance"
-import { useMediaQuery } from "@/hooks/useMediaQuery"
+import { formatVND } from "@/lib/zod/finance"
+import { getInvoiceStatusSpineColor } from "@/lib/status-config"
 
-// =============================================================================
-// FILTER OPTIONS
-// =============================================================================
+import {
+  useInvoices,
+  useInvoiceStatusCounts,
+} from "@/hooks/finance/useInvoices"
+import { useFinanceDashboard } from "@/hooks/finance/useFinanceDashboard"
+import {
+  toInvoiceListViewModel,
+  type InvoiceListItemViewModel,
+} from "@/hooks/finance/useInvoiceViewModel"
+import { useInvoicesFilter } from "@/hooks/finance/useInvoicesFilter"
+import { INVOICE_STATUS_TABS } from "@/hooks/finance/filterDefaults"
 
-const INVOICE_STATUS_OPTIONS: { value: InvoiceStatus | "all"; label: string }[] = [
-  { value: "all", label: "Tất cả trạng thái" },
-  { value: "draft", label: "Nháp" },
-  { value: "issued", label: "Đã xuất" },
-  { value: "partial", label: "Thanh toán một phần" },
-  { value: "paid", label: "Đã thanh toán" },
-  { value: "overdue", label: "Quá hạn" },
-  { value: "cancelled", label: "Đã hủy" },
-]
+import { AdmissionsStatusTabs } from "@/app/(dashboard)/admissions/_components/AdmissionsStatusTabs"
+import {
+  AdmissionsMetricRail,
+  type MetricItem,
+} from "@/app/(dashboard)/admissions/_components/AdmissionsMetricRail"
+import { Assignees } from "@/app/(dashboard)/admissions/_components/roster-parts"
 
-// =============================================================================
-// TYPES
-// =============================================================================
+import { InvoiceFilterBar } from "./InvoiceFilterBar"
+import { InvoiceStatusDot } from "./InvoiceStatusDot"
+import { InvoiceCard } from "./InvoiceCard"
+import { InvoiceListSkeleton } from "./InvoiceListSkeleton"
+import {
+  AmountCell,
+  FeeCell,
+  IdentityCell,
+  InvoiceRowActionsMenu,
+  RecordPaymentButton,
+} from "./InvoiceColumns"
 
-interface InvoiceFilters {
-  status?: InvoiceStatus
-  fee_id?: number
+const DENSITY_STORAGE_KEY = "invoices:density"
+type Density = "comfortable" | "compact"
+
+/** Enter/Space kích hoạt row, bỏ qua khi focus ở element interactive bên trong. */
+function activateRow(e: React.KeyboardEvent, fn: () => void) {
+  if (e.key !== "Enter" && e.key !== " ") return
+  const target = e.target as HTMLElement
+  const inner = target.closest("button, a, input, [role='menuitem']")
+  if (inner && inner !== e.currentTarget) return
+  e.preventDefault()
+  fn()
 }
 
-// =============================================================================
-// MAIN COMPONENT
-// =============================================================================
-
-/**
- * InvoiceListClient - Client component for Invoice list page
- *
- * Features:
- * - Filterable and searchable invoice list
- * - Responsive: Table on desktop, Cards on mobile
- * - Quick actions: View, Issue, Cancel, Record Payment
- */
 export function InvoiceListClient() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const isMobile = useMediaQuery("(max-width: 768px)")
 
-  // Parse URL params
-  const initialFilters: InvoiceFilters = {
-    status: (searchParams.get("status") as InvoiceStatus) || undefined,
-    fee_id: searchParams.get("fee_id") ? parseInt(searchParams.get("fee_id")!) : undefined,
-  }
+  // ── Filter state (URL + localStorage) ──────────────────────────────────
+  const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useInvoicesFilter()
 
-  // Local state
-  const [filters, setFilters] = React.useState<InvoiceFilters>(initialFilters)
-  const [searchQuery, setSearchQuery] = React.useState("")
-  const [page, setPage] = React.useState(1)
+  // ── Density (SSR-safe; read localStorage after mount) ───────────────────
+  const [density, setDensity] = useState<Density>("comfortable")
+  // `mounted` gates client-only content (the money rail) whose React-Query data
+  // is cached app-wide by the sidebar badge counts → present on the client's
+  // first render but absent on the server → hydration mismatch. Rendering it
+  // only after mount makes server + first client render identical.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    // localStorage read deferred to post-mount to avoid SSR hydration mismatch
+    // (server can't know the persisted density). One-shot init, not a render loop.
+    const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (stored === "compact" || stored === "comfortable") setDensity(stored)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true)
+  }, [])
+  const handleDensityChange = useCallback((value: Density) => {
+    setDensity(value)
+    try {
+      window.localStorage.setItem(DENSITY_STORAGE_KEY, value)
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+  const compact = density === "compact"
 
-  // Fetch invoices
-  const { data, isLoading, error } = useInvoices({
-    page,
-    page_size: 20,
-    status: filters.status,
-    fee_id: filters.fee_id,
-  })
+  // ── Data ────────────────────────────────────────────────────────────────
+  const { data, isLoading, isError, isFetching } = useInvoices(apiFilters)
+  const { data: statusCounts } = useInvoiceStatusCounts(countFilters)
+  const { data: stats } = useFinanceDashboard()
 
-  // Transform to view models
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- toInvoiceListViewModel is pure
-  const invoiceViewModels = React.useMemo(() => {
-    if (!data?.items) return []
-    return toInvoiceListViewModel(data.items)
-  }, [data?.items])
+  const items = data?.items
+  const invoices = useMemo(() => {
+    if (!items) return []
+    return toInvoiceListViewModel(items)
+  }, [items])
 
-  // Filter by search query (client-side)
-  const filteredInvoices = React.useMemo(() => {
-    if (!searchQuery) return invoiceViewModels
-    const query = searchQuery.toLowerCase()
-    return invoiceViewModels.filter(
-      (invoice) => invoice.invoice_number.toLowerCase().includes(query)
-    )
-  }, [invoiceViewModels, searchQuery])
+  const totalCount = data?.total ?? 0
 
-  // Update URL when filters change
-  const updateFilters = React.useCallback(
-    (newFilters: Partial<InvoiceFilters>) => {
-      const updated = { ...filters, ...newFilters }
-      setFilters(updated)
+  // Empty later-page recovery: if a filter/total shrink (or a reload restoring a
+  // stale page from localStorage) leaves us past the last page, the API returns
+  // [] and we'd strand the user on "Chưa có hóa đơn nào" with no way back. Pull
+  // back to page 1. placeholderData can't help — a reload is a fresh mount.
+  useEffect(() => {
+    if (
+      data &&
+      !isFetching &&
+      totalCount > 0 &&
+      (items?.length ?? 0) === 0 &&
+      state.page > 1
+    ) {
+      handlers.setPage(1)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, isFetching, totalCount, items?.length, state.page])
 
-      // Update URL
-      const params = new URLSearchParams()
-      if (updated.status) params.set("status", updated.status)
-      if (updated.fee_id) params.set("fee_id", updated.fee_id.toString())
+  // ── Navigation / actions (PR1 routes to detail page) ────────────────────
+  const openInvoice = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}`), [router])
+  const handleIssue = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=issue`), [router])
+  const handleCancel = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=cancel`), [router])
+  const handlePenalty = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=apply-penalty`), [router])
+  const handleRecordPayment = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=record-payment`), [router])
 
-      const queryString = params.toString()
-      router.push(`/finance/invoices${queryString ? `?${queryString}` : ""}`)
-    },
-    [filters, router]
-  )
+  // ── Tab counts ──────────────────────────────────────────────────────────
+  // NOTE: "Quá hạn" is an ORTHOGONAL lens (overdue_derived), not a partition —
+  // an issued-overdue invoice is counted in BOTH "Chờ thu" and "Quá hạn". So the
+  // chips intentionally do NOT sum to "Tất cả". The tab ORDER (filterDefaults:
+  // "Quá hạn" sits right after "Tất cả") places the lens next to the total and
+  // away from the mutually-exclusive status group to avoid an "additive" misread.
+  const tabCounts = useMemo(() => {
+    if (!statusCounts?.counts) return undefined
+    const result: Record<string, number> = {}
+    for (const tab of INVOICE_STATUS_TABS) {
+      if (tab.key === "all") {
+        result[tab.key] = statusCounts.total
+      } else if (tab.overdue) {
+        result[tab.key] = statusCounts.overdue_derived
+      } else {
+        result[tab.key] = tab.statuses.reduce(
+          (sum, s) => sum + (statusCounts.counts[s as keyof typeof statusCounts.counts] ?? 0),
+          0,
+        )
+      }
+    }
+    return result
+  }, [statusCounts])
 
-  // Clear all filters
-  const clearFilters = React.useCallback(() => {
-    setFilters({})
-    setSearchQuery("")
-    router.push("/finance/invoices")
-  }, [router])
-
-  // Navigation handlers
-  const handleView = (invoice: InvoiceListItemViewModel) => {
-    router.push(`/finance/invoices/${invoice.id}`)
-  }
-
-  const handleIssue = (invoice: InvoiceListItemViewModel) => {
-    router.push(`/finance/invoices/${invoice.id}?action=issue`)
-  }
-
-  const handleCancel = (invoice: InvoiceListItemViewModel) => {
-    router.push(`/finance/invoices/${invoice.id}?action=cancel`)
-  }
-
-  const handleRecordPayment = (invoice: InvoiceListItemViewModel) => {
-    router.push(`/finance/invoices/${invoice.id}?action=record-payment`)
-  }
-
-  // Check if any filters are active
-  const hasActiveFilters = filters.status || filters.fee_id
-
-  if (error) {
-    return (
-      <div className="h-full flex flex-col p-4 sm:p-6">
-        <Card className="border-destructive">
-          <CardContent className="p-6 text-center">
-            <p className="text-destructive font-medium">Không thể tải danh sách hóa đơn</p>
-            <p className="text-sm text-muted-foreground mt-1">Vui lòng thử lại sau</p>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex flex-col p-4 sm:p-6 space-y-4">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Quản lý hóa đơn</h1>
-          <p className="text-muted-foreground">
-            {data?.total ?? 0} hóa đơn
-            {hasActiveFilters && " (đã lọc)"}
-          </p>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-2 items-center">
-        {/* Search */}
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Tìm theo số hóa đơn..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
-        </div>
-
-        {/* Status filter */}
-        <Select
-          value={filters.status ?? "all"}
-          onValueChange={(value) =>
-            updateFilters({ status: value === "all" ? undefined : (value as InvoiceStatus) })
-          }
-        >
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Trạng thái" />
-          </SelectTrigger>
-          <SelectContent>
-            {INVOICE_STATUS_OPTIONS.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {/* Clear filters */}
-        {hasActiveFilters && (
-          <Button variant="ghost" size="sm" onClick={clearFilters}>
-            <X className="h-4 w-4 mr-1" />
-            Xóa bộ lọc
-          </Button>
-        )}
-      </div>
-
-      {/* Fee filter badge */}
-      {filters.fee_id && (
-        <div className="flex items-center gap-2 text-sm">
-          <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-muted-foreground">Lọc theo phí:</span>
-          <span className="font-medium">#{filters.fee_id}</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2"
-            onClick={() => updateFilters({ fee_id: undefined })}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
-      )}
-
-      {/* Content */}
-      {isLoading ? (
-        <InvoiceListSkeleton isMobile={isMobile} />
-      ) : filteredInvoices.length === 0 ? (
-        <Card>
-          <CardContent className="p-12 text-center">
-            <p className="text-muted-foreground">Không có hóa đơn nào</p>
-            {hasActiveFilters && (
-              <Button variant="link" onClick={clearFilters} className="mt-2">
-                Xóa bộ lọc để xem tất cả
-              </Button>
-            )}
-          </CardContent>
-        </Card>
-      ) : isMobile ? (
-        <InvoiceCardList
-          invoices={filteredInvoices}
-          onView={handleView}
-          onIssue={handleIssue}
-          onCancel={handleCancel}
-          onRecordPayment={handleRecordPayment}
-        />
-      ) : (
-        <InvoiceTable
-          invoices={filteredInvoices}
-          onView={handleView}
-          onIssue={handleIssue}
-          onCancel={handleCancel}
-          onRecordPayment={handleRecordPayment}
-        />
-      )}
-
-      {/* Pagination */}
-      {data && data.pages > 1 && (
-        <div className="flex justify-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 1}
-            onClick={() => setPage((p) => p - 1)}
-          >
-            Trước
-          </Button>
-          <span className="flex items-center px-4 text-sm text-muted-foreground">
-            Trang {page} / {data.pages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === data.pages}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Sau
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// =============================================================================
-// TABLE VIEW (Desktop)
-// =============================================================================
-
-interface InvoiceTableProps {
-  invoices: InvoiceListItemViewModel[]
-  onView: (invoice: InvoiceListItemViewModel) => void
-  onIssue: (invoice: InvoiceListItemViewModel) => void
-  onCancel: (invoice: InvoiceListItemViewModel) => void
-  onRecordPayment: (invoice: InvoiceListItemViewModel) => void
-}
-
-function InvoiceTable({
-  invoices,
-  onView,
-  onIssue,
-  onCancel,
-  onRecordPayment,
-}: InvoiceTableProps) {
-  return (
-    <Card>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Số hóa đơn</TableHead>
-            <TableHead>Đợt</TableHead>
-            <TableHead>Trạng thái</TableHead>
-            <TableHead className="text-right">Số tiền</TableHead>
-            <TableHead className="text-right">Còn lại</TableHead>
-            <TableHead>Tiến độ</TableHead>
-            <TableHead>Hạn thanh toán</TableHead>
-            <TableHead className="w-[50px]"></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {invoices.map((invoice) => (
-            <TableRow
-              key={invoice.id}
-              className="cursor-pointer hover:bg-muted/50"
-              onClick={() => onView(invoice)}
-            >
-              <TableCell className="font-medium font-mono">
-                {invoice.invoice_number}
-              </TableCell>
-              <TableCell>Đợt {invoice.installment_no}</TableCell>
-              <TableCell>
-                <InvoiceStatusBadge status={invoice.status as InvoiceStatus} size="sm" />
-              </TableCell>
-              <TableCell className="text-right">
-                <AmountDisplay amount={invoice.amount_formatted} showCurrency={false} />
-              </TableCell>
-              <TableCell className="text-right">
-                <AmountDisplay
-                  amount={invoice.remaining_amount_formatted}
-                  showCurrency={false}
-                  className={cn(
-                    parseAmountInput(invoice.remaining_amount_formatted) > 0 &&
-                      "text-warning-600"
-                  )}
-                />
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <Progress value={invoice.payment_progress} className="w-16 h-2" />
-                  <span className="text-xs text-muted-foreground w-8">
-                    {invoice.payment_progress}%
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1.5">
-                  {invoice.is_overdue && (
-                    <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-                  )}
-                  {invoice.is_due_soon && !invoice.is_overdue && (
-                    <Clock className="h-3.5 w-3.5 text-warning-500" />
-                  )}
-                  <span className={cn(invoice.is_overdue && "text-destructive font-medium")}>
-                    {invoice.due_date_formatted}
-                  </span>
-                </div>
-              </TableCell>
-              <TableCell onClick={(e) => e.stopPropagation()}>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => onView(invoice)}>
-                      <Eye className="h-4 w-4 mr-2" />
-                      Xem chi tiết
-                    </DropdownMenuItem>
-                    {invoice.can_issue && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => onIssue(invoice)}>
-                          <FileText className="h-4 w-4 mr-2" />
-                          Xuất hóa đơn
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                    {invoice.can_record_payment && (
-                      <DropdownMenuItem onClick={() => onRecordPayment(invoice)}>
-                        <CreditCard className="h-4 w-4 mr-2" />
-                        Ghi nhận thanh toán
-                      </DropdownMenuItem>
-                    )}
-                    {invoice.can_cancel && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onClick={() => onCancel(invoice)}
-                          className="text-destructive focus:text-destructive"
-                        >
-                          <XCircle className="h-4 w-4 mr-2" />
-                          Hủy
-                        </DropdownMenuItem>
-                      </>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Card>
-  )
-}
-
-// =============================================================================
-// CARD LIST VIEW (Mobile)
-// =============================================================================
-
-interface InvoiceCardListProps {
-  invoices: InvoiceListItemViewModel[]
-  onView: (invoice: InvoiceListItemViewModel) => void
-  onIssue: (invoice: InvoiceListItemViewModel) => void
-  onCancel: (invoice: InvoiceListItemViewModel) => void
-  onRecordPayment: (invoice: InvoiceListItemViewModel) => void
-}
-
-function InvoiceCardList({
-  invoices,
-  onView,
-  onIssue,
-  onCancel,
-  onRecordPayment,
-}: InvoiceCardListProps) {
-  return (
-    <div className="space-y-3">
-      {invoices.map((invoice) => (
-        <InvoiceCard
-          key={invoice.id}
-          invoice={invoice}
-          onView={onView}
-          onIssue={onIssue}
-          onCancel={onCancel}
-          onRecordPayment={onRecordPayment}
-        />
-      ))}
-    </div>
-  )
-}
-
-// =============================================================================
-// INVOICE CARD (Mobile)
-// =============================================================================
-
-interface InvoiceCardProps {
-  invoice: InvoiceListItemViewModel
-  onView: (invoice: InvoiceListItemViewModel) => void
-  onIssue: (invoice: InvoiceListItemViewModel) => void
-  onCancel: (invoice: InvoiceListItemViewModel) => void
-  onRecordPayment: (invoice: InvoiceListItemViewModel) => void
-}
-
-function InvoiceCard({
-  invoice,
-  onView,
-  onIssue,
-  onCancel,
-  onRecordPayment,
-}: InvoiceCardProps) {
-  const hasActions = invoice.can_issue || invoice.can_cancel || invoice.can_record_payment
+  // ── Metric rail = TIỀN (4 ô) ────────────────────────────────────────────
+  const metricItems: MetricItem[] = useMemo(() => {
+    if (!stats) return []
+    return [
+      { key: "outstanding", label: "Còn phải thu", value: formatVND(stats.outstanding_total), dot: "bg-primary" },
+      { key: "overdue", label: "Quá hạn", value: formatVND(stats.overdue_amount), dot: "bg-error-500" },
+      { key: "monthly", label: "Thu tháng này", value: formatVND(stats.monthly_collections), dot: "bg-emerald-500" },
+      { key: "pending", label: "Chờ xác minh", value: stats.pending_payments_count.toLocaleString("vi-VN"), dot: "bg-info-500" },
+    ]
+  }, [stats])
 
   return (
-    <Card className={cn(
-      "hover:shadow-md transition-shadow",
-      invoice.is_overdue && "border-destructive/50 bg-destructive/5"
-    )}>
-      <CardContent className="p-4 space-y-3">
+    <PageContainer maxWidth="xl">
+      <div className="space-y-5">
         {/* Header */}
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0">
-            <p className="font-mono font-medium text-sm">{invoice.invoice_number}</p>
-            <p className="text-xs text-muted-foreground">Đợt {invoice.installment_no}</p>
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 items-center justify-center rounded-2xl bg-primary/10 text-primary sm:size-11">
+              <Receipt className="size-5 sm:size-6" aria-hidden="true" />
+            </div>
+            <div>
+              <h1 className="font-display text-xl font-bold tracking-tight md:text-2xl">Thu học phí</h1>
+              <p className="text-sm text-muted-foreground" aria-live="polite">
+                Quản lý hóa đơn và ghi nhận thu học phí
+                {totalCount > 0 && (
+                  <>
+                    {" · "}
+                    <span className="font-medium tabular-nums text-foreground">{totalCount}</span> hóa đơn
+                  </>
+                )}
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <InvoiceStatusBadge status={invoice.status as InvoiceStatus} size="sm" />
-            {hasActions && (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => onView(invoice)}>
-                    <Eye className="h-4 w-4 mr-2" />
-                    Xem chi tiết
-                  </DropdownMenuItem>
-                  {invoice.can_issue && (
-                    <DropdownMenuItem onClick={() => onIssue(invoice)}>
-                      <FileText className="h-4 w-4 mr-2" />
-                      Xuất hóa đơn
-                    </DropdownMenuItem>
-                  )}
-                  {invoice.can_record_payment && (
-                    <DropdownMenuItem onClick={() => onRecordPayment(invoice)}>
-                      <CreditCard className="h-4 w-4 mr-2" />
-                      Ghi nhận thanh toán
-                    </DropdownMenuItem>
-                  )}
-                  {invoice.can_cancel && (
-                    <DropdownMenuItem
-                      onClick={() => onCancel(invoice)}
-                      className="text-destructive"
-                    >
-                      <XCircle className="h-4 w-4 mr-2" />
-                      Hủy
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
-        </div>
 
-        {/* Amounts */}
-        <div className="flex justify-between items-end">
-          <div>
-            <p className="text-xs text-muted-foreground">Số tiền</p>
-            <AmountDisplay amount={invoice.amount_formatted} size="lg" showCurrency={false} />
+          <div className="hidden self-start rounded-full border border-border bg-card p-0.5 sm:inline-flex sm:self-auto">
+            {(["comfortable", "compact"] as const).map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => handleDensityChange(d)}
+                aria-pressed={density === d}
+                className={cn(
+                  "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {d === "comfortable" ? "Thoáng" : "Gọn"}
+              </button>
+            ))}
           </div>
-          <div className="text-right">
-            <p className="text-xs text-muted-foreground">Còn lại</p>
-            <AmountDisplay
-              amount={invoice.remaining_amount_formatted}
-              size="md"
-              showCurrency={false}
-              className={cn(
-                parseAmountInput(invoice.remaining_amount_formatted) > 0 &&
-                  "text-warning-600"
-              )}
+        </header>
+
+        {/* Metric rail (TIỀN) — gated on `mounted` (hydration-safe, see above) */}
+        {mounted && metricItems.length > 0 && (
+          <AdmissionsMetricRail items={metricItems} ariaLabel="Chỉ số thu học phí" />
+        )}
+
+        {/* Status tabs */}
+        <AdmissionsStatusTabs
+          tabs={INVOICE_STATUS_TABS}
+          activeTab={state.activeTab}
+          counts={tabCounts}
+          onTabClick={handlers.handleTabClick}
+        />
+
+        {/* Filter bar */}
+        <InvoiceFilterBar
+          search={state.search}
+          onSearchChange={handlers.handleSearchChange}
+          feeType={state.feeType}
+          onFeeTypeChange={handlers.handleFeeTypeChange}
+          sortBy={state.sortBy}
+          sortOrder={state.sortOrder}
+          onSortChange={handlers.handleSortChange}
+          hasActiveFilters={hasActiveFilters}
+          onReset={handlers.resetFilters}
+        />
+
+        {/* Content */}
+        {isLoading ? (
+          <InvoiceListSkeleton />
+        ) : isError ? (
+          <div className="rounded-2xl border border-border bg-card">
+            <ErrorEmptyState message="Không thể tải danh sách hóa đơn. Vui lòng thử lại." />
+          </div>
+        ) : invoices.length === 0 ? (
+          <div className="rounded-2xl border border-border bg-card">
+            <EmptyState
+              icon={<Receipt className="h-12 w-12" />}
+              title={hasActiveFilters ? "Không tìm thấy hóa đơn" : "Chưa có hóa đơn nào"}
+              description={
+                hasActiveFilters
+                  ? "Thử thay đổi bộ lọc hoặc xóa tất cả bộ lọc để xem kết quả khác"
+                  : "Hóa đơn sẽ xuất hiện khi học phí được tính và phát hành"
+              }
+              action={
+                hasActiveFilters && (
+                  <Button variant="outline" onClick={handlers.resetFilters}>
+                    Xóa tất cả bộ lọc
+                  </Button>
+                )
+              }
             />
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Desktop: roster table */}
+            <div
+              className={cn(
+                "hidden overflow-hidden rounded-2xl border border-border bg-card shadow-xs md:block",
+                isFetching && "opacity-60",
+              )}
+            >
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <th className="px-3 py-3 font-medium">Học sinh</th>
+                    <th className="px-3 py-3 font-medium">Khoản thu</th>
+                    <th className="px-3 py-3 font-medium">Phụ trách</th>
+                    <th className="px-3 py-3 font-medium">Trạng thái</th>
+                    <th className="px-3 py-3 text-right font-medium">Số tiền</th>
+                    <th className="px-3 py-3 font-medium">
+                      <span className="sr-only">Thao tác</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoices.map((invoice) => {
+                    const spine = getInvoiceStatusSpineColor(invoice.status, invoice.is_overdue)
+                    return (
+                      <tr
+                        key={invoice.id}
+                        role="link"
+                        tabIndex={0}
+                        aria-label={`Hóa đơn ${invoice.invoice_number} — ${invoice.profile_name ?? "Chưa rõ học sinh"}`}
+                        onClick={() => openInvoice(invoice)}
+                        onKeyDown={(e) => activateRow(e, () => openInvoice(invoice))}
+                        className={cn(
+                          "group cursor-pointer border-b border-l-2 border-border/60 outline-none transition-colors last:border-b-0 hover:bg-muted/40 focus-visible:bg-muted/40",
+                          spine,
+                        )}
+                      >
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <IdentityCell invoice={invoice} />
+                        </td>
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <FeeCell invoice={invoice} />
+                        </td>
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <Assignees officer={invoice.officer_name} reviewer={null} />
+                        </td>
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <InvoiceStatusDot status={invoice.status} isOverdue={invoice.is_overdue} />
+                        </td>
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <AmountCell invoice={invoice} />
+                        </td>
+                        <td
+                          className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-end gap-1.5">
+                            <RecordPaymentButton invoice={invoice} onRecordPayment={handleRecordPayment} />
+                            <InvoiceRowActionsMenu
+                              invoice={invoice}
+                              onIssue={handleIssue}
+                              onCancel={handleCancel}
+                              onPenalty={handlePenalty}
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-        {/* Progress */}
-        <div className="space-y-1.5">
-          <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Tiến độ</span>
-            <span className="font-medium">{invoice.payment_progress}%</span>
-          </div>
-          <Progress value={invoice.payment_progress} className="h-2" />
-        </div>
-
-        {/* Due date */}
-        <div className="flex justify-between items-center text-xs pt-2 border-t">
-          <span className="text-muted-foreground">Hạn thanh toán</span>
-          <div className="flex items-center gap-1.5">
-            {invoice.is_overdue && (
-              <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
-            )}
-            {invoice.is_due_soon && !invoice.is_overdue && (
-              <Clock className="h-3.5 w-3.5 text-warning-500" />
-            )}
-            <span className={cn(invoice.is_overdue && "text-destructive font-medium")}>
-              {invoice.due_date_formatted}
-            </span>
-          </div>
-        </div>
-
-        {/* Action button */}
-        <Button
-          variant="outline"
-          className="w-full min-h-[44px]"
-          onClick={() => onView(invoice)}
-        >
-          Xem chi tiết
-        </Button>
-      </CardContent>
-    </Card>
-  )
-}
-
-// =============================================================================
-// LOADING SKELETON
-// =============================================================================
-
-function InvoiceListSkeleton({ isMobile }: { isMobile: boolean }) {
-  if (isMobile) {
-    return (
-      <div className="space-y-3">
-        {[...Array(5)].map((_, i) => (
-          <Skeleton key={i} className="h-56 rounded-lg" />
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <Card>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Số hóa đơn</TableHead>
-            <TableHead>Đợt</TableHead>
-            <TableHead>Trạng thái</TableHead>
-            <TableHead className="text-right">Số tiền</TableHead>
-            <TableHead className="text-right">Còn lại</TableHead>
-            <TableHead>Tiến độ</TableHead>
-            <TableHead>Hạn thanh toán</TableHead>
-            <TableHead className="w-[50px]"></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {[...Array(10)].map((_, i) => (
-            <TableRow key={i}>
-              {[...Array(8)].map((_, j) => (
-                <TableCell key={j}>
-                  <Skeleton className="h-4 w-full" />
-                </TableCell>
+            {/* Mobile: roster tiles */}
+            <div className={cn("space-y-2 md:hidden", isFetching && "opacity-60")}>
+              {invoices.map((invoice) => (
+                <InvoiceCard
+                  key={invoice.id}
+                  invoice={invoice}
+                  onOpen={openInvoice}
+                  onIssue={handleIssue}
+                  onCancel={handleCancel}
+                  onPenalty={handlePenalty}
+                  onRecordPayment={handleRecordPayment}
+                />
               ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </Card>
+            </div>
+
+            {/* Pagination (derives pages from total/pageSize). The empty
+                later-page case (page>1, no rows) is handled by the page-clamp
+                effect above, not here. */}
+            {totalCount > state.pageSize && (
+              <Pagination
+                page={state.page}
+                pageSize={state.pageSize}
+                total={totalCount}
+                onPageChange={handlers.setPage}
+                isLoading={isFetching}
+                showTotal
+                showPageSizeSelector={false}
+                className="border-t pt-4"
+              />
+            )}
+          </>
+        )}
+      </div>
+    </PageContainer>
   )
 }
 

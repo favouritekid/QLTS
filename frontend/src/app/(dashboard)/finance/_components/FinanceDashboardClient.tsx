@@ -197,7 +197,7 @@ function FinanceDashboardInner() {
           value={stats?.overdue_invoices_count ?? 0}
           description={stats?.overdue_amount ? `${stats.overdue_amount}` : undefined}
           icon={<AlertTriangle className="h-4 w-4" />}
-          href="/finance/invoices?status=overdue"
+          href="/finance/invoices?tab=overdue"
           variant={stats?.overdue_invoices_count && stats.overdue_invoices_count > 0 ? "warning" : "default"}
           isLoading={isLoading}
         />

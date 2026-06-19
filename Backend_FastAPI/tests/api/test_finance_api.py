@@ -687,6 +687,36 @@ class TestFinanceRolePermissions:
         # Should have POST /api/payments (record payment)
         assert ("/api/payments", "POST") in accountant_actions
 
+    def test_accountant_has_explicit_invoice_status_counts_policy(self):
+        """Workspace tab badges (/api/invoices/status-counts) must be an EXPLICIT
+        accountant policy — NOT granted only via the keyMatch4 collision with
+        /api/invoices/{id}. Guards against the path-alignment drift the repo has
+        had to lock before.
+        """
+        from app.casbin_config.policy_templates import ACCOUNTANT_TEMPLATE
+
+        accountant_actions = [
+            (p["object"], p["action"])
+            for p in ACCOUNTANT_TEMPLATE["policies"]
+        ]
+        assert ("/api/invoices/status-counts", "GET") in accountant_actions
+        # ...and it sits next to the list grant it mirrors.
+        assert ("/api/invoices", "GET") in accountant_actions
+
+    def test_manager_can_access_invoice_workspace(self):
+        """Manager is in FINANCE_ROLES (FE lets them into /finance/invoices) but
+        does NOT inherit accountant — so the list + tab badges must be granted on
+        MANAGER_TEMPLATE explicitly, else the workspace list 403s for manager.
+        """
+        from app.casbin_config.policy_templates import MANAGER_TEMPLATE
+
+        manager_actions = [
+            (p["object"], p["action"])
+            for p in MANAGER_TEMPLATE["policies"]
+        ]
+        assert ("/api/invoices", "GET") in manager_actions
+        assert ("/api/invoices/status-counts", "GET") in manager_actions
+
     def test_accountant_can_verify_payment(self):
         """Accountant policy should include verify payment permission."""
         from app.casbin_config.policy_templates import ACCOUNTANT_TEMPLATE

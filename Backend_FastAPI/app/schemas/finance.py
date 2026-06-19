@@ -384,6 +384,10 @@ class InvoiceResponse(InvoiceBase):
     can_cancel: bool = False
     can_record_payment: bool = False
     can_apply_penalty: bool = False
+    # Derived overdue (BE-owned single source) — the detail page must read this,
+    # NOT infer status=='overdue', or it goes silent on issued/partial rows the
+    # nightly beat job hasn't transitioned yet (the list already shows them red).
+    is_overdue: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -829,9 +833,35 @@ class FeesPage(BaseModel):
 
 
 class InvoiceListItem(InvoiceSummaryResponse):
-    """Invoice item for list view with additional info."""
+    """Invoice item for list view with additional info.
+
+    Distinct from the detail ``InvoiceResponse``: this carries only the
+    columns the "Thu học phí" workspace list renders. The router builds it by
+    explicit kwargs (NOT model_validate), so every field below must be passed
+    explicitly or the list 500s.
+    """
+    # Identity / context (who + what)
+    fee_id: int
     profile_name: Optional[str] = None
+    profile_code: Optional[str] = None      # "HS-000131"
+    program_name: Optional[str] = None      # ngành (batch-safe: lead.offering.program)
+    officer_name: Optional[str] = None      # TVV phụ trách
     fee_type: Optional[FeeTypeEnum] = None
+    semester_no: Optional[int] = None       # kỳ HK (NULL cho phí non-tuition)
+    # Late-payment penalty + grand total (amount + penalty). remaining_amount
+    # (from the summary base) already includes penalty, so the list can show
+    # "Còn X (gồm Y phạt)" instead of a remaining that mysteriously exceeds amount.
+    penalty_amount: Decimal = Decimal("0")
+    total_due: Decimal = Decimal("0")
+    # Derived urgency — BE-owned single source for spine/status-pill/tab/sort.
+    # is_overdue = status IN OVERDUE_DERIVED_STATUSES AND due_date < today
+    # (SUPERSET of the lagging enum 'overdue'; draft excluded).
+    is_overdue: bool = False
+    # Role-aware permission flags (same logic as InvoiceResponse, thin-client).
+    can_issue: bool = False
+    can_cancel: bool = False
+    can_record_payment: bool = False
+    can_apply_penalty: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -842,6 +872,21 @@ class InvoicesPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class InvoiceStatusCounts(BaseModel):
+    """Counts for the status tabs/chips of the invoice workspace.
+
+    ``counts`` is a per-enum group-by (one key per InvoiceStatusEnum value).
+    ``overdue_derived`` is the DERIVED overdue count (issued/partial past due) —
+    used by the "Quá hạn" tab + red spine so the count matches the rows shown
+    (the enum 'overdue' bucket under-counts until the beat job transitions).
+    """
+    counts: Dict[str, int]
+    overdue_derived: int
+    total: int
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -952,6 +997,11 @@ class FinanceDashboardStats(BaseModel):
     pending_payments_count: int = 0
     overdue_invoices_count: int = 0
     overdue_amount: Decimal = Decimal("0")
+    # Total still owed on billed invoices (issued/partial/overdue) = the
+    # "Còn phải thu" metric of the collection workspace rail. Penalty-aware
+    # remaining (amount + penalty - paid, clamped ≥ 0), same as overdue_amount,
+    # so overdue_amount ⊆ outstanding_total.
+    outstanding_total: Decimal = Decimal("0")
     today_collections: Decimal = Decimal("0")
     monthly_collections: Decimal = Decimal("0")
     period_collections: Decimal = Decimal("0")

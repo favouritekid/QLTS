@@ -40,6 +40,7 @@ export {
 export {
   invoicesKeys,
   useInvoices,
+  useInvoiceStatusCounts,
   useInvoiceDetail,
   useInvoicesByFee,
   useInvoiceVietQR,

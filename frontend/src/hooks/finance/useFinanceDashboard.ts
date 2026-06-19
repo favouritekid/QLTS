@@ -171,7 +171,7 @@ function toFinanceDashboardViewModel(
         value: stats.overdue_invoices_count,
         subtitle: formatVND(stats.overdue_amount),
         variant: stats.overdue_invoices_count > 0 ? "destructive" : "default",
-        href: "/finance/invoices?overdue_only=true",
+        href: "/finance/invoices?tab=overdue",
         icon: "alert-triangle",
       },
       {

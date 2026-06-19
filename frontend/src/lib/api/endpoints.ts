@@ -250,6 +250,7 @@ export const API_ENDPOINTS = {
 
     INVOICES: {
       LIST: "/api/invoices",
+      STATUS_COUNTS: "/api/invoices/status-counts",
       BY_FEE: (feeId: number) => `/api/invoices/by-fee/${feeId}`,
       DETAIL: (invoiceId: number) => `/api/invoices/${invoiceId}`,
       VIETQR: (invoiceId: number) => `/api/invoices/${invoiceId}/vietqr`,

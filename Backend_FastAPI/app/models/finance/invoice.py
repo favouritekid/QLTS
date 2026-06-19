@@ -55,6 +55,19 @@ PAYABLE_INVOICE_STATUSES = (
     InvoiceStatusEnum.overdue.value,
 )
 
+# Single source for "this invoice counts as overdue when past its due date".
+# DERIVED overdue = these statuses AND due_date < today — a SUPERSET of the enum
+# ``overdue`` (set nightly by the beat job ``mark_overdue_invoices``): the
+# issued/partial legs catch rows the job hasn't transitioned yet, the overdue leg
+# keeps the already-transitioned ones. ``draft`` is excluded (not yet billed).
+# Used by the workspace spine / "Quá hạn" tab / sort / rail / is_overdue so the
+# definition never drifts across the module (cf. PAYABLE_INVOICE_STATUSES).
+OVERDUE_DERIVED_STATUSES = (
+    InvoiceStatusEnum.issued.value,
+    InvoiceStatusEnum.partial.value,
+    InvoiceStatusEnum.overdue.value,
+)
+
 
 class Invoice(Base):
     """

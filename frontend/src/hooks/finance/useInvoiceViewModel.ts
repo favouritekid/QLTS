@@ -17,7 +17,7 @@ import {
   INVOICE_STATUS_LABELS,
   INVOICE_STATUS_VARIANTS,
 } from "@/types/finance.types"
-import type { InvoiceDetail, Invoice } from "@/types/finance.types"
+import type { InvoiceDetail, InvoiceListItem } from "@/types/finance.types"
 import { formatVND, parseAmount } from "@/lib/zod/finance"
 
 // =====================================================================
@@ -91,6 +91,25 @@ function calculateDaysUntilDue(dueDate: string): number | null {
   }
 }
 
+/**
+ * Whole days a due date is in the PAST (today − due_date), date-only.
+ * Returns 0 when the date is today or in the future. Display-only: the overdue
+ * STATE itself is backend-owned (`is_overdue`); this only formats "quá N ngày".
+ */
+function calculateOverdueDays(dueDate: string): number {
+  try {
+    const due = new Date(dueDate)
+    if (Number.isNaN(due.getTime())) return 0
+    const startOfDue = Date.UTC(due.getFullYear(), due.getMonth(), due.getDate())
+    const now = new Date()
+    const startOfToday = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    const diffDays = Math.floor((startOfToday - startOfDue) / (1000 * 60 * 60 * 24))
+    return diffDays > 0 ? diffDays : 0
+  } catch {
+    return 0
+  }
+}
+
 // =====================================================================
 // TRANSFORM FUNCTION
 // =====================================================================
@@ -131,7 +150,9 @@ export function toInvoiceViewModel(invoice: InvoiceDetail): InvoiceViewModel {
     show_record_payment_button: invoice.can_record_payment,
     show_penalty_button: invoice.can_apply_penalty,
     is_paid: invoice.status === "paid",
-    is_overdue: invoice.status === "overdue",
+    // Backend-owned derived flag (issued/partial AND due<today). Do NOT infer
+    // from the enum status — the `overdue` enum lags the job, so trust `is_overdue`.
+    is_overdue: invoice.is_overdue ?? false,
     is_draft: invoice.status === "draft",
     is_cancelled: invoice.status === "cancelled",
     has_payments: invoice.payments.length > 0,
@@ -199,17 +220,34 @@ export interface InvoiceListItemViewModel {
   fee_id: number
   invoice_number: string
   installment_no: number
+  // List enrichment (who + what) from GET /api/invoices
+  profile_name: string | null
+  profile_code: string | null
+  program_name: string | null
+  officer_name: string | null
+  fee_type: string | null
+  semester_no: number | null
   status: string
   status_label: string
   status_variant: "default" | "secondary" | "destructive" | "outline"
+  amount: string // raw Decimal string (for thresholds / re-format)
   amount_formatted: string
   paid_amount_formatted: string
+  remaining_amount: string // raw Decimal string
   remaining_amount_formatted: string
-  payment_progress: number
+  // Penalty (raw Decimal string), total due (amount + penalty) formatted, and a
+  // convenience flag so the amount cell can switch its headline figure to
+  // `total_due_formatted` + show a "(gồm … phạt)" subline when penalty > 0.
+  penalty_amount: string
+  total_due_formatted: string
+  has_penalty: boolean
+  due_date: string // raw ISO date
   due_date_formatted: string
+  // Backend-owned overdue STATE (single source of truth). FE never recomputes it.
   is_overdue: boolean
-  is_due_soon: boolean
-  days_until_due: number | null
+  // Display-only: whole days past due (today − due_date), 0 when not past.
+  overdue_days: number
+  is_paid: boolean
   // Permission flags from API
   can_issue: boolean
   can_cancel: boolean
@@ -218,31 +256,39 @@ export interface InvoiceListItemViewModel {
 }
 
 /**
- * Transform a list of invoices for table display
+ * Transform a list of invoices (`InvoiceListItem` from GET /api/invoices) for
+ * table/card display. Uses the backend-owned `is_overdue` flag verbatim — the
+ * derived `overdue_days` is presentation-only (formats "quá N ngày").
  */
-export function toInvoiceListViewModel(invoices: Invoice[]): InvoiceListItemViewModel[] {
+export function toInvoiceListViewModel(invoices: InvoiceListItem[]): InvoiceListItemViewModel[] {
   return invoices.map((invoice) => {
-    const amount = parseAmount(invoice.amount)
-    const paidAmount = parseAmount(invoice.paid_amount)
-    const paymentProgress = amount > 0 ? Math.min(100, Math.round((paidAmount / amount) * 100)) : 0
-    const daysUntilDue = calculateDaysUntilDue(invoice.due_date)
-
     return {
       id: invoice.id,
       fee_id: invoice.fee_id,
       invoice_number: invoice.invoice_number,
       installment_no: invoice.installment_no,
+      profile_name: invoice.profile_name ?? null,
+      profile_code: invoice.profile_code ?? null,
+      program_name: invoice.program_name ?? null,
+      officer_name: invoice.officer_name ?? null,
+      fee_type: invoice.fee_type ?? null,
+      semester_no: invoice.semester_no ?? null,
       status: invoice.status,
       status_label: INVOICE_STATUS_LABELS[invoice.status] ?? invoice.status,
       status_variant: INVOICE_STATUS_VARIANTS[invoice.status] ?? "secondary",
+      amount: invoice.amount,
       amount_formatted: formatVND(invoice.amount),
       paid_amount_formatted: formatVND(invoice.paid_amount),
+      remaining_amount: invoice.remaining_amount,
       remaining_amount_formatted: formatVND(invoice.remaining_amount),
-      payment_progress: paymentProgress,
+      penalty_amount: invoice.penalty_amount,
+      total_due_formatted: formatVND(invoice.total_due),
+      has_penalty: parseAmount(invoice.penalty_amount) > 0,
+      due_date: invoice.due_date,
       due_date_formatted: formatDate(invoice.due_date) ?? "",
-      is_overdue: invoice.status === "overdue",
-      is_due_soon: daysUntilDue !== null && daysUntilDue > 0 && daysUntilDue <= 7,
-      days_until_due: daysUntilDue,
+      is_overdue: invoice.is_overdue,
+      overdue_days: invoice.is_overdue ? calculateOverdueDays(invoice.due_date) : 0,
+      is_paid: invoice.status === "paid",
       // Permission flags from API
       can_issue: invoice.can_issue,
       can_cancel: invoice.can_cancel,
