@@ -1298,6 +1298,123 @@ class TestConsultation:
         assert seeded_lead.pipeline_stage_id == stage_id               # ✅ stage GIỮ NGUYÊN
         assert seeded_lead.consultation_status_id == "sts_pipe_guard"  # ✅ status lead giữ nguyên
 
+    async def test_cancel_latest_consultation_clears_scheduled_at(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Nút 'Hủy lịch hẹn': gửi đồng thời ``status_id=sts19`` + ``scheduled_at=None``
+        phải GỠ giờ hẹn (→ hết 'sống' → hết nhắc phụ huynh) NHƯNG KHÔNG null
+        stage/status lead (nhờ guard updates_pipeline). Đây là điểm cốt lõi của
+        action — verify scheduled_at thực sự bị clear, không chỉ đổi status."""
+        stage_id = seeded_dependencies["stage_id"]
+
+        piped = models.ConsultationStatus(
+            id="sts_pipe_cxl", name="Pipeline Cancel", color_code="#0b0b0b",
+            stage_id=stage_id, is_universal=False, updates_pipeline=True,
+        )
+        # sts19 universal: neutral (KHÔNG negative → không vướng loss_reason 400).
+        uni = models.ConsultationStatus(
+            id="sts19", name="Đã hủy lịch hẹn", color_code="#0c0c0c",
+            stage_id=None, is_universal=True, updates_pipeline=False,
+            outcome_type="neutral",
+        )
+        db.add_all([piped, uni])
+        await db.flush()
+
+        future = datetime.now(timezone.utc) + timedelta(days=3)
+        seeded_lead.pipeline_stage_id = stage_id
+        seeded_lead.consultation_status_id = "sts_pipe_cxl"
+        db.add(seeded_lead)
+        c = models.Consultation(
+            lead_id=seeded_lead.id, officer_id=officer_user.id,
+            consultation_date=datetime.now(timezone.utc),
+            scheduled_at=future,  # hẹn TƯƠNG LAI đang "sống"
+            method="phone", consultation_status_id="sts_pipe_cxl",
+        )
+        db.add(c)
+        await db.flush()
+
+        class _Cancel:
+            # FE gửi cả status_id lẫn scheduled_at=null → exclude_unset giữ cả 2.
+            def model_dump(self, **kwargs):
+                return {"status_id": "sts19", "scheduled_at": None}
+
+        with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock), \
+             patch(
+                 "app.services.lead_service.pipeline_service.validate_status_transition",
+                 new_callable=AsyncMock,
+             ) as m:
+            m.return_value = True
+            updated = await lead_service.update_consultation(
+                db, seeded_lead.id, c.id, _Cancel(), admin_user
+            )
+            await db.flush()
+
+        await db.refresh(seeded_lead)
+        assert updated.consultation_status_id == "sts19"               # row ĐÃ đổi
+        assert updated.scheduled_at is None                            # ✅ giờ hẹn ĐÃ gỡ
+        assert seeded_lead.pipeline_stage_id == stage_id               # ✅ stage GIỮ NGUYÊN
+        assert seeded_lead.consultation_status_id == "sts_pipe_cxl"    # ✅ status lead giữ nguyên
+
+    async def test_reschedule_consultation_changes_scheduled_at_only(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        admin_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """Nút 'Dời lịch': chỉ gửi ``scheduled_at`` mới (KHÔNG status_id) → đổi
+        đúng giờ hẹn trên chính dòng đó; status consultation + stage/status lead
+        giữ nguyên (khối status bị skip vì status_id không có trong update)."""
+        stage_id = seeded_dependencies["stage_id"]
+
+        piped = models.ConsultationStatus(
+            id="sts_pipe_resched", name="Pipeline Resched", color_code="#0d0d0d",
+            stage_id=stage_id, is_universal=False, updates_pipeline=True,
+        )
+        db.add(piped)
+        await db.flush()
+
+        old_dt = datetime.now(timezone.utc) + timedelta(days=2)
+        new_dt = datetime.now(timezone.utc) + timedelta(days=5)
+        seeded_lead.pipeline_stage_id = stage_id
+        seeded_lead.consultation_status_id = "sts_pipe_resched"
+        db.add(seeded_lead)
+        c = models.Consultation(
+            lead_id=seeded_lead.id, officer_id=officer_user.id,
+            consultation_date=datetime.now(timezone.utc),
+            scheduled_at=old_dt,
+            method="phone", consultation_status_id="sts_pipe_resched",
+        )
+        db.add(c)
+        await db.flush()
+
+        class _Reschedule:
+            # FE gửi DUY NHẤT scheduled_at → exclude_unset chỉ giữ field này.
+            def model_dump(self, **kwargs):
+                return {"scheduled_at": new_dt}
+
+        with patch("app.services.lead_cache_service.update_lead_cache", new_callable=AsyncMock):
+            updated = await lead_service.update_consultation(
+                db, seeded_lead.id, c.id, _Reschedule(), admin_user
+            )
+            await db.flush()
+
+        await db.refresh(seeded_lead)
+        got = updated.scheduled_at
+        assert got is not None
+        if got.tzinfo is None:
+            got = got.replace(tzinfo=timezone.utc)
+        assert abs((got - new_dt).total_seconds()) < 2                 # ✅ giờ hẹn = giờ MỚI
+        assert updated.consultation_status_id == "sts_pipe_resched"    # status row giữ nguyên
+        assert seeded_lead.pipeline_stage_id == stage_id               # ✅ stage lead giữ nguyên
+        assert seeded_lead.consultation_status_id == "sts_pipe_resched"
+
     async def test_add_consultation_stores_loss_reason_on_consultation(
         self,
         db: AsyncSession,
