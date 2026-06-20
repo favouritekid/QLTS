@@ -13,6 +13,7 @@ import { api } from "./client"
 import { API_ENDPOINTS } from "./endpoints"
 import type {
   Payment,
+  PaymentListPaginatedResponse,
   PaymentIntent,
   PaymentMethod,
   PaymentFilters,
@@ -29,13 +30,8 @@ import type {
 // RESPONSE TYPES
 // ============================================================================
 
-export interface PaymentPaginatedResponse {
-  items: Payment[]
-  total: number
-  page: number
-  page_size: number
-  pages: number
-}
+// Re-export the list paginated response (workspace list / maker-checker queue).
+export type { PaymentListPaginatedResponse }
 
 // ============================================================================
 // PAYMENT CRUD OPERATIONS
@@ -57,10 +53,13 @@ export interface PaymentPaginatedResponse {
  * })
  * ```
  */
-export async function getPayments(filters?: PaymentFilters): Promise<PaymentPaginatedResponse> {
-  const response = await api.get<PaymentPaginatedResponse>(API_ENDPOINTS.FINANCE.PAYMENTS.LIST, {
-    params: filters,
-  })
+export async function getPayments(
+  filters?: PaymentFilters,
+): Promise<PaymentListPaginatedResponse> {
+  const response = await api.get<PaymentListPaginatedResponse>(
+    API_ENDPOINTS.FINANCE.PAYMENTS.LIST,
+    { params: filters },
+  )
   return response.data
 }
 

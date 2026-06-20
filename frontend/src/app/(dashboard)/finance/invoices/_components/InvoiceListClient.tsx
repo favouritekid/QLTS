@@ -14,8 +14,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
-import { Receipt } from "lucide-react"
+import { Receipt, Plus, ClipboardCheck } from "lucide-react"
 
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
@@ -55,6 +54,16 @@ import {
   InvoiceRowActionsMenu,
   RecordPaymentButton,
 } from "./InvoiceColumns"
+import { FinanceProfileDrawer } from "./FinanceProfileDrawer"
+import { PendingPaymentsTab } from "./PendingPaymentsTab"
+import { CalculateFeePickerDialog } from "./CalculateFeePickerDialog"
+import {
+  WorkspaceActionDialogs,
+  type WorkspaceDialog,
+} from "./WorkspaceActionDialogs"
+
+/** Sentinel tab key for the payment maker-checker queue (grain ≠ invoice). */
+const PENDING_TAB = "pending"
 
 const DENSITY_STORAGE_KEY = "invoices:density"
 type Density = "comfortable" | "compact"
@@ -70,10 +79,16 @@ function activateRow(e: React.KeyboardEvent, fn: () => void) {
 }
 
 export function InvoiceListClient() {
-  const router = useRouter()
-
   // ── Filter state (URL + localStorage) ──────────────────────────────────
   const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useInvoicesFilter()
+
+  // "Chờ duyệt" is a payment queue (different grain) — switches the whole
+  // content area + suppresses the invoice query while it's active.
+  const isPendingTab = state.activeTab === PENDING_TAB
+
+  // ── Action dialogs (shared by row + drawer + queue) ─────────────────────
+  const [activeDialog, setActiveDialog] = useState<WorkspaceDialog | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   // ── Density (SSR-safe; read localStorage after mount) ───────────────────
   const [density, setDensity] = useState<Density>("comfortable")
@@ -86,9 +101,7 @@ export function InvoiceListClient() {
     // localStorage read deferred to post-mount to avoid SSR hydration mismatch
     // (server can't know the persisted density). One-shot init, not a render loop.
     const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (stored === "compact" || stored === "comfortable") setDensity(stored)
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true)
   }, [])
   const handleDensityChange = useCallback((value: Density) => {
@@ -102,7 +115,10 @@ export function InvoiceListClient() {
   const compact = density === "compact"
 
   // ── Data ────────────────────────────────────────────────────────────────
-  const { data, isLoading, isError, isFetching } = useInvoices(apiFilters)
+  // Suppress the invoice query on the payment queue tab (different entity).
+  const { data, isLoading, isError, isFetching } = useInvoices(apiFilters, {
+    enabled: !isPendingTab,
+  })
   const { data: statusCounts } = useInvoiceStatusCounts(countFilters)
   const { data: stats } = useFinanceDashboard()
 
@@ -120,6 +136,7 @@ export function InvoiceListClient() {
   // back to page 1. placeholderData can't help — a reload is a fresh mount.
   useEffect(() => {
     if (
+      !isPendingTab &&
       data &&
       !isFetching &&
       totalCount > 0 &&
@@ -129,14 +146,61 @@ export function InvoiceListClient() {
       handlers.setPage(1)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, isFetching, totalCount, items?.length, state.page])
+  }, [isPendingTab, data, isFetching, totalCount, items?.length, state.page])
 
-  // ── Navigation / actions (PR1 routes to detail page) ────────────────────
-  const openInvoice = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}`), [router])
-  const handleIssue = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=issue`), [router])
-  const handleCancel = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=cancel`), [router])
-  const handlePenalty = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=apply-penalty`), [router])
-  const handleRecordPayment = useCallback((inv: InvoiceListItemViewModel) => router.push(`/finance/invoices/${inv.id}?action=record-payment`), [router])
+  // ── Row interactions (PR2) ──────────────────────────────────────────────
+  // Clicking a row opens the profile drawer (?profile=<id>); the quick "Thu
+  // tiền" + ⋯ menu open the shared action dialogs inline (no page navigation).
+  const { openDrawer } = handlers
+  const openInvoice = useCallback(
+    (inv: InvoiceListItemViewModel) => {
+      if (inv.profile_id != null) openDrawer(inv.profile_id)
+    },
+    [openDrawer],
+  )
+  const handleRecordPayment = useCallback((inv: InvoiceListItemViewModel) => {
+    setActiveDialog({
+      type: "record",
+      invoiceId: inv.id,
+      feeId: inv.fee_id,
+      maxAmountFormatted: inv.remaining_amount_formatted,
+      invoiceNumber: inv.invoice_number,
+    })
+  }, [])
+  const handleIssue = useCallback((inv: InvoiceListItemViewModel) => {
+    setActiveDialog({
+      type: "issue",
+      invoiceId: inv.id,
+      feeId: inv.fee_id,
+      invoiceNumber: inv.invoice_number,
+    })
+  }, [])
+  const handleCancel = useCallback((inv: InvoiceListItemViewModel) => {
+    setActiveDialog({
+      type: "cancel",
+      invoiceId: inv.id,
+      feeId: inv.fee_id,
+      invoiceNumber: inv.invoice_number,
+    })
+  }, [])
+  const handlePenalty = useCallback((inv: InvoiceListItemViewModel) => {
+    setActiveDialog({
+      type: "penalty",
+      invoiceId: inv.id,
+      feeId: inv.fee_id,
+      invoiceNumber: inv.invoice_number,
+      daysOverdue: inv.overdue_days,
+    })
+  }, [])
+  // "+ Tính phí": prefill the open student, else pick one (no raw-id box).
+  const drawerProfileId = state.drawerProfileId
+  const handleCalculateFee = useCallback(() => {
+    if (drawerProfileId != null) {
+      setActiveDialog({ type: "calculate", profileId: drawerProfileId })
+    } else {
+      setPickerOpen(true)
+    }
+  }, [drawerProfileId])
 
   // ── Tab counts ──────────────────────────────────────────────────────────
   // NOTE: "Quá hạn" is an ORTHOGONAL lens (overdue_derived), not a partition —
@@ -196,21 +260,27 @@ export function InvoiceListClient() {
             </div>
           </div>
 
-          <div className="hidden self-start rounded-full border border-border bg-card p-0.5 sm:inline-flex sm:self-auto">
-            {(["comfortable", "compact"] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => handleDensityChange(d)}
-                aria-pressed={density === d}
-                className={cn(
-                  "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                  density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {d === "comfortable" ? "Thoáng" : "Gọn"}
-              </button>
-            ))}
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <Button onClick={handleCalculateFee} className="gap-1.5">
+              <Plus className="size-4" aria-hidden="true" />
+              Tính phí
+            </Button>
+            <div className="hidden rounded-full border border-border bg-card p-0.5 sm:inline-flex">
+              {(["comfortable", "compact"] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => handleDensityChange(d)}
+                  aria-pressed={density === d}
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    density === d ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {d === "comfortable" ? "Thoáng" : "Gọn"}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
 
@@ -219,29 +289,70 @@ export function InvoiceListClient() {
           <AdmissionsMetricRail items={metricItems} ariaLabel="Chỉ số thu học phí" />
         )}
 
-        {/* Status tabs */}
-        <AdmissionsStatusTabs
-          tabs={INVOICE_STATUS_TABS}
-          activeTab={state.activeTab}
-          counts={tabCounts}
-          onTabClick={handlers.handleTabClick}
-        />
+        {/* Status tabs (hóa đơn theo trạng thái) + grain switch → "Chờ duyệt"
+            (payment queue). The divider + icon make the entity switch explicit,
+            not just a sentinel key. */}
+        <div className="flex items-stretch gap-1 border-b border-border">
+          <div className="min-w-0 flex-1">
+            <AdmissionsStatusTabs
+              tabs={INVOICE_STATUS_TABS}
+              activeTab={isPendingTab ? "" : state.activeTab}
+              counts={tabCounts}
+              onTabClick={handlers.handleTabClick}
+            />
+          </div>
+          <div className="flex items-center pl-1">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isPendingTab}
+              onClick={() => handlers.handleTabClick(PENDING_TAB)}
+              className={cn(
+                "relative flex items-center gap-1.5 whitespace-nowrap border-l border-border py-3 pl-3 text-sm font-medium transition-colors",
+                isPendingTab ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <ClipboardCheck className="size-4" aria-hidden="true" />
+              Chờ duyệt
+              {/* Gated on `mounted`: the count comes from client-only React-Query
+                  stats (absent during SSR) → render it only after mount so the
+                  server + first client render match (no hydration mismatch). */}
+              {mounted && stats?.pending_payments_count ? (
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-2xs tabular-nums",
+                    isPendingTab ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {stats.pending_payments_count}
+                </span>
+              ) : null}
+              {isPendingTab && (
+                <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+              )}
+            </button>
+          </div>
+        </div>
 
-        {/* Filter bar */}
-        <InvoiceFilterBar
-          search={state.search}
-          onSearchChange={handlers.handleSearchChange}
-          feeType={state.feeType}
-          onFeeTypeChange={handlers.handleFeeTypeChange}
-          sortBy={state.sortBy}
-          sortOrder={state.sortOrder}
-          onSortChange={handlers.handleSortChange}
-          hasActiveFilters={hasActiveFilters}
-          onReset={handlers.resetFilters}
-        />
+        {/* Filter bar — invoice filters only; hidden on the payment queue tab. */}
+        {!isPendingTab && (
+          <InvoiceFilterBar
+            search={state.search}
+            onSearchChange={handlers.handleSearchChange}
+            feeType={state.feeType}
+            onFeeTypeChange={handlers.handleFeeTypeChange}
+            sortBy={state.sortBy}
+            sortOrder={state.sortOrder}
+            onSortChange={handlers.handleSortChange}
+            hasActiveFilters={hasActiveFilters}
+            onReset={handlers.resetFilters}
+          />
+        )}
 
-        {/* Content */}
-        {isLoading ? (
+        {/* Content: payment maker-checker queue ("Chờ duyệt") OR invoice list */}
+        {isPendingTab ? (
+          <PendingPaymentsTab onAction={setActiveDialog} />
+        ) : isLoading ? (
           <InvoiceListSkeleton />
         ) : isError ? (
           <div className="rounded-2xl border border-border bg-card">
@@ -291,17 +402,22 @@ export function InvoiceListClient() {
                 <tbody>
                   {invoices.map((invoice) => {
                     const spine = getInvoiceStatusSpineColor(invoice.status, invoice.is_overdue)
+                    const selected =
+                      invoice.profile_id != null &&
+                      invoice.profile_id === state.drawerProfileId
                     return (
                       <tr
                         key={invoice.id}
                         role="link"
                         tabIndex={0}
                         aria-label={`Hóa đơn ${invoice.invoice_number} — ${invoice.profile_name ?? "Chưa rõ học sinh"}`}
+                        aria-current={selected ? "true" : undefined}
                         onClick={() => openInvoice(invoice)}
                         onKeyDown={(e) => activateRow(e, () => openInvoice(invoice))}
                         className={cn(
                           "group cursor-pointer border-b border-l-2 border-border/60 outline-none transition-colors last:border-b-0 hover:bg-muted/40 focus-visible:bg-muted/40",
                           spine,
+                          selected && "bg-primary/5",
                         )}
                       >
                         <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
@@ -373,6 +489,26 @@ export function InvoiceListClient() {
           </>
         )}
       </div>
+
+      {/* Collection drawer (state ⇄ URL ?profile=<id>) — opens on row click. */}
+      <FinanceProfileDrawer
+        profileId={state.drawerProfileId ?? null}
+        onClose={handlers.closeDrawer}
+        onAction={setActiveDialog}
+      />
+
+      {/* One host for every action dialog (row + drawer + queue raise here). */}
+      <WorkspaceActionDialogs dialog={activeDialog} onClose={() => setActiveDialog(null)} />
+
+      {/* Global "+ Tính phí" picker (only when no student is selected). */}
+      <CalculateFeePickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        onPick={(profileId) => {
+          setPickerOpen(false)
+          setActiveDialog({ type: "calculate", profileId })
+        }}
+      />
     </PageContainer>
   )
 }

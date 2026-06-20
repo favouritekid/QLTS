@@ -15,6 +15,7 @@ import type {
   FeeRecalculateRequest,
   FeeWaiveRequest,
   ProfileFinanceSummary,
+  ProfileCollection,
 } from "@/types/finance.types"
 
 // ============================================================================
@@ -91,6 +92,22 @@ export async function getProfileFinanceSummary(
 ): Promise<ProfileFinanceSummary> {
   const response = await api.get<ProfileFinanceSummary>(
     API_ENDPOINTS.FINANCE.FEES.PROFILE_SUMMARY(profileId)
+  )
+  return response.data
+}
+
+/**
+ * Get the full collection view for a profile (workspace "Thu học phí" drawer):
+ * identity + summary + invoices + payments (the three finance tiers).
+ *
+ * @param profileId - The admission profile ID
+ * @returns ProfileCollection (404 if the profile is outside the caller's unit)
+ */
+export async function getProfileCollection(
+  profileId: number
+): Promise<ProfileCollection> {
+  const response = await api.get<ProfileCollection>(
+    API_ENDPOINTS.FINANCE.FEES.COLLECTION(profileId)
   )
   return response.data
 }
@@ -186,6 +203,7 @@ export const feesApi = {
   getFee,
   getFeesByProfile,
   getProfileFinanceSummary,
+  getProfileCollection,
   // Actions
   calculateFee,
   waiveFee,

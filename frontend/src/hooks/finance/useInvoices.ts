@@ -100,6 +100,14 @@ const invalidateInvoiceQueries = async (
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     )
   }
+  // PR2: refresh the collection drawer (a profile's fees + invoices + payments)
+  // after any invoice mutation — the prefix matches every open collection.
+  invalidations.push(
+    queryClient.invalidateQueries({
+      queryKey: [...feesKeys.all, "collection"],
+      refetchType: "active",
+    })
+  )
 
   return Promise.all(invalidations)
 }

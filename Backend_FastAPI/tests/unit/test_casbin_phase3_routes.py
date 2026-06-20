@@ -112,6 +112,19 @@ def test_phase3_routes_not_in_admin_template():
     )
 
 
+def test_manager_template_has_payment_queue_read():
+    """PR2 "Thu học phí": manager is a maker-checker CHECKER (verify/reject) →
+    must be able to READ the verification queue (GET /api/payments → "Chờ duyệt"
+    tab). Without this the workspace shows the tab but it 403s on click. Drift
+    guard — pairs with the verify/reject grants.
+    """
+    rules = apply_template("manager", "role:manager")
+    objects = {(r["object"], r["action"]) for r in rules}
+    assert ("/api/payments", "GET") in objects               # queue list
+    assert ("/api/payments/{id}/verify", "PUT") in objects    # checker action
+    assert ("/api/payments/{id}/reject", "PUT") in objects
+
+
 # ----------------------------------------------------------------------
 # Enforce() runtime check via in-memory Casbin (manager + officer)
 # ----------------------------------------------------------------------
@@ -222,6 +235,19 @@ def test_phase3_route_enforce_matrix(enforcer, role, route, expected):
         f"Casbin enforce drift: ({role}, {obj}, {action}) expected "
         f"{expected}, got {result}"
     )
+
+
+def test_payment_queue_read_enforce(enforcer):
+    """PR2: runtime enforce — manager + accountant may READ the verification
+    queue (GET /api/payments); officer (holds only the per-id read
+    /api/payments/{id}, NOT the list) must STAY denied — proves the new manager
+    grant does not leak to officer via keyMatch4 / inheritance.
+    """
+    assert enforcer.enforce("role:manager", "/api/payments", "GET") is True
+    assert enforcer.enforce("role:accountant", "/api/payments", "GET") is True
+    assert enforcer.enforce("role:officer", "/api/payments", "GET") is False
+    # The per-payment detail read manager just gained also resolves at runtime.
+    assert enforcer.enforce("role:manager", "/api/payments/42", "GET") is True
 
 
 # ----------------------------------------------------------------------

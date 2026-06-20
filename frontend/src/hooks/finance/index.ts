@@ -22,6 +22,7 @@ export {
   useFeeDetail,
   useFeesByProfile,
   useProfileFinanceSummary,
+  useProfileCollection,
   useCalculateFee,
   useWaiveFee,
   useCancelFee,
@@ -61,6 +62,7 @@ export {
 export {
   paymentsKeys,
   usePayments,
+  usePendingPayments,
   usePaymentDetail,
   usePaymentsByInvoice,
   usePaymentIntent,

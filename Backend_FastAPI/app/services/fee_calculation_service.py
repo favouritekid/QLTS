@@ -32,7 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from app import models
 from app.models.finance import (
-    Fee, FeeAppliedDiscount, Invoice, InstallmentPlan,
+    Fee, FeeAppliedDiscount, Invoice, Payment, InstallmentPlan,
     FeeTypeEnum, FeeStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
@@ -823,6 +823,54 @@ class FeeCalculationService:
             "fee_count": len(fees),
             "fees": fees,
         }
+
+    async def get_profile_collection(
+        self,
+        profile_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[models.AdmissionProfile]:
+        """Resolve a profile with its full finance graph for the "Thu học phí"
+        drawer (identity + fees → invoices → payments).
+
+        IDOR: unit-scoped via the ``lead.unit_id`` join (same scope as the rest
+        of the finance module). Returns ``None`` when the profile does not exist
+        OR is outside ``unit_id`` so the router can 404 WITHOUT leaking identity/
+        existence — the access decision is made HERE (resolve-first), never from
+        whether the collection turns out empty.
+
+        Bounded eager-load (a handful of selectin/joined queries, NO per-row
+        N+1): lead → assigned_officer / offering → program (identity columns,
+        batch-safe ``program_name``) and fees → invoices → payments → (method,
+        created_by) (the three tiers + the columns the list builders read).
+        """
+        query = (
+            select(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                selectinload(models.AdmissionProfile.lead)
+                .selectinload(models.Lead.assigned_officer),
+                selectinload(models.AdmissionProfile.lead)
+                .selectinload(models.Lead.offering)
+                .selectinload(models.ProgramOffering.program),
+                # fees → invoices → payments, with the payment columns the list
+                # builder reads (method/created_by). Explicit chain overrides the
+                # model-level lazy="selectin" so those nested loads are eager too.
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.method),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.created_by),
+            )
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
 
     # ==========================================================================
     # HELPER METHODS

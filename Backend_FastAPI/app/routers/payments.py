@@ -65,6 +65,12 @@ async def list_payments(
     status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
     invoice_id: Optional[int] = Query(None, description="Filter by invoice ID"),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    pending_manual_only: bool = Query(
+        False,
+        description="Maker-checker queue: only manual payments (intent_id IS "
+        "NULL) awaiting verification. Online/gateway payments auto-verify and "
+        "must NOT appear here. Ignores status/method_id when set.",
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -72,7 +78,8 @@ async def list_payments(
     List payments with pagination and filters.
 
     **Common Filters:**
-    - status=pending: For verification queue (Checker workflow)
+    - pending_manual_only=true: maker-checker verification queue (manual,
+      intent_id IS NULL only — never online/auto-verified payments)
     - status=verified: For verified payments
     - status=rejected: For rejected payments
 
@@ -87,66 +94,36 @@ async def list_payments(
     skip = (page - 1) * page_size
     limit = min(page_size, 100)
 
-    # Parse comma-separated values
-    statuses: Optional[List[str]] = None
-    if status:
-        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    if pending_manual_only:
+        # Maker-checker queue: status=pending AND intent_id IS NULL, oldest-first.
+        # This is the ONLY path that guarantees online (gateway, auto-verified)
+        # payments never reach the manual verification queue — do NOT emulate it
+        # with a generic status=pending filter, which would also surface a
+        # pending online payment.
+        payments, total = await payment_repo.get_pending_verification(
+            unit_id=unit_id,
+            skip=skip,
+            limit=limit,
+        )
+    else:
+        # Parse comma-separated values
+        statuses: Optional[List[str]] = None
+        if status:
+            statuses = [s.strip() for s in status.split(",") if s.strip()]
 
-    payments, total = await payment_repo.get_filtered_with_count(
-        skip=skip,
-        limit=limit,
-        unit_id=unit_id,
-        statuses=statuses,
-        invoice_id=invoice_id,
-        method_id=method_id,
-    )
+        payments, total = await payment_repo.get_filtered_with_count(
+            skip=skip,
+            limit=limit,
+            unit_id=unit_id,
+            statuses=statuses,
+            invoice_id=invoice_id,
+            method_id=method_id,
+        )
 
-    # Build response items with profile name and method name
-    items = []
-    for payment in payments:
-        profile_name = None
-        method_name = None
-        created_by_name = None
-
-        # Get profile name from relationship
-        if payment.invoice and payment.invoice.fee:
-            fee = payment.invoice.fee
-            if fee.admission_profile and fee.admission_profile.lead:
-                profile_name = fee.admission_profile.lead.full_name
-
-        # Get method name from relationship
-        if payment.method:
-            method_name = payment.method.name
-
-        # Get creator name from relationship
-        if payment.created_by:
-            created_by_name = payment.created_by.full_name or payment.created_by.email
-
-        # Compute permission flags for maker-checker
-        status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
-        is_pending = status_value == "pending"
-        is_different_user = payment.created_by_id != current_user.id
-        is_finance_reviewer = current_user.role in [
-            UserRole.ADMIN,
-            UserRole.MANAGER,
-            UserRole.ACCOUNTANT,
-        ]
-        can_verify = is_pending and is_different_user and is_finance_reviewer
-        can_reject = is_pending and is_different_user and is_finance_reviewer
-
-        items.append(finance_schemas.PaymentListItem(
-            id=payment.id,
-            invoice_id=payment.invoice_id,
-            amount=payment.amount,
-            status=payment.status,
-            payment_date=payment.payment_date,
-            created_at=payment.created_at,
-            profile_name=profile_name,
-            method_name=method_name,
-            created_by_name=created_by_name,
-            can_verify=can_verify,
-            can_reject=can_reject,
-        ))
+    items = [
+        _build_payment_list_item(payment, current_user.id, current_user.role)
+        for payment in payments
+    ]
 
     return finance_schemas.PaymentsPage(
         items=items,
@@ -663,6 +640,87 @@ async def payment_callback(
 # HELPER FUNCTIONS
 # ==============================================================================
 
+def _compute_payment_review_flags(
+    payment, current_user_id: Optional[int], current_user_role: str
+) -> tuple[bool, bool]:
+    """Role-aware maker-checker can_verify/can_reject for a payment.
+
+    SINGLE source for both the list/queue/collection (``_build_payment_list_item``)
+    and the detail (``_build_payment_response``): a payment is verifiable/
+    rejectable only while ``pending``, by a DIFFERENT user than the maker
+    (no self-approval — also a DB CHECK), and only by a finance reviewer
+    (admin/manager/accountant; Casbin grants accountant verify/reject on every
+    unit). Returns ``(can_verify, can_reject)`` — identical today, kept as two
+    values so a future divergence (e.g. reject-only) has a single edit point.
+    """
+    status_value = (
+        payment.status.value if hasattr(payment.status, "value") else payment.status
+    )
+    is_pending = status_value == "pending"
+    is_different_user = (
+        current_user_id is not None and payment.created_by_id != current_user_id
+    )
+    is_finance_reviewer = current_user_role in [
+        UserRole.ADMIN,
+        UserRole.MANAGER,
+        UserRole.ACCOUNTANT,
+    ]
+    can = is_pending and is_different_user and is_finance_reviewer
+    return can, can
+
+
+def _build_payment_list_item(
+    payment,
+    current_user_id: Optional[int] = None,
+    current_user_role: str = None,
+) -> finance_schemas.PaymentListItem:
+    """Build an enriched ``PaymentListItem`` from a Payment model.
+
+    SINGLE builder for the payment list, the manual-pending maker-checker queue
+    (``pending_manual_only``) AND the profile-collection drawer so every surface
+    shows the same enriched columns (``reference_code`` / ``payer_name`` for
+    reconciliation, ``is_online`` to tell gateway payments apart) and the same
+    role-aware can_verify/can_reject.
+
+    Requires ``payment.invoice.fee.admission_profile.lead`` (profile_name),
+    ``payment.method`` and ``payment.created_by`` eager-loaded — all relationship
+    access happens HERE in async context, never during Pydantic serialization.
+    """
+    profile_name = None
+    if payment.invoice and payment.invoice.fee:
+        fee = payment.invoice.fee
+        if fee.admission_profile and fee.admission_profile.lead:
+            profile_name = fee.admission_profile.lead.full_name
+
+    method_name = payment.method.name if payment.method else None
+    created_by_name = None
+    if payment.created_by:
+        created_by_name = payment.created_by.full_name or payment.created_by.email
+
+    can_verify, can_reject = _compute_payment_review_flags(
+        payment, current_user_id, current_user_role
+    )
+    is_own = current_user_id is not None and payment.created_by_id == current_user_id
+
+    return finance_schemas.PaymentListItem(
+        id=payment.id,
+        invoice_id=payment.invoice_id,
+        amount=payment.amount,
+        status=payment.status,
+        payment_date=payment.payment_date,
+        created_at=payment.created_at,
+        reference_code=payment.reference_code,
+        payer_name=payment.payer_name,
+        is_online=payment.intent_id is not None,
+        is_own=is_own,
+        profile_name=profile_name,
+        method_name=method_name,
+        created_by_name=created_by_name,
+        can_verify=can_verify,
+        can_reject=can_reject,
+    )
+
+
 def _build_payment_response(
     payment,
     current_user_id: Optional[int] = None,
@@ -683,22 +741,12 @@ def _build_payment_response(
     Denormalized Names (P2):
         - Extracted from payment.created_by and payment.verified_by relationships
     """
-    # P1: Compute permission flags based on maker-checker rule AND role
-    status_value = payment.status.value if hasattr(payment.status, "value") else payment.status
-    is_pending = status_value == "pending"
-    is_different_user = current_user_id is not None and payment.created_by_id != current_user_id
-
-    # Role-aware permission computation. Accountant is a central finance role
-    # that Casbin grants payments verify/reject on every unit — mirror that here
-    # so the FE surfaces the action buttons (parity with refunds/overpayments).
-    is_finance_reviewer = current_user_role in [
-        UserRole.ADMIN,
-        UserRole.MANAGER,
-        UserRole.ACCOUNTANT,
-    ]
-
-    can_verify = is_pending and is_different_user and is_finance_reviewer
-    can_reject = is_pending and is_different_user and is_finance_reviewer
+    # P1: Permission flags — shared maker-checker + role logic (single source
+    # with the list/queue builder so a button shown in one view is never denied
+    # by the route the other view would call).
+    can_verify, can_reject = _compute_payment_review_flags(
+        payment, current_user_id, current_user_role
+    )
 
     # P2: Extract denormalized user names from relationships
     created_by_name = None

@@ -322,6 +322,12 @@ class FeeSummaryResponse(BaseModel):
     paid_amount: Decimal
     remaining_amount: Decimal
     status: FeeStatusEnum
+    # Role-aware waive capability (same rule as FeeResponse.can_waive: not
+    # terminal AND remaining > 0 AND role in [admin, manager] — the RequireManager
+    # route gate). Default False so any builder that doesn't set it shows no
+    # waive button rather than a button the route would 403. The collection
+    # drawer populates it per the viewing user.
+    can_waive: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -842,6 +848,7 @@ class InvoiceListItem(InvoiceSummaryResponse):
     """
     # Identity / context (who + what)
     fee_id: int
+    profile_id: Optional[int] = None        # numeric id → opens the drawer
     profile_name: Optional[str] = None
     profile_code: Optional[str] = None      # "HS-000131"
     program_name: Optional[str] = None      # ngành (batch-safe: lead.offering.program)
@@ -892,7 +899,22 @@ class InvoiceStatusCounts(BaseModel):
 
 
 class PaymentListItem(PaymentSummaryResponse):
-    """Payment item for list view with additional info."""
+    """Payment item for list view with additional info.
+
+    Distinct from the detail ``PaymentResponse``: built by explicit kwargs (via
+    ``_build_payment_list_item``) for the payment list, the manual-pending queue
+    AND the profile-collection drawer. ``reference_code`` / ``payer_name`` let
+    an accountant reconcile a bank transfer straight from the row; ``is_online``
+    (= ``intent_id is not None``) tells the maker-checker queue apart from
+    auto-verified gateway payments (the queue shows manual-only).
+    """
+    reference_code: Optional[str] = None   # bank/gateway ref (reconciliation)
+    payer_name: Optional[str] = None       # who paid (manual transfers)
+    is_online: bool = False                # intent_id is not None (gateway)
+    # True when the viewer is the maker → the queue shows a "needs another
+    # reviewer" reason instead of a dead/hidden verify button (vs a non-reviewer,
+    # which can_verify alone cannot distinguish).
+    is_own: bool = False
     profile_name: Optional[str] = None
     method_name: Optional[str] = None
     created_by_name: Optional[str] = None
@@ -908,6 +930,54 @@ class PaymentsPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PROFILE COLLECTION (workspace drawer — the 3 finance tiers for ONE profile)
+# ==============================================================================
+
+class ProfileCollectionIdentity(BaseModel):
+    """Identity header for the "Thu học phí" drawer.
+
+    Mirrors the spine-row identity columns so the drawer header matches the row
+    the user clicked: ``program_name`` is the BATCH-SAFE offering program
+    (``lead.offering.program.name`` — same as the list / admission, may differ
+    from the multi-NV admitted major; that resolver is deferred).
+    """
+    profile_id: int
+    profile_code: str                      # "HS-000131"
+    student_name: Optional[str] = None
+    program_name: Optional[str] = None     # ngành (offering gốc, batch-safe)
+    officer_name: Optional[str] = None     # TVV phụ trách
+    phone: Optional[str] = None            # parent phone (accountant lookup)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProfileCollectionResponse(BaseModel):
+    """Everything the "Thu học phí" drawer needs for ONE profile — the point
+    where the three finance tiers (phí → hóa đơn → thanh toán) converge.
+
+    IDOR: the router resolves the AdmissionProfile UNIT-SCOPED first and 404s if
+    it is outside the caller's finance scope. The empty-collection case is NEVER
+    used as the access gate (a profile with no fees still belongs to a unit —
+    gating on "fees empty" would leak identity/existence).
+
+    - ``summary`` reuses ``ProfileFinanceSummary`` (totals + counts + the per-fee
+      list). The drawer's "Phí" section reads ``summary.fees`` — single source,
+      no duplicate top-level fees array that could drift. ``overdue_invoices`` is
+      populated with the DERIVED overdue predicate (issued/partial past due),
+      consistent with the workspace spine, NOT the lagging enum bucket.
+    - ``invoices`` / ``payments`` are flat cross-fee projections built with the
+      SAME list-item builders + role-aware ``can_*`` as the workspace list (NOT
+      detail types), so an action shown in the drawer is one the route allows.
+    """
+    identity: ProfileCollectionIdentity
+    summary: ProfileFinanceSummary
+    invoices: List[InvoiceListItem] = []
+    payments: List[PaymentListItem] = []
 
     model_config = ConfigDict(from_attributes=True)
 

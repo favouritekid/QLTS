@@ -344,6 +344,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/by-profile/{profile_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/summary/{profile_id}", "action": "GET"},
+        # Workspace drawer — EXPLICIT (distinct literal from summary/by-profile,
+        # so no keyMatch4 collision); also gated by require_finance_staff.
+        {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},
@@ -581,10 +584,18 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # the workspace list 403s for manager.
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
+        {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},  # Workspace drawer
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice
         {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},  # Apply penalty
+        # Manager is a CHECKER (verify/reject below) → must be able to read the
+        # maker-checker queue ("Chờ duyệt" tab → GET /api/payments?pending_manual_only).
+        # Without this the workspace shows the tab but clicking it 403s. Manager
+        # does NOT inherit accountant, so grant the read explicitly (unit-scoped
+        # via finance_scope_unit_id). Pairs with the verify/reject grants.
+        {"subject": "{role}", "object": "/api/payments", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment (maker-checker)
         {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
         {"subject": "{role}", "object": "/api/refunds", "action": "GET"},

@@ -221,6 +221,7 @@ export interface InvoiceListItemViewModel {
   invoice_number: string
   installment_no: number
   // List enrichment (who + what) from GET /api/invoices
+  profile_id: number | null
   profile_name: string | null
   profile_code: string | null
   program_name: string | null
@@ -267,6 +268,7 @@ export function toInvoiceListViewModel(invoices: InvoiceListItem[]): InvoiceList
       fee_id: invoice.fee_id,
       invoice_number: invoice.invoice_number,
       installment_no: invoice.installment_no,
+      profile_id: invoice.profile_id ?? null,
       profile_name: invoice.profile_name ?? null,
       profile_code: invoice.profile_code ?? null,
       program_name: invoice.program_name ?? null,

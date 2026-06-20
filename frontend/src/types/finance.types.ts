@@ -135,6 +135,10 @@ export interface FeeSummary {
   paid_amount: string
   remaining_amount: string
   status: FeeStatus
+  // Role-aware waive capability (backend-owned, matches the RequireManager
+  // route gate). Optional: only the collection drawer populates it; other
+  // FeeSummary sources leave it falsy → no waive button (safe default).
+  can_waive?: boolean
 }
 
 export interface FeeDetail extends Fee {
@@ -210,6 +214,7 @@ export interface InvoiceListItem {
   status: InvoiceStatus
   // List enrichment (who + what), batch-safe from lead/offering/program/officer
   fee_id: number
+  profile_id: number | null
   profile_name: string | null
   profile_code: string | null
   program_name: string | null
@@ -305,6 +310,36 @@ export interface PaymentSummary {
   payment_date: string | null
   created_at: string
   // [TODO_BACKEND] Add: reference_code, method_name (for display)
+}
+
+/**
+ * Payment row for the workspace payment list / maker-checker queue / drawer
+ * (from backend `PaymentListItem`). DISTINCT from the detail `Payment`: the
+ * list endpoint returns only these enriched columns, so the queue card reads
+ * fields that actually exist (no `undefined` from reading detail-only fields).
+ * `is_online` (= intent_id is not None) is backend-owned — never recompute it
+ * from a missing `intent_id`. `pages` is NOT returned; derive from total/size.
+ */
+export interface PaymentListItem {
+  id: number
+  invoice_id: number
+  amount: string
+  status: PaymentStatus
+  payment_date: string | null
+  created_at: string
+  // Reconciliation + grain (enriched by backend list builder)
+  reference_code: string | null
+  payer_name: string | null
+  is_online: boolean
+  // True when the viewer is the maker (own payment) → queue shows the
+  // maker-checker reason rather than a hidden verify button.
+  is_own: boolean
+  profile_name: string | null
+  method_name: string | null
+  created_by_name: string | null
+  // Role-aware maker-checker flags (computed by backend)
+  can_verify: boolean
+  can_reject: boolean
 }
 
 // ============================================================================
@@ -422,6 +457,28 @@ export interface ProfileFinanceSummary {
   pending_invoices: number
   overdue_invoices: number
   // [TODO_BACKEND] Add: has_fee (boolean), fee_status, overdue_amount, last_payment_date
+}
+
+// ============================================================================
+// PROFILE COLLECTION (workspace drawer — from backend ProfileCollectionResponse)
+// The three finance tiers for ONE profile. `summary.fees` is the canonical fee
+// list (the "Phí" section); `invoices`/`payments` are flat cross-fee
+// projections reusing the SAME list-item contracts (NOT detail types).
+// ============================================================================
+export interface ProfileCollectionIdentity {
+  profile_id: number
+  profile_code: string
+  student_name: string | null
+  program_name: string | null
+  officer_name: string | null
+  phone: string | null
+}
+
+export interface ProfileCollection {
+  identity: ProfileCollectionIdentity
+  summary: ProfileFinanceSummary
+  invoices: InvoiceListItem[]
+  payments: PaymentListItem[]
 }
 
 // ============================================================================
@@ -774,6 +831,17 @@ export interface PaymentPaginatedResponse {
   pages: number
 }
 
+/**
+ * Paginated payment LIST response (`PaymentListItem` rows). The backend does
+ * NOT return `pages` — derive it from `Math.ceil(total / page_size)`.
+ */
+export interface PaymentListPaginatedResponse {
+  items: PaymentListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
 // ============================================================================
 // FILTER TYPES
 // ============================================================================
@@ -816,6 +884,10 @@ export interface PaymentFilters {
   method_id?: number
   page?: number
   page_size?: number
+  // Maker-checker queue: manual payments (intent_id IS NULL) awaiting
+  // verification. When true the backend ignores status/method_id. Online
+  // (auto-verified) payments never appear here.
+  pending_manual_only?: boolean
 }
 
 export interface DebtReportFilters {

@@ -289,6 +289,18 @@ export function PendingPaymentCard({
           </div>
         </div>
 
+        {/* Maker-checker reason: own payment cannot be self-verified. Shown
+            instead of a hidden/dead verify button so the user understands why. */}
+        {payment.is_own && payment.is_pending && (
+          <p
+            className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground"
+            role="note"
+          >
+            <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Khoản bạn tạo — cần người khác duyệt
+          </p>
+        )}
+
         {/* Action buttons */}
         <div className="flex gap-2 pt-2 border-t">
           {payment.can_verify && (

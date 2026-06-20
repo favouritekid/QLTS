@@ -622,6 +622,7 @@ def _build_invoice_list_item(
         total_due=invoice.total_due,
         due_date=invoice.due_date,
         status=invoice.status,
+        profile_id=profile.id if profile else None,
         profile_name=lead.full_name if lead else None,
         profile_code=format_profile_code(profile.id) if profile else None,
         program_name=program.name if program else None,

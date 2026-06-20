@@ -49,6 +49,12 @@ export interface InvoicesFilterState extends StoredInvoiceFilters {
   feeId: number | undefined
   /** Deep-link-only profile scope (from `?profile_id=`, admission TuitionTab). */
   profileId: number | undefined
+  /**
+   * Collection-drawer selection (from `?profile=`). DISTINCT from `profileId`
+   * (`?profile_id=`, a LIST filter): this opens the FinanceProfileDrawer over
+   * the workspace. Reflected in the URL for deep-link / back / reload-restore.
+   */
+  drawerProfileId: number | undefined
 }
 
 export interface InvoicesFilterHandlers {
@@ -58,6 +64,10 @@ export interface InvoicesFilterHandlers {
   handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void
   handleTabClick: (tabKey: string) => void
   resetFilters: () => void
+  /** Open the collection drawer for a profile (writes `?profile=<id>`). */
+  openDrawer: (profileId: number) => void
+  /** Close the collection drawer (drops `?profile=`). */
+  closeDrawer: () => void
 }
 
 export interface UseInvoicesFilterReturn {
@@ -194,6 +204,10 @@ function parseProfileId(sp: URLSearchParams): number | undefined {
   return parseIdParam(sp, "profile_id")
 }
 
+function parseDrawerProfileId(sp: URLSearchParams): number | undefined {
+  return parseIdParam(sp, "profile")
+}
+
 // =============================================================================
 // MAIN HOOK
 // =============================================================================
@@ -230,6 +244,11 @@ export function useInvoicesFilter(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
+  const initialDrawerProfileId = useMemo(
+    () => parseDrawerProfileId(searchParams),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
   // ── STATE ─────────────────────────────────────────────────────────────
   const [page, setPage] = useState(initialValues.page)
@@ -241,6 +260,9 @@ export function useInvoicesFilter(
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">(initialValues.sortOrder)
   const [feeId, setFeeId] = useState<number | undefined>(initialFeeId)
   const [profileId, setProfileId] = useState<number | undefined>(initialProfileId)
+  const [drawerProfileId, setDrawerProfileId] = useState<number | undefined>(
+    initialDrawerProfileId,
+  )
 
   // Restore persisted filters only after hydration. URL params stay the source
   // of truth (server can render them; localStorage cannot).
@@ -273,6 +295,13 @@ export function useInvoicesFilter(
       isInternalUrlChange.current = false
       return
     }
+
+    // Drawer selection follows browser back/forward / reload INDEPENDENTLY of
+    // filter params (a drawer-only URL `?profile=5` has no filter params, so
+    // this must run BEFORE the hasUrlFilterParams guard or Back-to-close breaks).
+    const urlDrawerProfileId = parseDrawerProfileId(searchParams)
+    if (urlDrawerProfileId !== drawerProfileId) setDrawerProfileId(urlDrawerProfileId)
+
     if (!hasUrlFilterParams(searchParams)) return
 
     const url = parseSearchParams(searchParams)
@@ -309,6 +338,8 @@ export function useInvoicesFilter(
       if (activeTab !== "all") params.set("tab", activeTab)
       if (sortBy !== INVOICES_DEFAULT_SORT_BY) params.set("sort", sortBy)
       if (sortOrder !== INVOICES_DEFAULT_SORT_ORDER) params.set("order", sortOrder)
+      // Collection drawer selection — last so it reads naturally in the URL.
+      if (drawerProfileId !== undefined) params.set("profile", String(drawerProfileId))
 
       const qs = params.toString()
       const newUrl = qs ? `${pathname}?${qs}` : pathname
@@ -320,7 +351,7 @@ export function useInvoicesFilter(
     return () => {
       if (urlUpdateTimeoutRef.current) clearTimeout(urlUpdateTimeoutRef.current)
     }
-  }, [page, search, feeType, feeId, profileId, activeTab, sortBy, sortOrder, pathname])
+  }, [page, search, feeType, feeId, profileId, drawerProfileId, activeTab, sortBy, sortOrder, pathname])
 
   // ── LOCALSTORAGE SYNC ─────────────────────────────────────────────────
   useEffect(() => {
@@ -378,7 +409,12 @@ export function useInvoicesFilter(
     setProfileId(undefined)
     setPage(1)
     clearFiltersFromStorage()
+    // NOTE: deliberately does NOT close the drawer — "clear filters" is about the
+    // list, not the open student. Use closeDrawer() for that.
   }, [])
+
+  const openDrawer = useCallback((id: number) => setDrawerProfileId(id), [])
+  const closeDrawer = useCallback(() => setDrawerProfileId(undefined), [])
 
   // ── COMPUTED VALUES ───────────────────────────────────────────────────
   const hasActiveFilters = useMemo(() => {
@@ -429,7 +465,10 @@ export function useInvoicesFilter(
 
   // ── RETURN ────────────────────────────────────────────────────────────
   return {
-    state: { page, pageSize, search, feeType, activeTab, sortBy, sortOrder, feeId, profileId },
+    state: {
+      page, pageSize, search, feeType, activeTab, sortBy, sortOrder,
+      feeId, profileId, drawerProfileId,
+    },
     handlers: {
       setPage,
       handleSearchChange,
@@ -437,6 +476,8 @@ export function useInvoicesFilter(
       handleSortChange,
       handleTabClick,
       resetFilters,
+      openDrawer,
+      closeDrawer,
     },
     hasActiveFilters,
     apiFilters,
