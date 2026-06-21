@@ -90,6 +90,24 @@ export function InvoiceListClient() {
   const [activeDialog, setActiveDialog] = useState<WorkspaceDialog | null>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
 
+  // CTA deep-link: the Finance dashboard "Tính phí" buttons link to
+  // /finance/fees?action=calculate (redirected here). Open the picker once on
+  // mount, then strip ?action so a reload / back doesn't re-trigger it.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search)
+    if (sp.get("action") === "calculate") {
+      setPickerOpen(true)
+      sp.delete("action")
+      const qs = sp.toString()
+      window.history.replaceState(
+        window.history.state,
+        "",
+        qs ? `${window.location.pathname}?${qs}` : window.location.pathname,
+      )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Density (SSR-safe; read localStorage after mount) ───────────────────
   const [density, setDensity] = useState<Density>("comfortable")
   // `mounted` gates client-only content (the money rail) whose React-Query data
