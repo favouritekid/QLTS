@@ -468,21 +468,21 @@ async def get_profile_finance_summary(
 
     summary = await fee_service.get_fee_summary(profile_id, unit_id)
 
-    # Count pending and overdue invoices
-    pending_count = 0
-    overdue_count = 0
-    for fee in summary["fees"]:
-        for invoice in fee.invoices:
-            if invoice.status == "issued":
-                pending_count += 1
-            elif invoice.status == "overdue":
-                overdue_count += 1
+    # Pending/overdue via the SAME derived predicate as the collection drawer
+    # (issued|partial; derived-overdue) so the shared ProfileFinanceSummary
+    # field is endpoint-independent — not the lagging enum 'overdue' bucket.
+    all_invoices = [inv for fee in summary["fees"] for inv in fee.invoices]
+    pending_count, overdue_count = _count_pending_overdue(
+        all_invoices, date.today()
+    )
 
     return finance_schemas.ProfileFinanceSummary(
         admission_profile_id=profile_id,
         total_fees=summary["total_fees"],
         total_paid=summary["total_paid"],
-        total_remaining=summary["total_remaining"],
+        total_remaining=_total_remaining_with_penalty(
+            summary["fees"], all_invoices
+        ),
         fees=[
             finance_schemas.FeeSummaryResponse(
                 id=f.id,
@@ -527,10 +527,7 @@ async def get_profile_collection(
     """
     # Local imports → no router import cycle (fees ↔ invoices ↔ payments). The
     # list builders are reused verbatim so a drawer row matches the spine row.
-    from app.routers.invoices import (
-        _build_invoice_list_item,
-        _invoice_is_overdue,
-    )
+    from app.routers.invoices import _build_invoice_list_item
     from app.routers.payments import _build_payment_list_item
 
     fee_service = FeeCalculationService(db)
@@ -567,24 +564,16 @@ async def get_profile_collection(
             all_invoices.append(inv)
             all_payments.extend(inv.payments or [])
 
-    # Summary — mirror FeeCalculationService.get_fee_summary's money formula on
-    # the already-loaded fees (no extra query), but count overdue with the
-    # DERIVED predicate so the drawer agrees with the workspace spine, not the
-    # lagging enum 'overdue' bucket.
+    # Summary on the already-loaded graph (no extra query): totals + counts.
+    # total_remaining INCLUDES invoice penalties (shared helper) so the drawer
+    # header agrees with the invoice rows below; counts use the DERIVED overdue
+    # predicate so the drawer agrees with the workspace spine, not the lagging
+    # enum 'overdue' bucket.
     total_fees = sum((f.final_amount for f in fees), Decimal("0"))
     total_paid = sum((f.paid_amount for f in fees), Decimal("0"))
-    total_waived = sum((f.waived_amount for f in fees), Decimal("0"))
-    total_remaining = total_fees - total_paid - total_waived
+    total_remaining = _total_remaining_with_penalty(fees, all_invoices)
 
-    def _inv_status(inv):
-        return inv.status.value if hasattr(inv.status, "value") else inv.status
-
-    pending_count = sum(
-        1 for inv in all_invoices if _inv_status(inv) in ("issued", "partial")
-    )
-    overdue_count = sum(
-        1 for inv in all_invoices if _invoice_is_overdue(inv, today)
-    )
+    pending_count, overdue_count = _count_pending_overdue(all_invoices, today)
 
     summary = finance_schemas.ProfileFinanceSummary(
         admission_profile_id=profile.id,
@@ -810,6 +799,45 @@ async def recalculate_fee(
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
+
+def _inv_status_value(inv):
+    """Normalize an invoice status to its string value (Enum or str)."""
+    return inv.status.value if hasattr(inv.status, "value") else inv.status
+
+
+def _count_pending_overdue(invoices, today):
+    """Pending/overdue counts via the derived predicate the workspace spine +
+    collection drawer use: pending = issued|partial, overdue =
+    _invoice_is_overdue (derived superset of the lagging enum 'overdue').
+    One formula so ProfileFinanceSummary.{pending,overdue}_invoices is
+    endpoint-independent."""
+    from app.routers.invoices import _invoice_is_overdue
+
+    pending = sum(
+        1 for inv in invoices if _inv_status_value(inv) in ("issued", "partial")
+    )
+    overdue = sum(1 for inv in invoices if _invoice_is_overdue(inv, today))
+    return pending, overdue
+
+
+def _total_remaining_with_penalty(fees, invoices):
+    """Amount still owed INCLUDING invoice penalties. Fee-level
+    (final-paid-waived) omits penalties (they live on invoices) and so
+    under-states the drawer header vs the invoice rows. Sum non-terminal
+    invoices' remaining (= what the rows show) + any fee not yet invoiced."""
+    invoiced = sum(
+        (
+            inv.remaining_amount
+            for inv in invoices
+            if _inv_status_value(inv) not in ("paid", "cancelled")
+        ),
+        Decimal("0"),
+    )
+    uninvoiced = sum(
+        (f.remaining_amount for f in fees if not f.invoices), Decimal("0")
+    )
+    return invoiced + uninvoiced
+
 
 _FEE_TERMINAL_STATUSES = {"paid", "cancelled", "waived"}
 

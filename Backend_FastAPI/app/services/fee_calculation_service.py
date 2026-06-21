@@ -863,6 +863,16 @@ class FeeCalculationService:
                 .selectinload(Fee.invoices)
                 .selectinload(Invoice.payments)
                 .joinedload(Payment.created_by),
+                # Suppress the model-level lazy="selectin" eager-loads the list
+                # builders never read — otherwise opening the drawer fires 2 extra
+                # batched SELECTs (invoice.payment_intents + payment.transactions).
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .noload(Invoice.payment_intents),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .noload(Payment.transactions),
             )
             .where(models.AdmissionProfile.id == profile_id)
         )
