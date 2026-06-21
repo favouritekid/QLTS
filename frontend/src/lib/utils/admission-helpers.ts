@@ -315,6 +315,15 @@ export function isDocumentPendingVerification(status: string): boolean {
 // ==============================================================================
 
 /**
+ * Format an admission profile id into its canonical code — mirrors the backend
+ * `id_helpers.format_profile_code` (HS-000123). Use wherever a profile code must
+ * be derived client-side (e.g. list APIs that don't return profile_code).
+ */
+export function formatProfileCode(id: number): string {
+  return `HS-${String(id).padStart(6, "0")}`
+}
+
+/**
  * Format ISO date string to Vietnamese date format.
  * @param isoString ISO 8601 date string from backend
  * @returns Formatted date string (dd/mm/yyyy)

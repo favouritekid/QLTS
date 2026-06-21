@@ -320,4 +320,5 @@ export const mockDashboardStats: FinanceDashboardStats = {
   period_end: "2026-02-04",
   pending_overpayments_count: 1,
   pending_refunds_count: 0,
+  outstanding_total: "95000000",
 };

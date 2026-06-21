@@ -12,7 +12,10 @@ import type {
   Invoice,
   InvoiceDetail,
   InvoiceFilters,
+  InvoiceListItem,
   InvoicePenaltyRequest,
+  InvoiceStatusCountFilters,
+  InvoiceStatusCounts,
   VietQRResponse,
 } from "@/types/finance.types"
 
@@ -20,12 +23,18 @@ import type {
 // RESPONSE TYPES
 // ============================================================================
 
+/**
+ * Paginated list response for `GET /api/invoices`.
+ *
+ * Items are `InvoiceListItem` (the list contract), NOT the detail `Invoice`.
+ * Backend `InvoicesPage` does NOT include `pages` — callers derive total pages
+ * from `total`/`page_size`.
+ */
 export interface InvoicePaginatedResponse {
-  items: Invoice[]
+  items: InvoiceListItem[]
   total: number
   page: number
   page_size: number
-  pages: number
 }
 
 // ============================================================================
@@ -52,6 +61,24 @@ export async function getInvoices(filters?: InvoiceFilters): Promise<InvoicePagi
   const response = await api.get<InvoicePaginatedResponse>(API_ENDPOINTS.FINANCE.INVOICES.LIST, {
     params: filters,
   })
+  return response.data
+}
+
+/**
+ * Get tab status counts for the invoice workspace.
+ *
+ * Returns per-enum `counts` (for status tabs) plus `overdue_derived` (the count
+ * matching the red-spine rows: issued/partial AND past-due) and `total`.
+ *
+ * @param filters - Context filters (fee_id, fee_type, search) — NOT status/page.
+ */
+export async function getInvoiceStatusCounts(
+  filters?: InvoiceStatusCountFilters,
+): Promise<InvoiceStatusCounts> {
+  const response = await api.get<InvoiceStatusCounts>(
+    API_ENDPOINTS.FINANCE.INVOICES.STATUS_COUNTS,
+    { params: filters },
+  )
   return response.data
 }
 
@@ -146,6 +173,7 @@ export async function applyPenalty(invoiceId: number, data: InvoicePenaltyReques
 export const invoicesApi = {
   // CRUD
   getInvoices,
+  getInvoiceStatusCounts,
   getInvoice,
   getInvoicesByFee,
   getInvoiceVietQR,

@@ -1,52 +1,21 @@
 // src/app/(dashboard)/finance/fees/page.tsx
 /**
- * Fee List Page (Server Component)
- *
- * Lists all fees with filtering and search.
- * Supports profile_id query param for cross-reference from Admissions.
+ * Folded into the "Thu học phí" workspace (PR2): fees are managed inside the
+ * profile drawer (Phí section) + "+ Tính phí". This route redirects to the
+ * workspace, preserving any query (e.g. ?profile_id= from Admissions) so old
+ * links / bookmarks keep working. The per-fee detail route (/finance/fees/[id])
+ * is untouched.
  */
 
-import { Suspense } from "react"
-import { Skeleton } from "@/components/ui/skeleton"
-import { FeeListClient } from "./_components/FeeListClient"
+import { redirect } from "next/navigation"
 
-/**
- * Loading skeleton for fee list
- */
-function FeeListLoading() {
-  return (
-    <div className="h-full flex flex-col p-4 sm:p-6 space-y-4">
-      {/* Header */}
-      <div className="flex justify-between items-center">
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-32" />
-          <Skeleton className="h-4 w-48" />
-        </div>
-        <Skeleton className="h-10 w-32" />
-      </div>
+import { legacyFeesRedirectTarget } from "./redirect-target"
 
-      {/* Filters */}
-      <div className="flex gap-2">
-        <Skeleton className="h-10 w-48" />
-        <Skeleton className="h-10 w-32" />
-        <Skeleton className="h-10 w-32" />
-      </div>
-
-      {/* Table */}
-      <div className="flex-1">
-        <Skeleton className="h-full w-full rounded-lg" />
-      </div>
-    </div>
-  )
-}
-
-/**
- * Fee List Page
- */
-export default function FeesPage() {
-  return (
-    <Suspense fallback={<FeeListLoading />}>
-      <FeeListClient />
-    </Suspense>
-  )
+export default async function FeesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const sp = await searchParams
+  redirect(legacyFeesRedirectTarget(sp))
 }

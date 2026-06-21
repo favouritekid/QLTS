@@ -13,20 +13,23 @@ Architecture:
 - Eager loading to prevent N+1 queries
 """
 
+import re
+import unicodedata
 from datetime import datetime, date, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple, Union
 
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import select, and_, or_, func, desc, asc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
 from app.models.finance import (
     Fee, FeeAppliedDiscount, Invoice, FeeStatusEnum, InvoiceStatusEnum,
-    InstallmentPlan,
+    InstallmentPlan, OVERDUE_DERIVED_STATUSES,
 )
 from app.repositories.base import BaseRepository
+from app.utils.text_helpers import escape_like_pattern, LIKE_ESCAPE_CHAR
 
 
 class FeeRepository(BaseRepository[Fee]):
@@ -627,6 +630,124 @@ class InvoiceRepository(BaseRepository[Invoice]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    # ------------------------------------------------------------------
+    # Shared list/counts plumbing — list and status-counts MUST build the
+    # same WHERE so a tab's count always equals the rows it returns.
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _overdue_predicate(today: date):
+        """Derived "overdue": a billed-but-unsettled invoice that is past due.
+
+        ``status IN OVERDUE_DERIVED_STATUSES (issued/partial/overdue) AND
+        due_date < today`` — a SUPERSET of the enum ``overdue`` status set nightly
+        by the beat job ``invoice_service.mark_overdue_invoices`` (the
+        issued/partial legs catch rows not yet transitioned; the overdue leg keeps
+        transitioned ones). Single source (model OVERDUE_DERIVED_STATUSES) for
+        spine / "Quá hạn" tab / sort / rail / is_overdue. ``today`` is passed in
+        (computed once per request) so predicate/sort/is_overdue never straddle
+        midnight inconsistently.
+        """
+        return and_(
+            Invoice.due_date < today,
+            Invoice.status.in_(OVERDUE_DERIVED_STATUSES),
+        )
+
+    @staticmethod
+    def _build_invoice_list_conditions(
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        fee_id: Optional[int] = None,
+        profile_id: Optional[int] = None,
+        overdue_only: Optional[bool] = None,
+        search: Optional[str] = None,
+        fee_type: Optional[str] = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        today: Optional[date] = None,
+    ) -> list:
+        """Build the shared WHERE for the invoice list + status-counts.
+
+        Assumes the query joins Invoice -> Fee -> AdmissionProfile -> Lead.
+        """
+        today = today or date.today()
+        conditions = []
+        # IDOR (None = admin/accountant global scope)
+        if unit_id is not None:
+            conditions.append(models.Lead.unit_id == unit_id)
+        if statuses:
+            conditions.append(Invoice.status.in_(statuses))
+        if fee_id:
+            conditions.append(Invoice.fee_id == fee_id)
+        if profile_id:
+            conditions.append(Fee.admission_profile_id == profile_id)
+        if fee_type:
+            conditions.append(Fee.fee_type == fee_type)
+        if overdue_only:
+            conditions.append(InvoiceRepository._overdue_predicate(today))
+        if date_from:
+            conditions.append(Invoice.due_date >= date_from)
+        if date_to:
+            conditions.append(Invoice.due_date <= date_to)
+        if search and search.strip():
+            # NFC + central LIKE escaping (shared helper used across repos).
+            normalized = unicodedata.normalize("NFC", search.strip())
+            term = f"%{escape_like_pattern(normalized)}%"
+            search_or = [
+                Invoice.invoice_number.ilike(term, escape=LIKE_ESCAPE_CHAR),
+                func.f_unaccent(models.Lead.full_name).ilike(
+                    func.f_unaccent(term), escape=LIKE_ESCAPE_CHAR
+                ),
+                # Accountants receiving a profile from an officer often look it up
+                # by the parent's phone (plain ilike — digits, no diacritics).
+                models.Lead.phone.ilike(term, escape=LIKE_ESCAPE_CHAR),
+            ]
+            # "HS-000131" or a bare profile id -> match AdmissionProfile.id.
+            digits = re.sub(r"\D", "", normalized)
+            if digits and (normalized.upper().startswith("HS") or normalized.isdigit()):
+                try:
+                    search_or.append(models.AdmissionProfile.id == int(digits))
+                except (ValueError, OverflowError):
+                    pass
+            conditions.append(or_(*search_or))
+        return conditions
+
+    @staticmethod
+    def _invoice_sort_clause(
+        sort_by: Optional[str], sort_order: Optional[str], today: date
+    ):
+        """ORDER BY for the invoice list. Default = actionable-first priority.
+
+        ``Invoice.id`` is appended as a UNIQUE tiebreaker on EVERY branch so
+        pagination is deterministic — without it, rows sharing a status + due_date
+        (e.g. a batch of same-day tuition invoices) order arbitrarily and a row
+        can appear on two pages or be skipped across offset/limit.
+        """
+        descending = (sort_order or "asc").lower() == "desc"
+        direction = desc if descending else asc
+        if sort_by == "due_date":
+            return [direction(Invoice.due_date), asc(Invoice.id)]
+        if sort_by == "amount":
+            return [direction(Invoice.amount), asc(Invoice.id)]
+        if sort_by == "status":
+            return [direction(Invoice.status), asc(Invoice.due_date), asc(Invoice.id)]
+        if sort_by == "created_at":
+            return [direction(Invoice.created_at), asc(Invoice.id)]
+        # Default "priority": overdue (derived) > issued > partial > draft >
+        # paid > cancelled, then earliest due first, then id. Branch 0 reuses
+        # _overdue_predicate so a beat-transitioned enum 'overdue' row stays at
+        # the TOP (not dumped into else_ below cancelled).
+        priority = case(
+            (InvoiceRepository._overdue_predicate(today), 0),
+            (Invoice.status == InvoiceStatusEnum.overdue.value, 1),
+            (Invoice.status == InvoiceStatusEnum.issued.value, 2),
+            (Invoice.status == InvoiceStatusEnum.partial.value, 3),
+            (Invoice.status == InvoiceStatusEnum.draft.value, 4),
+            (Invoice.status == InvoiceStatusEnum.paid.value, 5),
+            (Invoice.status == InvoiceStatusEnum.cancelled.value, 6),
+            else_=7,
+        )
+        return [asc(priority), asc(Invoice.due_date), asc(Invoice.id)]
+
     async def get_filtered_with_count(
         self,
         skip: int = 0,
@@ -634,81 +755,146 @@ class InvoiceRepository(BaseRepository[Invoice]):
         unit_id: Optional[int] = None,
         statuses: Optional[List[str]] = None,
         fee_id: Optional[int] = None,
+        profile_id: Optional[int] = None,
         overdue_only: Optional[bool] = None,
+        search: Optional[str] = None,
+        fee_type: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        today: Optional[date] = None,
     ) -> Tuple[List[Invoice], int]:
-        """
-        Get filtered list of invoices with pagination AND total count.
+        """Filtered + paginated invoice list WITH total count (IDOR by unit)."""
+        today = today or date.today()  # one "today" → predicate + sort agree
+        conditions = self._build_invoice_list_conditions(
+            unit_id=unit_id, statuses=statuses, fee_id=fee_id,
+            profile_id=profile_id, overdue_only=overdue_only, search=search,
+            fee_type=fee_type, date_from=date_from, date_to=date_to, today=today,
+        )
 
-        Args:
-            skip: Number of records to skip
-            limit: Maximum records to return
-            unit_id: Filter by lead.unit_id (for IDOR protection)
-            statuses: List of statuses to filter
-            fee_id: Filter by fee ID
-            overdue_only: Filter only overdue invoices
-
-        Returns:
-            Tuple of (List of Invoice instances, total_count)
-        """
-        base_conditions = []
-
-        # IDOR Filter
-        if unit_id is not None:
-            base_conditions.append(models.Lead.unit_id == unit_id)
-
-        if statuses and len(statuses) > 0:
-            base_conditions.append(Invoice.status.in_(statuses))
-
-        if fee_id:
-            base_conditions.append(Invoice.fee_id == fee_id)
-
-        if overdue_only:
-            today = date.today()
-            base_conditions.append(
-                and_(
-                    Invoice.due_date < today,
-                    Invoice.status.in_([
-                        InvoiceStatusEnum.draft.value,
-                        InvoiceStatusEnum.issued.value
-                    ])
-                )
-            )
-
-        # Count query
         count_query = (
             select(func.count(Invoice.id))
-            .join(Fee)
-            .join(models.AdmissionProfile)
-            .join(models.Lead)
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
         )
-        if base_conditions:
-            count_query = count_query.where(and_(*base_conditions))
+        if conditions:
+            count_query = count_query.where(and_(*conditions))
+        total = (await self.db.execute(count_query)).scalar() or 0
 
-        count_result = await self.db.execute(count_query)
-        total = count_result.scalar() or 0
-
-        # Data query
         data_query = (
             select(Invoice)
-            .join(Fee)
-            .join(models.AdmissionProfile)
-            .join(models.Lead)
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
             .options(
-                joinedload(Invoice.fee).joinedload(Fee.admission_profile).joinedload(
-                    models.AdmissionProfile.lead
-                ),
+                joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead)
+                .joinedload(models.Lead.assigned_officer),
+                joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead)
+                .joinedload(models.Lead.offering)
+                .joinedload(models.ProgramOffering.program),
             )
+            .order_by(*self._invoice_sort_clause(sort_by, sort_order, today))
             .offset(skip)
             .limit(limit)
-            .order_by(Invoice.due_date)
         )
-        if base_conditions:
-            data_query = data_query.where(and_(*base_conditions))
+        if conditions:
+            data_query = data_query.where(and_(*conditions))
 
         result = await self.db.execute(data_query)
         invoices = list(result.scalars().all())
-
         return invoices, total
+
+    async def get_status_counts(
+        self,
+        unit_id: Optional[int] = None,
+        fee_id: Optional[int] = None,
+        profile_id: Optional[int] = None,
+        search: Optional[str] = None,
+        fee_type: Optional[str] = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        today: Optional[date] = None,
+    ) -> dict:
+        """Per-status counts + derived overdue count for the workspace tabs.
+
+        Uses the SAME conditions as the list (minus status/overdue) so each
+        tab's count matches the rows clicking it would return.
+        """
+        today = today or date.today()
+        conditions = self._build_invoice_list_conditions(
+            unit_id=unit_id, statuses=None, fee_id=fee_id, profile_id=profile_id,
+            overdue_only=None, search=search, fee_type=fee_type,
+            date_from=date_from, date_to=date_to, today=today,
+        )
+
+        group_query = (
+            select(Invoice.status, func.count(Invoice.id))
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
+        )
+        if conditions:
+            group_query = group_query.where(and_(*conditions))
+        group_query = group_query.group_by(Invoice.status)
+        rows = (await self.db.execute(group_query)).all()
+        raw = {row[0]: row[1] for row in rows}
+        counts = {s.value: int(raw.get(s.value, 0)) for s in InvoiceStatusEnum}
+        total = sum(counts.values())
+
+        overdue_query = (
+            select(func.count(Invoice.id))
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            .where(and_(*(conditions + [self._overdue_predicate(today)])))
+        )
+        overdue_derived = (await self.db.execute(overdue_query)).scalar() or 0
+
+        return {
+            "counts": counts,
+            "overdue_derived": int(overdue_derived),
+            "total": int(total),
+        }
+
+    async def get_collection_money_totals(
+        self,
+        unit_id: Optional[int] = None,
+        today: Optional[date] = None,
+    ) -> dict:
+        """Money aggregates for the workspace rail / finance dashboard.
+
+        Keeps the SQL in the repository (Backend rule: no ``db.execute`` in
+        routers). Per-row remaining = ``amount + penalty - paid`` clamped ≥ 0
+        (mirrors Invoice.remaining_amount). ``outstanding_total`` sums every
+        billed-but-unsettled invoice (OVERDUE_DERIVED_STATUSES); the overdue
+        slice adds ``due_date < today`` so overdue ⊆ outstanding.
+        """
+        today = today or date.today()
+        remaining_expr = func.greatest(
+            Invoice.amount + Invoice.penalty_amount - Invoice.paid_amount, 0
+        )
+
+        def _scoped(query):
+            query = query.join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            if unit_id is not None:
+                query = query.where(models.Lead.unit_id == unit_id)
+            return query
+
+        outstanding = (await self.db.execute(
+            _scoped(select(func.coalesce(func.sum(remaining_expr), 0)))
+            .where(Invoice.status.in_(OVERDUE_DERIVED_STATUSES))
+        )).scalar() or 0
+
+        overdue_row = (await self.db.execute(
+            _scoped(select(
+                func.count(Invoice.id).label("count"),
+                func.coalesce(func.sum(remaining_expr), 0).label("amount"),
+            )).where(self._overdue_predicate(today))
+        )).one()
+
+        return {
+            "outstanding_total": Decimal(str(outstanding)),
+            "overdue_amount": Decimal(str(overdue_row.amount or 0)),
+            "overdue_invoices_count": int(overdue_row.count or 0),
+        }
 
     async def get_overdue_invoices(
         self,

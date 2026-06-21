@@ -32,7 +32,7 @@ from sqlalchemy.orm import selectinload
 
 from app import models
 from app.models.finance import (
-    Fee, FeeAppliedDiscount, Invoice, InstallmentPlan,
+    Fee, FeeAppliedDiscount, Invoice, Payment, InstallmentPlan,
     FeeTypeEnum, FeeStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
@@ -44,6 +44,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
 )
 from app.config import settings
+from app.utils.text_helpers import escape_like_pattern, LIKE_ESCAPE_CHAR
 
 log = structlog.get_logger(__name__)
 
@@ -823,6 +824,131 @@ class FeeCalculationService:
             "fee_count": len(fees),
             "fees": fees,
         }
+
+    async def get_profile_collection(
+        self,
+        profile_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Optional[models.AdmissionProfile]:
+        """Resolve a profile with its full finance graph for the "Thu học phí"
+        drawer (identity + fees → invoices → payments).
+
+        IDOR: unit-scoped via the ``lead.unit_id`` join (same scope as the rest
+        of the finance module). Returns ``None`` when the profile does not exist
+        OR is outside ``unit_id`` so the router can 404 WITHOUT leaking identity/
+        existence — the access decision is made HERE (resolve-first), never from
+        whether the collection turns out empty.
+
+        Bounded eager-load (a handful of selectin/joined queries, NO per-row
+        N+1): lead → assigned_officer / offering → program (identity columns,
+        batch-safe ``program_name``) and fees → invoices → payments → (method,
+        created_by) (the three tiers + the columns the list builders read).
+        """
+        query = (
+            select(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                selectinload(models.AdmissionProfile.lead)
+                .selectinload(models.Lead.assigned_officer),
+                selectinload(models.AdmissionProfile.lead)
+                .selectinload(models.Lead.offering)
+                .selectinload(models.ProgramOffering.program),
+                # fees → invoices → payments, with the payment columns the list
+                # builder reads (method/created_by). Explicit chain overrides the
+                # model-level lazy="selectin" so those nested loads are eager too.
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.method),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.created_by),
+                # Suppress the model-level lazy="selectin" eager-loads the list
+                # builders never read — otherwise opening the drawer fires 2 extra
+                # batched SELECTs (invoice.payment_intents + payment.transactions).
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .noload(Invoice.payment_intents),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .noload(Payment.transactions),
+            )
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def search_calculable_profiles(
+        self,
+        search: str,
+        unit_id: Optional[int] = None,
+        limit: int = 8,
+    ) -> List[models.AdmissionProfile]:
+        """Fee-ELIGIBLE admission-profile lookup for the "Tính phí" picker —
+        match by HS-code, name, or phone; identity-only (lead eager-loaded).
+
+        Accountant is DENIED ``/api/admissions`` by design, so this finance-
+        scoped search gives finance staff just enough to pick a profile to
+        calculate a fee for. Returns ONLY profiles a fee can actually be
+        calculated for (``is_fee_eligible`` — the endpoint is *calculable*-
+        profiles): keeps the result minimal-by-design and does not re-open a
+        name/phone enumeration of draft/rejected profiles wider than necessary.
+        Unit-scoped via ``lead.unit_id`` (admin/accountant global → ``None``).
+        NFC-normalised + LIKE-escaped like the admission search."""
+        import re
+        import unicodedata
+
+        from app.utils.admission_status import is_fee_eligible
+
+        term = unicodedata.normalize("NFC", (search or "").strip())
+        if not term:
+            return []
+
+        query = (
+            select(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                selectinload(models.AdmissionProfile.lead),
+                # is_fee_eligible's multi-NV branch reads ``.choices`` (fails
+                # closed if not eager-loaded) → load it so the filter is accurate.
+                selectinload(models.AdmissionProfile.choices),
+            )
+        )
+
+        code = re.match(r"^HS-?0*(\d+)$", term, re.IGNORECASE)
+        if code:
+            profile_id = int(code.group(1))
+            # A profile id is a PostgreSQL int4. The ``\d+`` under
+            # ``max_length=100`` can be ~98 digits → out of int32 → asyncpg
+            # DataError → 500. No such profile, so return empty (mirrors the
+            # fee_repository HS-code guard).
+            if profile_id < 1 or profile_id > 2147483647:
+                return []
+            query = query.where(models.AdmissionProfile.id == profile_id)
+        else:
+            pattern = f"%{escape_like_pattern(term)}%"
+            query = query.where(
+                sa.or_(
+                    models.Lead.full_name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    models.Lead.phone.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                )
+            )
+
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        # Over-fetch then keep only fee-eligible profiles (the eligibility gate
+        # is Python-level, not a column). A name/phone search is narrow, so 4×
+        # the display cap is plenty to fill ``limit`` after filtering.
+        query = query.order_by(models.AdmissionProfile.id.desc()).limit(limit * 4)
+        result = await self.db.execute(query)
+        profiles = result.scalars().all()
+        return [p for p in profiles if is_fee_eligible(p)][:limit]
 
     # ==========================================================================
     # HELPER METHODS

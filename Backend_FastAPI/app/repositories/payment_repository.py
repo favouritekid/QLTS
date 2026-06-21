@@ -201,7 +201,12 @@ class PaymentRepository(BaseRepository[Payment]):
             .join(models.AdmissionProfile)
             .join(models.Lead)
             .options(
-                joinedload(Payment.invoice).joinedload(Invoice.fee),
+                # Load the profile→lead chain too so _build_payment_list_item
+                # can read profile_name without a lazy load (MissingGreenlet).
+                joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
                 joinedload(Payment.method),
                 joinedload(Payment.created_by),
             )

@@ -1,0 +1,712 @@
+// src/app/(dashboard)/finance/invoices/_components/FinanceProfileDrawer.tsx
+/**
+ * FinanceProfileDrawer — the point where the three finance tiers converge for
+ * ONE student: identity + money summary + Phí / Hóa đơn / Thanh toán sections,
+ * with thu/duyệt/tính-phí inline.
+ *
+ * Thin-client: every status, can_* flag and `is_overdue` comes straight from
+ * `GET /api/fees/collection/{profile_id}`. The drawer only PROJECTS those for
+ * display (e.g. "Hạn" = earliest open invoice due, "Next-action" = the first
+ * available BE action) — it never decides eligibility/overdue itself.
+ *
+ * Actions are raised through `onAction` so all dialogs live in ONE host
+ * (WorkspaceActionDialogs) shared with the spine row + queue. Post-mutation the
+ * drawer stays open and re-fetches via the collection-key invalidation in the
+ * mutation hooks (no surprise close).
+ *
+ * a11y/WIG: Radix Sheet gives focus-trap + Esc + return-focus; the body scrolls
+ * with `overscroll-contain` + a mobile safe-area inset; async feedback is the
+ * polite toast (sonner) + the aria-live status line below.
+ */
+
+"use client"
+
+import * as React from "react"
+import {
+  Receipt,
+  Plus,
+  CreditCard,
+  FileText,
+  MoreHorizontal,
+  QrCode,
+  Ban,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  CircleDollarSign,
+  Clock,
+} from "lucide-react"
+
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { ErrorEmptyState } from "@/components/common/EmptyState"
+import { Skeleton } from "@/components/ui/skeleton"
+import { cn } from "@/lib/utils"
+import { formatVND } from "@/lib/zod/finance"
+import { formatDate } from "@/lib/utils/admission-helpers"
+
+import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
+import {
+  FeeStatusBadge,
+  InvoiceStatusBadge,
+  PaymentStatusBadge,
+} from "@/components/finance"
+
+import { useProfileCollection } from "@/hooks/finance/useFees"
+import { calculateOverdueDays } from "@/hooks/finance/useInvoiceViewModel"
+import { FEE_TYPE_LABELS } from "@/types/finance.types"
+import type {
+  ProfileCollection,
+  InvoiceListItem,
+  PaymentListItem,
+  FeeSummary,
+  FeeType,
+  PaymentStatus,
+  InvoiceStatus,
+} from "@/types/finance.types"
+import type { WorkspaceDialog } from "./WorkspaceActionDialogs"
+
+// =============================================================================
+// HELPERS (presentation only — over BE-owned flags)
+// =============================================================================
+
+// "Open" = still collectable. Includes 'overdue' — the daily beat job flips the
+// enum issued→overdue once past due, so an only-overdue invoice must still count
+// toward "Hạn gần nhất"; otherwise the header shows "Quá hạn" with no due date
+// (the BE-owned `is_overdue` already lit hasOverdue). Mirrors PAYABLE_INVOICE_STATUSES.
+const OPEN_INVOICE_STATUSES = new Set(["issued", "partial", "overdue"])
+
+/** Earliest due date among OPEN (issued/partial/overdue) invoices — drawer "Hạn". */
+function nextDue(invoices: InvoiceListItem[]): InvoiceListItem | null {
+  const open = invoices.filter((i) => OPEN_INVOICE_STATUSES.has(i.status))
+  if (open.length === 0) return null
+  return open.reduce((soonest, inv) =>
+    new Date(inv.due_date) < new Date(soonest.due_date) ? inv : soonest,
+  )
+}
+
+interface SummaryView {
+  remainingFormatted: string
+  hasOverdue: boolean
+  isSettled: boolean
+  statusLabel: string
+  statusTone: "error" | "amber" | "success" | "muted"
+  dueLabel: string | null
+  dueOverdue: boolean
+  nextActionLabel: string
+}
+
+function buildSummaryView(collection: ProfileCollection): SummaryView {
+  const { summary, invoices } = collection
+  const remaining = Number(summary.total_remaining)
+  const hasOverdue = invoices.some((i) => i.is_overdue)
+  const isSettled = remaining <= 0
+
+  const due = nextDue(invoices)
+  // Next-action = the first BE-permitted action across the invoice set.
+  let nextActionLabel = "Không có việc cần làm"
+  if (invoices.some((i) => i.can_record_payment)) nextActionLabel = "Thu tiền"
+  else if (invoices.some((i) => i.can_issue)) nextActionLabel = "Phát hành hóa đơn"
+  else if (isSettled && invoices.length > 0) nextActionLabel = "Đã thu đủ"
+
+  return {
+    remainingFormatted: formatVND(summary.total_remaining),
+    hasOverdue,
+    isSettled,
+    statusLabel: hasOverdue ? "Quá hạn" : isSettled ? "Đã thu đủ" : "Còn phải thu",
+    statusTone: hasOverdue ? "error" : isSettled ? "success" : "amber",
+    dueLabel: due ? formatDate(due.due_date) : null,
+    dueOverdue: due ? due.is_overdue : false,
+    nextActionLabel,
+  }
+}
+
+// =============================================================================
+// COMPONENT
+// =============================================================================
+
+interface FinanceProfileDrawerProps {
+  profileId: number | null
+  onClose: () => void
+  onAction: (dialog: WorkspaceDialog) => void
+}
+
+export function FinanceProfileDrawer({
+  profileId,
+  onClose,
+  onAction,
+}: FinanceProfileDrawerProps) {
+  const open = profileId != null
+  const { data, isLoading, isError, refetch } = useProfileCollection(profileId, {
+    enabled: open,
+  })
+
+  return (
+    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent
+        side="right"
+        // Override the default padding: fixed header + scrollable body.
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+      >
+        {/* Header (fixed) */}
+        <SheetHeader className="space-y-0 border-b border-border px-5 py-4 text-left">
+          {data ? (
+            <DrawerIdentity collection={data} />
+          ) : (
+            <>
+              <SheetTitle className="text-base">Hồ sơ tài chính</SheetTitle>
+              <SheetDescription>Đang tải dữ liệu thu học phí…</SheetDescription>
+            </>
+          )}
+        </SheetHeader>
+
+        {/* Body (scrollable; overscroll-contain + mobile safe-area) */}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <p className="sr-only" role="status" aria-live="polite">
+            {isLoading
+              ? "Đang tải hồ sơ tài chính"
+              : data
+                ? `Đã tải hồ sơ tài chính của ${data.identity.student_name ?? "học sinh"}`
+                : ""}
+          </p>
+
+          {isLoading ? (
+            <DrawerSkeleton />
+          ) : isError ? (
+            <ErrorEmptyState
+              message="Không thể tải hồ sơ tài chính."
+              onRetry={() => refetch()}
+            />
+          ) : data ? (
+            <div className="space-y-6">
+              <DrawerSummary collection={data} onAction={onAction} />
+              <FeeSection collection={data} onAction={onAction} />
+              <InvoiceSection collection={data} onAction={onAction} />
+              <PaymentSection collection={data} onAction={onAction} />
+            </div>
+          ) : null}
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// =============================================================================
+// IDENTITY HEADER
+// =============================================================================
+
+function DrawerIdentity({ collection }: { collection: ProfileCollection }) {
+  const { identity } = collection
+  const name = identity.student_name ?? "Chưa rõ học sinh"
+  const sub = [identity.profile_code, identity.program_name].filter(Boolean).join(" · ")
+  return (
+    <div className="flex items-center gap-3 pr-10">
+      <Monogram name={name} className="size-10" />
+      <div className="min-w-0">
+        <SheetTitle className="truncate text-base">{name}</SheetTitle>
+        <SheetDescription className="truncate">
+          {sub || "Hồ sơ tài chính"}
+          {identity.officer_name ? ` · TVV ${identity.officer_name}` : ""}
+        </SheetDescription>
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
+// SUMMARY (Còn phải thu · Hạn · Trạng thái · Next-action)
+// =============================================================================
+
+const TONE_TEXT: Record<SummaryView["statusTone"], string> = {
+  error: "text-error-600",
+  amber: "text-amber-600",
+  success: "text-emerald-600",
+  muted: "text-muted-foreground",
+}
+
+function DrawerSummary({
+  collection,
+  onAction,
+}: {
+  collection: ProfileCollection
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  const v = buildSummaryView(collection)
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4 shadow-xs">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Còn phải thu
+          </p>
+          <p
+            className={cn(
+              "mt-0.5 font-display text-2xl font-bold tabular-nums",
+              v.isSettled ? "text-emerald-600" : "text-foreground",
+            )}
+          >
+            {v.remainingFormatted}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="shrink-0"
+          onClick={() => onAction({ type: "calculate", profileId: collection.identity.profile_id })}
+        >
+          <Plus className="size-4" aria-hidden="true" />
+          Tính phí
+        </Button>
+      </div>
+
+      <dl className="mt-4 grid grid-cols-3 gap-3 text-sm">
+        <div>
+          <dt className="text-xs text-muted-foreground">Hạn gần nhất</dt>
+          <dd
+            className={cn(
+              "mt-0.5 font-medium tabular-nums",
+              v.dueOverdue && "text-error-600",
+            )}
+          >
+            {v.dueLabel ?? "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Trạng thái</dt>
+          <dd className={cn("mt-0.5 font-medium", TONE_TEXT[v.statusTone])}>{v.statusLabel}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-muted-foreground">Việc cần làm</dt>
+          <dd className="mt-0.5 font-medium">{v.nextActionLabel}</dd>
+        </div>
+      </dl>
+    </section>
+  )
+}
+
+// =============================================================================
+// PHÍ SECTION
+// =============================================================================
+
+function SectionHeader({
+  icon,
+  title,
+  count,
+}: {
+  icon: React.ReactNode
+  title: string
+  count: number
+}) {
+  return (
+    <div className="mb-2 flex items-center gap-2">
+      <span className="text-muted-foreground" aria-hidden="true">
+        {icon}
+      </span>
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs tabular-nums text-muted-foreground">
+        {count}
+      </span>
+    </div>
+  )
+}
+
+function FeeSection({
+  collection,
+  onAction,
+}: {
+  collection: ProfileCollection
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  const fees = collection.summary.fees
+  return (
+    <section>
+      <SectionHeader
+        icon={<CircleDollarSign className="size-4" />}
+        title="Khoản phí"
+        count={fees.length}
+      />
+      {fees.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+          Chưa có khoản phí nào. Dùng “Tính phí” để tạo.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {fees.map((fee) => (
+            <FeeRow key={fee.id} fee={fee} onAction={onAction} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function FeeRow({
+  fee,
+  onAction,
+}: {
+  fee: FeeSummary
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  // Backend-owned (role + status + amount, matches the waive route gate) — do
+  // NOT re-derive on the client (thin-client; avoids showing a button the route
+  // would reject).
+  const canWaive = fee.can_waive ?? false
+  const typeLabel = FEE_TYPE_LABELS[fee.fee_type as FeeType] ?? fee.fee_type
+  const semester = fee.semester_no ? ` · HK${fee.semester_no}` : ""
+  return (
+    <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">
+          {typeLabel}
+          <span className="text-muted-foreground">{semester}</span>
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          {formatVND(fee.final_amount)} · còn {formatVND(fee.remaining_amount)}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <FeeStatusBadge status={fee.status} size="sm" />
+        {canWaive && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-xs"
+            onClick={() =>
+              onAction({
+                type: "waive",
+                feeId: fee.id,
+                maxAmount: fee.remaining_amount,
+                maxAmountFormatted: formatVND(fee.remaining_amount),
+              })
+            }
+          >
+            Miễn giảm
+          </Button>
+        )}
+      </div>
+    </li>
+  )
+}
+
+// =============================================================================
+// HÓA ĐƠN SECTION
+// =============================================================================
+
+function InvoiceSection({
+  collection,
+  onAction,
+}: {
+  collection: ProfileCollection
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  const invoices = collection.invoices
+  return (
+    <section>
+      <SectionHeader
+        icon={<Receipt className="size-4" />}
+        title="Hóa đơn"
+        count={invoices.length}
+      />
+      {invoices.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+          Chưa có hóa đơn nào.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {invoices.map((inv) => (
+            <InvoiceRow
+              key={inv.id}
+              invoice={inv}
+              onAction={onAction}
+              payerName={collection.identity.student_name ?? undefined}
+              referenceHint={collection.identity.profile_code}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function InvoiceRow({
+  invoice,
+  onAction,
+  payerName,
+  referenceHint,
+}: {
+  invoice: InvoiceListItem
+  onAction: (d: WorkspaceDialog) => void
+  payerName?: string
+  referenceHint?: string
+}) {
+  const overdueDays = invoice.is_overdue ? calculateOverdueDays(invoice.due_date) : 0
+  const remainingFormatted = formatVND(invoice.remaining_amount)
+  const hasMenu =
+    invoice.can_issue || invoice.can_cancel || invoice.can_apply_penalty
+  // QR only makes sense once the invoice can actually receive money.
+  const canQr = invoice.can_record_payment
+
+  return (
+    <li
+      className={cn(
+        "rounded-xl border bg-card px-3 py-2.5",
+        invoice.is_overdue ? "border-l-2 border-l-error-500 border-border" : "border-border",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{invoice.invoice_number}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+            Còn {remainingFormatted}
+            {overdueDays > 0 && (
+              <span className="text-error-600"> · quá {overdueDays} ngày</span>
+            )}
+            {" · hạn "}
+            {formatDate(invoice.due_date)}
+          </p>
+        </div>
+        <InvoiceStatusBadge
+          status={(invoice.is_overdue ? "overdue" : invoice.status) as InvoiceStatus}
+          size="sm"
+        />
+      </div>
+
+      <div className="mt-2 flex items-center justify-end gap-1.5">
+        {invoice.can_record_payment && (
+          <Button
+            size="sm"
+            className="h-8"
+            onClick={() =>
+              onAction({
+                type: "record",
+                invoiceId: invoice.id,
+                feeId: invoice.fee_id,
+                maxAmountFormatted: remainingFormatted,
+                invoiceNumber: invoice.invoice_number,
+                payerName,
+                referenceHint,
+              })
+            }
+          >
+            <CreditCard className="size-4" aria-hidden="true" />
+            Thu tiền
+          </Button>
+        )}
+        {(hasMenu || canQr) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label={`Thao tác cho hóa đơn ${invoice.invoice_number}`}
+              >
+                <MoreHorizontal className="size-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {canQr && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    onAction({
+                      type: "qr",
+                      invoiceId: invoice.id,
+                      invoiceNumber: invoice.invoice_number,
+                    })
+                  }
+                >
+                  <QrCode className="size-4" aria-hidden="true" />
+                  Mã QR chuyển khoản
+                </DropdownMenuItem>
+              )}
+              {invoice.can_issue && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    onAction({
+                      type: "issue",
+                      invoiceId: invoice.id,
+                      feeId: invoice.fee_id,
+                      invoiceNumber: invoice.invoice_number,
+                    })
+                  }
+                >
+                  <FileText className="size-4" aria-hidden="true" />
+                  Phát hành
+                </DropdownMenuItem>
+              )}
+              {invoice.can_apply_penalty && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    onAction({
+                      type: "penalty",
+                      invoiceId: invoice.id,
+                      feeId: invoice.fee_id,
+                      invoiceNumber: invoice.invoice_number,
+                      daysOverdue: overdueDays,
+                    })
+                  }
+                >
+                  <AlertTriangle className="size-4" aria-hidden="true" />
+                  Áp phí trễ hạn
+                </DropdownMenuItem>
+              )}
+              {invoice.can_cancel && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() =>
+                      onAction({
+                        type: "cancel",
+                        invoiceId: invoice.id,
+                        feeId: invoice.fee_id,
+                        invoiceNumber: invoice.invoice_number,
+                      })
+                    }
+                  >
+                    <Ban className="size-4" aria-hidden="true" />
+                    Hủy hóa đơn
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+    </li>
+  )
+}
+
+// =============================================================================
+// THANH TOÁN SECTION
+// =============================================================================
+
+function PaymentSection({
+  collection,
+  onAction,
+}: {
+  collection: ProfileCollection
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  const payments = collection.payments
+  return (
+    <section>
+      <SectionHeader
+        icon={<CreditCard className="size-4" />}
+        title="Thanh toán"
+        count={payments.length}
+      />
+      {payments.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+          Chưa có giao dịch thanh toán nào.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {payments.map((p) => (
+            <PaymentRow key={p.id} payment={p} onAction={onAction} />
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+function PaymentRow({
+  payment,
+  onAction,
+}: {
+  payment: PaymentListItem
+  onAction: (d: WorkspaceDialog) => void
+}) {
+  const reviewTarget = {
+    id: payment.id,
+    invoice_id: payment.invoice_id,
+    reference_code: payment.reference_code,
+    amount_formatted: formatVND(payment.amount),
+    created_by_display: payment.created_by_name ?? "Không rõ",
+  }
+  const isPending = payment.status === "pending"
+  return (
+    <li className="rounded-xl border border-border bg-card px-3 py-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium tabular-nums">
+            {formatVND(payment.amount)}
+          </p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {payment.reference_code || `#${payment.id}`}
+            {payment.payer_name ? ` · ${payment.payer_name}` : ""}
+          </p>
+        </div>
+        <PaymentStatusBadge status={payment.status as PaymentStatus} size="sm" />
+      </div>
+
+      {isPending && payment.is_own && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground" role="note">
+          <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+          Khoản bạn tạo — cần người khác duyệt
+        </p>
+      )}
+
+      {(payment.can_verify || payment.can_reject) && (
+        <div className="mt-2 flex justify-end gap-1.5">
+          {payment.can_verify && (
+            <Button
+              size="sm"
+              className="h-8 bg-success-600 hover:bg-success-700"
+              onClick={() => onAction({ type: "verify", payment: reviewTarget })}
+            >
+              <CheckCircle className="size-4" aria-hidden="true" />
+              Xác minh
+            </Button>
+          )}
+          {payment.can_reject && (
+            <Button
+              size="sm"
+              variant="destructive"
+              className="h-8"
+              onClick={() => onAction({ type: "reject", payment: reviewTarget })}
+            >
+              <XCircle className="size-4" aria-hidden="true" />
+              Từ chối
+            </Button>
+          )}
+        </div>
+      )}
+    </li>
+  )
+}
+
+// =============================================================================
+// SKELETON
+// =============================================================================
+
+function DrawerSkeleton() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-28 w-full rounded-2xl" />
+      {[0, 1, 2].map((s) => (
+        <div key={s} className="space-y-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-16 w-full rounded-xl" />
+          <Skeleton className="h-16 w-full rounded-xl" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default FinanceProfileDrawer

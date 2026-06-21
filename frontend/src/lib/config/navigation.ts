@@ -169,23 +169,13 @@ export const navigationConfig: NavigationConfig = {
           ],
         },
         {
-          label: "Khoản phí",
-          href: "/finance/fees",
-          icon: Calculator,
-          roles: ["accountant", "manager", "admin"],
-        },
-        {
-          label: "Hóa đơn",
+          // Workspace "Thu học phí" — gộp Khoản phí + Hóa đơn + Thanh toán
+          // chờ duyệt (xem PR2). /finance/fees và /finance/payments redirect về
+          // đây để không gãy link/bookmark cũ.
+          label: "Thu học phí",
           href: "/finance/invoices",
           icon: Receipt,
           roles: ["accountant", "manager", "admin"],
-        },
-        {
-          label: "Thanh toán chờ duyệt",
-          href: "/finance/payments",
-          icon: CreditCard,
-          roles: ["accountant", "manager", "admin"],
-          // Badge for pending count can be added dynamically
         },
         {
           label: "Báo cáo công nợ",

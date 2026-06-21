@@ -11,12 +11,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
 import { toast } from "sonner"
-import { paymentsApi, type PaymentPaginatedResponse } from "@/lib/api/payments"
+import { paymentsApi } from "@/lib/api/payments"
 import type { ApiErrorResponse } from "@/types/api.types"
 import type {
   Payment,
   PaymentIntent,
   PaymentFilters,
+  PaymentListPaginatedResponse,
   PaymentCreateRequest,
   PaymentIntentCreateRequest,
   PaymentRejectRequest,
@@ -90,6 +91,21 @@ const invalidatePaymentQueries = async (
     invalidations.push(
       queryClient.invalidateQueries({ queryKey: invoicesKeys.detail(invoiceDetail) })
     )
+    // A verified/rejected payment changes the invoice's status + remaining → the
+    // collection workspace list rows + tab counts must refresh too, not just the
+    // invoice detail.
+    invalidations.push(
+      queryClient.invalidateQueries({
+        queryKey: invoicesKeys.lists(),
+        refetchType: "active",
+      })
+    )
+    invalidations.push(
+      queryClient.invalidateQueries({
+        queryKey: [...invoicesKeys.all, "status-counts"],
+        refetchType: "active",
+      })
+    )
   }
   if (feeDetail) {
     invalidations.push(
@@ -101,6 +117,15 @@ const invalidatePaymentQueries = async (
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     )
   }
+  // PR2: the collection drawer aggregates a profile's fees + invoices +
+  // payments. Any payment mutation changes it → refresh the open drawer (the
+  // prefix matches every open collection; usually just the one).
+  invalidations.push(
+    queryClient.invalidateQueries({
+      queryKey: [...feesKeys.all, "collection"],
+      refetchType: "active",
+    })
+  )
 
   return Promise.all(invalidations)
 }
@@ -123,14 +148,37 @@ const invalidatePaymentQueries = async (
  */
 export function usePayments(
   filters?: PaymentFilters,
-  options?: { initialData?: PaymentPaginatedResponse; enabled?: boolean }
+  options?: { initialData?: PaymentListPaginatedResponse; enabled?: boolean }
 ) {
-  return useQuery<PaymentPaginatedResponse, AxiosError<ApiErrorResponse>>({
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
     queryKey: paymentsKeys.list(filters),
     queryFn: () => paymentsApi.getPayments(filters),
     staleTime: 1000 * 15, // 15 seconds - shorter for verification queue
     gcTime: 1000 * 60 * 5,
     initialData: options?.initialData,
+    enabled: options?.enabled ?? true,
+  })
+}
+
+/**
+ * Maker-checker verification queue — manual payments only (intent_id IS NULL,
+ * status=pending), oldest-first. Online/auto-verified payments never appear.
+ * Used by the workspace "Chờ duyệt" tab.
+ */
+export function usePendingPayments(
+  params?: { page?: number; page_size?: number },
+  options?: { enabled?: boolean }
+) {
+  const filters: PaymentFilters = {
+    pending_manual_only: true,
+    page: params?.page ?? 1,
+    page_size: params?.page_size ?? 50,
+  }
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: paymentsKeys.list(filters),
+    queryFn: () => paymentsApi.getPayments(filters),
+    staleTime: 1000 * 15,
+    gcTime: 1000 * 60 * 5,
     enabled: options?.enabled ?? true,
   })
 }

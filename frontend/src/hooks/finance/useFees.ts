@@ -17,6 +17,7 @@ import type {
   FeeRecalculateRequest,
   FeeWaiveRequest,
   ProfileFinanceSummary,
+  ProfileCollection,
 } from "@/types/finance.types"
 
 // =====================================================================
@@ -31,6 +32,7 @@ export const feesKeys = {
   detail: (id: number) => [...feesKeys.details(), id] as const,
   byProfile: (profileId: number) => [...feesKeys.all, "by-profile", profileId] as const,
   profileSummary: (profileId: number) => [...feesKeys.all, "profile-summary", profileId] as const,
+  collection: (profileId: number) => [...feesKeys.all, "collection", profileId] as const,
 }
 
 // =====================================================================
@@ -90,6 +92,18 @@ const invalidateFeeQueries = async (
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     )
   }
+  // PR2: a fee mutation (calculate/waive/cancel/recalculate) creates or changes
+  // invoices, so the "Thu học phí" workspace list + tab counts + the open
+  // collection drawer must refresh too. Raw key prefixes (["invoices", …])
+  // avoid a useFees ↔ useInvoices import cycle (useInvoices imports feesKeys).
+  invalidations.push(
+    queryClient.invalidateQueries({ queryKey: ["invoices", "list"], refetchType: "active" }),
+    queryClient.invalidateQueries({ queryKey: ["invoices", "status-counts"], refetchType: "active" }),
+    queryClient.invalidateQueries({
+      queryKey: [...feesKeys.all, "collection"],
+      refetchType: "active",
+    }),
+  )
 
   return Promise.all(invalidations)
 }
@@ -186,6 +200,24 @@ export function useProfileFinanceSummary(
     queryFn: () => feesApi.getProfileFinanceSummary(profileId),
     enabled: (options?.enabled ?? true) && !!profileId,
     staleTime: 1000 * 60, // 1 minute
+  })
+}
+
+/**
+ * Full collection view for a profile (workspace "Thu học phí" drawer):
+ * identity + summary + invoices + payments. Short staleTime so the drawer
+ * reflects a just-recorded payment / just-issued invoice after invalidation.
+ */
+export function useProfileCollection(
+  profileId: number | null | undefined,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<ProfileCollection, AxiosError<ApiErrorResponse>>({
+    queryKey: feesKeys.collection(profileId ?? 0),
+    queryFn: () => feesApi.getProfileCollection(profileId as number),
+    enabled: (options?.enabled ?? true) && !!profileId,
+    staleTime: 1000 * 15,
+    gcTime: 1000 * 60 * 5,
   })
 }
 

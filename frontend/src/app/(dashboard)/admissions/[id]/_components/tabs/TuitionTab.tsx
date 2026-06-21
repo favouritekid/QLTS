@@ -245,7 +245,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
               </div>
               {canAccessFinanceModule && (
                 <Button variant="destructive" size="sm" asChild>
-                  <Link href={`/finance/invoices?profile_id=${profile.id}&status=overdue`}>
+                  <Link href={`/finance/invoices?profile_id=${profile.id}&tab=overdue`}>
                     Xem chi tiết
                   </Link>
                 </Button>

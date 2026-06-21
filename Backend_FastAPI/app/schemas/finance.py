@@ -322,6 +322,12 @@ class FeeSummaryResponse(BaseModel):
     paid_amount: Decimal
     remaining_amount: Decimal
     status: FeeStatusEnum
+    # Role-aware waive capability (same rule as FeeResponse.can_waive: not
+    # terminal AND remaining > 0 AND role in [admin, manager] — the RequireManager
+    # route gate). Default False so any builder that doesn't set it shows no
+    # waive button rather than a button the route would 403. The collection
+    # drawer populates it per the viewing user.
+    can_waive: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -384,6 +390,10 @@ class InvoiceResponse(InvoiceBase):
     can_cancel: bool = False
     can_record_payment: bool = False
     can_apply_penalty: bool = False
+    # Derived overdue (BE-owned single source) — the detail page must read this,
+    # NOT infer status=='overdue', or it goes silent on issued/partial rows the
+    # nightly beat job hasn't transitioned yet (the list already shows them red).
+    is_overdue: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -829,9 +839,36 @@ class FeesPage(BaseModel):
 
 
 class InvoiceListItem(InvoiceSummaryResponse):
-    """Invoice item for list view with additional info."""
+    """Invoice item for list view with additional info.
+
+    Distinct from the detail ``InvoiceResponse``: this carries only the
+    columns the "Thu học phí" workspace list renders. The router builds it by
+    explicit kwargs (NOT model_validate), so every field below must be passed
+    explicitly or the list 500s.
+    """
+    # Identity / context (who + what)
+    fee_id: int
+    profile_id: Optional[int] = None        # numeric id → opens the drawer
     profile_name: Optional[str] = None
+    profile_code: Optional[str] = None      # "HS-000131"
+    program_name: Optional[str] = None      # ngành (batch-safe: lead.offering.program)
+    officer_name: Optional[str] = None      # TVV phụ trách
     fee_type: Optional[FeeTypeEnum] = None
+    semester_no: Optional[int] = None       # kỳ HK (NULL cho phí non-tuition)
+    # Late-payment penalty + grand total (amount + penalty). remaining_amount
+    # (from the summary base) already includes penalty, so the list can show
+    # "Còn X (gồm Y phạt)" instead of a remaining that mysteriously exceeds amount.
+    penalty_amount: Decimal = Decimal("0")
+    total_due: Decimal = Decimal("0")
+    # Derived urgency — BE-owned single source for spine/status-pill/tab/sort.
+    # is_overdue = status IN OVERDUE_DERIVED_STATUSES AND due_date < today
+    # (SUPERSET of the lagging enum 'overdue'; draft excluded).
+    is_overdue: bool = False
+    # Role-aware permission flags (same logic as InvoiceResponse, thin-client).
+    can_issue: bool = False
+    can_cancel: bool = False
+    can_record_payment: bool = False
+    can_apply_penalty: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -846,8 +883,38 @@ class InvoicesPage(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class InvoiceStatusCounts(BaseModel):
+    """Counts for the status tabs/chips of the invoice workspace.
+
+    ``counts`` is a per-enum group-by (one key per InvoiceStatusEnum value).
+    ``overdue_derived`` is the DERIVED overdue count (issued/partial past due) —
+    used by the "Quá hạn" tab + red spine so the count matches the rows shown
+    (the enum 'overdue' bucket under-counts until the beat job transitions).
+    """
+    counts: Dict[str, int]
+    overdue_derived: int
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PaymentListItem(PaymentSummaryResponse):
-    """Payment item for list view with additional info."""
+    """Payment item for list view with additional info.
+
+    Distinct from the detail ``PaymentResponse``: built by explicit kwargs (via
+    ``_build_payment_list_item``) for the payment list, the manual-pending queue
+    AND the profile-collection drawer. ``reference_code`` / ``payer_name`` let
+    an accountant reconcile a bank transfer straight from the row; ``is_online``
+    (= ``intent_id is not None``) tells the maker-checker queue apart from
+    auto-verified gateway payments (the queue shows manual-only).
+    """
+    reference_code: Optional[str] = None   # bank/gateway ref (reconciliation)
+    payer_name: Optional[str] = None       # who paid (manual transfers)
+    is_online: bool = False                # intent_id is not None (gateway)
+    # True when the viewer is the maker → the queue shows a "needs another
+    # reviewer" reason instead of a dead/hidden verify button (vs a non-reviewer,
+    # which can_verify alone cannot distinguish).
+    is_own: bool = False
     profile_name: Optional[str] = None
     method_name: Optional[str] = None
     created_by_name: Optional[str] = None
@@ -863,6 +930,70 @@ class PaymentsPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PROFILE COLLECTION (workspace drawer — the 3 finance tiers for ONE profile)
+# ==============================================================================
+
+class CalculableProfileItem(BaseModel):
+    """One result row for the finance "Tính phí" picker — identity only."""
+    id: int
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CalculableProfilesResponse(BaseModel):
+    """Search results for the "Tính phí" picker (GET /api/fees/calculable-profiles).
+    Finance-scoped so accountant — denied /api/admissions by design — can still
+    pick a profile to calculate a fee for."""
+    profiles: List[CalculableProfileItem]
+
+
+class ProfileCollectionIdentity(BaseModel):
+    """Identity header for the "Thu học phí" drawer.
+
+    Mirrors the spine-row identity columns so the drawer header matches the row
+    the user clicked: ``program_name`` is the BATCH-SAFE offering program
+    (``lead.offering.program.name`` — same as the list / admission, may differ
+    from the multi-NV admitted major; that resolver is deferred).
+    """
+    profile_id: int
+    profile_code: str                      # "HS-000131"
+    student_name: Optional[str] = None
+    program_name: Optional[str] = None     # ngành (offering gốc, batch-safe)
+    officer_name: Optional[str] = None     # TVV phụ trách
+    phone: Optional[str] = None            # parent phone (accountant lookup)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProfileCollectionResponse(BaseModel):
+    """Everything the "Thu học phí" drawer needs for ONE profile — the point
+    where the three finance tiers (phí → hóa đơn → thanh toán) converge.
+
+    IDOR: the router resolves the AdmissionProfile UNIT-SCOPED first and 404s if
+    it is outside the caller's finance scope. The empty-collection case is NEVER
+    used as the access gate (a profile with no fees still belongs to a unit —
+    gating on "fees empty" would leak identity/existence).
+
+    - ``summary`` reuses ``ProfileFinanceSummary`` (totals + counts + the per-fee
+      list). The drawer's "Phí" section reads ``summary.fees`` — single source,
+      no duplicate top-level fees array that could drift. ``overdue_invoices`` is
+      populated with the DERIVED overdue predicate (issued/partial past due),
+      consistent with the workspace spine, NOT the lagging enum bucket.
+    - ``invoices`` / ``payments`` are flat cross-fee projections built with the
+      SAME list-item builders + role-aware ``can_*`` as the workspace list (NOT
+      detail types), so an action shown in the drawer is one the route allows.
+    """
+    identity: ProfileCollectionIdentity
+    summary: ProfileFinanceSummary
+    invoices: List[InvoiceListItem] = []
+    payments: List[PaymentListItem] = []
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -952,6 +1083,11 @@ class FinanceDashboardStats(BaseModel):
     pending_payments_count: int = 0
     overdue_invoices_count: int = 0
     overdue_amount: Decimal = Decimal("0")
+    # Total still owed on billed invoices (issued/partial/overdue) = the
+    # "Còn phải thu" metric of the collection workspace rail. Penalty-aware
+    # remaining (amount + penalty - paid, clamped ≥ 0), same as overdue_amount,
+    # so overdue_amount ⊆ outstanding_total.
+    outstanding_total: Decimal = Decimal("0")
     today_collections: Decimal = Decimal("0")
     monthly_collections: Decimal = Decimal("0")
     period_collections: Decimal = Decimal("0")

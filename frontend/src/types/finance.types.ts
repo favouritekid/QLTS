@@ -135,6 +135,10 @@ export interface FeeSummary {
   paid_amount: string
   remaining_amount: string
   status: FeeStatus
+  // Role-aware waive capability (backend-owned, matches the RequireManager
+  // route gate). Optional: only the collection drawer populates it; other
+  // FeeSummary sources leave it falsy → no waive button (safe default).
+  can_waive?: boolean
 }
 
 export interface FeeDetail extends Fee {
@@ -158,6 +162,9 @@ export interface Invoice {
   remaining_amount: string // Computed (includes penalty)
   penalty_amount: string
   total_due: string // Computed (amount + penalty_amount)
+  // Backend-owned derived overdue flag (issued/partial AND due_date < today).
+  // Single source of truth — FE never recomputes overdue from status/due_date.
+  is_overdue?: boolean
   issued_at: string | null
   paid_at: string | null
   cancelled_at: string | null
@@ -168,6 +175,9 @@ export interface Invoice {
   can_cancel: boolean
   can_record_payment: boolean
   can_apply_penalty: boolean
+  // List-only enrichment (present on GET /api/invoices items, absent on detail)
+  profile_name?: string | null
+  fee_type?: FeeType | null
 }
 
 export interface InvoiceSummary {
@@ -179,6 +189,65 @@ export interface InvoiceSummary {
   remaining_amount: string
   due_date: string
   status: InvoiceStatus
+}
+
+/**
+ * InvoiceListItem — the EXACT contract returned by `GET /api/invoices` items
+ * (backend `InvoiceListItem(InvoiceSummaryResponse)`). This is a LIST-only type;
+ * the detail page keeps using `Invoice`. Reusing the detail `Invoice` type for
+ * the list is the root of the "fields always undefined" bug (list never returns
+ * penalty/total_due/issued_at, and detail never returns the enrichment below).
+ */
+export interface InvoiceListItem {
+  id: number
+  invoice_number: string
+  installment_no: number
+  amount: string
+  paid_amount: string
+  remaining_amount: string
+  // Penalty accrued on this invoice + total due (amount + penalty). When penalty
+  // > 0, `remaining_amount` already includes it, so the row shows `total_due` as
+  // the headline figure (otherwise "Còn" would exceed the displayed amount).
+  penalty_amount: string
+  total_due: string
+  due_date: string
+  status: InvoiceStatus
+  // List enrichment (who + what), batch-safe from lead/offering/program/officer
+  fee_id: number
+  profile_id: number | null
+  profile_name: string | null
+  profile_code: string | null
+  program_name: string | null
+  officer_name: string | null
+  fee_type: FeeType | null
+  semester_no: number | null
+  // Backend-owned derived overdue flag (issued/partial AND due_date < today).
+  // Single source of truth — FE never recomputes overdue from due_date.
+  is_overdue: boolean
+  // Permission flags (role-aware, computed by backend)
+  can_issue: boolean
+  can_cancel: boolean
+  can_record_payment: boolean
+  can_apply_penalty: boolean
+}
+
+/**
+ * Status counts for the invoice list tabs (`GET /api/invoices/status-counts`).
+ * `counts` is grouped by the enum `Invoice.status`; `overdue_derived` is the
+ * DERIVED count (issued/partial AND due<today) used by the "Quá hạn" tab/chip so
+ * it always matches the red-spine rows, regardless of the enum `overdue` lag.
+ */
+export interface InvoiceStatusCounts {
+  counts: {
+    draft: number
+    issued: number
+    partial: number
+    paid: number
+    cancelled: number
+    overdue: number
+  }
+  overdue_derived: number
+  total: number
 }
 
 export interface InvoiceDetail extends Invoice {
@@ -241,6 +310,36 @@ export interface PaymentSummary {
   payment_date: string | null
   created_at: string
   // [TODO_BACKEND] Add: reference_code, method_name (for display)
+}
+
+/**
+ * Payment row for the workspace payment list / maker-checker queue / drawer
+ * (from backend `PaymentListItem`). DISTINCT from the detail `Payment`: the
+ * list endpoint returns only these enriched columns, so the queue card reads
+ * fields that actually exist (no `undefined` from reading detail-only fields).
+ * `is_online` (= intent_id is not None) is backend-owned — never recompute it
+ * from a missing `intent_id`. `pages` is NOT returned; derive from total/size.
+ */
+export interface PaymentListItem {
+  id: number
+  invoice_id: number
+  amount: string
+  status: PaymentStatus
+  payment_date: string | null
+  created_at: string
+  // Reconciliation + grain (enriched by backend list builder)
+  reference_code: string | null
+  payer_name: string | null
+  is_online: boolean
+  // True when the viewer is the maker (own payment) → queue shows the
+  // maker-checker reason rather than a hidden verify button.
+  is_own: boolean
+  profile_name: string | null
+  method_name: string | null
+  created_by_name: string | null
+  // Role-aware maker-checker flags (computed by backend)
+  can_verify: boolean
+  can_reject: boolean
 }
 
 // ============================================================================
@@ -361,6 +460,28 @@ export interface ProfileFinanceSummary {
 }
 
 // ============================================================================
+// PROFILE COLLECTION (workspace drawer — from backend ProfileCollectionResponse)
+// The three finance tiers for ONE profile. `summary.fees` is the canonical fee
+// list (the "Phí" section); `invoices`/`payments` are flat cross-fee
+// projections reusing the SAME list-item contracts (NOT detail types).
+// ============================================================================
+export interface ProfileCollectionIdentity {
+  profile_id: number
+  profile_code: string
+  student_name: string | null
+  program_name: string | null
+  officer_name: string | null
+  phone: string | null
+}
+
+export interface ProfileCollection {
+  identity: ProfileCollectionIdentity
+  summary: ProfileFinanceSummary
+  invoices: InvoiceListItem[]
+  payments: PaymentListItem[]
+}
+
+// ============================================================================
 // DASHBOARD STATS
 // ============================================================================
 export interface FinanceDashboardStats {
@@ -376,6 +497,9 @@ export interface FinanceDashboardStats {
   period_end: string | null
   pending_overpayments_count: number
   pending_refunds_count: number
+  // Σ invoice.remaining over issued/partial invoices (unit-scoped). Drives the
+  // "Còn phải thu" money metric in the collection workspace rail.
+  outstanding_total: string
 }
 
 export type DebtAgingBucket = "0_30" | "31_60" | "over_60"
@@ -691,11 +815,12 @@ export interface FeePaginatedResponse {
 }
 
 export interface InvoicePaginatedResponse {
-  items: Invoice[]
+  items: InvoiceListItem[]
   total: number
   page: number
   page_size: number
-  pages: number
+  // NOTE: backend `InvoicesPage` does NOT return `pages`. Pagination derives
+  // total pages from total/page_size (see common Pagination component).
 }
 
 export interface PaymentPaginatedResponse {
@@ -704,6 +829,17 @@ export interface PaymentPaginatedResponse {
   page: number
   page_size: number
   pages: number
+}
+
+/**
+ * Paginated payment LIST response (`PaymentListItem` rows). The backend does
+ * NOT return `pages` — derive it from `Math.ceil(total / page_size)`.
+ */
+export interface PaymentListPaginatedResponse {
+  items: PaymentListItem[]
+  total: number
+  page: number
+  page_size: number
 }
 
 // ============================================================================
@@ -719,11 +855,27 @@ export interface FeeFilters {
 }
 
 export interface InvoiceFilters {
-  fee_id?: number
-  status?: InvoiceStatus
-  overdue_only?: boolean
   page?: number
   page_size?: number
+  /** Comma-separated status enum values (e.g. "issued,partial"). */
+  status?: string
+  fee_id?: number
+  /** Deep-link scope: only invoices of this admission profile (TuitionTab). */
+  profile_id?: number
+  fee_type?: FeeType
+  /** Derived overdue (issued/partial/overdue AND due<today). Use for "Quá hạn" tab. */
+  overdue_only?: boolean
+  search?: string
+  sort_by?: "priority" | "due_date" | "amount" | "status" | "created_at"
+  sort_order?: "asc" | "desc"
+}
+
+/** Query params for `GET /api/invoices/status-counts`. */
+export interface InvoiceStatusCountFilters {
+  fee_id?: number
+  profile_id?: number
+  fee_type?: FeeType
+  search?: string
 }
 
 export interface PaymentFilters {
@@ -732,6 +884,10 @@ export interface PaymentFilters {
   method_id?: number
   page?: number
   page_size?: number
+  // Maker-checker queue: manual payments (intent_id IS NULL) awaiting
+  // verification. When true the backend ignores status/method_id. Online
+  // (auto-verified) payments never appear here.
+  pending_manual_only?: boolean
 }
 
 export interface DebtReportFilters {

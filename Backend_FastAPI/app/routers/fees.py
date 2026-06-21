@@ -34,6 +34,7 @@ from app.core.deps import (
     RequireAdmin,
     RequireManager,
     finance_scope_unit_id,
+    require_finance_staff,
 )
 from app.core.rate_limits import limiter, RateLimits
 from app.models.finance import FeeTypeEnum
@@ -42,6 +43,7 @@ from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
 from app.repositories.fee_repository import FeeRepository
 from app.utils.admission_status import is_fee_eligible
+from app.utils.id_helpers import format_profile_code
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -360,6 +362,42 @@ async def calculate_fee(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/calculable-profiles",
+    response_model=finance_schemas.CalculableProfilesResponse,
+    summary="Search profiles for the Tính phí picker (finance-scoped)",
+)
+async def list_calculable_profiles(
+    request: Request,
+    search: str = Query(..., min_length=2, max_length=100),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """Minimal admission-profile search for the workspace "Tính phí" picker.
+
+    Finance staff (admin/manager/accountant). Accountant is DENIED
+    ``/api/admissions`` by design (separation of duties), so this finance-scoped
+    lookup returns just id + name + phone to pick a profile to calculate a fee
+    for. Declared BEFORE ``/{fee_id}`` so the literal path wins the route match.
+    Unit-scoped via ``finance_scope_unit_id`` like the rest of the finance module.
+    """
+    fee_service = FeeCalculationService(db)
+    unit_id = finance_scope_unit_id(current_user)
+    profiles = await fee_service.search_calculable_profiles(search, unit_id)
+    return finance_schemas.CalculableProfilesResponse(
+        profiles=[
+            finance_schemas.CalculableProfileItem(
+                id=p.id,
+                full_name=p.lead.full_name if p.lead else None,
+                phone=p.lead.phone if p.lead else None,
+            )
+            for p in profiles
+        ]
+    )
+
+
 # ==============================================================================
 # FEE RETRIEVAL
 # ==============================================================================
@@ -466,21 +504,21 @@ async def get_profile_finance_summary(
 
     summary = await fee_service.get_fee_summary(profile_id, unit_id)
 
-    # Count pending and overdue invoices
-    pending_count = 0
-    overdue_count = 0
-    for fee in summary["fees"]:
-        for invoice in fee.invoices:
-            if invoice.status == "issued":
-                pending_count += 1
-            elif invoice.status == "overdue":
-                overdue_count += 1
+    # Pending/overdue via the SAME derived predicate as the collection drawer
+    # (issued|partial; derived-overdue) so the shared ProfileFinanceSummary
+    # field is endpoint-independent — not the lagging enum 'overdue' bucket.
+    all_invoices = [inv for fee in summary["fees"] for inv in fee.invoices]
+    pending_count, overdue_count = _count_pending_overdue(
+        all_invoices, date.today()
+    )
 
     return finance_schemas.ProfileFinanceSummary(
         admission_profile_id=profile_id,
         total_fees=summary["total_fees"],
         total_paid=summary["total_paid"],
-        total_remaining=summary["total_remaining"],
+        total_remaining=_total_remaining_with_penalty(
+            summary["fees"], all_invoices
+        ),
         fees=[
             finance_schemas.FeeSummaryResponse(
                 id=f.id,
@@ -496,6 +534,129 @@ async def get_profile_finance_summary(
         ],
         pending_invoices=pending_count,
         overdue_invoices=overdue_count,
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/collection/{profile_id}",
+    response_model=finance_schemas.ProfileCollectionResponse,
+    summary="Full collection view for a profile (Thu học phí drawer)",
+)
+async def get_profile_collection(
+    request: Request,
+    profile_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """The three finance tiers for ONE profile, for the workspace drawer:
+    identity + summary + invoices + payments.
+
+    **Security:**
+    - ``require_finance_staff`` HARD role gate (admin/manager/accountant) — also
+      keeps an officer (read-only on summary) off the collection drawer.
+    - IDOR: the profile is resolved UNIT-SCOPED first (``finance_scope_unit_id``)
+      and 404s if outside scope. The empty-collection case is NEVER the gate —
+      gating on "no fees" would leak identity/existence for an out-of-unit
+      profile (``get_fee_summary`` returns an empty summary for any id).
+    """
+    # Local imports → no router import cycle (fees ↔ invoices ↔ payments). The
+    # list builders are reused verbatim so a drawer row matches the spine row.
+    from app.routers.invoices import _build_invoice_list_item
+    from app.routers.payments import _build_payment_list_item
+
+    fee_service = FeeCalculationService(db)
+    unit_id = finance_scope_unit_id(current_user)
+    today = date.today()
+
+    profile = await fee_service.get_profile_collection(profile_id, unit_id)
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Admission profile not found",
+        )
+
+    lead = profile.lead
+    officer = lead.assigned_officer if lead else None
+    offering = lead.offering if lead else None
+    program = offering.program if offering else None
+
+    identity = finance_schemas.ProfileCollectionIdentity(
+        profile_id=profile.id,
+        profile_code=format_profile_code(profile.id),
+        student_name=lead.full_name if lead else None,
+        program_name=program.name if program else None,
+        officer_name=officer.full_name if officer else None,
+        phone=lead.phone if lead else None,
+    )
+
+    # Flatten the loaded graph: fees → invoices → payments.
+    fees = list(profile.fees or [])
+    all_invoices = []
+    all_payments = []
+    for fee in fees:
+        for inv in (fee.invoices or []):
+            all_invoices.append(inv)
+            all_payments.extend(inv.payments or [])
+
+    # Summary on the already-loaded graph (no extra query): totals + counts.
+    # total_remaining INCLUDES invoice penalties (shared helper) so the drawer
+    # header agrees with the invoice rows below; counts use the DERIVED overdue
+    # predicate so the drawer agrees with the workspace spine, not the lagging
+    # enum 'overdue' bucket.
+    total_fees = sum((f.final_amount for f in fees), Decimal("0"))
+    total_paid = sum((f.paid_amount for f in fees), Decimal("0"))
+    total_remaining = _total_remaining_with_penalty(fees, all_invoices)
+
+    pending_count, overdue_count = _count_pending_overdue(all_invoices, today)
+
+    summary = finance_schemas.ProfileFinanceSummary(
+        admission_profile_id=profile.id,
+        total_fees=total_fees,
+        total_paid=total_paid,
+        total_remaining=total_remaining,
+        fees=[
+            finance_schemas.FeeSummaryResponse(
+                id=f.id,
+                fee_type=f.fee_type,
+                academic_year=f"{f.academic_year}-{f.academic_year + 1}",
+                semester_no=f.semester_no,
+                final_amount=f.final_amount,
+                paid_amount=f.paid_amount,
+                remaining_amount=f.remaining_amount,
+                status=f.status,
+                # Role-aware (route gate): drawer shows "Miễn giảm" only when the
+                # waive route would accept it — never a button that 400/403s.
+                can_waive=_fee_can_waive(f, current_user.role),
+            )
+            for f in fees
+        ],
+        pending_invoices=pending_count,
+        overdue_invoices=overdue_count,
+    )
+
+    # Invoices: same enriched list item + role-aware can_* as the workspace list.
+    # Actionable-first (derived-overdue → soonest due → id) so the drawer opens
+    # on the row most likely to need a "Thu tiền".
+    invoice_items = [
+        _build_invoice_list_item(inv, current_user.role, today)
+        for inv in all_invoices
+    ]
+    invoice_items.sort(key=lambda it: (not it.is_overdue, it.due_date, it.id))
+
+    # Payments: newest first (history), enriched + role-aware maker-checker flags.
+    all_payments.sort(key=lambda p: p.created_at, reverse=True)
+    payment_items = [
+        _build_payment_list_item(pmt, current_user.id, current_user.role)
+        for pmt in all_payments
+    ]
+
+    return finance_schemas.ProfileCollectionResponse(
+        identity=identity,
+        summary=summary,
+        invoices=invoice_items,
+        payments=payment_items,
     )
 
 
@@ -675,6 +836,74 @@ async def recalculate_fee(
 # HELPER FUNCTIONS
 # ==============================================================================
 
+def _inv_status_value(inv):
+    """Normalize an invoice status to its string value (Enum or str)."""
+    return inv.status.value if hasattr(inv.status, "value") else inv.status
+
+
+def _count_pending_overdue(invoices, today):
+    """Pending/overdue counts via the derived predicate the workspace spine +
+    collection drawer use: pending = issued|partial, overdue =
+    _invoice_is_overdue (derived superset of the lagging enum 'overdue').
+    One formula so ProfileFinanceSummary.{pending,overdue}_invoices is
+    endpoint-independent."""
+    from app.routers.invoices import _invoice_is_overdue
+
+    pending = sum(
+        1 for inv in invoices if _inv_status_value(inv) in ("issued", "partial")
+    )
+    overdue = sum(1 for inv in invoices if _invoice_is_overdue(inv, today))
+    return pending, overdue
+
+
+def _total_remaining_with_penalty(fees, invoices):
+    """Amount still owed = principal + outstanding penalty.
+
+    Principal = Σ fee.remaining_amount (final-paid-waived) — already correct
+    for waivers AND fees not yet invoiced. We do NOT sum invoice.remaining:
+    waive_fee bumps fee.waived but leaves invoice.amount untouched, so
+    Σ invoice.remaining (amount+penalty-paid) would OVER-state the header by
+    the waived amount. Penalties live on the invoice (not the fee), so add the
+    penalty of non-terminal invoices on top."""
+    principal = sum((f.remaining_amount for f in fees), Decimal("0"))
+    penalty = sum(
+        (
+            inv.penalty_amount
+            for inv in invoices
+            if _inv_status_value(inv) not in ("paid", "cancelled")
+        ),
+        Decimal("0"),
+    )
+    # Clamp ≥ 0: fee.paid_amount absorbs the penalty portion of a payment
+    # (record_payment allows paying up to invoice.remaining = amount+penalty,
+    # verify_payment adds it ALL to fee.paid) while fee.final excludes penalty,
+    # so a fully-paid penalised fee drives fee.remaining negative. Never surface
+    # a negative "Còn phải thu". (Root cause is the payment layer; this keeps the
+    # displayed total honest. Clamping the TOTAL — not per-fee — preserves the
+    # penalty-paid-in-part case where a negative principal correctly offsets a
+    # still-counted penalty on a 'partial' invoice.)
+    return max(Decimal("0"), principal + penalty)
+
+
+_FEE_TERMINAL_STATUSES = {"paid", "cancelled", "waived"}
+
+
+def _fee_can_waive(fee, current_user_role: str = None) -> bool:
+    """Role-aware waive capability for a fee — SINGLE source for the detail
+    ``FeeResponse`` and the collection drawer's ``FeeSummaryResponse``.
+
+    Mirrors the route gate exactly (``RequireManager`` → admin/manager only;
+    accountant is intentionally excluded — separation of duties): not terminal
+    AND remaining > 0 AND role in [admin, manager]. Keeping the flag aligned with
+    the route is the thin-client contract — a True flag the route would 403 is a
+    broken button.
+    """
+    status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
+    is_terminal = status_value in _FEE_TERMINAL_STATUSES
+    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    return not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
+
+
 def _build_fee_response(
     fee, first_due_date=None, current_user_role: str = None
 ) -> finance_schemas.FeeResponse:
@@ -706,22 +935,16 @@ def _build_fee_response(
             )
         )
 
-    # P1: Compute permission flags based on status, amounts, AND role
-    terminal_statuses = {"paid", "cancelled", "waived"}
+    # P1: Compute permission flags based on status, amounts, AND role.
+    # can_waive shares _fee_can_waive with the collection drawer (single source).
+    # can_cancel is admin-only (RequireAdmin); can_recalculate is manager+ — both
+    # kept aligned with their route gate (thin-client: no button the route 403s).
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
-    is_terminal = status_value in terminal_statuses
-
-    # Role-aware permission computation. Waive + recalculate are gated at the
-    # route by RequireManager (admin + manager only); accountant is intentionally
-    # NOT admitted (separation of duties — a central accountant verifies/records
-    # cash and reads finance org-wide, but does not waive or recalculate fees).
-    # Fee cancel is admin-only (RequireAdmin). Keeping these flags aligned with
-    # the route gate is the thin-client contract: a True flag the route would 403
-    # is a broken button.
+    is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
     is_admin = current_user_role == UserRole.ADMIN
 
-    can_waive = not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
+    can_waive = _fee_can_waive(fee, current_user_role)
     can_cancel = not is_terminal and fee.paid_amount == 0 and is_admin
     can_recalculate = not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
 

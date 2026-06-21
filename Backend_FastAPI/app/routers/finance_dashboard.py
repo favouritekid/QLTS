@@ -25,9 +25,10 @@ from app.core.deps import CasbinAuth, finance_scope_unit_id
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.finance_report_service import FinanceReportService
+from app.repositories.fee_repository import InvoiceRepository
 from app.models.finance import (
     Fee, Invoice, Payment, RefundRequest, OverpaymentRecord,
-    FeeStatusEnum, InvoiceStatusEnum, PaymentStatusEnum,
+    FeeStatusEnum, PaymentStatusEnum,
     RefundStatusEnum, OverpaymentStatusEnum,
 )
 
@@ -195,33 +196,16 @@ async def get_dashboard_stats(
     result = await db.execute(pending_payments_query)
     pending_payments_count = result.scalar() or 0
 
-    # 3. Overdue invoices count and amount
-    overdue_query = (
-        select(
-            func.count(Invoice.id).label("count"),
-            func.coalesce(
-                func.sum(Invoice.amount - Invoice.paid_amount), 0
-            ).label("amount")
-        )
-        .join(Fee)
-        .join(models.AdmissionProfile)
-        .join(models.Lead)
-        .where(
-            and_(
-                Invoice.due_date < today,
-                Invoice.status.in_([
-                    InvoiceStatusEnum.draft.value,
-                    InvoiceStatusEnum.issued.value,
-                ])
-            )
-        )
+    # 3 + 3.5. Overdue + outstanding money — computed in the repository (Backend
+    # rule #1/#4: no db.execute / raw SQL in routers). Penalty-aware remaining
+    # (amount + penalty - paid, clamped ≥ 0) over OVERDUE_DERIVED_STATUSES; the
+    # overdue slice adds due_date < today so overdue ⊆ outstanding.
+    money = await InvoiceRepository(db).get_collection_money_totals(
+        unit_id=unit_id, today=today
     )
-    if unit_id is not None:
-        overdue_query = overdue_query.where(models.Lead.unit_id == unit_id)
-    result = await db.execute(overdue_query)
-    overdue = result.one()
-    overdue_invoices_count = overdue.count or 0
-    overdue_amount = Decimal(str(overdue.amount or 0))
+    overdue_invoices_count = money["overdue_invoices_count"]
+    overdue_amount = money["overdue_amount"]
+    outstanding_total = money["outstanding_total"]
 
     # 4. Today's collections (verified payments today)
     today_query = (
@@ -315,6 +299,7 @@ async def get_dashboard_stats(
         pending_payments_count=pending_payments_count,
         overdue_invoices_count=overdue_invoices_count,
         overdue_amount=overdue_amount,
+        outstanding_total=outstanding_total,
         today_collections=today_collections,
         monthly_collections=monthly_collections,
         period_collections=period_collections,

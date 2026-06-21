@@ -193,6 +193,104 @@ export function getStatusDotColor(status: string): string {
 }
 
 // =============================================================================
+// INVOICE STATUS CONFIG (Finance — "Thu học phí" workspace)
+// =============================================================================
+
+/**
+ * Invoice status UI config — label + badge styling per enum status. Mirrors the
+ * ADMISSION_STATUS_CONFIG pattern so the finance list shares one status source.
+ * 6 enum values: draft / issued / partial / paid / cancelled / overdue.
+ */
+export const INVOICE_STATUS_CONFIG: Record<string, StatusUIConfig> = {
+  draft: {
+    label: 'Nháp',
+    badgeVariant: 'secondary',
+    badgeColor: 'bg-muted text-muted-foreground',
+    showBanner: false,
+    allowedActions: ['issue', 'cancel'],
+  },
+  issued: {
+    label: 'Chờ thu',
+    badgeVariant: 'outline',
+    badgeColor: 'bg-info-100 text-info-700',
+    showBanner: false,
+    allowedActions: ['record_payment', 'cancel'],
+  },
+  partial: {
+    label: 'Thu một phần',
+    badgeVariant: 'default',
+    badgeColor: 'bg-amber-100 text-amber-700',
+    showBanner: false,
+    allowedActions: ['record_payment'],
+  },
+  paid: {
+    label: 'Đã thu đủ',
+    badgeVariant: 'default',
+    badgeColor: 'bg-emerald-100 text-emerald-700',
+    showBanner: false,
+    allowedActions: [],
+  },
+  cancelled: {
+    label: 'Đã hủy',
+    badgeVariant: 'secondary',
+    badgeColor: 'bg-muted text-muted-foreground',
+    showBanner: false,
+    allowedActions: [],
+  },
+  overdue: {
+    label: 'Quá hạn',
+    badgeVariant: 'destructive',
+    badgeColor: 'bg-error-100 text-error-700',
+    showBanner: false,
+    allowedActions: ['record_payment', 'apply_penalty'],
+  },
+}
+
+/**
+ * Status dot color cho danh sách hóa đơn (chấm trạng thái). Class PHẢI là literal
+ * static (Tailwind JIT). overdue đỏ; còn lại theo enum.
+ */
+export const INVOICE_STATUS_DOT_COLOR: Record<string, string> = {
+  draft: 'bg-gray-400',
+  issued: 'bg-info-500',
+  partial: 'bg-amber-500',
+  paid: 'bg-emerald-500',
+  cancelled: 'bg-gray-400',
+  overdue: 'bg-error-500',
+}
+
+/** Lấy class màu chấm cho 1 invoice status (fallback xám trung tính). */
+export function getInvoiceStatusDotColor(status: string): string {
+  return INVOICE_STATUS_DOT_COLOR[status] ?? 'bg-gray-400'
+}
+
+/**
+ * Status SPINE color — viền-trái `border-l-2` của mỗi dòng hóa đơn (mockup
+ * signature "vệt màu quét cả màn"). 6 enum: issued=info · partial=amber ·
+ * paid=emerald · draft+cancelled=xám. `is_overdue` ĐỎ override xử lý ở call site
+ * (getInvoiceStatusSpineColor nhận cờ overdue). Class literal static.
+ */
+export const INVOICE_STATUS_SPINE_COLOR: Record<string, string> = {
+  draft: 'border-l-gray-300',
+  issued: 'border-l-info-500',
+  partial: 'border-l-amber-500',
+  paid: 'border-l-emerald-500',
+  cancelled: 'border-l-gray-300',
+  overdue: 'border-l-error-500',
+}
+
+/**
+ * Class màu spine (border-left) cho 1 dòng hóa đơn.
+ *
+ * `isOverdue` (backend-owned) → ĐỎ override KỂ CẢ khi enum vẫn là issued/partial
+ * — đây là nguồn DUY NHẤT cho vệt đỏ, khớp status-pill/tab/overdue_derived.
+ */
+export function getInvoiceStatusSpineColor(status: string, isOverdue?: boolean): string {
+  if (isOverdue) return 'border-l-error-500'
+  return INVOICE_STATUS_SPINE_COLOR[status] ?? 'border-l-gray-300'
+}
+
+// =============================================================================
 // LEAD STATUS CONFIG (for future use)
 // =============================================================================
 

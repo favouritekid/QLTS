@@ -344,18 +344,31 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/by-profile/{profile_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/summary/{profile_id}", "action": "GET"},
+        # Workspace drawer — EXPLICIT (distinct literal from summary/by-profile,
+        # so no keyMatch4 collision); also gated by require_finance_staff.
+        {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},
+        # Finance "Tính phí" picker — accountant is denied /api/admissions by
+        # design, so the workspace fee picker uses this finance-scoped lookup.
+        {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
-        {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},
-        {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},
+        # waive / recalculate are admin/manager only (route gate RequireManager
+        # excludes accountant — separation of duties). NOT granted to accountant:
+        # the grant would be DEAD (route rejects before Casbin) and a foot-gun if
+        # the route ever switched to CasbinAuth. Removed 2026-06-21 (#413 follow-up).
 
         # INVOICES - Full CRUD (except delete)
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},
+        # Workspace tab badges — EXPLICIT (don't rely on the keyMatch4 collision
+        # with /api/invoices/{id}); mirrors /api/admissions/status-counts.
+        {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/issue", "action": "PUT"},
-        {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},
-        {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},
+        # cancel / apply-penalty are admin/manager only (route gate RequireManager
+        # excludes accountant — separation of duties). NOT granted to accountant:
+        # DEAD grant + foot-gun if the route ever switched to CasbinAuth.
+        # Removed 2026-06-21 (#413 follow-up).
 
         # PAYMENTS - Record + Verify + Reject (giai đoạn đầu accountant tự verify)
         {"subject": "{role}", "object": "/api/payments", "action": "GET"},
@@ -573,10 +586,24 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Collection workspace ("Thu học phí") — manager is in FINANCE_ROLES (FE),
+        # but does NOT inherit accountant, so grant the list + tab badges here or
+        # the workspace list 403s for manager.
+        {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
+        {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
+        {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},  # Workspace drawer
+        {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},  # Tính phí picker
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice
         {"subject": "{role}", "object": "/api/invoices/{id}/apply-penalty", "action": "POST"},  # Apply penalty
+        # Manager is a CHECKER (verify/reject below) → must be able to read the
+        # maker-checker queue ("Chờ duyệt" tab → GET /api/payments?pending_manual_only).
+        # Without this the workspace shows the tab but clicking it 403s. Manager
+        # does NOT inherit accountant, so grant the read explicitly (unit-scoped
+        # via finance_scope_unit_id). Pairs with the verify/reject grants.
+        {"subject": "{role}", "object": "/api/payments", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment (maker-checker)
         {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
         {"subject": "{role}", "object": "/api/refunds", "action": "GET"},

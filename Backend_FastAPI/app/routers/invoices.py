@@ -18,6 +18,7 @@ Endpoints:
 """
 
 import base64
+from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -26,10 +27,18 @@ import structlog
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, RequireManager, finance_scope_unit_id
+from app.core.deps import (
+    CasbinAuth,
+    RequireManager,
+    finance_scope_unit_id,
+    require_finance_staff,
+)
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
-from app.models.finance import PAYABLE_INVOICE_STATUSES
+from app.models.finance import (
+    PAYABLE_INVOICE_STATUSES,
+    OVERDUE_DERIVED_STATUSES,
+)
 from app.services.invoice_service import InvoiceService
 from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
@@ -70,17 +79,31 @@ async def list_invoices(
         None, description="Filter by status (comma-separated)"
     ),
     fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
+    profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type"),
     overdue_only: Optional[bool] = Query(
-        None, description="Filter only overdue invoices"
+        None,
+        description="Only derived-overdue invoices (issued/partial/overdue past due)",
+    ),
+    search: Optional[str] = Query(
+        None,
+        description="Search by student name, profile code (HS-…) or invoice number",
+    ),
+    sort_by: Optional[str] = Query(
+        None,
+        description="priority (default) | due_date | amount | status | created_at",
+    ),
+    sort_order: Optional[str] = Query(
+        None, description="asc | desc (ignored for the default 'priority' sort)"
     ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
-    List invoices with pagination and filters.
+    List invoices for the "Thu học phí" collection workspace.
 
     **Security:**
-    - IDOR protection: Only accessible for user's unit
+    - IDOR protection: unit-scoped via finance_scope_unit_id
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
@@ -90,44 +113,35 @@ async def list_invoices(
     skip = (page - 1) * page_size
     limit = min(page_size, 100)
 
-    # Parse comma-separated values
+    # Parse comma-separated status values
     statuses: Optional[List[str]] = None
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
 
+    # One "today" per request → the SQL overdue predicate/sort and the Python
+    # row-level is_overdue can't disagree across a midnight tick.
+    today = date.today()
     invoices, total = await invoice_repo.get_filtered_with_count(
         skip=skip,
         limit=limit,
         unit_id=unit_id,
         statuses=statuses,
         fee_id=fee_id,
+        profile_id=profile_id,
+        fee_type=fee_type,
         overdue_only=overdue_only,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        today=today,
     )
 
-    # Build response items with profile name and fee type
-    items = []
-    for invoice in invoices:
-        profile_name = None
-        fee_type = None
-
-        # Get profile name and fee type from relationship
-        if invoice.fee:
-            fee_type = invoice.fee.fee_type
-            if invoice.fee.admission_profile and invoice.fee.admission_profile.lead:
-                profile_name = invoice.fee.admission_profile.lead.full_name
-
-        items.append(finance_schemas.InvoiceListItem(
-            id=invoice.id,
-            invoice_number=invoice.invoice_number,
-            installment_no=invoice.installment_no,
-            amount=invoice.amount,
-            paid_amount=invoice.paid_amount,
-            remaining_amount=invoice.amount - invoice.paid_amount,
-            due_date=invoice.due_date,
-            status=invoice.status,
-            profile_name=profile_name,
-            fee_type=fee_type,
-        ))
+    # Build enriched list rows (identity + derived urgency + role-aware flags).
+    # All relationship access happens here in async context (see builder).
+    items = [
+        _build_invoice_list_item(invoice, current_user.role, today)
+        for invoice in invoices
+    ]
 
     return finance_schemas.InvoicesPage(
         items=items,
@@ -135,6 +149,53 @@ async def list_invoices(
         page=page,
         page_size=page_size,
     )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/status-counts",
+    response_model=finance_schemas.InvoiceStatusCounts,
+    summary="Invoice counts per status (+ derived overdue) for workspace tabs",
+)
+async def get_invoice_status_counts(
+    request: Request,
+    fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
+    profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type"),
+    search: Optional[str] = Query(
+        None,
+        description="Search by student name, profile code (HS-…) or invoice number",
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """
+    Counts for the status tabs/chips of the collection workspace.
+
+    Same filters as the list (minus status/overdue) so a tab's count equals the
+    rows clicking it returns. ``overdue_derived`` uses the derived predicate
+    (issued/partial/overdue past due), NOT the lagging enum 'overdue' bucket.
+
+    NOTE: declared BEFORE ``/{invoice_id}`` so this literal path is not
+    captured as an invoice id.
+
+    **Security:** ``require_finance_staff`` is a HARD role gate (admin/manager/
+    accountant) — needed because this literal path collides with the
+    ``/api/invoices/{id}`` policy under keyMatch4, which would otherwise leak
+    counts to an officer that only has the per-invoice read. Plus IDOR via
+    finance_scope_unit_id.
+    """
+    invoice_repo = InvoiceRepository(db)
+    unit_id = finance_scope_unit_id(current_user)
+    counts = await invoice_repo.get_status_counts(
+        unit_id=unit_id,
+        fee_id=fee_id,
+        profile_id=profile_id,
+        fee_type=fee_type,
+        search=search,
+    )
+    return finance_schemas.InvoiceStatusCounts(**counts)
 
 
 # ==============================================================================
@@ -473,49 +534,115 @@ async def apply_penalty(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_invoice_response(
+def _compute_invoice_permissions(
     invoice, current_user_role: str = None
-) -> finance_schemas.InvoiceResponse:
-    """
-    Build InvoiceResponse from Invoice model.
+) -> dict:
+    """Role-aware ``can_*`` flags for an invoice.
 
-    Args:
-        invoice: Invoice ORM model
-        current_user_role: Current user's role for role-aware permission flags
+    SINGLE SOURCE for both the detail response (``_build_invoice_response``)
+    and the list item (``list_invoices``) so a button shown in the list is
+    never one the detail/route would 403.
 
-    Permission Flags Logic (Role-Aware):
-        - can_issue: status == 'draft' (any role with permission)
-        - can_cancel: status not terminal AND paid == 0 AND role in [admin, manager]
-        - can_record_payment: status == 'issued' AND remaining > 0 (any role)
-        - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
+    Every flag is gated by the SAME roles that hold the underlying route, so a
+    button shown is never one the route would 403 (critical now that managers can
+    load the workspace list but do NOT hold the accountant write routes):
+    - can_issue: status == 'draft' AND role in [admin, accountant]
+      (PUT /api/invoices/{id}/issue → ACCOUNTANT_TEMPLATE; manager lacks it)
+    - can_record_payment: status in PAYABLE (issued/partial/overdue) AND
+      remaining > 0 AND role in [admin, accountant]
+      (POST /api/payments → ACCOUNTANT_TEMPLATE; manager lacks it)
+    - can_cancel: status not terminal AND paid == 0 AND role in [admin, manager]
+      (PUT /api/invoices/{id}/cancel → RequireManager; accountant excluded)
+    - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
+      (POST /api/invoices/{id}/apply-penalty → RequireManager; accountant excluded)
     """
-    # P1: Compute permission flags based on status, amounts, AND role
     status_value = (
         invoice.status.value if hasattr(invoice.status, "value") else invoice.status
     )
+    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    is_accountant_or_admin = current_user_role in [UserRole.ADMIN, UserRole.ACCOUNTANT]
+    return {
+        "can_issue": status_value == "draft" and is_accountant_or_admin,
+        "can_cancel": (
+            status_value not in ["paid", "cancelled"]
+            and invoice.paid_amount == 0
+            and is_manager_or_admin
+        ),
+        "can_record_payment": (
+            status_value in PAYABLE_INVOICE_STATUSES
+            and invoice.remaining_amount > 0
+            and is_accountant_or_admin
+        ),
+        "can_apply_penalty": status_value == "overdue" and is_manager_or_admin,
+    }
+
+
+def _invoice_is_overdue(invoice, today: Optional[date] = None) -> bool:
+    """Derived overdue for a single invoice (Python mirror of
+    ``InvoiceRepository._overdue_predicate``): a billed/partial/overdue invoice
+    past its due date. SUPERSET of the lagging enum 'overdue'. Single source for
+    both the list row and the detail response so the detail page never goes
+    silent on a row the list paints red.
+    """
+    today = today or date.today()
+    status_value = (
+        invoice.status.value if hasattr(invoice.status, "value") else invoice.status
+    )
+    return status_value in OVERDUE_DERIVED_STATUSES and invoice.due_date < today
+
+
+def _build_invoice_list_item(
+    invoice, current_user_role: str = None, today: Optional[date] = None
+) -> finance_schemas.InvoiceListItem:
+    """Build an ``InvoiceListItem`` (collection-workspace row) from an Invoice.
+
+    Requires ``invoice.fee.admission_profile.lead`` with ``assigned_officer`` +
+    ``offering.program`` eager-loaded (see
+    ``InvoiceRepository.get_filtered_with_count``). All relationship access
+    happens HERE in async context — never during Pydantic serialization — to
+    avoid MissingGreenlet. Reused by PR2's profile-collection endpoint.
+    """
+    today = today or date.today()
+    fee = invoice.fee
+    profile = fee.admission_profile if fee else None
+    lead = profile.lead if profile else None
+    officer = lead.assigned_officer if lead else None
+    offering = lead.offering if lead else None
+    program = offering.program if offering else None
+
+    return finance_schemas.InvoiceListItem(
+        id=invoice.id,
+        fee_id=invoice.fee_id,
+        invoice_number=invoice.invoice_number,
+        installment_no=invoice.installment_no,
+        amount=invoice.amount,
+        paid_amount=invoice.paid_amount,
+        remaining_amount=invoice.remaining_amount,
+        penalty_amount=invoice.penalty_amount,
+        total_due=invoice.total_due,
+        due_date=invoice.due_date,
+        status=invoice.status,
+        profile_id=profile.id if profile else None,
+        profile_name=lead.full_name if lead else None,
+        profile_code=format_profile_code(profile.id) if profile else None,
+        program_name=program.name if program else None,
+        officer_name=officer.full_name if officer else None,
+        fee_type=fee.fee_type if fee else None,
+        semester_no=fee.semester_no if fee else None,
+        is_overdue=_invoice_is_overdue(invoice, today),
+        **_compute_invoice_permissions(invoice, current_user_role),
+    )
+
+
+def _build_invoice_response(
+    invoice, current_user_role: str = None, today: Optional[date] = None
+) -> finance_schemas.InvoiceResponse:
+    """Build InvoiceResponse from Invoice model (detail view)."""
     # QW-B fix #1: use the model's remaining_amount property (= amount +
     # penalty_amount - paid_amount) so the response is internally consistent
-    # with total_due (= amount + penalty). The old `amount - paid_amount`
-    # ignored penalty → contradicted total_due when penalty > 0.
+    # with total_due (= amount + penalty).
     remaining_amount = invoice.remaining_amount
-
-    # Role-aware permission computation. Cancel + apply-penalty are gated at the
-    # route by RequireManager (admin + manager only); accountant is intentionally
-    # NOT admitted (separation of duties). can_issue is NOT role-gated here — the
-    # issue route uses CasbinAuth, which DOES grant accountant, so a central
-    # accountant can issue org-wide; can_record_payment is open to any finance
-    # role. Keeping cancel/penalty aligned with RequireManager preserves the
-    # thin-client contract (no button the route would 403).
-    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
-
-    can_issue = status_value == "draft"
-    can_cancel = (
-        status_value not in ["paid", "cancelled"]
-        and invoice.paid_amount == 0
-        and is_manager_or_admin
-    )
-    can_record_payment = status_value == "issued" and remaining_amount > 0
-    can_apply_penalty = status_value == "overdue" and is_manager_or_admin
+    perms = _compute_invoice_permissions(invoice, current_user_role)
 
     return finance_schemas.InvoiceResponse(
         id=invoice.id,
@@ -527,7 +654,7 @@ def _build_invoice_response(
         status=invoice.status,
         paid_amount=invoice.paid_amount,
         remaining_amount=remaining_amount,
-        # QW-B fix #1: these are now REQUIRED on InvoiceResponse. This builder
+        # QW-B fix #1: these are REQUIRED on InvoiceResponse. This builder
         # constructs the schema by explicit kwargs (NOT model_validate), so
         # from_attributes does NOT fill them → must pass explicitly or every
         # invoice endpoint 500s.
@@ -538,11 +665,11 @@ def _build_invoice_response(
         cancelled_at=invoice.cancelled_at,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
-        # P1: Permission flags
-        can_issue=can_issue,
-        can_cancel=can_cancel,
-        can_record_payment=can_record_payment,
-        can_apply_penalty=can_apply_penalty,
+        # P1: Permission flags (role-aware, shared with the list)
+        **perms,
+        # Derived overdue — same source as the list row so the detail page paints
+        # the same urgency the list shows (no enum-lag silence).
+        is_overdue=_invoice_is_overdue(invoice, today),
     )
 
 

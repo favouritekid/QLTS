@@ -1,50 +1,23 @@
 // src/app/(dashboard)/finance/payments/page.tsx
 /**
- * Payment Verification Queue Page (Server Component)
- *
- * Lists pending payments for Maker-Checker verification.
- * Managers/Admins verify payments created by Accountants.
+ * Folded into the "Thu học phí" workspace (PR2): the payment maker-checker queue
+ * is now the workspace "Chờ duyệt" tab. This route redirects there (preserving
+ * any query) so old links / bookmarks keep working.
  */
 
-import { Suspense } from "react"
-import { Skeleton } from "@/components/ui/skeleton"
-import { PaymentListClient } from "./_components/PaymentListClient"
+import { redirect } from "next/navigation"
 
-/**
- * Loading skeleton for payment list
- */
-function PaymentListLoading() {
-  return (
-    <div className="h-full flex flex-col p-4 sm:p-6 space-y-4">
-      {/* Header */}
-      <div className="space-y-2">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-64" />
-      </div>
-
-      {/* Stats */}
-      <div className="flex gap-4">
-        <Skeleton className="h-20 w-32 rounded-lg" />
-        <Skeleton className="h-20 w-32 rounded-lg" />
-      </div>
-
-      {/* List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {[...Array(6)].map((_, i) => (
-          <Skeleton key={i} className="h-52 rounded-lg" />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/**
- * Payment List Page
- */
-export default function PaymentsPage() {
-  return (
-    <Suspense fallback={<PaymentListLoading />}>
-      <PaymentListClient />
-    </Suspense>
-  )
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const sp = await searchParams
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(sp)) {
+    if (typeof value === "string") params.set(key, value)
+  }
+  // Land on the verification queue tab by default.
+  if (!params.has("tab")) params.set("tab", "pending")
+  redirect(`/finance/invoices?${params.toString()}`)
 }

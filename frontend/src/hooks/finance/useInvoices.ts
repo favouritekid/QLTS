@@ -4,7 +4,7 @@
  * @see lib/api/invoices.ts
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
 import { toast } from "sonner"
 import { invoicesApi, type InvoicePaginatedResponse } from "@/lib/api/invoices"
@@ -14,6 +14,8 @@ import type {
   InvoiceDetail,
   InvoiceFilters,
   InvoicePenaltyRequest,
+  InvoiceStatusCountFilters,
+  InvoiceStatusCounts,
   VietQRResponse,
 } from "@/types/finance.types"
 import { feesKeys } from "./useFees"
@@ -26,6 +28,8 @@ export const invoicesKeys = {
   all: ["invoices"] as const,
   lists: () => [...invoicesKeys.all, "list"] as const,
   list: (filters?: InvoiceFilters) => [...invoicesKeys.lists(), filters] as const,
+  statusCounts: (filters?: InvoiceStatusCountFilters) =>
+    [...invoicesKeys.all, "status-counts", filters ?? {}] as const,
   details: () => [...invoicesKeys.all, "detail"] as const,
   detail: (id: number) => [...invoicesKeys.details(), id] as const,
   vietqr: (id: number) => [...invoicesKeys.detail(id), "vietqr"] as const,
@@ -71,6 +75,15 @@ const invalidateInvoiceQueries = async (
         refetchType: "active",
       })
     )
+    // Workspace tab counts + metric chips derive from the same list state →
+    // invalidate the status-counts prefix so they don't drift after a status/
+    // amount change. Prefix (no filter arg) matches every cached filter variant.
+    invalidations.push(
+      queryClient.invalidateQueries({
+        queryKey: [...invoicesKeys.all, "status-counts"],
+        refetchType: "active",
+      })
+    )
   }
   if (byFee) {
     invalidations.push(
@@ -87,6 +100,14 @@ const invalidateInvoiceQueries = async (
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     )
   }
+  // PR2: refresh the collection drawer (a profile's fees + invoices + payments)
+  // after any invoice mutation — the prefix matches every open collection.
+  invalidations.push(
+    queryClient.invalidateQueries({
+      queryKey: [...feesKeys.all, "collection"],
+      refetchType: "active",
+    })
+  )
 
   return Promise.all(invalidations)
 }
@@ -116,6 +137,33 @@ export function useInvoices(
     staleTime: 1000 * 30, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes
     initialData: options?.initialData,
+    // Keep the previous page's rows visible while a new filter/page fetches
+    // (isFetching drives an opacity dim) instead of flashing the full-page
+    // skeleton. Mirrors useAdmissions. isLoading stays true only on first load.
+    placeholderData: keepPreviousData,
+    enabled: options?.enabled ?? true,
+  })
+}
+
+/**
+ * Get invoice tab status counts (per-enum + overdue_derived + total).
+ *
+ * @param filters - Context filters (fee_id, fee_type, search); NOT status/page.
+ *
+ * @example
+ * ```tsx
+ * const { data: counts } = useInvoiceStatusCounts({ search: "Nguyễn" })
+ * ```
+ */
+export function useInvoiceStatusCounts(
+  filters?: InvoiceStatusCountFilters,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<InvoiceStatusCounts, AxiosError<ApiErrorResponse>>({
+    queryKey: invoicesKeys.statusCounts(filters),
+    queryFn: () => invoicesApi.getInvoiceStatusCounts(filters),
+    staleTime: 1000 * 30,
+    gcTime: 1000 * 60 * 5,
     enabled: options?.enabled ?? true,
   })
 }
