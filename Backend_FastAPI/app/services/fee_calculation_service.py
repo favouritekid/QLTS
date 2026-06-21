@@ -44,6 +44,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
 )
 from app.config import settings
+from app.utils.text_helpers import escape_like_pattern, LIKE_ESCAPE_CHAR
 
 log = structlog.get_logger(__name__)
 
@@ -881,6 +882,52 @@ class FeeCalculationService:
 
         result = await self.db.execute(query)
         return result.scalars().first()
+
+    async def search_calculable_profiles(
+        self,
+        search: str,
+        unit_id: Optional[int] = None,
+        limit: int = 8,
+    ) -> List[models.AdmissionProfile]:
+        """Minimal admission-profile lookup for the finance "Tính phí" picker —
+        match by HS-code, name, or phone; identity-only (lead eager-loaded).
+
+        Accountant is DENIED ``/api/admissions`` by design, so this finance-
+        scoped search gives finance staff just enough to pick a profile to
+        calculate a fee for. Unit-scoped via ``lead.unit_id`` (admin/accountant
+        global → ``unit_id is None``). NFC-normalised + LIKE-escaped like the
+        admission search (no wildcard injection)."""
+        import re
+        import unicodedata
+
+        term = unicodedata.normalize("NFC", (search or "").strip())
+        if not term:
+            return []
+
+        query = (
+            select(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(selectinload(models.AdmissionProfile.lead))
+        )
+
+        code = re.match(r"^HS-?0*(\d+)$", term, re.IGNORECASE)
+        if code:
+            query = query.where(models.AdmissionProfile.id == int(code.group(1)))
+        else:
+            pattern = f"%{escape_like_pattern(term)}%"
+            query = query.where(
+                sa.or_(
+                    models.Lead.full_name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    models.Lead.phone.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                )
+            )
+
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        query = query.order_by(models.AdmissionProfile.id.desc()).limit(limit)
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
 
     # ==========================================================================
     # HELPER METHODS

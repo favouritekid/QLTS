@@ -379,6 +379,31 @@ async def test_total_remaining_clamps_negative_when_penalty_paid_in_full():
     assert total == Decimal("0")  # clamped, not -50,000
 
 
+async def test_search_calculable_profiles(db, seeded_collection):
+    """Finance "Tính phí" picker lookup — finds a profile by name within the
+    caller's unit + by HS-code. Accountant uses THIS (denied /api/admissions),
+    so it must be finance-scoped, not admission-scoped."""
+    service = FeeCalculationService(db)
+
+    # By name, scoped to unit A → finds prof_a "Đặng Thu Hà".
+    hits = await service.search_calculable_profiles(
+        "Đặng", seeded_collection["unit_a"]
+    )
+    assert seeded_collection["prof_a_id"] in {p.id for p in hits}
+
+    # Unit scope: the same name from unit B's scope must NOT leak prof_a.
+    other = await service.search_calculable_profiles(
+        "Đặng", seeded_collection["unit_b"]
+    )
+    assert seeded_collection["prof_a_id"] not in {p.id for p in other}
+
+    # By HS-code → exact profile (global scope, unit_id=None).
+    by_code = await service.search_calculable_profiles(
+        f"HS-{seeded_collection['prof_a_id']:06d}", None
+    )
+    assert {p.id for p in by_code} == {seeded_collection["prof_a_id"]}
+
+
 async def test_collection_invoice_items_enriched_and_role_aware(db, seeded_collection):
     """Drawer invoice rows reuse the list-item builder: enriched identity +
     is_overdue + role-aware can_*."""

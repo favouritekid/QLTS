@@ -22,7 +22,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { admissionsApi } from "@/lib/api/admissions"
+import { feesApi } from "@/lib/api/fees"
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import { formatProfileCode } from "@/lib/utils/admission-helpers"
 
@@ -56,8 +56,8 @@ export function CalculateFeePickerDialog({
 
   const enabled = open && debounced.length >= 2
   const { data, isFetching } = useQuery({
-    queryKey: ["admissions", "fee-picker", debounced],
-    queryFn: () => admissionsApi.listAdmissions({ search: debounced, page_size: 8 }),
+    queryKey: ["fees", "calculable-profiles", debounced],
+    queryFn: () => feesApi.listCalculableProfiles(debounced),
     enabled,
     staleTime: 1000 * 30,
   })

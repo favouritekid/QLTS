@@ -362,6 +362,42 @@ async def calculate_fee(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/calculable-profiles",
+    response_model=finance_schemas.CalculableProfilesResponse,
+    summary="Search profiles for the Tính phí picker (finance-scoped)",
+)
+async def list_calculable_profiles(
+    request: Request,
+    search: str = Query(..., min_length=2, max_length=100),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """Minimal admission-profile search for the workspace "Tính phí" picker.
+
+    Finance staff (admin/manager/accountant). Accountant is DENIED
+    ``/api/admissions`` by design (separation of duties), so this finance-scoped
+    lookup returns just id + name + phone to pick a profile to calculate a fee
+    for. Declared BEFORE ``/{fee_id}`` so the literal path wins the route match.
+    Unit-scoped via ``finance_scope_unit_id`` like the rest of the finance module.
+    """
+    fee_service = FeeCalculationService(db)
+    unit_id = finance_scope_unit_id(current_user)
+    profiles = await fee_service.search_calculable_profiles(search, unit_id)
+    return finance_schemas.CalculableProfilesResponse(
+        profiles=[
+            finance_schemas.CalculableProfileItem(
+                id=p.id,
+                full_name=p.lead.full_name if p.lead else None,
+                phone=p.lead.phone if p.lead else None,
+            )
+            for p in profiles
+        ]
+    )
+
+
 # ==============================================================================
 # FEE RETRIEVAL
 # ==============================================================================

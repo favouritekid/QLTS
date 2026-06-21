@@ -30,6 +30,17 @@ export interface FeePaginatedResponse {
   pages: number
 }
 
+/** One result row for the "Tính phí" picker (GET /api/fees/calculable-profiles). */
+export interface CalculableProfile {
+  id: number
+  full_name: string | null
+  phone: string | null
+}
+
+export interface CalculableProfilesResponse {
+  profiles: CalculableProfile[]
+}
+
 // ============================================================================
 // FEE CRUD OPERATIONS
 // ============================================================================
@@ -108,6 +119,22 @@ export async function getProfileCollection(
 ): Promise<ProfileCollection> {
   const response = await api.get<ProfileCollection>(
     API_ENDPOINTS.FINANCE.FEES.COLLECTION(profileId)
+  )
+  return response.data
+}
+
+/**
+ * Search admission profiles for the "Tính phí" picker. Finance-scoped so the
+ * accountant role — denied /api/admissions by design — can pick a profile.
+ *
+ * @param search - name / HS-code / phone (≥ 2 chars)
+ */
+export async function listCalculableProfiles(
+  search: string
+): Promise<CalculableProfilesResponse> {
+  const response = await api.get<CalculableProfilesResponse>(
+    API_ENDPOINTS.FINANCE.FEES.CALCULABLE_PROFILES,
+    { params: { search } }
   )
   return response.data
 }
@@ -204,6 +231,7 @@ export const feesApi = {
   getFeesByProfile,
   getProfileFinanceSummary,
   getProfileCollection,
+  listCalculableProfiles,
   // Actions
   calculateFee,
   waiveFee,

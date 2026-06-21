@@ -347,6 +347,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # Workspace drawer — EXPLICIT (distinct literal from summary/by-profile,
         # so no keyMatch4 collision); also gated by require_finance_staff.
         {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},
+        # Finance "Tính phí" picker — accountant is denied /api/admissions by
+        # design, so the workspace fee picker uses this finance-scoped lookup.
+        {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
         # waive / recalculate are admin/manager only (route gate RequireManager
         # excludes accountant — separation of duties). NOT granted to accountant:
@@ -589,6 +592,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
         {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},  # Workspace drawer
+        {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},  # Tính phí picker
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
         {"subject": "{role}", "object": "/api/fees/{id}/recalculate", "action": "POST"},  # Recalculate fee
         {"subject": "{role}", "object": "/api/invoices/{id}/cancel", "action": "PUT"},  # Cancel invoice

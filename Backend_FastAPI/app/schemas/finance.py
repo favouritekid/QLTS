@@ -938,6 +938,22 @@ class PaymentsPage(BaseModel):
 # PROFILE COLLECTION (workspace drawer — the 3 finance tiers for ONE profile)
 # ==============================================================================
 
+class CalculableProfileItem(BaseModel):
+    """One result row for the finance "Tính phí" picker — identity only."""
+    id: int
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CalculableProfilesResponse(BaseModel):
+    """Search results for the "Tính phí" picker (GET /api/fees/calculable-profiles).
+    Finance-scoped so accountant — denied /api/admissions by design — can still
+    pick a profile to calculate a fee for."""
+    profiles: List[CalculableProfileItem]
+
+
 class ProfileCollectionIdentity(BaseModel):
     """Identity header for the "Thu học phí" drawer.
 
