@@ -141,7 +141,12 @@ function clearFiltersFromStorage() {
 }
 
 function normalizeStoredFilters(filters: StoredInvoiceFilters): StoredInvoiceFilters {
-  return { ...DEFAULT_FILTERS, ...filters }
+  const merged = { ...DEFAULT_FILTERS, ...filters }
+  // The "pending" queue is a transient grain, never a restorable invoice
+  // filter. Coerce any stale persisted value (written before the save-side
+  // guard) so an old localStorage entry can't open the queue on first load.
+  if (merged.activeTab === "pending") merged.activeTab = "all"
+  return merged
 }
 
 // =============================================================================

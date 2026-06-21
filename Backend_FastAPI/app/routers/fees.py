@@ -821,22 +821,24 @@ def _count_pending_overdue(invoices, today):
 
 
 def _total_remaining_with_penalty(fees, invoices):
-    """Amount still owed INCLUDING invoice penalties. Fee-level
-    (final-paid-waived) omits penalties (they live on invoices) and so
-    under-states the drawer header vs the invoice rows. Sum non-terminal
-    invoices' remaining (= what the rows show) + any fee not yet invoiced."""
-    invoiced = sum(
+    """Amount still owed = principal + outstanding penalty.
+
+    Principal = Σ fee.remaining_amount (final-paid-waived) — already correct
+    for waivers AND fees not yet invoiced. We do NOT sum invoice.remaining:
+    waive_fee bumps fee.waived but leaves invoice.amount untouched, so
+    Σ invoice.remaining (amount+penalty-paid) would OVER-state the header by
+    the waived amount. Penalties live on the invoice (not the fee), so add the
+    penalty of non-terminal invoices on top."""
+    principal = sum((f.remaining_amount for f in fees), Decimal("0"))
+    penalty = sum(
         (
-            inv.remaining_amount
+            inv.penalty_amount
             for inv in invoices
             if _inv_status_value(inv) not in ("paid", "cancelled")
         ),
         Decimal("0"),
     )
-    uninvoiced = sum(
-        (f.remaining_amount for f in fees if not f.invoices), Decimal("0")
-    )
-    return invoiced + uninvoiced
+    return principal + penalty
 
 
 _FEE_TERMINAL_STATUSES = {"paid", "cancelled", "waived"}

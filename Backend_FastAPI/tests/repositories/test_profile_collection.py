@@ -43,7 +43,7 @@ from app.repositories.payment_repository import PaymentRepository
 from app.services.fee_calculation_service import FeeCalculationService
 from app.routers.invoices import _build_invoice_list_item, _invoice_is_overdue
 from app.routers.payments import _build_payment_list_item
-from app.routers.fees import _fee_can_waive
+from app.routers.fees import _fee_can_waive, _total_remaining_with_penalty
 from app.utils.id_helpers import format_profile_code
 
 pytestmark = pytest.mark.asyncio
@@ -303,11 +303,16 @@ async def test_collection_identity_and_derived_summary(db, seeded_collection):
     fees = list(profile.fees)
     all_invoices = [inv for f in fees for inv in f.invoices]
 
-    # Money totals mirror get_fee_summary: Σfinal − Σpaid − Σwaived.
     total_fees = sum((f.final_amount for f in fees), Decimal("0"))
     total_paid = sum((f.paid_amount for f in fees), Decimal("0"))
     assert total_fees == Decimal("1300000")  # 1,000,000 tuition + 300,000 app
     assert total_paid == Decimal("500000")   # 200,000 + 300,000
+
+    # total_remaining = Σ fee.remaining (final-paid-waived) + Σ non-terminal
+    # invoice penalty — NOT Σ invoice.remaining. Here: tuition 800k + app 0
+    # (no waiver, no penalty) = 800k. (Σ invoice.remaining would wrongly give
+    # 1.3M — the tuition fee is over-invoiced 1M+500k against a 1M final.)
+    assert _total_remaining_with_penalty(fees, all_invoices) == Decimal("800000")
 
     # DERIVED overdue: only the issued-past-due tuition invoice (NOT the future
     # issued one, NOT the paid one). The enum 'overdue' bucket here is 0.
@@ -318,6 +323,40 @@ async def test_collection_identity_and_derived_summary(db, seeded_collection):
     # Invoice.status is a plain str column → compare directly.
     enum_overdue = sum(1 for inv in all_invoices if inv.status == "overdue")
     assert enum_overdue == 0
+
+
+async def test_total_remaining_excludes_waived_includes_penalty():
+    """Regression (PR2 review): a waive AFTER an invoice is issued bumps
+    fee.waived but leaves invoice.amount untouched, so total_remaining must be
+    Σ fee.remaining (reflects the waiver) + Σ non-terminal invoice penalty —
+    NEVER Σ invoice.remaining (which ignores the waiver and over-states)."""
+    from types import SimpleNamespace as NS
+
+    # Fee waived 400k of 1M (paid 0) → fee.remaining 600k; its issued invoice
+    # still shows the full 1M (waive_fee never touches the invoice).
+    fee_waived = NS(remaining_amount=Decimal("600000"))
+    inv_waived = NS(
+        remaining_amount=Decimal("1000000"),  # stale: ignores the waiver
+        penalty_amount=Decimal("0"), status="issued",
+    )
+    # Overdue fee whose invoice carries a 50k penalty (penalty ∉ the fee).
+    fee_overdue = NS(remaining_amount=Decimal("200000"))
+    inv_overdue = NS(
+        remaining_amount=Decimal("250000"),
+        penalty_amount=Decimal("50000"), status="overdue",
+    )
+    # A cancelled invoice's penalty must NOT count.
+    inv_cancelled = NS(
+        remaining_amount=Decimal("999"),
+        penalty_amount=Decimal("999"), status="cancelled",
+    )
+
+    total = _total_remaining_with_penalty(
+        [fee_waived, fee_overdue], [inv_waived, inv_overdue, inv_cancelled]
+    )
+    # 600k + 200k principal + 50k penalty = 850k. The regressed Σ invoice.remaining
+    # would give 1,000,000 + 250,000 = 1,250,000 — 400k too high (dropped waiver).
+    assert total == Decimal("850000")
 
 
 async def test_collection_invoice_items_enriched_and_role_aware(db, seeded_collection):
