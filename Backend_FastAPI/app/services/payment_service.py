@@ -260,6 +260,16 @@ class PaymentService:
                 f"Can only verify pending payments. Current status: {payment.status}"
             )
 
+        # Manual-only: a gateway/online payment (intent_id set) is confirmed by
+        # the provider callback (payment_intent_service.process_callback), never
+        # by the maker-checker path. Verifying it by hand would record money the
+        # gateway has not confirmed.
+        if payment.intent_id is not None:
+            raise BusinessRuleViolation(
+                "Online payments are confirmed by the payment gateway, not "
+                "manually."
+            )
+
         # C3: No self-approval
         if payment.created_by_id == verifier_id:
             raise BusinessRuleViolation(
@@ -450,6 +460,14 @@ class PaymentService:
         if payment.status != PaymentStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 f"Can only reject pending payments. Current status: {payment.status}"
+            )
+
+        # Manual-only: a gateway/online payment (intent_id set) is settled by the
+        # provider callback, not the maker-checker path (mirrors verify_payment).
+        if payment.intent_id is not None:
+            raise BusinessRuleViolation(
+                "Online payments are settled by the payment gateway, not "
+                "manually."
             )
 
         if not reason or not reason.strip():

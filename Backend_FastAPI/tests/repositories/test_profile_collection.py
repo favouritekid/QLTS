@@ -489,4 +489,25 @@ async def test_payment_list_item_online_flag(db, seeded_collection):
     online = next(p for p in payments if p.id == seeded_collection["online_pending_id"])
     item = _build_payment_list_item(online, seeded_collection["admin_id"], "admin")
     assert item.is_online is True
+    # Manual verify/reject must NOT be offered on a gateway payment — it is
+    # verified by the provider callback, and the manual queue excludes it.
+    assert item.can_verify is False
+    assert item.can_reject is False
     assert item.profile_name == "Đặng Thu Hà"
+
+
+async def test_verify_online_payment_blocked_at_service(db, seeded_collection):
+    """Defense-in-depth: a direct verify on a gateway/online payment (intent_id
+    set) is rejected at the SERVICE — only the provider callback confirms it.
+    Pairs with the can_verify=False flag so FE and backend agree (no button the
+    route would 400)."""
+    from app.services.payment_service import PaymentService
+    from app.utils.exceptions import BusinessRuleViolation
+
+    service = PaymentService(db)
+    with pytest.raises(BusinessRuleViolation):
+        await service.verify_payment(
+            seeded_collection["online_pending_id"],
+            verifier_id=seeded_collection["admin_id"],
+            unit_id=seeded_collection["unit_a"],
+        )

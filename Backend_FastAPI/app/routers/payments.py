@@ -657,6 +657,12 @@ def _compute_payment_review_flags(
         payment.status.value if hasattr(payment.status, "value") else payment.status
     )
     is_pending = status_value == "pending"
+    # Manual payments only (intent_id IS NULL): the maker-checker queue is
+    # manual-only and gateway/online payments (intent_id set) auto-verify via
+    # the callback, never by hand. Without this the collection drawer — which
+    # rows EVERY payment — would surface manual verify/reject on a pending
+    # gateway payment.
+    is_manual = payment.intent_id is None
     is_different_user = (
         current_user_id is not None and payment.created_by_id != current_user_id
     )
@@ -665,7 +671,9 @@ def _compute_payment_review_flags(
         UserRole.MANAGER,
         UserRole.ACCOUNTANT,
     ]
-    can = is_pending and is_different_user and is_finance_reviewer
+    can = (
+        is_pending and is_manual and is_different_user and is_finance_reviewer
+    )
     return can, can
 
 
