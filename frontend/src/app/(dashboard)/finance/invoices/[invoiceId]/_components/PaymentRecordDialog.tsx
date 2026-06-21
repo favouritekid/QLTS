@@ -68,6 +68,10 @@ interface PaymentRecordDialogProps {
   invoiceId: number
   maxAmount: string
   feeId?: number
+  /** Prefill the payer name (student/parent, known from the collection drawer). */
+  defaultPayerName?: string
+  /** Prefill the reference (e.g. the profile code = the VietQR transfer note). */
+  defaultReference?: string
 }
 
 // =============================================================================
@@ -85,6 +89,8 @@ export function PaymentRecordDialog({
   invoiceId,
   maxAmount,
   feeId,
+  defaultPayerName,
+  defaultReference,
 }: PaymentRecordDialogProps) {
   const createMutation = useCreatePayment()
   const { data: paymentMethods, isLoading: methodsLoading } = usePaymentMethods()
@@ -100,8 +106,8 @@ export function PaymentRecordDialog({
       method_id: undefined,
       amount: undefined,
       payment_date: new Date(),
-      reference_code: "",
-      payer_name: "",
+      reference_code: defaultReference ?? "",
+      payer_name: defaultPayerName ?? "",
       payer_account: "",
       notes: "",
     },
@@ -252,7 +258,10 @@ export function PaymentRecordDialog({
               name="reference_code"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Mã tham chiếu / Số biên lai</FormLabel>
+                  <FormLabel>
+                    Mã tham chiếu / Số biên lai{" "}
+                    <span className="font-normal text-muted-foreground">(tùy chọn)</span>
+                  </FormLabel>
                   <FormControl>
                     <Input {...field} placeholder="VD: PT001234, UNC-123456..." />
                   </FormControl>

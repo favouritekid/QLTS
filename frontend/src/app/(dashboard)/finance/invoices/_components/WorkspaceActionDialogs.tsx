@@ -66,6 +66,8 @@ export type WorkspaceDialog =
       feeId: number
       maxAmountFormatted: string
       invoiceNumber: string
+      payerName?: string
+      referenceHint?: string
     }
   | { type: "issue"; invoiceId: number; feeId: number; invoiceNumber: string }
   | { type: "cancel"; invoiceId: number; feeId: number; invoiceNumber: string }
@@ -106,6 +108,8 @@ export function WorkspaceActionDialogs({ dialog, onClose, onCalculated }: Worksp
           invoiceId={dialog.invoiceId}
           feeId={dialog.feeId}
           maxAmount={dialog.maxAmountFormatted}
+          defaultPayerName={dialog.payerName}
+          defaultReference={dialog.referenceHint}
         />
       )}
 

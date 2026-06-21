@@ -427,7 +427,13 @@ function InvoiceSection({
       ) : (
         <ul className="space-y-2">
           {invoices.map((inv) => (
-            <InvoiceRow key={inv.id} invoice={inv} onAction={onAction} />
+            <InvoiceRow
+              key={inv.id}
+              invoice={inv}
+              onAction={onAction}
+              payerName={collection.identity.student_name ?? undefined}
+              referenceHint={collection.identity.profile_code}
+            />
           ))}
         </ul>
       )}
@@ -438,9 +444,13 @@ function InvoiceSection({
 function InvoiceRow({
   invoice,
   onAction,
+  payerName,
+  referenceHint,
 }: {
   invoice: InvoiceListItem
   onAction: (d: WorkspaceDialog) => void
+  payerName?: string
+  referenceHint?: string
 }) {
   const overdueDays = invoice.is_overdue ? calculateOverdueDays(invoice.due_date) : 0
   const remainingFormatted = formatVND(invoice.remaining_amount)
@@ -486,6 +496,8 @@ function InvoiceRow({
                 feeId: invoice.fee_id,
                 maxAmountFormatted: remainingFormatted,
                 invoiceNumber: invoice.invoice_number,
+                payerName,
+                referenceHint,
               })
             }
           >
