@@ -355,13 +355,20 @@ export function useInvoicesFilter(
 
   // ── LOCALSTORAGE SYNC ─────────────────────────────────────────────────
   useEffect(() => {
-    const data: StoredInvoiceFilters = { page, search, feeType, activeTab, sortBy, sortOrder }
+    // The "pending" tab is the payment maker-checker queue (a different grain,
+    // not an invoice filter) and must NOT survive a reload — persisting it would
+    // resurrect the queue instead of the invoice list on the next no-query visit.
+    // Coerce it to "all" for storage and never let it alone trigger a save.
+    const persistTab = activeTab === "pending" ? "all" : activeTab
+    const data: StoredInvoiceFilters = {
+      page, search, feeType, activeTab: persistTab, sortBy, sortOrder,
+    }
 
     const shouldSave =
       page > 1 ||
       !!search ||
       !!feeType ||
-      activeTab !== "all" ||
+      persistTab !== "all" ||
       sortBy !== INVOICES_DEFAULT_SORT_BY ||
       sortOrder !== INVOICES_DEFAULT_SORT_ORDER
 

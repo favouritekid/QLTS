@@ -24,10 +24,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { admissionsApi } from "@/lib/api/admissions"
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
-
-function formatProfileCode(id: number): string {
-  return `HS-${String(id).padStart(6, "0")}`
-}
+import { formatProfileCode } from "@/lib/utils/admission-helpers"
 
 interface CalculateFeePickerDialogProps {
   open: boolean

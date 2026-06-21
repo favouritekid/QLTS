@@ -52,6 +52,8 @@ interface Props {
   open: boolean
   onOpenChange: (next: boolean) => void
   profileId: number
+  /** Fired after a successful calculate (caller can open the result drawer). */
+  onSuccess?: () => void
 }
 
 const SEMESTER_OPTIONS = [
@@ -60,7 +62,7 @@ const SEMESTER_OPTIONS = [
   { value: 3, label: "Học kỳ 3+" },
 ]
 
-export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
+export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }: Props) {
   const queryClient = useQueryClient()
   const calculateFee = useCalculateFee()
   const plansQuery = useInstallmentPlans({ enabled: open })
@@ -126,6 +128,7 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId }: Props) {
     ])
 
     reset()
+    onSuccess?.()
     onOpenChange(false)
   }
 

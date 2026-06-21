@@ -56,6 +56,7 @@ import { ErrorEmptyState } from "@/components/common/EmptyState"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { formatVND } from "@/lib/zod/finance"
+import { formatDate } from "@/lib/utils/admission-helpers"
 
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import {
@@ -65,6 +66,7 @@ import {
 } from "@/components/finance"
 
 import { useProfileCollection } from "@/hooks/finance/useFees"
+import { calculateOverdueDays } from "@/hooks/finance/useInvoiceViewModel"
 import { FEE_TYPE_LABELS } from "@/types/finance.types"
 import type {
   ProfileCollection,
@@ -81,28 +83,13 @@ import type { WorkspaceDialog } from "./WorkspaceActionDialogs"
 // HELPERS (presentation only — over BE-owned flags)
 // =============================================================================
 
-const OPEN_INVOICE_STATUSES = new Set(["issued", "partial"])
+// "Open" = still collectable. Includes 'overdue' — the daily beat job flips the
+// enum issued→overdue once past due, so an only-overdue invoice must still count
+// toward "Hạn gần nhất"; otherwise the header shows "Quá hạn" with no due date
+// (the BE-owned `is_overdue` already lit hasOverdue). Mirrors PAYABLE_INVOICE_STATUSES.
+const OPEN_INVOICE_STATUSES = new Set(["issued", "partial", "overdue"])
 
-function daysPastDue(dueDate: string): number {
-  const due = new Date(dueDate)
-  const today = new Date()
-  const ms = today.setHours(0, 0, 0, 0) - due.setHours(0, 0, 0, 0)
-  return ms > 0 ? Math.floor(ms / (1000 * 60 * 60 * 24)) : 0
-}
-
-function formatDueDate(dueDate: string): string {
-  try {
-    return new Intl.DateTimeFormat("vi-VN", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    }).format(new Date(dueDate))
-  } catch {
-    return dueDate
-  }
-}
-
-/** Earliest due date among OPEN (issued/partial) invoices — the drawer "Hạn". */
+/** Earliest due date among OPEN (issued/partial/overdue) invoices — drawer "Hạn". */
 function nextDue(invoices: InvoiceListItem[]): InvoiceListItem | null {
   const open = invoices.filter((i) => OPEN_INVOICE_STATUSES.has(i.status))
   if (open.length === 0) return null
@@ -141,7 +128,7 @@ function buildSummaryView(collection: ProfileCollection): SummaryView {
     isSettled,
     statusLabel: hasOverdue ? "Quá hạn" : isSettled ? "Đã thu đủ" : "Còn phải thu",
     statusTone: hasOverdue ? "error" : isSettled ? "success" : "amber",
-    dueLabel: due ? formatDueDate(due.due_date) : null,
+    dueLabel: due ? formatDate(due.due_date) : null,
     dueOverdue: due ? due.is_overdue : false,
     nextActionLabel,
   }
@@ -455,7 +442,7 @@ function InvoiceRow({
   invoice: InvoiceListItem
   onAction: (d: WorkspaceDialog) => void
 }) {
-  const overdueDays = invoice.is_overdue ? daysPastDue(invoice.due_date) : 0
+  const overdueDays = invoice.is_overdue ? calculateOverdueDays(invoice.due_date) : 0
   const remainingFormatted = formatVND(invoice.remaining_amount)
   const hasMenu =
     invoice.can_issue || invoice.can_cancel || invoice.can_apply_penalty
@@ -478,7 +465,7 @@ function InvoiceRow({
               <span className="text-error-600"> · quá {overdueDays} ngày</span>
             )}
             {" · hạn "}
-            {formatDueDate(invoice.due_date)}
+            {formatDate(invoice.due_date)}
           </p>
         </div>
         <InvoiceStatusBadge

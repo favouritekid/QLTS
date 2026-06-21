@@ -96,7 +96,7 @@ function calculateDaysUntilDue(dueDate: string): number | null {
  * Returns 0 when the date is today or in the future. Display-only: the overdue
  * STATE itself is backend-owned (`is_overdue`); this only formats "quá N ngày".
  */
-function calculateOverdueDays(dueDate: string): number {
+export function calculateOverdueDays(dueDate: string): number {
   try {
     const due = new Date(dueDate)
     if (Number.isNaN(due.getTime())) return 0

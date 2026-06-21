@@ -37,7 +37,7 @@ import { toast } from "sonner"
 
 import { useVerifyPayment, useRejectPayment } from "@/hooks/finance/usePayments"
 import { useInvoiceVietQR } from "@/hooks/finance/useInvoices"
-import { VietQRDisplay } from "@/components/finance"
+import { AmountDisplay, VietQRDisplay } from "@/components/finance"
 
 import { PaymentRecordDialog } from "../[invoiceId]/_components/PaymentRecordDialog"
 import { InvoiceIssueDialog } from "../[invoiceId]/_components/InvoiceIssueDialog"
@@ -85,9 +85,11 @@ export type WorkspaceDialog =
 interface WorkspaceActionDialogsProps {
   dialog: WorkspaceDialog | null
   onClose: () => void
+  /** Open the result drawer for a profile after its fee is calculated. */
+  onCalculated?: (profileId: number) => void
 }
 
-export function WorkspaceActionDialogs({ dialog, onClose }: WorkspaceActionDialogsProps) {
+export function WorkspaceActionDialogs({ dialog, onClose, onCalculated }: WorkspaceActionDialogsProps) {
   const handleOpenChange = React.useCallback(
     (open: boolean) => {
       if (!open) onClose()
@@ -153,6 +155,7 @@ export function WorkspaceActionDialogs({ dialog, onClose }: WorkspaceActionDialo
           open
           onOpenChange={handleOpenChange}
           profileId={dialog.profileId}
+          onSuccess={() => onCalculated?.(dialog.profileId)}
         />
       )}
 
@@ -238,7 +241,7 @@ function PaymentReviewDialog({
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-muted-foreground">Số tiền</span>
-            <span className="font-medium tabular-nums">{payment.amount_formatted}</span>
+            <AmountDisplay amount={payment.amount_formatted} className="font-medium" />
           </div>
           <div className="flex justify-between gap-3">
             <span className="text-muted-foreground">Người tạo</span>

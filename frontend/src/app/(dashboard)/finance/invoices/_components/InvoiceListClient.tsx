@@ -292,7 +292,7 @@ export function InvoiceListClient() {
         {/* Status tabs (hóa đơn theo trạng thái) + grain switch → "Chờ duyệt"
             (payment queue). The divider + icon make the entity switch explicit,
             not just a sentinel key. */}
-        <div className="flex items-stretch gap-1 border-b border-border">
+        <div className="flex items-stretch gap-1">
           <div className="min-w-0 flex-1">
             <AdmissionsStatusTabs
               tabs={INVOICE_STATUS_TABS}
@@ -301,11 +301,10 @@ export function InvoiceListClient() {
               onTabClick={handlers.handleTabClick}
             />
           </div>
-          <div className="flex items-center pl-1">
+          <div className="flex items-center border-b border-border pl-1">
             <button
               type="button"
-              role="tab"
-              aria-selected={isPendingTab}
+              aria-pressed={isPendingTab}
               onClick={() => handlers.handleTabClick(PENDING_TAB)}
               className={cn(
                 "relative flex items-center gap-1.5 whitespace-nowrap border-l border-border py-3 pl-3 text-sm font-medium transition-colors",
@@ -498,7 +497,7 @@ export function InvoiceListClient() {
       />
 
       {/* One host for every action dialog (row + drawer + queue raise here). */}
-      <WorkspaceActionDialogs dialog={activeDialog} onClose={() => setActiveDialog(null)} />
+      <WorkspaceActionDialogs dialog={activeDialog} onClose={() => setActiveDialog(null)} onCalculated={handlers.openDrawer} />
 
       {/* Global "+ Tính phí" picker (only when no student is selected). */}
       <CalculateFeePickerDialog
