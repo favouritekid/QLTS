@@ -838,7 +838,15 @@ def _total_remaining_with_penalty(fees, invoices):
         ),
         Decimal("0"),
     )
-    return principal + penalty
+    # Clamp ≥ 0: fee.paid_amount absorbs the penalty portion of a payment
+    # (record_payment allows paying up to invoice.remaining = amount+penalty,
+    # verify_payment adds it ALL to fee.paid) while fee.final excludes penalty,
+    # so a fully-paid penalised fee drives fee.remaining negative. Never surface
+    # a negative "Còn phải thu". (Root cause is the payment layer; this keeps the
+    # displayed total honest. Clamping the TOTAL — not per-fee — preserves the
+    # penalty-paid-in-part case where a negative principal correctly offsets a
+    # still-counted penalty on a 'partial' invoice.)
+    return max(Decimal("0"), principal + penalty)
 
 
 _FEE_TERMINAL_STATUSES = {"paid", "cancelled", "waived"}

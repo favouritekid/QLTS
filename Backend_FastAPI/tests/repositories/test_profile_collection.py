@@ -359,6 +359,26 @@ async def test_total_remaining_excludes_waived_includes_penalty():
     assert total == Decimal("850000")
 
 
+async def test_total_remaining_clamps_negative_when_penalty_paid_in_full():
+    """Edge (gap-catch): record_payment lets a parent pay up to
+    invoice.remaining = amount+penalty, and verify_payment adds the WHOLE
+    amount to fee.paid while fee.final excludes the penalty — so a penalised
+    fee paid in full drives fee.remaining negative and its (now 'paid') invoice
+    drops out of the penalty sum. The header must clamp to 0, never show a
+    negative 'Còn phải thu'."""
+    from types import SimpleNamespace as NS
+
+    # final 1M, paid 1.05M (1M principal + 50k penalty) → fee.remaining = -50k.
+    fee_overpaid = NS(remaining_amount=Decimal("-50000"))
+    # Its invoice is now fully paid (terminal) → penalty excluded from the sum.
+    inv_paid = NS(
+        remaining_amount=Decimal("0"),
+        penalty_amount=Decimal("50000"), status="paid",
+    )
+    total = _total_remaining_with_penalty([fee_overpaid], [inv_paid])
+    assert total == Decimal("0")  # clamped, not -50,000
+
+
 async def test_collection_invoice_items_enriched_and_role_aware(db, seeded_collection):
     """Drawer invoice rows reuse the list-item builder: enriched identity +
     is_overdue + role-aware can_*."""
