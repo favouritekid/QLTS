@@ -70,7 +70,12 @@ interface PaymentRecordDialogProps {
   feeId?: number
   /** Prefill the payer name (student/parent, known from the collection drawer). */
   defaultPayerName?: string
-  /** Prefill the reference (e.g. the profile code = the VietQR transfer note). */
+  /**
+   * Prefill the reference — a reconciliation HINT (the profile code "HS-…"),
+   * NOT the literal VietQR note: the bank statement shows the de-accented note
+   * "… HS000131 …" (no hyphen). The accountant edits it if they have the exact
+   * bank reference.
+   */
   defaultReference?: string
 }
 

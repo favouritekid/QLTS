@@ -183,6 +183,10 @@ export function InvoiceListClient() {
       feeId: inv.fee_id,
       maxAmountFormatted: inv.remaining_amount_formatted,
       invoiceNumber: inv.invoice_number,
+      // Prefill from the list row too (highest-traffic entry, not just the
+      // drawer) — the view model already carries the identity.
+      payerName: inv.profile_name ?? undefined,
+      referenceHint: inv.profile_code ?? undefined,
     })
   }, [])
   const handleIssue = useCallback((inv: InvoiceListItemViewModel) => {

@@ -73,11 +73,11 @@ async def _make_lead(db, deps, full_name, unit_id, officer_id=None, suffix="0"):
     return lead
 
 
-async def _make_profile(db, lead_id, citizen_suffix):
+async def _make_profile(db, lead_id, citizen_suffix, status="submitted"):
     profile = models.AdmissionProfile(
         lead_id=lead_id,
         citizen_id=f"78{citizen_suffix:0>10}"[:12],
-        status="submitted",
+        status=status,
         applied_rules={},
         academic_year=2026,
         uses_choice_engine=False,
@@ -379,13 +379,34 @@ async def test_total_remaining_clamps_negative_when_penalty_paid_in_full():
     assert total == Decimal("0")  # clamped, not -50,000
 
 
-async def test_search_calculable_profiles(db, seeded_collection):
-    """Finance "Tính phí" picker lookup — finds a profile by name within the
-    caller's unit + by HS-code. Accountant uses THIS (denied /api/admissions),
-    so it must be finance-scoped, not admission-scoped."""
+async def test_total_remaining_total_clamp_preserves_partial_penalty_offset():
+    """Clamp the TOTAL, not per-fee: a fee overpaid into negative principal must
+    OFFSET a penalty still counted on a NON-terminal invoice. A per-fee clamp
+    (max(0, fee.remaining) before summing) would drop the offset + over-state."""
+    from types import SimpleNamespace as NS
+
+    # Fee overpaid: final 1M, paid 1.03M → fee.remaining = -30k.
+    fee = NS(remaining_amount=Decimal("-30000"))
+    # Its invoice is still 'partial' (penalty not fully paid) → penalty counted.
+    inv = NS(
+        remaining_amount=Decimal("20000"),
+        penalty_amount=Decimal("50000"), status="partial",
+    )
+    total = _total_remaining_with_penalty([fee], [inv])
+    # -30k principal + 50k penalty = 20k. A per-fee clamp would give
+    # 0 + 50k = 50k (30k too high) — the regression this locks out.
+    assert total == Decimal("20000")
+
+
+async def test_search_calculable_profiles(db, seeded_collection, seeded_dependencies):
+    """Finance "Tính phí" picker — finds a FEE-ELIGIBLE profile by name (unit-
+    scoped) + by HS-code; excludes non-calculable (draft); survives an
+    out-of-int32 HS-code. Accountant uses THIS (denied /api/admissions), so it
+    must be finance-scoped, not admission-scoped."""
     service = FeeCalculationService(db)
 
-    # By name, scoped to unit A → finds prof_a "Đặng Thu Hà".
+    # By name, scoped to unit A → finds prof_a "Đặng Thu Hà" (submitted single-
+    # path → fee-eligible).
     hits = await service.search_calculable_profiles(
         "Đặng", seeded_collection["unit_a"]
     )
@@ -402,6 +423,24 @@ async def test_search_calculable_profiles(db, seeded_collection):
         f"HS-{seeded_collection['prof_a_id']:06d}", None
     )
     assert {p.id for p in by_code} == {seeded_collection["prof_a_id"]}
+
+    # (review #2) A DRAFT profile is NOT fee-eligible → excluded; the picker is
+    # "calculable"-profiles, the exact name enumeration the /api/admissions deny
+    # blocks for accountant.
+    draft_lead = await _make_lead(
+        db, seeded_dependencies, "Drafty McSearch",
+        seeded_collection["unit_a"], suffix="91",
+    )
+    draft_prof = await _make_profile(db, draft_lead.id, 291, status="draft")
+    drafts = await service.search_calculable_profiles(
+        "Drafty", seeded_collection["unit_a"]
+    )
+    assert draft_prof.id not in {p.id for p in drafts}
+
+    # (review #1) An absurdly long HS-code (≤ Query max_length) is out of int32
+    # range → no such profile → empty, NOT a 500.
+    huge = await service.search_calculable_profiles("HS" + "9" * 40, None)
+    assert huge == []
 
 
 async def test_collection_invoice_items_enriched_and_role_aware(db, seeded_collection):

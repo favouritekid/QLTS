@@ -889,16 +889,21 @@ class FeeCalculationService:
         unit_id: Optional[int] = None,
         limit: int = 8,
     ) -> List[models.AdmissionProfile]:
-        """Minimal admission-profile lookup for the finance "Tính phí" picker —
+        """Fee-ELIGIBLE admission-profile lookup for the "Tính phí" picker —
         match by HS-code, name, or phone; identity-only (lead eager-loaded).
 
         Accountant is DENIED ``/api/admissions`` by design, so this finance-
         scoped search gives finance staff just enough to pick a profile to
-        calculate a fee for. Unit-scoped via ``lead.unit_id`` (admin/accountant
-        global → ``unit_id is None``). NFC-normalised + LIKE-escaped like the
-        admission search (no wildcard injection)."""
+        calculate a fee for. Returns ONLY profiles a fee can actually be
+        calculated for (``is_fee_eligible`` — the endpoint is *calculable*-
+        profiles): keeps the result minimal-by-design and does not re-open a
+        name/phone enumeration of draft/rejected profiles wider than necessary.
+        Unit-scoped via ``lead.unit_id`` (admin/accountant global → ``None``).
+        NFC-normalised + LIKE-escaped like the admission search."""
         import re
         import unicodedata
+
+        from app.utils.admission_status import is_fee_eligible
 
         term = unicodedata.normalize("NFC", (search or "").strip())
         if not term:
@@ -907,12 +912,24 @@ class FeeCalculationService:
         query = (
             select(models.AdmissionProfile)
             .join(models.Lead)
-            .options(selectinload(models.AdmissionProfile.lead))
+            .options(
+                selectinload(models.AdmissionProfile.lead),
+                # is_fee_eligible's multi-NV branch reads ``.choices`` (fails
+                # closed if not eager-loaded) → load it so the filter is accurate.
+                selectinload(models.AdmissionProfile.choices),
+            )
         )
 
         code = re.match(r"^HS-?0*(\d+)$", term, re.IGNORECASE)
         if code:
-            query = query.where(models.AdmissionProfile.id == int(code.group(1)))
+            profile_id = int(code.group(1))
+            # A profile id is a PostgreSQL int4. The ``\d+`` under
+            # ``max_length=100`` can be ~98 digits → out of int32 → asyncpg
+            # DataError → 500. No such profile, so return empty (mirrors the
+            # fee_repository HS-code guard).
+            if profile_id < 1 or profile_id > 2147483647:
+                return []
+            query = query.where(models.AdmissionProfile.id == profile_id)
         else:
             pattern = f"%{escape_like_pattern(term)}%"
             query = query.where(
@@ -925,9 +942,13 @@ class FeeCalculationService:
         if unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
 
-        query = query.order_by(models.AdmissionProfile.id.desc()).limit(limit)
+        # Over-fetch then keep only fee-eligible profiles (the eligibility gate
+        # is Python-level, not a column). A name/phone search is narrow, so 4×
+        # the display cap is plenty to fill ``limit`` after filtering.
+        query = query.order_by(models.AdmissionProfile.id.desc()).limit(limit * 4)
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        profiles = result.scalars().all()
+        return [p for p in profiles if is_fee_eligible(p)][:limit]
 
     # ==========================================================================
     # HELPER METHODS
