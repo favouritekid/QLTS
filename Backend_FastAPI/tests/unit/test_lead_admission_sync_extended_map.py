@@ -22,8 +22,11 @@ import pytest
 
 from app.services.lead_admission_sync import (
     ADMISSION_TO_LEAD_STATUS_MAP,
+    FEE_OVERLAY_LEAD_STATUSES,
     FLOOR_FROM_PROFILE_STATUSES,
     PRE_APPLICATION_LEAD_STATUSES,
+    SUBMIT_FLOOR_EVENTS,
+    SUBMIT_FLOOR_PROFILE_STATUSES,
     _RESULT_PUBLISHED_NO_OP,
     _should_apply_admission_floor,
 )
@@ -173,9 +176,9 @@ def test_floor_blocks_downgrade(profile_status: str, lead_cs: str) -> None:
 @pytest.mark.parametrize(
     "profile_status",
     [
-        # Every non-floor value the admission column can hold today (legacy)
-        # plus the choice-engine new values that are NOT floor-only.
-        "draft", "submitted", "resubmitted", "approved", "confirmed",
+        # Every status that is neither floor-only (reviewing/waitlisted) nor a
+        # submit transition (submitted/resubmitted) — these always fall through.
+        "draft", "approved", "confirmed",
         "overridden", "rejected", "revision_requested", "enrolled",
         "withdrawn", "admitted",
     ],
@@ -187,8 +190,65 @@ def test_floor_blocks_downgrade(profile_status: str, lead_cs: str) -> None:
 def test_floor_no_op_for_non_floor_statuses(
     profile_status: str, lead_cs
 ) -> None:
-    """Non-floor statuses must always allow the existing fall-through —
+    """Non-guarded statuses must always allow the existing fall-through —
     helper short-circuits to True regardless of the lead state. Without
     this, refactoring the function would accidentally veto valid
     transitions (e.g. approve from any prior lead state)."""
+    assert _should_apply_admission_floor(profile_status, lead_cs) is True
+
+
+# ---------------------------------------------------------------------------
+# Submit / resubmit regression guard (SL1)
+# ---------------------------------------------------------------------------
+
+
+def test_submit_floor_profile_set_locked() -> None:
+    """Lock the exact set of submit transitions guarded against finance
+    regression. Adding another value without thinking through the overlay
+    semantics would silently change which transitions are floored."""
+    assert SUBMIT_FLOOR_PROFILE_STATUSES == frozenset({"submitted", "resubmitted"})
+
+
+def test_fee_overlay_set_locked() -> None:
+    """Lock the finance overlay set. sts13 = application fee paid; sts14/sts10/
+    sts18 = HK1 tuition pending/paid/refunded. rejected (sts16) and
+    revision_requested (sts17) MUST stay out so resubmits still floor to sts07."""
+    assert FEE_OVERLAY_LEAD_STATUSES == frozenset({"sts13", "sts14", "sts10", "sts18"})
+    assert "sts16" not in FEE_OVERLAY_LEAD_STATUSES
+    assert "sts17" not in FEE_OVERLAY_LEAD_STATUSES
+
+
+def test_submit_floor_events_locked_and_in_parity() -> None:
+    """SUBMIT_FLOOR_EVENTS gates the milestone-level guard
+    (_create_admission_milestone_consultation), while SUBMIT_FLOOR_PROFILE_STATUSES
+    gates the sync-level guard. They are two keys for the SAME two transitions and
+    MUST stay in parity (the milestone event names just prefix the profile statuses
+    with ``profile_``). This pins both so editing one without the other fails."""
+    assert SUBMIT_FLOOR_EVENTS == frozenset(
+        {"profile_submitted", "profile_resubmitted"}
+    )
+    assert {
+        e.removeprefix("profile_") for e in SUBMIT_FLOOR_EVENTS
+    } == SUBMIT_FLOOR_PROFILE_STATUSES
+
+
+@pytest.mark.parametrize("profile_status", ["submitted", "resubmitted"])
+@pytest.mark.parametrize("lead_cs", ["sts13", "sts14", "sts10", "sts18"])
+def test_submit_preserves_finance_overlay(profile_status: str, lead_cs: str) -> None:
+    """SL1 fix: submitting a profile must NOT drag a lead that already paid the
+    application fee (sts13) or entered the tuition lifecycle back to sts07."""
+    assert _should_apply_admission_floor(profile_status, lead_cs) is False
+
+
+@pytest.mark.parametrize("profile_status", ["submitted", "resubmitted"])
+@pytest.mark.parametrize(
+    "lead_cs",
+    # Pre-application phase + the normal admission-receipt target + the
+    # reject/revision branch a genuine resubmit comes from.
+    [None, "sts00", "sts02", "sts05", "sts06", "sts07", "sts16", "sts17"],
+)
+def test_submit_floors_up_when_no_finance_overlay(profile_status: str, lead_cs) -> None:
+    """Submit/resubmit still progresses the lead to sts07 from the consultation
+    phase, from sts07 itself (idempotent downstream), and crucially from
+    rejected/revision — flooring those is the whole point of a resubmit."""
     assert _should_apply_admission_floor(profile_status, lead_cs) is True

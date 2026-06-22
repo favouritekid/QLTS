@@ -457,6 +457,14 @@ class TestInvoiceGeneration:
         assert invoices[1].installment_no == 2
         assert invoices[2].installment_no == 3
 
+        # F1 regression guard: every invoice in one batch must get a distinct,
+        # sequential number. The MAX-without-flush collision made all three
+        # collapse to INV-YYYY-000001 and violate the UNIQUE index.
+        invoice_numbers = [inv.invoice_number for inv in invoices]
+        assert len(set(invoice_numbers)) == 3, \
+            f"Invoice numbers must be unique, got {invoice_numbers}"
+        assert all(n.startswith("INV-") for n in invoice_numbers)
+
         # Verify due dates
         assert invoices[1].due_date == invoices[0].due_date + timedelta(days=30)
         assert invoices[2].due_date == invoices[1].due_date + timedelta(days=30)
