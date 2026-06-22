@@ -585,6 +585,14 @@ class AdmissionPathResponse(BaseModel):
             "gates the 'Nâng cao' tab on this flag instead of user.role (thin-client)."
         ),
     )
+    can_manage_subject_group_configs: bool = Field(
+        default=False,
+        description=(
+            "Admin-only gate for the 'Tổ hợp môn' tab (path_subject_group_config "
+            "CRUD). Stricter than can_edit_governance: admin AND not archived. FE "
+            "gates the tab + controls on this (require_admin route + archived block)."
+        ),
+    )
     validation_errors: List[str] = Field(
         default_factory=list,
         description="Reasons why activation is blocked"

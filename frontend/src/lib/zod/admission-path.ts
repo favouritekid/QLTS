@@ -378,6 +378,9 @@ export const admissionPathResponseSchema = z.object({
   // false mirrors BE default + keeps parse lenient for endpoints that return
   // raw ORM without the computed field.
   can_edit_governance: z.boolean().default(false),
+  // Admin-only gate for the "Tổ hợp môn" tab (path_subject_group_config CRUD).
+  // .default(false) so older/partial responses parse — mirror can_edit_governance.
+  can_manage_subject_group_configs: z.boolean().default(false),
   validation_errors: z.array(z.string()).default([]),
 
   // PR #6 — REQUIRED in the response so Zod fails loudly when the backend

@@ -38,6 +38,9 @@ const hoisted = vi.hoisted(() => {
     // Default false: base 5-tab suite sees NO "Nâng cao" tab. Governance
     // tests override với can_edit_governance: true để hiện tab.
     can_edit_governance: false,
+    // #7 — gate thẻ "Tổ hợp môn" (admin-only). Default false: base suite KHÔNG
+    // thấy tab; subject-group tests override true.
+    can_manage_subject_group_configs: false,
     validation_errors: [] as string[],
     round_quota: 50,
     admit_quota: 30,
@@ -70,7 +73,12 @@ const hoisted = vi.hoisted(() => {
 })
 
 vi.mock("@/hooks/admissions/useAdmissionPaths", () => ({
-  admissionPathKeys: { all: ["admission-paths"] },
+  // detail() added: SubjectGroupConfigTab → usePathSubjectGroupConfigs invalidates
+  // admissionPathKeys.detail(pathId); without it a tab-mounting test would crash.
+  admissionPathKeys: {
+    all: ["admission-paths"],
+    detail: (id: number) => ["admission-paths", "detail", id],
+  },
   useAdmissionPath: hoisted.mockUseAdmissionPath,
   useUpdateAdmissionPath: () => ({ mutateAsync: hoisted.mockUpdatePath, isPending: false }),
   useActivateAdmissionPath: () => ({ mutateAsync: hoisted.mockActivate, isPending: false }),
@@ -538,5 +546,37 @@ describe("PathDetailDrawer — thẻ Nâng cao (governance, gate theo can_edit_g
         bonus_rule_override: null,
       },
     })
+  })
+})
+
+describe("PathDetailDrawer — thẻ Tổ hợp môn (gate theo can_manage_subject_group_configs)", () => {
+  // Active tab mặc định = "quota" → SubjectGroupConfigTab KHÔNG mount (Radix chỉ
+  // render content của tab active) nên các test chỉ kiểm tra trigger + fallback,
+  // không cần mock hook usePathSubjectGroupConfigs / useSubjectGroups.
+  const mngOn = (extra: Record<string, unknown> = {}) => ({
+    data: { ...hoisted.defaultPath, can_manage_subject_group_configs: true, ...extra },
+    isLoading: false,
+  })
+
+  it("can_manage_subject_group_configs=true → THẤY tab Tổ hợp môn", () => {
+    hoisted.mockUseAdmissionPath.mockReturnValue(mngOn())
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    expect(screen.getByRole("tab", { name: "Tổ hợp môn" })).toBeTruthy()
+  })
+
+  it("can_manage=false → KHÔNG thấy tab Tổ hợp môn (gate admin-only)", () => {
+    // defaultPath.can_manage_subject_group_configs = false (beforeEach reset).
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    expect(screen.getByRole("tab", { name: /Chỉ tiêu/ })).toBeTruthy()
+    expect(screen.queryByRole("tab", { name: "Tổ hợp môn" })).toBeNull()
+  })
+
+  it("can_manage=false + dán ?tab=subject-groups → fallback quota", async () => {
+    searchParamsMock.mockReturnValue(new URLSearchParams("tab=subject-groups"))
+    render(wrap(<PathDetailDrawer pathId={109} onClose={() => {}} />))
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Lưu chỉ tiêu/ })).toBeTruthy()
+    })
+    expect(screen.queryByRole("tab", { name: "Tổ hợp môn" })).toBeNull()
   })
 })

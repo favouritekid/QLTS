@@ -88,6 +88,7 @@ const mockAdmissionPathResponse = {
   admit_quota: null,
   submission_count: 0,
   application_fee: null,
+  can_manage_subject_group_configs: false,
 } satisfies AdmissionPathResponse;
 
 /** The shape that PUT /paths/:id/documents returns. */

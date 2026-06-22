@@ -12,6 +12,7 @@ from typing import List
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -19,6 +20,7 @@ from app.models.admission_config import (
     AdmissionPath,
     PathSubjectGroupConfig,
     PathSubjectGroupItem,
+    SubjectGroup,
     SubjectGroupSubject,
 )
 from app.repositories.path_subject_group_repository import PathSubjectGroupRepository
@@ -30,6 +32,7 @@ from app.schemas.path_subject_group import (
 )
 from app.utils.exceptions import (
     BusinessRuleViolation,
+    ConflictError,
     DuplicateResourceError,
     ResourceNotFoundError,
 )
@@ -43,6 +46,31 @@ class PathSubjectGroupService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = PathSubjectGroupRepository(db)
+
+    async def _require_writable_path(self, admission_path_id: int) -> AdmissionPath:
+        """Load the path or 404; block writes on an archived path.
+
+        Mirrors the AdmissionPathService lifecycle guard for archived paths.
+        All config/item mutations run through this so a bad ``admission_path_id``
+        surfaces as a clean 404 (instead of falling through to an FK 500) and
+        archived paths reject with a domain 400. Routes are ``require_admin`` so
+        no manager branch is needed here.
+        """
+        path = (
+            await self.db.execute(
+                select(AdmissionPath).where(AdmissionPath.id == admission_path_id)
+            )
+        ).scalar_one_or_none()
+        if path is None:
+            raise ResourceNotFoundError(
+                f"AdmissionPath {admission_path_id} not found"
+            )
+        if path.status == "archived":
+            raise BusinessRuleViolation(
+                "Không thể sửa tổ hợp môn của đường tuyển sinh đã lưu trữ "
+                "(archived)."
+            )
+        return path
 
     async def validate_tier3_chain(
         self,
@@ -122,6 +150,8 @@ class PathSubjectGroupService:
         - Composite invariant — BusinessRuleViolation
         - Tier 3 chain (if group_quota set) — BusinessRuleViolation
         """
+        await self._require_writable_path(admission_path_id)
+
         existing = await self.repo.get_config_by_path_and_group(
             admission_path_id, payload.subject_group_id
         )
@@ -133,9 +163,30 @@ class PathSubjectGroupService:
 
         # Composite invariant check (if items provided)
         item_sgs_ids = [item.subject_group_subject_id for item in payload.items]
+        # Reject a duplicated payload item (FE double-add) up front — the
+        # composite-invariant check dedups via id.in_(set) so it would NOT catch
+        # it, and the insert would otherwise hit uq_path_subject_group_item.
+        if len(item_sgs_ids) != len(set(item_sgs_ids)):
+            raise DuplicateResourceError(
+                "Danh sách môn (items) có subject_group_subject_id trùng lặp."
+            )
         await self._validate_composite_invariant(
             payload.subject_group_id, item_sgs_ids
         )
+        # When NO items, the composite invariant is skipped, so a bad
+        # subject_group_id would only surface at the FK (→ 500). Validate here.
+        if not item_sgs_ids:
+            sg_exists = (
+                await self.db.execute(
+                    select(SubjectGroup.id).where(
+                        SubjectGroup.id == payload.subject_group_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if sg_exists is None:
+                raise ResourceNotFoundError(
+                    f"SubjectGroup {payload.subject_group_id} not found"
+                )
 
         # Tier 3 chain check (if group_quota provided)
         if payload.group_quota is not None:
@@ -151,17 +202,29 @@ class PathSubjectGroupService:
             group_quota=payload.group_quota,
         )
         self.db.add(config)
-        await self.db.flush()
-
-        for item_payload in payload.items:
-            item = PathSubjectGroupItem(
-                path_subject_group_config_id=config.id,
-                subject_group_subject_id=item_payload.subject_group_subject_id,
-                is_principal=item_payload.is_principal,
-                min_subject_score=item_payload.min_subject_score,
+        # config + items in ONE savepoint so ANY UNIQUE violation — the config
+        # (admission_path_id, subject_group_id) race OR a duplicated payload
+        # item hitting uq_path_subject_group_item — maps to a clean 409, not an
+        # IntegrityError 500. (Payload item dup is also prechecked above for a
+        # clearer message; the config dup is prechecked via get_config_*.)
+        try:
+            async with self.db.begin_nested():
+                await self.db.flush()  # config insert
+                for item_payload in payload.items:
+                    self.db.add(PathSubjectGroupItem(
+                        path_subject_group_config_id=config.id,
+                        subject_group_subject_id=(
+                            item_payload.subject_group_subject_id
+                        ),
+                        is_principal=item_payload.is_principal,
+                        min_subject_score=item_payload.min_subject_score,
+                    ))
+                await self.db.flush()  # items insert
+        except IntegrityError:
+            raise DuplicateResourceError(
+                f"Tổ hợp trùng cho path={admission_path_id}, subject_group="
+                f"{payload.subject_group_id} (hoặc môn lặp trong danh sách)."
             )
-            self.db.add(item)
-        await self.db.flush()
 
         log.info(
             "path_subject_group_config_created",
@@ -184,6 +247,7 @@ class PathSubjectGroupService:
         config = await self.repo.get_config_by_id(config_id)
         if config is None:
             raise ResourceNotFoundError(f"Config {config_id} not found")
+        await self._require_writable_path(config.admission_path_id)
 
         update_data = payload.model_dump(exclude_unset=True)
 
@@ -216,6 +280,7 @@ class PathSubjectGroupService:
         config = await self.repo.get_config_by_id(config_id)
         if config is None:
             raise ResourceNotFoundError(f"Config {config_id} not found")
+        await self._require_writable_path(config.admission_path_id)
 
         await self._validate_composite_invariant(
             config.subject_group_id, [payload.subject_group_subject_id]
@@ -228,7 +293,16 @@ class PathSubjectGroupService:
             min_subject_score=payload.min_subject_score,
         )
         self.db.add(item)
-        await self.db.flush()
+        # Savepoint: UNIQUE(config_id, subject_group_subject_id) dup → 409, not
+        # an IntegrityError 500.
+        try:
+            async with self.db.begin_nested():
+                await self.db.flush()
+        except IntegrityError:
+            raise DuplicateResourceError(
+                f"Môn (subject_group_subject={payload.subject_group_subject_id}) "
+                f"đã có trong tổ hợp này."
+            )
 
         log.info(
             "path_subject_group_item_added",
@@ -238,10 +312,92 @@ class PathSubjectGroupService:
         return item
 
     async def delete_config(self, config_id: int) -> None:
-        """Delete config + cascade items."""
+        """Delete config (cascade items). Blocks if a choice references it."""
         config = await self.repo.get_config_by_id(config_id, with_items=False)
         if config is None:
             raise ResourceNotFoundError(f"Config {config_id} not found")
-        await self.db.delete(config)
-        await self.db.flush()
+        await self._require_writable_path(config.admission_path_id)
+
+        # FK admission_profile_choice.path_subject_group_config_id is RESTRICT.
+        used = await self.repo.count_choices_by_config(config_id)
+        if used > 0:
+            raise ConflictError(
+                f"Không thể xóa: tổ hợp đang được {used} nguyện vọng sử dụng."
+            )
+        # Savepoint catches the race where a choice is created after the
+        # precheck (still RESTRICT → IntegrityError) → clean 409, not 500.
+        try:
+            async with self.db.begin_nested():
+                await self.db.delete(config)
+                await self.db.flush()
+        except IntegrityError:
+            raise ConflictError(
+                "Không thể xóa: tổ hợp đang được nguyện vọng sử dụng."
+            )
         log.info("path_subject_group_config_deleted", config_id=config_id)
+
+    async def update_item(
+        self,
+        config_id: int,
+        item_id: int,
+        payload: PathSubjectGroupItemUpdate,
+    ) -> PathSubjectGroupItem:
+        """Update an item's is_principal / min_subject_score, scoped to its
+        config. ``subject_group_subject_id`` is NOT mutable here, so neither the
+        composite invariant nor the item UNIQUE can be violated."""
+        config = await self.repo.get_config_by_id(config_id, with_items=False)
+        if config is None:
+            raise ResourceNotFoundError(f"Config {config_id} not found")
+        await self._require_writable_path(config.admission_path_id)
+
+        item = (
+            await self.db.execute(
+                select(PathSubjectGroupItem).where(
+                    PathSubjectGroupItem.id == item_id,
+                    PathSubjectGroupItem.path_subject_group_config_id == config_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            raise ResourceNotFoundError(
+                f"Item {item_id} not found trong config {config_id}"
+            )
+
+        update_data = payload.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(item, field, value)
+        await self.db.flush()
+        log.info(
+            "path_subject_group_item_updated",
+            config_id=config_id,
+            item_id=item_id,
+            fields=list(update_data.keys()),
+        )
+        return item
+
+    async def delete_item(self, config_id: int, item_id: int) -> None:
+        """Delete an item scoped to its config (avoids cross-config IDOR)."""
+        config = await self.repo.get_config_by_id(config_id, with_items=False)
+        if config is None:
+            raise ResourceNotFoundError(f"Config {config_id} not found")
+        await self._require_writable_path(config.admission_path_id)
+
+        item = (
+            await self.db.execute(
+                select(PathSubjectGroupItem).where(
+                    PathSubjectGroupItem.id == item_id,
+                    PathSubjectGroupItem.path_subject_group_config_id == config_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if item is None:
+            raise ResourceNotFoundError(
+                f"Item {item_id} not found trong config {config_id}"
+            )
+        await self.db.delete(item)
+        await self.db.flush()
+        log.info(
+            "path_subject_group_item_deleted",
+            config_id=config_id,
+            item_id=item_id,
+        )

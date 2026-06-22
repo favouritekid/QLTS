@@ -69,6 +69,7 @@ import { canPerformAction, type AdmissionPathResponse } from "@/lib/zod/admissio
 import { ConfigCriteria } from "../ConfigCriteria"
 import { ConfigDocuments } from "../ConfigDocuments"
 import { AdvancedTab } from "./AdvancedTab"
+import { SubjectGroupConfigTab } from "./SubjectGroupConfigTab"
 import { pathStatusLabel } from "./labels"
 
 type PathLike = AdmissionPathResponse
@@ -82,6 +83,7 @@ const VALID_TABS = [
   "quota",
   "identity",
   "criteria",
+  "subject-groups",
   "documents",
   "advanced",
   "lifecycle",
@@ -96,6 +98,18 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
   // server-side (BusinessRuleViolation khi non-admin ghi governance); flag
   // này chỉ mirror cho UX. `path` async undefined → canGov=false an toàn.
   const canGov = path?.can_edit_governance ?? false
+  // Thẻ "Tổ hợp môn" gate theo flag admin-only `can_manage_subject_group_configs`
+  // (route require_admin + chặn archived). KHÔNG dùng can_edit (manager trên
+  // draft = true → thấy control rồi 403). `path` async undefined → false an toàn.
+  const canMng = path?.can_manage_subject_group_configs ?? false
+  // TabsList: 5 thẻ cố định + (advanced nếu canGov) + (subject-groups nếu canMng).
+  const tabCount = 5 + (canGov ? 1 : 0) + (canMng ? 1 : 0)
+  const gridColsClass =
+    tabCount >= 7
+      ? "sm:grid-cols-7"
+      : tabCount === 6
+        ? "sm:grid-cols-6"
+        : "sm:grid-cols-5"
 
   // Pass 2 hard-review FM-2: tab active sync với ?tab= URL param.
   // Reload page giữ tab user đang xem; share link mở thẳng tab cụ thể.
@@ -108,9 +122,11 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
     const valid = (VALID_TABS as readonly string[]).includes(raw ?? "")
       ? (raw as TabId)
       : "quota"
-    // Non-gov dán ?tab=advanced → fallback "quota" (tránh rơi vào thẻ ẩn).
-    return valid === "advanced" && !canGov ? "quota" : valid
-  }, [searchParams, canGov])
+    // Dán ?tab=<thẻ-ẩn> khi không có quyền → fallback "quota".
+    if (valid === "advanced" && !canGov) return "quota"
+    if (valid === "subject-groups" && !canMng) return "quota"
+    return valid
+  }, [searchParams, canGov, canMng])
   const setTab = useCallback(
     (next: string) => {
       // Idempotent guard: Radix Tabs + React 19 effects có thể fire
@@ -172,13 +188,14 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
             className="flex-1 flex flex-col min-h-0"
           >
             <TabsList
-              className={`flex w-full justify-start overflow-x-auto shrink-0 sm:grid sm:justify-center ${
-                canGov ? "sm:grid-cols-6" : "sm:grid-cols-5"
-              }`}
+              className={`flex w-full justify-start overflow-x-auto shrink-0 sm:grid sm:justify-center ${gridColsClass}`}
             >
               <TabsTrigger value="quota">Chỉ tiêu</TabsTrigger>
               <TabsTrigger value="identity">Định danh</TabsTrigger>
               <TabsTrigger value="criteria">Tiêu chí</TabsTrigger>
+              {canMng && (
+                <TabsTrigger value="subject-groups">Tổ hợp môn</TabsTrigger>
+              )}
               <TabsTrigger value="documents">Giấy tờ</TabsTrigger>
               {canGov && (
                 <TabsTrigger value="advanced">Nâng cao</TabsTrigger>
@@ -201,6 +218,15 @@ export function PathDetailDrawer({ pathId, onClose }: Props) {
                   embedded
                 />
               </TabsContent>
+              {canMng && (
+                <TabsContent value="subject-groups">
+                  <SubjectGroupConfigTab
+                    path={path}
+                    pathId={pathId}
+                    onClose={onClose}
+                  />
+                </TabsContent>
+              )}
               <TabsContent value="documents">
                 <ConfigDocuments
                   path={path}

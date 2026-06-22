@@ -26,17 +26,6 @@ class PathSubjectGroupRepository:
             stmt = stmt.options(selectinload(PathSubjectGroupConfig.items))
         return (await self.db.execute(stmt)).scalar_one_or_none()
 
-    async def list_configs_by_path(
-        self, admission_path_id: int
-    ) -> List[PathSubjectGroupConfig]:
-        stmt = (
-            select(PathSubjectGroupConfig)
-            .where(PathSubjectGroupConfig.admission_path_id == admission_path_id)
-            .options(selectinload(PathSubjectGroupConfig.items))
-            .order_by(PathSubjectGroupConfig.subject_group_id)
-        )
-        return list((await self.db.execute(stmt)).scalars().all())
-
     async def list_configs_by_path_with_subjects(
         self, admission_path_id: int
     ) -> List[PathSubjectGroupConfig]:
@@ -89,4 +78,19 @@ class PathSubjectGroupRepository:
         )
         if excluded_config_id is not None:
             stmt = stmt.where(PathSubjectGroupConfig.id != excluded_config_id)
+        return int((await self.db.execute(stmt)).scalar_one())
+
+    async def count_choices_by_config(self, config_id: int) -> int:
+        """Count admission_profile_choice rows referencing this config.
+
+        FK ``admission_profile_choice.path_subject_group_config_id`` is
+        ``ondelete=RESTRICT`` → precheck before delete to return a clean 409
+        instead of a raw IntegrityError 500.
+        """
+        from app.models.admission_profile_choice import AdmissionProfileChoice
+        stmt = (
+            select(func.count())
+            .select_from(AdmissionProfileChoice)
+            .where(AdmissionProfileChoice.path_subject_group_config_id == config_id)
+        )
         return int((await self.db.execute(stmt)).scalar_one())

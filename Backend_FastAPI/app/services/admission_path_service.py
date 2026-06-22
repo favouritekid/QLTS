@@ -1103,6 +1103,25 @@ class AdmissionPathService:
         """
         return bool(user and user.role == UserRole.ADMIN)
 
+    def compute_can_manage_subject_group_configs(
+        self,
+        path: AdmissionPath,
+        user: User | None = None,
+    ) -> bool:
+        """Admin-only gate for the 'Tổ hợp môn' tab (path_subject_group_config
+        CRUD).
+
+        Stricter than ``compute_can_edit_governance``: admin AND not archived.
+        The routes are ``require_admin`` and the service blocks archived paths,
+        so the FE must gate the tab + controls on THIS (not ``can_edit``, which
+        is True for a manager on a draft → would show controls that then 403).
+        """
+        return bool(
+            user
+            and user.role == UserRole.ADMIN
+            and path.status != "archived"
+        )
+
     async def compute_can_activate(
         self,
         path: AdmissionPath,
