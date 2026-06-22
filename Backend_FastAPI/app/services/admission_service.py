@@ -22,7 +22,7 @@ Security Features:
 - ACID Transactions: enroll_student uses begin_nested() savepoint
 """
 
-import random
+import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
@@ -151,6 +151,88 @@ def _sniff_document_signature(stream) -> Optional[str]:
     if head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     return None
+
+
+# Active-content markers that make a PDF unsafe (JavaScript / auto-run actions /
+# embedded files — common malware vectors). ID papers / transcripts never need
+# these, so rejecting them is a cheap, low-false-positive guard.
+_PDF_ACTIVE_CONTENT_MARKERS = (
+    b"/JavaScript", b"/JS", b"/OpenAction", b"/Launch", b"/EmbeddedFile",
+)
+# Per-side pixel cap — rejects decompression-bomb images from the header BEFORE
+# PIL decodes the pixel data.
+_MAX_IMAGE_DIMENSION = 10000
+
+
+def _sniff_and_verify_upload(file) -> str:
+    """Validate an uploaded document by its ACTUAL bytes; return the sniffed
+    kind ('pdf'/'jpeg'/'png') or raise ``BadRequest``.
+
+    Shared by ``upload_document()`` and the priority-evidence upload so both
+    paths get identical validation:
+      1. magic-byte sniff (``_sniff_document_signature``),
+      2. content-type-match (client header must agree with the real bytes),
+      3. PDF: reject active content (JavaScript / auto-run / embedded files),
+      4. image: cap dimensions (decompression-bomb guard, from the header
+         before decode) + PIL structural ``verify()`` (corrupt/forged JPEG/PNG).
+
+    NOTE: this is cheap content validation, NOT a full AV scan — it catches
+    active-content PDFs, image bombs, and corrupt/fake images, but not arbitrary
+    embedded malware. ClamAV is future hardening.
+    """
+    sniffed_kind = _sniff_document_signature(file.file)
+    if sniffed_kind is None:
+        raise BadRequest(
+            "Tệp tải lên không phải PDF, JPG hoặc PNG hợp lệ "
+            "(magic bytes không khớp)."
+        )
+    expected_content_type = {
+        "pdf": "application/pdf",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+    }[sniffed_kind]
+    if file.content_type != expected_content_type:
+        raise BadRequest(
+            f"Content-Type '{file.content_type}' không khớp nội dung thực tế "
+            f"({expected_content_type})."
+        )
+    if sniffed_kind == "pdf":
+        # Active-content scan. Read the whole file (size already capped ≤10MB by
+        # the caller) and reject auto-run / scripting / embed markers.
+        file.file.seek(0)
+        try:
+            content = file.file.read()
+        finally:
+            file.file.seek(0)
+        if any(marker in content for marker in _PDF_ACTIVE_CONTENT_MARKERS):
+            raise BadRequest(
+                "PDF chứa nội dung động không được phép "
+                "(JavaScript/OpenAction/EmbeddedFile)."
+            )
+    elif sniffed_kind in ("jpeg", "png"):
+        # Dimension cap (from the header, before decode) + PIL structural verify.
+        # The try/except wraps ONLY the PIL ops so it cannot swallow the
+        # content-type/magic BadRequests above; the dimension BadRequest is
+        # re-raised explicitly. finally restores the cursor for the downstream
+        # write.
+        from PIL import Image
+        file.file.seek(0)
+        try:
+            with Image.open(file.file) as img:
+                if (img.width > _MAX_IMAGE_DIMENSION
+                        or img.height > _MAX_IMAGE_DIMENSION):
+                    raise BadRequest(
+                        f"Ảnh quá lớn ({img.width}x{img.height}px); tối đa "
+                        f"{_MAX_IMAGE_DIMENSION}px mỗi chiều."
+                    )
+                img.verify()
+        except BadRequest:
+            raise
+        except Exception:
+            raise BadRequest("Ảnh tải lên hỏng hoặc cấu trúc không hợp lệ.")
+        finally:
+            file.file.seek(0)
+    return sniffed_kind
 
 
 def _safe_bulk_error_message(
@@ -6494,25 +6576,11 @@ async def upload_document(
             f"Maximum allowed: {MAX_FILE_SIZE:,} bytes ({max_mb_exact:.0f}MB)."
         )
 
-    # ADM-019: content_type and extension are client-controlled. Sniff
-    # the first bytes of the actual stream and reject mismatches so an
-    # attacker cannot upload a .exe with content_type=application/pdf.
-    sniffed_kind = _sniff_document_signature(file.file)
-    if sniffed_kind is None:
-        raise BadRequest(
-            "Tệp tải lên không phải PDF, JPG hoặc PNG hợp lệ "
-            "(magic bytes không khớp)."
-        )
-    expected_content_type = {
-        "pdf": "application/pdf",
-        "jpeg": "image/jpeg",
-        "png": "image/png",
-    }[sniffed_kind]
-    if file.content_type != expected_content_type:
-        raise BadRequest(
-            f"Content-Type '{file.content_type}' không khớp nội dung "
-            f"thực tế ({expected_content_type})."
-        )
+    # ADM-019 + image verify: content_type/extension are client-controlled.
+    # Validate by ACTUAL bytes (magic + image structure) so an attacker can't
+    # upload a .exe as application/pdf nor a corrupt/forged image. Shared helper
+    # covers both this path and the priority-evidence upload.
+    sniffed_kind = _sniff_and_verify_upload(file)
 
     # doc_record was already fetched above for the authz guard — no need to re-query.
 
@@ -6856,21 +6924,8 @@ async def upload_priority_evidence_document(
             f"Maximum allowed: {MAX_FILE_SIZE:,} bytes ({max_mb_exact:.0f}MB)."
         )
 
-    sniffed_kind = _sniff_document_signature(file.file)
-    if sniffed_kind is None:
-        raise BadRequest(
-            "Tệp tải lên không phải PDF, JPG hoặc PNG hợp lệ (magic bytes không khớp)."
-        )
-    expected_content_type = {
-        "pdf": "application/pdf",
-        "jpeg": "image/jpeg",
-        "png": "image/png",
-    }[sniffed_kind]
-    if file.content_type != expected_content_type:
-        raise BadRequest(
-            f"Content-Type '{file.content_type}' không khớp nội dung thực tế "
-            f"({expected_content_type})."
-        )
+    # ADM-019 + image verify (shared helper — same validation as upload_document).
+    sniffed_kind = _sniff_and_verify_upload(file)
 
     # Find existing priority_evidence row (for re-upload scenario)
     existing_doc_q = await db.execute(
@@ -7979,7 +8034,11 @@ async def _perform_enrollment_core(
                     )
 
                 for attempt in range(10):  # Retry up to 10 times
-                    random_digits = random.randint(0, 9999)
+                    # CSPRNG (secrets) so the next unissued student_code isn't
+                    # predictable from observed ones. student_code is a public
+                    # identifier (SV+YYYY+4d), not a secret credential — this is
+                    # defense-in-depth, format/entropy unchanged.
+                    random_digits = secrets.randbelow(10000)
                     candidate_code = f"SV{year}{random_digits:04d}"
 
                     # ✅ SPRINT 6: Use Repository for uniqueness check

@@ -258,21 +258,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if filters.get("lead_id"):
             base_conditions.append(models.AdmissionProfile.lead_id == filters["lead_id"])
 
-        # Search filter (name, email, citizen_id)
+        # Search filter: name diacritic-insensitive (f_unaccent) + exact
+        # email/citizen_id. Shared helper keeps list parity with status-counts.
         if search:
-            # Normalize Unicode for Vietnamese diacritics
-            normalized_search = unicodedata.normalize('NFC', search.strip())
-            # Escape LIKE wildcards (% _) so user input (incl. citizen_id) is
-            # treated literally — prevents wildcard-injection / DoS backtracking.
-            search_term = f"%{escape_like_pattern(normalized_search)}%"
-            search_conditions = or_(
-                models.Lead.full_name.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
-                models.Lead.email.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
-                models.AdmissionProfile.citizen_id.ilike(
-                    search_term, escape=LIKE_ESCAPE_CHAR
-                ),
-            )
-            base_conditions.append(search_conditions)
+            base_conditions.append(self._name_search_condition(search))
 
         # Major/Program filter via ProgramOffering.program_id (MajorProgram ID)
         # Requires JOIN through Lead → ProgramOffering → MajorProgram
@@ -407,6 +396,27 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             ).correlate(models.AdmissionProfile).exists()
             base_conditions.append(no_fees)
 
+    def _name_search_condition(self, search: str):
+        """Diacritic-insensitive name search (+ exact email/citizen_id).
+
+        ``f_unaccent(full_name)`` is backed by ``ix_lead_fullname_unaccent_trgm``
+        (migration leadsrch01) so "nguyen" matches "Nguyễn". Keeps
+        ``escape=LIKE_ESCAPE_CHAR`` because the term is escaped literal via
+        ``escape_like_pattern()``. Shared by the list query and
+        ``_build_base_conditions`` (status-counts) so list + tab counts agree.
+        """
+        normalized = unicodedata.normalize("NFC", search.strip())
+        term = f"%{escape_like_pattern(normalized)}%"
+        return or_(
+            func.f_unaccent(models.Lead.full_name).ilike(
+                func.f_unaccent(term), escape=LIKE_ESCAPE_CHAR
+            ),
+            models.Lead.email.ilike(term, escape=LIKE_ESCAPE_CHAR),
+            models.AdmissionProfile.citizen_id.ilike(
+                term, escape=LIKE_ESCAPE_CHAR
+            ),
+        )
+
     # =========================================================================
     # AGGREGATE QUERY METHODS (Phase 2 & 3)
     # =========================================================================
@@ -434,17 +444,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if unit_id is not None:
             conditions.append(models.Lead.unit_id == unit_id)
         if search:
-            normalized_search = unicodedata.normalize('NFC', search.strip())
-            # Escape LIKE wildcards (% _) so user input (incl. citizen_id) is
-            # treated literally — prevents wildcard-injection / DoS backtracking.
-            search_term = f"%{escape_like_pattern(normalized_search)}%"
-            conditions.append(or_(
-                models.Lead.full_name.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
-                models.Lead.email.ilike(search_term, escape=LIKE_ESCAPE_CHAR),
-                models.AdmissionProfile.citizen_id.ilike(
-                    search_term, escape=LIKE_ESCAPE_CHAR
-                ),
-            ))
+            # Same diacritic-insensitive search as the list query (parity).
+            conditions.append(self._name_search_condition(search))
         if major_ids and len(major_ids) > 0:
             conditions.append(models.ProgramOffering.program_id.in_(major_ids))
         if academic_year is not None:
