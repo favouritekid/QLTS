@@ -9739,7 +9739,7 @@ async def resubmit_profile(
             profile_id=profile.id,
         )
 
-    # ✅ SYNC: Update lead consultation status to match admission status (resubmitted → sts07)
+    # ✅ SYNC: lead → sts07 trên resubmit, TRỪ KHI giữ finance overlay (SL1 guard).
     from .lead_admission_sync import sync_lead_from_admission
     await sync_lead_from_admission(
         db=db,

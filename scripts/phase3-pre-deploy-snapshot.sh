@@ -39,9 +39,13 @@ ALEMBIC_VERSION=$(docker compose exec -T postgres psql -U qlts -d "${POSTGRES_DB
   "SELECT version_num FROM alembic_version" 2>&1 | tr -d ' \n' || echo "UNKNOWN")
 echo "Alembic version: ${ALEMBIC_VERSION}" | tee -a "${LOG_FILE}"
 
-# Expected: phase2_06 (Phase 2 PR-2D.1 v4a head)
-if [[ "${ALEMBIC_VERSION}" != "phase2_06" ]]; then
-  echo "WARNING: Expected alembic head 'phase2_06', got '${ALEMBIC_VERSION}'" | tee -a "${LOG_FILE}"
+# Optional expected-head guard. Set EXPECTED_ALEMBIC_HEAD before running to
+# assert the DB is at the head you intend to snapshot; left unset (default) it
+# just records the captured version above. The old hardcoded 'phase2_06' was a
+# one-shot Phase-3 value and is long stale on prod (head is now docdebt01+), so
+# it warned on every run — opt-in avoids that false alarm.
+if [[ -n "${EXPECTED_ALEMBIC_HEAD:-}" && "${ALEMBIC_VERSION}" != "${EXPECTED_ALEMBIC_HEAD}" ]]; then
+  echo "WARNING: Expected alembic head '${EXPECTED_ALEMBIC_HEAD}', got '${ALEMBIC_VERSION}'" | tee -a "${LOG_FILE}"
   echo "Continuing snapshot but verify post-restore manually." | tee -a "${LOG_FILE}"
 fi
 

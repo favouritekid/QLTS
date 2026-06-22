@@ -13,6 +13,7 @@ Tests cover end-to-end scenarios:
 Note: These tests require database fixtures from conftest.py
 """
 
+import asyncio
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone, date, timedelta
@@ -21,6 +22,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import AsyncSessionLocal
 from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentIntent, PaymentMethod, InstallmentPlan,
@@ -511,6 +513,64 @@ class TestInvoiceGeneration:
         assert invoice.status == InvoiceStatusEnum.issued.value
         assert invoice.issued_at is not None
         assert invoice.issued_by_id == maker_user.id
+
+    @pytest.mark.asyncio
+    async def test_concurrent_invoice_generation_unique_numbers(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """F1: hai luồng generate invoice cùng (prefix, year) ĐỒNG THỜI phải
+        nhận số khác nhau. pg_advisory_xact_lock serialise việc cấp số → không
+        có DUPLICATE KEY 500. Reverting the lock/flush would let both read the
+        same MAX and collide on the invoice_number UNIQUE index (one would raise
+        IntegrityError), so this is the regression guard for the F1 concurrency
+        fix that the sequential batch test cannot exercise."""
+        fee_service = FeeCalculationService(db)
+        profile = finance_fixtures["admission_profile"]
+        unit_id = finance_fixtures["unit_id"]
+
+        # Two independent fees (different types → no duplicate-fee constraint),
+        # committed so the concurrent sessions below can see them.
+        fee_a, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.dormitory,
+            base_amount=Decimal("2000000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=unit_id,
+        )
+        fee_b, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.insurance,
+            base_amount=Decimal("500000"),
+            academic_year=2025,
+            user_id=maker_user.id,
+            unit_id=unit_id,
+        )
+        await db.commit()
+
+        async def _issue(fee_id: int) -> list[str]:
+            # Separate session/transaction per task so they genuinely race on
+            # the (prefix, year) advisory lock.
+            async with AsyncSessionLocal() as session:
+                svc = InvoiceService(session)
+                invoices, _ = await svc.generate_invoices_for_fee(
+                    fee_id=fee_id,
+                    due_date_base=date.today() + timedelta(days=30),
+                    user_id=maker_user.id,
+                    unit_id=unit_id,
+                )
+                await session.commit()
+                return [inv.invoice_number for inv in invoices]
+
+        nums_a, nums_b = await asyncio.gather(_issue(fee_a.id), _issue(fee_b.id))
+        all_nums = nums_a + nums_b
+
+        assert len(set(all_nums)) == len(all_nums), \
+            f"Concurrent invoice numbers collided: {all_nums}"
+        assert all(n.startswith("INV-") for n in all_nums)
 
 
 # =============================================================================

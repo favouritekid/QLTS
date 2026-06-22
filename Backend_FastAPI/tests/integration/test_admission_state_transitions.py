@@ -700,6 +700,21 @@ class TestStateTransitionWorkflows:
         )
         assert wrong_confirm_response.status_code == 400, f"Should fail with wrong CCCD"
 
+        # ADM-023 (2026-04-29) added a sliding cooldown ladder: every wrong CCCD
+        # attempt sets ``lock_until`` (1st miss = 5 min). Reset it so the
+        # legitimate retry below isn't rate-limited — the cooldown ladder itself
+        # is covered by test_admission_confirmation_lock_ladder + the cooldown
+        # unit tests, not this happy-path flow.
+        async with AsyncSessionLocal() as session:
+            reset_result = await session.execute(
+                select(models.AdmissionConfirmationToken)
+                .where(models.AdmissionConfirmationToken.profile_id == profile.id)
+            )
+            reset_tok = reset_result.scalar_one()
+            reset_tok.lock_until = None
+            reset_tok.attempt_count = 0
+            await session.commit()
+
         # 6. Lead confirms with correct CCCD (last 4 digits of citizen_id)
         correct_confirm_response = await client.post(
             f"/api/admissions/confirm/{token_value}",
