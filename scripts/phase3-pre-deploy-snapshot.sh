@@ -35,7 +35,7 @@ echo ""
 
 # Step 1: Capture current alembic version (for restore verification)
 echo "[1/4] Capturing alembic version..."
-ALEMBIC_VERSION=$(docker compose exec -T postgres psql -U qlts -d qlts -t -c \
+ALEMBIC_VERSION=$(docker compose exec -T postgres psql -U qlts -d "${POSTGRES_DB:-qlts_production}" -t -c \
   "SELECT version_num FROM alembic_version" 2>&1 | tr -d ' \n' || echo "UNKNOWN")
 echo "Alembic version: ${ALEMBIC_VERSION}" | tee -a "${LOG_FILE}"
 
@@ -47,7 +47,7 @@ fi
 
 # Step 2: Capture row counts (for restore verification)
 echo "[2/4] Capturing table row counts..."
-docker compose exec -T postgres psql -U qlts -d qlts -c "
+docker compose exec -T postgres psql -U qlts -d "${POSTGRES_DB:-qlts_production}" -c "
 SELECT 'admission_profile' AS table, COUNT(*) FROM admission_profile
 UNION ALL SELECT 'admission_path', COUNT(*) FROM admission_path
 UNION ALL SELECT 'offering_admission_round', COUNT(*) FROM offering_admission_round
@@ -63,13 +63,21 @@ docker compose exec -T postgres pg_dump -U qlts \
   --no-owner \
   --no-acl \
   --file=/tmp/snapshot.dump \
-  qlts
+  "${POSTGRES_DB:-qlts_production}"
 
 docker compose cp postgres:/tmp/snapshot.dump "${SNAPSHOT_PATH}"
 docker compose exec -T postgres rm /tmp/snapshot.dump
 
 SNAPSHOT_SIZE=$(stat -c%s "${SNAPSHOT_PATH}" 2>/dev/null || stat -f%z "${SNAPSHOT_PATH}")
 echo "Snapshot size: $(numfmt --to=iec ${SNAPSHOT_SIZE}) (${SNAPSHOT_SIZE} bytes)" | tee -a "${LOG_FILE}"
+
+# Guard: a wrong dbname / failed pg_dump can yield a near-empty file. With the
+# pipefail change a pg_dump error would already abort, but this is a final
+# safety net so an empty/truncated snapshot is never treated as a valid backup.
+if [[ "${SNAPSHOT_SIZE:-0}" -lt 1024 ]]; then
+  echo "ERROR: Snapshot ${SNAPSHOT_PATH} is ${SNAPSHOT_SIZE} bytes (<1KiB) — dump likely failed, refusing to continue" >&2
+  exit 3
+fi
 
 # Step 4: Verify integrity (pg_restore --list parse-only)
 echo "[4/4] Verifying snapshot integrity..."
@@ -86,7 +94,7 @@ echo "==== Snapshot complete ===="
 echo "Path: ${SNAPSHOT_PATH}"
 echo "Log: ${LOG_FILE}"
 echo "Restore command:"
-echo "  docker compose exec postgres pg_restore -U qlts -d qlts ${SNAPSHOT_PATH}"
+echo "  docker compose exec postgres pg_restore -U qlts -d ${POSTGRES_DB:-qlts_production} ${SNAPSHOT_PATH}"
 echo ""
 
 # MD5 checksum (final integrity stamp)

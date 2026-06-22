@@ -85,6 +85,35 @@ PRE_APPLICATION_LEAD_STATUSES: frozenset = frozenset({
     None, "sts00", "sts02", "sts03", "sts04", "sts05", "sts06",
 })
 
+# Profile submit transitions that must not REGRESS a lead already carrying a
+# finance overlay. ``submitted`` / ``resubmitted`` normally floor the lead up to
+# sts07 (Đã tiếp nhận hồ sơ), but with the prepay fast-track a lead can reach
+# sts13 (lệ phí đã đóng) — or a later tuition overlay — while the profile is
+# still ``draft``. Submitting then must NOT pull the lead back down to sts07 and
+# erase the "đã đóng tiền" signal. This is regression SL1.
+SUBMIT_FLOOR_PROFILE_STATUSES: frozenset[str] = frozenset({"submitted", "resubmitted"})
+
+# Lead consultation statuses representing a finance overlay that sits ABOVE the
+# "hồ sơ đã tiếp nhận" milestone — application fee paid (sts13) plus the HK1
+# tuition lifecycle (sts14 chờ đóng / sts10 đã đóng / sts18 đã hoàn). A
+# submit/resubmit must PRESERVE these. NOTE: rejected (sts16) and
+# revision_requested (sts17) are intentionally ABSENT so a genuine resubmit
+# after a reject/revision still floors the lead back up to sts07.
+FEE_OVERLAY_LEAD_STATUSES: frozenset[str] = frozenset(
+    {"sts13", "sts14", "sts10", "sts18"}
+)
+
+# Admission milestone events that represent a submit/resubmit transition.
+# ``_create_admission_milestone_consultation`` is the CANONICAL writer of lead
+# state on submit — it runs BEFORE the officer-independent
+# ``sync_lead_from_admission`` fallback and sets the lead unconditionally. It
+# must therefore apply the same FEE_OVERLAY floor as ``_should_apply_admission_floor``;
+# otherwise the overlay regresses to sts07 on the officer path before the sync
+# guard ever sees it (SL1). Keep this set in sync with SUBMIT_FLOOR_PROFILE_STATUSES.
+SUBMIT_FLOOR_EVENTS: frozenset[str] = frozenset(
+    {"profile_submitted", "profile_resubmitted"}
+)
+
 # Sentinel for ``profile.status == "result_published"``. Kept as a constant
 # so the test suite can lock the no-op contract without restringifying the
 # value at the call site.
@@ -95,16 +124,28 @@ def _should_apply_admission_floor(
     profile_status: str,
     lead_consultation_status_id: Optional[str],
 ) -> bool:
-    """Pure decision rule for floor-only profile statuses.
+    """Pure decision rule guarding regression-prone profile statuses.
 
-    Returns ``True`` when the sync should proceed (lead still below the
-    admission floor) and ``False`` to preserve a later lead state.
-    Non-floor statuses always return ``True`` so the existing fall-through
+    Returns ``True`` when the sync should proceed and ``False`` to preserve a
+    later lead state. Two guarded families:
+
+    1. ``reviewing`` / ``waitlisted`` (choice-engine floor-up): only progress a
+       lead still in the pre-application phase; never regress one past sts07.
+    2. ``submitted`` / ``resubmitted``: floor the lead up to sts07 UNLESS it
+       already carries a finance overlay (sts13/sts14/sts10/sts18). This stops
+       the prepay regression (SL1) where submitting after paying the
+       application fee dragged the lead sts13 → sts07. Resubmits from
+       rejected/revision (sts16/sts17) are NOT overlays, so they still progress.
+
+    Every other status short-circuits to ``True`` so the existing fall-through
     logic applies unchanged.
     """
-    if profile_status not in FLOOR_FROM_PROFILE_STATUSES:
-        return True
-    return lead_consultation_status_id in PRE_APPLICATION_LEAD_STATUSES
+    if profile_status in FLOOR_FROM_PROFILE_STATUSES:
+        return lead_consultation_status_id in PRE_APPLICATION_LEAD_STATUSES
+    if profile_status in SUBMIT_FLOOR_PROFILE_STATUSES:
+        return lead_consultation_status_id not in FEE_OVERLAY_LEAD_STATUSES
+    return True
+
 
 # Application fee status from event mapping (Single Source of Truth)
 # Uses admission_event_mapping.py -> "application_fee_paid" event
@@ -190,9 +231,10 @@ async def sync_lead_from_admission(
         )
         return False
 
-    # Floor-only statuses (``reviewing`` / ``waitlisted``) must not regress
-    # a lead that already advanced past sts07. See FLOOR_FROM_PROFILE_STATUSES
-    # docstring for the rationale.
+    # Regression guard: floor-only statuses (``reviewing`` / ``waitlisted``)
+    # must not regress a lead past sts07, and ``submitted`` / ``resubmitted``
+    # must not erase a finance overlay (sts13/sts14/sts10/sts18 — SL1). See the
+    # _should_apply_admission_floor docstring for the rationale.
     if not _should_apply_admission_floor(profile.status, lead.consultation_status_id):
         log.debug(
             "sync_lead_from_admission: Floor-only status, lead already past "

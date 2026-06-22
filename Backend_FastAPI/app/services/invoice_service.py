@@ -27,7 +27,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, Callable
 import structlog
 
-from sqlalchemy import select, func, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -775,47 +775,83 @@ class InvoiceService:
     # HELPER METHODS
     # ==========================================================================
 
+    # Tuition invoice number prefix. Application-fee invoices use a separate
+    # ``APP-{fee.id}`` scheme (see admission_service) and never pass through
+    # this helper, so the MAX scan below is naturally scoped to INV rows.
+    _INVOICE_PREFIX = "INV"
+
     async def _generate_invoice_number(self) -> str:
         """
-        Generate unique invoice number using database sequence.
+        Generate a unique tuition invoice number atomically.
 
-        Format: INV-YYYY-XXXXXX
-        Example: INV-2026-000001
+        Format: ``INV-YYYY-NNNNNN`` (e.g. ``INV-2026-000001``).
+
+        Concurrency: a transaction-scoped advisory lock keyed on
+        ``(prefix, year)`` serialises allocation so two invoices issued at the
+        same instant cannot read the same counter and collide on the
+        ``invoice_number`` UNIQUE index (which previously surfaced as an HTTP
+        500 under concurrent issue). The lock auto-releases when the
+        surrounding transaction commits or rolls back.
+
+        Counter: the next number is ``MAX(existing suffix) + 1`` scoped to
+        ``INV-{year}-`` rows whose suffix is purely numeric — replacing the old
+        ``COUNT(*) + 1`` over the whole table, which counted ``APP-*`` rows too
+        (so INV suffixes jumped and never reset per year). The
+        ``~ '^[0-9]{1,9}$'`` guard means a stray non-numeric OR oversized INV
+        row can never make the ``CAST`` overflow int4 or throw.
+        Note: ``invoice_number_seq`` was never created in prod, so the previous
+        code always fell through to that fragile count-based path.
 
         Returns:
-            Unique invoice number string
+            Unique invoice number string.
         """
         year = datetime.now(timezone.utc).year
+        prefix = self._INVOICE_PREFIX
 
-        # Use PostgreSQL sequence for atomic counter
-        # First try to get existing sequence, or use a fallback
-        seq_num = None
-        try:
-            # Use savepoint so failure doesn't abort the whole transaction
-            async with self.db.begin_nested():
-                result = await self.db.execute(
-                    text("SELECT nextval('invoice_number_seq')")
-                )
-                seq_num = result.scalar()
-        except Exception:
-            # Sequence doesn't exist - fallback to count-based generation
-            pass
+        # Flush pending invoices first so the MAX() scan below sees rows added
+        # earlier in the SAME transaction — e.g. sibling installment invoices in
+        # one generate_invoices_for_fee batch. Raw text() queries do not trigger
+        # the ORM autoflush that the old COUNT(*) select relied on, so make it
+        # explicit; otherwise every invoice in a multi-installment batch reads
+        # the same MAX and collides on the invoice_number UNIQUE index.
+        await self.db.flush()
 
-        if seq_num is None:
-            # Fallback: count existing invoices + 1
-            result = await self.db.execute(
-                select(func.count(Invoice.id))
-            )
-            seq_num = (result.scalar() or 0) + 1
+        # Serialise allocation for this (prefix, year). hashtext() is a stable
+        # PostgreSQL hash → deterministic across workers (Python's hash() is
+        # per-process salted and must NOT be used for a shared lock key).
+        await self.db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_ns), :year)"),
+            {"lock_ns": f"invoice_number:{prefix}", "year": year},
+        )
 
-        invoice_number = f"INV-{year}-{seq_num:06d}"
+        # Highest suffix already issued for this prefix+year (NULL-safe → 0).
+        # The ``split_part ~ '^[0-9]{1,9}$'`` predicate keeps the CAST safe: it
+        # excludes any row whose 3rd segment is non-numeric (e.g. a manually
+        # inserted ``INV-2026-FOO``) AND any suffix longer than 9 digits, so the
+        # CAST can never overflow int4 (max 2,147,483,647) nor throw — one bad
+        # row cannot poison generation for the whole year. The timestamped
+        # collision fallback ``INV-2026-000001-<ts>`` IS still counted: its 3rd
+        # dash-segment is the numeric seq ``000001`` (the ts is the 4th).
+        result = await self.db.execute(
+            text(
+                "SELECT COALESCE(MAX(CAST(split_part(invoice_number, '-', 3) "
+                "AS INTEGER)), 0) FROM invoice "
+                "WHERE invoice_number LIKE :pattern "
+                "AND split_part(invoice_number, '-', 3) ~ '^[0-9]{1,9}$'"
+            ),
+            {"pattern": f"{prefix}-{year}-%"},
+        )
+        seq_num = (result.scalar() or 0) + 1
 
-        # Verify uniqueness (should not happen with sequence)
+        invoice_number = f"{prefix}-{year}-{seq_num:06d}"
+
+        # Belt-and-suspenders: the advisory lock makes a collision impossible,
+        # but verify once and fall back to a timestamped suffix if a row with a
+        # non-standard format ever slipped past the MAX scan.
         existing = await self.invoice_repo.get_by_invoice_number(invoice_number)
         if existing:
-            # Collision - append timestamp
             ts = int(datetime.now(timezone.utc).timestamp())
-            invoice_number = f"INV-{year}-{seq_num:06d}-{ts}"
+            invoice_number = f"{prefix}-{year}-{seq_num:06d}-{ts}"
 
         return invoice_number
 

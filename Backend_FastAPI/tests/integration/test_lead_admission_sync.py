@@ -67,6 +67,9 @@ async def sync_statuses(db: AsyncSession) -> dict:
         # Revision & Drop statuses
         "sts17": {"name": "Yêu cầu bổ sung hồ sơ", "phase": "admission", "order": 217},
         "sts12": {"name": "Ngưng theo học", "phase": "enrolled", "order": 212},
+        # Application fee paid (prepay fast-track overlay) — needed for the
+        # submit-regression guard test (SL1).
+        "sts13": {"name": "Đã hoàn tất lệ phí", "phase": "admission", "order": 213},
         # Finance Phase statuses
         "sts14": {"name": "Chưa hoàn tất học phí", "phase": "finance", "order": 214},
         "sts10": {"name": "Đã hoàn tất học phí", "phase": "finance", "order": 210},
@@ -105,6 +108,23 @@ async def sync_statuses(db: AsyncSession) -> dict:
         db.add(status)
         created_status_ids.append(status_id)
 
+    await db.flush()
+
+    # Canonical pipeline stages used by admission_event_mapping projections.
+    # The milestone helper sets lead.pipeline_stage_id = projection.pipeline_stage_id
+    # (stg03/stg04/stg05/stg06/stg07) — distinct from the stg_sync_* stages above
+    # that back the consultation statuses. Without these the milestone path trips
+    # the lead_pipeline_stage_id_fkey FK. High order values avoid collisions.
+    for std_stage_id, std_order in [
+        ("stg03", 8003), ("stg04", 8004), ("stg05", 8005),
+        ("stg06", 8006), ("stg07", 8007),
+    ]:
+        if not await db.get(models.PipelineStage, std_stage_id):
+            db.add(models.PipelineStage(
+                id=std_stage_id,
+                name=f"Canonical {std_stage_id}",
+                order=std_order,
+            ))
     await db.flush()
 
     return {"status_ids": created_status_ids}
@@ -1260,3 +1280,294 @@ class TestSyncStudentDropped:
     async def test_sts12_fixture_exists(self, sync_statuses: dict):
         """sts12 should be created in fixture for integration tests."""
         assert "sts12" in sync_statuses["status_ids"]
+
+
+# ==============================================================================
+# TEST: SUBMIT REGRESSION GUARD (SL1 — prepay fast-track)
+# ==============================================================================
+
+
+class TestSyncSubmitFinanceRegressionGuard:
+    """SL1 guard at the SYNC level (officer-independent fallback path only).
+
+    These call ``sync_lead_from_admission`` DIRECTLY — they pin the guard on
+    the magic-link / no-officer fallback branch, where the milestone helper
+    skipped the lead update (no officer resolvable) and sync is the sole
+    protection. The dominant OFFICER path goes through
+    ``_create_admission_milestone_consultation`` FIRST (which would otherwise
+    clobber the overlay to sts07 before sync runs) — that path is covered by
+    ``TestSubmitMilestoneFinanceRegressionGuard`` below. Both layers must hold.
+    """
+
+    async def test_submit_preserves_sts13_fee_paid(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Lead at sts13 (đã đóng lệ phí) must stay at sts13 when the profile
+        is submitted — no regression to sts07."""
+        sync_lead.consultation_status_id = "sts13"
+        await db.flush()
+
+        profile = await create_profile(db, sync_lead, "submitted")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Profile submitted after prepay",
+        )
+
+        assert result is False, "Submit must not regress a fee-paid lead"
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts13", \
+            f"Expected sts13 preserved, got {sync_lead.consultation_status_id}"
+
+    @pytest.mark.parametrize("overlay_status", ["sts14", "sts10", "sts18"])
+    async def test_submit_preserves_tuition_overlay(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+        overlay_status: str,
+    ):
+        """Tuition overlays (calculated/paid/refunded) must also survive a
+        late submit/resubmit."""
+        sync_lead.consultation_status_id = overlay_status
+        await db.flush()
+
+        profile = await create_profile(db, sync_lead, "resubmitted")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Resubmit while tuition overlay active",
+        )
+
+        assert result is False
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == overlay_status
+
+    async def test_resubmit_from_rejected_still_floors_to_sts07(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """A genuine resubmit after a reject (sts16) MUST progress to sts07 —
+        rejected is not a finance overlay, so the guard must not block it."""
+        sync_lead.consultation_status_id = "sts16"
+        await db.flush()
+
+        profile = await create_profile(db, sync_lead, "resubmitted")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Resubmit after reject",
+        )
+
+        assert result is True
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts07", \
+            f"Expected sts07 after resubmit, got {sync_lead.consultation_status_id}"
+
+    async def test_submit_from_consultation_floors_to_sts07(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """The normal path (no prepay): lead at sts06 → submit → sts07,
+        unchanged by the guard."""
+        # sync_lead fixture starts at sts06
+        profile = await create_profile(db, sync_lead, "submitted")
+
+        result = await sync_lead_from_admission(
+            db=db,
+            profile=profile,
+            changed_by_user_id=sync_user.id,
+            reason="Normal submit",
+        )
+
+        assert result is True
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts07"
+
+
+class TestSubmitMilestoneFinanceRegressionGuard:
+    """SL1 guard at the MILESTONE level — the actual prod regression site.
+
+    On the officer path ``_create_admission_milestone_consultation`` runs on
+    submit/resubmit BEFORE the sync fallback and used to set the lead to sts07
+    unconditionally (its only skip was ``lead.status == 'converted'``). Prod
+    verification: 18/18 regressed leads carried history reason
+    "Admission event: profile_submitted" — i.e. the milestone, not the sync,
+    was the culprit. These tests exercise the milestone helper directly so a
+    revert of the milestone guard fails here even though the sync-level tests
+    stay green.
+    """
+
+    @pytest.mark.parametrize("overlay_status", ["sts13", "sts14", "sts10", "sts18"])
+    async def test_submit_milestone_preserves_finance_overlay(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+        overlay_status: str,
+    ):
+        """A profile_submitted milestone must NOT regress a fee/tuition-overlay
+        lead down to sts07."""
+        from app.services.admission_service import (
+            _create_admission_milestone_consultation,
+        )
+
+        sync_lead.consultation_status_id = overlay_status
+        await db.flush()
+
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=sync_lead,
+            event="profile_submitted",
+            actor=sync_user,
+            profile_id=1,
+        )
+        await db.flush()
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == overlay_status, \
+            f"Milestone regressed {overlay_status} → {sync_lead.consultation_status_id}"
+
+        # Golden Rule: the SYSTEM milestone consultation IS still recorded even
+        # when the lead status is preserved. This also distinguishes "guard
+        # preserved the overlay" from "the milestone silently did nothing".
+        system_consultations = (
+            await db.execute(
+                select(models.Consultation).where(
+                    models.Consultation.lead_id == sync_lead.id,
+                    models.Consultation.method == "system",
+                )
+            )
+        ).scalars().all()
+        assert len(system_consultations) == 1, \
+            "submit milestone consultation must be recorded even when overlay preserved"
+
+    async def test_resubmit_milestone_preserves_sts13(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """profile_resubmitted is also floored when a fee overlay is present."""
+        from app.services.admission_service import (
+            _create_admission_milestone_consultation,
+        )
+
+        sync_lead.consultation_status_id = "sts13"
+        await db.flush()
+
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=sync_lead,
+            event="profile_resubmitted",
+            actor=sync_user,
+            profile_id=1,
+        )
+        await db.flush()
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts13"
+
+    async def test_submit_milestone_floors_sts06_to_sts07(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Normal path (no overlay): a profile_submitted milestone still floors
+        a consultation-phase lead up to sts07."""
+        from app.services.admission_service import (
+            _create_admission_milestone_consultation,
+        )
+
+        # sync_lead starts at sts06
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=sync_lead,
+            event="profile_submitted",
+            actor=sync_user,
+            profile_id=1,
+        )
+        await db.flush()
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts07"
+
+    async def test_resubmit_milestone_from_rejected_floors_to_sts07(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """Resubmit after reject (sts16, not an overlay) must still floor to
+        sts07 — the guard must not block a genuine resubmit."""
+        from app.services.admission_service import (
+            _create_admission_milestone_consultation,
+        )
+
+        sync_lead.consultation_status_id = "sts16"
+        await db.flush()
+
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=sync_lead,
+            event="profile_resubmitted",
+            actor=sync_user,
+            profile_id=1,
+        )
+        await db.flush()
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts07"
+
+    async def test_approve_milestone_not_floored_from_sts13(
+        self,
+        db: AsyncSession,
+        sync_lead: models.Lead,
+        sync_user: models.User,
+        sync_statuses: dict,
+    ):
+        """The guard must NOT over-reach: a profile_approved milestone is a
+        legitimate progression and must advance a sts13 lead to sts09, even
+        though sts13 is a fee overlay (only submit/resubmit are floored)."""
+        from app.services.admission_service import (
+            _create_admission_milestone_consultation,
+        )
+
+        sync_lead.consultation_status_id = "sts13"
+        await db.flush()
+
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=sync_lead,
+            event="profile_approved",
+            actor=sync_user,
+            profile_id=1,
+        )
+        await db.flush()
+
+        await db.refresh(sync_lead)
+        assert sync_lead.consultation_status_id == "sts09", \
+            "approve must still progress a fee-paid lead (guard is submit-only)"

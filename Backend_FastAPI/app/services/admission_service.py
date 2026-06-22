@@ -3275,6 +3275,25 @@ async def _create_admission_milestone_consultation(
         )
         return
 
+    # SL1 regression guard: on a submit/resubmit milestone for a lead that
+    # already carries a finance overlay (prepay application fee → sts13, or the
+    # HK1 tuition lifecycle → sts14/sts10/sts18), we STILL record the milestone
+    # consultation below (Golden Rule audit + consultation_count) but must NOT
+    # downgrade the lead pipeline back to sts07 ("Đã tiếp nhận"). This helper is
+    # the CANONICAL lead writer on submit (it runs before the officer-independent
+    # sync_lead_from_admission fallback), so the guard MUST live here — the sync
+    # guard alone is a no-op on the officer path because the lead would already
+    # be at sts07 by the time sync runs. Other events (approve/reject/enroll/...)
+    # are legitimate progressions and are intentionally NOT preserved.
+    from .lead_admission_sync import (
+        SUBMIT_FLOOR_EVENTS,
+        FEE_OVERLAY_LEAD_STATUSES,
+    )
+    preserve_lead_overlay = (
+        event in SUBMIT_FLOOR_EVENTS
+        and lead.consultation_status_id in FEE_OVERLAY_LEAD_STATUSES
+    )
+
     # Capture old state for history logging
     old_state = _get_current_lead_state(lead)
 
@@ -3336,6 +3355,20 @@ async def _create_admission_milestone_consultation(
         duration_minutes=0,  # System consultations have no duration
     )
     db.add(system_consultation)
+
+    if preserve_lead_overlay:
+        # Milestone recorded for audit, but the lead keeps its finance overlay
+        # (sts13/sts14/sts10/sts18) — do NOT downgrade it to the submit status.
+        log.info(
+            "SL1 guard: recorded submit milestone but preserved lead finance "
+            "overlay (not downgrading to sts07)",
+            lead_id=lead.id,
+            admission_event=event,
+            preserved_status=lead.consultation_status_id,
+            milestone_status=projection.consultation_status_id,
+            profile_id=profile_id,
+        )
+        return
 
     # Update lead pipeline (stage + status)
     lead.consultation_status_id = projection.consultation_status_id
@@ -9691,6 +9724,11 @@ async def resubmit_profile(
     profile.assigned_reviewer_id = None
     profile.assigned_at = None
 
+    # Capture lead consultation status BEFORE the milestone so we can tell
+    # whether the lead actually moved. The SL1 guard may preserve a finance
+    # overlay (sts13/sts14/sts10/sts18) instead of flooring to sts07.
+    _old_lead_cs = profile.lead.consultation_status_id if profile.lead else None
+
     # ✅ PIPELINE SYNC: Create system consultation for resubmission milestone
     if profile.lead:
         await _create_admission_milestone_consultation(
@@ -9724,6 +9762,13 @@ async def resubmit_profile(
     # Path C / Arch-3: paired notification bundle + commission callback.
     # Mirrors router admissions.py:1796+1811 (paired dispatch) + 1824
     # (commission). new_status="resubmitted" / lead "sts07".
+    # Did the lead actually change consultation status? The SL1 guard preserves
+    # a finance overlay (sts13/sts14/sts10/sts18) instead of flooring to sts07,
+    # so on that path the lead did NOT move — we must not broadcast a phantom
+    # LEAD_STATUS_CHANGED nor run commission bookkeeping for a non-transition.
+    _new_lead_cs = profile.lead.consultation_status_id if profile.lead else None
+    _lead_status_changed = bool(_new_lead_cs) and _new_lead_cs != _old_lead_cs
+
     bundle_callback = None
     if profile.lead_id:
         intents = [
@@ -9740,38 +9785,44 @@ async def resubmit_profile(
                 dedupe_key=f"admission_profile_resubmitted:{profile_id}",
                 rooms=rooms_for_admission(profile),
             ),
-            NotificationIntent(
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": profile.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": _old_status_for_audit,
-                    "new_status": "sts07",
-                    "actor_id": _actor_id,
-                    "actor_name": _actor_name,
-                },
-                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts07",
-                rooms=rooms_for_admission(profile),
-            ),
         ]
+        # Only broadcast a lead status change when the lead actually moved
+        # (suppressed when the SL1 guard preserved a finance overlay).
+        if _lead_status_changed:
+            intents.append(
+                NotificationIntent(
+                    event=SystemEvents.LEAD_STATUS_CHANGED,
+                    payload={
+                        "lead_id": profile.lead_id,
+                        "lead_name": f"Profile #{profile_id}",
+                        "old_status": _old_status_for_audit,
+                        "new_status": _new_lead_cs,
+                        "actor_id": _actor_id,
+                        "actor_name": _actor_name,
+                    },
+                    dedupe_key=f"lead_status_changed:{profile.lead_id}:{_new_lead_cs}",
+                    rooms=rooms_for_admission(profile),
+                )
+            )
         bundle = await dispatch_bundle(
             db, bundle_label="admission_resubmit", intents=intents,
         )
         bundle_callback = bundle.callback
 
     commission_callback = None
-    # Commission attribution requires a real actor (sts07 itself doesn't
-    # forward-trigger commissions, but regression bookkeeping records the
-    # cancelling actor). Skip for the magic-link candidate path —
-    # candidate-driven resubmit is not a commission-relevant event.
-    if profile.lead_id and _actor_id is not None:
+    # Commission attribution requires a real actor AND an actual lead status
+    # change. sts07 itself doesn't forward-trigger commissions, but regression
+    # bookkeeping records the cancelling actor. Skip for the magic-link
+    # candidate path and when the SL1 guard preserved the overlay (no move).
+    if profile.lead_id and _actor_id is not None and _lead_status_changed:
         captured_lead_id = profile.lead_id
         captured_old = _old_status_for_audit
+        captured_new = _new_lead_cs
         captured_actor_id = _actor_id
 
         async def _commission_callback():
             await safe_check_commission_on_status_change(
-                db, captured_lead_id, captured_old, "sts07", captured_actor_id,
+                db, captured_lead_id, captured_old, captured_new, captured_actor_id,
             )
 
         commission_callback = _commission_callback
