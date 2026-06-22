@@ -156,8 +156,15 @@ def _sniff_document_signature(stream) -> Optional[str]:
 # Active-content markers that make a PDF unsafe (JavaScript / auto-run actions /
 # embedded files — common malware vectors). ID papers / transcripts never need
 # these, so rejecting them is a cheap, low-false-positive guard.
+#
+# The 3-byte b"/JS" marker was dropped on purpose: it collides by chance inside
+# the FlateDecode/DCTDecode stream bytes of legitimate scanned PDFs (~46% of
+# 10MB scans), false-rejecting real documents. The remaining markers are ≥7
+# bytes (~0 random collision) and a real JS action always also carries the full
+# b"/JavaScript" token, so dropping /JS loses no detection. (Compressed or
+# name-escaped active content stays out of scope — ClamAV is future hardening.)
 _PDF_ACTIVE_CONTENT_MARKERS = (
-    b"/JavaScript", b"/JS", b"/OpenAction", b"/Launch", b"/EmbeddedFile",
+    b"/JavaScript", b"/OpenAction", b"/Launch", b"/EmbeddedFile",
 )
 # Per-side pixel cap — rejects decompression-bomb images from the header BEFORE
 # PIL decodes the pixel data.
@@ -11358,7 +11365,6 @@ async def generate_action_magic_link(
     Raises:
         BadRequest: action invalid hoặc profile.status không phù hợp
     """
-    import secrets
     from datetime import timedelta, datetime, timezone
     from app.config import settings
     from app.repositories import AdmissionRepository
@@ -11435,7 +11441,6 @@ async def generate_confirmation_token(
     Raises:
         BadRequest: Profile status is not 'approved'
     """
-    import secrets
     from datetime import timedelta, datetime, timezone
     from app.config import settings
     from app.repositories import AdmissionRepository

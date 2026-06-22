@@ -83,6 +83,28 @@ def test_sniff_and_verify_pdf_with_active_content_raises():
         admission_service._sniff_and_verify_upload(_upload(pdf, "application/pdf"))
 
 
+def test_sniff_and_verify_pdf_js_substring_not_false_rejected():
+    # REGRESSION: the 3-byte "/JS" sequence occurs by chance inside the
+    # compressed stream bytes of legitimate scanned PDFs. With /JS dropped from
+    # the marker set it must NOT trigger a reject — only the longer real tokens
+    # do. (No /JavaScript/OpenAction/Launch/EmbeddedFile present here.)
+    pdf = (
+        b"%PDF-1.4\n1 0 obj\nstream\n"
+        b"random /JS bytes here /JS"
+        b"\nendstream\nendobj\ntrailer<<>>"
+    )
+    assert admission_service._sniff_and_verify_upload(
+        _upload(pdf, "application/pdf")
+    ) == "pdf"
+
+
+def test_sniff_and_verify_pdf_launch_still_rejected():
+    # The longer markers stay active: /Launch (run external program) is rejected.
+    pdf = b"%PDF-1.4\n<< /S /Launch /F (calc.exe) >>\ntrailer<<>>"
+    with pytest.raises(BadRequest, match="nội dung động"):
+        admission_service._sniff_and_verify_upload(_upload(pdf, "application/pdf"))
+
+
 def test_sniff_and_verify_oversized_image_raises(monkeypatch):
     # Image-bomb guard: cap monkeypatched low so we don't allocate a real bomb.
     monkeypatch.setattr(admission_service, "_MAX_IMAGE_DIMENSION", 2)

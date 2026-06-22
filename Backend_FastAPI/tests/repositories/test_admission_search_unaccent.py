@@ -12,7 +12,7 @@ folding there needs a tsvector-config change, deferred.
 Requires the test DB's ``f_unaccent`` wrapper (created in
 tests/fixtures/database.py for the same reason).
 """
-from datetime import datetime
+import itertools
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,12 +24,19 @@ from app.repositories import AdmissionRepository
 pytestmark = pytest.mark.asyncio
 
 
+# Monotonic per-call sequence → unique citizen_id / phone / email regardless of
+# timing or per-test rollback. The previous datetime-millisecond derivation
+# could collide when two profiles seeded within the same millisecond, tripping
+# uq_citizen_academic_year (citizen_id + academic_year, fixed at 2026).
+_seed_seq = itertools.count(1)
+
+
 async def _seed_admission(db: AsyncSession, unit_id, status_id, full_name: str):
-    ts = datetime.now().timestamp()
+    n = next(_seed_seq)
     lead = models.Lead(
         full_name=full_name,
-        phone=f"09{int(ts) % 10_000_000:07d}",
-        email=f"srch_{ts:.6f}@test.com",
+        phone=f"09{n:08d}",
+        email=f"srch_{n}@test.com",
         source="website",
         unit_id=unit_id,
         consultation_status_id=status_id,
@@ -40,7 +47,7 @@ async def _seed_admission(db: AsyncSession, unit_id, status_id, full_name: str):
     profile = models.AdmissionProfile(
         lead_id=lead.id,
         status="submitted",
-        citizen_id=f"0{int(ts * 1000) % 10**11:011d}",
+        citizen_id=f"{n:012d}",
         version=1,
         applied_rules={},
         academic_year=2026,
