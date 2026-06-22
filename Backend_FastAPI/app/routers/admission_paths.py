@@ -137,6 +137,9 @@ async def build_path_response(
     response.can_edit_governance = service.compute_can_edit_governance(
         path, current_user
     )
+    response.can_manage_subject_group_configs = (
+        service.compute_can_manage_subject_group_configs(path, current_user)
+    )
     if include_validation_errors:
         _, errors = await service.validate_activation(path)
         response.validation_errors = errors

@@ -11,12 +11,15 @@ from app.core.rate_limits import RateLimits, limiter
 from app.schemas.path_subject_group import (
     ClonePathsRequest,
     ClonePathsResponse,
+    PathSubjectGroupConfigAdminListResponse,
+    PathSubjectGroupConfigAdminResponse,
     PathSubjectGroupConfigCreate,
-    PathSubjectGroupConfigListResponse,
     PathSubjectGroupConfigResponse,
+    PathSubjectGroupConfigSubjectAdmin,
     PathSubjectGroupConfigUpdate,
     PathSubjectGroupItemCreate,
     PathSubjectGroupItemResponse,
+    PathSubjectGroupItemUpdate,
 )
 from app.schemas.admission_path import AdmissionPathQuotaUpdate, AdmissionPathResponse
 from app.schemas.quota_matrix import PathMatrixResponse, QuotaMatrixResponse
@@ -58,9 +61,8 @@ async def create_config(
     """Create path subject group config với items."""
     service = PathSubjectGroupService(db)
     config = await service.create_config(admission_path_id, payload)
-    await db.commit()
-    await db.refresh(config, ["items"])
-
+    # Audit BEFORE commit: log_activity only flushes (does not commit), so the
+    # activity row must share this transaction frame or it never persists.
     await activity_service.log_activity(
         db=db,
         action="path_subject_group_config_create",
@@ -72,12 +74,14 @@ async def create_config(
             f"subject_group={payload.subject_group_id}"
         ),
     )
+    await db.commit()
+    await db.refresh(config, ["items"])
     return config
 
 
 @router.get(
     "/admission-paths/{admission_path_id}/subject-group-configs",
-    response_model=PathSubjectGroupConfigListResponse,
+    response_model=PathSubjectGroupConfigAdminListResponse,
 )
 async def list_configs(
     request: Request,
@@ -85,10 +89,66 @@ async def list_configs(
     db: AsyncSession = Depends(database.get_db),
     _admin: models.User = Depends(require_admin),
 ):
-    """List all configs trên a given admission_path."""
+    """List configs (enriched) on a path for the admin "Tổ hợp môn" tab.
+
+    Hand-built (mirrors the officer GET in admission_paths.py) so the response
+    carries subject_group label + per-subject detail and emits scores as JSON
+    number (float) — the bare ``...ListResponse`` response_model would strip
+    those enriched fields and Decimal would serialize to string.
+    """
     service = PathSubjectGroupService(db)
-    configs = await service.repo.list_configs_by_path(admission_path_id)
-    return PathSubjectGroupConfigListResponse(total=len(configs), items=configs)
+    configs = await service.repo.list_configs_by_path_with_subjects(
+        admission_path_id
+    )
+    items_out = []
+    for c in configs:
+        sg = c.subject_group
+        subjects = []
+        if sg is not None and sg.subject_mappings:
+            for m in sorted(
+                sg.subject_mappings,
+                key=lambda x: getattr(x, "position", 0) or 0,
+            ):
+                s = m.subject
+                if s is None:
+                    continue
+                subjects.append(PathSubjectGroupConfigSubjectAdmin(
+                    subject_id=s.id,
+                    subject_code=s.code,
+                    subject_name=s.name_vi,
+                    subject_group_subject_id=m.id,
+                    max_score=(
+                        float(s.max_score) if s.max_score is not None else 10.0
+                    ),
+                    min_possible_score=(
+                        float(s.min_possible_score)
+                        if s.min_possible_score is not None else 0.0
+                    ),
+                    position=getattr(m, "position", 0) or 0,
+                ))
+        items_out.append(PathSubjectGroupConfigAdminResponse(
+            id=c.id,
+            admission_path_id=c.admission_path_id,
+            subject_group_id=c.subject_group_id,
+            subject_group_code=getattr(sg, "code", None) if sg else None,
+            subject_group_name=getattr(sg, "name", None) if sg else None,
+            min_score=float(c.min_score) if c.min_score is not None else None,
+            min_subject_score=(
+                float(c.min_subject_score)
+                if c.min_subject_score is not None else None
+            ),
+            group_quota=c.group_quota,
+            items=[
+                PathSubjectGroupItemResponse.model_validate(it, from_attributes=True)
+                for it in sorted(c.items, key=lambda it: it.id)
+            ],
+            subjects=subjects,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        ))
+    return PathSubjectGroupConfigAdminListResponse(
+        total=len(items_out), items=items_out
+    )
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)
@@ -106,9 +166,6 @@ async def update_config(
     """Update score thresholds + group_quota (Tier 3 re-validation)."""
     service = PathSubjectGroupService(db)
     config = await service.update_config(config_id, payload)
-    await db.commit()
-    await db.refresh(config, ["items"])
-
     await activity_service.log_activity(
         db=db,
         action="path_subject_group_config_update",
@@ -117,6 +174,8 @@ async def update_config(
         actor_id=current_admin.id,
         description=f"Updated config {config_id}",
     )
+    await db.commit()
+    await db.refresh(config, ["items"])
     return config
 
 
@@ -134,8 +193,6 @@ async def delete_config(
     """Delete config + cascade items."""
     service = PathSubjectGroupService(db)
     await service.delete_config(config_id)
-    await db.commit()
-
     await activity_service.log_activity(
         db=db,
         action="path_subject_group_config_delete",
@@ -144,6 +201,7 @@ async def delete_config(
         actor_id=current_admin.id,
         description=f"Deleted config {config_id}",
     )
+    await db.commit()
 
 
 # =============================================================================
@@ -167,8 +225,70 @@ async def add_item(
     """Add single item to existing config (composite invariant guard)."""
     service = PathSubjectGroupService(db)
     item = await service.add_item(config_id, payload)
+    await activity_service.log_activity(
+        db=db,
+        action="path_subject_group_item_add",
+        resource_type="path_subject_group_config",
+        resource_id=config_id,
+        actor_id=current_admin.id,
+        description=f"Added item to config {config_id}",
+    )
     await db.commit()
     return item
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.patch(
+    "/path-subject-group-configs/{config_id}/items/{item_id}",
+    response_model=PathSubjectGroupItemResponse,
+)
+async def update_item(
+    request: Request,
+    config_id: int,
+    item_id: int,
+    payload: PathSubjectGroupItemUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """Update an item's is_principal / min_subject_score (scoped to config)."""
+    service = PathSubjectGroupService(db)
+    item = await service.update_item(config_id, item_id, payload)
+    await activity_service.log_activity(
+        db=db,
+        action="path_subject_group_item_update",
+        resource_type="path_subject_group_config",
+        resource_id=config_id,
+        actor_id=current_admin.id,
+        description=f"Updated item {item_id} of config {config_id}",
+    )
+    await db.commit()
+    return item
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)
+@router.delete(
+    "/path-subject-group-configs/{config_id}/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_item(
+    request: Request,
+    config_id: int,
+    item_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(require_admin),
+):
+    """Delete an item (scoped to config)."""
+    service = PathSubjectGroupService(db)
+    await service.delete_item(config_id, item_id)
+    await activity_service.log_activity(
+        db=db,
+        action="path_subject_group_item_delete",
+        resource_type="path_subject_group_config",
+        resource_id=config_id,
+        actor_id=current_admin.id,
+        description=f"Deleted item {item_id} of config {config_id}",
+    )
+    await db.commit()
 
 
 # =============================================================================
@@ -308,8 +428,9 @@ async def clone_paths_from_round(
         source_round_id=source_round_id,
         payload=payload,
     )
-    await db.commit()
-
+    # Audit BEFORE commit (log_activity only flushes) so the activity row shares
+    # this transaction frame — otherwise it is flushed then dropped on session
+    # close (same fix as the config/item endpoints above).
     await activity_service.log_activity(
         db=db,
         action="admission_paths_cloned",
@@ -321,4 +442,5 @@ async def clone_paths_from_round(
             f"→ round {target_round_id} (skipped {response.skipped_count})"
         ),
     )
+    await db.commit()
     return response

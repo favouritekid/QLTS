@@ -248,6 +248,156 @@ export async function getPathSubjectGroupConfigs(
 }
 
 // ============================================
+// ADMIN — PATH SUBJECT GROUP CONFIG CRUD (#7 "Tổ hợp môn" tab)
+// ============================================
+// Separate types from PathSubjectGroupConfigForChoice (officer GET) — that
+// shape feeds AddChoiceDialog and must stay untouched. Scores arrive as JSON
+// number (BE serializes Decimal→float; see admin GET).
+
+const ADMIN_SG_BASE = '/api/v2/admin'
+
+/** Item of an admin sg_config (principal + per-item min score). */
+export interface PathSubjectGroupItemAdmin {
+  id: number
+  path_subject_group_config_id: number
+  subject_group_subject_id: number
+  is_principal: boolean
+  min_subject_score: number | null
+}
+
+/** Subject of the config's subject_group (for the principal-item picker). */
+export interface PathSubjectGroupConfigSubjectAdmin {
+  subject_id: number
+  subject_code: string
+  subject_name: string
+  subject_group_subject_id: number
+  max_score: number
+  min_possible_score: number
+  position: number
+}
+
+/** Enriched admin config: subject_group label + items + subjects. */
+export interface PathSubjectGroupConfigAdmin {
+  id: number
+  admission_path_id: number
+  subject_group_id: number
+  subject_group_code: string | null
+  subject_group_name: string | null
+  min_score: number | null
+  min_subject_score: number | null
+  group_quota: number | null
+  items: PathSubjectGroupItemAdmin[]
+  subjects: PathSubjectGroupConfigSubjectAdmin[]
+}
+
+/** Base config returned by POST/PATCH (no enrichment — FE refetches list). */
+export interface PathSubjectGroupConfigBaseResponse {
+  id: number
+  admission_path_id: number
+  subject_group_id: number
+  min_score: number | null
+  min_subject_score: number | null
+  group_quota: number | null
+  items: PathSubjectGroupItemAdmin[]
+}
+
+export interface PathSubjectGroupItemPayload {
+  subject_group_subject_id: number
+  is_principal?: boolean
+  min_subject_score?: number | null
+}
+
+export interface PathSubjectGroupConfigCreatePayload {
+  subject_group_id: number
+  min_score?: number | null
+  min_subject_score?: number | null
+  group_quota?: number | null
+  items?: PathSubjectGroupItemPayload[]
+}
+
+export interface PathSubjectGroupConfigUpdatePayload {
+  min_score?: number | null
+  min_subject_score?: number | null
+  group_quota?: number | null
+}
+
+/** Item PATCH — omit a field to leave unchanged; do NOT send is_principal:null. */
+export interface PathSubjectGroupItemUpdatePayload {
+  is_principal?: boolean
+  min_subject_score?: number | null
+}
+
+export async function getPathSubjectGroupConfigsAdmin(
+  pathId: number,
+): Promise<{ total: number; items: PathSubjectGroupConfigAdmin[] }> {
+  const response = await api.get<{
+    total: number
+    items: PathSubjectGroupConfigAdmin[]
+  }>(`${ADMIN_SG_BASE}/admission-paths/${pathId}/subject-group-configs`)
+  return response.data
+}
+
+export async function createPathSubjectGroupConfig(
+  pathId: number,
+  data: PathSubjectGroupConfigCreatePayload,
+): Promise<PathSubjectGroupConfigBaseResponse> {
+  const response = await api.post<PathSubjectGroupConfigBaseResponse>(
+    `${ADMIN_SG_BASE}/admission-paths/${pathId}/subject-group-configs`,
+    data,
+  )
+  return response.data
+}
+
+export async function updatePathSubjectGroupConfig(
+  configId: number,
+  data: PathSubjectGroupConfigUpdatePayload,
+): Promise<PathSubjectGroupConfigBaseResponse> {
+  const response = await api.patch<PathSubjectGroupConfigBaseResponse>(
+    `${ADMIN_SG_BASE}/path-subject-group-configs/${configId}`,
+    data,
+  )
+  return response.data
+}
+
+export async function deletePathSubjectGroupConfig(
+  configId: number,
+): Promise<void> {
+  await api.delete(`${ADMIN_SG_BASE}/path-subject-group-configs/${configId}`)
+}
+
+export async function addPathSubjectGroupItem(
+  configId: number,
+  data: PathSubjectGroupItemPayload,
+): Promise<PathSubjectGroupItemAdmin> {
+  const response = await api.post<PathSubjectGroupItemAdmin>(
+    `${ADMIN_SG_BASE}/path-subject-group-configs/${configId}/items`,
+    data,
+  )
+  return response.data
+}
+
+export async function updatePathSubjectGroupItem(
+  configId: number,
+  itemId: number,
+  data: PathSubjectGroupItemUpdatePayload,
+): Promise<PathSubjectGroupItemAdmin> {
+  const response = await api.patch<PathSubjectGroupItemAdmin>(
+    `${ADMIN_SG_BASE}/path-subject-group-configs/${configId}/items/${itemId}`,
+    data,
+  )
+  return response.data
+}
+
+export async function deletePathSubjectGroupItem(
+  configId: number,
+  itemId: number,
+): Promise<void> {
+  await api.delete(
+    `${ADMIN_SG_BASE}/path-subject-group-configs/${configId}/items/${itemId}`,
+  )
+}
+
+// ============================================
 // EXPORT DEFAULT OBJECT
 // ============================================
 
@@ -271,6 +421,14 @@ export const admissionPathsApi = {
   // Phase 3 multi-NV AddChoiceDialog
   getPathsByRound,
   getPathSubjectGroupConfigs,
+  // Admin "Tổ hợp môn" tab CRUD (#7)
+  getPathSubjectGroupConfigsAdmin,
+  createPathSubjectGroupConfig,
+  updatePathSubjectGroupConfig,
+  deletePathSubjectGroupConfig,
+  addPathSubjectGroupItem,
+  updatePathSubjectGroupItem,
+  deletePathSubjectGroupItem,
 }
 
 export default admissionPathsApi
