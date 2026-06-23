@@ -185,10 +185,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .limit(limit)
         )
         
+        # Exclude profiles whose parent Lead is soft-deleted. NOTE: this method
+        # is currently unreferenced (dead) — kept defensively in case it is
+        # revived; safe to remove the whole method in a separate cleanup.
+        query = query.where(models.Lead.deleted_at.is_(None))
+
         # IDOR Filter: Filter at DB level for non-admin users
         if unit_id is not None:
             query = query.where(models.Lead.unit_id == unit_id)
-        
+
         if filters.get("status"):
             query = query.where(models.AdmissionProfile.status == filters["status"])
         
@@ -241,6 +246,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         """
         # Base query for filtering
         base_conditions = []
+
+        # Exclude profiles whose parent Lead is soft-deleted (Lead.deleted_at set).
+        # Applies to BOTH count and data queries below (both JOIN Lead).
+        base_conditions.append(models.Lead.deleted_at.is_(None))
 
         # IDOR Filter: Filter at DB level
         if assigned_officer_id is not None:
@@ -439,6 +448,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             Tuple of (conditions list, needs_program_join bool)
         """
         conditions = []
+        # Exclude soft-deleted leads' profiles (parity with list + aggregate).
+        conditions.append(models.Lead.deleted_at.is_(None))
         if assigned_officer_id is not None:
             conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
@@ -524,6 +535,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             dict with total_profiles, status counts, conversion_rate, avg_completion
         """
         conditions = []
+        # Exclude soft-deleted leads' profiles (parity with list + status counts).
+        conditions.append(models.Lead.deleted_at.is_(None))
         if assigned_officer_id is not None:
             conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
@@ -596,6 +609,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(distinct(models.AdmissionProfile.academic_year))
             .join(models.Lead)
             .where(models.AdmissionProfile.academic_year.isnot(None))
+            # Exclude years that exist only via soft-deleted leads' profiles.
+            .where(models.Lead.deleted_at.is_(None))
         )
         if assigned_officer_id is not None:
             query = query.where(models.Lead.assigned_officer_id == assigned_officer_id)
@@ -706,6 +721,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             # field khi reject ở tầng doc).
             .where(models.AdmissionProfile.status != "withdrawn")
             .where(models.AdmissionProfile.is_dropped.isnot(True))
+            # Exclude profiles whose parent Lead is soft-deleted (don't remind
+            # diploma debt for leads that have been removed).
+            .where(models.Lead.deleted_at.is_(None))
             .options(
                 selectinload(models.AdmissionProfile.lead).selectinload(
                     models.Lead.assigned_officer
