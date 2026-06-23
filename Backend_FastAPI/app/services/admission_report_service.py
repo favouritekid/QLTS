@@ -156,12 +156,18 @@ class AdmissionReportService:
         unit_id: Optional[int] = None,
     ) -> AdmissionWeeklyReportResponse:
         scope_unit_id = self._resolve_scope(current_user, unit_id)
-        # Implicit week for a FUTURE academic_year: anchor to that year (ISO week 1)
-        # instead of silently using the current calendar week — otherwise the response
-        # would carry current-year week metadata for a future year.
+        # Implicit week for a NON-current academic_year: anchor INSIDE that year so
+        # the week + cumulative cutoffs stay in-year (today's week would compute
+        # cutoffs outside it). Future → ISO week 1 (Jan 4; cumulative ~0, chưa bắt
+        # đầu); past → last ISO week (Dec 28; cumulative ≈ trọn năm). Both dates are
+        # always inside the year's own ISO weeks.
         anchor = week_start
-        if anchor is None and academic_year > today_vn().year:
-            anchor = date(academic_year, 1, 4)  # Jan 4 is always inside ISO week 1
+        if anchor is None and academic_year != today_vn().year:
+            anchor = (
+                date(academic_year, 1, 4)
+                if academic_year > today_vn().year
+                else date(academic_year, 12, 28)
+            )
         week_meta, week = self._compute_week(anchor)
         # An EXPLICIT week_start before the academic year is a stale bookmark → reject
         # on the NORMALIZED ISO year (ISO week 1's Monday can fall in the prior Dec).
@@ -252,6 +258,22 @@ class AdmissionReportService:
             missing = [k for k in acc if isinstance(k, int) and k not in officer_names]
             officer_names.update(await self.repo.get_user_names(missing))
 
+        # ---- chỉ tiêu: include EVERY quota-bearing major (even with 0 activity)
+        # so behind-target ngành surface instead of vanishing.
+        #  • Year-level only — skip when a single đợt is filtered (numerator round ≠
+        #    denominator năm); FE hides the progress column.
+        #  • Toàn-trường only (scope None) — quota is a per-offering institution
+        #    target with NO per-unit split; activity scopes by Lead.unit_id while a
+        #    shared offering's quota can't be attributed to one unit, so a manager
+        #    gets the count cockpit instead of a misleading gap.
+        quota_by_major: dict[int, int] = {}
+        if group_by == "major" and round_code is None and scope_unit_id is None:
+            for mid, (q, info) in (await self.repo.major_quotas(academic_year)).items():
+                quota_by_major[mid] = q
+                if mid not in acc:
+                    _row(mid)  # materialise an empty row (0 counts)
+                major_labels.setdefault(mid, info)
+
         rows: list[ReportRow] = []
         for key, row in acc.items():
             if isinstance(key, str):  # bucket sentinel
@@ -271,6 +293,12 @@ class AdmissionReportService:
                 row.group_key = key
                 row.label = officer_names.get(key, f"Cán bộ #{key}")
             rows.append(row)
+
+        # ---- attach chỉ tiêu + tỷ lệ chuyển đổi
+        for row in rows:
+            if not row.is_bucket and isinstance(row.group_key, int):
+                row.admission.quota = quota_by_major.get(row.group_key)
+            self._apply_conversion(row)
 
         rows.sort(key=self._sort_key)
         totals = self._totals(rows)
@@ -306,6 +334,19 @@ class AdmissionReportService:
         )
 
     @staticmethod
+    def _apply_conversion(row: ReportRow) -> None:
+        """Cumulative funnel ratios; left None when the denominator is 0."""
+        a = row.admission
+        if a.submitted_cumulative:
+            row.conversion.submit_to_admit = round(
+                a.admitted_cumulative / a.submitted_cumulative, 4
+            )
+        if a.admitted_cumulative:
+            row.conversion.admit_to_enroll = round(
+                a.enrolled_cumulative / a.admitted_cumulative, 4
+            )
+
+    @staticmethod
     def _totals(rows: list[ReportRow]) -> ReportRow:
         t = ReportRow(label="TỔNG")
         for row in rows:
@@ -334,4 +375,7 @@ class AdmissionReportService:
                 "profiles_paid",
             ):
                 setattr(t.finance, m, getattr(t.finance, m) + getattr(row.finance, m))
+            if row.admission.quota is not None:
+                t.admission.quota = (t.admission.quota or 0) + row.admission.quota
+        AdmissionReportService._apply_conversion(t)
         return t

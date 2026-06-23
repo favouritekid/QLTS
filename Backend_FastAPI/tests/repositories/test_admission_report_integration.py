@@ -33,17 +33,33 @@ def _admin() -> models.User:
     return models.User(role="admin", unit_id=None)
 
 
-async def _seed_catalog(db: AsyncSession, year: int, unit_id: int):
+def _manager(unit_id: int) -> models.User:
+    return models.User(role="manager", unit_id=unit_id)
+
+
+async def _seed_catalog(
+    db: AsyncSession, year: int, unit_id: int, *, quota=None, active=True
+):
     n = next(_seq)
     major = models.MajorProgram(
-        name=f"Ngành {n}", code=f"RPT{n:05d}", degree_level="Cao đẳng", unit_id=unit_id
+        name=f"Ngành {n}",
+        code=f"RPT{n:05d}",
+        degree_level="Cao đẳng",
+        unit_id=unit_id,
+        is_active=active,
     )
     db.add(major)
     await db.flush()
-    offering = models.ProgramOffering(offering_type="Chính quy", program_id=major.id)
+    offering = models.ProgramOffering(
+        offering_type="Chính quy", program_id=major.id, is_active=active
+    )
     db.add(offering)
     await db.flush()
-    db.add(models.OfferingAcademicInfo(academic_year=year, offering_id=offering.id))
+    db.add(
+        models.OfferingAcademicInfo(
+            academic_year=year, offering_id=offering.id, annual_admission_quota=quota
+        )
+    )
     db.add(
         models.OfferingAdmissionRound(
             academic_year=year,
@@ -634,6 +650,236 @@ async def test_report_years_include_config_only_year(
     repo = AdmissionReportRepository(db)
     assert year in await repo.list_report_years()
     assert await repo.list_report_rounds(year) == ["DOT_1"]
+
+
+async def test_quota_and_conversion_attached(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+
+    major, offering = await _seed_catalog(db, year, unit_id, quota=100)
+    # 4 submitted; of those 2 admitted (approved); of those 1 enrolled
+    for i in range(4):
+        _, p = await _seed_lead_profile(
+            db,
+            seeded_dependencies,
+            year,
+            offering.id,
+            officer_id,
+            created_at=win.start + timedelta(days=1),
+        )
+        await _seed_history(db, p.id, "submitted", win.start + timedelta(days=1))
+        if i < 2:
+            await _seed_history(
+                db,
+                p.id,
+                "approved",
+                win.start + timedelta(days=2),
+                from_status="submitted",
+            )
+        if i < 1:
+            await _seed_history(
+                db,
+                p.id,
+                "enrolled",
+                win.start + timedelta(days=3),
+                from_status="approved",
+            )
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.admission.quota == 100
+    assert row.admission.submitted_cumulative == 4
+    assert row.admission.admitted_cumulative == 2
+    assert row.admission.enrolled_cumulative == 1
+    assert row.conversion.submit_to_admit == 0.5  # 2/4
+    assert row.conversion.admit_to_enroll == 0.5  # 1/2
+    assert resp.totals.admission.quota == 100
+
+
+async def test_quota_none_for_officer_grouping(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+    _, offering = await _seed_catalog(db, year, unit_id, quota=50)
+    _, p = await _seed_lead_profile(
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    await _seed_history(db, p.id, "submitted", win.start + timedelta(days=1))
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(),
+        academic_year=year,
+        group_by="officer",
+        week_start=anchor,
+    )
+    # officer grouping never carries a major quota
+    assert all(r.admission.quota is None for r in resp.rows)
+    assert resp.totals.admission.quota is None
+
+
+async def test_quota_major_with_no_activity_appears(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # A major with a quota but ZERO leads/profiles MUST still appear (0%, top of
+    # the cockpit) — it is exactly the behind-target ngành a manager needs to see.
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    major, _ = await _seed_catalog(db, year, unit_id, quota=120)
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(),
+        academic_year=year,
+        group_by="major",
+        week_start=date(year, 6, 17),
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None, "quota major with no activity must not vanish"
+    assert row.admission.quota == 120
+    assert row.admission.submitted_cumulative == 0
+    assert row.admission.profiles_total == 0
+    assert resp.totals.admission.quota == 120
+
+
+async def test_quota_hidden_when_round_filtered(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # Year quota as the denominator only makes sense across the whole year. When a
+    # single đợt is filtered, quota is omitted (FE then hides the progress).
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    major, _ = await _seed_catalog(db, year, unit_id, quota=80)
+    svc = AdmissionReportService(db)
+    full = await svc.get_weekly_report(
+        current_user=_admin(),
+        academic_year=year,
+        group_by="major",
+        week_start=date(year, 6, 17),
+    )
+    assert full.totals.admission.quota == 80
+    assert _find(full.rows, major.id) is not None
+    filtered = await svc.get_weekly_report(
+        current_user=_admin(),
+        academic_year=year,
+        group_by="major",
+        week_start=date(year, 6, 17),
+        round_code="DOT_TEST",
+    )
+    assert filtered.totals.admission.quota is None
+    assert all(r.admission.quota is None for r in filtered.rows)
+
+
+async def test_quota_admin_only_hidden_for_unit_scope(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    # Quota is a whole-school per-offering target → shown to admin (scope toàn
+    # trường) but hidden for a unit-scoped manager (no per-unit quota split).
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+    major, offering = await _seed_catalog(db, year, unit_id, quota=100)
+    _, p = await _seed_lead_profile(
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    await _seed_history(db, p.id, "submitted", win.start + timedelta(days=1))
+    svc = AdmissionReportService(db)
+    admin_resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
+    )
+    assert _find(admin_resp.rows, major.id).admission.quota == 100
+    mgr_resp = await svc.get_weekly_report(
+        current_user=_manager(unit_id),
+        academic_year=year,
+        group_by="major",
+        week_start=anchor,
+    )
+    row = _find(mgr_resp.rows, major.id)
+    assert row is not None  # manager has the activity
+    assert row.admission.quota is None  # whole-school metric hidden for unit scope
+    assert mgr_resp.totals.admission.quota is None
+
+
+async def test_quota_excludes_archived_major(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # An archived (is_active=False) major must not surface a live quota row.
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    await _seed_catalog(db, year, unit_id, quota=100, active=False)
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(),
+        academic_year=year,
+        group_by="major",
+        week_start=date(year, 6, 17),
+    )
+    assert resp.totals.admission.quota is None
+    assert resp.rows == []
+
+
+async def test_past_year_implicit_week_defaults_in_year(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # Past year + no week_start → anchor inside that year (last ISO week), not
+    # today's week (which would compute week/cumulative cutoffs outside the year).
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2020, group_by="major"
+    )
+    assert resp.week.iso_year == 2020
+    assert resp.academic_year == 2020
+
+
+async def test_report_years_include_live_profile_only_year(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    # A year with a LIVE-lead profile but no config IS selectable; a year that
+    # exists only via a soft-deleted lead is NOT.
+    live_year = next(_year_seq)
+    del_year = next(_year_seq)
+    officer_id = officer_user_in_db["id"]
+    await _seed_lead_profile(
+        db,
+        seeded_dependencies,
+        live_year,
+        None,
+        officer_id,
+        created_at=datetime(live_year, 6, 1, tzinfo=timezone.utc),
+    )
+    await _seed_lead_profile(
+        db,
+        seeded_dependencies,
+        del_year,
+        None,
+        officer_id,
+        created_at=datetime(del_year, 6, 1, tzinfo=timezone.utc),
+        deleted=True,
+    )
+    repo = AdmissionReportRepository(db)
+    years = await repo.list_report_years()
+    assert live_year in years
+    assert del_year not in years
 
 
 async def test_synthetic_backfill_row_excluded_from_milestones(

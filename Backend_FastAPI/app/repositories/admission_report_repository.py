@@ -108,16 +108,32 @@ class AdmissionReportRepository:
 
     # ------------------------------------------------------------------ filters
     async def list_report_years(self) -> list[int]:
-        """Years with admission CONFIG (rounds) OR data (profiles), newest first.
+        """Years selectable in the report (config ∪ live report data), newest first.
 
-        Union of both so a year just set up (rounds created, no profiles yet) is
-        still selectable — unlike the profile-only ``get_distinct_academic_years``.
+        Union of: ``OfferingAcademicInfo`` (excl. soft-deleted) ∪
+        ``OfferingAdmissionRound`` (config) ∪ academic years of LIVE (non-deleted
+        lead) profiles (data). So a year configured with offerings but no rounds
+        appears, AND a year whose config was removed but still has live profiles
+        (the endpoint serves it) stays selectable — while a year that exists ONLY
+        via soft-deleted leads cannot leak in.
         """
-        round_years = select(models.OfferingAdmissionRound.academic_year)
-        profile_years = select(models.AdmissionProfile.academic_year).where(
-            models.AdmissionProfile.academic_year.isnot(None)
+        info_years = select(models.OfferingAcademicInfo.academic_year).where(
+            models.OfferingAcademicInfo.is_deleted.is_(False)
         )
-        rows = (await self.db.execute(round_years.union(profile_years))).scalars().all()
+        round_years = select(models.OfferingAdmissionRound.academic_year)
+        profile_years = (
+            select(models.AdmissionProfile.academic_year)
+            .join(models.Lead, models.AdmissionProfile.lead_id == models.Lead.id)
+            .where(
+                models.AdmissionProfile.academic_year.isnot(None),
+                models.Lead.deleted_at.is_(None),
+            )
+        )
+        rows = (
+            (await self.db.execute(info_years.union(round_years, profile_years)))
+            .scalars()
+            .all()
+        )
         return sorted({y for y in rows if y is not None}, reverse=True)
 
     async def list_report_rounds(self, academic_year: int) -> list[str]:
@@ -129,6 +145,56 @@ class AdmissionReportRepository:
             .order_by(models.OfferingAdmissionRound.round_code)
         )
         return list((await self.db.execute(stmt)).scalars().all())
+
+    async def major_quotas(
+        self, academic_year: int
+    ) -> dict[int, tuple[int, MajorInfo]]:
+        """major_id -> (Σ annual_admission_quota, MajorInfo) for the year, toàn trường.
+
+        Returns EVERY ACTIVE major with a (non-soft-deleted) quota row — even with
+        zero activity — so the cockpit can rank 0%-progress ngành. Whole-school
+        only: ``annual_admission_quota`` is a per-offering institution target with
+        no per-unit split, so the service shows it for admin scope only.
+        """
+        stmt = (
+            select(
+                models.MajorProgram.id,
+                models.MajorProgram.code,
+                models.MajorProgram.name,
+                models.MajorProgram.degree_level,
+                func.sum(models.OfferingAcademicInfo.annual_admission_quota),
+            )
+            .join(
+                models.ProgramOffering,
+                models.ProgramOffering.program_id == models.MajorProgram.id,
+            )
+            .join(
+                models.OfferingAcademicInfo,
+                models.OfferingAcademicInfo.offering_id == models.ProgramOffering.id,
+            )
+            .where(
+                models.OfferingAcademicInfo.academic_year == academic_year,
+                models.OfferingAcademicInfo.annual_admission_quota.isnot(None),
+                models.OfferingAcademicInfo.is_deleted.is_(False),
+                models.MajorProgram.is_active.is_(True),
+                models.ProgramOffering.is_active.is_(True),
+            )
+            .group_by(
+                models.MajorProgram.id,
+                models.MajorProgram.code,
+                models.MajorProgram.name,
+                models.MajorProgram.degree_level,
+            )
+        )
+        rows = (await self.db.execute(stmt)).all()
+        return {
+            mid: (
+                int(total),
+                MajorInfo(major_id=mid, code=code, name=name, degree_level=degree),
+            )
+            for mid, code, name, degree, total in rows
+            if total is not None
+        }
 
     # ------------------------------------------------------------------ catalog
     async def _build_catalog(

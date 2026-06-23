@@ -53,6 +53,16 @@ class AdmissionMetrics(BaseModel):
     submitted_cumulative: int = 0
     admitted_cumulative: int = 0
     enrolled_cumulative: int = 0
+    # chỉ tiêu (annual_admission_quota) — major grouping only; None for officer
+    # view / buckets / total rows where a quota does not apply.
+    quota: Optional[int] = None
+
+
+class ConversionMetrics(BaseModel):
+    """Cumulative funnel ratios (0..1); null when the denominator is 0."""
+
+    submit_to_admit: Optional[float] = None  # admitted_cum / submitted_cum
+    admit_to_enroll: Optional[float] = None  # enrolled_cum / admitted_cum
 
 
 class FinanceMetrics(BaseModel):
@@ -77,6 +87,7 @@ class ReportRow(BaseModel):
     bucket_kind: Optional[BucketKind] = None
     lead: LeadMetrics = Field(default_factory=LeadMetrics)
     admission: AdmissionMetrics = Field(default_factory=AdmissionMetrics)
+    conversion: ConversionMetrics = Field(default_factory=ConversionMetrics)
     finance: FinanceMetrics = Field(default_factory=FinanceMetrics)
 
 
