@@ -29,6 +29,12 @@ export const admissionMetricsSchema = z.object({
   submitted_cumulative: z.number().int(),
   admitted_cumulative: z.number().int(),
   enrolled_cumulative: z.number().int(),
+  quota: z.number().int().nullable(), // chỉ tiêu (major view); null = N/A
+});
+
+export const conversionMetricsSchema = z.object({
+  submit_to_admit: z.number().nullable(), // admitted/submitted (lũy kế); null nếu mẫu=0
+  admit_to_enroll: z.number().nullable(), // enrolled/admitted (lũy kế)
 });
 
 export const financeMetricsSchema = z.object({
@@ -52,6 +58,7 @@ export const reportRowSchema = z.object({
   bucket_kind: bucketKindSchema.nullable(),
   lead: leadMetricsSchema,
   admission: admissionMetricsSchema,
+  conversion: conversionMetricsSchema,
   finance: financeMetricsSchema,
 });
 

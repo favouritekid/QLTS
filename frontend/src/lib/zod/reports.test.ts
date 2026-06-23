@@ -18,7 +18,9 @@ const row = {
     submitted_cumulative: 19,
     admitted_cumulative: 0,
     enrolled_cumulative: 0,
+    quota: 200,
   },
+  conversion: { submit_to_admit: 0.6, admit_to_enroll: 0.5 },
   finance: {
     gross_in_week: "1680000",
     refund_in_week: "0",
