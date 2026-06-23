@@ -43,6 +43,7 @@ from .routers import (
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
+    admission_reports,  # Weekly admission report (lead→admission→finance by ngành/officer)
     admin_priority_config,  # ✅ Q9 #07 PR3: priority KV/UT bonus configs per year + clone + seed TT 05/2021
     admin_vn_locality,  # ✅ Q9 #07 PR4: commune + high school CSV import + dropdown search
     admin_vn_school,  # PR-B: admin CRUD vn_school + KV assignment
@@ -892,6 +893,7 @@ fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/adm
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
 fastapi_app.include_router(admin_v2_path_subject_group.router)  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone
+fastapi_app.include_router(admission_reports.router)  # Weekly admission report (admin/manager read-only)
 fastapi_app.include_router(admin_priority_config.router)  # ✅ Q9 #07 PR3: priority KV/UT configs (router declares full prefix)
 fastapi_app.include_router(admin_vn_locality.admin_router)  # ✅ Q9 #07 PR4: admin commune CSV import
 fastapi_app.include_router(admin_vn_school.admin_router)  # PR-B: admin vn_school + KV assignment CRUD

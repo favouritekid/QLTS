@@ -250,6 +250,9 @@ jobs:
           tests/unit/test_b2_1_admission_milestone_events.py
           tests/integration/test_delete_profile_revert.py
           tests/repositories/test_admission_soft_delete_excluded.py
+          tests/unit/test_admission_report_helpers.py
+          tests/repositories/test_admission_report_integration.py
+          tests/api/test_admission_report_api.py
           -q --tb=short --timeout=60
 
       # =====================================================================
