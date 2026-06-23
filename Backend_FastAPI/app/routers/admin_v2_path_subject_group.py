@@ -175,8 +175,12 @@ async def update_config(
         description=f"Updated config {config_id}",
     )
     await db.commit()
-    await db.refresh(config, ["items"])
-    return config
+    # An UPDATE expires the server-side ``onupdate`` column (updated_at); a bare
+    # ``return config`` would lazy-load it during response serialization →
+    # MissingGreenlet (async session has no greenlet at serialize time). Re-fetch
+    # via a fresh eager query so every response_model field is loaded in-context.
+    # (INSERT paths populate these via RETURNING, so create_config is unaffected.)
+    return await service.repo.get_config_by_id(config_id)
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)
@@ -262,6 +266,9 @@ async def update_item(
         description=f"Updated item {item_id} of config {config_id}",
     )
     await db.commit()
+    # UPDATE expires the server-side ``onupdate`` updated_at; reload in-context so
+    # response serialization doesn't lazy-load it (MissingGreenlet). See update_config.
+    await db.refresh(item)
     return item
 
 

@@ -181,7 +181,14 @@ async def _seed_path_and_group(
 
 
 def _full_personal(**overrides):
-    """Personal fields so _validate_personal_info passes (no personal errors)."""
+    """Personal fields so _validate_personal_info passes (no personal errors).
+
+    Includes the permanent-address hierarchy (province + ward + commune code):
+    ``_validate_personal_info`` now folds ``_validate_permanent_address`` in, so
+    a profile missing province/ward is ``ineligible`` at GET time. The current-
+    era ward check only runs at submit, which these GET/serialize tests never
+    reach, so any non-empty commune code keeps eligibility green here.
+    """
     base = dict(
         full_name="Nguyễn Văn Test",
         dob=date(2008, 1, 1),
@@ -190,6 +197,9 @@ def _full_personal(**overrides):
         ethnicity="Kinh",
         phone="0970000000",
         place_of_birth="Đắk Lắk",
+        permanent_province="Tỉnh Test KV",
+        permanent_ward="Phường Test KV",
+        permanent_commune_code="99TESTKV",
     )
     base.update(overrides)
     return base

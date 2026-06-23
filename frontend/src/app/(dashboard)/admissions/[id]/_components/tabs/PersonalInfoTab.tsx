@@ -47,6 +47,19 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const permanentCommuneCode = useWatch({ control: form.control, name: "permanent_commune_code" }) ?? null
   const permanentResidentialGroup = useWatch({ control: form.control, name: "permanent_residential_group" }) || ""
   const permanentStreetAddress = useWatch({ control: form.control, name: "permanent_street_address" }) || ""
+  // Combine ALL present address errors (province + ward + commune) into one
+  // multi-line message instead of surfacing only the first: after a mode
+  // switch both Tỉnh/Thành phố AND Phường/Xã go missing at once, so the officer
+  // must see both. Deduped — identical messages collapse to a single line.
+  const addressErrorMessage = Array.from(
+    new Set(
+      [
+        form.formState.errors.permanent_province?.message,
+        form.formState.errors.permanent_ward?.message,
+        form.formState.errors.permanent_commune_code?.message,
+      ].filter((m): m is string => Boolean(m)),
+    ),
+  ).join("\n")
 
   // PR-3 + Cách B: resolved CURRENT commune (2-cấp) for the picked ward, driven
   // by a React Query hook keyed on permanent_commune_code. The BE canonicalizes
@@ -273,6 +286,14 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               streetAddressValue={permanentStreetAddress}
               onProvinceChange={(value) => {
                 form.setValue("permanent_province", value, { shouldDirty: true })
+                if (value) {
+                  form.clearErrors("permanent_province")
+                } else {
+                  form.setError("permanent_province", {
+                    type: "address",
+                    message: "Địa chỉ thường trú đang thiếu Tỉnh/Thành phố. Vui lòng chọn lại trước khi lưu hoặc nộp hồ sơ.",
+                  })
+                }
                 // Province reset clears ward chain → mã xã canonical theo đó.
                 // (useResolveWard tự clear badge khi commune_code về null.)
                 form.setValue("permanent_commune_code", null, { shouldDirty: true })
@@ -281,24 +302,33 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
                 form.setValue("permanent_district", value || "", { shouldDirty: true })
                 form.setValue("permanent_commune_code", null, { shouldDirty: true })
               }}
-              onWardChange={(value) => form.setValue("permanent_ward", value, { shouldDirty: true })}
+              onWardChange={(value) => {
+                form.setValue("permanent_ward", value, { shouldDirty: true })
+                if (value) {
+                  form.clearErrors("permanent_ward")
+                } else {
+                  form.setError("permanent_ward", {
+                    type: "address",
+                    message: "Địa chỉ thường trú đang thiếu Phường/Xã. Vui lòng chọn lại trước khi lưu hoặc nộp hồ sơ.",
+                  })
+                }
+              }}
               // Phase E.4 KV bridge — engine đọc permanent_commune_code chuẩn,
               // KHÔNG đọc tên ward. PriorityTab hết phải hỏi officer gõ mã.
               // Cách B: chỉ set form value; useResolveWard(permanentCommuneCode)
               // tự fetch lại badge theo mã mới (cả lúc đổi lẫn lúc load).
               onWardCodeChange={(code) => {
                 form.setValue("permanent_commune_code", code, { shouldDirty: true })
+                if (code) form.clearErrors("permanent_commune_code")
               }}
               onResidentialGroupChange={(value) => form.setValue("permanent_residential_group", value)}
               onStreetAddressChange={(value) => form.setValue("permanent_street_address", value)}
               mode={addressMode}
               onModeChange={(newMode) => {
                 setAddressMode(newMode)
-                // Mode switch resets cả tỉnh/quận/xã → mã xã cũng phải clear
-                // để tránh stale code orphan.
-                form.setValue("permanent_commune_code", null, { shouldDirty: true })
               }}
               disabled={!isEditable}
+              errorMessage={addressErrorMessage ? String(addressErrorMessage) : undefined}
             />
 
             {/* Commit 5 + PR-3 — Address normalized indicator. BE engine resolve

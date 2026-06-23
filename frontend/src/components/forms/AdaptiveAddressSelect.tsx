@@ -7,12 +7,13 @@
  * - "legacy":   63 provinces, 3-level (province → district → ward)
  *
  * Mode is chosen by the user via a radio toggle at the top.
- * Switching mode resets province/district/ward selections.
+ * Switching mode resets province/district/ward selections after confirmation
+ * when the user already has hierarchical address data.
  */
 
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 
 import type { AddressMode } from "@/lib/api/administrative"
 import { useDistricts, useProvinces, useWards } from "@/lib/hooks/useAdministrative"
@@ -20,6 +21,16 @@ import { useDistricts, useProvinces, useWards } from "@/lib/hooks/useAdministrat
 import { Label } from "@/components/ui/label"
 import { Combobox } from "@/components/ui/combobox"
 import { Input } from "@/components/ui/input"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface AdaptiveAddressSelectProps {
   provinceValue: string
@@ -61,6 +72,7 @@ interface AdaptiveAddressSelectProps {
   onModeChange: (mode: AddressMode) => void
   label?: string
   disabled?: boolean
+  errorMessage?: string
 }
 
 export function AdaptiveAddressSelect({
@@ -80,8 +92,10 @@ export function AdaptiveAddressSelect({
   onModeChange,
   label = "Hộ khẩu thường trú",
   disabled = false,
+  errorMessage,
 }: AdaptiveAddressSelectProps) {
   const isLegacy = mode === "legacy"
+  const [pendingMode, setPendingMode] = useState<AddressMode | null>(null)
 
   // ---- Data fetching ----
   const { data: provinces = [], isLoading: loadingProvinces } = useProvinces(mode)
@@ -165,12 +179,32 @@ export function AdaptiveAddressSelect({
   // must mirror cả name (display) lẫn code (canonical KV input) qua callbacks
   // để callers tracking `permanent_commune_code` không có stale orphan code.
 
-  const handleModeChange = (newMode: AddressMode) => {
+  const applyModeChange = (newMode: AddressMode) => {
     onModeChange(newMode)
     onProvinceChange("")
     onDistrictChange(null)
     onWardChange("")
     onWardCodeChange?.(null)
+  }
+
+  const handleModeChange = (newMode: AddressMode) => {
+    if (newMode === mode) return
+
+    const hasHierarchicalAddress = Boolean(
+      provinceValue || districtValue || wardValue || wardCodeValue,
+    )
+    if (hasHierarchicalAddress) {
+      setPendingMode(newMode)
+      return
+    }
+
+    applyModeChange(newMode)
+  }
+
+  const confirmModeChange = () => {
+    if (!pendingMode) return
+    applyModeChange(pendingMode)
+    setPendingMode(null)
   }
 
   const handleProvinceChange = (name: string) => {
@@ -231,6 +265,30 @@ export function AdaptiveAddressSelect({
           <span className="text-muted-foreground">(trước 01/07/2025)</span>
         </label>
       </div>
+
+      <AlertDialog
+        open={pendingMode !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingMode(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Đổi chế độ địa chỉ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tỉnh/Thành phố, Quận/Huyện và Phường/Xã đang chọn sẽ bị xóa.
+              Tổ/Thôn và số nhà, tên đường vẫn được giữ lại. Bạn sẽ cần chọn
+              lại địa chỉ trước khi lưu hoặc nộp hồ sơ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Giữ địa chỉ hiện tại</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmModeChange}>
+              Đổi và xóa địa chỉ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Address fields */}
       <div
@@ -317,6 +375,17 @@ export function AdaptiveAddressSelect({
           )}
         </div>
       )}
+
+      {errorMessage ? (
+        <p
+          role="alert"
+          aria-live="assertive"
+          className="mt-2 whitespace-pre-line text-[0.8rem] font-medium text-destructive"
+          data-testid="address-field-error"
+        >
+          {errorMessage}
+        </p>
+      ) : null}
     </div>
   )
 }

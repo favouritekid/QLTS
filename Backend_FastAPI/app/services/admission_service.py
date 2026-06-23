@@ -1317,6 +1317,30 @@ async def _outstanding_debt_for_approval(db, profile) -> list[str]:
     return _compute_outstanding_debt_codes(profile, documents)
 
 
+def _validate_permanent_address(
+    profile: models.AdmissionProfile,
+) -> tuple[list[str], list[str]]:
+    """Validate the required permanent-address hierarchy shared by read + submit.
+
+    District is intentionally optional because current administrative data is
+    two-tier. The current-era commune-code check remains async at submit time;
+    this pure helper owns the province/ward presence contract so readiness,
+    grouped errors, document-debt eligibility, and submit cannot drift.
+    """
+    missing_fields: list[str] = []
+    validation_errors: list[str] = []
+
+    if not (getattr(profile, "permanent_province", None) or "").strip():
+        missing_fields.append("Tỉnh/Thành phố thường trú")
+        validation_errors.append("Thiếu địa chỉ thường trú: Tỉnh/Thành phố")
+
+    if not (getattr(profile, "permanent_ward", None) or "").strip():
+        missing_fields.append("Phường/Xã thường trú")
+        validation_errors.append("Thiếu địa chỉ thường trú: Phường/Xã")
+
+    return missing_fields, validation_errors
+
+
 def _validate_personal_info(
     profile: models.AdmissionProfile,
 ) -> tuple[list[str], list[str]]:
@@ -1342,7 +1366,11 @@ def _validate_personal_info(
         if not getattr(profile, field, None):
             missing_personal.append(label)
             validation_errors.append(f"Thiếu thông tin cá nhân: {label}")
-            
+
+    missing_address, address_errors = _validate_permanent_address(profile)
+    missing_personal.extend(missing_address)
+    validation_errors.extend(address_errors)
+
     return missing_personal, validation_errors
 
 
@@ -1379,6 +1407,10 @@ def _compute_completion_percent(
     personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
+    permanent_address_complete = all(
+        (getattr(profile, field, None) or "").strip()
+        for field in ("permanent_province", "permanent_ward")
+    )
     has_family = profile.family_info and len(profile.family_info) > 0
     has_academic = profile.academic_history and len(profile.academic_history) > 0
     # P0 hotfix multi-NV — Step 5 (Scores) "has any" reads per-choice
@@ -1412,7 +1444,9 @@ def _compute_completion_percent(
     # Previous Step 4 (Scores) renumbered → Step 5. Step 5 (Documents) → 6.
     # Step 6 (Tuition) → 7. Step 7 (Finalize) → 8. FE PipelineSidebar đã 8 steps.
     step_status = {
-        1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
+        1: "error" if (
+            cccd_error or not personal_required_filled or not permanent_address_complete
+        ) else ("success" if personal_optional_filled else "warning"),
         2: "success" if has_family else "warning",
         3: "success" if has_academic else "warning",
         4: (
@@ -2448,6 +2482,10 @@ def _compute_frontend_fields(
     personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
+    permanent_address_complete = all(
+        (getattr(profile, field, None) or "").strip()
+        for field in ("permanent_province", "permanent_ward")
+    )
     
     # Family
     has_family = profile.family_info and len(profile.family_info) > 0
@@ -2490,7 +2528,9 @@ def _compute_frontend_fields(
     # Step 6 (Tuition) → 7. Step 7 (Finalize) → 8. FE PipelineSidebar đã 8 steps.
     step_status = {
         # Step 1: Personal Info
-        1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
+        1: "error" if (
+            cccd_error or not personal_required_filled or not permanent_address_complete
+        ) else ("success" if personal_optional_filled else "warning"),
         # Step 2: Family
         2: "success" if has_family else "warning",
         # Step 3: Academic History
@@ -6130,11 +6170,12 @@ async def submit_and_evaluate(
         errors.append("Chưa nhập họ tên thí sinh (full_name)")
     if not (profile.phone or "").strip():
         errors.append("Chưa nhập số điện thoại (phone)")
-    if not (profile.permanent_province or "").strip():
-        errors.append("Thiếu địa chỉ thường trú: Tỉnh/Thành phố")
-    if not (profile.permanent_ward or "").strip():
-        errors.append("Thiếu địa chỉ thường trú: Phường/Xã")
-    elif not await _is_current_era_ward(db, profile.permanent_commune_code):
+    _, permanent_address_errors = _validate_permanent_address(profile)
+    errors.extend(permanent_address_errors)
+    if (
+        (profile.permanent_ward or "").strip()
+        and not await _is_current_era_ward(db, profile.permanent_commune_code)
+    ):
         errors.append(
             "Phường/Xã thường trú phải theo địa giới hiện hành (2 cấp, sau "
             "01/07/2025). Vui lòng chọn lại Phường/Xã hiện tại."

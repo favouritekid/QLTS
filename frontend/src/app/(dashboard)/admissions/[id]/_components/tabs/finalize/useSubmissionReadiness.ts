@@ -62,6 +62,8 @@ export interface ReadinessActionItem {
   source: "message" | "section"
   /** Number of underlying issues at this step (≥1) — for the reviewer locator chip. */
   count?: number
+  /** True only when the backend currently allows the missing-doc debt flow. */
+  canDeferAsDocumentDebt?: boolean
 }
 
 export interface SubmissionReadiness {
@@ -186,13 +188,22 @@ export function buildReadinessActionItems(
   const stepStatus = profile.step_status
 
   // Precise: structured BE items (objects with a numeric step).
-  const structured = buildStructuredActionItems(profile.executive_summary)
+  const grouped = profile.grouped_validation_errors
+  const structured = buildStructuredActionItems(profile.executive_summary).map((item) => {
+    if (item.id !== "personal_info_missing" || !grouped?.personal_info?.count) {
+      return item
+    }
+    return {
+      ...item,
+      message: summarizeMany(grouped.personal_info.errors),
+      count: Math.max(1, grouped.personal_info.count),
+    }
+  })
   const coveredSteps = new Set<number>(structured.map((i) => i.step))
   const items: ReadinessActionItem[] = [...structured]
 
   // Heuristic recovery — fill ONLY the steps structured items did not cover.
   // grouped_validation_errors → Step 1/5/6.
-  const grouped = profile.grouped_validation_errors
   const groupedBuckets: Array<
     [GroupedSectionKey, { category: string; errors: string[]; count: number } | undefined]
   > = [
@@ -251,10 +262,17 @@ export function buildReadinessActionItems(
   })
 
   // error before warning, then ascending step.
-  return deduped.sort((a, b) => {
-    if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1
-    return a.step - b.step
-  })
+  return deduped
+    .map((item) => ({
+      ...item,
+      canDeferAsDocumentDebt: Boolean(
+        profile.can_submit_with_document_debt && item.step === 6,
+      ),
+    }))
+    .sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1
+      return a.step - b.step
+    })
 }
 
 function eligibilityLabelFor(verdict: EligibilityVerdict): string {

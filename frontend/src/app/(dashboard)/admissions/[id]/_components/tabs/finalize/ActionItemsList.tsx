@@ -52,8 +52,25 @@ export function ActionItemsList({ items, onNavigateToStep }: ActionItemsListProp
                   aria-hidden="true"
                 />
               )}
-              <span className="text-sm text-foreground break-words min-w-0">
-                {item.message}
+              <span className="min-w-0 space-y-1">
+                <span className="block text-sm text-foreground break-words">
+                  {item.message}
+                </span>
+                <span
+                  className={
+                    item.canDeferAsDocumentDebt
+                      ? "block text-xs font-medium text-warning-700"
+                      : item.severity === "error"
+                        ? "block text-xs font-medium text-error-700"
+                        : "block text-xs font-medium text-warning-700"
+                  }
+                >
+                  {item.canDeferAsDocumentDebt
+                    ? "Có thể nộp kèm nợ giấy tờ"
+                    : item.severity === "error"
+                      ? "Phải sửa trước khi nộp"
+                      : "Cần rà soát"}
+                </span>
               </span>
             </span>
             <span className="flex items-center gap-1 text-sm font-medium text-primary shrink-0">
