@@ -111,6 +111,12 @@ export const navigationConfig: NavigationConfig = {
           icon: LayoutDashboard,
           roles: ["admin"], // Admin-only legacy dashboard
         },
+        {
+          label: "Báo cáo tuyển sinh",
+          href: "/reports/admissions-weekly",
+          icon: BarChart3,
+          roles: ["admin", "manager"], // weekly pivot by ngành/cán bộ
+        },
       ],
     },
 
