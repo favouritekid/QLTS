@@ -266,6 +266,13 @@ export function AdmissionDetailClient({
           form.setError("dob", { type: "backend", message: error })
         } else if (lower.includes("chưa chọn giới tính")) {
           form.setError("gender", { type: "backend", message: error })
+        } else if (lower.includes("thiếu địa chỉ thường trú: tỉnh/thành phố")) {
+          form.setError("permanent_province", { type: "backend", message: error })
+        } else if (
+          lower.includes("thiếu địa chỉ thường trú: phường/xã") ||
+          lower.includes("phường/xã thường trú phải theo địa giới hiện hành")
+        ) {
+          form.setError("permanent_ward", { type: "backend", message: error })
         } else if (lower.includes("gpa") && !lower.includes("tài liệu")) {
           form.setError("admission_scores", { type: "backend", message: error })
         }

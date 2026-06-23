@@ -395,6 +395,21 @@ async def test_submit_without_permanent_address_stays_draft_gap3(client, officer
     assert body["status"] == "draft", body
     assert "thường trú" in " ".join(body.get("validation_errors") or []), body
 
+    # Read-side readiness must expose the same blocker after submit refetch.
+    # Otherwise FE only shows a transient toast count, then loses the address
+    # error and may incorrectly offer the document-debt action.
+    after = (await client.get(ADM(pid), headers=oh)).json()
+    personal_errors = (
+        after.get("grouped_validation_errors", {})
+        .get("personal_info", {})
+        .get("errors", [])
+    )
+    assert after["eligibility_status"] == "ineligible", after
+    assert after["step_status"]["1"] == "error", after
+    assert any("Tỉnh/Thành phố" in error for error in personal_errors), after
+    assert any("Phường/Xã" in error for error in personal_errors), after
+    assert after["can_submit_with_document_debt"] is False, after
+
 
 @pytest.mark.asyncio
 async def test_submit_approve_override_finalize_enrolled(client, officer_user_in_db, adm_lead, adm_config):

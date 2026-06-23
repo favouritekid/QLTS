@@ -43,6 +43,7 @@ vi.mock("@/components/forms/AdaptiveAddressSelect", () => ({
         <span data-testid="address-mode">{String(props.mode)}</span>
         <span data-testid="address-disabled">{String(props.disabled)}</span>
         <span data-testid="address-label">{String(props.label)}</span>
+        <span data-testid="address-error">{String(props.errorMessage || "")}</span>
       </div>
     );
   },
@@ -328,7 +329,7 @@ describe("PersonalInfoTab", () => {
       expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
     });
 
-    it("changing address mode clears permanent_commune_code", () => {
+    it("mode callback alone preserves commune code until the child confirms and clears", () => {
       const profile = buildProfile({ version: 1 });
       render(<TestFormHost profile={profile} />);
 
@@ -344,7 +345,53 @@ describe("PersonalInfoTab", () => {
         onModeChange("legacy");
       });
 
+      expect(capturedFormRef?.getValues("permanent_commune_code")).toBe("66_002");
+
+      act(() => {
+        onWardCodeChange(null);
+      });
       expect(capturedFormRef?.getValues("permanent_commune_code")).toBeNull();
+    });
+
+    it("shows an inline address error after the confirmed reset clears province", () => {
+      const profile = buildProfile({
+        permanent_province: "Đắk Lắk",
+        permanent_ward: "Xã Ea Kao",
+        version: 1,
+      });
+      render(<TestFormHost profile={profile} />);
+
+      const onProvinceChange =
+        capturedAddressProps.onProvinceChange as (v: string) => void;
+      act(() => {
+        onProvinceChange("");
+      });
+
+      expect(screen.getByTestId("address-error").textContent).toContain(
+        "thiếu Tỉnh/Thành phố",
+      );
+    });
+
+    it("combines province AND ward errors when both are cleared", () => {
+      const profile = buildProfile({
+        permanent_province: "Đắk Lắk",
+        permanent_ward: "Xã Ea Kao",
+        version: 1,
+      });
+      render(<TestFormHost profile={profile} />);
+
+      const onProvinceChange =
+        capturedAddressProps.onProvinceChange as (v: string) => void;
+      const onWardChange =
+        capturedAddressProps.onWardChange as (v: string) => void;
+      act(() => {
+        onProvinceChange("");
+        onWardChange("");
+      });
+
+      const text = screen.getByTestId("address-error").textContent ?? "";
+      expect(text).toContain("thiếu Tỉnh/Thành phố");
+      expect(text).toContain("thiếu Phường/Xã");
     });
   });
 

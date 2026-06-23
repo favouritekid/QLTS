@@ -198,22 +198,65 @@ describe("AdaptiveAddressSelect", () => {
   // MODE SWITCHING
   // -----------------------------------------------------------------
 
-  it("switching mode resets province, district, and ward", async () => {
+  it("switching mode with existing data asks before resetting address", async () => {
     const { props } = await renderComponent({
       mode: "current",
       provinceValue: "Dak Lak",
+      wardValue: "Xa Ea Kao",
+      wardCodeValue: "66_002",
     })
 
-    // Click legacy radio
     const legacyRadio = screen.getByLabelText(/Hộ khẩu cũ/)
     fireEvent.click(legacyRadio)
+
+    expect(screen.getByText("Đổi chế độ địa chỉ?")).toBeInTheDocument()
+    expect(props.onModeChange).not.toHaveBeenCalled()
+    expect(props.onProvinceChange).not.toHaveBeenCalled()
+    expect(props.onWardChange).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Đổi và xóa địa chỉ" }))
 
     await waitFor(() => {
       expect(props.onModeChange).toHaveBeenCalledWith("legacy")
       expect(props.onProvinceChange).toHaveBeenCalledWith("")
       expect(props.onDistrictChange).toHaveBeenCalledWith(null)
       expect(props.onWardChange).toHaveBeenCalledWith("")
+      expect(props.onWardCodeChange).toHaveBeenCalledWith(null)
     })
+  })
+
+  it("cancelling mode switch preserves the current address", async () => {
+    const { props } = await renderComponent({
+      mode: "current",
+      provinceValue: "Dak Lak",
+      wardValue: "Xa Ea Kao",
+      wardCodeValue: "66_002",
+    })
+
+    fireEvent.click(screen.getByLabelText(/Hộ khẩu cũ/))
+    fireEvent.click(screen.getByRole("button", { name: "Giữ địa chỉ hiện tại" }))
+
+    await waitFor(() => {
+      expect(screen.queryByText("Đổi chế độ địa chỉ?")).not.toBeInTheDocument()
+    })
+    expect(props.onModeChange).not.toHaveBeenCalled()
+    expect(props.onProvinceChange).not.toHaveBeenCalled()
+    expect(props.onDistrictChange).not.toHaveBeenCalled()
+    expect(props.onWardChange).not.toHaveBeenCalled()
+    expect(props.onWardCodeChange).not.toHaveBeenCalled()
+  })
+
+  it("switching mode without address data applies immediately", async () => {
+    const { props } = await renderComponent({ mode: "current" })
+
+    fireEvent.click(screen.getByLabelText(/Hộ khẩu cũ/))
+
+    await waitFor(() => {
+      expect(props.onModeChange).toHaveBeenCalledWith("legacy")
+      expect(props.onProvinceChange).toHaveBeenCalledWith("")
+      expect(props.onWardChange).toHaveBeenCalledWith("")
+    })
+    expect(screen.queryByText("Đổi chế độ địa chỉ?")).not.toBeInTheDocument()
   })
 
   it("switching to current hides district field", async () => {
@@ -414,6 +457,7 @@ describe("AdaptiveAddressSelect", () => {
     })
 
     fireEvent.click(screen.getByLabelText(/Hộ khẩu cũ/))
+    fireEvent.click(screen.getByRole("button", { name: "Đổi và xóa địa chỉ" }))
 
     await waitFor(() => {
       expect(props.onWardCodeChange).toHaveBeenCalledWith(null)

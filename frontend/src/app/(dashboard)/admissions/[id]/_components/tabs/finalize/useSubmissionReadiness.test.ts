@@ -410,6 +410,56 @@ describe("useSubmissionReadiness — Phase 3 structured blockers routing", () =>
     expect(step6[0].message).toBe("structured doc")
   })
 
+  it("personal blocker uses the specific grouped address error and routes to Step 1", () => {
+    const profile = buildProfile({
+      grouped_validation_errors: {
+        personal_info: {
+          category: "Thông tin cá nhân",
+          errors: [
+            "Thiếu địa chỉ thường trú: Tỉnh/Thành phố",
+            "Thiếu địa chỉ thường trú: Phường/Xã",
+          ],
+          count: 2,
+        },
+      },
+      executive_summary: es({
+        critical_blockers: [{
+          code: "personal_info_missing",
+          message: "Thiếu 2 thông tin cá nhân bắt buộc",
+          step: 1,
+          section: "personal_info",
+          severity: "blocker",
+        }],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+
+    const r = run(buildParams({ profile }))
+    const addressItem = r.actionItems.find((item) => item.id === "personal_info_missing")
+    expect(addressItem?.step).toBe(1)
+    expect(addressItem?.message).toBe(
+      "Thiếu địa chỉ thường trú: Tỉnh/Thành phố (+1 mục khác)",
+    )
+    expect(addressItem?.canDeferAsDocumentDebt).toBe(false)
+  })
+
+  it("marks missing documents as deferrable only when backend grants document debt", () => {
+    const profile = buildProfile({
+      can_submit_with_document_debt: true,
+      executive_summary: es({
+        critical_blockers: [{
+          code: "documents_missing",
+          message: "Thiếu giấy khai sinh",
+          step: 6,
+          section: "documents",
+          severity: "blocker",
+        }],
+      }),
+    } as Partial<AdmissionProfileResponse>)
+
+    const r = run(buildParams({ profile }))
+    expect(r.actionItems.find((item) => item.step === 6)?.canDeferAsDocumentDebt).toBe(true)
+  })
+
   it("priority (Step 4) still added alongside structured items", () => {
     const profile = buildProfile({
       cultural_education_level: null,
