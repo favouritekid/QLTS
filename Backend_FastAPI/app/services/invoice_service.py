@@ -317,7 +317,19 @@ class InvoiceService:
             BusinessRuleViolation: If amount exceeds remaining balance
             BadRequest: If duplicate installment number
         """
-        fee = await self.fee_repo.get_by_id_with_relations(fee_id, unit_id)
+        # Global lock order (review v8): advisory(invoice-number) -> fee-row ->
+        # invoice — the SAME order generate_invoices_for_fee uses. Acquire the
+        # invoice-number advisory FIRST; v7 took the fee row first, which let
+        # create×generate on one fee ABBA-deadlock on (fee-row ↔ number-advisory).
+        invoice_number = await self._generate_invoice_number()
+
+        # LOCK the fee row up-front (not get_by_id_with_relations) so the checks
+        # below + recompute act on a FRESH fee under the lock (recompute calls
+        # db.refresh — get_for_update alone does NOT repopulate an instance already
+        # in the session), and FOR UPDATE is taken before the INSERT (no
+        # KEY-SHARE→FOR UPDATE upgrade that two concurrent creates would deadlock
+        # on). Shares only the fee row with cancel (invoice→fee), so no cycle.
+        fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
@@ -350,9 +362,6 @@ class InvoiceService:
                 f"Invoice amount ({amount}) exceeds remaining balance ({remaining_to_invoice})"
             )
 
-        # Generate invoice number
-        invoice_number = await self._generate_invoice_number()
-
         invoice = Invoice(
             fee_id=fee_id,
             invoice_number=invoice_number,
@@ -379,10 +388,9 @@ class InvoiceService:
             ) from exc
         await self.db.refresh(invoice)
 
-        # Update fee status if not already invoiced
-        if fee.status == FeeStatusEnum.calculated.value:
-            fee.status = FeeStatusEnum.invoiced.value
-            await self.db.flush()
+        # Keep Fee.status consistent (PR-B): recompute re-reads the locked fee
+        # (db.refresh inside) and updates status from the active-invoice set.
+        await self.recompute_fee_from_invoices(fee_id, unit_id)
 
         log.info(
             "invoice_created",
@@ -550,6 +558,11 @@ class InvoiceService:
 
         await self.db.flush()
 
+        # Nhóm A (PR-B): cancelling an invoice must not leave the parent Fee
+        # stranded ('invoiced' while fewer invoices remain billed). Recompute
+        # Fee.status from the remaining active invoices in the SAME transaction.
+        await self.recompute_fee_from_invoices(invoice.fee_id, unit_id)
+
         log.info(
             "invoice_cancelled",
             invoice_id=invoice_id,
@@ -559,6 +572,71 @@ class InvoiceService:
         )
 
         return invoice, None
+
+    async def recompute_fee_from_invoices(
+        self,
+        fee_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Fee:
+        """Recompute ``Fee.status`` from settlement (paid + waived) and whether
+        any ACTIVE (non-cancelled) invoice remains.
+
+        Nhóm A balance fix (PR-B): paths that change the active-invoice set
+        (cancel, supplemental create) must keep ``Fee.status`` consistent in the
+        SAME transaction, else the Fee drifts (status stuck at 'invoiced' with
+        fewer invoices than billed).
+
+        Status rules (no 'partially invoiced' enum — don't overload 'partial' =
+        "đã thu một phần"):
+        - fully settled (``final - waived - paid <= 0``) -> 'paid'. Catches a FULL
+          WAIVER too (``waive_fee`` sets 'paid' with ``paid_amount == 0``).
+        - else ``paid_amount > 0`` -> 'partial'
+        - else any active invoice -> 'invoiced'
+        - else -> 'calculated'
+
+        Terminal statuses ('waived', 'cancelled') are deliberate and left as-is.
+        Does NOT touch final/waived/paid amounts — a real reduction is a separate
+        audited flow. NO over-bill guard here: recompute runs on REDUCTIONS
+        (cancel) and must never block clearing an already over-billed fee — a
+        post-issue waiver can legitimately make Σ active > (final - waived). The
+        over-bill guard lives at invoice CREATION (``create_single_invoice``).
+        """
+        fee = await self.fee_repo.get_for_update(fee_id, unit_id)
+        if not fee:
+            raise ResourceNotFoundError("Fee not found")
+        # get_for_update does NOT repopulate an instance already in this session
+        # (no populate_existing), so force a fresh read under the lock before
+        # branching on fee.status/paid/waived — a fee loaded earlier in the same
+        # session (e.g. by create_single_invoice) would otherwise be a stale
+        # snapshot and we could skip a needed status UPDATE.
+        await self.db.refresh(fee)
+
+        # Terminal statuses first: a stale over-billed waived/cancelled fee stays
+        # a no-op rather than being recomputed.
+        if fee.status in (
+            FeeStatusEnum.waived.value,
+            FeeStatusEnum.cancelled.value,
+        ):
+            return fee
+
+        active_count = await self.invoice_repo.count_active_for_fee(fee_id, unit_id)
+
+        # Settled by EITHER payment OR waiver.
+        remaining = fee.final_amount - fee.waived_amount - fee.paid_amount
+        if remaining <= 0:
+            new_status = FeeStatusEnum.paid.value
+        elif fee.paid_amount > 0:
+            new_status = FeeStatusEnum.partial.value
+        elif active_count > 0:
+            new_status = FeeStatusEnum.invoiced.value
+        else:
+            new_status = FeeStatusEnum.calculated.value
+
+        if new_status != fee.status:
+            fee.status = new_status
+            fee.version += 1  # optimistic-lock token, like every Fee mutator
+            await self.db.flush()
+        return fee
 
     async def apply_penalty(
         self,
