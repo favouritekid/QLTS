@@ -16,7 +16,8 @@ Query pattern:
       AND (:level IS NULL OR s.level = :level)
       AND (:province IS NULL OR s.moet_province_code = :province)
       AND unaccent(s.name) ILIKE unaccent('%' || :q || '%')
-    ORDER BY s.name
+    -- Relevance: 0=prefix, 1=q ở đầu một từ, 2=giữa từ; rồi length, name, id
+    ORDER BY relevance, length(s.name), s.name, s.id
     LIMIT :limit OFFSET :offset;
 
 Auth: caller responsible for authentication. This service does NOT
@@ -126,7 +127,10 @@ class VnSchoolService:
         #   0 = tên bắt đầu bằng q (prefix)
         #   1 = q ở đầu một từ (word boundary — phổ biến nhất khi gõ tên riêng)
         #   2 = q ở giữa từ
-        # rồi tên ngắn lên trước (khớp sát hơn), cuối cùng alphabet cho ổn định.
+        # rồi tên ngắn lên trước (khớp sát hơn), tên (alphabet), cuối cùng id —
+        # tie-break DUY NHẤT để thứ tự ổn định: phân trang không lặp/bỏ sót khi
+        # nhiều trường trùng tên giữa các tỉnh (vd "THPT Lê Quý Đôn" ~48 tỉnh,
+        # cùng relevance + length + name). Mirror list_schools (đã có .id).
         name_unaccent = func.unaccent(VnSchool.name)
         relevance = case(
             (name_unaccent.ilike(func.unaccent(f"{q_escaped}%")), 0),
@@ -148,7 +152,12 @@ class VnSchoolService:
                 current_kv_subq.label("current_kv"),
             )
             .where(*filters)
-            .order_by(relevance, func.length(VnSchool.name), VnSchool.name)
+            .order_by(
+                relevance,
+                func.length(VnSchool.name),
+                VnSchool.name,
+                VnSchool.id,
+            )
             .limit(limit)
             .offset(offset)
         )
