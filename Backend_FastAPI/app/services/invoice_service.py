@@ -317,17 +317,18 @@ class InvoiceService:
             BusinessRuleViolation: If amount exceeds remaining balance
             BadRequest: If duplicate installment number
         """
-        # PR-B (review v7): LOCK the fee row up-front (not get_by_id_with_relations).
-        # Two reasons:
-        #  (a) recompute below re-reads the fee under the SAME lock — but a plain
-        #      get_for_update on an instance ALREADY in the session does NOT reload
-        #      columns without populate_existing, so without this first-load lock
-        #      recompute would mix a stale status/paid/version with a fresh
-        #      active_count → drift / lost-update under concurrency.
-        #  (b) taking FOR UPDATE before the INSERT avoids the KEY-SHARE→FOR UPDATE
-        #      lock upgrade that two concurrent creates on the same fee deadlock on.
-        # Lock order (fee→invoice) shares only the fee row with cancel
-        # (invoice→fee), so no cycle.
+        # Global lock order (review v8): advisory(invoice-number) -> fee-row ->
+        # invoice — the SAME order generate_invoices_for_fee uses. Acquire the
+        # invoice-number advisory FIRST; v7 took the fee row first, which let
+        # create×generate on one fee ABBA-deadlock on (fee-row ↔ number-advisory).
+        invoice_number = await self._generate_invoice_number()
+
+        # LOCK the fee row up-front (not get_by_id_with_relations) so the checks
+        # below + recompute act on a FRESH fee under the lock (recompute calls
+        # db.refresh — get_for_update alone does NOT repopulate an instance already
+        # in the session), and FOR UPDATE is taken before the INSERT (no
+        # KEY-SHARE→FOR UPDATE upgrade that two concurrent creates would deadlock
+        # on). Shares only the fee row with cancel (invoice→fee), so no cycle.
         fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
@@ -361,9 +362,6 @@ class InvoiceService:
                 f"Invoice amount ({amount}) exceeds remaining balance ({remaining_to_invoice})"
             )
 
-        # Generate invoice number
-        invoice_number = await self._generate_invoice_number()
-
         invoice = Invoice(
             fee_id=fee_id,
             invoice_number=invoice_number,
@@ -390,9 +388,8 @@ class InvoiceService:
             ) from exc
         await self.db.refresh(invoice)
 
-        # Keep Fee.status consistent (PR-B): recompute under a FRESH fee lock so a
-        # concurrent cancel that committed e.g. 'calculated' isn't shadowed by a
-        # stale in-memory snapshot of fee.status here (re-reads the fee row).
+        # Keep Fee.status consistent (PR-B): recompute re-reads the locked fee
+        # (db.refresh inside) and updates status from the active-invoice set.
         await self.recompute_fee_from_invoices(fee_id, unit_id)
 
         log.info(
@@ -607,6 +604,12 @@ class InvoiceService:
         fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
+        # get_for_update does NOT repopulate an instance already in this session
+        # (no populate_existing), so force a fresh read under the lock before
+        # branching on fee.status/paid/waived — a fee loaded earlier in the same
+        # session (e.g. by create_single_invoice) would otherwise be a stale
+        # snapshot and we could skip a needed status UPDATE.
+        await self.db.refresh(fee)
 
         # Terminal statuses first: a stale over-billed waived/cancelled fee stays
         # a no-op rather than being recomputed.
