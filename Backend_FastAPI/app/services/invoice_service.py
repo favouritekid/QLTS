@@ -317,7 +317,18 @@ class InvoiceService:
             BusinessRuleViolation: If amount exceeds remaining balance
             BadRequest: If duplicate installment number
         """
-        fee = await self.fee_repo.get_by_id_with_relations(fee_id, unit_id)
+        # PR-B (review v7): LOCK the fee row up-front (not get_by_id_with_relations).
+        # Two reasons:
+        #  (a) recompute below re-reads the fee under the SAME lock — but a plain
+        #      get_for_update on an instance ALREADY in the session does NOT reload
+        #      columns without populate_existing, so without this first-load lock
+        #      recompute would mix a stale status/paid/version with a fresh
+        #      active_count → drift / lost-update under concurrency.
+        #  (b) taking FOR UPDATE before the INSERT avoids the KEY-SHARE→FOR UPDATE
+        #      lock upgrade that two concurrent creates on the same fee deadlock on.
+        # Lock order (fee→invoice) shares only the fee row with cancel
+        # (invoice→fee), so no cycle.
+        fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
