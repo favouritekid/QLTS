@@ -552,6 +552,31 @@ class InvoiceRepository(BaseRepository[Invoice]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def count_active_for_fee(
+        self,
+        fee_id: int,
+        unit_id: Optional[int] = None,
+    ) -> int:
+        """Count non-cancelled invoices for a fee (IDOR-scoped).
+
+        Cheap aggregate for the Fee.status recompute (PR-B) — a single COUNT, no
+        payment hydration (unlike ``get_by_fee_id`` which selectinloads payments).
+        """
+        query = (
+            select(func.count(Invoice.id))
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(
+                Invoice.fee_id == fee_id,
+                Invoice.status != 'cancelled',
+            )
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+        result = await self.db.execute(query)
+        return int(result.scalar() or 0)
+
     async def get_for_update(
         self,
         invoice_id: int,

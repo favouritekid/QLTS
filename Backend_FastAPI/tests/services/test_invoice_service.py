@@ -802,34 +802,83 @@ class TestFeeRecomputeOnCancelPRB:
         await db.refresh(fee)
         assert fee.status == FeeStatusEnum.paid.value
 
-    async def test_invariant_over_target_raises(
+    async def test_cancel_after_post_issue_waive_not_blocked(
         self, db, invoice_fixtures, admin_user
     ):
-        """Σ active invoice.amount must not exceed final_amount - waived."""
+        """F1 (review 06-24): a post-issue waiver can make Σ active >
+        (final - waived). Cancelling to clean up must NOT be blocked — recompute
+        no longer enforces an over-bill invariant (that guard lives at creation)."""
         service = InvoiceService(db)
-        fee = invoice_fixtures["fee_with_plan"]
+        fee = invoice_fixtures["fee_with_plan"]  # final 9_000_000, 3 installments
         unit_id = invoice_fixtures["unit_id"]
-        await service.generate_invoices_for_fee(
+        invs, _ = await service.generate_invoices_for_fee(
             fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
             user_id=admin_user.id, unit_id=unit_id,
         )
         await db.commit()
 
-        # Raw-insert an extra ACTIVE invoice (distinct installment_no) pushing the
-        # active total over final_amount, bypassing the service guard.
-        over = Invoice(
-            fee_id=fee.id, invoice_number="INV-TEST-OVER-0001",
-            installment_no=99, amount=Decimal("1000000"),
-            paid_amount=Decimal("0"), penalty_amount=Decimal("0"),
-            status=InvoiceStatusEnum.draft.value,
-            due_date=date.today() + timedelta(days=30),
-        )
-        db.add(over)
+        # Post-issue waiver shrinking billable below Σ active (still un-paid).
+        fee.waived_amount = Decimal("6000000")  # billable 3M < Σ active 9M
         await db.flush()
 
-        with pytest.raises(BusinessRuleViolation):
-            await service.recompute_fee_from_invoices(fee.id, unit_id)
-        await db.rollback()
+        # Must succeed (no over-bill BusinessRuleViolation).
+        await service.cancel_invoice(
+            invs[0].id, "cleanup over-billed", admin_user.id, unit_id
+        )
+        await db.commit()
+        await db.refresh(fee)
+
+        # remaining = 9M - 6M - 0 = 3M > 0, paid=0, active>0 → invoiced
+        assert fee.status == FeeStatusEnum.invoiced.value
+
+    async def test_full_waive_then_cancel_stays_paid(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """F2 (review 06-24): a fully-waived fee (settled, paid_amount 0) must NOT
+        be reopened to 'calculated' when its invoice is cancelled."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]  # single application fee 900_000
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        # Full waiver: settled by waiver, status 'paid', paid_amount 0.
+        fee.waived_amount = fee.final_amount
+        fee.status = FeeStatusEnum.paid.value
+        await db.flush()
+
+        await service.cancel_invoice(invs[0].id, "redo billing", admin_user.id, unit_id)
+        await db.commit()
+        await db.refresh(fee)
+
+        assert fee.status == FeeStatusEnum.paid.value  # stays settled, not reopened
+
+    async def test_recompute_bumps_version_on_status_change(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """F3 (review 06-24): recompute bumps fee.version when it changes status,
+        so the optimistic-lock token can't be silently stale."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        await db.refresh(fee)
+        v0 = fee.version
+
+        for inv in invs:
+            await service.cancel_invoice(inv.id, "all", admin_user.id, unit_id)
+        await db.commit()
+        await db.refresh(fee)
+
+        assert fee.status == FeeStatusEnum.calculated.value
+        assert fee.version > v0  # invoiced→calculated bumped the token
 
     async def test_cancel_blocked_when_invoice_paid(
         self, db, invoice_fixtures, admin_user
