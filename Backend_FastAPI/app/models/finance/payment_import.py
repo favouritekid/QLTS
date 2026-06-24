@@ -15,7 +15,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey, Integer, Numeric, String, Text,
+    CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -53,6 +54,15 @@ class PaymentImportBatch(Base):
             name="chk_payment_import_batch_status",
         ),
         CheckConstraint("semester_no >= 1", name="chk_payment_import_batch_semester"),
+        # Idempotency tại DB: tối đa 1 batch CÒN HIỆU LỰC (preview/committed) cho mỗi
+        # file → chống re-import + double-commit cùng file (kể cả 2 upload race).
+        # 'void' thoát ràng buộc nên đảo batch sai rồi import lại được.
+        Index(
+            "uq_payment_import_batch_active_file",
+            "file_sha256",
+            unique=True,
+            postgresql_where=text("status <> 'void'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -64,10 +74,14 @@ class PaymentImportBatch(Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
-    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    matched_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    warned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    row_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    matched_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    warned_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
+    failed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
     total_amount: Mapped[Decimal] = mapped_column(
         Numeric(15, 2), nullable=False, default=Decimal("0"), server_default="0",
         comment="Tổng tiền dự kiến/đã ghi (gốc học phí)",
@@ -85,7 +99,12 @@ class PaymentImportBatch(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False,
+        default=lambda: datetime.now(timezone.utc), server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc), server_default=func.now(),
     )
     committed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True)
@@ -95,7 +114,9 @@ class PaymentImportBatch(Base):
 
     rows: Mapped[List["PaymentImportRow"]] = relationship(
         "PaymentImportRow", back_populates="batch",
-        cascade="all, delete-orphan", lazy="selectin",
+        cascade="all, delete-orphan",
+        # lazy mặc định (select) — KHÔNG eager: list batch không kéo hết dòng của
+        # mọi batch; chỉ selectinload(rows) trong query xem chi tiết 1 batch.
     )
     created_by: Mapped[Optional["User"]] = relationship("User")
 
@@ -119,6 +140,8 @@ class PaymentImportRow(Base):
             "status IN ('matched', 'warned', 'error')",
             name="chk_payment_import_row_status",
         ),
+        # Chống trùng dòng (parser chạy lại/bug) → void & đối soát theo row_no rõ ràng.
+        UniqueConstraint("batch_id", "row_no", name="uq_payment_import_row_batch_rowno"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -37,6 +37,10 @@ def upgrade() -> None:
             "created_at", sa.DateTime(timezone=True), nullable=False,
             server_default=sa.func.now(),
         ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.Column("committed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("voided_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("void_reason", sa.Text(), nullable=True),
@@ -54,6 +58,11 @@ def upgrade() -> None:
     op.create_index("ix_payment_import_batch_status", "payment_import_batch", ["status"])
     op.create_index(
         "ix_payment_import_batch_created_by_id", "payment_import_batch", ["created_by_id"])
+    # Idempotency: 1 batch CÒN HIỆU LỰC (preview/committed) / file (chống double-commit).
+    op.create_index(
+        "uq_payment_import_batch_active_file", "payment_import_batch", ["file_sha256"],
+        unique=True, postgresql_where=sa.text("status <> 'void'"),
+    )
 
     op.create_table(
         "payment_import_row",
@@ -74,6 +83,8 @@ def upgrade() -> None:
             "status IN ('matched', 'warned', 'error')",
             name="chk_payment_import_row_status",
         ),
+        sa.UniqueConstraint(
+            "batch_id", "row_no", name="uq_payment_import_row_batch_rowno"),
     )
     op.create_index("ix_payment_import_row_batch_id", "payment_import_row", ["batch_id"])
 
