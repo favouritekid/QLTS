@@ -3,6 +3,7 @@ import { io, Socket } from "socket.io-client";
 import { env } from "@/lib/config/env";
 import { useAuthStore } from "../stores/auth.store";
 import { toast } from "sonner";
+import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 
 class SocketService {
   private socket: Socket | null = null;
@@ -195,7 +196,12 @@ class SocketService {
               });
 
               if (typeof window !== "undefined") {
-                window.location.href = "/login";
+                // Return-url vô điều kiện: revalidate_auth fail (hết phiên/thu
+                // hồi) — login lại vẫn là chính user nên quay về trang cũ an toàn.
+                window.location.href = buildLoginRedirect(
+                  window.location.pathname + window.location.search,
+                  { reason: "session_expired" },
+                );
               }
             }
           }

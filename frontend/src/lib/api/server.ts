@@ -170,7 +170,11 @@ async function serverFetch<T>(
 
   // Handle non-OK responses
   if (!response.ok) {
-    // 401 Unauthorized — token expired/blacklisted → redirect to login
+    // 401 Unauthorized — token expired/blacklisted → redirect to login.
+    // LIMITATION (scope return-url): RSC serverFetch không có request path nên
+    // không đính được ?redirect=<trang đang xem>; user về dashboard mặc định
+    // sau khi đăng nhập lại. Client-side navigation (case phổ biến nhất) đã giữ
+    // return-url qua proxy.ts + client.ts interceptor (buildLoginRedirect).
     if (response.status === 401) {
       redirect('/login?force_login=true');
     }

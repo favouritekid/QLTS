@@ -27,6 +27,8 @@ import {
 } from "./csrf";
 import { env } from "@/lib/config/env";
 import { inspectVersionHeaders } from "@/lib/api/api-versioning";
+import { refreshAccessToken } from "./refresh";
+import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
 // ============================================
@@ -34,7 +36,7 @@ export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 // ============================================
 // Uses window global to survive Turbopack HMR module reloads.
 // Set by logoutMutation in useAuth.ts, reset on login success.
-function isApiLoggedOut(): boolean {
+export function isApiLoggedOut(): boolean {
   return typeof window !== "undefined" && !!(window as unknown as Record<string, unknown>).__qlts_logged_out;
 }
 export function setApiLoggedOut(value: boolean) {
@@ -53,36 +55,11 @@ export const api = axios.create({
 });
 
 // ============================================
-// 🔒 AUTO-REFRESH TOKEN MECHANISM (FIX-4 ENHANCED)
+// 🔒 AUTO-REFRESH TOKEN MECHANISM
 // ============================================
-
-/**
- * Mutex lock + Queue mechanism to prevent race conditions
- *
- * When multiple requests receive 401 simultaneously:
- * - Only ONE refresh request is made (Leader)
- * - Other requests wait in queue (Followers)
- * - After refresh success, all queued requests retry
- *
- * This prevents "Token Reuse Detection" false positives
- * caused by duplicate refresh requests hitting backend.
- */
-let isRefreshing = false;
-let failedQueue: Array<{
-  resolve: (value?: unknown) => void;
-  reject: (reason?: unknown) => void;
-}> = [];
-
-const processQueue = (error: unknown, token: string | null = null) => {
-  failedQueue.forEach((prom) => {
-    if (error) {
-      prom.reject(error);
-    } else {
-      prom.resolve(token);
-    }
-  });
-  failedQueue = [];
-};
+// Logic single-flight (mutex + queue + delay 100ms cookie-persist) đã được
+// tách sang ./refresh (`refreshAccessToken`) để dùng chung cho: interceptor
+// 401, CSRF-recovery, và hook proactive (useProactiveTokenRefresh).
 
 // ============================================
 // 📤 REQUEST INTERCEPTOR
@@ -166,6 +143,9 @@ api.interceptors.response.use(
       }
 
       const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
+      // Capture search CÙNG LÚC (trước await refresh) — tránh trộn pathname cũ
+      // với query mới nếu user điều hướng client-side trong lúc refresh.
+      const currentSearch = typeof window !== "undefined" ? window.location.search : "";
 
       // Don't redirect if already on public pages
       const publicPages = ["/login", "/register", "/forgot-password", "/reset-password"];
@@ -174,74 +154,21 @@ api.interceptors.response.use(
       }
 
       // ========================================
-      // STEP 2: QUEUE MECHANISM (Follower)
-      // If refresh is already in progress, queue this request
-      // ========================================
-      if (isRefreshing) {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[API Client] 🔄 Request queued (refresh in progress)");
-        }
-
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        })
-          .then(() => {
-            // When queue is processed, retry original request
-            return api(originalRequest);
-          })
-          .catch((err) => {
-            return Promise.reject(err);
-          });
-      }
-
-      // ========================================
-      // STEP 3: START REFRESH PROCESS (Leader)
+      // STEP 2: REFRESH (single-flight) + RETRY
+      // refreshAccessToken() tự xử lý mutex/queue/100ms (xem ./refresh):
+      // request đầu là leader gọi /auth/refresh, các request khác chờ.
       // ========================================
       originalRequest._retry = true;
-      isRefreshing = true;
 
       try {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[API Client] 🔄 Access token expired, refreshing...");
-        }
-
-        // Call /refresh endpoint (tokens sent/received via httpOnly cookies)
-        await axios.post(
-          `${API_BASE_URL}/api/auth/refresh`,
-          {},
-          {
-            withCredentials: true, // ✅ Important: Send refresh_token cookie
-          }
-        );
-
-        // ⚠️ DEFENSIVE FIX: Wait for browser to persist new cookie
-        // This prevents race condition at browser storage level
-        // Some browsers (especially mobile) need 50-150ms to persist cookies
-        await new Promise((resolve) => setTimeout(resolve, 100));
-
-        if (process.env.NODE_ENV === "development") {
-          console.log("[API Client] ✅ Token refreshed successfully (via httpOnly cookie)");
-        }
-
-        // ========================================
-        // STEP 4: NOTIFY QUEUED REQUESTS
-        // ========================================
-        processQueue(null, "success");
-
-        // ========================================
-        // STEP 5: RETRY ORIGINAL REQUEST
-        // ========================================
+        await refreshAccessToken();
+        // Refresh thành công → retry request gốc với cookie mới.
         return api(originalRequest);
       } catch (refreshError) {
         console.error("[API Client] ❌ Refresh failed:", refreshError);
 
-        // ========================================
-        // STEP 6: HANDLE REFRESH FAILURE
-        // ========================================
-        processQueue(refreshError, null);
-
-        // Fallback Logout: Set logout flag to stop further API calls,
-        // call logout API to clear httpOnly cookies, then hard redirect.
+        // Fallback Logout: chặn API tiếp theo, clear store, rồi hard
+        // redirect KÈM return-url để sau khi đăng nhập lại quay về đúng trang.
         if (typeof window !== "undefined" && !publicPages.includes(currentPath)) {
           console.log("[API Client] 🚪 Session invalid — logging out...");
           setApiLoggedOut(true);
@@ -254,15 +181,13 @@ api.interceptors.response.use(
             // Best-effort
           }
 
-          // Redirect with force_login flag — middleware will clear stale
-          // httpOnly cookies that JS can't delete directly
-          window.location.href = "/login?force_login=true";
+          // force_login → middleware xoá cookie cũ mà JS không xoá được.
+          window.location.href = buildLoginRedirect(currentPath + currentSearch, {
+            forceLogin: true,
+          });
         }
 
         return Promise.reject(refreshError);
-      } finally {
-        // Always unlock mutex
-        isRefreshing = false;
       }
     }
 
@@ -312,30 +237,30 @@ api.interceptors.response.use(
           }
         }
 
-        // Try refresh — /auth/refresh is CSRF-exempt and sets a new csrf_token cookie
+        // Try refresh — /auth/refresh là CSRF-exempt và set lại csrf_token cookie.
+        // Dùng chung refreshAccessToken() (single-flight) — tránh chạy song song
+        // với một refresh do 401 đang diễn ra.
         originalRequest._retry = true;
         try {
-          await axios.post(
-            `${API_BASE_URL}/api/auth/refresh`,
-            {},
-            { withCredentials: true }
-          );
-
-          // Wait for browser to persist the new csrf_token cookie
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await refreshAccessToken();
 
           if (process.env.NODE_ENV === "development") {
             console.log("[API Client] ✅ CSRF recovery: refresh succeeded, retrying original request");
           }
 
-          // Retry original request — interceptor will re-read fresh csrf_token from document.cookie
+          // Retry — interceptor sẽ đọc lại csrf_token mới từ document.cookie.
           return api(originalRequest);
         } catch (refreshError) {
           console.warn("[API Client] ❌ CSRF recovery failed (refresh rejected) — redirecting to login");
 
           if (typeof window !== "undefined") {
             setApiLoggedOut(true);
-            window.location.href = "/login?reason=session_expired";
+            // forceLogin → middleware xoá httpOnly cookie chết (giống nhánh 401);
+            // CSRF-recovery fail nghĩa session đã hết hiệu lực.
+            window.location.href = buildLoginRedirect(
+              window.location.pathname + window.location.search,
+              { forceLogin: true, reason: "session_expired" },
+            );
           }
 
           return Promise.reject(refreshError);

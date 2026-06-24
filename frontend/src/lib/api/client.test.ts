@@ -29,6 +29,7 @@ vi.mock("axios", () => {
 
 // Now safe to import
 import { setApiLoggedOut } from "./client";
+import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 
 describe("API Client — Logout Guard", () => {
   beforeEach(() => {
@@ -55,9 +56,23 @@ describe("API Client — Force Login Contract", () => {
     expect(url.searchParams.get("force_login")).toBe("true");
   });
 
-  it("force_login URL does not include other params", () => {
-    const redirectUrl = "/login?force_login=true";
-    const url = new URL(redirectUrl, "http://localhost:3000");
-    expect(Array.from(url.searchParams.keys())).toEqual(["force_login"]);
+  it("force_login URL nay kèm redirect khi có path hợp lệ (contract mới)", () => {
+    // Interceptor 401 nay dùng buildLoginRedirect(path, { forceLogin: true }).
+    const withPath = new URL(
+      buildLoginRedirect("/leads/5", { forceLogin: true }),
+      "http://localhost:3000",
+    );
+    expect(Array.from(withPath.searchParams.keys())).toEqual([
+      "force_login",
+      "redirect",
+    ]);
+    expect(withPath.searchParams.get("redirect")).toBe("/leads/5");
+
+    // Không có path hợp lệ → vẫn chỉ force_login (giữ contract cũ).
+    const noPath = new URL(
+      buildLoginRedirect(null, { forceLogin: true }),
+      "http://localhost:3000",
+    );
+    expect(Array.from(noPath.searchParams.keys())).toEqual(["force_login"]);
   });
 });
