@@ -37,6 +37,12 @@ from .payment_intent import PaymentIntent, PaymentIntentStatusEnum, GatewayStatu
 from .payment import Payment, PaymentTransaction, PaymentStatusEnum, TransactionTypeEnum
 from .refund import RefundRequest, RefundStatusEnum
 from .overpayment import OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum
+from .payment_import import (
+    PaymentImportBatch,
+    PaymentImportRow,
+    PaymentImportBatchStatusEnum,
+    PaymentImportRowStatusEnum,
+)
 
 __all__ = [
     # Enums - Fee
@@ -72,4 +78,9 @@ __all__ = [
     # Models - Refund & Overpayment
     "RefundRequest",
     "OverpaymentRecord",
+    # Bulk payment import (BV)
+    "PaymentImportBatch",
+    "PaymentImportRow",
+    "PaymentImportBatchStatusEnum",
+    "PaymentImportRowStatusEnum",
 ]
