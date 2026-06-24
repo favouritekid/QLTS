@@ -37,7 +37,7 @@ class PaymentImportBatchStatusEnum(str, enum.Enum):
 class PaymentImportRowStatusEnum(str, enum.Enum):
     """Per-row outcome of resolve/validate."""
     matched = "matched"        # ghi được (có thể kèm warning)
-    warned = "warned"          # ghi được + cảnh báo (lệch tên / tràn nhiều đợt / nghi trùng)
+    warned = "warned"          # ghi được + cảnh báo (lệch tên/tràn đợt/nghi trùng)
     error = "error"            # KHÔNG ghi (không khớp / vượt tổng / sai định dạng)
 
 
@@ -141,7 +141,9 @@ class PaymentImportRow(Base):
             name="chk_payment_import_row_status",
         ),
         # Chống trùng dòng (parser chạy lại/bug) → void & đối soát theo row_no rõ ràng.
-        UniqueConstraint("batch_id", "row_no", name="uq_payment_import_row_batch_rowno"),
+        UniqueConstraint(
+            "batch_id", "row_no", name="uq_payment_import_row_batch_rowno"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
