@@ -10,6 +10,7 @@ Architecture Compliance:
 - IDOR Protection: Unit-based access control via service layer
 
 Endpoints:
+- POST /api/invoices - Create a supplemental/replacement invoice for a fee
 - GET /api/invoices/{invoice_id} - Get invoice details with payments
 - GET /api/invoices/by-fee/{fee_id} - Get all invoices for a fee
 - PUT /api/invoices/{invoice_id}/issue - Issue invoice
@@ -49,6 +50,7 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
+    DuplicateResourceError,
 )
 
 log = structlog.get_logger(__name__)
@@ -471,6 +473,71 @@ async def cancel_invoice(
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "",
+    response_model=finance_schemas.InvoiceResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a supplemental/replacement invoice for a fee",
+)
+async def create_invoice(
+    request: Request,
+    data: finance_schemas.InvoiceCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = RequireManager,
+):
+    """
+    Create a single invoice (installment) for a fee.
+
+    Primary use: re-create an installment after the original was cancelled.
+    PR-A made cancelled invoices stop reserving the (fee_id, installment_no)
+    slot, so a manager can issue a fresh invoice for that installment. Also
+    serves manual / supplemental installments.
+
+    **Business Rules:**
+    - Fee status must be calculated / invoiced / partial
+    - installment_no must not collide with an ACTIVE (non-cancelled) invoice
+    - amount must not exceed the fee's remaining-to-invoice
+    - Requires manager or admin role
+
+    **Security:**
+    - IDOR protection: scoped to the caller's unit
+    - Role enforced via RequireManager dependency
+    """
+    invoice_service = InvoiceService(db)
+    unit_id = finance_scope_unit_id(current_user)
+
+    try:
+        invoice, _ = await invoice_service.create_single_invoice(
+            fee_id=data.fee_id,
+            amount=data.amount,
+            due_date=data.due_date,
+            installment_no=data.installment_no,
+            user_id=current_user.id,
+            unit_id=unit_id,
+        )
+
+        await db.commit()
+
+        log.info(
+            "invoice_created_via_api",
+            invoice_id=invoice.id,
+            fee_id=data.fee_id,
+            installment_no=data.installment_no,
+            user_id=current_user.id,
+        )
+
+        await db.refresh(invoice)
+        return _build_invoice_response(invoice, current_user_role=current_user.role)
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except DuplicateResourceError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except (BadRequest, BusinessRuleViolation) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 

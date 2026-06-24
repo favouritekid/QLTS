@@ -530,3 +530,194 @@ class TestInvoiceLifecycle:
         assert inv_num.startswith("INV-")
         # Format: INV-YYYY-XXXXXX (possibly with timestamp suffix)
         assert re.match(r"INV-\d{4}-\d+", inv_num)
+
+
+# =============================================================================
+# PR-A: RE-CREATE INVOICE AFTER CANCEL
+# =============================================================================
+
+class TestInvoiceRecreateAfterCancelPRA:
+    """PR-A: a cancelled invoice no longer reserves the (fee_id, installment_no)
+    slot, so an installment can be re-created after cancellation. The DB partial
+    unique index still forbids two ACTIVE invoices on the same installment.
+    """
+
+    async def test_regenerate_after_all_cancelled(self, db, invoice_fixtures, admin_user):
+        """Cancel every invoice → generate_invoices_for_fee runs again instead of
+        raising BadRequest('Invoices already exist')."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        invoices, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        assert len(invoices) == 3
+
+        for inv in invoices:
+            await service.cancel_invoice(
+                invoice_id=inv.id, reason="test recreate",
+                user_id=admin_user.id, unit_id=unit_id,
+            )
+        await db.commit()
+
+        regenerated, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        assert len(regenerated) == 3
+        # New rows are distinct from the cancelled ones (no slot collision).
+        assert {inv.id for inv in invoices}.isdisjoint({inv.id for inv in regenerated})
+
+    async def test_recreate_single_installment_after_cancel(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Cancel one installment → create_single_invoice with the SAME
+        installment_no succeeds (partial index frees the slot)."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        invoices, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        target = next(inv for inv in invoices if inv.installment_no == 2)
+
+        await service.cancel_invoice(
+            invoice_id=target.id, reason="wrong amount",
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        new_inv, _ = await service.create_single_invoice(
+            fee_id=fee.id, amount=target.amount, due_date=due,
+            installment_no=2, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        assert new_inv.installment_no == 2
+        assert new_inv.id != target.id
+        assert new_inv.status == InvoiceStatusEnum.draft.value
+
+    async def test_duplicate_active_installment_still_blocked(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """create_single_invoice on an installment that still has an ACTIVE
+        invoice is rejected — active_only guard sees the live row."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        with pytest.raises(BadRequest):
+            await service.create_single_invoice(
+                fee_id=fee.id, amount=Decimal("100000"), due_date=due,
+                installment_no=1, user_id=admin_user.id, unit_id=unit_id,
+            )
+
+    async def test_total_invoiced_excludes_cancelled(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Hidden-bug guard: create_single_invoice's remaining-to-invoice must
+        ignore cancelled amounts, else re-invoicing a cancelled installment
+        wrongly trips 'exceeds remaining balance'."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]  # single 900000, no plan
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        invoices, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        await service.cancel_invoice(
+            invoice_id=invoices[0].id, reason="redo",
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        # The full 900000 is invoiceable again (cancelled amount not counted).
+        new_inv, _ = await service.create_single_invoice(
+            fee_id=fee.id, amount=Decimal("900000"), due_date=due,
+            installment_no=1, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        assert new_inv.amount == Decimal("900000")
+
+    async def test_db_partial_unique_blocks_two_active(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """DB-level: two ACTIVE invoices on the same (fee_id, installment_no)
+        violate uq_invoice_fee_installment_active."""
+        from sqlalchemy.exc import IntegrityError
+
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        dup = Invoice(
+            fee_id=fee.id,
+            invoice_number="INV-TEST-DUP-0001",
+            installment_no=1,
+            amount=Decimal("900000"),
+            paid_amount=Decimal("0"),
+            penalty_amount=Decimal("0"),
+            status=InvoiceStatusEnum.draft.value,
+            due_date=due,
+        )
+        db.add(dup)
+        with pytest.raises(IntegrityError):
+            await db.flush()
+        await db.rollback()
+
+    async def test_race_integrity_error_maps_to_duplicate(
+        self, db, invoice_fixtures, admin_user, monkeypatch
+    ):
+        """Race backstop: when a concurrent INSERT wins between the active_only
+        pre-check and the flush, create_single_invoice maps the partial-unique
+        IntegrityError to a domain DuplicateResourceError (→ 409 at the router),
+        not a raw 500.
+
+        Simulated by stubbing the duplicate pre-check to 'see nothing' while a
+        real ACTIVE invoice for the same installment already exists.
+        """
+        from app.utils.exceptions import DuplicateResourceError
+
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]
+        unit_id = invoice_fixtures["unit_id"]
+        due = date.today() + timedelta(days=30)
+
+        await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=due, user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        async def _no_existing(*args, **kwargs):
+            return []
+
+        # Pre-check now "sees nothing", so create proceeds to the flush where the
+        # real active installment #1 trips the partial unique index.
+        monkeypatch.setattr(service.invoice_repo, "get_by_fee_id", _no_existing)
+
+        with pytest.raises(DuplicateResourceError):
+            await service.create_single_invoice(
+                fee_id=fee.id, amount=Decimal("100000"), due_date=due,
+                installment_no=1, user_id=admin_user.id, unit_id=unit_id,
+            )

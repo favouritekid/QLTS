@@ -28,6 +28,7 @@ from typing import List, Optional, Tuple, Callable
 import structlog
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -41,6 +42,7 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
+    DuplicateResourceError,
 )
 from app.config import settings
 
@@ -117,7 +119,9 @@ class InvoiceService:
             )
 
         # Check if invoices already exist
-        existing = await self.invoice_repo.get_by_fee_id(fee_id, unit_id)
+        existing = await self.invoice_repo.get_by_fee_id(
+            fee_id, unit_id, active_only=True
+        )
         if existing:
             raise BadRequest(
                 f"Invoices already exist for this fee. "
@@ -329,7 +333,9 @@ class InvoiceService:
             )
 
         # Check for duplicate installment
-        existing = await self.invoice_repo.get_by_fee_id(fee_id, unit_id)
+        existing = await self.invoice_repo.get_by_fee_id(
+            fee_id, unit_id, active_only=True
+        )
         for inv in existing:
             if inv.installment_no == installment_no:
                 raise BadRequest(
@@ -360,7 +366,17 @@ class InvoiceService:
         )
 
         self.db.add(invoice)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError as exc:
+            # Race: a concurrent create for the same (fee_id, installment_no)
+            # slipped past the active_only pre-check and won the INSERT; the
+            # partial unique index uq_invoice_fee_installment_active rejects
+            # this one. Map the raw DB error to a domain 409, not a 500.
+            await self.db.rollback()
+            raise DuplicateResourceError(
+                f"Invoice for installment #{installment_no} already exists"
+            ) from exc
         await self.db.refresh(invoice)
 
         # Update fee status if not already invoiced

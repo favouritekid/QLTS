@@ -22,8 +22,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, Date, DateTime, ForeignKey,
-    Integer, Numeric, String, Text, UniqueConstraint
+    CheckConstraint, Date, DateTime, ForeignKey, Index,
+    Integer, Numeric, String, Text, text
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -82,9 +82,15 @@ class Invoice(Base):
     __tablename__ = "invoice"
 
     __table_args__ = (
-        UniqueConstraint(
+        # PR-A: partial unique — chỉ ràng buộc (fee_id, installment_no) trên các
+        # invoice CHƯA hủy. Hóa đơn 'cancelled' không còn chiếm slot đợt → cho
+        # phép tạo lại đợt sau khi hủy (thay UniqueConstraint cứng cũ
+        # 'uq_invoice_fee_installment'). PR-F sẽ mở predicate thêm 'replaced'.
+        Index(
+            'uq_invoice_fee_installment_active',
             'fee_id', 'installment_no',
-            name='uq_invoice_fee_installment'
+            unique=True,
+            postgresql_where=text("status <> 'cancelled'"),
         ),
         CheckConstraint('amount > 0', name='chk_invoice_amount_positive'),
         CheckConstraint('paid_amount >= 0', name='chk_invoice_paid_amount_non_negative'),
