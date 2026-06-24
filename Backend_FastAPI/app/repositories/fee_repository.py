@@ -508,7 +508,8 @@ class InvoiceRepository(BaseRepository[Invoice]):
     async def get_by_fee_id(
         self,
         fee_id: int,
-        unit_id: Optional[int] = None
+        unit_id: Optional[int] = None,
+        active_only: bool = False,
     ) -> List[Invoice]:
         """
         Get all invoices for a fee.
@@ -516,6 +517,11 @@ class InvoiceRepository(BaseRepository[Invoice]):
         Args:
             fee_id: Fee ID
             unit_id: Filter by lead.unit_id (for IDOR protection)
+            active_only: When True, exclude cancelled invoices. Default False
+                keeps the legacy behaviour — display/audit callers must still
+                see cancelled rows. Only the duplicate-guard callers in
+                InvoiceService pass True so a cancelled installment no longer
+                blocks re-creating that installment (PR-A).
 
         Returns:
             List of invoices
@@ -530,6 +536,12 @@ class InvoiceRepository(BaseRepository[Invoice]):
             )
             .where(Invoice.fee_id == fee_id)
         )
+
+        if active_only:
+            # 'cancelled' is the only non-active invoice state today; the partial
+            # unique index uq_invoice_fee_installment_active uses the same
+            # predicate so this guard and the DB constraint stay in agreement.
+            query = query.where(Invoice.status != 'cancelled')
 
         # IDOR Filter
         if unit_id is not None:
