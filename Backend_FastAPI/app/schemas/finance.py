@@ -1097,3 +1097,44 @@ class FinanceDashboardStats(BaseModel):
     pending_refunds_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PAYMENT IMPORT (BULK VERIFY) SCHEMAS — BV-2
+# ==============================================================================
+
+class PaymentImportAllocationOut(BaseModel):
+    """Một phần phân bổ FIFO dự kiến của 1 dòng vào 1 đợt (invoice)."""
+    invoice_id: int
+    installment_no: int
+    amount: Decimal
+
+
+class PaymentImportRowOut(BaseModel):
+    """Kết quả đối chiếu 1 dòng file (preview)."""
+    row_no: int = Field(..., description="Số dòng trên bảng tính (header = dòng 1)")
+    status: str = Field(..., description="matched | warned | error")
+    message: Optional[str] = None
+    citizen_id: Optional[str] = None
+    profile_id: Optional[int] = None
+    fee_id: Optional[int] = None
+    amount: Optional[Decimal] = None
+    method_code: Optional[str] = None
+    payment_date: Optional[date] = None
+    reference: Optional[str] = None
+    allocations: List[PaymentImportAllocationOut] = Field(default_factory=list)
+
+
+class PaymentImportPreviewOut(BaseModel):
+    """Phản hồi pha 1 — preview (dry-run, CHƯA ghi tiền)."""
+    batch_id: int
+    academic_year: int
+    semester_no: int
+    file_name: str
+    status: str
+    row_count: int
+    matched_count: int
+    warned_count: int
+    failed_count: int
+    total_amount: Decimal
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)

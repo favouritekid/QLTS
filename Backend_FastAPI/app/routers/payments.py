@@ -21,26 +21,33 @@ Payment Flows:
    - POST /api/payments/callback/{gateway} - Gateway callback (IPN)
 """
 
+import io
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile,
+    status,
+)
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from app import database, models, schemas
 from app.core import deps
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, finance_scope_unit_id
+from app.core.deps import CasbinAuth, finance_scope_unit_id, require_finance_staff
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import PaymentService
 from app.services.payment_intent_service import PaymentIntentService
+from app.services import payment_import_service
 from app.repositories.payment_repository import PaymentRepository
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
     BusinessRuleViolation,
+    ConflictError,
 )
 
 log = structlog.get_logger(__name__)
@@ -637,8 +644,155 @@ async def payment_callback(
 
 
 # ==============================================================================
+# BULK PAYMENT IMPORT (auto-verify) — BV-2: template + preview (read-only)
+# ==============================================================================
+
+# Giới hạn kích thước file import (chống nuốt RAM / DoS); 5000 dòng × vài cột.
+_MAX_IMPORT_FILE_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/import/template",
+    summary="Tải file mẫu import thu học phí hàng loạt",
+)
+async def download_payment_import_template(
+    request: Request,
+    format: str = Query("xlsx", description="Định dạng: xlsx (khuyến nghị) hoặc csv"),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """File mẫu để kế toán điền số tiền đã thu offline → import tự xác minh.
+
+    Cấp batch (chọn khi import, KHÔNG có trong file): **Năm học + Học kỳ**.
+    Cột: Số CCCD · Họ và tên · Số tiền thu (VNĐ) · Ngày thu (dd/mm/yyyy) · Hình thức
+    (TM/CK) · Mã tham chiếu (tùy chọn) · Ghi chú (tùy chọn). Cột CCCD + Mã tham chiếu
+    định dạng TEXT để giữ số 0 đầu. Gate: Casbin (route grant) + finance staff.
+
+    Sinh file ở service (``build_template``) — router chỉ stream (CLAUDE.md rule 1).
+    """
+    content, media_type, filename = payment_import_service.build_template(format)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/import/preview",
+    response_model=finance_schemas.PaymentImportPreviewOut,
+    summary="Xem trước (dry-run) import thu học phí hàng loạt — KHÔNG ghi tiền",
+)
+async def preview_payment_import(
+    request: Request,
+    file: UploadFile = File(..., description="File .xlsx/.csv theo mẫu"),
+    academic_year: int = Form(
+        ..., ge=2020, le=2100, description="Năm học (cấp batch)"
+    ),
+    semester_no: int = Form(
+        ..., ge=1, le=12, description="Học kỳ (cấp batch, 1..12)"
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """Pha 1: đối chiếu từng dòng (CCCD → hồ sơ → học phí → đợt FIFO) READ-ONLY.
+
+    Tạo 1 lô ``preview`` (chống re-import qua file_sha256) và trả về phân loại
+    MATCHED / WARNING / ERROR + phân bổ FIFO dự kiến. **KHÔNG** tạo/ghi Payment —
+    việc ghi tiền nằm ở pha commit (BV-3).
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="File rỗng."
+        )
+    if len(content) > _MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File vượt giới hạn {_MAX_IMPORT_FILE_BYTES // (1024 * 1024)}MB.",
+        )
+
+    unit_id = finance_scope_unit_id(current_user)
+    try:
+        batch, preview = await payment_import_service.preview_import(
+            db,
+            content=content,
+            filename=file.filename or "import.xlsx",
+            academic_year=academic_year,
+            semester_no=semester_no,
+            created_by_id=current_user.id,
+            unit_id=unit_id,
+        )
+        await db.commit()
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    log.info(
+        "payment_import_preview",
+        batch_id=batch.id,
+        academic_year=academic_year,
+        semester_no=semester_no,
+        matched=batch.matched_count,
+        warned=batch.warned_count,
+        failed=batch.failed_count,
+        user_id=current_user.id,
+    )
+    return _build_payment_import_preview(batch, preview)
+
+
+# ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
+
+def _build_payment_import_preview(
+    batch, preview,
+) -> finance_schemas.PaymentImportPreviewOut:
+    """Map ``(PaymentImportBatch, PreviewResult)`` → schema response của pha preview.
+
+    Phân bổ FIFO dự kiến (``allocations``) chỉ có trong ``preview`` in-memory (KHÔNG
+    persist vào row) nên build từ ``preview.rows`` thay vì từ ORM rows.
+    """
+    return finance_schemas.PaymentImportPreviewOut(
+        batch_id=batch.id,
+        academic_year=batch.academic_year,
+        semester_no=batch.semester_no,
+        file_name=batch.file_name,
+        status=batch.status,
+        row_count=batch.row_count,
+        matched_count=batch.matched_count,
+        warned_count=batch.warned_count,
+        failed_count=batch.failed_count,
+        total_amount=batch.total_amount,
+        rows=[
+            finance_schemas.PaymentImportRowOut(
+                row_no=r.row_no,
+                status=r.status,
+                message=r.message,
+                citizen_id=r.citizen_id,
+                profile_id=r.profile_id,
+                fee_id=r.fee_id,
+                amount=r.amount,
+                method_code=r.method_code,
+                payment_date=r.payment_date,
+                reference=r.reference,
+                allocations=[
+                    finance_schemas.PaymentImportAllocationOut(
+                        invoice_id=a.invoice_id,
+                        installment_no=a.installment_no,
+                        amount=a.amount,
+                    )
+                    for a in r.allocations
+                ],
+            )
+            for r in preview.rows
+        ],
+    )
+
 
 def _compute_payment_review_flags(
     payment, current_user_id: Optional[int], current_user_role: str
