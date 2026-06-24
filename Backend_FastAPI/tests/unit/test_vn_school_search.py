@@ -241,3 +241,83 @@ async def test_search_sql_injection_safe(seed_schools, db):
     # '%' should not match everything if escaped
     rows, total = await svc.search_schools(query="100% nothing", limit=10)
     assert total == 0  # literal "100% nothing" not in any school name
+
+
+@pytest.mark.asyncio
+async def test_search_ranking_prefix_and_word_boundary_first(db):
+    """Relevance ranking: prefix-match > word-boundary > mid-word, then shorter
+    name. Với ORDER BY name thuần, trường đứng đầu alphabet sẽ thắng bất kể độ
+    khớp — bug gốc khiến "THPT <tên>" bị vùi sau DTNT/GDNN/PT/THCS."""
+    await db.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+    db.add_all(
+        [
+            # word-boundary: " Sáng Tạo" sau tiền tố THPT
+            VnSchool(
+                moet_province_code="099", moet_school_code="R001",
+                name="THPT Sáng Tạo", province="Test", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+            # prefix: tên bắt đầu ngay bằng query
+            VnSchool(
+                moet_province_code="099", moet_school_code="R002",
+                name="Sáng Tạo Quốc Tế", province="Test", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+            # mid-word: "sang tao" nằm giữa từ, không có space đứng trước
+            VnSchool(
+                moet_province_code="099", moet_school_code="R003",
+                name="ABCSáng Tạo Center", province="Test", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+        ]
+    )
+    await db.flush()
+
+    svc = VnSchoolService(db)
+    rows, total = await svc.search_schools(query="Sáng Tạo", limit=10)
+    assert total == 3
+    names = [r["name"] for r in rows]
+    # prefix-match đứng đầu, mid-word đứng cuối
+    assert names[0] == "Sáng Tạo Quốc Tế"
+    assert names[-1] == "ABCSáng Tạo Center"
+    # word-boundary ("THPT Sáng Tạo") xếp trên mid-word
+    assert names.index("THPT Sáng Tạo") < names.index("ABCSáng Tạo Center")
+
+
+@pytest.mark.asyncio
+async def test_search_duplicate_names_paginate_stable_by_id(db):
+    """Trùng tên giữa các tỉnh (phổ biến: "THPT Lê Quý Đôn" ~48 tỉnh) → cùng
+    relevance + length + name; id là tie-break duy nhất giữ thứ tự ổn định,
+    phân trang limit/offset không lặp hay bỏ sót row."""
+    await db.execute(text("CREATE EXTENSION IF NOT EXISTS unaccent"))
+    db.add_all(
+        [
+            VnSchool(
+                moet_province_code="091", moet_school_code="D001",
+                name="THPT Lê Quý Đôn", province="Tỉnh A", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+            VnSchool(
+                moet_province_code="092", moet_school_code="D001",
+                name="THPT Lê Quý Đôn", province="Tỉnh B", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+            VnSchool(
+                moet_province_code="093", moet_school_code="D001",
+                name="THPT Lê Quý Đôn", province="Tỉnh C", level="THPT",
+                is_dtnt=False, is_active=True,
+            ),
+        ]
+    )
+    await db.flush()
+
+    svc = VnSchoolService(db)
+    page1, total = await svc.search_schools(query="Lê Quý Đôn", limit=2, offset=0)
+    page2, _ = await svc.search_schools(query="Lê Quý Đôn", limit=2, offset=2)
+    assert total == 3
+    ids = [r["id"] for r in page1] + [r["id"] for r in page2]
+    # Không lặp / không bỏ sót dù cả 3 row trùng (relevance, length, name)
+    assert len(ids) == 3
+    assert len(set(ids)) == 3
+    # id tie-break → thứ tự tăng dần ổn định
+    assert ids == sorted(ids)

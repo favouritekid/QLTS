@@ -82,7 +82,10 @@ export function VnSchoolPicker({
   const { data, isLoading } = useVnSchoolSearch({
     q: debouncedQuery,
     level: levelFilter,
-    limit: 20,
+    // 50 (không phải 20): danh mục có ~4900 trường, nhiều trường trùng tên ở
+    // các tỉnh khác nhau (vd "THPT Lê Quý Đôn" ~48 tỉnh). 20 cắt mất trường
+    // người dùng cần dù backend đã rank theo độ liên quan. Backend max = 100.
+    limit: 50,
   })
 
   const handleSelect = (school: VnSchoolSearchItem) => {
