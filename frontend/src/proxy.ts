@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
 import { hasAdminAccess, hasFinanceAccess } from "@/lib/config/roles";
+import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -129,10 +130,11 @@ export function proxy(request: NextRequest) {
   const accessToken = request.cookies.get("access_token")?.value;
 
   if (!accessToken) {
-    // Expected for unauthenticated visitors — redirect silently
-    const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("redirect", pathname);
-    return NextResponse.redirect(loginUrl);
+    // Expected for unauthenticated visitors — redirect silently, giữ cả query
+    // (nhất quán với nhánh token invalid/expired bên dưới).
+    return NextResponse.redirect(
+      new URL(buildLoginRedirect(pathname + request.nextUrl.search), request.url),
+    );
   }
 
   // ========================================
@@ -144,8 +146,10 @@ export function proxy(request: NextRequest) {
   if (!payload) {
     console.warn(`[Proxy] ❌ Invalid token format for: ${pathname}`);
 
-    // Clear invalid cookie and redirect
-    const response = NextResponse.redirect(new URL("/login", request.url));
+    // Clear invalid cookie and redirect (giữ return-url để login xong quay lại)
+    const response = NextResponse.redirect(
+      new URL(buildLoginRedirect(pathname + request.nextUrl.search), request.url),
+    );
     response.cookies.delete("access_token");
     return response;
   }
@@ -154,8 +158,10 @@ export function proxy(request: NextRequest) {
   if (isTokenExpired(accessToken)) {
     console.warn(`[Proxy] ❌ Expired token for: ${pathname}`);
 
-    // Clear expired cookie and redirect
-    const response = NextResponse.redirect(new URL("/login", request.url));
+    // Clear expired cookie and redirect (giữ return-url để login xong quay lại)
+    const response = NextResponse.redirect(
+      new URL(buildLoginRedirect(pathname + request.nextUrl.search), request.url),
+    );
     response.cookies.delete("access_token");
     return response;
   }

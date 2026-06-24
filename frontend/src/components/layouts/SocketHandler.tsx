@@ -17,6 +17,7 @@ import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
 import { pipelineKeys } from "@/hooks/usePipeline";
 import { isSafeUrl } from "@/lib/utils";
 import { bumpSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
+import { useProactiveTokenRefresh } from "@/hooks/useProactiveTokenRefresh";
 import type { SuspiciousLoginSocketPayload } from "@/types/api.types";
 
 // =============================================================================
@@ -52,6 +53,9 @@ export const INVALIDATION_DEBOUNCE_MS = 300; // 300ms debounce
 export function SocketHandler() {
   // ✅ PERF FIX: Granular selectors to avoid re-registering 30+ socket listeners on unrelated store changes
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
+  // Proactive refresh access token cho tab đang hoạt động (giữ phiên sống,
+  // giảm 401 + tránh bị middleware đá ra login sau khi access hết hạn).
+  useProactiveTokenRefresh(isAuthenticated);
   const logout = useAuthStore(s => s.logout);
   const user = useAuthStore(s => s.user);
   const addNotification = useAddNotification();

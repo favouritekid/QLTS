@@ -21,20 +21,13 @@ import React, { useEffect } from "react";
 import { AxiosError } from "axios";
 import { triggerBannerCheck, triggerSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
+import { isValidRedirect, buildLoginRedirect } from "@/lib/auth/login-redirect";
 
 /**
  * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
  */
 export interface UseAuthOptions {
   initialData?: User;
-}
-
-function isValidRedirect(url: string | null): url is string {
-  if (!url) return false;
-  if (!url.startsWith('/')) return false;
-  if (url.startsWith('//')) return false;
-  if (url.includes(':')) return false;
-  return true;
 }
 
 export function useAuth(options?: UseAuthOptions) {
@@ -485,7 +478,12 @@ export function useAuth(options?: UseAuthOptions) {
         toast.error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         logoutStore();
         queryClient.clear();
-        router.push("/login");
+        router.push(
+          buildLoginRedirect(
+            window.location.pathname + window.location.search,
+            { reason: "session_expired" },
+          ),
+        );
       } else {
         toast.error("Không thể tải thông tin người dùng.");
       }
