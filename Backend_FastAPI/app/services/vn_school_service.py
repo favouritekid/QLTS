@@ -29,7 +29,7 @@ import csv
 import io
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.vn_school import VnSchool, VnSchoolKvAssignment
@@ -117,6 +117,23 @@ class VnSchoolService:
             .scalar_subquery()
         )
 
+        # Relevance ranking (thay cho ORDER BY name thuần). Không có nó, sắp xếp
+        # alphabet vùi các trường "THPT <tên>" phổ biến xuống sau hàng loạt tiền
+        # tố đứng trước theo bảng chữ cái (DTNT/GDNN/PT/TH-/THCS...). Với limit
+        # ~50, trường người dùng cần có thể không bao giờ xuất hiện (đo thực tế:
+        # q="nguyen" khớp 438 trường nhưng dòng "THPT ..." đầu tiên nằm ở vị trí
+        # alphabet 40). Ưu tiên:
+        #   0 = tên bắt đầu bằng q (prefix)
+        #   1 = q ở đầu một từ (word boundary — phổ biến nhất khi gõ tên riêng)
+        #   2 = q ở giữa từ
+        # rồi tên ngắn lên trước (khớp sát hơn), cuối cùng alphabet cho ổn định.
+        name_unaccent = func.unaccent(VnSchool.name)
+        relevance = case(
+            (name_unaccent.ilike(func.unaccent(f"{q_escaped}%")), 0),
+            (name_unaccent.ilike(func.unaccent(f"% {q_escaped}%")), 1),
+            else_=2,
+        )
+
         stmt = (
             select(
                 VnSchool.id,
@@ -131,7 +148,7 @@ class VnSchoolService:
                 current_kv_subq.label("current_kv"),
             )
             .where(*filters)
-            .order_by(VnSchool.name)
+            .order_by(relevance, func.length(VnSchool.name), VnSchool.name)
             .limit(limit)
             .offset(offset)
         )
