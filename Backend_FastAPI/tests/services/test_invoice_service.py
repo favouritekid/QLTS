@@ -721,3 +721,131 @@ class TestInvoiceRecreateAfterCancelPRA:
                 fee_id=fee.id, amount=Decimal("100000"), due_date=due,
                 installment_no=1, user_id=admin_user.id, unit_id=unit_id,
             )
+
+
+# =============================================================================
+# PR-B: FEE.STATUS RECOMPUTE ON CANCEL (Nhóm A balance)
+# =============================================================================
+
+class TestFeeRecomputeOnCancelPRB:
+    """PR-B: cancelling an invoice recomputes the parent Fee.status from the
+    remaining ACTIVE invoices (+ paid_amount), WITHOUT touching final_amount."""
+
+    async def test_cancel_one_of_many_keeps_invoiced(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Cancel one of several unpaid installments → Fee stays 'invoiced'
+        (still has active invoices, paid=0); final_amount NOT auto-reduced."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        original_final = fee.final_amount
+        invs, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        await service.cancel_invoice(invs[1].id, "drop one", admin_user.id, unit_id)
+        await db.commit()
+        await db.refresh(fee)
+
+        assert fee.status == FeeStatusEnum.invoiced.value
+        assert fee.final_amount == original_final
+
+    async def test_cancel_all_returns_calculated(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Cancel every invoice (paid=0) → Fee back to 'calculated'; final_amount
+        unchanged (real reduction is a separate audited flow)."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        original_final = fee.final_amount
+        invs, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        for inv in invs:
+            await service.cancel_invoice(inv.id, "drop all", admin_user.id, unit_id)
+        await db.commit()
+        await db.refresh(fee)
+
+        assert fee.status == FeeStatusEnum.calculated.value
+        assert fee.final_amount == original_final
+
+    async def test_recompute_status_paid_branches(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """paid_amount > 0 → 'partial'; paid >= billable → 'paid'. Never overload
+        'partial' with "đã lập một phần"."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        fee.paid_amount = Decimal("100000")  # > 0, < billable
+        await db.flush()
+        await service.recompute_fee_from_invoices(fee.id, unit_id)
+        await db.refresh(fee)
+        assert fee.status == FeeStatusEnum.partial.value
+
+        fee.paid_amount = fee.final_amount - fee.waived_amount  # >= billable
+        await db.flush()
+        await service.recompute_fee_from_invoices(fee.id, unit_id)
+        await db.refresh(fee)
+        assert fee.status == FeeStatusEnum.paid.value
+
+    async def test_invariant_over_target_raises(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Σ active invoice.amount must not exceed final_amount - waived."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+
+        # Raw-insert an extra ACTIVE invoice (distinct installment_no) pushing the
+        # active total over final_amount, bypassing the service guard.
+        over = Invoice(
+            fee_id=fee.id, invoice_number="INV-TEST-OVER-0001",
+            installment_no=99, amount=Decimal("1000000"),
+            paid_amount=Decimal("0"), penalty_amount=Decimal("0"),
+            status=InvoiceStatusEnum.draft.value,
+            due_date=date.today() + timedelta(days=30),
+        )
+        db.add(over)
+        await db.flush()
+
+        with pytest.raises(BusinessRuleViolation):
+            await service.recompute_fee_from_invoices(fee.id, unit_id)
+        await db.rollback()
+
+    async def test_cancel_blocked_when_invoice_paid(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Existing guard preserved: an invoice with paid_amount > 0 cannot be
+        cancelled (recompute never runs on a paid installment)."""
+        service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id,
+        )
+        await db.commit()
+        invs[0].paid_amount = Decimal("1")
+        await db.flush()
+
+        with pytest.raises(BusinessRuleViolation):
+            await service.cancel_invoice(invs[0].id, "x", admin_user.id, unit_id)

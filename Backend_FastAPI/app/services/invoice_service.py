@@ -550,6 +550,11 @@ class InvoiceService:
 
         await self.db.flush()
 
+        # Nhóm A (PR-B): cancelling an invoice must not leave the parent Fee
+        # stranded ('invoiced' while fewer invoices remain billed). Recompute
+        # Fee.status from the remaining active invoices in the SAME transaction.
+        await self.recompute_fee_from_invoices(invoice.fee_id, unit_id)
+
         log.info(
             "invoice_cancelled",
             invoice_id=invoice_id,
@@ -559,6 +564,69 @@ class InvoiceService:
         )
 
         return invoice, None
+
+    async def recompute_fee_from_invoices(
+        self,
+        fee_id: int,
+        unit_id: Optional[int] = None,
+    ) -> Fee:
+        """Recompute ``Fee.status`` from its ACTIVE (non-cancelled) invoices.
+
+        Nhóm A balance fix (PR-B): ``cancel_invoice`` doesn't touch the Fee, so
+        after a cancel the Fee can drift (status stuck at 'invoiced' while fewer
+        invoices remain billed). Call this in the SAME transaction after a cancel
+        (or any path that changes the active-invoice set) to keep the Fee
+        consistent.
+
+        Status rules (there is no 'partially invoiced' enum — do NOT overload
+        'partial', which means "đã thu một phần"):
+        - ``paid_amount > 0``  -> 'paid' if remaining <= 0 else 'partial'
+        - ``paid_amount == 0`` -> 'invoiced' if any active invoice else 'calculated'
+        Terminal statuses ('waived', 'cancelled') are left untouched — those are
+        deliberate decisions, not a side-effect of cancelling one installment.
+
+        Does NOT change ``final_amount`` / ``waived_amount`` / ``paid_amount`` — a
+        real reduction (giảm trừ) is a separate audited flow. Enforces the balance
+        invariant ``Σ active invoice.amount <= final_amount - waived_amount``.
+        """
+        fee = await self.fee_repo.get_for_update(fee_id, unit_id)
+        if not fee:
+            raise ResourceNotFoundError("Fee not found")
+
+        active = await self.invoice_repo.get_by_fee_id(
+            fee_id, unit_id, active_only=True
+        )
+        total_active = sum((inv.amount for inv in active), Decimal("0"))
+        target = fee.final_amount - fee.waived_amount
+
+        # Invariant: active invoices must never over-bill the fee.
+        if total_active > target:
+            raise BusinessRuleViolation(
+                f"Active invoices ({total_active}) exceed fee billable amount "
+                f"({target}) for fee {fee_id}"
+            )
+
+        # Terminal statuses are deliberate — leave them.
+        if fee.status in (
+            FeeStatusEnum.waived.value,
+            FeeStatusEnum.cancelled.value,
+        ):
+            return fee
+
+        remaining = target - fee.paid_amount
+        if fee.paid_amount > 0:
+            fee.status = (
+                FeeStatusEnum.paid.value
+                if remaining <= 0
+                else FeeStatusEnum.partial.value
+            )
+        elif active:
+            fee.status = FeeStatusEnum.invoiced.value
+        else:
+            fee.status = FeeStatusEnum.calculated.value
+
+        await self.db.flush()
+        return fee
 
     async def apply_penalty(
         self,
