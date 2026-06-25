@@ -39,6 +39,7 @@ from app.models.finance import (
     Fee,
     Invoice,
     FeeStatusEnum,
+    InvoiceStatusEnum,
     PAYABLE_INVOICE_STATUSES,
     Payment,
     PaymentImportBatch,
@@ -48,6 +49,8 @@ from app.models.finance import (
     PaymentMethod,
     PaymentStatusEnum,
     PaymentTransaction,
+    RefundRequest,
+    RefundStatusEnum,
     TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
@@ -1259,6 +1262,219 @@ async def commit_batch(
         # Lead-sync (projection) đã làm trong body. Nếu sau cần báo phụ huynh: thêm 1
         # notif GỘP per-hồ-sơ + PHẢI seed notification_rule (nếu không sẽ fire-zero
         # theo fail-closed dispatcher). Để trống là CỐ Ý, không phải thiếu sót.
+        return None
+
+    return result, post_commit
+
+
+# ---------------------------------------------------------------------------
+# BV-3.5 — Void (đảo) lô đã committed: rút lại tiền + mở lại file để re-import
+# ---------------------------------------------------------------------------
+@dataclass
+class VoidResult:
+    batch_id: int
+    reversed_count: int  # số Payment đã đảo (rút lại)
+    reversed_amount: Decimal  # tổng tiền đã rút
+
+
+async def void_batch(
+    db: AsyncSession,
+    *,
+    batch_id: int,
+    user_id: int,
+    unit_id: Optional[int],
+    reason: str,
+) -> Tuple[VoidResult, Callable]:
+    """Đảo (void) 1 lô đã ``committed`` — rút lại MỌI Payment bulk đã ghi.
+
+    Mỗi Payment 'verified' của lô → reverse invoice/fee.paid_amount (về 'issued' nếu
+    hết, 'partial' nếu còn) + ``PaymentTransaction(type=reversal, amount âm)`` +
+    Payment → 'refunded' (constraint chỉ có refunded; ``type=reversal`` phân biệt với
+    customer-refund ở ledger). Batch → 'void' → file_sha256 thoát partial-unique →
+    re-import được.
+
+    ATOMIC (KHÔNG savepoint per-row): void phải đảo TRỌN lô — 1 lỗi → rollback cả
+    (router get_db không commit). Lock TẤT CẢ invoice (asc id) RỒI fee (asc id) —
+    khớp lock-order invoice→fee, tránh deadlock ABBA với verify/commit đồng thời.
+
+    ⚠️ KHÔNG tự đảo lead-status (sts10→cũ): projection 1 chiều, không lưu status cũ
+    → điều chỉnh lead thủ công nếu cần (void là thao tác kế toán hiếm).
+    """
+    from app.services.payment_service import reverse_payment_balances
+
+    batch = (
+        await db.execute(
+            select(PaymentImportBatch)
+            .where(PaymentImportBatch.id == batch_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if batch is None:
+        raise ResourceNotFoundError("Không tìm thấy lô import")
+    # IDOR: void unit-scope theo đơn vị NGƯỜI TẠO (khớp commit/list). manager unit-
+    # scope; admin (unit_id=None) → mọi lô. accountant bị Casbin chặn (void=mgr/admin).
+    if unit_id is not None:
+        creator_unit = (
+            await db.execute(
+                select(models.User.unit_id).where(
+                    models.User.id == batch.created_by_id
+                )
+            )
+        ).scalar_one_or_none()
+        if creator_unit != unit_id:
+            raise ResourceNotFoundError("Không tìm thấy lô import")
+    if batch.status != PaymentImportBatchStatusEnum.committed.value:
+        raise ConflictError(
+            f"Chỉ đảo (void) được lô đã committed (hiện: {batch.status})"
+        )
+
+    fee_repo = FeeRepository(db)
+    inv_repo = InvoiceRepository(db)
+
+    rows = list(
+        (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    payment_ids = sorted({pid for r in rows for pid in (r.payment_ids or [])})
+    # Lock Payment rows FOR UPDATE (asc id) TRƯỚC khi check refund + đảo — serialize
+    # với refund-creation (request_refund cũng khóa Payment, of=Payment): refund tạo
+    # đồng thời phải CHỜ → sau void thấy status='refunded' → bị chặn (chỉ refund
+    # 'verified'). order_by(id) cho thứ tự khóa xác định (chống void↔void deadlock).
+    payments = (
+        list(
+            (
+                await db.execute(
+                    select(Payment)
+                    .where(Payment.id.in_(payment_ids))
+                    .order_by(Payment.id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if payment_ids
+        else []
+    )
+
+    # Lock TẤT CẢ invoice (asc id) RỒI TẤT CẢ fee (asc id) — deadlock-safe (không giữ
+    # khóa fee khi đi xin khóa invoice). KHÔNG db.refresh: void không pre-load (Payment.
+    # invoice lazy='select') nên get_for_update là lần nạp ĐẦU → cột đã tươi.
+    invoice_ids = sorted({p.invoice_id for p in payments})
+    inv_by_id: Dict[int, Invoice] = {}
+    for iid in invoice_ids:
+        li = await inv_repo.get_for_update(iid, unit_id)
+        if li is None:
+            raise BusinessRuleViolation(
+                f"không khóa được hóa đơn #{iid} (IDOR / đã đổi)"
+            )
+        inv_by_id[iid] = li
+    fee_ids = sorted({inv.fee_id for inv in inv_by_id.values()})
+    fee_by_id: Dict[int, Fee] = {}
+    for fid in fee_ids:
+        lf = await fee_repo.get_for_update(fid, unit_id)
+        if lf is None:
+            raise BusinessRuleViolation(f"không khóa được học phí #{fid}")
+        fee_by_id[fid] = lf
+
+    # (#3) Guard out-of-band: invoice/fee bị HỦY/MIỄN giữa commit→void (vd luồng gộp
+    # đợt SQL) → KHÔNG resurrect (reverse_payment_balances set 'issued'/'partial' vô
+    # điều kiện → hồi sinh hóa đơn đã hủy / IntegrityError). Refuse → xử lý thủ công.
+    for inv in inv_by_id.values():
+        if inv.status == InvoiceStatusEnum.cancelled.value:
+            raise BusinessRuleViolation(
+                f"hóa đơn #{inv.id} đã bị hủy giữa commit→void — xử lý thủ công"
+            )
+    for fee in fee_by_id.values():
+        if fee.status in (
+            FeeStatusEnum.cancelled.value,
+            FeeStatusEnum.waived.value,
+        ):
+            raise BusinessRuleViolation(
+                f"học phí #{fee.id} đã {fee.status} giữa commit→void — xử lý thủ công"
+            )
+
+    # (P1) Guard refund: payment trong lô đã/đang được hoàn lẻ (RefundRequest non-
+    # rejected) → KHÔNG đảo (trừ tiền 2 LẦN — refund đã rút phần đó). Dưới khóa fee nên
+    # refund-processing đồng thời (cũng khóa fee) bị serialize. Khe tạo refund SAU check
+    # bị chặn bởi guard payment.status='verified' ở process_approved_refund.
+    if payment_ids:
+        live_refund = (
+            await db.execute(
+                select(RefundRequest.id)
+                .where(
+                    RefundRequest.payment_id.in_(payment_ids),
+                    RefundRequest.status != RefundStatusEnum.rejected.value,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if live_refund is not None:
+            raise ConflictError(
+                "Lô có payment đã/đang được hoàn tiền (refund) — xử lý refund "
+                "trước khi đảo lô"
+            )
+
+    now = datetime.now(timezone.utc)
+    reversed_count = 0
+    reversed_amount = Decimal("0")
+    for p in payments:
+        # Idempotent: Payment đã 'refunded' (đã đảo/hoàn lẻ trước) → bỏ qua (không
+        # đảo 2 lần).
+        if p.status != PaymentStatusEnum.verified.value:
+            continue
+        inv = inv_by_id.get(p.invoice_id)
+        fee = fee_by_id.get(inv.fee_id) if inv is not None else None
+        if inv is None or fee is None:
+            raise BusinessRuleViolation(f"thiếu hóa đơn/học phí cho payment #{p.id}")
+        bal_before, fee_remaining = reverse_payment_balances(
+            invoice=inv, fee=fee, amount=p.amount
+        )
+        p.status = PaymentStatusEnum.refunded.value
+        db.add(
+            PaymentTransaction(
+                payment_id=p.id,
+                fee_id=fee.id,
+                transaction_type=TransactionTypeEnum.reversal.value,
+                amount=-p.amount,
+                balance_before=bal_before,
+                balance_after=fee_remaining,
+                external_reference=p.reference_code,
+                gateway_response={
+                    "verification_mode": "bulk_void",
+                    "batch_id": batch_id,
+                    "voided_by_id": user_id,
+                },
+                idempotency_key=f"bulkvoid:{batch_id}:{p.id}",
+                performed_by_id=user_id,
+                notes=f"Void lô import #{batch_id}. Lý do: {reason}"[:1000],
+            )
+        )
+        reversed_count += 1
+        reversed_amount += p.amount
+
+    batch.status = PaymentImportBatchStatusEnum.void.value
+    batch.voided_at = now
+    batch.void_reason = (reason or "")[:1000]
+    # (#4) Lịch sử lô phản ánh tiền THỰC còn lại = đã thu − đã đảo (full void → 0),
+    # tránh batch 'void' vẫn hiện total như còn thu đủ.
+    batch.total_amount = batch.total_amount - reversed_amount
+    if batch.total_amount < Decimal("0"):
+        batch.total_amount = Decimal("0")
+    await db.flush()
+
+    result = VoidResult(
+        batch_id=batch_id,
+        reversed_count=reversed_count,
+        reversed_amount=reversed_amount,
+    )
+
+    async def post_commit() -> None:
         return None
 
     return result, post_commit

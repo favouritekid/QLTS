@@ -26,8 +26,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
 from fastapi import (
-    APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile,
-    status,
+    APIRouter, Body, Depends, File, Form, HTTPException, Query, Request,
+    UploadFile, status,
 )
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,7 +36,12 @@ import structlog
 from app import database, models, schemas
 from app.core import deps
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, finance_scope_unit_id, require_finance_staff
+from app.core.deps import (
+    CasbinAuth,
+    finance_scope_unit_id,
+    require_admin_or_manager,
+    require_finance_staff,
+)
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.payment_service import PaymentService
@@ -794,6 +799,63 @@ async def commit_payment_import(
     )
     batch, rows = await payment_import_service.load_batch_with_rows(db, batch_id)
     return _build_payment_import_commit(result, batch, rows)
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/import/{batch_id}/void",
+    response_model=finance_schemas.PaymentImportVoidOut,
+    summary="Đảo (void) lô import đã ghi tiền — rút lại toàn bộ Payment",
+)
+async def void_payment_import(
+    request: Request,
+    batch_id: int,
+    reason: str = Body(
+        ..., embed=True, min_length=3, max_length=500,
+        description="Lý do đảo lô (bắt buộc, lưu audit)",
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _mgr: models.User = Depends(require_admin_or_manager),
+):
+    """Đảo lô đã committed: rút lại invoice/fee.paid_amount + Payment→refunded +
+    PaymentTransaction reversal; batch→void (mở lại file_sha256 để re-import). Gate
+    manager/admin (CAO HƠN finance staff — accountant KHÔNG được). Lô chưa committed
+    → 409.
+    """
+    unit_id = finance_scope_unit_id(current_user)
+    try:
+        result, callback = await payment_import_service.void_batch(
+            db,
+            batch_id=batch_id,
+            user_id=current_user.id,
+            unit_id=unit_id,
+            reason=reason,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except (BusinessRuleViolation, BadRequest) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    log.info(
+        "payment_import_void",
+        batch_id=batch_id,
+        reversed=result.reversed_count,
+        amount=str(result.reversed_amount),
+        user_id=current_user.id,
+    )
+    return finance_schemas.PaymentImportVoidOut(
+        batch_id=result.batch_id,
+        status="void",
+        reversed_count=result.reversed_count,
+        reversed_amount=result.reversed_amount,
+        void_reason=reason,
+    )
 
 
 @limiter.limit(RateLimits.DATA_READ)

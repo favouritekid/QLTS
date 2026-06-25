@@ -1152,6 +1152,15 @@ class PaymentImportCommitOut(BaseModel):
     rows: List[PaymentImportRowOut] = Field(default_factory=list)
 
 
+class PaymentImportVoidOut(BaseModel):
+    """Phản hồi đảo (void) lô — ĐÃ rút lại tiền (BV-3.5)."""
+    batch_id: int
+    status: str  # void
+    reversed_count: int = Field(..., description="Số Payment đã đảo")
+    reversed_amount: Decimal = Field(..., description="Tổng tiền đã rút lại")
+    void_reason: Optional[str] = None
+
+
 class PaymentImportBatchSummaryOut(BaseModel):
     """1 dòng lịch sử lô import."""
     id: int

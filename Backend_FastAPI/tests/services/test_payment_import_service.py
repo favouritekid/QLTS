@@ -1431,6 +1431,291 @@ class TestCommitBatch:
         assert pay.reference_code == "-PT-2026-001"  # KHÔNG có dấu ' đầu
 
 
+class TestVoidBatch:
+    async def _commit_one(self, db, deps, importer_id):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, deps, importer_id=importer_id)
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=importer_id, unit_id=None
+        )
+        await db.commit()
+        return batch_id
+
+    async def test_void_reverses_payment(self, db, seeded_dependencies, admin_user):
+        # §10 Void: đảo lô → trừ lại paid_amount, reverse transaction, recompute status
+        batch_id = await self._commit_one(db, seeded_dependencies, admin_user.id)
+        result, _cb = await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None,
+            reason="nhập sai hồ sơ",
+        )
+        await db.commit()
+
+        assert result.reversed_count == 1
+        assert result.reversed_amount == Decimal("10000000")
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "void" and b.voided_at is not None
+        assert b.void_reason == "nhập sai hồ sơ"
+
+        pay = (await db.execute(select(Payment))).scalars().first()
+        assert pay.status == "refunded"  # rút lại → loại khỏi sum verified
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        assert inv.paid_amount == Decimal("0")
+        assert inv.status == "issued"  # mở lại để thu tiếp
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        assert fee.paid_amount == Decimal("0")
+        assert fee.status == "invoiced"
+
+        rev = (
+            (
+                await db.execute(
+                    select(PaymentTransaction).where(
+                        PaymentTransaction.transaction_type == "reversal"
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        assert rev is not None
+        assert rev.amount == Decimal("-10000000")  # âm
+        assert rev.idempotency_key == f"bulkvoid:{batch_id}:{pay.id}"
+
+    async def test_void_only_committed_batch(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Lô 'preview' (chưa commit) → KHÔNG void được
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=admin_user.id
+        )
+        batch_id = batch.id
+        await db.commit()
+        with pytest.raises(ConflictError):
+            await pis.void_batch(
+                db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x"
+            )
+
+    async def test_revoid_rejected(self, db, seeded_dependencies, admin_user):
+        # void 2 lần → lần 2 ConflictError (status=void ≠ committed)
+        batch_id = await self._commit_one(db, seeded_dependencies, admin_user.id)
+        await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x"
+        )
+        await db.commit()
+        with pytest.raises(ConflictError):
+            await pis.void_batch(
+                db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x"
+            )
+
+    async def test_void_frees_file_for_reimport(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Sau void, file_sha256 thoát partial-unique → re-import tạo batch MỚI
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        cid = "001234567890"
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id=cid,
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                [cid, "Nguyễn Văn An", "10.000.000", "05/09/2026", "TM", "", ""],
+            ]
+        )
+        b1, _ = await pis.preview_import(
+            db, content=content, filename="thu.csv", academic_year=2026,
+            semester_no=1, created_by_id=admin_user.id, unit_id=None,
+        )
+        b1_id = b1.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=b1_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        await pis.void_batch(
+            db, batch_id=b1_id, user_id=admin_user.id, unit_id=None, reason="x"
+        )
+        await db.commit()
+        # re-import cùng file → KHÔNG ConflictError (batch cũ đã void) → batch mới
+        b2, _ = await pis.preview_import(
+            db, content=content, filename="thu.csv", academic_year=2026,
+            semester_no=1, created_by_id=admin_user.id, unit_id=None,
+        )
+        await db.commit()
+        assert b2.id != b1_id
+
+    async def test_void_cross_unit_rejected(
+        self, db, seeded_dependencies, second_unit, officer_user, admin_user
+    ):
+        # manager đơn vị khác void lô đơn vị 1001 → 404 (không poison)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=officer_user.id
+        )  # creator unit 1001
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        with pytest.raises(ResourceNotFoundError):
+            await pis.void_batch(
+                db, batch_id=batch_id, user_id=admin_user.id,
+                unit_id=second_unit.id, reason="x",
+            )
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "committed"  # không bị void nhầm
+
+    async def test_void_partial_paid_invoice(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # #9: nhánh 'partial' của reverse — invoice còn paid khác sau khi đảo bulk
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "partial", "4000000", "0")],  # đã trả 4tr trước
+        )
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["001234567890", "Nguyễn Văn An", "6.000.000", "05/09/2026", "TM",
+                 "", ""],
+            ]
+        )
+        batch, _ = await pis.preview_import(
+            db, content=content, filename="thu.csv", academic_year=2026,
+            semester_no=1, created_by_id=admin_user.id, unit_id=None,
+        )
+        bid = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=bid, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()  # invoice paid = 10tr (paid)
+        await pis.void_batch(
+            db, batch_id=bid, user_id=admin_user.id, unit_id=None, reason="x"
+        )
+        await db.commit()
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        assert inv.paid_amount == Decimal("4000000")  # còn 4tr (paid trước, KHÔNG đảo)
+        assert inv.status == "partial"  # nhánh partial, KHÔNG về issued
+
+    async def test_void_multi_invoice(self, db, seeded_dependencies, admin_user):
+        # #10: 1 dòng trải 2 đợt → 2 payment → void đảo cả 2 (cumulative trên 1 fee)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=admin_user.id, amount="7.000.000",
+            invoices=(
+                (1, "4000000", "issued", "0", "0"),
+                (2, "6000000", "issued", "0", "0"),
+            ),
+        )
+        bid = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=bid, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        result, _ = await pis.void_batch(
+            db, batch_id=bid, user_id=admin_user.id, unit_id=None, reason="x"
+        )
+        await db.commit()
+        assert result.reversed_count == 2
+        assert result.reversed_amount == Decimal("7000000")
+        invs = (
+            (await db.execute(select(Invoice).order_by(Invoice.installment_no)))
+            .scalars()
+            .all()
+        )
+        assert all(i.paid_amount == Decimal("0") and i.status == "issued" for i in invs)
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        assert fee.paid_amount == Decimal("0") and fee.status == "invoiced"
+        revs = (
+            (
+                await db.execute(
+                    select(PaymentTransaction).where(
+                        PaymentTransaction.transaction_type == "reversal"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(revs) == 2
+
+    async def test_void_blocked_when_refund_exists(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # P1: payment có RefundRequest non-rejected → void REFUSE (chống double-reverse)
+        from app.models.finance import RefundRequest
+
+        batch_id = await self._commit_one(db, seeded_dependencies, admin_user.id)
+        pay = (await db.execute(select(Payment))).scalars().first()
+        db.add(
+            RefundRequest(
+                payment_id=pay.id, amount=Decimal("5000000"), reason="khách đòi lại",
+                requested_by_id=admin_user.id, status="approved",
+            )
+        )
+        await db.commit()
+        with pytest.raises(ConflictError):
+            await pis.void_batch(
+                db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x"
+            )
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "committed"  # KHÔNG bị void
+
+    async def test_void_blocked_when_fee_cancelled(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # #3: fee bị hủy out-of-band giữa commit→void → refuse (không resurrect)
+        batch_id = await self._commit_one(db, seeded_dependencies, admin_user.id)
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        fee.status = "cancelled"
+        await db.commit()
+        with pytest.raises(BusinessRuleViolation):
+            await pis.void_batch(
+                db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x"
+            )
+
+
 class TestListBatches:
     async def test_unit_scope(self, db, seeded_dependencies, second_unit, officer_user):
         # P1 #2: list lô unit-scope theo đơn vị người tạo.

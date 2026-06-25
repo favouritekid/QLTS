@@ -26,6 +26,7 @@ from tests.fixtures.users import create_user_with_role, get_auth_headers
 TEMPLATE_URL = "/api/payments/import/template"
 PREVIEW_URL = "/api/payments/import/preview"
 COMMIT_URL = "/api/payments/import/{}/commit"
+VOID_URL = "/api/payments/import/{}/void"
 BATCHES_URL = "/api/payments/import/batches"
 
 
@@ -138,6 +139,41 @@ class TestBatchesAuthz:
         assert r.status_code == 200
 
 
+# ---------------------------------------------------------------------------
+# POST /import/{id}/void (đảo lô) — BV-3.5: manager/admin ONLY (accountant DENY)
+# ---------------------------------------------------------------------------
+class TestVoidAuthz:
+    _BODY = {"reason": "đảo lô do nhập sai"}
+
+    async def test_officer_denied(self, client, officer_token_headers):
+        r = await client.post(
+            VOID_URL.format(999999), json=self._BODY, headers=officer_token_headers
+        )
+        assert r.status_code == 403
+
+    async def test_accountant_denied(self, client, accountant_token_headers):
+        # KHÁC commit/batches: accountant là finance staff NHƯNG void = manager/admin
+        # → accountant PHẢI bị từ chối (Casbin không grant + require_admin_or_manager).
+        r = await client.post(
+            VOID_URL.format(999999), json=self._BODY, headers=accountant_token_headers
+        )
+        assert r.status_code == 403
+
+    async def test_manager_passes_gate(self, client, manager_token_headers):
+        r = await client.post(
+            VOID_URL.format(999999), json=self._BODY, headers=manager_token_headers
+        )
+        assert r.status_code != 403  # qua gate
+        assert r.status_code == 404  # lô không tồn tại
+
+    async def test_admin_passes_gate(self, client, admin_token_headers):
+        r = await client.post(
+            VOID_URL.format(999999), json=self._BODY, headers=admin_token_headers
+        )
+        assert r.status_code != 403
+        assert r.status_code == 404
+
+
 def test_casbin_migrations_seed_eft_v3():
     """Regression guard (qae2e02): migration casbin_rule p-row PHẢI có v3 (eft).
 
@@ -152,6 +188,7 @@ def test_casbin_migrations_seed_eft_v3():
     for name in (
         "bvg20260624001_casbin_payment_import_grants.py",
         "bvh20260624001_casbin_payment_import_commit_grants.py",
+        "bvj20260625001_casbin_payment_import_void_grant.py",
     ):
         content = (versions / name).read_text(encoding="utf-8")
         assert "v2, v3, template_id" in content, f"{name} thiếu cột v3 (eft)"
