@@ -1123,6 +1123,7 @@ class PaymentImportRowOut(BaseModel):
     payment_date: Optional[date] = None
     reference: Optional[str] = None
     allocations: List[PaymentImportAllocationOut] = Field(default_factory=list)
+    payment_ids: Optional[List[int]] = None  # populated sau commit (BV-3)
 
 
 class PaymentImportPreviewOut(BaseModel):
@@ -1138,3 +1139,41 @@ class PaymentImportPreviewOut(BaseModel):
     failed_count: int
     total_amount: Decimal
     rows: List[PaymentImportRowOut] = Field(default_factory=list)
+
+
+class PaymentImportCommitOut(BaseModel):
+    """Phản hồi pha 2 — commit (ĐÃ ghi tiền)."""
+    batch_id: int
+    status: str  # committed
+    committed_count: int
+    failed_count: int
+    payment_count: int
+    total_amount: Decimal
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)
+
+
+class PaymentImportBatchSummaryOut(BaseModel):
+    """1 dòng lịch sử lô import."""
+    id: int
+    academic_year: int
+    semester_no: int
+    file_name: str
+    status: str  # preview | committed | void
+    row_count: int
+    matched_count: int
+    warned_count: int
+    failed_count: int
+    total_amount: Decimal
+    created_at: datetime
+    committed_at: Optional[datetime] = None
+    voided_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentImportBatchListOut(BaseModel):
+    """Lịch sử lô import (phân trang)."""
+    items: List[PaymentImportBatchSummaryOut] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int

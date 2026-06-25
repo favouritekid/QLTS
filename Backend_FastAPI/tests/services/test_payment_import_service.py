@@ -25,13 +25,21 @@ from app import models
 from app.models.finance import (
     Fee,
     Invoice,
+    Payment,
     PaymentImportBatch,
     PaymentImportBatchStatusEnum,
     PaymentImportRow,
     PaymentImportRowStatusEnum,
+    PaymentMethod,
+    PaymentTransaction,
 )
 from app.services import payment_import_service as pis
-from app.utils.exceptions import BadRequest, ConflictError
+from app.utils.exceptions import (
+    BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
+    ResourceNotFoundError,
+)
 
 MATCHED = PaymentImportRowStatusEnum.matched.value
 WARNED = PaymentImportRowStatusEnum.warned.value
@@ -126,13 +134,17 @@ async def _seed_tuition(
     db.add(profile)
     await db.flush()
 
+    # fee thực tế = tổng các đợt (invoice) — thu đủ → fee 'paid'.
+    fee_total = sum(
+        (Decimal(str(amt)) for (_no, amt, *_rest) in invoices), Decimal("0")
+    )
     fee = Fee(
         admission_profile_id=profile.id,
         fee_type="tuition",
         academic_year=year,
         semester_no=semester,
-        base_amount=Decimal("100000000"),
-        final_amount=Decimal("100000000"),
+        base_amount=fee_total,
+        final_amount=fee_total,
         status="invoiced",
     )
     db.add(fee)
@@ -187,6 +199,27 @@ class TestParseAmount:
     def test_rejects_garbage(self):
         with pytest.raises(ValueError):
             pis.parse_amount_vn("abc")
+
+    def test_us_locale_thousands_comma(self):
+        # Fix #7: chuỗi locale US (',' = nghìn) phải parse đúng, không reject hàng loạt
+        assert pis.parse_amount_vn("7,200,000") == Decimal("7200000")
+        assert pis.parse_amount_vn("7,200,000.00") == Decimal("7200000.00")
+        assert pis.parse_amount_vn("1,234,567.50") == Decimal("1234567.50")
+
+    def test_single_comma_still_vn_decimal(self):
+        # Không regress: 1 dấu ',' giữ nghĩa thập phân VN
+        assert pis.parse_amount_vn("7,50") == Decimal("7.50")
+
+    def test_malformed_groups_rejected(self):
+        # Fix #9: nhóm nghìn sai (nhóm giữa ≠3) KHÔNG được nối thầm thành số
+        for bad in ("1.23.456", "1,23,456", "12.34.567"):
+            with pytest.raises(ValueError):
+                pis.parse_amount_vn(bad)
+
+    def test_amount_over_column_max_rejected(self):
+        # Fix #2: số quá lớn tràn Numeric(15,2) → lỗi sạch, không 500 ở persist
+        with pytest.raises(ValueError):
+            pis.parse_amount_vn("99999999999999")  # 14 số 9 > 9.999.999.999.999,99
 
     def test_nbsp_whitespace_separator(self):
         # File ngân hàng/Excel: '7 200 000' với non-breaking space (NBSP   /
@@ -345,6 +378,75 @@ class TestParseTemplate:
         drafts = pis.parse_template(content, "f.csv")
         assert drafts[0].citizen_id == "001234567890"
         assert drafts[0].reference == "PT-1"
+
+    def test_header_with_trailing_space_accepted(self):
+        # Fix #10: tên cột thừa khoảng trắng vẫn nhận đúng (strip header)
+        header = [c + " " for c in pis.TEMPLATE_COLS]
+        content = _xlsx_bytes(
+            [
+                header,
+                ["001234567890", "An", "1.000.000", "05/09/2026", "TM", "", ""],
+            ]
+        )
+        drafts = pis.parse_template(content, "f.xlsx")
+        assert len(drafts) == 1
+        assert drafts[0].citizen_id == "001234567890"
+        assert drafts[0].parse_error is None
+
+    def test_data_on_second_sheet_found(self):
+        # Fix #8: data ở sheet 2 (sau sheet "Hướng dẫn") KHÔNG bị bỏ thầm
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws0 = wb.active
+        ws0.title = "Huong dan"
+        ws0.append(["Hướng dẫn điền form"])
+        ws1 = wb.create_sheet("Du lieu")
+        ws1.append(pis.TEMPLATE_COLS)
+        ws1.append(["001234567890", "An", "1.000.000", "05/09/2026", "TM", "", ""])
+        buf = io.BytesIO()
+        wb.save(buf)
+        drafts = pis.parse_template(buf.getvalue(), "f.xlsx")
+        assert len(drafts) == 1
+        assert drafts[0].citizen_id == "001234567890"
+
+    def test_raw_not_csv_sanitized(self):
+        # Fix #3: reference '-...' KHÔNG bị chèn ' vào raw (sanitize=việc export)
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["001234567890", "An", "1.000.000", "05/09/2026", "TM", "-PT123", ""],
+            ]
+        )
+        drafts = pis.parse_template(content, "f.csv")
+        assert drafts[0].raw[pis.COL_REF] == "-PT123"  # KHÔNG có dấu ' đầu
+        assert drafts[0].reference == "-PT123"
+
+    def test_reference_too_long_is_parse_error(self):
+        # Fix P2(ref-len): ref > 100 ký tự (cột String(100)) → lỗi dòng sạch, không 500
+        long_ref = "X" * 101
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["001234567890", "An", "1.000.000", "05/09/2026", "TM", long_ref, ""],
+            ]
+        )
+        drafts = pis.parse_template(content, "f.csv")
+        assert drafts[0].parse_error is not None
+        assert "tham chiếu" in drafts[0].parse_error
+
+    def test_duplicate_columns_after_strip_rejected(self):
+        # Re-review fix: 'Số CCCD' + 'Số CCCD ' (thừa space) → sau strip TRÙNG tên →
+        # row.get trả Series → rác. Phải BadRequest rõ ràng, KHÔNG parse rác âm thầm.
+        header = list(pis.TEMPLATE_COLS) + ["Số CCCD "]
+        content = _csv_bytes(
+            [
+                header,
+                ["001234567890", "An", "1.000.000", "05/09/2026", "TM", "P", "", "X"],
+            ]
+        )
+        with pytest.raises(BadRequest):
+            pis.parse_template(content, "f.csv")
 
 
 # =============================================================================
@@ -619,6 +721,19 @@ class TestResolveValidate:
         assert res.rows[0].status == ERROR
         assert "không có học phí" in res.rows[0].message
 
+    async def test_payment_date_far_from_year_warns(self, db, seeded_dependencies):
+        # Fix #5: ngày thu lệch xa năm học → WARNED (surface ở preview), không chặn cứng
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        d = _draft("001234567890", "1000000", payment_date=date(2030, 9, 5))
+        res = await pis.resolve_and_validate(db, [d], 2026, 1, None)
+        assert res.rows[0].status == WARNED
+        assert "lệch xa năm học" in res.rows[0].message
+
 
 # =============================================================================
 # create_preview_batch / preview_import (DB persistence)
@@ -846,3 +961,509 @@ class TestPreviewBatch:
                 file_sha256_hex="c" * 64,
                 created_by_id=admin_user.id,
             )
+
+
+# =============================================================================
+# BV-3 — ghi tiền (get_system_user / auto_verify_payment / commit_batch)
+# =============================================================================
+async def _seed_system_user(db):
+    from app.security import get_password_hash
+
+    user = models.User(
+        username="system",
+        email="system@qlts.internal",
+        password_hash=get_password_hash("SystemX123!"),
+        full_name="System Policy",
+        role="user",
+        status="inactive",
+        unit_id=None,
+    )
+    db.add(user)
+    await db.flush()
+    return user
+
+
+async def _seed_cash_method(db):
+    m = PaymentMethod(code="cash", name="Tiền mặt", is_online=False, is_active=True)
+    db.add(m)
+    await db.flush()
+    return m
+
+
+async def _preview_batch(
+    db,
+    deps,
+    *,
+    importer_id,
+    citizen_id="001234567890",
+    name="Nguyễn Văn An",
+    amount="10.000.000",
+    invoices=((1, "10000000", "issued", "0", "0"),),
+    year=2026,
+    semester=1,
+):
+    """Seed chain + 1 dòng matched + preview_import → batch preview."""
+    await _seed_tuition(
+        db,
+        deps,
+        citizen_id=citizen_id,
+        lead_name=name,
+        invoices=list(invoices),
+        year=year,
+        semester=semester,
+    )
+    content = _csv_bytes(
+        [pis.TEMPLATE_COLS, [citizen_id, name, amount, "05/09/2026", "TM", "", ""]]
+    )
+    batch, _ = await pis.preview_import(
+        db,
+        content=content,
+        filename="thu.csv",
+        academic_year=year,
+        semester_no=semester,
+        created_by_id=importer_id,
+        unit_id=None,
+    )
+    return batch
+
+
+class TestGetSystemUser:
+    async def test_returns_seeded(self, db, seeded_dependencies):
+        await _seed_system_user(db)
+        u = await pis.get_system_user(db)
+        assert u.username == "system"
+
+    async def test_missing_raises(self, db, seeded_dependencies):
+        with pytest.raises(ConflictError):
+            await pis.get_system_user(db)
+
+    async def test_bad_fingerprint_raises(self, db, seeded_dependencies):
+        u = await _seed_system_user(db)
+        u.status = "active"  # sai fingerprint (phải inactive)
+        await db.flush()
+        with pytest.raises(ConflictError):
+            await pis.get_system_user(db)
+
+    async def test_fingerprint_rejects_non_bcrypt_hash(self, db, seeded_dependencies):
+        # Fix #14: fingerprint chặt hơn — password không phải bcrypt thật → từ chối
+        u = await _seed_system_user(db)
+        u.password_hash = "not-a-bcrypt-hash"
+        await db.flush()
+        with pytest.raises(ConflictError):
+            await pis.get_system_user(db)
+
+
+class TestCommitBatch:
+    async def test_commit_writes_payment(self, db, seeded_dependencies, admin_user):
+        sysu = await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        sysu_id = sysu.id
+        await db.commit()
+
+        result, _cb = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        assert result.committed_count == 1
+        assert result.payment_count == 1
+        assert result.total_amount == Decimal("10000000")
+
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "committed" and b.committed_at is not None
+
+        pay = (await db.execute(select(Payment))).scalars().first()
+        assert pay.status == "verified"
+        assert pay.created_by_id == admin_user.id
+        assert pay.verified_by_id == sysu_id
+        assert pay.created_by_id != pay.verified_by_id  # maker-checker
+
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        assert inv.paid_amount == Decimal("10000000")
+        assert inv.status == "paid"
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        assert fee.paid_amount == Decimal("10000000")
+        assert fee.status == "paid"
+
+        txn = (await db.execute(select(PaymentTransaction))).scalars().first()
+        assert txn.idempotency_key.startswith("bulkimport:")
+        assert txn.transaction_type == "payment"
+
+        row = (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        ).scalar_one()
+        assert row.payment_ids == [pay.id]
+
+    async def test_recommit_rejected(self, db, seeded_dependencies, admin_user):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        with pytest.raises(ConflictError):
+            await pis.commit_batch(
+                db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+            )
+
+    async def test_importer_is_system_rejected(self, db, seeded_dependencies):
+        sysu = await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=sysu.id)
+        batch_id = batch.id
+        sysu_id = sysu.id
+        await db.commit()
+        with pytest.raises(BusinessRuleViolation):
+            await pis.commit_batch(
+                db, batch_id=batch_id, importer_id=sysu_id, unit_id=None
+            )
+
+    async def test_toctou_fee_cancelled_skips(
+        self, db, seeded_dependencies, admin_user
+    ):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        # hủy fee giữa preview→commit (TOCTOU)
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        fee.status = "cancelled"
+        await db.commit()
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        assert result.committed_count == 0
+        assert result.failed_count == 1
+        assert result.payment_count == 0
+        assert (await db.execute(select(Payment))).scalars().all() == []
+        row = (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        ).scalar_one()
+        assert row.status == "error"
+        assert "cancelled" in (row.message or "")
+
+    async def test_fifo_two_invoices(self, db, seeded_dependencies, admin_user):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db,
+            seeded_dependencies,
+            importer_id=admin_user.id,
+            amount="7.000.000",
+            invoices=(
+                (1, "4000000", "issued", "0", "0"),
+                (2, "6000000", "issued", "0", "0"),
+            ),
+        )
+        batch_id = batch.id
+        await db.commit()
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        assert result.committed_count == 1
+        assert result.payment_count == 2  # 4tr (đợt 1) + 3tr (tràn đợt 2)
+        assert result.total_amount == Decimal("7000000")
+        row = (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        ).scalar_one()
+        assert len(row.payment_ids) == 2
+
+    async def test_lead_sync_hk1_cleared(self, db, seeded_dependencies, admin_user):
+        from app.services.lead_admission_sync import TUITION_PAID_STATUS
+
+        db.add(
+            models.ConsultationStatus(
+                id=TUITION_PAID_STATUS,
+                name="Đã đóng học phí",
+                color_code="#00aa00",
+                stage_id="stg01",
+            )
+        )
+        await db.flush()
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        prof = (await db.execute(select(models.AdmissionProfile))).scalars().first()
+        lead_id = prof.lead_id
+        await db.commit()
+
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        lead = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead.consultation_status_id == TUITION_PAID_STATUS
+
+    async def test_partial_alloc_overpay_not_counted(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Bug 1: phân-bổ-một-phần-rồi-overpay → savepoint rollback; tổng KHÔNG phình.
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db,
+            seeded_dependencies,
+            importer_id=admin_user.id,
+            amount="7.000.000",
+            invoices=(
+                (1, "4000000", "issued", "0", "0"),
+                (2, "6000000", "issued", "0", "0"),
+            ),
+        )
+        batch_id = batch.id
+        # giữa preview→commit: đợt 2 đã thu đủ ngoài → chỉ còn đợt 1 (4tr) payable
+        inv2 = (
+            (await db.execute(select(Invoice).where(Invoice.installment_no == 2)))
+            .scalars()
+            .first()
+        )
+        inv2.paid_amount = Decimal("6000000")
+        inv2.status = "paid"
+        await db.commit()
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        # 7tr > 4tr còn lại → dòng error, KHÔNG ghi nửa vời + tổng KHÔNG phình
+        assert result.committed_count == 0
+        assert result.payment_count == 0
+        assert result.total_amount == Decimal("0")
+        assert (await db.execute(select(Payment))).scalars().all() == []
+
+    async def test_lead_sync_failure_keeps_money(
+        self, db, seeded_dependencies, admin_user, monkeypatch
+    ):
+        # Bug 2: lead-sync raise KHÔNG được hủy tiền đã ghi của cả lô.
+        async def _boom(**kwargs):
+            raise RuntimeError("lead sync boom")
+
+        monkeypatch.setattr(
+            "app.services.lead_admission_sync.sync_lead_tuition_paid", _boom
+        )
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await db.commit()
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        # tiền vẫn ghi dù lead-sync nổ
+        assert result.payment_count == 1
+        pay = (await db.execute(select(Payment))).scalars().first()
+        assert pay is not None and pay.status == "verified"
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "committed"
+
+    async def test_cross_unit_creator_rejected(
+        self, db, seeded_dependencies, second_unit, officer_user, admin_user
+    ):
+        # P1 #1: committer khác đơn vị người tạo lô → 404 (không poison lô đơn vị khác).
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=officer_user.id
+        )  # officer_user unit 1001
+        batch_id = batch.id
+        await db.commit()
+        with pytest.raises(ResourceNotFoundError):
+            await pis.commit_batch(
+                db,
+                batch_id=batch_id,
+                importer_id=admin_user.id,
+                unit_id=second_unit.id,  # unit 2001 ≠ creator unit 1001
+            )
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "preview"  # không bị poison
+
+    async def test_all_rows_fail_keeps_preview_and_counters(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Fix #4 + #1: lô commit fail-TOÀN-BỘ → GIỮ 'preview' (không khóa file) +
+        # counter/total recompute về số THỰC (0), không giữ overstate preview.
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=admin_user.id
+        )
+        batch_id = batch.id
+        # hủy fee giữa preview→commit → dòng (matched ở preview) fail lúc commit
+        fee = (
+            (await db.execute(select(Fee).where(Fee.fee_type == "tuition")))
+            .scalars()
+            .first()
+        )
+        fee.status = "cancelled"
+        await db.commit()
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        assert result.committed_count == 0
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "preview"  # KHÔNG khóa file (re-import được)
+        assert b.total_amount == Decimal("0")  # không giữ số preview overstate
+        assert b.matched_count == 0
+        assert b.failed_count == 1
+
+    async def test_committed_counters_reflect_actual_writes(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Fix #1: 2 đợt, commit thành công → total_amount/counter của batch = tiền THỰC
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db,
+            seeded_dependencies,
+            importer_id=admin_user.id,
+            amount="7.000.000",
+            invoices=(
+                (1, "4000000", "issued", "0", "0"),
+                (2, "6000000", "issued", "0", "0"),
+            ),
+        )
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "committed"
+        assert b.total_amount == Decimal("7000000")  # tiền thực ghi
+        assert b.failed_count == 0
+
+    async def test_reference_dangerous_prefix_committed_clean(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Fix #3: mã tham chiếu bắt đầu '-' ghi vào Payment SẠCH (không có dấu ' đầu)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                [
+                    "001234567890",
+                    "Nguyễn Văn An",
+                    "10.000.000",
+                    "05/09/2026",
+                    "TM",
+                    "-PT-2026-001",
+                    "",
+                ],
+            ]
+        )
+        batch, _ = await pis.preview_import(
+            db,
+            content=content,
+            filename="thu.csv",
+            academic_year=2026,
+            semester_no=1,
+            created_by_id=admin_user.id,
+            unit_id=None,
+        )
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        pay = (await db.execute(select(Payment))).scalars().first()
+        assert pay.reference_code == "-PT-2026-001"  # KHÔNG có dấu ' đầu
+
+
+class TestListBatches:
+    async def test_unit_scope(self, db, seeded_dependencies, second_unit, officer_user):
+        # P1 #2: list lô unit-scope theo đơn vị người tạo.
+        from app.security import get_password_hash
+
+        u2001 = models.User(
+            username="fin2001",
+            email="fin2001@test.com",
+            password_hash=get_password_hash("X123!"),
+            role="accountant",
+            status="active",
+            unit_id=second_unit.id,
+        )
+        db.add(u2001)
+        await db.flush()
+        for created_by in (officer_user.id, u2001.id):
+            db.add(
+                PaymentImportBatch(
+                    academic_year=2026,
+                    semester_no=1,
+                    file_name="f.csv",
+                    file_sha256=f"{created_by:064d}",
+                    status="preview",
+                    created_by_id=created_by,
+                )
+            )
+        await db.flush()
+
+        items_a, total_a = await pis.list_batches(
+            db, unit_id=seeded_dependencies["unit_id"]
+        )
+        assert total_a == 1
+        assert items_a[0].created_by_id == officer_user.id
+
+        items_all, total_all = await pis.list_batches(db, unit_id=None)
+        assert total_all == 2

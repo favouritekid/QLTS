@@ -23,29 +23,40 @@ import io
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import structlog
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.constants import UserRole
 from app.models.finance import (
     Fee,
     Invoice,
     FeeStatusEnum,
     PAYABLE_INVOICE_STATUSES,
+    Payment,
     PaymentImportBatch,
     PaymentImportRow,
     PaymentImportBatchStatusEnum,
     PaymentImportRowStatusEnum,
+    PaymentMethod,
+    PaymentStatusEnum,
+    PaymentTransaction,
+    TransactionTypeEnum,
 )
-from app.utils.csv_helpers import sanitize_csv_cell
-from app.utils.exceptions import BadRequest, ConflictError
+from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.utils.exceptions import (
+    BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
+    ResourceNotFoundError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -85,6 +96,13 @@ METHOD_MAP = {
 
 CCCD_RE = re.compile(r"^\d{12}$")
 MAX_IMPORT_ROWS = 5000
+# Trần 1 khoản = max cột Numeric(15,2). Chặn ở parser để số quá lớn KHÔNG lọt
+# xuống INSERT (payment_import_row.amount / Payment.amount) → DataError → 500.
+MAX_AMOUNT = Decimal("9999999999999.99")
+# Mã tham chiếu lưu vào Payment.reference_code / PaymentTransaction.external_reference
+# = String(100). Ref dài hơn → DataError ở flush → 500 không bắt → chặn sớm thành
+# lỗi dòng sạch.
+MAX_REF_LEN = 100
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +172,17 @@ def _norm_name(s: Optional[str]) -> str:
     return " ".join(s.lower().split())
 
 
+def _check_thousands_groups(int_groups: List[str], raw: str) -> None:
+    """Xác thực nhóm phân cách nghìn của PHẦN NGUYÊN: nhóm đầu 1-3 chữ số, các nhóm
+    sau ĐÚNG 3. Chặn '1.23.456' / '1,23,456' (nhóm giữa sai) bị nối thầm thành số."""
+    if not (
+        int_groups
+        and 1 <= len(int_groups[0]) <= 3
+        and all(len(g) == 3 for g in int_groups[1:])
+    ):
+        raise ValueError(f"số tiền không hợp lệ: '{raw}'")
+
+
 def parse_amount_vn(raw: str) -> Decimal:
     """Parse số tiền kiểu VN. '.' = phân cách nghìn, ',' = thập phân.
 
@@ -166,10 +195,24 @@ def parse_amount_vn(raw: str) -> Decimal:
     s = re.sub(r"\s", "", _norm(raw))
     if not s:
         raise ValueError("trống")
-    if "," in s:  # ',' = thập phân VN
-        s = s.replace(".", "").replace(",", ".")
-    elif "." in s:  # '.' nhập nhằng
+    has_dot = "." in s
+    has_comma = "," in s
+    if has_dot and has_comma:
+        if s.rfind(",") > s.rfind("."):  # ',' bên phải = thập phân (VN 7.200.000,50)
+            _check_thousands_groups(s.split(",")[0].split("."), raw)
+            s = s.replace(".", "").replace(",", ".")
+        else:  # '.' bên phải = thập phân (US 7,200,000.00)
+            _check_thousands_groups(s.split(".")[0].split(","), raw)
+            s = s.replace(",", "")
+    elif has_comma:
+        if s.count(",") > 1:  # nhiều ',' = phân cách nghìn (US 7,200,000)
+            _check_thousands_groups(s.split(","), raw)
+            s = s.replace(",", "")
+        else:  # 1 dấu ',' = thập phân VN (7,50)
+            s = s.replace(",", ".")
+    elif has_dot:  # '.' nhập nhằng
         if len(s.rsplit(".", 1)[1]) == 3:  # nhóm cuối 3 chữ số -> nghìn
+            _check_thousands_groups(s.split("."), raw)
             s = s.replace(".", "")
         # else: '.' là thập phân (float string) -> giữ nguyên
     try:
@@ -181,6 +224,8 @@ def parse_amount_vn(raw: str) -> Decimal:
     val = val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if val <= 0:
         raise ValueError("số tiền phải > 0")
+    if val > MAX_AMOUNT:  # chặn tràn cột Numeric(15,2) → DataError/500 ở pha persist
+        raise ValueError(f"số tiền vượt giới hạn cho phép ({_money(MAX_AMOUNT)} đ)")
     return val
 
 
@@ -225,12 +270,37 @@ def parse_template(content: bytes, filename: str) -> List[RowDraft]:
     try:
         if ext == "csv":
             df = pd.read_csv(io.BytesIO(content), dtype=str)
+            df.columns = [str(c).strip() for c in df.columns]
         else:
-            df = pd.read_excel(io.BytesIO(content), engine="openpyxl", dtype=str)
+            # Đọc MỌI sheet rồi chọn sheet ĐẦU TIÊN đủ cột bắt buộc — tránh chỉ đọc
+            # sheet 0 (im lặng bỏ data khi nằm ở sheet sau, sau sheet "Hướng dẫn").
+            sheets = pd.read_excel(
+                io.BytesIO(content), engine="openpyxl", dtype=str, sheet_name=None
+            )
+            df = None
+            for sheet_df in sheets.values():
+                sheet_df.columns = [str(c).strip() for c in sheet_df.columns]
+                if all(c in sheet_df.columns for c in REQUIRED_COLS):
+                    df = sheet_df
+                    break
+            if df is None:  # không sheet nào đủ cột → lấy sheet đầu để báo lỗi cột
+                df = next(iter(sheets.values()), pd.DataFrame())
     except Exception as exc:  # noqa: BLE001
         raise BadRequest(f"Không đọc được file: {exc}")
 
     df = df.fillna("")
+    # Header hay thừa khoảng trắng (' '/' ') → strip để không trượt so khớp
+    # cột bắt buộc rồi từ chối nhầm cả file (CSV đã strip ở trên; lặp lại vô hại).
+    df.columns = [str(c).strip() for c in df.columns]
+    # Strip có thể làm 2 cột khác nhau (vd 'Số CCCD' và 'Số CCCD ') TRÙNG tên →
+    # row.get(col) trả pandas Series → rác vào amount/CCCD/raw. Từ chối rõ ràng thay
+    # vì âm thầm parse sai (file cột trùng = nhập nhằng, kế toán phải sửa).
+    _cols = list(df.columns)
+    _dups = sorted({c for c in _cols if _cols.count(c) > 1})
+    if _dups:
+        raise BadRequest(
+            f"File có cột trùng tên (sau khi bỏ khoảng trắng): {', '.join(_dups)}"
+        )
     missing = [c for c in REQUIRED_COLS if c not in df.columns]
     if missing:
         raise BadRequest(f"File thiếu cột bắt buộc: {', '.join(missing)}")
@@ -250,7 +320,10 @@ def parse_template(content: bytes, filename: str) -> List[RowDraft]:
         # false-error "thiếu CCCD" hàng loạt.
         if not any(cells.values()):
             continue
-        raw = {c: sanitize_csv_cell(row.get(c, "")) for c in df.columns}
+        # raw = giá trị gốc (đã chuẩn hóa chuỗi) cho audit + pha commit re-parse.
+        # KHÔNG sanitize-CSV ở ingest: sanitize là việc của tầng EXPORT — làm ở đây
+        # sẽ chèn dấu ' vào reference/method → lệch preview vs tiền THỰC ghi (BV-3).
+        raw = dict(cells)
         cccd = cells.get(COL_CCCD, "")
         name = cells.get(COL_NAME, "")
         ref = cells.get(COL_REF, "")
@@ -271,6 +344,9 @@ def parse_template(content: bytes, filename: str) -> List[RowDraft]:
         method_code = METHOD_MAP.get(method_raw)
         if method_code is None:
             err = err or f"hình thức không hợp lệ: '{row.get(COL_METHOD, '')}'"
+        # Ref dài hơn cột String(100) → DataError ở commit → 500. Chặn sớm = lỗi dòng.
+        if len(ref) > MAX_REF_LEN:
+            err = err or f"mã tham chiếu quá dài (tối đa {MAX_REF_LEN} ký tự)"
 
         drafts.append(
             RowDraft(
@@ -399,6 +475,14 @@ async def resolve_and_validate(
             warnings.append(
                 f"tên lệch: file '{d.name}' vs hồ sơ "
                 f"'{profile.lead.full_name if profile.lead else ''}'"
+            )
+
+        # cảnh báo ngày thu lệch xa năm học (gõ nhầm năm '2027' thay '2026', hoặc
+        # nhầm dd/mm vs mm/dd) — surface ở preview để kế toán soát, KHÔNG chặn cứng
+        # (thu sớm/muộn trong khoảng [năm học, +1] là hợp lệ).
+        if d.payment_date and abs(d.payment_date.year - academic_year) > 1:
+            warnings.append(
+                f"ngày thu {d.payment_date:%d/%m/%Y} lệch xa năm học {academic_year}"
             )
 
         # FIFO allocate
@@ -730,3 +814,514 @@ def build_template(fmt: str) -> Tuple[bytes, str, str]:
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue(), _XLSX_MEDIA, "mau_import_thu_hoc_phi.xlsx"
+
+
+# ---------------------------------------------------------------------------
+# BV-3 — Ghi tiền (auto-verify) + commit lô
+#
+# ``get_system_user`` + ``auto_verify_payment`` là GENERIC (đặt tạm ở đây; tách sang
+# payment_service.py khi refactor lệ-phí dùng chung — plan §8). auto_verify KHÔNG
+# dispatch notification / lead-sync → ``commit_batch`` GỘP 1 lần/hồ-sơ (tránh fan-out
+# 3N của verify_payment per-row).
+# ---------------------------------------------------------------------------
+async def get_system_user(db: AsyncSession) -> "models.User":
+    """Tài khoản kỹ thuật 'system' (checker cho auto-verify by policy).
+
+    Fingerprint-validated (khớp ``_get_system_application_fee_user`` admission_service):
+    username='system', status='inactive', role=user, email='system@qlts.internal',
+    unit_id=None. Maker-checker thỏa vì importer (kế toán) ≠ system_user (DB constraint
+    ``chk_payment_no_self_approval``).
+    """
+    user = (
+        await db.execute(select(models.User).where(models.User.username == "system"))
+    ).scalar_one_or_none()
+    if user is None:
+        raise ConflictError("Tài khoản kỹ thuật 'system' chưa được cấu hình")
+    # Fingerprint KHỚP ``_get_system_application_fee_user`` (admission_service): thêm
+    # current_assignment_id IS NULL + password là bcrypt thật → không nhận nhầm 1 tài
+    # khoản 'system' bị hạ cấp/chiếm dụng làm checker maker-checker.
+    if not (
+        user.status == "inactive"
+        and user.role == UserRole.USER
+        and user.email == "system@qlts.internal"
+        and user.unit_id is None
+        and user.current_assignment_id is None
+        # bcrypt thật = prefix $2a/$2b/$2y VÀ đủ dài (khớp _is_bcrypt_hash len>=50;
+        # tránh nhận '$2b$' cụt làm hợp lệ).
+        and len(user.password_hash or "") >= 50
+        and (user.password_hash or "").startswith(("$2a$", "$2b$", "$2y$"))
+    ):
+        raise ConflictError("Tài khoản kỹ thuật 'system' sai fingerprint")
+    return user
+
+
+async def auto_verify_payment(
+    db: AsyncSession,
+    *,
+    invoice: Invoice,
+    fee: Fee,
+    method_id: int,
+    amount: Decimal,
+    payment_date: datetime,
+    reference: Optional[str],
+    importer_id: int,
+    system_user: "models.User",
+    idempotency_key: str,
+) -> Optional[Payment]:
+    """Tạo Payment 'verified' (maker=importer, checker=system_user) áp vào ``invoice``
+    ĐÃ TỒN TẠI + cập nhật invoice/fee + PaymentTransaction (audit, neo idempotency).
+
+    Replicate money-math của ``verify_payment`` (payment_service.py:296-335) nhưng tạo
+    Payment verified NGAY (không từ pending) và KHÔNG dispatch/lead-sync. Idempotent:
+    idempotency_key đã có → trả ``None`` (re-commit an toàn).
+
+    ⚠️ Caller PHẢI đã get_for_update + refresh ``invoice`` rồi ``fee`` (lock order
+    invoice→fee, khớp verify_payment → tránh deadlock).
+    """
+    dup = (
+        await db.execute(
+            select(PaymentTransaction.id).where(
+                PaymentTransaction.idempotency_key == idempotency_key
+            )
+        )
+    ).scalar_one_or_none()
+    if dup is not None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    payment = Payment(
+        invoice_id=invoice.id,
+        method_id=method_id,
+        amount=amount,
+        reference_code=reference,
+        status=PaymentStatusEnum.verified.value,
+        payment_date=payment_date,
+        verified_at=now,
+        created_by_id=importer_id,
+        verified_by_id=system_user.id,
+        intent_id=None,
+        notes="Bulk import thu học phí — auto-verify (system_user)",
+    )
+    db.add(payment)
+    await db.flush()
+
+    # Money-math GỐC = verify_payment (1 nguồn sự thật chung, tránh 2 đường ghi tiền
+    # trôi dạt). is_fully_paid GỒM penalty → trả đủ GỐC nhưng còn phạt thì 'partial'.
+    from app.services.payment_service import apply_verified_payment_balances
+
+    fee_balance_before, fee_remaining = apply_verified_payment_balances(
+        invoice=invoice, fee=fee, amount=amount, now=now
+    )
+
+    db.add(
+        PaymentTransaction(
+            payment_id=payment.id,
+            fee_id=fee.id,
+            transaction_type=TransactionTypeEnum.payment.value,
+            amount=amount,
+            balance_before=fee_balance_before,
+            balance_after=fee_remaining,
+            external_reference=reference,
+            gateway_response={
+                "verification_mode": "bulk_import",
+                "idempotency_key": idempotency_key,
+                "importer_id": importer_id,
+                "verified_by_id": system_user.id,
+            },
+            idempotency_key=idempotency_key,
+            performed_by_id=system_user.id,
+            notes=f"Bulk import payment. Invoice: {invoice.invoice_number}",
+        )
+    )
+    await db.flush()
+    return payment
+
+
+async def _load_profile_with_lead(
+    db: AsyncSession, profile_id: int
+) -> "Optional[models.AdmissionProfile]":
+    from sqlalchemy.orm import selectinload
+
+    return (
+        await db.execute(
+            select(models.AdmissionProfile)
+            .options(selectinload(models.AdmissionProfile.lead))
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+    ).scalar_one_or_none()
+
+
+@dataclass
+class CommitResult:
+    batch_id: int
+    committed_count: int  # số dòng ghi được
+    failed_count: int  # số dòng lỗi tại commit (TOCTOU/đổi số dư)
+    payment_count: int  # tổng Payment tạo
+    total_amount: Decimal  # tổng tiền đã ghi
+
+
+async def commit_batch(
+    db: AsyncSession,
+    *,
+    batch_id: int,
+    importer_id: int,
+    unit_id: Optional[int],
+) -> Tuple[CommitResult, Callable]:
+    """Pha 2 — GHI TIỀN. RE-VALIDATE TOCTOU dưới khóa + savepoint per-row + idempotency
+    + GỘP lead-sync 1 lần/hồ-sơ. Trả ``(CommitResult, post_commit)``.
+
+    - Khóa lô (FOR UPDATE) → serialize commit đồng thời cùng lô.
+    - Lock order invoice→fee (khớp verify_payment → tránh deadlock với verify tay).
+    - KHÔNG dùng snapshot preview để ghi: re-fetch fee/invoice HIỆN TẠI (số dư có thể
+      đổi giữa preview→commit). Cuối vòng còn ``left>0`` = vượt nợ hiện tại → raise →
+      savepoint rollback CẢ dòng (không ghi nửa vời).
+    - 1 dòng lỗi không abort cả lô (savepoint per-row).
+    """
+    from app.services.fee_calculation_service import is_hk1_cleared
+    from app.services.lead_admission_sync import sync_lead_tuition_paid
+
+    batch = (
+        await db.execute(
+            select(PaymentImportBatch)
+            .where(PaymentImportBatch.id == batch_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if batch is None:
+        raise ResourceNotFoundError("Không tìm thấy lô import")
+    # P1 IDOR: committer unit-scope (manager) chỉ commit lô do user CÙNG ĐƠN VỊ tạo;
+    # admin/accountant (unit_id=None) → commit mọi lô. Chặn manager commit/poison lô
+    # đơn vị khác → 404 (không lộ tồn tại).
+    if unit_id is not None:
+        creator_unit = (
+            await db.execute(
+                select(models.User.unit_id).where(models.User.id == batch.created_by_id)
+            )
+        ).scalar_one_or_none()
+        if creator_unit != unit_id:
+            raise ResourceNotFoundError("Không tìm thấy lô import")
+    if batch.status != PaymentImportBatchStatusEnum.preview.value:
+        raise ConflictError(
+            f"Lô #{batch_id} không ở trạng thái preview (hiện: {batch.status})"
+        )
+
+    system_user = await get_system_user(db)
+    if system_user.id == importer_id:
+        raise BusinessRuleViolation(
+            "Tài khoản import trùng system_user — vi phạm maker-checker"
+        )
+
+    method_ids = {
+        code: mid
+        for code, mid in (
+            await db.execute(
+                select(PaymentMethod.code, PaymentMethod.id).where(
+                    PaymentMethod.code.in_(["cash", "bank_transfer"]),
+                    PaymentMethod.is_active.is_(True),
+                )
+            )
+        ).all()
+    }
+
+    fee_repo = FeeRepository(db)
+    inv_repo = InvoiceRepository(db)
+
+    rows = list(
+        (
+            await db.execute(
+                select(PaymentImportRow)
+                .where(
+                    PaymentImportRow.batch_id == batch_id,
+                    PaymentImportRow.status.in_(
+                        [
+                            PaymentImportRowStatusEnum.matched.value,
+                            PaymentImportRowStatusEnum.warned.value,
+                        ]
+                    ),
+                )
+                .order_by(PaymentImportRow.row_no)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    committed_count = 0
+    failed_count = 0
+    payment_count = 0
+    total_amount = Decimal("0")
+    cleared_profiles: Dict[int, str] = {}
+
+    for row in rows:
+        row_payment_ids: List[int] = []
+        row_total = Decimal("0")  # row-local (Bug 1: cộng tổng SAU khi savepoint OK)
+        row_cleared: Optional[tuple] = None
+        try:
+            async with db.begin_nested():
+                raw = row.raw or {}
+                method_code = METHOD_MAP.get(_norm_name(str(raw.get(COL_METHOD, ""))))
+                method_id = method_ids.get(method_code)
+                if method_id is None:
+                    raise BusinessRuleViolation("hình thức không hợp lệ")
+                pay_date = parse_date_vn(str(raw.get(COL_DATE, "")))
+                # date → datetime tz-aware (cột Payment.payment_date DateTime(tz)).
+                pay_dt = datetime(
+                    pay_date.year, pay_date.month, pay_date.day, tzinfo=timezone.utc
+                )
+                reference = _norm(str(raw.get(COL_REF, ""))) or None
+                # Defense: ref > String(100) → DataError ở flush không bắt được → 500
+                # cả lô. Bắt thành lỗi DÒNG (preview cũng đã chặn ở parse_template).
+                if reference is not None and len(reference) > MAX_REF_LEN:
+                    raise BusinessRuleViolation(
+                        f"mã tham chiếu quá dài (tối đa {MAX_REF_LEN} ký tự)"
+                    )
+                amount = row.amount
+                if amount is None or amount <= 0:
+                    raise BusinessRuleViolation("số tiền không hợp lệ")
+                if row.resolved_fee_id is None:
+                    raise BusinessRuleViolation("thiếu học phí đã resolve")
+
+                # payable invoices HIỆN TẠI (sắp installment_no asc).
+                payable = (
+                    await _fetch_payable_invoices(db, [row.resolved_fee_id])
+                ).get(row.resolved_fee_id, [])
+                if not payable:
+                    raise BusinessRuleViolation(
+                        "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)"
+                    )
+
+                # Bug 3: lock TẤT CẢ invoice (asc) RỒI mới fee — khớp lock-order
+                # verify_payment (invoice→fee) cho dòng trải nhiều đợt → tránh deadlock
+                # ABBA (fee KHÔNG bị khóa GIỮA các invoice).
+                locked = []
+                for inv in payable:
+                    li = await inv_repo.get_for_update(inv.id, unit_id)
+                    if li is None:
+                        continue
+                    await db.refresh(li)
+                    locked.append(li)
+                if not locked:
+                    raise BusinessRuleViolation(
+                        "không tìm thấy hóa đơn (IDOR / đổi giữa 2 pha)"
+                    )
+                fee = await fee_repo.get_for_update(locked[0].fee_id, unit_id)
+                if fee is None:
+                    raise BusinessRuleViolation("không tìm thấy học phí")
+                await db.refresh(fee)
+                if fee.status in (
+                    FeeStatusEnum.cancelled.value,
+                    FeeStatusEnum.waived.value,
+                ):
+                    raise BusinessRuleViolation(
+                        f"học phí đã {fee.status} (đổi giữa 2 pha)"
+                    )
+                # Re-check lead chưa xóa mềm: preview lọc Lead.deleted_at IS NULL nhưng
+                # get_for_update KHÔNG lọc → chặn ghi tiền vào hồ sơ bị xóa mềm giữa
+                # preview→commit (mirror filter của _fetch_profiles).
+                lead_deleted = (
+                    await db.execute(
+                        select(models.Lead.deleted_at)
+                        .join(
+                            models.AdmissionProfile,
+                            models.AdmissionProfile.lead_id == models.Lead.id,
+                        )
+                        .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                    )
+                ).scalar_one_or_none()
+                if lead_deleted is not None:
+                    raise BusinessRuleViolation(
+                        "hồ sơ đã bị xóa giữa preview→commit"
+                    )
+                was_hk1 = is_hk1_cleared(
+                    fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+                )
+
+                left = amount
+                for li in locked:
+                    if left <= 0:
+                        break
+                    if li.status not in PAYABLE_INVOICE_STATUSES:
+                        continue  # đổi trạng thái sau khi khóa
+                    principal_rem = (li.amount or Decimal("0")) - (
+                        li.paid_amount or Decimal("0")
+                    )
+                    if principal_rem <= 0:
+                        continue
+                    take = min(left, principal_rem)
+                    idem = f"bulkimport:{batch_id}:{row.row_no}:{li.id}"
+                    payment = await auto_verify_payment(
+                        db,
+                        invoice=li,
+                        fee=fee,
+                        method_id=method_id,
+                        amount=take,
+                        payment_date=pay_dt,
+                        reference=reference,
+                        importer_id=importer_id,
+                        system_user=system_user,
+                        idempotency_key=idem,
+                    )
+                    if payment is not None:
+                        row_payment_ids.append(payment.id)
+                        row_total += take
+                    left -= take
+
+                if left > 0:
+                    raise BusinessRuleViolation(
+                        f"thu {_money(amount)} vượt còn nợ gốc HIỆN TẠI "
+                        "(số dư đổi giữa preview→commit)"
+                    )
+
+                if not was_hk1:
+                    now_hk1 = is_hk1_cleared(
+                        fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+                    )
+                    if now_hk1:
+                        row_cleared = (
+                            fee.admission_profile_id,
+                            reference or f"BULK-{batch_id}-{row.row_no}",
+                        )
+                row.payment_ids = row_payment_ids
+            # savepoint committed → giờ mới cộng tổng (raise giữa chừng đã rollback DB).
+            committed_count += 1
+            payment_count += len(row_payment_ids)
+            total_amount += row_total
+            if row_cleared:
+                cleared_profiles[row_cleared[0]] = row_cleared[1]
+        except (
+            BusinessRuleViolation,
+            ResourceNotFoundError,
+            ValueError,
+            IntegrityError,
+        ) as exc:
+            failed_count += 1
+            row.status = PaymentImportRowStatusEnum.error.value
+            row.message = f"[commit] {exc}"[:1000]
+
+    # GỘP lead-sync (projection) 1 lần/hồ-sơ HK1 vừa cleared. Bug 2: bọc savepoint +
+    # try/except MỖI hồ-sơ — lỗi projection 1 hồ-sơ KHÔNG được hủy tiền đã ghi của CẢ
+    # lô (sync chạy trong body trước router commit; raise → outer rollback → mất tiền).
+    for profile_id, ref in cleared_profiles.items():
+        try:
+            async with db.begin_nested():
+                profile = await _load_profile_with_lead(db, profile_id)
+                if profile is not None:
+                    await sync_lead_tuition_paid(
+                        db=db,
+                        profile=profile,
+                        transaction_id=ref,
+                        changed_by_user_id=importer_id,
+                        reason=f"Thu học phí qua import lô #{batch_id}",
+                    )
+        except Exception as exc:  # noqa: BLE001
+            # KHÔNG hủy tiền đã ghi vì lỗi projection 1 hồ-sơ, NHƯNG log ERROR + stack
+            # trace (backend chưa có Sentry) để lỗi projection HỆ THỐNG không ẩn mình:
+            # tiền đã ghi mà lead đứng yên sts cũ phải lộ ra để truy.
+            log.error(
+                "bulk_commit_lead_sync_failed",
+                batch_id=batch_id,
+                profile_id=profile_id,
+                error=str(exc),
+                exc_info=True,
+            )
+
+    # Recompute counter theo trạng thái dòng THỰC TẾ sau commit (dòng có thể flip
+    # matched/warned → error lúc commit) để lịch sử lô khớp tiền THỰC ghi, không giữ
+    # số preview (overstate). `rows` chỉ gồm dòng matched/warned ở preview; preview-
+    # errors nằm ngoài nên cộng vào failed_count cũ.
+    batch.matched_count = sum(
+        1 for r in rows if r.status == PaymentImportRowStatusEnum.matched.value
+    )
+    batch.warned_count = sum(
+        1 for r in rows if r.status == PaymentImportRowStatusEnum.warned.value
+    )
+    batch.failed_count = batch.failed_count + failed_count
+    batch.total_amount = total_amount
+    # Chỉ đánh dấu 'committed' khi THỰC SỰ ghi được tiền. 0 dòng ghi (tất cả fail
+    # TOCTOU) → GIỮ 'preview' để re-import được (chưa có endpoint void; tránh khóa
+    # file vĩnh viễn qua partial-unique).
+    if committed_count > 0:
+        batch.status = PaymentImportBatchStatusEnum.committed.value
+        batch.committed_at = datetime.now(timezone.utc)
+    await db.flush()
+
+    result = CommitResult(
+        batch_id=batch_id,
+        committed_count=committed_count,
+        failed_count=failed_count,
+        payment_count=payment_count,
+        total_amount=total_amount,
+    )
+
+    async def post_commit() -> None:
+        # QUYẾT ĐỊNH SẢN PHẨM (đã chốt): bulk import KHÔNG gửi notification per-row
+        # (tránh fan-out 3N) — KHÁC verify tay (fire PAYMENT_RECEIVED mỗi payment).
+        # Lead-sync (projection) đã làm trong body. Nếu sau cần báo phụ huynh: thêm 1
+        # notif GỘP per-hồ-sơ + PHẢI seed notification_rule (nếu không sẽ fire-zero
+        # theo fail-closed dispatcher). Để trống là CỐ Ý, không phải thiếu sót.
+        return None
+
+    return result, post_commit
+
+
+# ---------------------------------------------------------------------------
+# Read helpers (response build + lịch sử lô)
+# ---------------------------------------------------------------------------
+async def load_batch_with_rows(
+    db: AsyncSession, batch_id: int
+) -> Tuple[Optional[PaymentImportBatch], List[PaymentImportRow]]:
+    """Lô + các dòng (sắp row_no) cho response build. ``(None, [])`` nếu không có."""
+    batch = (
+        await db.execute(
+            select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+        )
+    ).scalar_one_or_none()
+    if batch is None:
+        return None, []
+    rows = list(
+        (
+            await db.execute(
+                select(PaymentImportRow)
+                .where(PaymentImportRow.batch_id == batch_id)
+                .order_by(PaymentImportRow.row_no)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return batch, rows
+
+
+async def list_batches(
+    db: AsyncSession, *, unit_id: Optional[int], skip: int = 0, limit: int = 50
+) -> Tuple[List[PaymentImportBatch], int]:
+    """Lịch sử lô import (mới nhất trước), phân trang.
+
+    P1 IDOR: unit-scope (manager) chỉ thấy lô do user CÙNG ĐƠN VỊ tạo; admin/accountant
+    (unit_id=None) → toàn hệ.
+    """
+    count_q = select(func.count()).select_from(PaymentImportBatch)
+    list_q = select(PaymentImportBatch)
+    if unit_id is not None:
+        count_q = count_q.join(
+            models.User, PaymentImportBatch.created_by_id == models.User.id
+        ).where(models.User.unit_id == unit_id)
+        list_q = list_q.join(
+            models.User, PaymentImportBatch.created_by_id == models.User.id
+        ).where(models.User.unit_id == unit_id)
+    total = (await db.execute(count_q)).scalar_one()
+    items = list(
+        (
+            await db.execute(
+                list_q.order_by(
+                    PaymentImportBatch.created_at.desc(),
+                    PaymentImportBatch.id.desc(),
+                )
+                .offset(skip)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return items, total

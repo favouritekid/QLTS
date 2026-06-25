@@ -384,6 +384,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # xác minh; commit/void (ghi tiền/đảo lô) thêm grant ở BV-3.
         {"subject": "{role}", "object": "/api/payments/import/template", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/import/preview", "action": "POST"},
+        # BV-3 commit (ghi tiền) + lịch sử lô
+        {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
+        {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
 
         # ACCOUNTING PERIODS - View only (create/close is admin only)
         {"subject": "{role}", "object": "/api/accounting/periods", "action": "GET"},
@@ -613,6 +616,9 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # BV-2 Bulk payment import — template + preview (dry-run).
         {"subject": "{role}", "object": "/api/payments/import/template", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/import/preview", "action": "POST"},
+        # BV-3 commit (ghi tiền) + lịch sử lô
+        {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
+        {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
         {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
         {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/refunds/{id}/approve", "action": "POST"},

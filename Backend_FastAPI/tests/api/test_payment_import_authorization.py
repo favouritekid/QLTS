@@ -25,6 +25,8 @@ from tests.fixtures.users import create_user_with_role, get_auth_headers
 
 TEMPLATE_URL = "/api/payments/import/template"
 PREVIEW_URL = "/api/payments/import/preview"
+COMMIT_URL = "/api/payments/import/{}/commit"
+BATCHES_URL = "/api/payments/import/batches"
 
 
 @pytest_asyncio.fixture
@@ -106,8 +108,38 @@ class TestPreviewAuthz:
         assert r.status_code in (400, 422)  # file rỗng → lỗi validate, KHÔNG 403
 
 
-def test_migration_seeds_eft_v3():
-    """Regression guard (bug qae2e02): migration casbin_rule p-row PHẢI ghi v3 (eft).
+# ---------------------------------------------------------------------------
+# POST /import/{id}/commit (ghi tiền) — BV-3 dual-gate
+# ---------------------------------------------------------------------------
+class TestCommitAuthz:
+    async def test_officer_denied(self, client, officer_token_headers):
+        r = await client.post(COMMIT_URL.format(999999), headers=officer_token_headers)
+        assert r.status_code == 403
+
+    async def test_accountant_passes_gate(self, client, accountant_token_headers):
+        # qua gate → commit lô không tồn tại → 404 (KHÔNG 403)
+        r = await client.post(
+            COMMIT_URL.format(999999), headers=accountant_token_headers
+        )
+        assert r.status_code != 403
+        assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /import/batches (lịch sử) — BV-3 dual-gate
+# ---------------------------------------------------------------------------
+class TestBatchesAuthz:
+    async def test_officer_denied(self, client, officer_token_headers):
+        r = await client.get(BATCHES_URL, headers=officer_token_headers)
+        assert r.status_code == 403
+
+    async def test_accountant_allowed(self, client, accountant_token_headers):
+        r = await client.get(BATCHES_URL, headers=accountant_token_headers)
+        assert r.status_code == 200
+
+
+def test_casbin_migrations_seed_eft_v3():
+    """Regression guard (qae2e02): migration casbin_rule p-row PHẢI có v3 (eft).
 
     auth_model.conf ``p = sub, obj, act, eft`` → row p thiếu v3 bị bỏ khi
     load_policy() / "invalid policy size" → grant vô hiệu trên prod. Test thường
@@ -116,12 +148,11 @@ def test_migration_seeds_eft_v3():
     """
     import pathlib
 
-    mig = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "alembic"
-        / "versions"
-        / "bvg20260624001_casbin_payment_import_grants.py"
-    )
-    content = mig.read_text(encoding="utf-8")
-    assert "v2, v3, template_id" in content  # INSERT có cột v3 (eft)
-    assert "'allow'" in content  # giá trị eft
+    versions = pathlib.Path(__file__).resolve().parents[2] / "alembic" / "versions"
+    for name in (
+        "bvg20260624001_casbin_payment_import_grants.py",
+        "bvh20260624001_casbin_payment_import_commit_grants.py",
+    ):
+        content = (versions / name).read_text(encoding="utf-8")
+        assert "v2, v3, template_id" in content, f"{name} thiếu cột v3 (eft)"
+        assert "'allow'" in content, f"{name} thiếu giá trị eft 'allow'"

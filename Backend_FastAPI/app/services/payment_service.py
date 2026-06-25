@@ -54,6 +54,44 @@ from app.config import settings
 log = structlog.get_logger(__name__)
 
 
+def apply_verified_payment_balances(
+    *,
+    invoice: Invoice,
+    fee: Fee,
+    amount: Decimal,
+    now: datetime,
+) -> Tuple[Decimal, Decimal]:
+    """Áp money-math của 1 payment ĐÃ verified vào invoice + fee (cập nhật
+    paid_amount/status + bump fee.version). Trả ``(fee_balance_before, fee_remaining)``
+    cho audit transaction.
+
+    NGUỒN SỰ THẬT DUY NHẤT cho việc "ghi 1 khoản verified vào invoice+fee", dùng
+    chung bởi ``verify_payment`` (verify tay) và ``payment_import_service.
+    auto_verify_payment`` (bulk import) — tránh 2 đường ghi tiền trôi dạt số liệu.
+
+    Lưu ý: ``invoice.is_fully_paid`` GỒM penalty → trả đủ GỐC nhưng còn phạt thì
+    invoice giữ 'partial'. fee chỉ lên 'partial' từ 'invoiced' (giữ nguyên các status
+    khác như verify_payment lịch sử).
+    """
+    invoice.paid_amount = (invoice.paid_amount or Decimal("0")) + amount
+    if invoice.is_fully_paid:
+        invoice.status = InvoiceStatusEnum.paid.value
+        invoice.paid_at = now
+    elif invoice.paid_amount > 0:
+        invoice.status = InvoiceStatusEnum.partial.value
+
+    fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
+    fee.paid_amount = fee.paid_amount + amount
+    fee.last_payment_at = now
+    fee.version += 1
+    fee_remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
+    if fee_remaining <= 0:
+        fee.status = FeeStatusEnum.paid.value
+    elif fee.paid_amount > 0 and fee.status == FeeStatusEnum.invoiced.value:
+        fee.status = FeeStatusEnum.partial.value
+    return fee_balance_before, fee_remaining
+
+
 class PaymentService:
     """
     Service for manual payment processing with maker-checker workflow.
@@ -286,37 +324,23 @@ class PaymentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
-        # Capture balance + cleared state BEFORE mutation (PR 5 transition detection)
-        fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
+        # Capture cleared state BEFORE mutation (PR 5 transition detection)
         from app.services.fee_calculation_service import is_hk1_cleared
         was_hk1_cleared = is_hk1_cleared(
             fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
         )
 
         # Update payment status
+        now = datetime.now(timezone.utc)
         payment.status = PaymentStatusEnum.verified.value
-        payment.verified_at = datetime.now(timezone.utc)
+        payment.verified_at = now
         payment.verified_by_id = verifier_id
 
-        # Update invoice paid_amount
-        invoice.paid_amount = invoice.paid_amount + payment.amount
-        if invoice.is_fully_paid:
-            invoice.status = InvoiceStatusEnum.paid.value
-            invoice.paid_at = datetime.now(timezone.utc)
-        elif invoice.paid_amount > 0:
-            invoice.status = InvoiceStatusEnum.partial.value
-
-        # Update fee paid_amount
-        fee.paid_amount = fee.paid_amount + payment.amount
-        fee.last_payment_at = datetime.now(timezone.utc)
-        fee.version += 1
-
-        # Update fee status
-        fee_remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
-        if fee_remaining <= 0:
-            fee.status = FeeStatusEnum.paid.value
-        elif fee.paid_amount > 0 and fee.status == FeeStatusEnum.invoiced.value:
-            fee.status = FeeStatusEnum.partial.value
+        # Apply money-math to invoice + fee (shared 1 nguồn sự thật với bulk
+        # auto-verify) → fee_balance_before / fee_remaining cho audit transaction.
+        fee_balance_before, fee_remaining = apply_verified_payment_balances(
+            invoice=invoice, fee=fee, amount=payment.amount, now=now
+        )
 
         # Create audit transaction
         transaction = PaymentTransaction(
