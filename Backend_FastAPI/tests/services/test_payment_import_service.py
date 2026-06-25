@@ -1595,6 +1595,140 @@ class TestVoidBatch:
         await db.commit()
         return batch_id
 
+    async def _seed_sts10(self, db):
+        from app.services.lead_admission_sync import TUITION_PAID_STATUS
+
+        db.add(
+            models.ConsultationStatus(
+                id=TUITION_PAID_STATUS,
+                name="Đã đóng học phí",
+                color_code="#00aa00",
+                stage_id="stg01",
+            )
+        )
+        await db.flush()
+        return TUITION_PAID_STATUS
+
+    async def test_void_reverts_lead_from_sts10(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Void lô đã đẩy lead sts10 → LÙI lead về status TRƯỚC (đối xứng forward sync).
+        sts10 = await self._seed_sts10(db)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        prof = (await db.execute(select(models.AdmissionProfile))).scalars().first()
+        lead_id = prof.lead_id
+        orig = seeded_dependencies["initial_status_id"]
+        await db.commit()
+
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        lead = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead.consultation_status_id == sts10  # tiền đề: forward đẩy sts10
+
+        await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None,
+            reason="ghi nhầm lô",
+        )
+        await db.commit()
+        lead2 = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead2.consultation_status_id == orig  # đã lùi về status cũ
+        # có bản ghi history audit cho lần lùi (sts10 → orig)
+        hist = (
+            (
+                await db.execute(
+                    select(models.LeadStatusHistory).where(
+                        models.LeadStatusHistory.lead_id == lead_id,
+                        models.LeadStatusHistory.old_consultation_status_id == sts10,
+                        models.LeadStatusHistory.new_consultation_status_id == orig,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(hist) >= 1
+
+    async def test_void_skips_lead_revert_when_advanced_past_sts10(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Lead đã chuyển tiếp khỏi sts10 (nhập học) → void KHÔNG kéo lùi pipeline.
+        sts10 = await self._seed_sts10(db)
+        db.add(
+            models.ConsultationStatus(
+                id="stsZZ", name="Đã nhập học", color_code="#123456",
+                stage_id="stg01",
+            )
+        )
+        await db.flush()
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        prof = (await db.execute(select(models.AdmissionProfile))).scalars().first()
+        lead_id = prof.lead_id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        lead = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead.consultation_status_id == sts10
+        lead.consultation_status_id = "stsZZ"  # giả lập chuyển tiếp sau khi đóng HP
+        await db.commit()
+
+        await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x",
+        )
+        await db.commit()
+        lead2 = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead2.consultation_status_id == "stsZZ"  # KHÔNG bị kéo lùi
+
+    async def test_void_hk2_does_not_touch_lead(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # batch HK2 → commit/void KHÔNG đụng pipeline lead (chỉ HK1 đẩy/lùi).
+        await self._seed_sts10(db)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(
+            db, seeded_dependencies, importer_id=admin_user.id, semester=2
+        )
+        batch_id = batch.id
+        prof = (await db.execute(select(models.AdmissionProfile))).scalars().first()
+        lead_id = prof.lead_id
+        orig = seeded_dependencies["initial_status_id"]
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        lead = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead.consultation_status_id == orig  # HK2 → KHÔNG forward sts10
+
+        await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x",
+        )
+        await db.commit()
+        lead2 = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead2.consultation_status_id == orig  # void HK2 → KHÔNG revert
+
     async def test_void_reverses_payment(self, db, seeded_dependencies, admin_user):
         # §10 Void: đảo lô → trừ lại paid_amount, reverse transaction, recompute status
         batch_id = await self._commit_one(db, seeded_dependencies, admin_user.id)

@@ -1543,6 +1543,42 @@ async def void_batch(
         reversed_count += 1
         reversed_amount += p.amount
 
+    # Lùi lead (projection) cho hồ sơ HK1 KHÔNG còn cleared sau khi đảo tiền — đối xứng
+    # forward sync ở commit. Void = SỬA NHẦM ghi nhận (KHÔNG phải học sinh rút) → lùi về
+    # status TRƯỚC sts10, KHÔNG đẩy sts18 (đó là refund thật). Bọc savepoint + try/except
+    # MỖI hồ-sơ: lỗi projection KHÔNG hủy đảo tiền của cả lô (tiền đã đảo phải giữ).
+    from app.services.fee_calculation_service import is_hk1_cleared
+    from app.services.lead_admission_sync import revert_lead_tuition_paid
+
+    reverted_leads = 0
+    for fee in fee_by_id.values():
+        if fee.fee_type != "tuition" or fee.semester_no != 1:
+            continue  # chỉ HK1 đụng pipeline lead
+        if is_hk1_cleared(fee.fee_type, fee.semester_no, fee.status, fee.paid_amount):
+            continue  # HK1 vẫn còn cleared (nguồn thu khác) → giữ lead ở sts10
+        try:
+            async with db.begin_nested():
+                profile = await _load_profile_with_lead(db, fee.admission_profile_id)
+                if profile is not None and await revert_lead_tuition_paid(
+                    db=db,
+                    profile=profile,
+                    changed_by_user_id=user_id,
+                    reason=f"Đảo (void) lô import #{batch_id}",
+                ):
+                    reverted_leads += 1
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "bulk_void_lead_revert_failed",
+                batch_id=batch_id,
+                profile_id=fee.admission_profile_id,
+                error=str(exc),
+                exc_info=True,
+            )
+    if reverted_leads:
+        log.info(
+            "bulk_void_leads_reverted", batch_id=batch_id, count=reverted_leads
+        )
+
     batch.status = PaymentImportBatchStatusEnum.void.value
     batch.voided_at = now
     batch.void_reason = (reason or "")[:1000]
