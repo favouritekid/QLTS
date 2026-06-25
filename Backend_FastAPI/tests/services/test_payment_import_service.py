@@ -546,7 +546,8 @@ class TestResolveValidate:
         assert "học phí" in res.rows[0].message
 
     async def test_only_draft_invoice_is_error(self, db, seeded_dependencies):
-        # Finding 12: đợt draft chưa phát hành → không payable → LỖI
+        # Finding 12: đợt draft chưa phát hành → không payable → LỖI.
+        # Message tách riêng nhánh 'nháp' (cần phát hành) — KHÔNG gộp 'hoặc đã thu đủ'.
         await _seed_tuition(
             db,
             seeded_dependencies,
@@ -557,7 +558,26 @@ class TestResolveValidate:
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
         assert res.rows[0].status == ERROR
-        assert "chưa phát hành" in res.rows[0].message
+        assert "đợt còn nháp" in res.rows[0].message
+        assert "phát hành" in res.rows[0].message
+        assert "đã thu đủ" not in res.rows[0].message  # không còn gộp 2 ca
+
+    async def test_fully_paid_invoice_is_error_distinct_message(
+        self, db, seeded_dependencies
+    ):
+        # Hồ sơ đã đóng đủ (mọi đợt 'paid') → không payable → LỖI với message RIÊNG
+        # "học phí đã thu đủ" (phân biệt với nhánh 'đợt còn nháp').
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "paid", "10000000", "0")],
+        )
+        res = await pis.resolve_and_validate(
+            db, [_draft("001234567890", "1000000")], 2026, 1, None
+        )
+        assert res.rows[0].status == ERROR
+        assert res.rows[0].message == "học phí đã thu đủ"
 
     async def test_overpay_total_principal_is_error(self, db, seeded_dependencies):
         await _seed_tuition(
@@ -2104,3 +2124,167 @@ class TestResultFileAndDetail:
         content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
         text = content.decode("utf-8")
         assert "(không có hồ sơ)" in text
+
+
+# =============================================================================
+# Diễn tiến: kế toán thu nhiều lần + import nhiều lô cho 1 hồ sơ (kịch bản 06-25)
+# =============================================================================
+class TestMultiCollectionTimeline:
+    """Mô phỏng đúng diễn biến nghiệp vụ đã chốt: học phí HK1 chia 2 đợt (đợt 1
+    đã phát hành, đợt 2 còn nháp). Kế toán thu 3 lần → import 3 lô; lô tràn sang
+    đợt CHƯA phát hành bị chặn cho tới khi phát hành hóa đơn đợt đó."""
+
+    @pytest.fixture(autouse=True)
+    async def _infra(self, db):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+
+    @staticmethod
+    def _file(amount: str) -> bytes:
+        return _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["012345678901", "Nguyễn Văn A", amount, "05/09/2026", "TM", "", ""],
+            ]
+        )
+
+    async def _import_commit(self, db, admin_id, amount):
+        batch, preview = await pis.preview_import(
+            db,
+            content=self._file(amount),
+            filename=f"thu_{amount}.csv",
+            academic_year=2026,
+            semester_no=1,
+            created_by_id=admin_id,
+            unit_id=None,
+        )
+        await db.commit()
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch.id, importer_id=admin_id, unit_id=None
+        )
+        await db.commit()
+        return batch, preview, result
+
+    async def test_full_timeline_multi_collect_multi_import(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # --- Thiết lập: HK1 = 10tr = đợt1 6tr (issued) + đợt2 4tr (draft, CHƯA p.hành)
+        _profile, _fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="012345678901",
+            lead_name="Nguyễn Văn A",
+            invoices=[
+                (1, "6000000", "issued", "0", "0"),
+                (2, "4000000", "draft", "0", "0"),
+            ],
+        )
+        inv1_id, inv2_id, fee_id = invs[0].id, invs[1].id, _fee.id
+        await db.commit()
+
+        async def _state():
+            i1 = (
+                await db.execute(select(Invoice).where(Invoice.id == inv1_id))
+            ).scalar_one()
+            i2 = (
+                await db.execute(select(Invoice).where(Invoice.id == inv2_id))
+            ).scalar_one()
+            f = (
+                await db.execute(select(Fee).where(Fee.id == fee_id))
+            ).scalar_one()
+            return i1, i2, f
+
+        # === Lô #1: thu 3.5tr → vào đợt 1 (issued) ===
+        _, _, r1 = await self._import_commit(db, admin_user.id, "3.500.000")
+        assert r1.committed_count == 1 and r1.payment_count == 1
+        i1, i2, f = await _state()
+        assert i1.paid_amount == Decimal("3500000") and i1.status == "partial"
+        assert i2.status == "draft"  # đợt 2 vẫn nháp
+        assert f.paid_amount == Decimal("3500000")
+
+        # === Lô #2: thu 2.5tr → đóng nốt đợt 1 ===
+        _, _, r2 = await self._import_commit(db, admin_user.id, "2.500.000")
+        assert r2.committed_count == 1
+        i1, i2, f = await _state()
+        assert i1.paid_amount == Decimal("6000000") and i1.status == "paid"
+        assert f.paid_amount == Decimal("6000000")
+
+        # === Lô #3 (lần 1): thu 4tr — đợt 1 đã 'paid', đợt 2 còn 'draft' → KHÔNG có
+        #     hóa đơn payable → LỖI message 'đợt còn nháp' (KHÔNG ghi tiền) ===
+        batch3, preview3 = await pis.preview_import(
+            db,
+            content=self._file("4.000.000"),
+            filename="thu_4.000.000.csv",
+            academic_year=2026,
+            semester_no=1,
+            created_by_id=admin_user.id,
+            unit_id=None,
+        )
+        await db.commit()
+        assert preview3.rows[0].status == ERROR
+        assert "đợt còn nháp" in preview3.rows[0].message
+        _, _, f = await _state()
+        assert f.paid_amount == Decimal("6000000")  # chưa ghi thêm
+
+        # === Kế toán PHÁT HÀNH đợt 2 (draft → issued) ===
+        i2_lock = (
+            await db.execute(select(Invoice).where(Invoice.id == inv2_id))
+        ).scalar_one()
+        i2_lock.status = "issued"
+        await db.commit()
+
+        # === Lô #3 (lần 2): re-import CÙNG file 4tr → preview cũ bị THAY (replace) →
+        #     đợt 2 nay 'issued' → Khớp → commit → đóng đủ HK1 ===
+        _, preview3b, r3 = await self._import_commit(db, admin_user.id, "4.000.000")
+        assert preview3b.rows[0].status in (MATCHED, WARNED)
+        assert r3.committed_count == 1 and r3.payment_count == 1
+        i1, i2, f = await _state()
+        assert i2.paid_amount == Decimal("4000000") and i2.status == "paid"
+        assert f.paid_amount == Decimal("10000000") and f.status == "paid"
+
+        # Tổng 3 lô = 3 Payment = 10tr
+        pays = (await db.execute(select(Payment))).scalars().all()
+        assert len(pays) == 3
+        assert sum((p.amount for p in pays), Decimal("0")) == Decimal("10000000")
+
+    async def test_overpay_blocked_when_next_installment_not_issued(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Biên: đợt 1 còn 2.5tr, đợt 2 còn 'draft' → thu 5tr KHÔNG tràn sang đợt 2
+        # (đợt nháp không tính nợ khả thu) → LỖI 'vượt còn nợ gốc'.
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="012345678901",
+            lead_name="Nguyễn Văn A",
+            invoices=[
+                (1, "6000000", "partial", "3500000", "0"),
+                (2, "4000000", "draft", "0", "0"),
+            ],
+        )
+        res = await pis.resolve_and_validate(
+            db, [_draft("012345678901", "5000000")], 2026, 1, None
+        )
+        assert res.rows[0].status == ERROR
+        assert "vượt" in res.rows[0].message
+
+    async def test_overflow_two_issued_installments_warns(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Đối chứng: nếu đợt 2 ĐÃ phát hành (issued), thu 5tr tràn 2 đợt → WARNED
+        # (cảnh báo tràn nhiều đợt) — ghi được (khác hẳn ca đợt nháp ở trên).
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="012345678901",
+            lead_name="Nguyễn Văn A",
+            invoices=[
+                (1, "6000000", "partial", "3500000", "0"),
+                (2, "4000000", "issued", "0", "0"),
+            ],
+        )
+        res = await pis.resolve_and_validate(
+            db, [_draft("012345678901", "5000000")], 2026, 1, None
+        )
+        assert res.rows[0].status == WARNED
+        assert len(res.rows[0].allocations) == 2  # 2.5tr đợt1 + 2.5tr đợt2

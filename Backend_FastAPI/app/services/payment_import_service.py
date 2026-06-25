@@ -398,7 +398,9 @@ async def resolve_and_validate(
     }
     profiles = await _fetch_profiles(db, cccds, academic_year, unit_id)
     fees = await _fetch_tuition_fees(db, [p.id for p in profiles.values()], semester_no)
-    invoices_by_fee = await _fetch_payable_invoices(db, [f.id for f in fees.values()])
+    fee_ids = [f.id for f in fees.values()]
+    invoices_by_fee = await _fetch_payable_invoices(db, fee_ids)
+    invoice_statuses = await _fetch_invoice_status_sets(db, fee_ids)
 
     # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
     # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR
@@ -479,7 +481,16 @@ async def resolve_and_validate(
         warnings: List[str] = []
         invoices = invoices_by_fee.get(fee.id, [])
         if not invoices:
-            res.message = "chưa phát hành hóa đơn (đợt còn nháp) hoặc đã thu đủ"
+            # Tách rõ hành động cho kế toán (thay vì gộp 'nháp hoặc đã thu đủ').
+            # Ưu tiên 'nháp' khi vừa có đợt nháp vừa có đợt đã thu đủ — vì còn việc
+            # phải làm: phát hành đợt nháp để thu tiếp.
+            statuses = invoice_statuses.get(fee.id, set())
+            if InvoiceStatusEnum.draft.value in statuses:
+                res.message = "đợt còn nháp — kế toán cần phát hành hóa đơn trước"
+            elif InvoiceStatusEnum.paid.value in statuses:
+                res.message = "học phí đã thu đủ"
+            else:
+                res.message = "chưa có đợt hóa đơn để thu"
             results.append(res)
             continue
 
@@ -657,6 +668,22 @@ async def _fetch_payable_invoices(
     for inv in (await db.execute(stmt)).scalars().all():
         by_fee.setdefault(inv.fee_id, []).append(inv)
     return by_fee
+
+
+async def _fetch_invoice_status_sets(
+    db: AsyncSession,
+    fee_ids: List[int],
+) -> Dict[int, set]:
+    """Lô fee_id → {fee_id: set(status MỌI invoice)} (1 query). Phân biệt nhánh
+    KHÔNG-payable: đợt còn nháp (draft → cần phát hành) vs đã thu đủ (paid) vs chưa
+    có đợt → message preview rõ hành động thay vì gộp 'nháp hoặc đã thu đủ'."""
+    if not fee_ids:
+        return {}
+    stmt = select(Invoice.fee_id, Invoice.status).where(Invoice.fee_id.in_(fee_ids))
+    out: Dict[int, set] = {}
+    for fee_id, status in (await db.execute(stmt)).all():
+        out.setdefault(fee_id, set()).add(status)
+    return out
 
 
 def _money(v: Decimal) -> str:
