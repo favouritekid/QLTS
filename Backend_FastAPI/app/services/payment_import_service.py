@@ -470,7 +470,7 @@ async def resolve_and_validate(
         # (3) học phí kỳ S, active-only — prefetch
         fee = fees.get(profile.id)
         if fee is None:
-            res.message = f"không có học phí HK{semester_no} đang hiệu lực"
+            res.message = f"hồ sơ chưa được thiết lập học phí HK{semester_no}"
             results.append(res)
             continue
         res.fee_id = fee.id
@@ -1245,15 +1245,24 @@ async def commit_batch(
             total_amount += row_total
             if row_cleared:
                 cleared_profiles[row_cleared[0]] = row_cleared[1]
-        except (
-            BusinessRuleViolation,
-            ResourceNotFoundError,
-            ValueError,
-            IntegrityError,
-        ) as exc:
+        except (BusinessRuleViolation, ResourceNotFoundError, ValueError) as exc:
+            # Lỗi nghiệp vụ/giá trị → message đã sạch (tiếng Việt) → hiện thẳng cho kế toán.
             failed_count += 1
             row.status = PaymentImportRowStatusEnum.error.value
-            row.message = f"[commit] {exc}"[:1000]
+            row.message = str(exc)[:500]
+        except Exception as exc:  # noqa: BLE001 — lỗi KHÔNG lường (DB/FK/IntegrityError…)
+            # KHÔNG nhét dump SQLAlchemy/asyncpg cho kế toán (xấu + lộ chi tiết kỹ thuật) →
+            # message generic + LOG đầy đủ cho dev. Savepoint per-row đã rollback dòng này
+            # nên các dòng khác vẫn ghi (cũng làm lô ROBUST: lỗi-lạ 1 dòng không abort cả lô).
+            log.error(
+                "bulk import commit: lỗi không lường khi ghi dòng",
+                batch_id=batch_id,
+                row_no=row.row_no,
+                error=str(exc),
+            )
+            failed_count += 1
+            row.status = PaymentImportRowStatusEnum.error.value
+            row.message = "lỗi hệ thống khi ghi dòng này — vui lòng liên hệ kỹ thuật"
 
     # GỘP lead-sync (projection) 1 lần/hồ-sơ HK1 vừa cleared. Bug 2: bọc savepoint +
     # try/except MỖI hồ-sơ — lỗi projection 1 hồ-sơ KHÔNG được hủy tiền đã ghi của CẢ
@@ -1616,6 +1625,7 @@ def _result_status_label(batch_status: str, row_status: str) -> str:
     return "Dự kiến ghi"  # preview
 
 
+COL_PROFILE_NAME = "Tên hồ sơ"  # tên hệ thống (Lead.full_name) — đối chiếu file
 _RESULT_EXTRA_COLS = ["Trạng thái", "Lý do", "Mã Payment", "Đã ghi (đồng)"]
 
 
@@ -1635,6 +1645,27 @@ async def build_result_file(
         PaymentImportRowStatusEnum.matched.value,
         PaymentImportRowStatusEnum.warned.value,
     )
+    # Cột "Tên hồ sơ" = tên hệ thống để kế toán đối chiếu cạnh "Họ và tên học sinh"
+    # của file (file có thể ghi lệch). Batch-query 1 lần (anti-N+1); dòng không
+    # resolve được hồ sơ → "(không có hồ sơ)".
+    profile_ids = {
+        r.resolved_profile_id for r in rows if r.resolved_profile_id is not None
+    }
+    profile_names: Dict[int, str] = {}
+    if profile_ids:
+        name_rows = await db.execute(
+            select(models.AdmissionProfile.id, models.Lead.full_name)
+            .join(models.Lead, models.AdmissionProfile.lead_id == models.Lead.id)
+            .where(models.AdmissionProfile.id.in_(profile_ids))
+        )
+        profile_names = {pid: (name or "") for pid, name in name_rows.all()}
+
+    def _profile_name(r: PaymentImportRow) -> str:
+        pid = r.resolved_profile_id
+        if pid is None:
+            return "(không có hồ sơ)"
+        return profile_names.get(pid) or "(không có hồ sơ)"
+
     # Header = cột gốc của file + cột kết quả. JSONB KHÔNG giữ thứ tự key → sắp theo
     # TEMPLATE_COLS (cột template, đúng thứ tự file mẫu) rồi cột lạ (nếu có) ở cuối.
     # Cột gốc do FILE quyết → cũng phải sanitize.
@@ -1645,7 +1676,11 @@ async def build_result_file(
         ]
     else:
         raw_keys = list(TEMPLATE_COLS)
-    header = raw_keys + _RESULT_EXTRA_COLS
+    # Chèn "Tên hồ sơ" NGAY SAU "Họ và tên học sinh" (đối chiếu cạnh nhau); file thiếu
+    # cột tên → đặt cuối phần cột gốc, ngay trước cột kết quả.
+    name_pos = raw_keys.index(COL_NAME) + 1 if COL_NAME in raw_keys else len(raw_keys)
+    display_cols = raw_keys[:name_pos] + [COL_PROFILE_NAME] + raw_keys[name_pos:]
+    header = display_cols + _RESULT_EXTRA_COLS
 
     def _row_cells(r: PaymentImportRow) -> List[str]:
         raw = r.raw or {}
@@ -1660,7 +1695,9 @@ async def build_result_file(
             )
             else ""
         )
-        cells = [raw.get(k, "") for k in raw_keys] + [label, r.message or "", pay, written]
+        base = [raw.get(k, "") for k in raw_keys]
+        base = base[:name_pos] + [_profile_name(r)] + base[name_pos:]
+        cells = base + [label, r.message or "", pay, written]
         return sanitize_csv_row(cells)  # = [sanitize_csv_cell(c) for c in cells]
 
     fname = f"ket_qua_import_lo_{batch_id}"

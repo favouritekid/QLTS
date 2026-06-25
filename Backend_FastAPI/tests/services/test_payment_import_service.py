@@ -1383,6 +1383,49 @@ class TestCommitBatch:
         ).scalar_one()
         assert b.status == "committed"
 
+    async def test_unexpected_error_shows_generic_message(
+        self, db, seeded_dependencies, admin_user, monkeypatch
+    ):
+        # Lỗi KHÔNG lường khi ghi 1 dòng (vd asyncpg/IntegrityError) → message generic
+        # thân thiện + KHÔNG dump SQLAlchemy/asyncpg cho kế toán; savepoint cô lập dòng.
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await db.commit()
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("asyncpg.ForeignKeyViolationError: detail")
+
+        monkeypatch.setattr(pis, "auto_verify_payment", _boom)
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        assert result.committed_count == 0
+        assert result.failed_count == 1
+        row = (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        ).scalar_one()
+        assert row.status == "error"
+        assert row.message == (
+            "lỗi hệ thống khi ghi dòng này — vui lòng liên hệ kỹ thuật"
+        )
+        # KHÔNG lộ chi tiết kỹ thuật cho kế toán
+        assert "asyncpg" not in row.message
+        assert "ForeignKeyViolation" not in row.message
+        # lô fail-toàn-bộ → giữ 'preview' (re-import được, không poison)
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "preview"
+
     async def test_cross_unit_creator_rejected(
         self, db, seeded_dependencies, second_unit, officer_user, admin_user
     ):
@@ -1866,7 +1909,8 @@ async def _mk_user(db, *, username, unit_id, role="accountant"):
 
 
 async def _mk_batch_with_row(
-    db, *, creator_id, status, raw, row_status="matched", payment_ids=None, amount="1000000"
+    db, *, creator_id, status, raw, row_status="matched", payment_ids=None,
+    amount="1000000", resolved_profile_id=None,
 ):
     batch = PaymentImportBatch(
         academic_year=2026,
@@ -1892,6 +1936,7 @@ async def _mk_batch_with_row(
         amount=Decimal(amount),
         message="",
         payment_ids=payment_ids or [],
+        resolved_profile_id=resolved_profile_id,
     )
     db.add(row)
     await db.flush()
@@ -2015,3 +2060,47 @@ class TestResultFileAndDetail:
         content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
         text = content.decode("utf-8")
         assert "Lỗi (không ghi)" in text
+
+    async def test_includes_profile_name_column_after_student_name(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Cột "Tên hồ sơ" (tên hệ thống) chèn NGAY SAU "Họ và tên học sinh" để đối chiếu.
+        profile, _, _ = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="012345678901",
+            invoices=[(1, 1000000, "issued", 0, 0)],
+            lead_name="Nguyễn Thị Hồng",
+        )
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="committed",
+            raw={pis.COL_CCCD: "012345678901", pis.COL_NAME: "Nguyen Thi Hong"},
+            payment_ids=[101],
+            resolved_profile_id=profile.id,
+        )
+        content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        header = text.splitlines()[0].lstrip("﻿").split(",")
+        assert pis.COL_PROFILE_NAME in header
+        assert header.index(pis.COL_PROFILE_NAME) == header.index(pis.COL_NAME) + 1
+        # tên hệ thống (có dấu) xuất hiện — khác tên file ghi không dấu
+        assert "Nguyễn Thị Hồng" in text
+
+    async def test_profile_name_placeholder_when_unresolved(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Dòng không resolve được hồ sơ → cột "Tên hồ sơ" = "(không có hồ sơ)".
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="preview",
+            raw={pis.COL_CCCD: "999999999999", pis.COL_NAME: "Vô Danh"},
+            row_status="error",
+            payment_ids=[],
+            resolved_profile_id=None,
+        )
+        content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        assert "(không có hồ sơ)" in text
