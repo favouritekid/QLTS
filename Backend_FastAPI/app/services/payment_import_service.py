@@ -22,6 +22,7 @@ import hashlib
 import io
 import re
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -54,6 +55,7 @@ from app.models.finance import (
     TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.utils.csv_helpers import sanitize_csv_cell
 from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
@@ -398,6 +400,30 @@ async def resolve_and_validate(
     fees = await _fetch_tuition_fees(db, [p.id for p in profiles.values()], semester_no)
     invoices_by_fee = await _fetch_payable_invoices(db, [f.id for f in fees.values()])
 
+    # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
+    # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR
+    # ngay ở preview (đối xứng commit, hết "khớp giả" rồi commit fail).
+    active_methods = {
+        c
+        for (c,) in (
+            await db.execute(
+                select(PaymentMethod.code).where(
+                    PaymentMethod.code.in_(["cash", "bank_transfer"]),
+                    PaymentMethod.is_active.is_(True),
+                )
+            )
+        ).all()
+    }
+    # G1 — đếm CCCD trùng (và CCCD+tiền trùng) trong file. Cái chốt money DUY NHẤT
+    # ("không thu vượt nợ gốc") KHÔNG bắt được trùng-còn-trong-nợ → thu khống. Cảnh báo
+    # (WARNING, không chặn — thu nhiều đợt là hợp lệ; kế toán quyết).
+    _valid = [
+        d for d in drafts
+        if not d.parse_error and CCCD_RE.match(d.citizen_id or "")
+    ]
+    cccd_counts = Counter(d.citizen_id for d in _valid)
+    cccd_amount_counts = Counter((d.citizen_id, d.amount) for d in _valid)
+
     # Sổ phân bổ trong batch: invoice_id -> tổng đã phân bổ ở các dòng TRƯỚC.
     batch_alloc: Dict[int, Decimal] = {}
     results: List[RowResult] = []
@@ -422,6 +448,12 @@ async def resolve_and_validate(
         # (6) CCCD định dạng
         if not CCCD_RE.match(d.citizen_id):
             res.message = "CCCD phải đúng 12 chữ số" if d.citizen_id else "thiếu CCCD"
+            results.append(res)
+            continue
+        # (G2) hình thức đã map (parser) nhưng PaymentMethod inactive/missing → ERROR sớm
+        # (commit:1017 cũng chặn → tránh "khớp giả" ở preview).
+        if d.method_code not in active_methods:
+            res.message = "hình thức chưa được kích hoạt trong hệ thống"
             results.append(res)
             continue
 
@@ -487,6 +519,20 @@ async def resolve_and_validate(
             warnings.append(
                 f"ngày thu {d.payment_date:%d/%m/%Y} lệch xa năm học {academic_year}"
             )
+
+        # (G1) CCCD xuất hiện nhiều dòng trong file → cảnh báo (không chặn). Nhấn mạnh khi
+        # CÙNG số tiền (nghi copy nhầm → thu khống), vì chốt "không vượt nợ" không bắt được.
+        dup_n = cccd_counts.get(d.citizen_id, 0)
+        if dup_n > 1:
+            if cccd_amount_counts.get((d.citizen_id, d.amount), 0) > 1:
+                warnings.append(
+                    f"CCCD xuất hiện {dup_n} dòng — CÙNG số tiền, nghi copy nhầm"
+                )
+            else:
+                warnings.append(
+                    f"CCCD xuất hiện {dup_n} dòng trong file — kiểm tra trùng "
+                    "(nếu thu nhiều đợt thì bỏ qua)"
+                )
 
         # FIFO allocate
         left = d.amount
@@ -1541,3 +1587,115 @@ async def list_batches(
         .all()
     )
     return items, total
+
+
+# ---------------------------------------------------------------------------
+# BV-5 R2/R1 — xem lại per-row + xuất file kết quả
+# ---------------------------------------------------------------------------
+async def get_batch_detail_scoped(
+    db: AsyncSession, batch_id: int, unit_id: Optional[int]
+) -> Tuple[PaymentImportBatch, List[PaymentImportRow]]:
+    """Lô + dòng, có IDOR unit-scope (mirror commit:998). Ngoài scope / không tồn tại
+    → ``ResourceNotFoundError`` (404, không lộ tồn tại)."""
+    batch, rows = await load_batch_with_rows(db, batch_id)
+    if batch is None:
+        raise ResourceNotFoundError("Không tìm thấy lô import")
+    if unit_id is not None:
+        creator_unit = (
+            await db.execute(
+                select(models.User.unit_id).where(
+                    models.User.id == batch.created_by_id
+                )
+            )
+        ).scalar_one_or_none()
+        if creator_unit != unit_id:
+            raise ResourceNotFoundError("Không tìm thấy lô import")
+    return batch, rows
+
+
+def _result_status_label(batch_status: str, row_status: str) -> str:
+    """Nhãn Trạng thái cho file kết quả — theo LÔ × DÒNG (P2: void KHÔNG "Thành công")."""
+    if row_status == PaymentImportRowStatusEnum.error.value:
+        if batch_status == PaymentImportBatchStatusEnum.committed.value:
+            return "Lỗi (không ghi)"
+        return "Lỗi"
+    # matched / warned
+    if batch_status == PaymentImportBatchStatusEnum.void.value:
+        return "Đã đảo"
+    if batch_status == PaymentImportBatchStatusEnum.committed.value:
+        return "Đã ghi"
+    return "Dự kiến ghi"  # preview
+
+
+_RESULT_EXTRA_COLS = ["Trạng thái", "Lý do", "Mã Payment", "Đã ghi (đồng)"]
+
+
+async def build_result_file(
+    db: AsyncSession, batch_id: int, fmt: str, unit_id: Optional[int]
+) -> Tuple[bytes, str, str]:
+    """File kết quả = NGUYÊN dòng gốc (`raw`) + cột Trạng thái/Lý do/Mã Payment/Đã ghi
+    → ``(content, media_type, filename)``. IDOR scope.
+
+    🔴 P1 chống formula injection: MỌI ô (raw = user nhập + header cột do file quyết) qua
+    ``sanitize_csv_cell`` (CSV + XLSX); XLSX thêm ``number_format='@'`` (text) phòng openpyxl
+    diễn giải chuỗi mở đầu '=' thành công thức.
+    """
+    batch, rows = await get_batch_detail_scoped(db, batch_id, unit_id)
+    committed_v = PaymentImportBatchStatusEnum.committed.value
+    written_statuses = (
+        PaymentImportRowStatusEnum.matched.value,
+        PaymentImportRowStatusEnum.warned.value,
+    )
+    # Header = cột gốc của file + cột kết quả. JSONB KHÔNG giữ thứ tự key → sắp theo
+    # TEMPLATE_COLS (cột template, đúng thứ tự file mẫu) rồi cột lạ (nếu có) ở cuối.
+    # Cột gốc do FILE quyết → cũng phải sanitize.
+    first_raw = rows[0].raw if rows and rows[0].raw else {}
+    if first_raw:
+        raw_keys = [c for c in TEMPLATE_COLS if c in first_raw] + [
+            k for k in first_raw if k not in TEMPLATE_COLS
+        ]
+    else:
+        raw_keys = list(TEMPLATE_COLS)
+    header = raw_keys + _RESULT_EXTRA_COLS
+
+    def _row_cells(r: PaymentImportRow) -> List[str]:
+        raw = r.raw or {}
+        label = _result_status_label(batch.status, r.status)
+        pay = ", ".join(str(p) for p in (r.payment_ids or []))
+        written = (
+            str(r.amount)
+            if (
+                batch.status == committed_v
+                and r.status in written_statuses
+                and r.amount is not None
+            )
+            else ""
+        )
+        cells = [raw.get(k, "") for k in raw_keys] + [label, r.message or "", pay, written]
+        return [sanitize_csv_cell(c) for c in cells]
+
+    fname = f"ket_qua_import_lo_{batch_id}"
+    if (fmt or "").lower() == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([sanitize_csv_cell(h) for h in header])
+        for r in rows:
+            writer.writerow(_row_cells(r))
+        content = ("﻿" + buf.getvalue()).encode("utf-8")  # BOM
+        return content, "text/csv; charset=utf-8", f"{fname}.csv"
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ket qua"
+    ws.append([sanitize_csv_cell(h) for h in header])
+    for r in rows:
+        ws.append(_row_cells(r))
+    # Force TEXT mọi ô (chống injection + giữ số 0 đầu CCCD).
+    for ws_row in ws.iter_rows():
+        for cell in ws_row:
+            cell.number_format = "@"
+    bio = io.BytesIO()
+    wb.save(bio)
+    return bio.getvalue(), _XLSX_MEDIA, f"{fname}.xlsx"

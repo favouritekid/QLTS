@@ -108,6 +108,14 @@ export const paymentImportBatchListSchema = z.object({
 })
 export type PaymentImportBatchList = z.infer<typeof paymentImportBatchListSchema>
 
+// BV-5 R2: lô + chi tiết từng dòng (xem lại per-row sau commit)
+export const paymentImportBatchDetailSchema = paymentImportBatchSummarySchema.extend({
+  rows: z.array(paymentImportRowSchema).default([]),
+})
+export type PaymentImportBatchDetail = z.infer<
+  typeof paymentImportBatchDetailSchema
+>
+
 // ============================================================================
 // FORM SCHEMAS (local)
 // ============================================================================

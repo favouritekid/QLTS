@@ -281,6 +281,11 @@ export const API_ENDPOINTS = {
         COMMIT: (batchId: number) => `/api/payments/import/${batchId}/commit`,
         VOID: (batchId: number) => `/api/payments/import/${batchId}/void`,
         BATCHES: "/api/payments/import/batches",
+        // BV-5 R2/R1: chi tiết lô (per-row) + tải file kết quả
+        BATCH_DETAIL: (batchId: number) =>
+          `/api/payments/import/batches/${batchId}`,
+        RESULT: (batchId: number) =>
+          `/api/payments/import/batches/${batchId}/result`,
       },
     },
 

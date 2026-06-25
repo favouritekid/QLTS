@@ -1,6 +1,6 @@
 "use client"
 
-import { CheckCircle2, Loader2 } from "lucide-react"
+import { CheckCircle2, Download, Loader2 } from "lucide-react"
 import { useState } from "react"
 
 import {
@@ -17,22 +17,16 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { useCommitPaymentImport } from "@/hooks/finance/usePaymentImport"
+  useCommitPaymentImport,
+  useDownloadPaymentImportResult,
+} from "@/hooks/finance/usePaymentImport"
 import {
   formatAmount,
   type PaymentImportCommit,
   type PaymentImportPreview,
-  type PaymentImportRow,
 } from "@/lib/zod/payment-import"
 
-import { RowStatusBadge } from "./ImportStatusBadge"
+import { ImportRowsTable } from "./ImportRowsTable"
 
 interface Props {
   preview: PaymentImportPreview
@@ -57,74 +51,13 @@ function SummaryStat({
   )
 }
 
-const ROW_DISPLAY_CAP = 500
-
-function RowsTable({ rows }: { rows: PaymentImportRow[] }) {
-  const shown = rows.slice(0, ROW_DISPLAY_CAP)
-  return (
-    <div className="space-y-1">
-      <div className="max-h-[28rem] overflow-auto rounded-lg border">
-        <Table>
-          <TableHeader className="sticky top-0 bg-background">
-            <TableRow>
-              <TableHead className="w-14">Dòng</TableHead>
-              <TableHead>Trạng thái</TableHead>
-              <TableHead>CCCD</TableHead>
-              <TableHead className="text-right">Số tiền</TableHead>
-              <TableHead>Phân bổ / Ghi chú</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.map((r) => (
-            <TableRow key={r.row_no}>
-              <TableCell className="font-mono text-xs">{r.row_no}</TableCell>
-              <TableCell>
-                <RowStatusBadge status={r.status} />
-              </TableCell>
-              <TableCell className="font-mono text-xs">
-                {r.citizen_id ?? "—"}
-              </TableCell>
-              <TableCell className="text-right">{formatAmount(r.amount)}</TableCell>
-              <TableCell className="text-xs">
-                {r.allocations.length > 0 ? (
-                  <span className="text-muted-foreground">
-                    {r.allocations
-                      .map((a) => `Đợt ${a.installment_no}: ${formatAmount(a.amount)}`)
-                      .join(" · ")}
-                  </span>
-                ) : null}
-                {r.message ? (
-                  <span
-                    className={
-                      r.status === "error" ? "text-red-600" : "text-amber-600"
-                    }
-                  >
-                    {r.allocations.length > 0 ? " — " : ""}
-                    {r.message}
-                  </span>
-                ) : null}
-              </TableCell>
-            </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-      {rows.length > ROW_DISPLAY_CAP ? (
-        <p className="text-xs text-muted-foreground">
-          Hiển thị {ROW_DISPLAY_CAP}/{rows.length} dòng đầu — xem file gốc để biết
-          đầy đủ.
-        </p>
-      ) : null}
-    </div>
-  )
-}
-
 export function PaymentImportPreviewResult({
   preview,
   onCommitted,
   onDiscard,
 }: Props) {
   const commit = useCommitPaymentImport()
+  const downloadResult = useDownloadPaymentImportResult()
   const [open, setOpen] = useState(false)
   const [committed, setCommitted] = useState<PaymentImportCommit | null>(null)
 
@@ -170,14 +103,27 @@ export function PaymentImportPreviewResult({
               <p className="text-sm font-medium text-red-700">
                 {errorRows.length} dòng KHÔNG ghi được (số dư đổi giữa preview→commit):
               </p>
-              <RowsTable rows={errorRows} />
+              <ImportRowsTable rows={errorRows} />
             </>
           ) : (
             <p className="text-sm text-green-700">
               Tất cả dòng hợp lệ đã ghi thành công.
             </p>
           )}
-          <div className="flex justify-end">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={downloadResult.isPending}
+              onClick={() =>
+                downloadResult.mutate({
+                  batchId: committed.batch_id,
+                  format: "xlsx",
+                })
+              }
+            >
+              <Download className="mr-1.5 h-4 w-4" />
+              Tải kết quả (Excel)
+            </Button>
             <Button onClick={onCommitted}>Xong</Button>
           </div>
         </CardContent>
@@ -222,7 +168,7 @@ export function PaymentImportPreviewResult({
           />
         </div>
 
-        <RowsTable rows={preview.rows} />
+        <ImportRowsTable rows={preview.rows} />
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button variant="ghost" onClick={onDiscard} disabled={commit.isPending}>

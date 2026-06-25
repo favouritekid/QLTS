@@ -1189,3 +1189,8 @@ class PaymentImportBatchListOut(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class PaymentImportBatchDetailOut(PaymentImportBatchSummaryOut):
+    """Lô + chi tiết TỪNG DÒNG — xem lại per-row sau commit (BV-5 R2)."""
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)

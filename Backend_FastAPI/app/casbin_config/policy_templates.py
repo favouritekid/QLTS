@@ -387,6 +387,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # BV-3 commit (ghi tiền) + lịch sử lô
         {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
         {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
+        # BV-5 R2/R1 đọc: chi tiết lô (per-row) + tải file kết quả
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}/result", "action": "GET"},
 
         # ACCOUNTING PERIODS - View only (create/close is admin only)
         {"subject": "{role}", "object": "/api/accounting/periods", "action": "GET"},
@@ -619,6 +622,9 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # BV-3 commit (ghi tiền) + lịch sử lô
         {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
         {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
+        # BV-5 R2/R1 đọc: chi tiết lô (per-row) + tải file kết quả
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}/result", "action": "GET"},
         # BV-3.5 void (đảo lô đã ghi) — manager/admin ONLY (accountant KHÔNG có)
         {"subject": "{role}", "object": "/api/payments/import/{batch_id}/void", "action": "POST"},
         {"subject": "{role}", "object": "/api/refunds", "action": "GET"},

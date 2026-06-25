@@ -1,6 +1,11 @@
 "use client"
 
-import { ChevronLeft, ChevronRight } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+} from "lucide-react"
 import { useState } from "react"
 
 import { ErrorEmptyState, TableEmptyState } from "@/components/common/EmptyState"
@@ -21,18 +26,104 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { usePaymentImportBatches } from "@/hooks/finance/usePaymentImport"
-import { formatAmount } from "@/lib/zod/payment-import"
+import {
+  usePaymentImportBatchDetail,
+  usePaymentImportBatches,
+  useDownloadPaymentImportResult,
+} from "@/hooks/finance/usePaymentImport"
+import {
+  formatAmount,
+  type PaymentImportBatchSummary,
+} from "@/lib/zod/payment-import"
 
+import { ImportRowsTable } from "./ImportRowsTable"
 import { BatchStatusBadge } from "./ImportStatusBadge"
 import { PaymentImportVoidDialog } from "./PaymentImportVoidDialog"
 
 const PAGE_SIZE = 20
+const COL_COUNT = 9 // số cột (gồm cột expand) → colSpan dòng chi tiết
 
 function formatDate(iso?: string | null): string {
   if (!iso) return "—"
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString("vi-VN")
+}
+
+/** 1 dòng lô + (mở rộng) chi tiết per-row. Hook detail/download gọi top-level ở đây. */
+function BatchRow({ b }: { b: PaymentImportBatchSummary }) {
+  const [expanded, setExpanded] = useState(false)
+  const detail = usePaymentImportBatchDetail(b.id, expanded)
+  const download = useDownloadPaymentImportResult()
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="w-8 pr-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={expanded ? "Thu gọn" : "Xem chi tiết"}
+            onClick={() => setExpanded((e) => !e)}
+          >
+            {expanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </Button>
+        </TableCell>
+        <TableCell className="font-mono text-xs">{b.id}</TableCell>
+        <TableCell className="whitespace-nowrap text-sm">
+          HK{b.semester_no}/{b.academic_year}
+        </TableCell>
+        <TableCell className="max-w-[12rem] truncate text-sm">
+          {b.file_name}
+        </TableCell>
+        <TableCell>
+          <BatchStatusBadge status={b.status} />
+        </TableCell>
+        <TableCell className="text-center text-xs">
+          <span className="text-green-700">{b.matched_count}</span>
+          {" / "}
+          <span className="text-amber-700">{b.warned_count}</span>
+          {" / "}
+          <span className="text-red-700">{b.failed_count}</span>
+        </TableCell>
+        <TableCell className="text-right">{formatAmount(b.total_amount)}</TableCell>
+        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+          {formatDate(b.created_at)}
+        </TableCell>
+        <TableCell className="text-right">
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={download.isPending}
+              aria-label="Tải file kết quả (Excel)"
+              onClick={() => download.mutate({ batchId: b.id, format: "xlsx" })}
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+            {b.can_void ? <PaymentImportVoidDialog batchId={b.id} /> : null}
+          </div>
+        </TableCell>
+      </TableRow>
+      {expanded ? (
+        <TableRow>
+          <TableCell colSpan={COL_COUNT} className="bg-muted/30">
+            {detail.isLoading ? (
+              <TableSkeleton rows={3} />
+            ) : detail.isError ? (
+              <ErrorEmptyState message="Không tải được chi tiết lô." />
+            ) : detail.data ? (
+              <ImportRowsTable rows={detail.data.rows} />
+            ) : null}
+          </TableCell>
+        </TableRow>
+      ) : null}
+    </>
+  )
 }
 
 export function PaymentImportHistory() {
@@ -46,7 +137,8 @@ export function PaymentImportHistory() {
       <CardHeader>
         <CardTitle>Lịch sử lô import</CardTitle>
         <CardDescription>
-          Các lô đã xem trước / ghi tiền / đảo (mới nhất trước).
+          Các lô đã xem trước / ghi tiền / đảo (mới nhất trước). Mở rộng để xem từng
+          dòng; tải file kết quả để đối soát.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -62,13 +154,12 @@ export function PaymentImportHistory() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-8" />
                     <TableHead className="w-12">#</TableHead>
                     <TableHead>Năm / Kỳ</TableHead>
                     <TableHead>File</TableHead>
                     <TableHead>Trạng thái</TableHead>
-                    <TableHead className="text-center">
-                      Khớp / CB / Lỗi
-                    </TableHead>
+                    <TableHead className="text-center">Khớp / CB / Lỗi</TableHead>
                     <TableHead className="text-right">Tổng tiền</TableHead>
                     <TableHead>Tạo lúc</TableHead>
                     <TableHead className="text-right">Thao tác</TableHead>
@@ -76,36 +167,7 @@ export function PaymentImportHistory() {
                 </TableHeader>
                 <TableBody>
                   {data.items.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell className="font-mono text-xs">{b.id}</TableCell>
-                      <TableCell className="whitespace-nowrap text-sm">
-                        HK{b.semester_no}/{b.academic_year}
-                      </TableCell>
-                      <TableCell className="max-w-[12rem] truncate text-sm">
-                        {b.file_name}
-                      </TableCell>
-                      <TableCell>
-                        <BatchStatusBadge status={b.status} />
-                      </TableCell>
-                      <TableCell className="text-center text-xs">
-                        <span className="text-green-700">{b.matched_count}</span>
-                        {" / "}
-                        <span className="text-amber-700">{b.warned_count}</span>
-                        {" / "}
-                        <span className="text-red-700">{b.failed_count}</span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {formatAmount(b.total_amount)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDate(b.created_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {b.can_void ? (
-                          <PaymentImportVoidDialog batchId={b.id} />
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
+                    <BatchRow key={b.id} b={b} />
                   ))}
                 </TableBody>
               </Table>

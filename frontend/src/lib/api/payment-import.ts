@@ -13,10 +13,12 @@
 import { api } from "./client"
 import { API_ENDPOINTS } from "./endpoints"
 import {
+  paymentImportBatchDetailSchema,
   paymentImportBatchListSchema,
   paymentImportCommitSchema,
   paymentImportPreviewSchema,
   paymentImportVoidSchema,
+  type PaymentImportBatchDetail,
   type PaymentImportBatchList,
   type PaymentImportCommit,
   type PaymentImportPreview,
@@ -73,10 +75,32 @@ async function listBatches(
   return paymentImportBatchListSchema.parse(res.data)
 }
 
+/** BV-5 R2: chi tiết 1 lô + per-row (xem lại sau commit). */
+async function getBatchDetail(
+  batchId: number,
+): Promise<PaymentImportBatchDetail> {
+  const res = await api.get(IMPORT.BATCH_DETAIL(batchId))
+  return paymentImportBatchDetailSchema.parse(res.data)
+}
+
+/** BV-5 R1: tải file kết quả (nguyên dòng gốc + cột Trạng thái/Lý do). Trả Blob. */
+async function downloadResult(
+  batchId: number,
+  format: "xlsx" | "csv",
+): Promise<Blob> {
+  const res = await api.get<Blob>(IMPORT.RESULT(batchId), {
+    params: { format },
+    responseType: "blob",
+  })
+  return res.data
+}
+
 export const paymentImportApi = {
   downloadTemplate,
   preview,
   commit,
   voidBatch,
   listBatches,
+  getBatchDetail,
+  downloadResult,
 }

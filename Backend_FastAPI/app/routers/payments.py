@@ -895,9 +895,89 @@ async def list_payment_import_batches(
     )
 
 
+# Route-order: ĐẶT SAU "/import/batches" (tĩnh) + dùng đường con "/batches/{id}" để
+# KHÔNG nuốt route danh sách. (Bare "/import/{batch_id}" sẽ khớp "batches"→ép int→422.)
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/import/batches/{batch_id}",
+    response_model=finance_schemas.PaymentImportBatchDetailOut,
+    summary="Chi tiết lô import — xem lại từng dòng sau commit (BV-5 R2)",
+)
+async def get_payment_import_batch_detail(
+    request: Request,
+    batch_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """Lô + per-row (status / lý do / payment_ids) để truy vết. IDOR unit-scope → 404."""
+    unit_id = finance_scope_unit_id(current_user)
+    try:
+        batch, rows = await payment_import_service.get_batch_detail_scoped(
+            db, batch_id, unit_id
+        )
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    # KHÔNG model_validate(batch) trực tiếp vào DetailOut: field `rows` + from_attributes
+    # → Pydantic đọc batch.rows (relationship LAZY, chưa load) → MissingGreenlet (async IO
+    # ngoài greenlet) → 500. Build từ summary (chỉ cột) + rows đã nạp riêng.
+    summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(batch)
+    summary.can_void = (
+        current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+        and batch.status == "committed"
+    )
+    return finance_schemas.PaymentImportBatchDetailOut(
+        **summary.model_dump(),
+        rows=[_payment_import_row_out(r) for r in rows],
+    )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/import/batches/{batch_id}/result",
+    summary="Tải file kết quả import (nguyên dòng gốc + Trạng thái/Lý do) (BV-5 R1)",
+)
+async def download_payment_import_result(
+    request: Request,
+    batch_id: int,
+    format: str = Query("xlsx", pattern="^(xlsx|csv)$"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+):
+    """File kết quả = nguyên dòng gốc + cột kết quả (sanitize chống formula injection).
+    IDOR unit-scope. Sinh ở service; router chỉ stream (CLAUDE.md rule 1)."""
+    unit_id = finance_scope_unit_id(current_user)
+    try:
+        content, media_type, filename = await payment_import_service.build_result_file(
+            db, batch_id, format, unit_id
+        )
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
+
+def _payment_import_row_out(r) -> finance_schemas.PaymentImportRowOut:
+    """Map 1 ``PaymentImportRow`` ORM → schema (dùng chung commit + detail BV-5)."""
+    return finance_schemas.PaymentImportRowOut(
+        row_no=r.row_no,
+        status=r.status,
+        message=r.message,
+        citizen_id=r.citizen_id,
+        profile_id=r.resolved_profile_id,
+        fee_id=r.resolved_fee_id,
+        amount=r.amount,
+        payment_ids=r.payment_ids,
+    )
+
 
 def _build_payment_import_commit(
     result, batch, rows
@@ -910,19 +990,7 @@ def _build_payment_import_commit(
         failed_count=result.failed_count,
         payment_count=result.payment_count,
         total_amount=result.total_amount,
-        rows=[
-            finance_schemas.PaymentImportRowOut(
-                row_no=r.row_no,
-                status=r.status,
-                message=r.message,
-                citizen_id=r.citizen_id,
-                profile_id=r.resolved_profile_id,
-                fee_id=r.resolved_fee_id,
-                amount=r.amount,
-                payment_ids=r.payment_ids,
-            )
-            for r in rows
-        ],
+        rows=[_payment_import_row_out(r) for r in rows],
     )
 
 

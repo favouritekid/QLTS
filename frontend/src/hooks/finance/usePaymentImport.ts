@@ -13,6 +13,7 @@ import { AxiosError, isAxiosError } from "axios"
 import { toast } from "sonner"
 
 import { paymentImportApi } from "@/lib/api/payment-import"
+import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob"
 import type {
   PaymentImportCommit,
   PaymentImportPreview,
@@ -27,6 +28,8 @@ export const paymentImportKeys = {
   all: ["payment-import"] as const,
   batches: (page: number, pageSize: number) =>
     [...paymentImportKeys.all, "batches", page, pageSize] as const,
+  detail: (batchId: number) =>
+    [...paymentImportKeys.all, "detail", batchId] as const,
 }
 
 function errMsg(error: unknown, fallback: string): string {
@@ -57,33 +60,10 @@ export function usePaymentImportBatches(page: number, pageSize: number) {
 export function useDownloadPaymentImportTemplate() {
   return useMutation<Blob, AxiosError<ApiErrorResponse>, "xlsx" | "csv">({
     mutationFn: (format) => paymentImportApi.downloadTemplate(format),
-    onSuccess: (blob, format) => {
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement("a")
-      link.href = url
-      link.download = `mau_import_thu_hoc_phi.${format}`
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-    },
-    onError: async (error) => {
-      // responseType:'blob' → body lỗi (JSON) bị bọc thành Blob → đọc text để lấy
-      // detail thật thay vì luôn fallback.
-      let msg = "Không tải được file mẫu"
-      const data = error.response?.data as unknown
-      if (data instanceof Blob) {
-        try {
-          const parsed = JSON.parse(await data.text())
-          if (typeof parsed?.detail === "string") msg = parsed.detail
-        } catch {
-          /* blob không phải JSON → giữ fallback */
-        }
-      } else {
-        msg = errMsg(error, msg)
-      }
-      toast.error(msg)
-    },
+    onSuccess: (blob, format) =>
+      downloadBlob(blob, `mau_import_thu_hoc_phi.${format}`),
+    onError: async (error) =>
+      toast.error(await blobErrorMessage(error, "Không tải được file mẫu")),
   })
 }
 
@@ -137,5 +117,32 @@ export function useVoidPaymentImport() {
       queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })
     },
     onError: (error) => toast.error(errMsg(error, "Không đảo được lô import")),
+  })
+}
+
+// ============================================================================
+// BV-5 R2 — chi tiết lô (per-row) · R1 — tải file kết quả
+// ============================================================================
+export function usePaymentImportBatchDetail(batchId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: paymentImportKeys.detail(batchId),
+    queryFn: () => paymentImportApi.getBatchDetail(batchId),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
+export function useDownloadPaymentImportResult() {
+  return useMutation<
+    Blob,
+    AxiosError<ApiErrorResponse>,
+    { batchId: number; format: "xlsx" | "csv" }
+  >({
+    mutationFn: ({ batchId, format }) =>
+      paymentImportApi.downloadResult(batchId, format),
+    onSuccess: (blob, { batchId, format }) =>
+      downloadBlob(blob, `ket_qua_import_lo_${batchId}.${format}`),
+    onError: async (error) =>
+      toast.error(await blobErrorMessage(error, "Không tải được file kết quả")),
   })
 }

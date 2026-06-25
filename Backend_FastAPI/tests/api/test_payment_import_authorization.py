@@ -193,3 +193,101 @@ def test_casbin_migrations_seed_eft_v3():
         content = (versions / name).read_text(encoding="utf-8")
         assert "v2, v3, template_id" in content, f"{name} thiếu cột v3 (eft)"
         assert "'allow'" in content, f"{name} thiếu giá trị eft 'allow'"
+
+
+# Route mới BV-5 R2/R1: chi tiết lô (per-row) + tải file kết quả. Đường con
+# "/batches/{id}" → KHÔNG nuốt route danh sách "/batches".
+DETAIL_URL = "/api/payments/import/batches/999999"
+RESULT_URL = "/api/payments/import/batches/999999/result"
+
+
+class TestBatchDetailAndResultAuthz:
+    async def test_batches_list_still_200_not_shadowed(
+        self, client, accountant_token_headers
+    ):
+        # 🔴 P2 regression: detail "/batches/{id}" KHÔNG shadow list "/batches" → 200 (≠ 422).
+        r = await client.get(BATCHES_URL, headers=accountant_token_headers)
+        assert r.status_code == 200
+
+    async def test_detail_officer_denied(self, client, officer_token_headers):
+        r = await client.get(DETAIL_URL, headers=officer_token_headers)
+        assert r.status_code == 403
+
+    async def test_detail_regular_user_denied(
+        self, client, regular_user_token_headers
+    ):
+        r = await client.get(DETAIL_URL, headers=regular_user_token_headers)
+        assert r.status_code == 403
+
+    async def test_detail_accountant_passes_gate(
+        self, client, accountant_token_headers
+    ):
+        # Qua Casbin → lô không tồn tại → 404 (KHÔNG 403, KHÔNG 422 route-order).
+        r = await client.get(DETAIL_URL, headers=accountant_token_headers)
+        assert r.status_code == 404
+
+    async def test_detail_manager_passes_gate(self, client, manager_token_headers):
+        r = await client.get(DETAIL_URL, headers=manager_token_headers)
+        assert r.status_code == 404
+
+    async def test_result_officer_denied(self, client, officer_token_headers):
+        r = await client.get(RESULT_URL, headers=officer_token_headers)
+        assert r.status_code == 403
+
+    async def test_result_accountant_passes_gate(
+        self, client, accountant_token_headers
+    ):
+        r = await client.get(RESULT_URL, headers=accountant_token_headers)
+        assert r.status_code == 404
+
+
+class TestBatchDetailContent:
+    async def test_detail_returns_rows_no_missing_greenlet(
+        self, client, admin_token_headers
+    ):
+        # 🐞 Regression: serialize PaymentImportBatchDetailOut KHÔNG được đọc batch.rows
+        # (relationship lazy, chưa load) → MissingGreenlet → 500. Build từ summary.
+        from decimal import Decimal
+
+        from app.models.finance import PaymentImportBatch, PaymentImportRow
+
+        async with AsyncSessionLocal() as db:
+            batch = PaymentImportBatch(
+                academic_year=2026,
+                semester_no=1,
+                file_name="reg.xlsx",
+                file_sha256="sha-regression-detail-greenlet",
+                status="committed",
+                row_count=1,
+                matched_count=1,
+                warned_count=0,
+                failed_count=0,
+                total_amount=Decimal("1000000"),
+                created_by_id=None,
+            )
+            db.add(batch)
+            await db.flush()
+            db.add(
+                PaymentImportRow(
+                    batch_id=batch.id,
+                    row_no=2,
+                    citizen_id="001234567890",
+                    raw={"Số CCCD": "001234567890"},
+                    status="matched",
+                    amount=Decimal("1000000"),
+                    message="ok",
+                    payment_ids=[1],
+                )
+            )
+            await db.commit()
+            bid = batch.id
+
+        r = await client.get(
+            f"/api/payments/import/batches/{bid}", headers=admin_token_headers
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["id"] == bid
+        assert len(body["rows"]) == 1
+        assert body["rows"][0]["row_no"] == 2
+        assert body["rows"][0]["citizen_id"] == "001234567890"
