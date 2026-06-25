@@ -1272,7 +1272,12 @@ async def commit_batch(
             total_amount += row_total
             if row_cleared:
                 cleared_profiles[row_cleared[0]] = row_cleared[1]
-        except (BusinessRuleViolation, ResourceNotFoundError, ValueError) as exc:
+        except (
+            BusinessRuleViolation,
+            ResourceNotFoundError,
+            ValueError,
+            ConflictError,
+        ) as exc:
             # Lỗi nghiệp vụ/giá trị → message đã sạch (tiếng Việt) → hiện thẳng cho kế toán.
             failed_count += 1
             row.status = PaymentImportRowStatusEnum.error.value
@@ -1282,7 +1287,7 @@ async def commit_batch(
             # message generic + LOG đầy đủ cho dev. Savepoint per-row đã rollback dòng này
             # nên các dòng khác vẫn ghi (cũng làm lô ROBUST: lỗi-lạ 1 dòng không abort cả lô).
             log.error(
-                "bulk import commit: lỗi không lường khi ghi dòng",
+                "bulk_commit_row_unexpected_error",
                 batch_id=batch_id,
                 row_no=row.row_no,
                 error=str(exc),
@@ -1652,7 +1657,8 @@ def _result_status_label(batch_status: str, row_status: str) -> str:
     return "Dự kiến ghi"  # preview
 
 
-COL_PROFILE_NAME = "Tên hồ sơ"  # tên hệ thống (Lead.full_name) — đối chiếu file
+# "(hệ thống)" trong nhãn để tránh trùng nếu file có sẵn cột tên "Tên hồ sơ".
+COL_PROFILE_NAME = "Tên hồ sơ (hệ thống)"  # tên hệ thống (Lead.full_name)
 _RESULT_EXTRA_COLS = ["Trạng thái", "Lý do", "Mã Payment", "Đã ghi (đồng)"]
 
 
