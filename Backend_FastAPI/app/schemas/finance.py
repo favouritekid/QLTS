@@ -1176,6 +1176,9 @@ class PaymentImportBatchSummaryOut(BaseModel):
     created_at: datetime
     committed_at: Optional[datetime] = None
     voided_at: Optional[datetime] = None
+    # Quyền đảo lô của NGƯỜI ĐANG XEM (BE quyết theo role+status) → FE đọc flag thay
+    # vì tự check role (thin-client). True khi user là manager/admin & lô 'committed'.
+    can_void: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -36,6 +36,7 @@ import {
   Trash2,
   TrendingUp,
   Trello,
+  Upload,
   UserCheck,
   Users,
   WalletCards,
@@ -181,6 +182,13 @@ export const navigationConfig: NavigationConfig = {
           label: "Thu học phí",
           href: "/finance/invoices",
           icon: Receipt,
+          roles: ["accountant", "manager", "admin"],
+        },
+        {
+          // Import file tổng hợp → tự xác minh thanh toán hàng loạt (BV)
+          label: "Import thu học phí",
+          href: "/finance/payments/import",
+          icon: Upload,
           roles: ["accountant", "manager", "admin"],
         },
         {

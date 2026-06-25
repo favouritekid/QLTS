@@ -879,11 +879,16 @@ async def list_payment_import_batches(
     items, total = await payment_import_service.list_batches(
         db, unit_id=unit_id, skip=skip, limit=page_size
     )
+    # can_void = quyền THẬT của người xem (khớp gate require_admin_or_manager của route
+    # void) → FE đọc flag, KHÔNG tự check role. Chỉ lô 'committed' mới đảo được.
+    can_void_role = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    items_out = []
+    for b in items:
+        summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(b)
+        summary.can_void = can_void_role and b.status == "committed"
+        items_out.append(summary)
     return finance_schemas.PaymentImportBatchListOut(
-        items=[
-            finance_schemas.PaymentImportBatchSummaryOut.model_validate(b)
-            for b in items
-        ],
+        items=items_out,
         total=total,
         page=page,
         page_size=page_size,

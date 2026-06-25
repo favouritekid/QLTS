@@ -274,6 +274,14 @@ export const API_ENDPOINTS = {
         CREATE: "/api/payments/intents",
         DETAIL: (intentId: number) => `/api/payments/intents/${intentId}`,
       },
+      // Bulk payment import (BV — kế toán thu offline → import → tự xác minh)
+      IMPORT: {
+        TEMPLATE: "/api/payments/import/template",
+        PREVIEW: "/api/payments/import/preview",
+        COMMIT: (batchId: number) => `/api/payments/import/${batchId}/commit`,
+        VOID: (batchId: number) => `/api/payments/import/${batchId}/void`,
+        BATCHES: "/api/payments/import/batches",
+      },
     },
 
     // Lookup data
