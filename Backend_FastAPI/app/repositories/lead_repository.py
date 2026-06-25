@@ -793,6 +793,34 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return {row.status: row.count for row in result}
 
+    async def count_by_consultation_status(self, filters: list) -> dict:
+        """
+        Count leads grouped by consultation_status_id over a pre-built filter set.
+
+        Mirrors get_summary's filter contract (shared _build_filters output) so
+        the "Giai đoạn" filter tree honours the EXACT same scope as the lead
+        list. The caller passes scope-only filters → "static per-scope" counts
+        (Documents/LEAD_STAGE_TREE_FILTER_PLAN.md §2). Leads with NULL
+        consultation_status_id are bucketed under "__null__" so the tree never
+        hides a lead.
+        """
+        query = (
+            select(
+                models.Lead.consultation_status_id,
+                func.count(models.Lead.id).label("count"),
+            )
+            .group_by(models.Lead.consultation_status_id)
+        )
+        if filters:
+            query = query.where(*filters)
+
+        result = await self.db.execute(query)
+        return {
+            ("__null__" if row.consultation_status_id is None
+             else row.consultation_status_id): row.count
+            for row in result
+        }
+
     # =========================================================================
     # LEAD INSIGHTS CACHE: Aggregation methods for cache update
     # =========================================================================

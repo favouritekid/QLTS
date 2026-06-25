@@ -2038,6 +2038,16 @@ class LeadListFilter:
         self.requesting_user = requesting_user
         self.is_forced_officer_filter = is_forced_officer_filter
 
+    def scope_kwargs(self) -> dict:
+        """RBAC scope (officer/unit) as kwargs for lead queries — single source
+        so list, export and count honour the SAME scope. Add any new scope
+        field here so every consumer updates atomically (no silent drift)."""
+        return {
+            "assigned_officer_id": self.assigned_officer_id,
+            "unit_id": self.unit_id,
+            "unit_ids": self.unit_ids,
+        }
+
 
 async def get_lead_list_filter(
     assigned_officer_id: str | None = None,

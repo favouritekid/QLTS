@@ -300,6 +300,13 @@ async def get_all_leads(
     consultation_status_id: Optional[str] = Query(
         None, description="Consultation status IDs (comma-separated, e.g. sts04,sts20)"
     ),
+    with_status_counts: bool = Query(
+        False,
+        description=(
+            "Also return lead counts grouped by consultation_status_id "
+            "(scope-only, ignores other filters) for the Giai đoạn filter tree."
+        ),
+    ),
 ):
     """
     Lấy danh sách Leads (có phân trang, filter, search, sort).
@@ -343,11 +350,22 @@ async def get_all_leads(
         is_hot=is_hot,
         consultation_status_id=consultation_status_id,
     )
+
+    # Scope-only counts for the "Giai đoạn" filter tree (static navigation map).
+    # Reuses the SAME LeadListFilter scope as the list → no RBAC leak; ignores
+    # secondary filters on purpose. See LEAD_STAGE_TREE_FILTER_PLAN.md §2.
+    consultation_status_counts = None
+    if with_status_counts:
+        consultation_status_counts = await lead_service.get_consultation_status_counts(
+            db, **lead_filter.scope_kwargs()
+        )
+
     return {
         "total_count": total,
         "leads": leads,
         "summary": summary,
         "effective_scope": lead_filter.effective_scope,
+        "consultation_status_counts": consultation_status_counts,
     }
 
 

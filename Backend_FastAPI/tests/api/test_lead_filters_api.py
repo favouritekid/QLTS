@@ -180,3 +180,69 @@ async def test_search_unaccent_via_api(
     names2 = [lead["full_name"] for lead in r2.json()["leads"]]
     assert "Nguyễn Văn Hùng" not in names2
     assert "Trần Thị Bình" not in names2
+
+
+@pytest.mark.asyncio
+async def test_with_status_counts_returns_grouped_map(
+    client: AsyncClient, admin_token_headers: dict, filter_env: dict
+):
+    """?with_status_counts=1 adds a counts map grouped by
+    consultation_status_id; absent flag → field stays null (no extra query)."""
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            s.add(models.ConsultationStatus(
+                id="fltcnt", name="Filter Count", color_code="#123456",
+                stage_id=None, is_final=False,
+            ))
+    u = filter_env
+    await _seed_lead(u["unit_id"], "fltcnt", "CountLeadA", "0911000010")
+    await _seed_lead(u["unit_id"], "fltcnt", "CountLeadB", "0911000011")
+
+    r = await client.get(
+        f"{LEADS_URL}?with_status_counts=1", headers=admin_token_headers
+    )
+    assert r.status_code == 200, r.text
+    counts = r.json()["consultation_status_counts"]
+    assert counts is not None
+    # Dedicated status → exact count regardless of what other tests seeded.
+    assert counts.get("fltcnt") == 2
+
+    # No flag → field is null (avoids the extra group-by on every page request).
+    r2 = await client.get(LEADS_URL, headers=admin_token_headers)
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["consultation_status_counts"] is None
+
+
+@pytest.mark.asyncio
+async def test_with_status_counts_honours_officer_scope(
+    client: AsyncClient, officer_token_headers: dict,
+    officer_user_in_db: dict, filter_env: dict
+):
+    """The counts map reuses the SAME LeadListFilter scope as the list: an
+    officer sees the count for THEIR OWN lead but NOT for leads they can't
+    access. Seeds one owned + one unassigned lead so the assertion can tell
+    'correctly scoped to self' apart from 'returns nothing' (non-vacuous)."""
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            s.add(models.ConsultationStatus(
+                id="fltown", name="Filter Owned", color_code="#222222",
+                stage_id=None, is_final=False,
+            ))
+            s.add(models.ConsultationStatus(
+                id="fltsco", name="Filter Scope", color_code="#654321",
+                stage_id=None, is_final=False,
+            ))
+    u = filter_env
+    # One lead OWNED by the calling officer + one unassigned (invisible to them).
+    await _seed_lead(u["unit_id"], "fltown", "OwnedByOfficer", "0911000020",
+                     assigned_officer_id=officer_user_in_db["id"])
+    await _seed_lead(u["unit_id"], "fltsco", "NotOwnedByOfficer", "0911000021",
+                     assigned_officer_id=None)
+
+    r = await client.get(
+        f"{LEADS_URL}?with_status_counts=1", headers=officer_token_headers
+    )
+    assert r.status_code == 200, r.text
+    counts = r.json()["consultation_status_counts"] or {}
+    assert counts.get("fltown") == 1   # officer's OWN lead IS counted
+    assert "fltsco" not in counts      # unowned lead excluded (no RBAC leak)

@@ -549,6 +549,12 @@ class LeadsPage(BaseModel):
     leads: List[Lead]
     summary: Optional[LeadsSummary] = None
     effective_scope: Optional[EffectiveScope] = None
+    # Scope-only counts per consultation_status_id for the "Giai đoạn" filter
+    # tree — populated only when ?with_status_counts=true. Honours RBAC scope
+    # (same as the list) but ignores secondary filters → a stable "navigation
+    # map". Key "__null__" = leads with no consultation_status (no lead hidden).
+    # See Documents/LEAD_STAGE_TREE_FILTER_PLAN.md.
+    consultation_status_counts: Optional[Dict[str, int]] = None
 
 
 class BulkAssignLeadsSchema(BaseModel):

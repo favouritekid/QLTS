@@ -762,6 +762,33 @@ async def get_leads(
     return total_count, leads, summary
 
 
+async def get_consultation_status_counts(
+    db: AsyncSession,
+    *,
+    assigned_officer_id: Optional[str] = None,
+    unit_id: Optional[int] = None,
+    unit_ids: Optional[List[int]] = None,
+) -> dict:
+    """
+    Đếm lead theo consultation_status_id, CHỈ áp RBAC scope (officer/unit) —
+    KHÔNG áp filter phụ (nguồn/ngày/điểm/search) → count "tĩnh theo scope"
+    làm bản đồ điều hướng cho cây filter Giai đoạn.
+
+    Tái dùng `_build_filters` với CHỈ scope params để khớp chính xác
+    phạm vi của danh sách (officer ép self, manager ép unit, admin
+    full) đã được LeadListFilter giải quyết ở router. Xem
+    LEAD_STAGE_TREE_FILTER_PLAN §2.
+    """
+    from app.repositories import LeadRepository
+
+    repo = LeadRepository(db)
+    scope_filters = repo._build_filters(
+        assigned_officer_id=assigned_officer_id,
+        unit_id=unit_id,
+        unit_ids=unit_ids,
+    )
+    return await repo.count_by_consultation_status(scope_filters)
+
 
 async def create_lead(
     db: AsyncSession,
