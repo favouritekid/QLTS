@@ -881,11 +881,10 @@ async def list_payment_import_batches(
     )
     # can_void = quyền THẬT của người xem (khớp gate require_admin_or_manager của route
     # void) → FE đọc flag, KHÔNG tự check role. Chỉ lô 'committed' mới đảo được.
-    can_void_role = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
     items_out = []
     for b in items:
         summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(b)
-        summary.can_void = can_void_role and b.status == "committed"
+        summary.can_void = _can_void_for(current_user, b.status)
         items_out.append(summary)
     return finance_schemas.PaymentImportBatchListOut(
         items=items_out,
@@ -922,10 +921,7 @@ async def get_payment_import_batch_detail(
     # → Pydantic đọc batch.rows (relationship LAZY, chưa load) → MissingGreenlet (async IO
     # ngoài greenlet) → 500. Build từ summary (chỉ cột) + rows đã nạp riêng.
     summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(batch)
-    summary.can_void = (
-        current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
-        and batch.status == "committed"
-    )
+    summary.can_void = _can_void_for(current_user, batch.status)
     return finance_schemas.PaymentImportBatchDetailOut(
         **summary.model_dump(),
         rows=[_payment_import_row_out(r) for r in rows],
@@ -964,6 +960,12 @@ async def download_payment_import_result(
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
+
+def _can_void_for(user: models.User, batch_status: str) -> bool:
+    """Quyền đảo lô của user xem: manager/admin & lô 'committed' (khớp gate route void).
+    Dùng chung list + detail (1 nguồn — tránh lệch nếu đổi điều kiện)."""
+    return user.role in (UserRole.MANAGER, UserRole.ADMIN) and batch_status == "committed"
+
 
 def _payment_import_row_out(r) -> finance_schemas.PaymentImportRowOut:
     """Map 1 ``PaymentImportRow`` ORM → schema (dùng chung commit + detail BV-5)."""

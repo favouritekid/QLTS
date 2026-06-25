@@ -1663,7 +1663,7 @@ async def build_result_file(
         label = _result_status_label(batch.status, r.status)
         pay = ", ".join(str(p) for p in (r.payment_ids or []))
         written = (
-            str(r.amount)
+            f"{r.amount:.0f}"  # VND nguyên — bỏ đuôi '.00' của Numeric(15,2)
             if (
                 batch.status == committed_v
                 and r.status in written_statuses
