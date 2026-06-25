@@ -117,7 +117,7 @@ function BatchRow({ b }: { b: PaymentImportBatchSummary }) {
             ) : detail.isError ? (
               <ErrorEmptyState message="Không tải được chi tiết lô." />
             ) : detail.data ? (
-              <ImportRowsTable rows={detail.data.rows} />
+              <ImportRowsTable rows={detail.data.rows} batchStatus={b.status} />
             ) : null}
           </TableCell>
         </TableRow>

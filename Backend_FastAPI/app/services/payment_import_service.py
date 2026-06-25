@@ -55,7 +55,7 @@ from app.models.finance import (
     TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
-from app.utils.csv_helpers import sanitize_csv_cell
+from app.utils.csv_helpers import sanitize_csv_row
 from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
@@ -1009,6 +1009,23 @@ class CommitResult:
     total_amount: Decimal  # tổng tiền đã ghi
 
 
+async def _assert_batch_creator_in_unit(
+    db: AsyncSession, batch: PaymentImportBatch, unit_id: Optional[int]
+) -> None:
+    """IDOR unit-scope theo ĐƠN VỊ người tạo lô: manager (unit_id!=None) chỉ thao tác lô
+    do user CÙNG đơn vị tạo; admin/accountant (unit_id=None) → mọi lô. Ngoài scope → 404
+    (không lộ tồn tại). 1 NGUỒN quy tắc dùng chung commit/void/detail (tránh drift quyền)."""
+    if unit_id is None:
+        return
+    creator_unit = (
+        await db.execute(
+            select(models.User.unit_id).where(models.User.id == batch.created_by_id)
+        )
+    ).scalar_one_or_none()
+    if creator_unit != unit_id:
+        raise ResourceNotFoundError("Không tìm thấy lô import")
+
+
 async def commit_batch(
     db: AsyncSession,
     *,
@@ -1038,17 +1055,8 @@ async def commit_batch(
     ).scalar_one_or_none()
     if batch is None:
         raise ResourceNotFoundError("Không tìm thấy lô import")
-    # P1 IDOR: committer unit-scope (manager) chỉ commit lô do user CÙNG ĐƠN VỊ tạo;
-    # admin/accountant (unit_id=None) → commit mọi lô. Chặn manager commit/poison lô
-    # đơn vị khác → 404 (không lộ tồn tại).
-    if unit_id is not None:
-        creator_unit = (
-            await db.execute(
-                select(models.User.unit_id).where(models.User.id == batch.created_by_id)
-            )
-        ).scalar_one_or_none()
-        if creator_unit != unit_id:
-            raise ResourceNotFoundError("Không tìm thấy lô import")
+    # P1 IDOR: committer unit-scope — chặn manager commit/poison lô đơn vị khác.
+    await _assert_batch_creator_in_unit(db, batch, unit_id)
     if batch.status != PaymentImportBatchStatusEnum.preview.value:
         raise ConflictError(
             f"Lô #{batch_id} không ở trạng thái preview (hiện: {batch.status})"
@@ -1357,18 +1365,8 @@ async def void_batch(
     ).scalar_one_or_none()
     if batch is None:
         raise ResourceNotFoundError("Không tìm thấy lô import")
-    # IDOR: void unit-scope theo đơn vị NGƯỜI TẠO (khớp commit/list). manager unit-
-    # scope; admin (unit_id=None) → mọi lô. accountant bị Casbin chặn (void=mgr/admin).
-    if unit_id is not None:
-        creator_unit = (
-            await db.execute(
-                select(models.User.unit_id).where(
-                    models.User.id == batch.created_by_id
-                )
-            )
-        ).scalar_one_or_none()
-        if creator_unit != unit_id:
-            raise ResourceNotFoundError("Không tìm thấy lô import")
+    # IDOR: void unit-scope theo đơn vị NGƯỜI TẠO (accountant đã bị Casbin chặn).
+    await _assert_batch_creator_in_unit(db, batch, unit_id)
     if batch.status != PaymentImportBatchStatusEnum.committed.value:
         raise ConflictError(
             f"Chỉ đảo (void) được lô đã committed (hiện: {batch.status})"
@@ -1600,16 +1598,7 @@ async def get_batch_detail_scoped(
     batch, rows = await load_batch_with_rows(db, batch_id)
     if batch is None:
         raise ResourceNotFoundError("Không tìm thấy lô import")
-    if unit_id is not None:
-        creator_unit = (
-            await db.execute(
-                select(models.User.unit_id).where(
-                    models.User.id == batch.created_by_id
-                )
-            )
-        ).scalar_one_or_none()
-        if creator_unit != unit_id:
-            raise ResourceNotFoundError("Không tìm thấy lô import")
+    await _assert_batch_creator_in_unit(db, batch, unit_id)
     return batch, rows
 
 
@@ -1672,13 +1661,13 @@ async def build_result_file(
             else ""
         )
         cells = [raw.get(k, "") for k in raw_keys] + [label, r.message or "", pay, written]
-        return [sanitize_csv_cell(c) for c in cells]
+        return sanitize_csv_row(cells)  # = [sanitize_csv_cell(c) for c in cells]
 
     fname = f"ket_qua_import_lo_{batch_id}"
     if (fmt or "").lower() == "csv":
         buf = io.StringIO()
         writer = csv.writer(buf)
-        writer.writerow([sanitize_csv_cell(h) for h in header])
+        writer.writerow(sanitize_csv_row(header))
         for r in rows:
             writer.writerow(_row_cells(r))
         content = ("﻿" + buf.getvalue()).encode("utf-8")  # BOM
@@ -1689,7 +1678,7 @@ async def build_result_file(
     wb = Workbook()
     ws = wb.active
     ws.title = "Ket qua"
-    ws.append([sanitize_csv_cell(h) for h in header])
+    ws.append(sanitize_csv_row(header))
     for r in rows:
         ws.append(_row_cells(r))
     # Force TEXT mọi ô (chống injection + giữ số 0 đầu CCCD).

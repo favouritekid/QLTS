@@ -1979,3 +1979,39 @@ class TestResultFileAndDetail:
     async def test_get_batch_detail_scoped_not_found(self, db, seeded_dependencies):
         with pytest.raises(pis.ResourceNotFoundError):
             await pis.get_batch_detail_scoped(db, 999999, unit_id=None)
+
+    async def test_build_result_file_written_amount_no_trailing_cents(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Review #9: cột "Đã ghi (đồng)" = VND nguyên (KHÔNG đuôi '.00' của Numeric(15,2)).
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="committed",
+            raw={pis.COL_CCCD: "001234567890"},
+            row_status="matched",
+            payment_ids=[101],
+            amount="1000000",
+        )
+        content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        assert "1000000" in text
+        assert "1000000.00" not in text  # không lọt đuôi .00
+
+    async def test_build_result_file_committed_error_label(
+        self, db, seeded_dependencies, admin_user
+    ):
+        # Review #10: lô committed + dòng ERROR (TOCTOU) → nhãn "Lỗi (không ghi)",
+        # KHÔNG "Đã ghi" (chống lừa P2 cho nhánh error).
+        batch = await _mk_batch_with_row(
+            db,
+            creator_id=admin_user.id,
+            status="committed",
+            raw={pis.COL_CCCD: "001234567890"},
+            row_status="error",
+            payment_ids=[],
+            amount="1000000",
+        )
+        content, _, _ = await pis.build_result_file(db, batch.id, "csv", None)
+        text = content.decode("utf-8")
+        assert "Lỗi (không ghi)" in text
