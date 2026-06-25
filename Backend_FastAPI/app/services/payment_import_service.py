@@ -1392,8 +1392,11 @@ async def void_batch(
     (router get_db không commit). Lock TẤT CẢ invoice (asc id) RỒI fee (asc id) —
     khớp lock-order invoice→fee, tránh deadlock ABBA với verify/commit đồng thời.
 
-    ⚠️ KHÔNG tự đảo lead-status (sts10→cũ): projection 1 chiều, không lưu status cũ
-    → điều chỉnh lead thủ công nếu cần (void là thao tác kế toán hiếm).
+    Lead-status: void TỰ lùi lead khỏi sts10 ("Đã hoàn tất học phí") về status TRƯỚC
+    (đối xứng forward sync) cho hồ sơ HK1 KHÔNG còn cleared sau đảo — qua
+    ``revert_lead_tuition_paid`` (đọc LeadStatusHistory). Best-effort: chỉ khi lead
+    ĐANG ở sts10 (đã chuyển tiếp/nhập học → giữ nguyên, không kéo lùi). KHÔNG đẩy
+    sts18 (đó là refund THẬT — ``sync_lead_tuition_refunded``).
     """
     from app.services.payment_service import reverse_payment_balances
 
@@ -1542,6 +1545,13 @@ async def void_batch(
         )
         reversed_count += 1
         reversed_amount += p.amount
+
+    # ⚠️ Flush việc đảo tiền xuống DB TRƯỚC vòng lùi-lead. autoflush=False (database.py)
+    # → các UPDATE/INSERT đảo tiền ở trên còn PENDING; nếu không flush ở đây, lần flush
+    # ĐẦU TIÊN là `db.flush()` BÊN TRONG savepoint của revert → revert lỗi → ROLLBACK TO
+    # SAVEPOINT cuốn theo cả đảo tiền (mất tiền đã đảo dù lô vẫn chuyển 'void'). Flush
+    # NGOÀI savepoint = đảo tiền bền trong outer txn; revert lỗi chỉ mất projection.
+    await db.flush()
 
     # Lùi lead (projection) cho hồ sơ HK1 KHÔNG còn cleared sau khi đảo tiền — đối xứng
     # forward sync ở commit. Void = SỬA NHẦM ghi nhận (KHÔNG phải học sinh rút) → lùi về

@@ -1711,10 +1711,11 @@ class TestVoidBatch:
         lead_id = prof.lead_id
         orig = seeded_dependencies["initial_status_id"]
         await db.commit()
-        await pis.commit_batch(
+        cres, _ = await pis.commit_batch(
             db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
         )
         await db.commit()
+        assert cres.payment_count == 1  # HK2 batch THỰC ghi tiền (test không rỗng)
         lead = (
             await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
         ).scalar_one()
@@ -1728,6 +1729,49 @@ class TestVoidBatch:
             await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
         ).scalar_one()
         assert lead2.consultation_status_id == orig  # void HK2 → KHÔNG revert
+
+    async def test_void_money_reversed_even_if_lead_revert_flush_fails(
+        self, db, seeded_dependencies, admin_user, monkeypatch
+    ):
+        # C1 regression: revert chạy db.flush() (cuốn pending đảo tiền vào savepoint
+        # của nó) RỒI lỗi → việc đảo tiền KHÔNG được cuốn theo, vì void đã flush đảo
+        # tiền NGOÀI savepoint trước vòng revert. (Không fix → tiền sẽ rollback theo.)
+        await self._seed_sts10(db)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        async def _flush_then_boom(*, db, profile, **kwargs):
+            await db.flush()  # cuốn pending đảo tiền vào savepoint của revert
+            raise RuntimeError("revert boom sau flush")
+
+        monkeypatch.setattr(
+            "app.services.lead_admission_sync.revert_lead_tuition_paid",
+            _flush_then_boom,
+        )
+        result, _ = await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None, reason="x",
+        )
+        await db.commit()
+
+        # tiền VẪN đảo dù revert flush-rồi-lỗi
+        assert result.reversed_count == 1
+        pay = (await db.execute(select(Payment))).scalars().first()
+        assert pay.status == "refunded"
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        assert inv.paid_amount == Decimal("0")
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "void"
 
     async def test_void_reverses_payment(self, db, seeded_dependencies, admin_user):
         # §10 Void: đảo lô → trừ lại paid_amount, reverse transaction, recompute status
