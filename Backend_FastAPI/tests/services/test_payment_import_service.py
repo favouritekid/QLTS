@@ -746,7 +746,7 @@ class TestResolveValidate:
             db, [_draft("001234567890", "1000000")], 2026, 2, None
         )  # hỏi HK2
         assert res.rows[0].status == ERROR
-        assert "không có học phí" in res.rows[0].message
+        assert "chưa được thiết lập học phí HK2" in res.rows[0].message
 
     async def test_payment_date_far_from_year_warns(self, db, seeded_dependencies):
         # Fix #5: ngày thu lệch xa năm học → WARNED (surface ở preview), không chặn cứng
