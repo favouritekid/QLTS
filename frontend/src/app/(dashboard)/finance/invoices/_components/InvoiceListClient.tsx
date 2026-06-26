@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Receipt, Plus, ClipboardCheck } from "lucide-react"
 import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
+import type { MajorProgram } from "@/types/organization.types"
 
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
@@ -169,10 +170,12 @@ export function InvoiceListClient() {
   }, [isPendingTab, data, isFetching, totalCount, items?.length, state.page])
 
   // Danh sách ngành cho filter dropdown (trình độ derive distinct degree_level).
+  // useMajorPrograms trả any (API client chưa typed) → ép MajorProgram[] để
+  // tránh implicit-any (CI noImplicitAny).
   const { data: majors } = useMajorPrograms()
   const majorOptions = useMemo(
     () =>
-      (majors ?? []).map((m) => ({
+      ((majors ?? []) as MajorProgram[]).map((m) => ({
         id: m.id,
         name: m.name,
         degree_level: m.degree_level,
