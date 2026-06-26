@@ -230,6 +230,90 @@ async def resolve_fee_academic_info(
     )
 
 
+async def resnapshot_fee_academic_info_for_profile(
+    db: AsyncSession,
+    profile_id: int,
+) -> int:
+    """Re-snapshot ``Fee.resolved_*`` (academic_info / major / degree) for ALL
+    fees of a profile — the SINGLE writer of the denormalized major snapshot the
+    "Thu học phí" workspace reads (filter + list row + drawer + status-counts).
+
+    Resolves via the SAME ``resolve_fee_academic_info`` used for pricing, so for
+    multi-NV profiles the snapshot reflects the ADMITTED choice — never the
+    lead's intent offering.
+
+    **Fail-soft**: when the resolver can't decide the ngành (multi-NV
+    not-yet-admitted / 0 / ≥2 admitted, or missing config) the three columns are
+    set to NULL — never guessed. Idempotent → safe to call repeatedly. Service
+    only ``flush``es; the caller commits.
+
+    ⚠️ MUST be called by ANY code that (a) creates a Fee outside
+    ``calculate_fee`` or (b) changes which ngành a profile is admitted to
+    (``AdmissionProfileChoice.decision``) — else the snapshot goes stale and the
+    filter/display disagree. Current callers: ``calculate_fee``,
+    ``recalculate_fee``, ``recalculate_fees_for_semester_tuition_change``,
+    ``_create_or_repair_paid_chain`` (application fee), and the decision writers
+    ``evaluate_cascade`` / ``promote_waitlisted_choice`` /
+    ``AdmissionProfileChoiceRepository.update_decision``.
+
+    Returns the number of fees updated.
+    """
+    profile = (
+        await db.execute(
+            select(models.AdmissionProfile).where(
+                models.AdmissionProfile.id == profile_id
+            )
+        )
+    ).scalars().first()
+    if profile is None:
+        return 0
+
+    resolved_ai_id: Optional[int] = None
+    resolved_major_id: Optional[int] = None
+    resolved_degree_level: Optional[str] = None
+    try:
+        academic_info = await resolve_fee_academic_info(db, profile)
+    except BadRequest:
+        # Fail-soft: chưa chốt được ngành → để NULL (UI hiện "(chưa chốt ngành)").
+        academic_info = None
+    if academic_info is not None:
+        resolved_ai_id = academic_info.id
+        row = (
+            await db.execute(
+                select(
+                    models.MajorProgram.id,
+                    models.MajorProgram.degree_level,
+                )
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == resolved_ai_id)
+            )
+        ).first()
+        if row is not None:
+            resolved_major_id, resolved_degree_level = row
+
+    fees = (
+        await db.execute(
+            select(Fee).where(Fee.admission_profile_id == profile_id)
+        )
+    ).scalars().all()
+    for fee in fees:
+        fee.resolved_academic_info_id = resolved_ai_id
+        fee.resolved_major_id = resolved_major_id
+        fee.resolved_degree_level = resolved_degree_level
+    if fees:
+        await db.flush()
+    return len(fees)
+
+
 class FeeCalculationService:
     """
     Service for fee calculation and lifecycle management.
@@ -504,6 +588,13 @@ class FeeCalculationService:
 
         await self.db.flush()
 
+        # Snapshot ngành đã resolve lên Fee.resolved_* (single writer) — giữ
+        # filter/list/drawer/status-counts khớp với ngành ĐÚNG (admitted choice
+        # cho multi-NV). Cập nhật MỌI fee của hồ sơ cho nhất quán; fail-soft.
+        await resnapshot_fee_academic_info_for_profile(
+            self.db, admission_profile_id
+        )
+
         log.info(
             "fee_calculated",
             fee_id=fee.id,
@@ -626,6 +717,13 @@ class FeeCalculationService:
                     f"Reason: {reason}"
 
         await self.db.flush()
+
+        # Recalc KHÔNG gọi resolver như calculate_fee → snapshot ngành tường minh
+        # (ngành thường không đổi, nhưng đảm bảo điền/refresh resolved_* cho fee
+        # cũ chưa có snapshot). Fail-soft, idempotent.
+        await resnapshot_fee_academic_info_for_profile(
+            self.db, fee.admission_profile_id
+        )
 
         log.info(
             "fee_recalculated",
@@ -1188,6 +1286,7 @@ async def recalculate_fees_for_semester_tuition_change(
     eligible_fees = fee_result.scalars().all()
 
     recalc_count = 0
+    affected_profile_ids: set = set()
     for fee in eligible_fees:
         # Skip if any invoice is beyond draft — recalculating would
         # leave fee.final_amount out of sync with issued invoice totals.
@@ -1259,6 +1358,7 @@ async def recalculate_fees_for_semester_tuition_change(
             )
 
         recalc_count += 1
+        affected_profile_ids.add(fee.admission_profile_id)
         log.info(
             "fee_recalculated_by_semester_change",
             fee_id=fee.id,
@@ -1270,5 +1370,9 @@ async def recalculate_fees_for_semester_tuition_change(
 
     if recalc_count > 0:
         await db.flush()
+        # Recalc path không gọi resolver → refresh snapshot ngành cho từng hồ sơ
+        # bị ảnh hưởng (dùng resolver đúng admitted-choice; fail-soft, idempotent).
+        for pid in affected_profile_ids:
+            await resnapshot_fee_academic_info_for_profile(db, pid)
 
     return recalc_count

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from app.models.tuition_discount_policy import TuitionDiscountPolicy
     from app.models.finance.installment_plan import InstallmentPlan
     from app.models.finance.invoice import Invoice
+    from app.models.major_program import MajorProgram
 
 
 class FeeTypeEnum(str, enum.Enum):
@@ -293,7 +294,7 @@ class Fee(Base):
         ForeignKey("major_program.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
-        comment="Snapshot: resolved MajorProgram (filter/display source — NULL = chưa chốt)"
+        comment="Snapshot: resolved MajorProgram (filter/display — NULL=chưa chốt)"
     )
     resolved_degree_level: Mapped[Optional[str]] = mapped_column(
         String(50),
