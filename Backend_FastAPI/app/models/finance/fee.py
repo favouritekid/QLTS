@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from app.models.tuition_discount_policy import TuitionDiscountPolicy
     from app.models.finance.installment_plan import InstallmentPlan
     from app.models.finance.invoice import Invoice
+    from app.models.major_program import MajorProgram
 
 
 class FeeTypeEnum(str, enum.Enum):
@@ -274,6 +275,34 @@ class Fee(Base):
         comment="Notes for waive/cancel/audit trail"
     )
 
+    # Resolved academic snapshot (denormalized — single source for the
+    # "Thu học phí" workspace: filter + list row + drawer + status-counts).
+    # Populated by ``resnapshot_fee_academic_info_for_profile`` (the SAME
+    # ``resolve_fee_academic_info`` used for the tuition amount), so a multi-NV
+    # profile's row/filter reflects the ADMITTED choice — never the lead's
+    # intent offering. ALL nullable + fail-soft: when the resolver can't decide
+    # (multi-NV not-yet-admitted / 0 / ≥2 admitted) the columns stay NULL and
+    # the UI shows "(chưa chốt ngành)" rather than guessing.
+    resolved_academic_info_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("offering_academic_info.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Snapshot: resolved OfferingAcademicInfo (trace source of major)"
+    )
+    resolved_major_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("major_program.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Snapshot: resolved MajorProgram (filter/display — NULL=chưa chốt)"
+    )
+    resolved_degree_level: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="Snapshot: degree level TEXT NAME ('Cao đẳng'…) matching "
+                "MajorProgram.degree_level legacy text + admissions FE filter value"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -297,6 +326,12 @@ class Fee(Base):
     calculated_by: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[calculated_by_id]
+    )
+    # Resolved-major snapshot relationship (read-only display name source).
+    resolved_major: Mapped[Optional["MajorProgram"]] = relationship(
+        "MajorProgram",
+        foreign_keys=[resolved_major_id],
+        lazy="raise",
     )
     applied_discounts: Mapped[List["FeeAppliedDiscount"]] = relationship(
         "FeeAppliedDiscount",

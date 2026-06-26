@@ -227,6 +227,14 @@ class AdmissionProfileChoiceRepository:
 
         Caller (engine) wraps trong begin_nested + SELECT FOR UPDATE per
         GAP-16 atomicity.
+
+        ⚠️ DENORMALIZED MAJOR SNAPSHOT: nếu ``decision`` đổi NV trúng tuyển,
+        caller (service layer — KHÔNG phải repo này) PHẢI gọi
+        ``fee_calculation_service.resnapshot_fee_academic_info_for_profile``
+        sau đó để Fee.resolved_* không stale (workspace "Thu học phí" lọc/hiển
+        thị theo cột này). Hai đường publish LIVE (evaluate_cascade /
+        promote_waitlisted_choice) đã gọi; method này hiện dormant — bất kỳ
+        caller mới nào kích hoạt lại đều phải tuân theo contract trên.
         """
         choice = await self.db.get(AdmissionProfileChoice, choice_id)
         if choice is None:

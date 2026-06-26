@@ -1085,6 +1085,14 @@ async def evaluate_cascade(
         reason="Choice engine cascade — publish_result",
     )
 
+    # Admitted choice vừa chốt → re-snapshot Fee.resolved_* để row/filter/drawer
+    # "Thu học phí" phản ánh ĐÚNG ngành trúng tuyển (gồm application fee tạo
+    # pre-decision với snapshot NULL). Same transaction (flush only). Fail-soft.
+    from .fee_calculation_service import (
+        resnapshot_fee_academic_info_for_profile,
+    )
+    await resnapshot_fee_academic_info_for_profile(db, profile.id, profile=profile)
+
     # Chain callbacks: caller commits + awaits both dispatches
     async def chained_callback() -> None:
         if cb1 is not None:
@@ -1304,6 +1312,14 @@ async def promote_waitlisted_choice(
         changed_by_user_id=actor.id if actor else None,
         reason=reason or "Waitlist promote — manual admin",
     )
+
+    # Waitlist promote ĐỔI ngành trúng tuyển → re-snapshot Fee.resolved_* để các
+    # fee đã tồn tại (application/tuition) không stale ngành cũ. Fail-soft, same
+    # transaction (flush only).
+    from .fee_calculation_service import (
+        resnapshot_fee_academic_info_for_profile,
+    )
+    await resnapshot_fee_academic_info_for_profile(db, profile.id, profile=profile)
 
     return (
         {

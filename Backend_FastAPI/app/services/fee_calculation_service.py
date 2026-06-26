@@ -230,6 +230,115 @@ async def resolve_fee_academic_info(
     )
 
 
+async def resnapshot_fee_academic_info_for_profile(
+    db: AsyncSession,
+    profile_id: int,
+    *,
+    profile: "Optional[models.AdmissionProfile]" = None,
+) -> int:
+    """Re-snapshot ``Fee.resolved_*`` (academic_info / major / degree) for the
+    non-cancelled fees of a profile — the SINGLE writer of the denormalized major
+    snapshot the "Thu học phí" workspace reads (filter + list row + drawer +
+    status-counts).
+
+    Resolves via the SAME ``resolve_fee_academic_info`` used for pricing, so for
+    multi-NV profiles the snapshot reflects the ADMITTED choice — never the
+    lead's intent offering.
+
+    **Best-effort + fail-soft**: any failure resolving the ngành (BadRequest for
+    multi-NV-undecided / 0 / ≥2 admitted, OR an unexpected DB error in the
+    resolve/major-lookup) → snapshot stays NULL and the function still returns,
+    NEVER raising into the caller. This keeps the denormalization (a display
+    nicety) OFF the critical path of the money-creating flows that call it
+    (calculate_fee / fee payment / decision publish). Idempotent. Service only
+    ``flush``es; the caller commits.
+
+    **Cancelled fees are skipped** so a later admit doesn't relabel a historical
+    cancelled fee (e.g. officer cancelled an NV1 fee, profile later admitted NV2).
+
+    ``profile`` may be passed by callers that already hold the ORM object
+    (``calculate_fee`` / decision hooks) to skip a redundant SELECT.
+
+    ⚠️ MUST be called by ANY code that (a) creates a Fee outside
+    ``calculate_fee`` or (b) changes which ngành a profile is admitted to
+    (``AdmissionProfileChoice.decision``) — else the snapshot goes stale and the
+    filter/display disagree. Current callers: ``calculate_fee``,
+    ``recalculate_fee``, ``recalculate_fees_for_semester_tuition_change``,
+    ``_create_or_repair_paid_chain`` (application fee), and the decision writers
+    ``evaluate_cascade`` / ``promote_waitlisted_choice`` /
+    ``AdmissionProfileChoiceRepository.update_decision``.
+
+    Returns the number of fees updated.
+    """
+    if profile is None:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == profile_id
+                )
+            )
+        ).scalars().first()
+    if profile is None:
+        return 0
+
+    resolved_ai_id: Optional[int] = None
+    resolved_major_id: Optional[int] = None
+    resolved_degree_level: Optional[str] = None
+    try:
+        academic_info = await resolve_fee_academic_info(db, profile)
+        if academic_info is not None:
+            resolved_ai_id = academic_info.id
+            row = (
+                await db.execute(
+                    select(
+                        models.MajorProgram.id,
+                        models.MajorProgram.degree_level,
+                    )
+                    .select_from(models.OfferingAcademicInfo)
+                    .join(
+                        models.ProgramOffering,
+                        models.ProgramOffering.id
+                        == models.OfferingAcademicInfo.offering_id,
+                    )
+                    .join(
+                        models.MajorProgram,
+                        models.MajorProgram.id
+                        == models.ProgramOffering.program_id,
+                    )
+                    .where(models.OfferingAcademicInfo.id == resolved_ai_id)
+                )
+            ).first()
+            if row is not None:
+                resolved_major_id, resolved_degree_level = row
+    except BadRequest:
+        # Fail-soft: chưa chốt được ngành → để NULL (UI hiện "(chưa chốt ngành)").
+        pass
+    except Exception as exc:  # best-effort: KHÔNG để snapshot vỡ money flow
+        log.error(
+            "resnapshot_fee_academic_info_failed",
+            profile_id=profile_id,
+            error=str(exc),
+        )
+        return 0
+
+    # Bỏ qua fee đã huỷ — không relabel lịch sử theo ngành admitted hiện tại.
+    fees = (
+        await db.execute(
+            select(Fee).where(
+                Fee.admission_profile_id == profile_id,
+                Fee.status != "cancelled",
+            )
+        )
+    ).scalars().all()
+    for fee in fees:
+        fee.resolved_academic_info_id = resolved_ai_id
+        fee.resolved_major_id = resolved_major_id
+        fee.resolved_degree_level = resolved_degree_level
+    if fees:
+        await db.flush()
+    return len(fees)
+
+
 class FeeCalculationService:
     """
     Service for fee calculation and lifecycle management.
@@ -504,6 +613,13 @@ class FeeCalculationService:
 
         await self.db.flush()
 
+        # Snapshot ngành đã resolve lên Fee.resolved_* (single writer) — giữ
+        # filter/list/drawer/status-counts khớp với ngành ĐÚNG (admitted choice
+        # cho multi-NV). Truyền profile đã load (bỏ re-SELECT); best-effort.
+        await resnapshot_fee_academic_info_for_profile(
+            self.db, admission_profile_id, profile=profile
+        )
+
         log.info(
             "fee_calculated",
             fee_id=fee.id,
@@ -626,6 +742,13 @@ class FeeCalculationService:
                     f"Reason: {reason}"
 
         await self.db.flush()
+
+        # Recalc KHÔNG gọi resolver như calculate_fee → snapshot ngành tường minh
+        # (ngành thường không đổi, nhưng đảm bảo điền/refresh resolved_* cho fee
+        # cũ chưa có snapshot). Fail-soft, idempotent.
+        await resnapshot_fee_academic_info_for_profile(
+            self.db, fee.admission_profile_id
+        )
 
         log.info(
             "fee_recalculated",
@@ -841,9 +964,9 @@ class FeeCalculationService:
         whether the collection turns out empty.
 
         Bounded eager-load (a handful of selectin/joined queries, NO per-row
-        N+1): lead → assigned_officer / offering → program (identity columns,
-        batch-safe ``program_name``) and fees → invoices → payments → (method,
-        created_by) (the three tiers + the columns the list builders read).
+        N+1): lead → assigned_officer (identity) · fees → resolved_major (ngành/
+        trình độ snapshot) · fees → invoices → payments → (method, created_by,
+        verified_by) (the three tiers + the columns the list builders read).
         """
         query = (
             select(models.AdmissionProfile)
@@ -851,12 +974,15 @@ class FeeCalculationService:
             .options(
                 selectinload(models.AdmissionProfile.lead)
                 .selectinload(models.Lead.assigned_officer),
-                selectinload(models.AdmissionProfile.lead)
-                .selectinload(models.Lead.offering)
-                .selectinload(models.ProgramOffering.program),
+                # Ngành/trình độ drawer đọc snapshot Fee.resolved_major (khớp list
+                # + filter, đúng NV admitted) — KHÔNG còn dùng lead.offering.program
+                # nên bỏ luôn eager-load offering→program (dead load).
+                selectinload(models.AdmissionProfile.fees)
+                .joinedload(Fee.resolved_major),
                 # fees → invoices → payments, with the payment columns the list
-                # builder reads (method/created_by). Explicit chain overrides the
-                # model-level lazy="selectin" so those nested loads are eager too.
+                # builder reads (method/created_by/verified_by). Explicit chain
+                # overrides the model-level lazy="selectin" so nested loads are
+                # eager too.
                 selectinload(models.AdmissionProfile.fees)
                 .selectinload(Fee.invoices)
                 .selectinload(Invoice.payments)
@@ -865,6 +991,10 @@ class FeeCalculationService:
                 .selectinload(Fee.invoices)
                 .selectinload(Invoice.payments)
                 .joinedload(Payment.created_by),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.verified_by),
                 # Suppress the model-level lazy="selectin" eager-loads the list
                 # builders never read — otherwise opening the drawer fires 2 extra
                 # batched SELECTs (invoice.payment_intents + payment.transactions).
@@ -1188,6 +1318,7 @@ async def recalculate_fees_for_semester_tuition_change(
     eligible_fees = fee_result.scalars().all()
 
     recalc_count = 0
+    affected_profile_ids: set = set()
     for fee in eligible_fees:
         # Skip if any invoice is beyond draft — recalculating would
         # leave fee.final_amount out of sync with issued invoice totals.
@@ -1259,6 +1390,7 @@ async def recalculate_fees_for_semester_tuition_change(
             )
 
         recalc_count += 1
+        affected_profile_ids.add(fee.admission_profile_id)
         log.info(
             "fee_recalculated_by_semester_change",
             fee_id=fee.id,
@@ -1270,5 +1402,9 @@ async def recalculate_fees_for_semester_tuition_change(
 
     if recalc_count > 0:
         await db.flush()
+        # Recalc path không gọi resolver → refresh snapshot ngành cho từng hồ sơ
+        # bị ảnh hưởng (dùng resolver đúng admitted-choice; fail-soft, idempotent).
+        for pid in affected_profile_ids:
+            await resnapshot_fee_academic_info_for_profile(db, pid)
 
     return recalc_count

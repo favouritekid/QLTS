@@ -851,7 +851,8 @@ class InvoiceListItem(InvoiceSummaryResponse):
     profile_id: Optional[int] = None        # numeric id → opens the drawer
     profile_name: Optional[str] = None
     profile_code: Optional[str] = None      # "HS-000131"
-    program_name: Optional[str] = None      # ngành (batch-safe: lead.offering.program)
+    program_name: Optional[str] = None      # ngành (snapshot Fee.resolved_major — đúng NV admitted)
+    degree_level: Optional[str] = None      # trình độ (snapshot Fee.resolved_degree_level, TEXT name)
     officer_name: Optional[str] = None      # TVV phụ trách
     fee_type: Optional[FeeTypeEnum] = None
     semester_no: Optional[int] = None       # kỳ HK (NULL cho phí non-tuition)
@@ -917,7 +918,12 @@ class PaymentListItem(PaymentSummaryResponse):
     is_own: bool = False
     profile_name: Optional[str] = None
     method_name: Optional[str] = None
-    created_by_name: Optional[str] = None
+    created_by_name: Optional[str] = None    # người thu (maker)
+    verified_by_name: Optional[str] = None   # người duyệt (checker)
+    verified_at: Optional[datetime] = None   # thời điểm duyệt
+    # Nguồn thu (BE-owned, suy ra lúc đọc): online (intent_id) | import
+    # (payment_ids của PaymentImportRow) | manual (thu tay). Mặc định manual.
+    source: str = "manual"
     can_verify: bool = False
     can_reject: bool = False
 
@@ -958,14 +964,16 @@ class ProfileCollectionIdentity(BaseModel):
     """Identity header for the "Thu học phí" drawer.
 
     Mirrors the spine-row identity columns so the drawer header matches the row
-    the user clicked: ``program_name`` is the BATCH-SAFE offering program
-    (``lead.offering.program.name`` — same as the list / admission, may differ
-    from the multi-NV admitted major; that resolver is deferred).
+    the user clicked: ``program_name`` / ``degree_level`` đọc từ snapshot
+    ``Fee.resolved_*`` (đúng NV admitted cho multi-NV, KHỚP filter + list row).
+    ``citizen_id_masked`` = CCCD đã che (PII): chỉ lộ vài số đầu/cuối.
     """
     profile_id: int
     profile_code: str                      # "HS-000131"
     student_name: Optional[str] = None
-    program_name: Optional[str] = None     # ngành (offering gốc, batch-safe)
+    citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (PII-safe)
+    program_name: Optional[str] = None     # ngành (snapshot Fee.resolved_major)
+    degree_level: Optional[str] = None     # trình độ (snapshot, TEXT name)
     officer_name: Optional[str] = None     # TVV phụ trách
     phone: Optional[str] = None            # parent phone (accountant lookup)
 

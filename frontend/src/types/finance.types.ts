@@ -217,7 +217,9 @@ export interface InvoiceListItem {
   profile_id: number | null
   profile_name: string | null
   profile_code: string | null
+  // Ngành/trình độ từ snapshot Fee.resolved_* (BE-owned, đúng NV admitted).
   program_name: string | null
+  degree_level: string | null
   officer_name: string | null
   fee_type: FeeType | null
   semester_no: number | null
@@ -337,10 +339,18 @@ export interface PaymentListItem {
   profile_name: string | null
   method_name: string | null
   created_by_name: string | null
+  // Người duyệt (checker) + thời điểm duyệt (drawer chi tiết).
+  verified_by_name: string | null
+  verified_at: string | null
+  // Nguồn thu (BE-owned): "online" | "import" | "manual".
+  source: PaymentSource
   // Role-aware maker-checker flags (computed by backend)
   can_verify: boolean
   can_reject: boolean
 }
+
+/** Nguồn thu của 1 payment (BE-owned, suy ra lúc đọc). */
+export type PaymentSource = "online" | "import" | "manual"
 
 // ============================================================================
 // OVERPAYMENT (from backend OverpaymentRecordResponse)
@@ -469,7 +479,10 @@ export interface ProfileCollectionIdentity {
   profile_id: number
   profile_code: string
   student_name: string | null
+  // CCCD đã che giữa (PII-safe). Ngành/trình độ từ snapshot Fee.resolved_*.
+  citizen_id_masked: string | null
   program_name: string | null
+  degree_level: string | null
   officer_name: string | null
   phone: string | null
 }
@@ -854,7 +867,24 @@ export interface FeeFilters {
   page_size?: number
 }
 
-export interface InvoiceFilters {
+/**
+ * Filter ngành/trình độ/năm-HK/TVV/đơn vị/hạn — BE đọc Fee.resolved_* (snapshot)
+ * cho ngành/trình độ. PHẢI đồng bộ với InvoiceStatusCountFilters để badge tab khớp.
+ */
+export interface InvoiceWorkspaceFilters {
+  major_id?: number
+  /** Trình độ: TEXT name khớp Fee.resolved_degree_level (vd "Cao đẳng"). */
+  degree_level?: string
+  academic_year?: number
+  semester_no?: number
+  officer_id?: number
+  /** Đơn vị: INTERSECT với scope IDOR (officer vẫn bị clamp). */
+  unit_id?: number
+  /** Hạn thanh toán: "due_soon_7d" (đến hạn ≤7 ngày, chưa thu) | "overdue". */
+  due_window?: "due_soon_7d" | "overdue"
+}
+
+export interface InvoiceFilters extends InvoiceWorkspaceFilters {
   page?: number
   page_size?: number
   /** Comma-separated status enum values (e.g. "issued,partial"). */
@@ -866,12 +896,23 @@ export interface InvoiceFilters {
   /** Derived overdue (issued/partial/overdue AND due<today). Use for "Quá hạn" tab. */
   overdue_only?: boolean
   search?: string
-  sort_by?: "priority" | "due_date" | "amount" | "status" | "created_at"
+  sort_by?:
+    | "priority"
+    | "due_date"
+    | "amount"
+    | "paid"
+    | "remaining"
+    | "status"
+    | "created_at"
   sort_order?: "asc" | "desc"
 }
 
-/** Query params for `GET /api/invoices/status-counts`. */
-export interface InvoiceStatusCountFilters {
+/**
+ * Query params for `GET /api/invoices/status-counts`. PARITY: mọi filter
+ * workspace (ngành/trình độ/năm-HK/TVV/đơn vị/hạn) phải có Ở ĐÂY y hệt list,
+ * nếu không badge tab đếm lệch.
+ */
+export interface InvoiceStatusCountFilters extends InvoiceWorkspaceFilters {
   fee_id?: number
   profile_id?: number
   fee_type?: FeeType

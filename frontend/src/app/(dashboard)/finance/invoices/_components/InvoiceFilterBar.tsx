@@ -19,7 +19,26 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { FEE_TYPE_LABELS, type FeeType } from "@/types/finance.types"
+import {
+  FEE_TYPE_LABELS,
+  type FeeType,
+  type InvoiceWorkspaceFilters,
+} from "@/types/finance.types"
+
+export interface MajorFilterOption {
+  id: number
+  name: string
+  degree_level: string
+}
+
+const DUE_WINDOW_OPTIONS: readonly {
+  value: NonNullable<InvoiceWorkspaceFilters["due_window"]> | ""
+  label: string
+}[] = [
+  { value: "", label: "Mọi hạn" },
+  { value: "due_soon_7d", label: "Đến hạn ≤7 ngày" },
+  { value: "overdue", label: "Quá hạn" },
+]
 
 const FEE_TYPE_OPTIONS: readonly { value: FeeType; label: string }[] = (
   Object.entries(FEE_TYPE_LABELS) as [FeeType, string][]
@@ -31,6 +50,9 @@ const SORT_OPTIONS: readonly { by: string; order: "asc" | "desc"; label: string 
   { by: "due_date", order: "desc", label: "Hạn xa nhất" },
   { by: "amount", order: "desc", label: "Số tiền cao → thấp" },
   { by: "amount", order: "asc", label: "Số tiền thấp → cao" },
+  { by: "remaining", order: "desc", label: "Còn lại nhiều → ít" },
+  { by: "remaining", order: "asc", label: "Còn lại ít → nhiều" },
+  { by: "paid", order: "desc", label: "Đã đóng nhiều → ít" },
   { by: "created_at", order: "desc", label: "Mới nhất" },
 ]
 
@@ -48,6 +70,14 @@ export interface InvoiceFilterBarProps {
   onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void
   hasActiveFilters: boolean
   onReset: () => void
+  // Workspace filters (ngành/trình độ/hạn). majorOptions = danh sách ngành để
+  // chọn; trình độ derive từ distinct degree_level của majorOptions.
+  workspaceFilters: InvoiceWorkspaceFilters
+  setWorkspaceFilter: <K extends keyof InvoiceWorkspaceFilters>(
+    key: K,
+    value: InvoiceWorkspaceFilters[K],
+  ) => void
+  majorOptions: readonly MajorFilterOption[]
 }
 
 export function InvoiceFilterBar({
@@ -60,11 +90,43 @@ export function InvoiceFilterBar({
   onSortChange,
   hasActiveFilters,
   onReset,
+  workspaceFilters,
+  setWorkspaceFilter,
+  majorOptions,
 }: InvoiceFilterBarProps) {
+  const selectedMajor = majorOptions.find((m) => m.id === workspaceFilters.major_id)
+  // Trình độ: distinct degree_level từ danh sách ngành (gửi TEXT name xuống BE).
+  const degreeOptions = Array.from(
+    new Set(majorOptions.map((m) => m.degree_level).filter(Boolean)),
+  )
+  const dueWindow = workspaceFilters.due_window ?? ""
+
   type Chip = { key: string; label: string; onRemove: () => void }
   const chips: Chip[] = []
   if (feeType) {
     chips.push({ key: "fee_type", label: `Loại: ${feeTypeLabel(feeType)}`, onRemove: () => onFeeTypeChange("") })
+  }
+  if (selectedMajor) {
+    chips.push({
+      key: "major",
+      label: `Ngành: ${selectedMajor.name}`,
+      onRemove: () => setWorkspaceFilter("major_id", undefined),
+    })
+  }
+  if (workspaceFilters.degree_level) {
+    chips.push({
+      key: "degree",
+      label: `Trình độ: ${workspaceFilters.degree_level}`,
+      onRemove: () => setWorkspaceFilter("degree_level", undefined),
+    })
+  }
+  if (workspaceFilters.due_window) {
+    const lbl = DUE_WINDOW_OPTIONS.find((o) => o.value === workspaceFilters.due_window)?.label
+    chips.push({
+      key: "due",
+      label: `Hạn: ${lbl ?? workspaceFilters.due_window}`,
+      onRemove: () => setWorkspaceFilter("due_window", undefined),
+    })
   }
 
   return (
@@ -120,6 +182,84 @@ export function InvoiceFilterBar({
                 >
                   {o.label}
                   {feeType === o.value && <Check className="size-4" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Ngành */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="h-10 max-w-[14rem] gap-1.5" aria-label="Lọc theo ngành">
+                <span className="truncate">{selectedMajor ? selectedMajor.name : "Tất cả ngành"}</span>
+                <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-80 w-64 overflow-y-auto">
+              <DropdownMenuItem className="justify-between" onClick={() => setWorkspaceFilter("major_id", undefined)}>
+                Tất cả ngành
+                {workspaceFilters.major_id === undefined && <Check className="size-4" />}
+              </DropdownMenuItem>
+              {majorOptions.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  className="justify-between gap-2"
+                  onClick={() => setWorkspaceFilter("major_id", m.id)}
+                >
+                  <span className="truncate">{m.name}</span>
+                  {workspaceFilters.major_id === m.id && <Check className="size-4 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Trình độ */}
+          {degreeOptions.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="h-10 gap-1.5" aria-label="Lọc theo trình độ">
+                  {workspaceFilters.degree_level ?? "Mọi trình độ"}
+                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem className="justify-between" onClick={() => setWorkspaceFilter("degree_level", undefined)}>
+                  Mọi trình độ
+                  {!workspaceFilters.degree_level && <Check className="size-4" />}
+                </DropdownMenuItem>
+                {degreeOptions.map((d) => (
+                  <DropdownMenuItem
+                    key={d}
+                    className="justify-between"
+                    onClick={() => setWorkspaceFilter("degree_level", d)}
+                  >
+                    {d}
+                    {workspaceFilters.degree_level === d && <Check className="size-4" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {/* Hạn thanh toán */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="h-10 gap-1.5" aria-label="Lọc theo hạn thanh toán">
+                {DUE_WINDOW_OPTIONS.find((o) => o.value === dueWindow)?.label ?? "Mọi hạn"}
+                <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+              {DUE_WINDOW_OPTIONS.map((o) => (
+                <DropdownMenuItem
+                  key={o.value || "all"}
+                  className="justify-between"
+                  onClick={() =>
+                    setWorkspaceFilter("due_window", o.value === "" ? undefined : o.value)
+                  }
+                >
+                  {o.label}
+                  {dueWindow === o.value && <Check className="size-4" />}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

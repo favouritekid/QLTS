@@ -22,6 +22,7 @@ import type {
   FeeType,
   InvoiceFilters,
   InvoiceStatusCountFilters,
+  InvoiceWorkspaceFilters,
 } from "@/types/finance.types"
 import {
   INVOICES_DEFAULT_PAGE_SIZE,
@@ -55,6 +56,8 @@ export interface InvoicesFilterState extends StoredInvoiceFilters {
    * the workspace. Reflected in the URL for deep-link / back / reload-restore.
    */
   drawerProfileId: number | undefined
+  /** Workspace filters (ngành/trình độ/năm-HK/TVV/đơn vị/hạn). */
+  workspaceFilters: InvoiceWorkspaceFilters
 }
 
 export interface InvoicesFilterHandlers {
@@ -68,6 +71,11 @@ export interface InvoicesFilterHandlers {
   openDrawer: (profileId: number) => void
   /** Close the collection drawer (drops `?profile=`). */
   closeDrawer: () => void
+  /** Set/clear 1 workspace filter (undefined/null/"" = xoá). */
+  setWorkspaceFilter: <K extends keyof InvoiceWorkspaceFilters>(
+    key: K,
+    value: InvoiceWorkspaceFilters[K],
+  ) => void
 }
 
 export interface UseInvoicesFilterReturn {
@@ -268,6 +276,11 @@ export function useInvoicesFilter(
   const [drawerProfileId, setDrawerProfileId] = useState<number | undefined>(
     initialDrawerProfileId,
   )
+  // Workspace filters (ngành/trình độ/năm-HK/TVV/đơn vị/hạn). Session-only state
+  // (URL/localStorage persistence → follow-up). Đưa vào CẢ apiFilters lẫn
+  // countFilters để badge tab khớp danh sách (parity P1).
+  const [workspaceFilters, setWorkspaceFilters] =
+    useState<InvoiceWorkspaceFilters>({})
 
   // Restore persisted filters only after hydration. URL params stay the source
   // of truth (server can render them; localStorage cannot).
@@ -419,6 +432,7 @@ export function useInvoicesFilter(
     setSortOrder(INVOICES_DEFAULT_SORT_ORDER)
     setFeeId(undefined)
     setProfileId(undefined)
+    setWorkspaceFilters({})
     setPage(1)
     clearFiltersFromStorage()
     // NOTE: deliberately does NOT close the drawer — "clear filters" is about the
@@ -428,6 +442,26 @@ export function useInvoicesFilter(
   const openDrawer = useCallback((id: number) => setDrawerProfileId(id), [])
   const closeDrawer = useCallback(() => setDrawerProfileId(undefined), [])
 
+  /** Set/clear 1 workspace filter (undefined/null/"" = xoá). Reset về trang 1. */
+  const setWorkspaceFilter = useCallback(
+    <K extends keyof InvoiceWorkspaceFilters>(
+      key: K,
+      value: InvoiceWorkspaceFilters[K],
+    ) => {
+      setWorkspaceFilters((prev) => {
+        const next = { ...prev }
+        if (value === undefined || value === null || (value as unknown) === "") {
+          delete next[key]
+        } else {
+          next[key] = value
+        }
+        return next
+      })
+      setPage(1)
+    },
+    [],
+  )
+
   // ── COMPUTED VALUES ───────────────────────────────────────────────────
   const hasActiveFilters = useMemo(() => {
     return !!(
@@ -435,9 +469,10 @@ export function useInvoicesFilter(
       feeType ||
       feeId !== undefined ||
       profileId !== undefined ||
-      activeTab !== "all"
+      activeTab !== "all" ||
+      Object.keys(workspaceFilters).length > 0
     )
-  }, [search, feeType, feeId, profileId, activeTab])
+  }, [search, feeType, feeId, profileId, activeTab, workspaceFilters])
 
   /** Params sent to useInvoices (list). */
   const apiFilters: InvoiceFilters = useMemo(() => {
@@ -446,6 +481,8 @@ export function useInvoicesFilter(
       page_size: pageSize,
       sort_by: sortBy as InvoiceFilters["sort_by"],
       sort_order: sortOrder,
+      // Workspace filters (ngành/trình độ/năm-HK/TVV/đơn vị/hạn).
+      ...workspaceFilters,
     }
 
     if (search) params.search = search
@@ -463,23 +500,30 @@ export function useInvoicesFilter(
     }
 
     return params
-  }, [page, pageSize, search, feeType, feeId, profileId, activeTab, sortBy, sortOrder])
+  }, [
+    page, pageSize, search, feeType, feeId, profileId, activeTab,
+    sortBy, sortOrder, workspaceFilters,
+  ])
 
-  /** Params for useInvoiceStatusCounts (context only: no status/page/sort). */
+  /**
+   * Params for useInvoiceStatusCounts (context only: no status/page/sort).
+   * PARITY (P1): workspaceFilters phải spread Y HỆT apiFilters, nếu không badge
+   * tab đếm lệch so với danh sách.
+   */
   const countFilters: InvoiceStatusCountFilters = useMemo(() => {
-    const params: InvoiceStatusCountFilters = {}
+    const params: InvoiceStatusCountFilters = { ...workspaceFilters }
     if (search) params.search = search
     if (feeType) params.fee_type = feeType as FeeType
     if (feeId !== undefined) params.fee_id = feeId
     if (profileId !== undefined) params.profile_id = profileId
     return params
-  }, [search, feeType, feeId, profileId])
+  }, [search, feeType, feeId, profileId, workspaceFilters])
 
   // ── RETURN ────────────────────────────────────────────────────────────
   return {
     state: {
       page, pageSize, search, feeType, activeTab, sortBy, sortOrder,
-      feeId, profileId, drawerProfileId,
+      feeId, profileId, drawerProfileId, workspaceFilters,
     },
     handlers: {
       setPage,
@@ -490,6 +534,7 @@ export function useInvoicesFilter(
       resetFilters,
       openDrawer,
       closeDrawer,
+      setWorkspaceFilter,
     },
     hasActiveFilters,
     apiFilters,

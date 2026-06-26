@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import select, and_, or_, func, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -45,6 +45,31 @@ class PaymentRepository(BaseRepository[Payment]):
     def __init__(self, db: AsyncSession):
         """Initialize Payment repository."""
         super().__init__(db, Payment)
+
+    async def get_imported_payment_ids(self, payment_ids: List[int]) -> set:
+        """Trả tập con của ``payment_ids`` là các payment do IMPORT tạo (id nằm
+        trong ``PaymentImportRow.payment_ids`` JSONB). Dùng cho badge nguồn thu
+        ở drawer "Thu học phí".
+
+        An toàn: ``CASE WHEN jsonb_typeof(payment_ids)='array'`` BỌC quanh
+        ``jsonb_array_elements_text`` để hàng có ``payment_ids`` scalar/null
+        KHÔNG làm unnest 500 (guard ở WHERE không đủ — FROM-LATERAL chạy trước).
+        """
+        if not payment_ids:
+            return set()
+        rows = await self.db.execute(
+            text(
+                "SELECT DISTINCT elem::int AS pid "
+                "FROM payment_import_row, "
+                "jsonb_array_elements_text("
+                "  CASE WHEN jsonb_typeof(payment_ids) = 'array' "
+                "       THEN payment_ids ELSE '[]'::jsonb END"
+                ") AS elem "
+                "WHERE elem ~ '^[0-9]+$' AND elem::int = ANY(:ids)"
+            ),
+            {"ids": payment_ids},
+        )
+        return {r[0] for r in rows}
 
     async def get_by_id_with_relations(
         self,

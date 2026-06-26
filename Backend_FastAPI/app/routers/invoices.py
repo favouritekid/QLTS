@@ -93,10 +93,26 @@ async def list_invoices(
     ),
     sort_by: Optional[str] = Query(
         None,
-        description="priority (default) | due_date | amount | status | created_at",
+        description=(
+            "priority (default) | due_date | amount | paid | remaining | "
+            "status | created_at"
+        ),
     ),
     sort_order: Optional[str] = Query(
         None, description="asc | desc (ignored for the default 'priority' sort)"
+    ),
+    major_id: Optional[int] = Query(None, description="Filter theo ngành (MajorProgram.id)"),
+    degree_level: Optional[str] = Query(
+        None, description="Filter theo trình độ (TEXT name, vd 'Cao đẳng')"
+    ),
+    academic_year: Optional[int] = Query(None, description="Filter theo năm học"),
+    semester_no: Optional[int] = Query(None, description="Filter theo học kỳ (1=HK1...)"),
+    officer_id: Optional[int] = Query(None, description="Filter theo TVV phụ trách"),
+    unit_id: Optional[int] = Query(
+        None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
+    ),
+    due_window: Optional[str] = Query(
+        None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
     ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
@@ -109,7 +125,7 @@ async def list_invoices(
     - Requires 'invoices:read' permission
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = finance_scope_unit_id(current_user)
+    scope_unit_id = finance_scope_unit_id(current_user)
 
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
@@ -126,7 +142,7 @@ async def list_invoices(
     invoices, total = await invoice_repo.get_filtered_with_count(
         skip=skip,
         limit=limit,
-        unit_id=unit_id,
+        unit_id=scope_unit_id,
         statuses=statuses,
         fee_id=fee_id,
         profile_id=profile_id,
@@ -136,6 +152,13 @@ async def list_invoices(
         sort_by=sort_by,
         sort_order=sort_order,
         today=today,
+        major_id=major_id,
+        degree_level=degree_level,
+        academic_year=academic_year,
+        semester_no=semester_no,
+        officer_id=officer_id,
+        unit_id_filter=unit_id,
+        due_window=due_window,
     )
 
     # Build enriched list rows (identity + derived urgency + role-aware flags).
@@ -168,6 +191,19 @@ async def get_invoice_status_counts(
         None,
         description="Search by student name, profile code (HS-…) or invoice number",
     ),
+    major_id: Optional[int] = Query(None, description="Filter theo ngành (MajorProgram.id)"),
+    degree_level: Optional[str] = Query(
+        None, description="Filter theo trình độ (TEXT name, vd 'Cao đẳng')"
+    ),
+    academic_year: Optional[int] = Query(None, description="Filter theo năm học"),
+    semester_no: Optional[int] = Query(None, description="Filter theo học kỳ (1=HK1...)"),
+    officer_id: Optional[int] = Query(None, description="Filter theo TVV phụ trách"),
+    unit_id: Optional[int] = Query(
+        None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
+    ),
+    due_window: Optional[str] = Query(
+        None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
@@ -179,6 +215,9 @@ async def get_invoice_status_counts(
     rows clicking it returns. ``overdue_derived`` uses the derived predicate
     (issued/partial/overdue past due), NOT the lagging enum 'overdue' bucket.
 
+    PARITY (P1): mọi filter mới (ngành/trình độ/năm-HK/TVV/đơn vị/hạn) phải y hệt
+    list_invoices, nếu không badge tab đếm lệch so với danh sách.
+
     NOTE: declared BEFORE ``/{invoice_id}`` so this literal path is not
     captured as an invoice id.
 
@@ -189,13 +228,20 @@ async def get_invoice_status_counts(
     finance_scope_unit_id.
     """
     invoice_repo = InvoiceRepository(db)
-    unit_id = finance_scope_unit_id(current_user)
+    scope_unit_id = finance_scope_unit_id(current_user)
     counts = await invoice_repo.get_status_counts(
-        unit_id=unit_id,
+        unit_id=scope_unit_id,
         fee_id=fee_id,
         profile_id=profile_id,
         fee_type=fee_type,
         search=search,
+        major_id=major_id,
+        degree_level=degree_level,
+        academic_year=academic_year,
+        semester_no=semester_no,
+        officer_id=officer_id,
+        unit_id_filter=unit_id,
+        due_window=due_window,
     )
     return finance_schemas.InvoiceStatusCounts(**counts)
 
@@ -674,8 +720,11 @@ def _build_invoice_list_item(
     profile = fee.admission_profile if fee else None
     lead = profile.lead if profile else None
     officer = lead.assigned_officer if lead else None
-    offering = lead.offering if lead else None
-    program = offering.program if offering else None
+    # Ngành/trình độ đọc TỪ snapshot Fee.resolved_* (single source khớp filter),
+    # KHÔNG dùng lead.offering.program (NV gốc — sai với multi-NV admitted).
+    # __dict__.get tránh lazy-load (MissingGreenlet) nếu chưa eager-load; NULL
+    # snapshot → program_name None → FE hiển thị "(chưa chốt ngành)".
+    resolved_major = fee.__dict__.get("resolved_major") if fee else None
 
     return finance_schemas.InvoiceListItem(
         id=invoice.id,
@@ -692,7 +741,8 @@ def _build_invoice_list_item(
         profile_id=profile.id if profile else None,
         profile_name=lead.full_name if lead else None,
         profile_code=format_profile_code(profile.id) if profile else None,
-        program_name=program.name if program else None,
+        program_name=resolved_major.name if resolved_major else None,
+        degree_level=fee.resolved_degree_level if fee else None,
         officer_name=officer.full_name if officer else None,
         fee_type=fee.fee_type if fee else None,
         semester_no=fee.semester_no if fee else None,

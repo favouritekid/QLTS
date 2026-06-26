@@ -9432,6 +9432,17 @@ async def _create_or_repair_paid_chain(
         db.add(transaction)
         await db.flush()
 
+    if created_fee:
+        # Application fee tạo trực tiếp (KHÔNG qua calculate_fee) → snapshot ngành
+        # tường minh để row/filter "Thu học phí" nhất quán. Pre-decision thường
+        # resolve None → NULL (fail-soft), sẽ được decision-hook điền sau.
+        from app.services.fee_calculation_service import (
+            resnapshot_fee_academic_info_for_profile,
+        )
+        await resnapshot_fee_academic_info_for_profile(
+            db, profile.id, profile=profile
+        )
+
     return fee
 
 

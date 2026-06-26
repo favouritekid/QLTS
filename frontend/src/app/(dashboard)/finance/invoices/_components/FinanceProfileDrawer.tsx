@@ -211,7 +211,11 @@ export function FinanceProfileDrawer({
 function DrawerIdentity({ collection }: { collection: ProfileCollection }) {
   const { identity } = collection
   const name = identity.student_name ?? "Chưa rõ học sinh"
-  const sub = [identity.profile_code, identity.program_name].filter(Boolean).join(" · ")
+  // Ngành (snapshot Fee.resolved_major) + trình độ. NULL → "(chưa chốt ngành)".
+  const major = identity.program_name ?? "(chưa chốt ngành)"
+  const sub = [identity.profile_code, major, identity.degree_level]
+    .filter(Boolean)
+    .join(" · ")
   return (
     <div className="flex items-center gap-3 pr-10">
       <Monogram name={name} className="size-10" />
@@ -221,6 +225,11 @@ function DrawerIdentity({ collection }: { collection: ProfileCollection }) {
           {sub || "Hồ sơ tài chính"}
           {identity.officer_name ? ` · TVV ${identity.officer_name}` : ""}
         </SheetDescription>
+        {identity.citizen_id_masked ? (
+          <p className="truncate text-xs text-muted-foreground">
+            CCCD: {identity.citizen_id_masked}
+          </p>
+        ) : null}
       </div>
     </div>
   )
@@ -624,6 +633,12 @@ function PaymentSection({
   )
 }
 
+const PAYMENT_SOURCE_LABEL: Record<string, string> = {
+  online: "Online",
+  import: "Qua import",
+  manual: "Thu tay",
+}
+
 function PaymentRow({
   payment,
   onAction,
@@ -639,6 +654,16 @@ function PaymentRow({
     created_by_display: payment.created_by_name ?? "Không rõ",
   }
   const isPending = payment.status === "pending"
+  const sourceLabel = PAYMENT_SOURCE_LABEL[payment.source] ?? "Thu tay"
+  // Chi tiết: ai thu · lúc nào · ai duyệt (drawer chi tiết hơn list).
+  const collectedAt = payment.payment_date
+    ? new Date(payment.payment_date).toLocaleDateString("vi-VN")
+    : null
+  const detailParts = [
+    payment.created_by_name ? `Thu: ${payment.created_by_name}` : null,
+    collectedAt,
+    payment.verified_by_name ? `Duyệt: ${payment.verified_by_name}` : null,
+  ].filter(Boolean)
   return (
     <li className="rounded-xl border border-border bg-card px-3 py-2.5">
       <div className="flex items-start justify-between gap-3">
@@ -650,8 +675,18 @@ function PaymentRow({
             {payment.reference_code || `#${payment.id}`}
             {payment.payer_name ? ` · ${payment.payer_name}` : ""}
           </p>
+          {detailParts.length > 0 ? (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {detailParts.join(" · ")}
+            </p>
+          ) : null}
         </div>
-        <PaymentStatusBadge status={payment.status as PaymentStatus} size="sm" />
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <PaymentStatusBadge status={payment.status as PaymentStatus} size="sm" />
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {sourceLabel}
+          </span>
+        </div>
       </div>
 
       {isPending && payment.is_own && (
