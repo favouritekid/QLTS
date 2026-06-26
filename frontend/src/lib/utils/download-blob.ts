@@ -16,6 +16,24 @@ export function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /**
+ * Lấy filename từ header `Content-Disposition` (giữ tên có timestamp do backend đặt).
+ * Dùng chung cho mọi endpoint export blob; fallback khi header thiếu/không parse được.
+ */
+export function filenameFromDisposition(
+  disposition: string | undefined,
+  fallback: string,
+): string {
+  if (!disposition) return fallback
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition)
+  if (!match) return fallback
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
+
+/**
  * Lấy message lỗi khi tải blob: vì `responseType:'blob'`, body lỗi (JSON) bị axios bọc
  * thành Blob → phải đọc `.text()` rồi parse mới ra `detail` thật (không thì luôn fallback).
  */

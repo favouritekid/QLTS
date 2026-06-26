@@ -230,6 +230,26 @@ async def test_search_by_profile_code(db, seeded_invoices):
     assert all(inv.invoice_number.startswith("INV-T-") for inv in invoices)
 
 
+async def test_search_oversized_numeric_does_not_crash(db, seeded_invoices):
+    """A numeric search longer than int4 (e.g. a pasted phone / mã ~11+ digits)
+    must NOT bind an out-of-int32 value into AdmissionProfile.id → asyncpg
+    DataError → 500. Regression: prod hit this 126×/72h on BOTH list_invoices
+    and get_status_counts (the id branch's old try/except never caught it because
+    Python int() doesn't overflow). Out-of-int4 = no such profile → id branch
+    skipped; name/phone/number ilike still run, so the query returns cleanly."""
+    repo = InvoiceRepository(db)
+    big = "66311007745"  # ~66 tỷ, vượt int4 max 2_147_483_647
+    invoices, total = await repo.get_filtered_with_count(
+        unit_id=seeded_invoices["unit_a"], search=big
+    )
+    assert total == 0  # no invoice_number/name/phone contains it; no crash
+    # get_status_counts shares _build_invoice_list_conditions → must also not crash.
+    counts = await repo.get_status_counts(
+        unit_id=seeded_invoices["unit_a"], search=big
+    )
+    assert counts["total"] == 0
+
+
 async def test_fee_type_filter(db, seeded_invoices):
     repo = InvoiceRepository(db)
     invoices, total = await repo.get_filtered_with_count(

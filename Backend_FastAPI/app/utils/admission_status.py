@@ -153,9 +153,17 @@ def is_fee_eligible(profile: "AdmissionProfile") -> bool:
     ``tests/api/test_phase3_pr3d_b_choice_crud.py`` (single-choice→201;
     ≥2-pending / 0-choice → fail-closed).
     """
-    if is_admitted_like(profile) or profile.status in ("confirmed", "enrolled"):
+    # Normalize legacy aliases ONCE via ``effective_status`` instead of hardcoding
+    # the pairs at every gate: ``approved``/``overridden`` → ``admitted`` and
+    # ``resubmitted`` → ``submitted``. Hardcoding the ``("submitted",
+    # "resubmitted")`` pair here while other gates only checked ``"submitted"`` is
+    # exactly what hid the "Tính học phí" button on a re-submitted multi-NV
+    # profile (prod profile 81); routing through the single canonicalizer prevents
+    # that whole class of drift for any future alias added to LEGACY_TO_NEW_STATUS_MAP.
+    eff = effective_status(profile)
+    if eff in ("admitted", "confirmed", "enrolled"):
         return True
-    if profile.status in ("submitted", "resubmitted"):
+    if eff == "submitted":
         if not profile.uses_choice_engine:
             return True
         choices = profile.__dict__.get("choices")

@@ -59,6 +59,7 @@ from .admission_correction_helpers import (
     safe_serialize,
 )
 from ..utils.admission_status import (
+    effective_status,
     is_admitted_like,
     is_confirmation_eligible,
     is_fee_eligible,
@@ -2186,12 +2187,13 @@ def _compute_frontend_fields(
         # Thu lệ phí xét tuyển - POST /api/admissions/{id}/record-fee-payment.
         # Mirror get_admission_for_fee_collection (deps.py): admin all;
         # manager/accountant same-unit; officer assigned+same-unit. Gate
-        # draft/submitted/resubmitted + le phi thuc su pending -> nut khong hien
-        # cho exempt / da-paid / post-decision. ``resubmitted`` = submitted sau
-        # khi officer nop lai (mirror enforcement record_application_fee_payment
-        # + is_fee_eligible cho hoc phi).
+        # draft + submitted-equivalent (effective_status maps resubmitted →
+        # submitted) + le phi thuc su pending -> nut khong hien cho exempt /
+        # da-paid / post-decision. Normalize via effective_status thay vì hardcode
+        # ("draft","submitted","resubmitted") để khớp enforcement
+        # record_application_fee_payment + tránh drift (xem is_fee_eligible).
         "record_fee_payment": (
-            status in ("draft", "submitted", "resubmitted")
+            (status == "draft" or effective_status(profile) == "submitted")
             and bool((profile.applied_rules or {}).get("requires_application_fee"))
             and (profile.applied_rules or {}).get("fee_status") == "pending"
             and (
@@ -9484,12 +9486,13 @@ async def record_application_fee_payment(
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
     # Check profile status — only allow fee payment for profiles still in the
-    # pre-decision intake window: draft / submitted / resubmitted. ``resubmitted``
-    # is submitted after an officer re-submit (rejected/revision_requested →
-    # resubmitted); omitting it blocked fee collection on a re-submitted profile
-    # even though it is still being processed (mirrors the FE record_fee_payment
-    # flag + is_fee_eligible for tuition).
-    if profile.status not in ("draft", "submitted", "resubmitted"):
+    # pre-decision intake window: draft + submitted-equivalent. effective_status
+    # maps the legacy ``resubmitted`` (rejected/revision_requested → re-submit)
+    # back to ``submitted``, so a re-submitted profile is accepted without
+    # hardcoding the alias here (mirrors the FE record_fee_payment flag +
+    # is_fee_eligible for tuition; prevents the drift that hid the action on
+    # prod profile 81).
+    if profile.status != "draft" and effective_status(profile) != "submitted":
         raise BadRequest(
             f"Cannot record fee payment for profile in '{profile.status}' status. "
             "Only draft, submitted or resubmitted profiles accept fee payments."
