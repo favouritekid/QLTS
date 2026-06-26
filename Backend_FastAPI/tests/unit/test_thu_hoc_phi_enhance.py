@@ -1,44 +1,21 @@
 """Unit tests cho nâng cấp workspace "Thu học phí" (no-DB, pure logic).
 
-Phủ:
-- ``_mask_citizen_id`` — che CCCD PII (giữ 3 đầu/3 cuối).
-- ``_build_payment_list_item`` source resolver — online/import/manual + các field
-  mới (verified_by_name, verified_at).
+Phủ ``_build_payment_list_item`` source resolver — online/import/manual + các
+field mới (verified_by_name, verified_at). CCCD masked dùng util chung
+``app.utils.masking.mask_citizen_id`` (đã có test riêng).
 
-Các test parity list↔status-counts + snapshot multi-NV admitted (cần fixture
-choice-engine + academic_info) để PR sau (integration).
+Parity list↔status-counts + snapshot multi-NV admitted (DB + choice-engine):
+``tests/services/test_fee_resolved_snapshot.py``.
 """
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
-from app.routers.fees import _mask_citizen_id
 from app.routers.payments import _build_payment_list_item
 
 
 pytestmark = pytest.mark.unit
-
-
-# ── _mask_citizen_id ────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ("036204001234", "036******234"),  # 12 số CCCD: che 6 giữa
-        ("123456789", "123***789"),         # 9 số
-        (None, None),
-        ("", None),
-        ("12", "**"),                        # quá ngắn (<3) → che hết
-        ("123456", "****56"),                # <7 → che hết trừ 2 cuối
-    ],
-)
-def test_mask_citizen_id(raw, expected):
-    assert _mask_citizen_id(raw) == expected
-
-
-def test_mask_citizen_id_strips_whitespace():
-    assert _mask_citizen_id("  036204001234  ") == "036******234"
 
 
 # ── _build_payment_list_item: source + field mới ────────────────────────────

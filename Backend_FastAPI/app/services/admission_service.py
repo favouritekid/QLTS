@@ -9439,7 +9439,9 @@ async def _create_or_repair_paid_chain(
         from app.services.fee_calculation_service import (
             resnapshot_fee_academic_info_for_profile,
         )
-        await resnapshot_fee_academic_info_for_profile(db, profile.id)
+        await resnapshot_fee_academic_info_for_profile(
+            db, profile.id, profile=profile
+        )
 
     return fee
 

@@ -1091,7 +1091,7 @@ async def evaluate_cascade(
     from .fee_calculation_service import (
         resnapshot_fee_academic_info_for_profile,
     )
-    await resnapshot_fee_academic_info_for_profile(db, profile.id)
+    await resnapshot_fee_academic_info_for_profile(db, profile.id, profile=profile)
 
     # Chain callbacks: caller commits + awaits both dispatches
     async def chained_callback() -> None:
@@ -1319,7 +1319,7 @@ async def promote_waitlisted_choice(
     from .fee_calculation_service import (
         resnapshot_fee_academic_info_for_profile,
     )
-    await resnapshot_fee_academic_info_for_profile(db, profile.id)
+    await resnapshot_fee_academic_info_for_profile(db, profile.id, profile=profile)
 
     return (
         {

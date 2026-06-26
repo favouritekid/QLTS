@@ -257,6 +257,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/pending-diploma", "action": "GET"},
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/program-offerings", "action": "GET"},  # Dropdown data
+        # Danh sách ngành (MajorProgram) cho dropdown filter "Thu học phí" +
+        # admission. Service unit-scopes manager/officer; accountant (finance
+        # global read) thấy full list — chủ ý cho filter công nợ toàn đơn vị.
+        {"subject": "{role}", "object": "/api/programs", "action": "GET"},  # Dropdown ngành
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/criteria", "action": "GET"},
