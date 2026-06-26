@@ -52,6 +52,7 @@ SRC_LABEL = dict(SRC_BUCKETS)
 
 _DUNG_CS = {"sts20", "sts16", "sts08", "sts18", "sts12"}
 _CHUA_CS = {"sts00", "sts02", "sts01", "sts15", "sts19"}
+_UNASSIGNED = 0  # sentinel cột "Chưa PC" cho lead không có nhân viên phụ trách
 
 # ---- Styling ----------------------------------------------------------------
 _THIN = Side(style="thin", color="B0B0B0")
@@ -122,10 +123,12 @@ _OFFICER_SQL = text(
     GROUP BY 1, 2 ORDER BY c DESC, u.id
     """
 )
-_MAJOR_SQL = text("""
+_MAJOR_SQL = text(
+    """
     SELECT id, code, name, degree_level FROM major_program WHERE is_active
     ORDER BY name, CASE degree_level WHEN 'Cao đẳng' THEN 0 ELSE 1 END, code
-    """)
+    """
+)
 
 
 def _lead_bucket(has_tui, has_app, cs) -> str:
@@ -199,9 +202,16 @@ class AdmissionSummaryExportService:
     # ----------------------------------------------------------- workbook build
     def _build_workbook(self, year, leads, officers, majors) -> Workbook:
         officer_ids = [r["id"] for r in officers]
+        officer_id_set = set(officer_ids)
         oname = {r["id"]: r["nm"] for r in officers}
         oshort = _officer_short_names(oname, officer_ids)
-        n_unassigned = sum(1 for r in leads if r["off"] not in officer_ids)
+        n_unassigned = sum(1 for r in leads if r["off"] not in officer_id_set)
+        # Sheet-2 columns = officers (+ "Chưa PC" if any lead has no officer) so
+        # EVERY lead is attributed → sheet 2 reconciles exactly with sheet 1.
+        officer_cols = list(officer_ids)
+        if n_unassigned:
+            officer_cols.append(_UNASSIGNED)
+            oshort[_UNASSIGNED] = "Chưa PC"
 
         major_ids = [m["id"] for m in majors]
         minfo = {m["id"]: m for m in majors}
@@ -210,32 +220,32 @@ class AdmissionSummaryExportService:
 
         s1 = {p: {k: 0 for k in LB_KEYS} for p in all_keys}
         s1hs = {p: {k: 0 for k in HS_KEYS} for p in all_keys}
-        s2 = {p: {k: {o: 0 for o in officer_ids} for k in LB_KEYS} for p in all_keys}
-        s2hs = {p: {k: {o: 0 for o in officer_ids} for k in HS_KEYS} for p in all_keys}
-        src = {p: {g: {o: 0 for o in officer_ids} for g in SRC_KEYS} for p in all_keys}
+        s2 = {p: {k: {o: 0 for o in officer_cols} for k in LB_KEYS} for p in all_keys}
+        s2hs = {p: {k: {o: 0 for o in officer_cols} for k in HS_KEYS} for p in all_keys}
+        src = {p: {g: {o: 0 for o in officer_cols} for g in SRC_KEYS} for p in all_keys}
 
         for r in leads:
             pid = r["pid"] if r["pid"] in s1 else NONE
             b = _lead_bucket(r["has_tui"], r["has_app"], r["cs"])
             s1[pid][b] += 1
             off = r["off"]
-            if off in officer_ids:
-                s2[pid][b][off] += 1
+            # col is always a valid key: an unassigned lead implies _UNASSIGNED ∈ cols
+            col = off if off in officer_id_set else _UNASSIGNED
+            s2[pid][b][col] += 1
             ps = r["pstatus"]
             # draft → Nháp; bất kỳ trạng thái khác (đã nộp trở lên: submitted/
             # approved/enrolled/…) → Đã nộp (mốc lũy kế); không hồ sơ → bỏ qua.
             hk = "nhap" if ps == "draft" else ("danop" if ps is not None else None)
             if hk:
                 s1hs[pid][hk] += 1
-                if off in officer_ids:
-                    s2hs[pid][hk][off] += 1
-            if b == "hocphi" and off in officer_ids:
+                s2hs[pid][hk][col] += 1
+            if b == "hocphi":
                 g = (
                     "lienhe"
                     if (r["source"] == "referral" or r["referrer_id"] is not None)
                     else "hethong"
                 )
-                src[pid][g][off] += 1
+                src[pid][g][col] += 1
 
         ordered = [
             p for p in major_ids if sum(s1[p].values()) + sum(s1hs[p].values()) > 0
@@ -267,7 +277,7 @@ class AdmissionSummaryExportService:
             ND,
             ordered,
             desc_of,
-            officer_ids,
+            officer_cols,
             oshort,
             n_unassigned,
             s2,
@@ -385,7 +395,7 @@ class AdmissionSummaryExportService:
         ND,
         ordered,
         desc_of,
-        officer_ids,
+        officer_cols,
         oshort,
         n_unassigned,
         s2,
@@ -393,11 +403,12 @@ class AdmissionSummaryExportService:
         src,
     ):
         ws = wb.create_sheet("Chia theo nhân viên")
-        noff = len(officer_ids)
+        noff = len(officer_cols)
+        block_w = 1 + noff  # cột "Tổng" + mỗi nhân viên (+ "Chưa PC" nếu có)
         aA = ND + 1
-        aB = aA + len(LB_KEYS) * noff
-        aC = aB + len(HS_KEYS) * noff
-        total2 = ND + (len(LB_KEYS) + len(HS_KEYS) + len(SRC_KEYS)) * noff
+        aB = aA + len(LB_KEYS) * block_w
+        aC = aB + len(HS_KEYS) * block_w
+        total2 = ND + (len(LB_KEYS) + len(HS_KEYS) + len(SRC_KEYS)) * block_w
 
         ws.cell(1, 1, f"SỐ LIỆU TUYỂN SINH NĂM {year} — CHIA THEO NHÂN VIÊN").font = (
             _TITLE_FONT
@@ -412,12 +423,12 @@ class AdmissionSummaryExportService:
             ws.cell(
                 2,
                 6,
-                f"Lưu ý: chưa gồm {n_unassigned} lead chưa phân công nhân viên "
-                "(xem sheet 'Số liệu chung').",
+                f"{n_unassigned} lead chưa phân công nằm ở cột 'Chưa PC' (mỗi "
+                "khối) → cột 'Tổng' khớp sheet 'Số liệu chung'.",
             ).font = Font(italic=True, color="C00000", size=9)
 
-        if noff == 0:
-            return  # không có nhân viên trong phạm vi → sheet chỉ có tiêu đề
+        if not officer_cols:
+            return  # không có lead trong phạm vi → sheet chỉ có tiêu đề
 
         for i, h in enumerate(DESC, 1):
             ws.merge_cells(start_row=3, start_column=i, end_row=5, end_column=i)
@@ -429,21 +440,26 @@ class AdmissionSummaryExportService:
         ws.merge_cells(start_row=3, start_column=aC, end_row=3, end_column=total2)
         _H(ws.cell(3, aC, "Nguồn tuyển nhập học (nhóm đã đóng học phí)"))
 
+        # mỗi khối: cột "Tổng" + 1 cột / nhân viên (+ "Chưa PC")
         def grp(col, keys, label, fill):
             for k in keys:
                 ws.merge_cells(
-                    start_row=4, start_column=col, end_row=4, end_column=col + noff - 1
+                    start_row=4,
+                    start_column=col,
+                    end_row=4,
+                    end_column=col + block_w - 1,
                 )
                 _H(ws.cell(4, col, label[k]), fill=fill, font=_SUB_FONT)
-                for t, oid in enumerate(officer_ids):
-                    _H(ws.cell(5, col + t, oshort[oid]), fill=fill, font=_SUB_FONT)
-                col += noff
+                _H(ws.cell(5, col, "Tổng"), fill=fill, font=_SUB_FONT)
+                for t, oid in enumerate(officer_cols):
+                    _H(ws.cell(5, col + 1 + t, oshort[oid]), fill=fill, font=_SUB_FONT)
+                col += block_w
 
         grp(aA, LB_KEYS, LB_LABEL, _GRPA_FILL)
         grp(aB, HS_KEYS, HS_LABEL, _GRPB_FILL)
         grp(aC, SRC_KEYS, SRC_LABEL, _GRPC_FILL)
 
-        # TỔNG row 6
+        # TỔNG CỘNG row 6
         ws.cell(6, 1, "TỔNG CỘNG")
         ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=ND)
         ws.cell(6, 1).font = _TOTAL_FONT
@@ -454,19 +470,27 @@ class AdmissionSummaryExportService:
 
         def emit(row, col, store, keys, pid, is_total):
             for k in keys:
-                for t, oid in enumerate(officer_ids):
-                    v = (
+                vals = [
+                    (
                         sum(store[p][k][oid] for p in ordered)
                         if is_total
                         else store[pid][k][oid]
                     )
-                    c = ws.cell(row, col + t, v)
+                    for oid in officer_cols
+                ]
+                # cột "Tổng" của khối = cộng các nhân viên (khớp sheet Số liệu chung)
+                cells = [(col, sum(vals), True)]
+                cells += [(col + 1 + t, v, False) for t, v in enumerate(vals)]
+                for cc, v, is_block_total in cells:
+                    c = ws.cell(row, cc, v)
                     c.alignment = _CTR
+                    c.border = _BORDER
                     if is_total:
                         c.fill = _TOTAL_FILL
                         c.font = _TOTAL_FONT
-                    c.border = _BORDER
-                col += noff
+                    elif is_block_total:
+                        c.font = Font(bold=True)
+                col += block_w
             return col
 
         emit(6, aA, s2, LB_KEYS, None, True)
@@ -576,13 +600,13 @@ class AdmissionSummaryExportService:
             "nhưng theo quy ước: đóng cả 2 CHỈ tính học phí → 2 cột rời "
             "nhau, cộng = tổng đã đóng tiền.",
             "• Nguồn tuyển nhập học chỉ tính cho nhóm 'đã đóng học phí'.",
+            "• Sheet 'Chia theo nhân viên': mỗi khối có cột 'Tổng' (= cộng các "
+            "nhân viên, KHỚP sheet 'Số liệu chung') và cột 'Chưa PC' (lead chưa "
+            "phân công nhân viên) nên sheet 2 đối chiếu khớp sheet 1.",
         ]
         if n_unassigned:
             notes.append(
-                f"• Sheet 'Chia theo nhân viên' KHÔNG gồm {n_unassigned} "
-                f"lead chưa phân công nhân viên → tổng theo nhân viên = "
-                f"{n_leads - n_unassigned}, ít hơn Tổng lead ({n_leads}) "
-                f"đúng {n_unassigned} lead."
+                f"• Có {n_unassigned} lead chưa phân công nhân viên (cột " "'Chưa PC')."
             )
         for t in notes:
             ws.cell(r, 1, t).alignment = _LEFT

@@ -39,8 +39,12 @@ def test_officer_short_name_whitespace_does_not_crash():
 
 
 def test_officer_short_name_sanitizes_formula_injection():
-    out = _officer_short_names({1: "=cmd|'/c calc'!A1"}, [1])
-    assert out[1].startswith("'")  # neutralized for Excel
+    # single-token formula → prefixed with ' (neutralized for Excel)
+    assert _officer_short_names({1: "=cmd"}, [1])[1].startswith("'")
+    # output must never begin with a formula-trigger char
+    for nm in ("=1+1", "@SUM", "+x", "Trần |pipe"):
+        v = _officer_short_names({9: nm}, [9])[9]
+        assert v and v[0] not in ("=", "+", "-", "@", "|", "\t")
 
 
 def test_officer_short_name_disambiguates_collisions():
