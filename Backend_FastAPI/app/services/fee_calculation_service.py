@@ -952,9 +952,14 @@ class FeeCalculationService:
                 selectinload(models.AdmissionProfile.lead)
                 .selectinload(models.Lead.offering)
                 .selectinload(models.ProgramOffering.program),
+                # Ngành/trình độ drawer đọc snapshot Fee.resolved_major (khớp list
+                # + filter, đúng NV admitted) — không dùng lead.offering.program.
+                selectinload(models.AdmissionProfile.fees)
+                .joinedload(Fee.resolved_major),
                 # fees → invoices → payments, with the payment columns the list
-                # builder reads (method/created_by). Explicit chain overrides the
-                # model-level lazy="selectin" so those nested loads are eager too.
+                # builder reads (method/created_by/verified_by). Explicit chain
+                # overrides the model-level lazy="selectin" so nested loads are
+                # eager too.
                 selectinload(models.AdmissionProfile.fees)
                 .selectinload(Fee.invoices)
                 .selectinload(Invoice.payments)
@@ -963,6 +968,10 @@ class FeeCalculationService:
                 .selectinload(Fee.invoices)
                 .selectinload(Invoice.payments)
                 .joinedload(Payment.created_by),
+                selectinload(models.AdmissionProfile.fees)
+                .selectinload(Fee.invoices)
+                .selectinload(Invoice.payments)
+                .joinedload(Payment.verified_by),
                 # Suppress the model-level lazy="selectin" eager-loads the list
                 # builders never read — otherwise opening the drawer fires 2 extra
                 # batched SELECTs (invoice.payment_intents + payment.transactions).

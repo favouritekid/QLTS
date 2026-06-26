@@ -23,6 +23,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -539,6 +540,20 @@ async def get_profile_finance_summary(
     )
 
 
+def _mask_citizen_id(citizen_id: Optional[str]) -> Optional[str]:
+    """Che CCCD cho PII: giữ 3 số đầu + 3 số cuối, che giữa bằng '*'.
+
+    VD '036204001234' → '036******234'. Chuỗi quá ngắn (<7) che toàn bộ trừ 2
+    số cuối. None/empty → None.
+    """
+    if not citizen_id:
+        return None
+    s = citizen_id.strip()
+    if len(s) < 7:
+        return ("*" * max(0, len(s) - 2)) + s[-2:] if len(s) > 2 else "*" * len(s)
+    return s[:3] + ("*" * (len(s) - 6)) + s[-3:]
+
+
 @limiter.limit(RateLimits.DATA_READ)
 @router.get(
     "/collection/{profile_id}",
@@ -581,20 +596,31 @@ async def get_profile_collection(
 
     lead = profile.lead
     officer = lead.assigned_officer if lead else None
-    offering = lead.offering if lead else None
-    program = offering.program if offering else None
+
+    # Flatten the loaded graph: fees → invoices → payments.
+    fees = list(profile.fees or [])
+
+    # Ngành/trình độ header đọc TỪ snapshot Fee.resolved_* (khớp list row +
+    # filter, đúng NV admitted). Lấy fee đầu tiên có snapshot (mọi fee cùng hồ
+    # sơ cùng ngành sau khi hook chạy). NULL → "(chưa chốt ngành)" phía FE.
+    _resolved_major = None
+    _resolved_degree = None
+    for _f in fees:
+        if _f.resolved_major_id:
+            _resolved_major = _f.__dict__.get("resolved_major")
+            _resolved_degree = _f.resolved_degree_level
+            break
 
     identity = finance_schemas.ProfileCollectionIdentity(
         profile_id=profile.id,
         profile_code=format_profile_code(profile.id),
         student_name=lead.full_name if lead else None,
-        program_name=program.name if program else None,
+        citizen_id_masked=_mask_citizen_id(getattr(profile, "citizen_id", None)),
+        program_name=_resolved_major.name if _resolved_major else None,
+        degree_level=_resolved_degree,
         officer_name=officer.full_name if officer else None,
         phone=lead.phone if lead else None,
     )
-
-    # Flatten the loaded graph: fees → invoices → payments.
-    fees = list(profile.fees or [])
     all_invoices = []
     all_payments = []
     for fee in fees:
@@ -647,10 +673,30 @@ async def get_profile_collection(
     ]
     invoice_items.sort(key=lambda it: (not it.is_overdue, it.due_date, it.id))
 
+    # Nguồn thu "import": prefetch các payment.id của hồ sơ nằm trong
+    # PaymentImportRow.payment_ids (JSONB) — 1 query, anti-N+1. intent_id →
+    # online, còn lại → manual (xem _build_payment_list_item).
+    imported_payment_ids: set = set()
+    _pay_ids = [p.id for p in all_payments]
+    if _pay_ids:
+        _rows = await db.execute(
+            text(
+                "SELECT DISTINCT elem::int AS pid "
+                "FROM payment_import_row, "
+                "jsonb_array_elements_text(payment_ids) AS elem "
+                "WHERE payment_ids IS NOT NULL AND elem::int = ANY(:ids)"
+            ),
+            {"ids": _pay_ids},
+        )
+        imported_payment_ids = {r[0] for r in _rows}
+
     # Payments: newest first (history), enriched + role-aware maker-checker flags.
     all_payments.sort(key=lambda p: p.created_at, reverse=True)
     payment_items = [
-        _build_payment_list_item(pmt, current_user.id, current_user.role)
+        _build_payment_list_item(
+            pmt, current_user.id, current_user.role,
+            imported_payment_ids=imported_payment_ids,
+        )
         for pmt in all_payments
     ]
 

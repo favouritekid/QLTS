@@ -1082,6 +1082,7 @@ def _build_payment_list_item(
     payment,
     current_user_id: Optional[int] = None,
     current_user_role: str = None,
+    imported_payment_ids: Optional[set] = None,
 ) -> finance_schemas.PaymentListItem:
     """Build an enriched ``PaymentListItem`` from a Payment model.
 
@@ -1092,8 +1093,15 @@ def _build_payment_list_item(
     role-aware can_verify/can_reject.
 
     Requires ``payment.invoice.fee.admission_profile.lead`` (profile_name),
-    ``payment.method`` and ``payment.created_by`` eager-loaded — all relationship
-    access happens HERE in async context, never during Pydantic serialization.
+    ``payment.method``, ``payment.created_by`` (and ``verified_by`` for the
+    drawer) eager-loaded — all relationship access happens HERE in async
+    context, never during Pydantic serialization.
+
+    ``source`` (BE-owned): ``online`` khi ``intent_id`` có; ``import`` khi
+    ``payment.id`` nằm trong ``imported_payment_ids`` (prefetch từ
+    ``PaymentImportRow.payment_ids`` — chỉ drawer truyền vào); else ``manual``.
+    Caller không truyền set → import-payment hiện "manual" (chấp nhận ở list/
+    queue; drawer là nơi cần chi tiết nguồn).
     """
     profile_name = None
     if payment.invoice and payment.invoice.fee:
@@ -1105,6 +1113,19 @@ def _build_payment_list_item(
     created_by_name = None
     if payment.created_by:
         created_by_name = payment.created_by.full_name or payment.created_by.email
+    # verified_by may not be eager-loaded in list/queue callers → __dict__.get
+    # avoids a lazy-load (MissingGreenlet); drawer eager-loads it.
+    verified_by = payment.__dict__.get("verified_by")
+    verified_by_name = None
+    if verified_by:
+        verified_by_name = verified_by.full_name or verified_by.email
+
+    if payment.intent_id is not None:
+        source = "online"
+    elif imported_payment_ids and payment.id in imported_payment_ids:
+        source = "import"
+    else:
+        source = "manual"
 
     can_verify, can_reject = _compute_payment_review_flags(
         payment, current_user_id, current_user_role
@@ -1125,6 +1146,9 @@ def _build_payment_list_item(
         profile_name=profile_name,
         method_name=method_name,
         created_by_name=created_by_name,
+        verified_by_name=verified_by_name,
+        verified_at=payment.verified_at,
+        source=source,
         can_verify=can_verify,
         can_reject=can_reject,
     )
