@@ -94,7 +94,9 @@ export function useCommitPaymentImport() {
         `Đã ghi ${result.committed_count} dòng` +
           (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : ""),
       )
-      queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })
+      // return → mutation pending tới khi cache refetch xong (tránh thao tác tiếp
+      // trên dữ liệu cũ; convention await-invalidate của repo).
+      return queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })
     },
     onError: (error) => toast.error(errMsg(error, "Không ghi được tiền lô import")),
   })
@@ -114,7 +116,9 @@ export function useVoidPaymentImport() {
       paymentImportApi.voidBatch(batchId, reason),
     onSuccess: (result) => {
       toast.success(`Đã đảo lô — rút lại ${result.reversed_count} khoản`)
-      queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })
+      // return → mutation pending tới khi cache refetch xong: dòng History hết stale
+      // can_void → chặn double-void (409). Convention await-invalidate của repo.
+      return queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })
     },
     onError: (error) => toast.error(errMsg(error, "Không đảo được lô import")),
   })

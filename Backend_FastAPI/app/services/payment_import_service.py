@@ -35,7 +35,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.core.constants import UserRole
 from app.models.finance import (
     Fee,
     Invoice,
@@ -407,7 +406,11 @@ async def resolve_and_validate(
     fees = await _fetch_tuition_fees(db, [p.id for p in profiles.values()], semester_no)
     fee_ids = [f.id for f in fees.values()]
     invoices_by_fee = await _fetch_payable_invoices(db, fee_ids)
-    invoice_statuses = await _fetch_invoice_status_sets(db, fee_ids)
+    # Chỉ cần status-set cho fee KHÔNG có hóa đơn payable (nhánh hiếm "đợt nháp / đã thu
+    # đủ / chưa có đợt"). File bình thường mọi fee đều payable → list rỗng → helper
+    # return {} ngay, KHÔNG tốn query trên đường happy-path.
+    no_payable_fee_ids = [fid for fid in fee_ids if fid not in invoices_by_fee]
+    invoice_statuses = await _fetch_invoice_status_sets(db, no_payable_fee_ids)
 
     # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
     # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR
@@ -911,32 +914,17 @@ def build_template(fmt: str) -> Tuple[bytes, str, str]:
 async def get_system_user(db: AsyncSession) -> "models.User":
     """Tài khoản kỹ thuật 'system' (checker cho auto-verify by policy).
 
-    Fingerprint-validated (khớp ``_get_system_application_fee_user`` admission_service):
-    username='system', status='inactive', role=user, email='system@qlts.internal',
-    unit_id=None. Maker-checker thỏa vì importer (kế toán) ≠ system_user (DB constraint
-    ``chk_payment_no_self_approval``).
+    DÙNG CHUNG resolver canonical ``_get_system_application_fee_user``
+    (admission_service) → **1 NGUỒN** fingerprint cho mọi luồng auto-verify by-policy
+    (lệ phí + bulk import), hết drift. Canonical chặt hơn (thêm check không có
+    UserUnitAssignment active + reuse ``_is_bcrypt_hash``). Maker-checker thỏa vì
+    importer (kế toán) ≠ system_user (``chk_payment_no_self_approval``).
+
+    (Eventual home: ``payment_service`` — plan §8.)
     """
-    user = (
-        await db.execute(select(models.User).where(models.User.username == "system"))
-    ).scalar_one_or_none()
-    if user is None:
-        raise ConflictError("Tài khoản kỹ thuật 'system' chưa được cấu hình")
-    # Fingerprint KHỚP ``_get_system_application_fee_user`` (admission_service): thêm
-    # current_assignment_id IS NULL + password là bcrypt thật → không nhận nhầm 1 tài
-    # khoản 'system' bị hạ cấp/chiếm dụng làm checker maker-checker.
-    if not (
-        user.status == "inactive"
-        and user.role == UserRole.USER
-        and user.email == "system@qlts.internal"
-        and user.unit_id is None
-        and user.current_assignment_id is None
-        # bcrypt thật = prefix $2a/$2b/$2y VÀ đủ dài (khớp _is_bcrypt_hash len>=50;
-        # tránh nhận '$2b$' cụt làm hợp lệ).
-        and len(user.password_hash or "") >= 50
-        and (user.password_hash or "").startswith(("$2a$", "$2b$", "$2y$"))
-    ):
-        raise ConflictError("Tài khoản kỹ thuật 'system' sai fingerprint")
-    return user
+    from app.services.admission_service import _get_system_application_fee_user
+
+    return await _get_system_application_fee_user(db)
 
 
 async def auto_verify_payment(
