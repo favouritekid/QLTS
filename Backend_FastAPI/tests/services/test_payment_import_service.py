@@ -207,8 +207,16 @@ class TestParseAmount:
         assert pis.parse_amount_vn("1,234,567.50") == Decimal("1234567.50")
 
     def test_single_comma_still_vn_decimal(self):
-        # Không regress: 1 dấu ',' giữ nghĩa thập phân VN
+        # Không regress: 1 dấu ',' + 1-2 chữ số giữ nghĩa thập phân VN
         assert pis.parse_amount_vn("7,50") == Decimal("7.50")
+        assert pis.parse_amount_vn("7,5") == Decimal("7.5")
+
+    def test_single_comma_three_digits_is_thousands(self):
+        # P1: ',' đơn + ĐÚNG 3 chữ số = phân cách nghìn (VND nguyên), KHÔNG thập phân.
+        # Trước đây '500,000' -> 500.000 -> 500.00 = GHI NHẦM 500đ thay vì 500.000đ.
+        assert pis.parse_amount_vn("500,000") == Decimal("500000")
+        assert pis.parse_amount_vn("7,500") == Decimal("7500")
+        assert pis.parse_amount_vn("1,200") == Decimal("1200")
 
     def test_malformed_groups_rejected(self):
         # Fix #9: nhóm nghìn sai (nhóm giữa ≠3) KHÔNG được nối thầm thành số

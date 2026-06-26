@@ -192,8 +192,10 @@ def parse_amount_vn(raw: str) -> Decimal:
     """Parse số tiền kiểu VN. '.' = phân cách nghìn, ',' = thập phân.
 
     "7.200.000" -> 7200000 · "7.200.000,50" -> 7200000.50 · "7200000.0" (float
-    string từ Excel, nhóm cuối 1 chữ số) -> 7200000. Heuristic: '.' với nhóm cuối
-    đúng 3 chữ số = phân cách nghìn; nếu không -> thập phân.
+    string từ Excel, nhóm cuối 1 chữ số) -> 7200000. Heuristic: dấu phân cách ĐƠN
+    ('.' hoặc ',') với nhóm cuối ĐÚNG 3 chữ số = phân cách nghìn ("500.000" và
+    "500,000" đều = 500000 vì VND nguyên); nhóm cuối 1-2 chữ số = thập phân
+    ("7,50" -> 7.50). Nhiều dấu = phân cách nghìn (US "7,200,000").
     """
     # Bỏ MỌI khoảng trắng kể cả NBSP   / narrow   — file ngân hàng/Excel
     # hay ghi '7 200 000' với non-breaking space (re \s khớp Unicode whitespace).
@@ -213,7 +215,12 @@ def parse_amount_vn(raw: str) -> Decimal:
         if s.count(",") > 1:  # nhiều ',' = phân cách nghìn (US 7,200,000)
             _check_thousands_groups(s.split(","), raw)
             s = s.replace(",", "")
-        else:  # 1 dấu ',' = thập phân VN (7,50)
+        elif len(s.rsplit(",", 1)[1]) == 3:  # 1 ',' + nhóm cuối 3 số -> nghìn
+            # Đối xứng nhánh '.': VND nguyên nên '500,000' = 500000, KHÔNG phải thập
+            # phân 500,000 -> 500.00 (P1: ghi nhầm 500đ thay vì 500.000đ).
+            _check_thousands_groups(s.split(","), raw)
+            s = s.replace(",", "")
+        else:  # 1 ',' + nhóm cuối 1-2 số = thập phân VN (7,50 -> 7.50)
             s = s.replace(",", ".")
     elif has_dot:  # '.' nhập nhằng
         if len(s.rsplit(".", 1)[1]) == 3:  # nhóm cuối 3 chữ số -> nghìn
