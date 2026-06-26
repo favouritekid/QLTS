@@ -741,10 +741,17 @@ class InvoiceRepository(BaseRepository[Invoice]):
             # "HS-000131" or a bare profile id -> match AdmissionProfile.id.
             digits = re.sub(r"\D", "", normalized)
             if digits and (normalized.upper().startswith("HS") or normalized.isdigit()):
-                try:
-                    search_or.append(models.AdmissionProfile.id == int(digits))
-                except (ValueError, OverflowError):
-                    pass
+                # A profile id is a PostgreSQL int4. ``int(digits)`` NEVER raises
+                # in Python (arbitrary precision), so the old try/except was a
+                # no-op: a long numeric search (a pasted phone / mã ~11+ digits)
+                # bound an out-of-int32 value into AdmissionProfile.id → asyncpg
+                # DataError → 500 on BOTH list_invoices and get_status_counts
+                # (observed 126×/72h on prod). Range-guard instead — out of int4
+                # range means "no such profile", so just skip the id branch
+                # (mirrors search_calculable_profiles in fee_calculation_service).
+                pid_val = int(digits)
+                if 1 <= pid_val <= 2147483647:
+                    search_or.append(models.AdmissionProfile.id == pid_val)
             conditions.append(or_(*search_or))
         return conditions
 
