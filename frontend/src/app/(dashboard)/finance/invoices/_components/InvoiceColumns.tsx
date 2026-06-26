@@ -135,6 +135,63 @@ export function AmountSubline({
 }
 
 /**
+ * Cột "Đã đóng" (tách khỏi "Số tiền") — paid_amount, xanh khi đã thu đủ.
+ */
+export function PaidCell({ invoice }: { invoice: InvoiceListItemViewModel }) {
+  return (
+    <div className="text-right tabular-nums">
+      <span
+        className={cn(
+          "font-medium",
+          invoice.is_paid ? "text-emerald-600" : "text-foreground",
+        )}
+      >
+        {invoice.paid_amount_formatted}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Cột "Còn lại" — remaining (đỏ nếu quá hạn) + dòng phụ quá-N-ngày / phạt.
+ * "Đã thu đủ" khi is_paid.
+ */
+export function RemainingCell({ invoice }: { invoice: InvoiceListItemViewModel }) {
+  if (invoice.is_paid) {
+    return (
+      <div className="text-right text-xs font-medium tabular-nums text-emerald-600">
+        Đã thu đủ
+      </div>
+    )
+  }
+  return (
+    <div className="text-right tabular-nums">
+      <div
+        className={cn(
+          "flex items-center justify-end gap-1 font-medium",
+          invoice.is_overdue ? "text-error-600" : "text-foreground",
+        )}
+      >
+        {invoice.is_overdue && (
+          <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+        )}
+        <span>{invoice.remaining_amount_formatted}</span>
+      </div>
+      {invoice.is_overdue && invoice.overdue_days > 0 && (
+        <div className="text-[11px] text-error-600">
+          quá {invoice.overdue_days} ngày
+        </div>
+      )}
+      {invoice.has_penalty && (
+        <div className="text-[11px] tabular-nums text-muted-foreground">
+          (gồm {formatVND(invoice.penalty_amount)} phạt)
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * "Thu tiền" = nút hạng nhất (gate can_record_payment). Desktop: hover-reveal
  * (`opacity-0 group-hover:opacity-100`, luôn hiện khi focus-within). Mobile card:
  * truyền `alwaysVisible` để LUÔN hiện. Keyboard-reachable + aria-label.

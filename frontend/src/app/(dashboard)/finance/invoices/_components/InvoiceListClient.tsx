@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Receipt, Plus, ClipboardCheck } from "lucide-react"
+import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
 
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
@@ -48,7 +49,8 @@ import { InvoiceStatusDot } from "./InvoiceStatusDot"
 import { InvoiceCard } from "./InvoiceCard"
 import { InvoiceListSkeleton } from "./InvoiceListSkeleton"
 import {
-  AmountCell,
+  PaidCell,
+  RemainingCell,
   FeeCell,
   IdentityCell,
   InvoiceRowActionsMenu,
@@ -165,6 +167,18 @@ export function InvoiceListClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPendingTab, data, isFetching, totalCount, items?.length, state.page])
+
+  // Danh sách ngành cho filter dropdown (trình độ derive distinct degree_level).
+  const { data: majors } = useMajorPrograms()
+  const majorOptions = useMemo(
+    () =>
+      (majors ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        degree_level: m.degree_level,
+      })),
+    [majors],
+  )
 
   // ── Row interactions (PR2) ──────────────────────────────────────────────
   // Clicking a row opens the profile drawer (?profile=<id>); the quick "Thu
@@ -367,6 +381,9 @@ export function InvoiceListClient() {
             onSortChange={handlers.handleSortChange}
             hasActiveFilters={hasActiveFilters}
             onReset={handlers.resetFilters}
+            workspaceFilters={state.workspaceFilters}
+            setWorkspaceFilter={handlers.setWorkspaceFilter}
+            majorOptions={majorOptions}
           />
         )}
 
@@ -414,7 +431,8 @@ export function InvoiceListClient() {
                     <th className="px-3 py-3 font-medium">Khoản thu</th>
                     <th className="px-3 py-3 font-medium">Phụ trách</th>
                     <th className="px-3 py-3 font-medium">Trạng thái</th>
-                    <th className="px-3 py-3 text-right font-medium">Số tiền</th>
+                    <th className="px-3 py-3 text-right font-medium">Đã đóng</th>
+                    <th className="px-3 py-3 text-right font-medium">Còn lại</th>
                     <th className="px-3 py-3 font-medium">
                       <span className="sr-only">Thao tác</span>
                     </th>
@@ -454,7 +472,10 @@ export function InvoiceListClient() {
                           <InvoiceStatusDot status={invoice.status} isOverdue={invoice.is_overdue} />
                         </td>
                         <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
-                          <AmountCell invoice={invoice} />
+                          <PaidCell invoice={invoice} />
+                        </td>
+                        <td className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}>
+                          <RemainingCell invoice={invoice} />
                         </td>
                         <td
                           className={cn("px-3 align-middle", compact ? "py-2" : "py-3")}
