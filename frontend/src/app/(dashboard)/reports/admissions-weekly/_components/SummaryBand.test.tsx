@@ -13,6 +13,7 @@ function mkRow(o: {
   submitted?: number;
   active?: number;
   netCum?: string;
+  prepayDraft?: number;
 }): ReportRow {
   return {
     group_key: 1,
@@ -32,6 +33,7 @@ function mkRow(o: {
       admitted_in_week: 0,
       enrolled_in_week: 0,
       submitted_cumulative: o.submitted ?? 0,
+      fee_paid_not_submitted: o.prepayDraft ?? 0,
       admitted_cumulative: o.admitted ?? 0,
       enrolled_cumulative: o.enrolled ?? 0,
       quota: o.quota ?? null,
@@ -73,11 +75,20 @@ describe("SummaryBand", () => {
   });
 
   it("officer (no quota) → count fallback cards", () => {
-    const totals = mkRow({ quota: null, enrolled: 50, submitted: 120, active: 300 });
+    const totals = mkRow({
+      quota: null,
+      enrolled: 50,
+      submitted: 120,
+      active: 300,
+      prepayDraft: 14,
+    });
     render(<SummaryBand rows={[]} totals={totals} groupBy="officer" />);
     expect(screen.queryByText("Nhập học / Chỉ tiêu")).toBeNull();
     expect(screen.getByText("Nhập học")).toBeTruthy();
     expect(screen.getByText("Hồ sơ nộp")).toBeTruthy();
+    // prepay-draft card surfaces the "đã đóng lệ phí, chưa nộp" cohort
+    const prepay = screen.getByText("Đóng phí chưa nộp").parentElement as HTMLElement;
+    expect(within(prepay).getByText("14")).toBeTruthy();
   });
 
   it("quota=0 totals → treated as no quota (count fallback)", () => {

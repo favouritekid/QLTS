@@ -53,6 +53,9 @@ class AdmissionMetrics(BaseModel):
     submitted_cumulative: int = 0
     admitted_cumulative: int = 0
     enrolled_cumulative: int = 0
+    # Đã đóng lệ phí xét tuyển (application paid) NHƯNG hồ sơ CHƯA nộp (chưa có
+    # milestone submitted) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ.
+    fee_paid_not_submitted: int = 0
     # chỉ tiêu (annual_admission_quota) — major grouping only; None for officer
     # view / buckets / total rows where a quota does not apply.
     quota: Optional[int] = None

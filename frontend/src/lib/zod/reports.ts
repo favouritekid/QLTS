@@ -27,6 +27,9 @@ export const admissionMetricsSchema = z.object({
   admitted_in_week: z.number().int(),
   enrolled_in_week: z.number().int(),
   submitted_cumulative: z.number().int(),
+  // đã đóng lệ phí xét tuyển nhưng hồ sơ CHƯA nộp (prepay-draft). default(0) để
+  // không vỡ nếu BE cũ chưa trả field.
+  fee_paid_not_submitted: z.number().int().default(0),
   admitted_cumulative: z.number().int(),
   enrolled_cumulative: z.number().int(),
   quota: z.number().int().nullable(), // chỉ tiêu (major view); null = N/A
