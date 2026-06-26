@@ -934,3 +934,51 @@ async def test_iso_week1_monday_in_prior_year_not_rejected(
     )
     assert resp.week.iso_year == year
     assert resp.week.week_start == monday_w1  # refetch-stable, not rejected
+
+
+async def test_application_paid_without_submit_counts_prepay_draft(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """fee_paid_not_submitted = đã đóng lệ phí XÉT TUYỂN nhưng CHƯA có milestone
+    submitted (nhóm prepay-draft cần nhắc hoàn tất). Một hồ sơ đã submit — dù
+    cũng đóng lệ phí — KHÔNG tính; lệ phí 'tuition' không tính (chỉ application)."""
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    # (1) prepay-draft: application paid, NO submitted history → counted
+    _, p_draft = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    fee_d = await _seed_fee(db, p_draft.id, year)  # application
+    await _add_txn(db, fee_d.id, "payment", "1000000", win.start + timedelta(days=2))
+
+    # (2) submitted + application paid → NOT prepay-draft (already nộp)
+    _, p_sub = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    await _seed_history(db, p_sub.id, "submitted", win.start + timedelta(days=2))
+    fee_s = await _seed_fee(db, p_sub.id, year)
+    await _add_txn(db, fee_s.id, "payment", "1000000", win.start + timedelta(days=2))
+
+    # (3) tuition paid only (no application, no submit) → NOT counted
+    _, p_tui = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    fee_t = await _seed_fee(db, p_tui.id, year, fee_type="tuition")
+    await _add_txn(db, fee_t.id, "payment", "1000000", win.start + timedelta(days=2))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.admission.fee_paid_not_submitted == 1  # only p_draft
+    assert row.admission.submitted_cumulative == 1  # only p_sub (milestone)
+    assert resp.totals.admission.fee_paid_not_submitted == 1

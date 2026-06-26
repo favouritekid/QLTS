@@ -57,7 +57,7 @@ export function SummaryBand({
   ).length;
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {hasQuota ? (
         <Card label="Nhập học / Chỉ tiêu" hint={`${Math.round(ratio * 100)}% chỉ tiêu năm`}>
           <div className="mt-1 text-xl font-bold tabular-nums">
@@ -101,6 +101,11 @@ export function SummaryBand({
       ) : (
         <Card label="Hồ sơ nộp" hint="lũy kế năm" value={nf.format(t.submitted_cumulative)} />
       )}
+      <Card
+        label="Đóng phí chưa nộp"
+        hint="đã đóng lệ phí, hồ sơ còn nháp — cần nhắc hoàn tất"
+        value={nf.format(t.fee_paid_not_submitted)}
+      />
     </div>
   );
 }

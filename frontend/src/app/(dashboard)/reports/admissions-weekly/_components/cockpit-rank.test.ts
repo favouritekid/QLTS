@@ -24,6 +24,7 @@ function mkRow(o: {
       admitted_in_week: 0,
       enrolled_in_week: 0,
       submitted_cumulative: 0,
+      fee_paid_not_submitted: 0,
       admitted_cumulative: 0,
       enrolled_cumulative: o.enrolled ?? 0,
       quota: o.quota ?? null,

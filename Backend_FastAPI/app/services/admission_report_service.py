@@ -226,6 +226,9 @@ class AdmissionReportService:
 
         # ---- finance ledger (cash: payment/refund; refund amount stored negative)
         paid_profiles: dict[GroupKey, set] = {}
+        # Profiles with a cumulative APPLICATION-fee payment — used to surface the
+        # "đã đóng lệ phí nhưng chưa nộp hồ sơ" (prepay-draft) cohort below.
+        app_paid_profiles: dict[GroupKey, set] = {}
         for pid, fee_type, ttype, amount, created_at in fin_rows:
             dim = dims.get(pid)
             if dim is None:
@@ -236,6 +239,8 @@ class AdmissionReportService:
             f.net_cumulative += amt
             if ttype == "payment":
                 paid_profiles.setdefault(key, set()).add(pid)
+                if fee_type == "application":
+                    app_paid_profiles.setdefault(key, set()).add(pid)
             if week.start <= created_at < week.end_excl:
                 f.net_in_week += amt
                 if ttype == "payment":
@@ -248,6 +253,14 @@ class AdmissionReportService:
                     f.tuition_net_in_week += amt
         for key, pids in paid_profiles.items():
             _row(key).finance.profiles_paid = len(pids)
+        # Prepay-draft: đã đóng lệ phí xét tuyển nhưng CHƯA nộp hồ sơ (no submitted
+        # milestone) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ.
+        for key, pids in app_paid_profiles.items():
+            _row(key).admission.fee_paid_not_submitted = sum(
+                1
+                for pid in pids
+                if not milestones.get(pid, {}).get("submitted_cumulative")
+            )
 
         # ---- labels
         officer_names: dict[int, str] = {}
@@ -361,6 +374,7 @@ class AdmissionReportService:
                 "submitted_cumulative",
                 "admitted_cumulative",
                 "enrolled_cumulative",
+                "fee_paid_not_submitted",
             ):
                 setattr(
                     t.admission, m, getattr(t.admission, m) + getattr(row.admission, m)
