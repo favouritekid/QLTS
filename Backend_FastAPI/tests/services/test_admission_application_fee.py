@@ -575,6 +575,42 @@ class TestRecordFeePayment:
         assert transactions[0].performed_by_id == payment.verified_by_id
         assert transactions[0].external_reference == "TXN123456"
 
+    async def test_resubmitted_profile_record_fee_succeeds(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Enforcement regression (prod profile 81, 2026-06-26): a profile
+        re-submitted after a manager return (rejected/revision_requested →
+        resubmitted) is still in the pre-decision intake window, so the service
+        gate must accept an application-fee payment. Before the fix the gate
+        only matched draft/submitted and raised BadRequest on resubmitted."""
+        unit_id = seed_admission_statuses["unit_id"]
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=admin_user_in_db["id"],
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000661",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+            status="resubmitted",
+        )
+
+        admin_headers = await get_auth_headers(client, admin_user_in_db)
+        response = await client.post(
+            f"/api/admissions/{profile.id}/record-fee-payment",
+            params={"transaction_id": "TXN-RESUB-1", "amount": 100000},
+            headers=admin_headers,
+        )
+
+        assert response.status_code == 200, f"Failed: {response.text}"
+        updated_profile = await reload_profile(profile.id)
+        assert updated_profile.applied_rules.get("fee_status") == "paid"
+
     async def test_assigned_officer_can_record_fee_payment(
         self,
         client: AsyncClient,
@@ -896,6 +932,36 @@ class TestRecordFeePaymentPermissionFlag:
 
         data = await self._get_detail(client, profile.id, manager_user_in_db)
 
+        assert data["permissions"]["record_fee_payment"] is True
+        assert "record_fee_payment" in data["available_actions"]
+
+    async def test_resubmitted_pending_profile_can_record_fee(
+        self,
+        client: AsyncClient,
+        admin_user_in_db: dict,
+        officer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """Flag regression (prod profile 81, 2026-06-26): a re-submitted profile
+        with a pending application fee must still expose record_fee_payment —
+        resubmitted is part of the pre-decision intake window, exactly like
+        submitted. Before the fix the flag only matched draft/submitted."""
+        lead_id = await create_test_lead_with_consultation(
+            unit_id=seed_admission_statuses["unit_id"],
+            assigned_officer_id=officer_user_in_db["id"],
+        )
+        profile = await create_admission_profile_with_fee_status(
+            lead_id=lead_id,
+            citizen_id="200000000662",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+            status="resubmitted",
+        )
+
+        data = await self._get_detail(client, profile.id, admin_user_in_db)
+
+        assert data["status"] == "resubmitted", data.get("status")
         assert data["permissions"]["record_fee_payment"] is True
         assert "record_fee_payment" in data["available_actions"]
 

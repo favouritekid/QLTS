@@ -1003,6 +1003,55 @@ async def test_single_path_calculate_fee_at_submitted_still_ok(
 
 
 @pytest.mark.asyncio
+async def test_calculate_fee_at_resubmitted_ok(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Regression (prod profile 81, 2026-06-26): a profile the manager returned
+    and the officer re-submitted lands in ``resubmitted`` — still pre-decision,
+    still fee-eligible exactly like ``submitted`` (C2 fast-track prepay / giữ
+    chỗ). Before the fix ``is_fee_eligible`` only matched the literal
+    ``submitted`` so a re-submitted profile silently lost the "Tính học phí"
+    button. Asserts BOTH gate sites that share ``is_fee_eligible``:
+      * Site B — the FE ``calculate_fee`` permission flag,
+      * Site A — the ``/api/fees/calculate`` route gate.
+    """
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Resubmitted Calc OK", approve=False,
+    )
+    # Flip submitted → resubmitted directly (mirrors how the L2 tests mutate
+    # state without driving the full reject → resubmit workflow). Single-path
+    # so choices are irrelevant to the gate.
+    await _set_choice_engine(pid, value=False, status="resubmitted")
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert detail["status"] == "resubmitted", detail.get("status")
+    assert detail["permissions"]["calculate_fee"] is True, detail["permissions"]
+    assert "calculate_fee" in detail["available_actions"], detail["available_actions"]
+
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, (
+        f"Resubmitted profile should be fee-eligible like submitted, got "
+        f"{resp.status_code}: {resp.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_multi_nv_zero_choice_at_admitted_fails_closed(
     client: AsyncClient,
     admin_token_headers: dict,

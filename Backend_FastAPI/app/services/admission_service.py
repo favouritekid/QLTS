@@ -2186,10 +2186,12 @@ def _compute_frontend_fields(
         # Thu lệ phí xét tuyển - POST /api/admissions/{id}/record-fee-payment.
         # Mirror get_admission_for_fee_collection (deps.py): admin all;
         # manager/accountant same-unit; officer assigned+same-unit. Gate
-        # draft/submitted + le phi thuc su pending -> nut khong hien cho exempt /
-        # da-paid / post-decision.
+        # draft/submitted/resubmitted + le phi thuc su pending -> nut khong hien
+        # cho exempt / da-paid / post-decision. ``resubmitted`` = submitted sau
+        # khi officer nop lai (mirror enforcement record_application_fee_payment
+        # + is_fee_eligible cho hoc phi).
         "record_fee_payment": (
-            status in ("draft", "submitted")
+            status in ("draft", "submitted", "resubmitted")
             and bool((profile.applied_rules or {}).get("requires_application_fee"))
             and (profile.applied_rules or {}).get("fee_status") == "pending"
             and (
@@ -9445,7 +9447,7 @@ async def record_application_fee_payment(
     2. Manual payment confirmation by admin
 
     Flow:
-    - Profile must be in "draft" or "submitted" status
+    - Profile must be in "draft", "submitted" or "resubmitted" status
     - Updates applied_rules.fee_status to "paid"
     - Syncs lead to sts13 (Đã hoàn lệ phí xét tuyển)
 
@@ -9481,11 +9483,16 @@ async def record_application_fee_payment(
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
 
-    # Check profile status — only allow fee payment for draft/submitted profiles
-    if profile.status not in ("draft", "submitted"):
+    # Check profile status — only allow fee payment for profiles still in the
+    # pre-decision intake window: draft / submitted / resubmitted. ``resubmitted``
+    # is submitted after an officer re-submit (rejected/revision_requested →
+    # resubmitted); omitting it blocked fee collection on a re-submitted profile
+    # even though it is still being processed (mirrors the FE record_fee_payment
+    # flag + is_fee_eligible for tuition).
+    if profile.status not in ("draft", "submitted", "resubmitted"):
         raise BadRequest(
             f"Cannot record fee payment for profile in '{profile.status}' status. "
-            "Only draft or submitted profiles accept fee payments."
+            "Only draft, submitted or resubmitted profiles accept fee payments."
         )
 
     # Check fee requirement

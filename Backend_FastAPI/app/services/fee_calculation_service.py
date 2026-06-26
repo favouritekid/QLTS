@@ -114,7 +114,8 @@ async def resolve_fee_academic_info(
       * more than one admitted → fail-closed (corrupt data: the cascade admits
         at most one NV — never guess),
       * not yet published + exactly one choice → that single choice's ngành
-        (prepay / giữ chỗ at ``submitted`` — mirrors ``is_fee_eligible``),
+        (prepay / giữ chỗ at ``submitted`` / ``resubmitted`` — mirrors
+        ``is_fee_eligible``),
       * otherwise (≥2 pending, or zero choices) → BadRequest.
 
     Legacy single-path profiles resolve from the profile snapshot, in order:
