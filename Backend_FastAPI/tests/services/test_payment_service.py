@@ -1013,6 +1013,32 @@ class TestRefundService:
         await db.refresh(pf["fee"])
         assert pf["fee"].paid_amount == Decimal("700000")  # 1M - 300K
 
+    async def test_process_refund_blocked_when_payment_reversed(
+        self, db, payment_fixtures
+    ):
+        # BV-3.5 P1: payment đã bị ĐẢO (void lô import → status='refunded') KHÔNG được
+        # process refund (chống double-subtract sau void). Guard re-check sau khóa fee.
+        pf = payment_fixtures
+        payment = await self._create_verified_payment(db, pf)
+        refund_service = RefundService(db)
+        refund, _ = await refund_service.request_refund(
+            payment_id=payment.id, amount=Decimal("300000"), reason="x",
+            user_id=pf["maker"].id, unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        refund, _ = await refund_service.approve_refund(
+            refund_id=refund.id, approver_id=pf["checker"].id, unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        # mô phỏng void: payment → 'refunded' SAU khi refund đã approved
+        payment.status = "refunded"
+        await db.commit()
+        with pytest.raises(BusinessRuleViolation):
+            await refund_service.process_approved_refund(
+                refund_id=refund.id, processor_id=pf["checker"].id,
+                refund_reference="X", unit_id=pf["unit_id"],
+            )
+
     async def test_reject_refund(self, db, payment_fixtures):
         """Reject refund request with reason."""
         pf = payment_fixtures

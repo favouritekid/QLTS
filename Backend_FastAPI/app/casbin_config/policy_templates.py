@@ -380,6 +380,16 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/payments/intents", "action": "POST"},
         {"subject": "{role}", "object": "/api/payments/intents/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/methods", "action": "GET"},
+        # BV-2 Bulk payment import — template + preview (dry-run). Accountant tự
+        # xác minh; commit/void (ghi tiền/đảo lô) thêm grant ở BV-3.
+        {"subject": "{role}", "object": "/api/payments/import/template", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/preview", "action": "POST"},
+        # BV-3 commit (ghi tiền) + lịch sử lô
+        {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
+        {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
+        # BV-5 R2/R1 đọc: chi tiết lô (per-row) + tải file kết quả
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}/result", "action": "GET"},
 
         # ACCOUNTING PERIODS - View only (create/close is admin only)
         {"subject": "{role}", "object": "/api/accounting/periods", "action": "GET"},
@@ -606,6 +616,17 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/payments/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/payments/{id}/verify", "action": "PUT"},  # Verify payment (maker-checker)
         {"subject": "{role}", "object": "/api/payments/{id}/reject", "action": "PUT"},  # Reject payment
+        # BV-2 Bulk payment import — template + preview (dry-run).
+        {"subject": "{role}", "object": "/api/payments/import/template", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/preview", "action": "POST"},
+        # BV-3 commit (ghi tiền) + lịch sử lô
+        {"subject": "{role}", "object": "/api/payments/import/{batch_id}/commit", "action": "POST"},
+        {"subject": "{role}", "object": "/api/payments/import/batches", "action": "GET"},
+        # BV-5 R2/R1 đọc: chi tiết lô (per-row) + tải file kết quả
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/payments/import/batches/{batch_id}/result", "action": "GET"},
+        # BV-3.5 void (đảo lô đã ghi) — manager/admin ONLY (accountant KHÔNG có)
+        {"subject": "{role}", "object": "/api/payments/import/{batch_id}/void", "action": "POST"},
         {"subject": "{role}", "object": "/api/refunds", "action": "GET"},
         {"subject": "{role}", "object": "/api/refunds/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/refunds/{id}/approve", "action": "POST"},

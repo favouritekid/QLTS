@@ -1097,3 +1097,100 @@ class FinanceDashboardStats(BaseModel):
     pending_refunds_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==============================================================================
+# PAYMENT IMPORT (BULK VERIFY) SCHEMAS — BV-2
+# ==============================================================================
+
+class PaymentImportAllocationOut(BaseModel):
+    """Một phần phân bổ FIFO dự kiến của 1 dòng vào 1 đợt (invoice)."""
+    invoice_id: int
+    installment_no: int
+    amount: Decimal
+
+
+class PaymentImportRowOut(BaseModel):
+    """Kết quả đối chiếu 1 dòng file (preview)."""
+    row_no: int = Field(..., description="Số dòng trên bảng tính (header = dòng 1)")
+    status: str = Field(..., description="matched | warned | error")
+    message: Optional[str] = None
+    citizen_id: Optional[str] = None
+    profile_id: Optional[int] = None
+    fee_id: Optional[int] = None
+    amount: Optional[Decimal] = None
+    method_code: Optional[str] = None
+    payment_date: Optional[date] = None
+    reference: Optional[str] = None
+    allocations: List[PaymentImportAllocationOut] = Field(default_factory=list)
+    payment_ids: Optional[List[int]] = None  # populated sau commit (BV-3)
+
+
+class PaymentImportPreviewOut(BaseModel):
+    """Phản hồi pha 1 — preview (dry-run, CHƯA ghi tiền)."""
+    batch_id: int
+    academic_year: int
+    semester_no: int
+    file_name: str
+    status: str
+    row_count: int
+    matched_count: int
+    warned_count: int
+    failed_count: int
+    total_amount: Decimal
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)
+
+
+class PaymentImportCommitOut(BaseModel):
+    """Phản hồi pha 2 — commit (ĐÃ ghi tiền)."""
+    batch_id: int
+    status: str  # committed
+    committed_count: int
+    failed_count: int
+    payment_count: int
+    total_amount: Decimal
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)
+
+
+class PaymentImportVoidOut(BaseModel):
+    """Phản hồi đảo (void) lô — ĐÃ rút lại tiền (BV-3.5)."""
+    batch_id: int
+    status: str  # void
+    reversed_count: int = Field(..., description="Số Payment đã đảo")
+    reversed_amount: Decimal = Field(..., description="Tổng tiền đã rút lại")
+    void_reason: Optional[str] = None
+
+
+class PaymentImportBatchSummaryOut(BaseModel):
+    """1 dòng lịch sử lô import."""
+    id: int
+    academic_year: int
+    semester_no: int
+    file_name: str
+    status: str  # preview | committed | void
+    row_count: int
+    matched_count: int
+    warned_count: int
+    failed_count: int
+    total_amount: Decimal
+    created_at: datetime
+    committed_at: Optional[datetime] = None
+    voided_at: Optional[datetime] = None
+    # Quyền đảo lô của NGƯỜI ĐANG XEM (BE quyết theo role+status) → FE đọc flag thay
+    # vì tự check role (thin-client). True khi user là manager/admin & lô 'committed'.
+    can_void: bool = False
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PaymentImportBatchListOut(BaseModel):
+    """Lịch sử lô import (phân trang)."""
+    items: List[PaymentImportBatchSummaryOut] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int
+
+
+class PaymentImportBatchDetailOut(PaymentImportBatchSummaryOut):
+    """Lô + chi tiết TỪNG DÒNG — xem lại per-row sau commit (BV-5 R2)."""
+    rows: List[PaymentImportRowOut] = Field(default_factory=list)
