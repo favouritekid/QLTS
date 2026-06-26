@@ -240,9 +240,9 @@ def test_admitted_like_set_matches_effective_status_admitted_targets() -> None:
 # ---------------------------------------------------------------------------
 # is_fee_eligible — fee-create state gate (shared by routers/fees.py
 # _fee_calc_authorized + admission_service calculate_fee permission flag).
-# Post-decision states always pass; ``submitted`` passes for single-path
-# (C2 prepay) AND for a multi-NV profile that has EXACTLY ONE nguyện vọng
-# (ngành already determined). Multi-NV ≥2 at ``submitted`` must wait for
+# Post-decision states always pass; ``submitted`` / ``resubmitted`` pass for
+# single-path (C2 prepay) AND for a multi-NV profile that has EXACTLY ONE
+# nguyện vọng (ngành already determined). Multi-NV ≥2 must wait for
 # publish → ``admitted``.
 # ---------------------------------------------------------------------------
 
@@ -272,54 +272,68 @@ def test_is_fee_eligible_true_for_later_post_decision(status: str) -> None:
     )
 
 
-def test_is_fee_eligible_submitted_single_path_true() -> None:
-    """Legacy single-path at ``submitted`` = C2 fast-track prepay / giữ chỗ.
-    Choices are irrelevant for single-path."""
-    assert is_fee_eligible(_fee_profile("submitted", uses_choice_engine=False)) is True
+@pytest.mark.parametrize("status", ["submitted", "resubmitted"])
+def test_is_fee_eligible_submitted_single_path_true(status: str) -> None:
+    """Legacy single-path at ``submitted`` / ``resubmitted`` = C2 fast-track
+    prepay / giữ chỗ. Choices are irrelevant for single-path."""
+    assert is_fee_eligible(_fee_profile(status, uses_choice_engine=False)) is True
     # Even with a stray loaded (empty) choices list, single-path stays eligible.
     assert (
-        is_fee_eligible(_fee_profile("submitted", uses_choice_engine=False, choices=[]))
+        is_fee_eligible(_fee_profile(status, uses_choice_engine=False, choices=[]))
         is True
     )
 
 
-def test_is_fee_eligible_submitted_multinv_single_choice_true() -> None:
+@pytest.mark.parametrize("status", ["submitted", "resubmitted"])
+def test_is_fee_eligible_submitted_multinv_single_choice_true(status: str) -> None:
     """The new rule: a multi-NV profile with EXACTLY ONE nguyện vọng may
-    prepay at ``submitted`` (ngành is already determined)."""
+    prepay at ``submitted`` / ``resubmitted`` (ngành is already determined).
+
+    ``resubmitted`` is the regression that hid the "Tính học phí" button after a
+    multi-NV profile was returned for too many NVs, trimmed to one NV and
+    re-submitted (prod profile 81, 2026-06-26)."""
     assert (
         is_fee_eligible(
-            _fee_profile("submitted", uses_choice_engine=True, choices=[object()])
+            _fee_profile(status, uses_choice_engine=True, choices=[object()])
         )
         is True
     )
 
 
+@pytest.mark.parametrize("status", ["submitted", "resubmitted"])
 @pytest.mark.parametrize("n_choices", [2, 3, 5])
-def test_is_fee_eligible_submitted_multinv_multi_choice_false(n_choices: int) -> None:
-    """Multi-NV with ≥2 NVs at ``submitted`` is NOT eligible — the admitted
-    ngành is not locked until publish, so pricing now risks the wrong ngành."""
+def test_is_fee_eligible_submitted_multinv_multi_choice_false(
+    n_choices: int, status: str
+) -> None:
+    """Multi-NV with ≥2 NVs at ``submitted`` / ``resubmitted`` is NOT eligible —
+    the admitted ngành is not locked until publish, so pricing now risks the
+    wrong ngành."""
     choices = [object() for _ in range(n_choices)]
     assert (
         is_fee_eligible(
-            _fee_profile("submitted", uses_choice_engine=True, choices=choices)
+            _fee_profile(status, uses_choice_engine=True, choices=choices)
         )
         is False
     )
 
 
-def test_is_fee_eligible_submitted_multinv_zero_choice_false() -> None:
+@pytest.mark.parametrize("status", ["submitted", "resubmitted"])
+def test_is_fee_eligible_submitted_multinv_zero_choice_false(status: str) -> None:
     assert (
-        is_fee_eligible(_fee_profile("submitted", uses_choice_engine=True, choices=[]))
+        is_fee_eligible(_fee_profile(status, uses_choice_engine=True, choices=[]))
         is False
     )
 
 
-def test_is_fee_eligible_submitted_multinv_choices_not_loaded_fails_closed() -> None:
+@pytest.mark.parametrize("status", ["submitted", "resubmitted"])
+def test_is_fee_eligible_submitted_multinv_choices_not_loaded_fails_closed(
+    status: str,
+) -> None:
     """If ``choices`` was not eager-loaded the gate must fail closed (the
     fee-create path re-checks under a row lock; a missing eager-load must
     degrade to 'not eligible', never to a wrong-ngành fee)."""
     assert (
-        is_fee_eligible(_fee_profile("submitted", uses_choice_engine=True))
+        is_fee_eligible(_fee_profile(status, uses_choice_engine=True))
         is False
     )
 
@@ -327,12 +341,13 @@ def test_is_fee_eligible_submitted_multinv_choices_not_loaded_fails_closed() -> 
 @pytest.mark.parametrize(
     "status",
     ["draft", "reviewing", "waitlisted", "rejected", "withdrawn",
-     "revision_requested", "result_published", "resubmitted", "", "SUBMITTED"],
+     "revision_requested", "result_published", "", "SUBMITTED"],
 )
 @pytest.mark.parametrize("engine", [False, True])
 def test_is_fee_eligible_false_for_non_eligible_states(status: str, engine: bool) -> None:
-    """Pre-decision (other than the submitted prepay carve-outs) and negative
-    outcomes are never fee-eligible — even a single-choice multi-NV profile."""
+    """Pre-decision (other than the submitted/resubmitted prepay carve-outs) and
+    negative outcomes are never fee-eligible — even a single-choice multi-NV
+    profile."""
     assert (
         is_fee_eligible(
             _fee_profile(status, uses_choice_engine=engine, choices=[object()])

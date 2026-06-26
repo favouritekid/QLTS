@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { BarChart3, ChevronLeft, ChevronRight } from "lucide-react";
+import type { AxiosError } from "axios";
+import { BarChart3, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,8 +15,10 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { exportAdmissionSummary } from "@/lib/api/reports";
 import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyReport";
 import { cn } from "@/lib/utils";
+import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob";
 import { subDaysVN } from "@/lib/utils/vn-date";
 import type { ReportGroupBy } from "@/lib/zod/reports";
 
@@ -42,6 +46,15 @@ export function AdmissionsWeeklyClient() {
   const [groupBy, setGroupBy] = React.useState<ReportGroupBy>("major");
   const [period, setPeriod] = React.useState<Period>("ytd");
   const [weekStart, setWeekStart] = React.useState<string | undefined>(undefined);
+  const [exporting, setExporting] = React.useState(false);
+  // Guard the post-await setState if the user navigates away mid-export.
+  const mountedRef = React.useRef(true);
+  React.useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
   // Filter options (năm config ∪ data + đợt) — admin & manager, same gate as report.
   const { data: filters } = useReportFilters(year);
@@ -83,6 +96,22 @@ export function AdmissionsWeeklyClient() {
     // dependent filters may be invalid for the new year → reset both.
     setWeekStart(undefined);
     setRound(ALL_ROUNDS);
+  };
+
+  // Xuất báo cáo "số liệu tổng" (snapshot cả năm) — KHÁC bảng tuần đang hiển thị.
+  const onExport = async () => {
+    setExporting(true);
+    try {
+      const { blob, filename } = await exportAdmissionSummary(year);
+      downloadBlob(blob, filename);
+      toast.success("Đã xuất báo cáo Excel");
+    } catch (err) {
+      toast.error(
+        await blobErrorMessage(err as AxiosError, "Không xuất được báo cáo."),
+      );
+    } finally {
+      if (mountedRef.current) setExporting(false);
+    }
   };
 
   return (
@@ -170,6 +199,15 @@ export function AdmissionsWeeklyClient() {
               )}
             </div>
           </div>
+          <Button
+            variant="outline"
+            onClick={onExport}
+            disabled={exporting}
+            title="Xuất số liệu tuyển sinh cả năm ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)"
+          >
+            <Download className="mr-2 size-4" />
+            {exporting ? "Đang xuất…" : "Xuất Excel"}
+          </Button>
         </div>
       </div>
 

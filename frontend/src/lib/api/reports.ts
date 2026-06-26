@@ -39,3 +39,48 @@ export async function getReportFilters(
   );
   return reportFiltersSchema.parse(response.data);
 }
+
+export interface ExportedFile {
+  blob: Blob;
+  filename: string;
+}
+
+/** Lấy filename từ header Content-Disposition (giữ tên có timestamp của backend). */
+function filenameFromDisposition(
+  disposition: string | undefined,
+  fallback: string,
+): string {
+  if (!disposition) return fallback;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  if (!match) return fallback;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+/**
+ * Xuất báo cáo tuyển sinh (snapshot) ra Excel — số liệu CẢ NĂM tại thời điểm bấm.
+ * Trả {blob, filename} (giữ tên có timestamp do backend đặt, tránh ghi đè file cũ);
+ * scope theo vai trò ở backend (admin toàn trường / manager đơn vị).
+ */
+export async function exportAdmissionSummary(
+  academic_year: number,
+  unit_id?: number,
+): Promise<ExportedFile> {
+  const response = await api.get(
+    "/api/v2/admin/reports/admission-summary/export.xlsx",
+    {
+      params: { academic_year, ...(unit_id ? { unit_id } : {}) },
+      responseType: "blob",
+    },
+  );
+  return {
+    blob: response.data,
+    filename: filenameFromDisposition(
+      response.headers["content-disposition"],
+      `bao_cao_tuyen_sinh_${academic_year}.xlsx`,
+    ),
+  };
+}

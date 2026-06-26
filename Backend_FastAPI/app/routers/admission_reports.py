@@ -8,16 +8,23 @@ is enforced inside the service via domain exceptions. Read-only → no commit.
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.core.deps import require_admin_or_manager
+from app.core.rate_limits import RateLimits, limiter
 from app.database import get_db
 from app.schemas.admission_report import AdmissionWeeklyReportResponse, ReportFilters
 from app.services.admission_report_service import AdmissionReportService
+from app.services.admission_summary_export_service import (
+    AdmissionSummaryExportService,
+)
 
 router = APIRouter(prefix="/api/v2/admin/reports", tags=["Admin v2 - Reports"])
+
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("/admission-weekly", response_model=AdmissionWeeklyReportResponse)
@@ -58,3 +65,31 @@ async def get_admission_weekly_report_filters(
     """Năm (config ∪ data) + đợt cho bộ lọc báo cáo — admin & manager (cùng cổng)."""
     service = AdmissionReportService(db)
     return await service.get_filter_options(academic_year)
+
+
+@limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour — heavyweight workbook build
+@router.get("/admission-summary/export.xlsx")
+async def export_admission_summary(
+    request: Request,  # required by slowapi rate limiter
+    academic_year: int = Query(..., ge=2020, le=2100),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> Response:
+    """Xuất báo cáo tuyển sinh (snapshot) ra Excel — số liệu CẢ NĂM tại thời điểm xuất.
+
+    3 sheet: Số liệu chung (ngành × trạng thái) · Chia theo nhân viên · Quy ước.
+    Read-only → không commit. Scope theo vai trò (admin toàn trường / manager đơn vị).
+    """
+    service = AdmissionSummaryExportService(db)
+    content, filename = await service.build_xlsx(
+        current_user=current_user, academic_year=academic_year, unit_id=unit_id
+    )
+    # Plain Response (not StreamingResponse(iter([...]))) so Content-Length is set.
+    return Response(
+        content=content,
+        media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

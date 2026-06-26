@@ -75,8 +75,9 @@ def _fee_calc_authorized(
     any drift will surface as "FE hides button / API 404s" or vice versa.
 
     Rules:
-    * Profile must be in a fee-eligible state: ``submitted`` (fast-track
-      prepay / hold-spot — C2) plus the post-decision states
+    * Profile must be in a fee-eligible state: ``submitted`` / ``resubmitted``
+      (fast-track prepay / hold-spot — C2; resubmitted = submitted after an
+      officer re-submit) plus the post-decision states
       (``approved`` | ``confirmed`` | ``enrolled``). Earlier states
       (``draft`` etc.) would create a fee prematurely.
     * admin / accountant: any profile. Both are central finance roles; Casbin
@@ -91,9 +92,10 @@ def _fee_calc_authorized(
     # Fee-eligible states gate — shared with the ``calculate_fee`` permission
     # flag in ``admission_service._compute_frontend_fields`` via the single
     # ``is_fee_eligible`` helper (anti-drift): admitted-like + confirmed/enrolled
-    # + ``submitted`` for SINGLE-PATH profiles only (C2 fast-track prepay / giữ
-    # chỗ). A multi-NV profile at ``submitted`` qualifies only after publish →
-    # ``admitted``. Earlier states (draft) stay blocked.
+    # + ``submitted`` / ``resubmitted`` (C2 fast-track prepay / giữ chỗ) for
+    # single-path OR a multi-NV profile with EXACTLY ONE NV. A multi-NV profile
+    # with ≥2 NVs qualifies only after publish → ``admitted``. Earlier states
+    # (draft) stay blocked.
     if not is_fee_eligible(profile):
         return False
 
