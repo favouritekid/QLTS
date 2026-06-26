@@ -772,8 +772,8 @@ class TestResolveValidate:
     async def test_g1_duplicate_cccd_same_amount_warns_copy(
         self, db, seeded_dependencies
     ):
-        # G1: 2 dòng cùng CCCD + CÙNG số tiền (nghi copy nhầm → thu khống) → cả 2 WARNED,
-        # message "nghi copy". Cả 2 vẫn lọt nợ (10tr) nên không bị chốt "vượt nợ" bắt.
+        # G1: 2 dòng cùng CCCD + CÙNG số tiền (nghi copy nhầm → thu khống) → cả 2
+        # WARNED, message "nghi copy". Cả 2 vẫn lọt nợ (10tr) nên không bị "vượt nợ".
         await _seed_tuition(
             db,
             seeded_dependencies,
@@ -798,7 +798,8 @@ class TestResolveValidate:
     async def test_g1_duplicate_cccd_diff_amount_warns_not_copy(
         self, db, seeded_dependencies
     ):
-        # G1: cùng CCCD KHÁC số tiền (tách đợt hợp lệ) → WARNED "kiểm tra trùng", KHÔNG "copy".
+        # G1: cùng CCCD KHÁC số tiền (tách đợt hợp lệ) → WARNED "kiểm tra trùng",
+        # KHÔNG "copy".
         await _seed_tuition(
             db,
             seeded_dependencies,
@@ -820,9 +821,9 @@ class TestResolveValidate:
         assert "copy" not in res.rows[0].message
 
     async def test_g2_method_inactive_is_error(self, db, seeded_dependencies):
-        # G2: hình thức map-OK theo text (bank_transfer) nhưng PaymentMethod INACTIVE trong
-        # DB → ERROR ngay ở preview (đối xứng commit:1017, hết "khớp giả"). Parser :346 đã
-        # chặn text lạ; đây test nhánh inactive/missing.
+        # G2: hình thức map-OK theo text (bank_transfer) nhưng PaymentMethod INACTIVE
+        # trong DB → ERROR ngay ở preview (đối xứng commit:1017, hết "khớp giả").
+        # Parser :346 đã chặn text lạ; đây test nhánh inactive/missing.
         db.add(
             PaymentMethod(
                 code="bank_transfer", name="CK", is_online=False, is_active=False
@@ -2234,7 +2235,8 @@ class TestResultFileAndDetail:
     async def test_build_result_file_written_amount_no_trailing_cents(
         self, db, seeded_dependencies, admin_user
     ):
-        # Review #9: cột "Đã ghi (đồng)" = VND nguyên (KHÔNG đuôi '.00' của Numeric(15,2)).
+        # Review #9: cột "Đã ghi (đồng)" = VND nguyên (KHÔNG đuôi '.00' của
+        # Numeric(15,2)).
         batch = await _mk_batch_with_row(
             db,
             creator_id=admin_user.id,
@@ -2270,7 +2272,8 @@ class TestResultFileAndDetail:
     async def test_includes_profile_name_column_after_student_name(
         self, db, seeded_dependencies, admin_user
     ):
-        # Cột "Tên hồ sơ" (tên hệ thống) chèn NGAY SAU "Họ và tên học sinh" để đối chiếu.
+        # Cột "Tên hồ sơ" (tên hệ thống) chèn NGAY SAU "Họ và tên học sinh" để đối
+        # chiếu.
         profile, _, _ = await _seed_tuition(
             db,
             seeded_dependencies,

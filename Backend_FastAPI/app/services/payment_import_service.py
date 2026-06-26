@@ -459,8 +459,8 @@ async def resolve_and_validate(
             res.message = "CCCD phải đúng 12 chữ số" if d.citizen_id else "thiếu CCCD"
             results.append(res)
             continue
-        # (G2) hình thức đã map (parser) nhưng PaymentMethod inactive/missing → ERROR sớm
-        # (commit:1017 cũng chặn → tránh "khớp giả" ở preview).
+        # (G2) hình thức đã map (parser) nhưng PaymentMethod inactive/missing → ERROR
+        # sớm (commit:1017 cũng chặn → tránh "khớp giả" ở preview).
         if d.method_code not in active_methods:
             res.message = "hình thức chưa được kích hoạt trong hệ thống"
             results.append(res)
@@ -538,8 +538,9 @@ async def resolve_and_validate(
                 f"ngày thu {d.payment_date:%d/%m/%Y} lệch xa năm học {academic_year}"
             )
 
-        # (G1) CCCD xuất hiện nhiều dòng trong file → cảnh báo (không chặn). Nhấn mạnh khi
-        # CÙNG số tiền (nghi copy nhầm → thu khống), vì chốt "không vượt nợ" không bắt được.
+        # (G1) CCCD xuất hiện nhiều dòng trong file → cảnh báo (không chặn). Nhấn
+        # mạnh khi CÙNG số tiền (nghi copy nhầm → thu khống), vì chốt "không vượt
+        # nợ" không bắt được.
         dup_n = cccd_counts.get(d.citizen_id, 0)
         if dup_n > 1:
             if cccd_amount_counts.get((d.citizen_id, d.amount), 0) > 1:
@@ -1048,7 +1049,8 @@ async def _assert_batch_creator_in_unit(
 ) -> None:
     """IDOR unit-scope theo ĐƠN VỊ người tạo lô: manager (unit_id!=None) chỉ thao tác lô
     do user CÙNG đơn vị tạo; admin/accountant (unit_id=None) → mọi lô. Ngoài scope → 404
-    (không lộ tồn tại). 1 NGUỒN quy tắc dùng chung commit/void/detail (tránh drift quyền)."""
+    (không lộ tồn tại). 1 NGUỒN quy tắc dùng chung commit/void/detail (tránh drift
+    quyền)."""
     if unit_id is None:
         return
     creator_unit = (
@@ -1285,14 +1287,16 @@ async def commit_batch(
             ValueError,
             ConflictError,
         ) as exc:
-            # Lỗi nghiệp vụ/giá trị → message đã sạch (tiếng Việt) → hiện thẳng cho kế toán.
+            # Lỗi nghiệp vụ/giá trị → message đã sạch (tiếng Việt) → hiện thẳng cho
+            # kế toán.
             failed_count += 1
             row.status = PaymentImportRowStatusEnum.error.value
             row.message = str(exc)[:500]
-        except Exception as exc:  # noqa: BLE001 — lỗi KHÔNG lường (DB/FK/IntegrityError…)
-            # KHÔNG nhét dump SQLAlchemy/asyncpg cho kế toán (xấu + lộ chi tiết kỹ thuật) →
-            # message generic + LOG đầy đủ cho dev. Savepoint per-row đã rollback dòng này
-            # nên các dòng khác vẫn ghi (cũng làm lô ROBUST: lỗi-lạ 1 dòng không abort cả lô).
+        except Exception as exc:  # noqa: BLE001 — lỗi KHÔNG lường (DB/IntegrityError)
+            # KHÔNG nhét dump SQLAlchemy/asyncpg cho kế toán (xấu + lộ chi tiết kỹ
+            # thuật) → message generic + LOG đầy đủ cho dev. Savepoint per-row đã
+            # rollback dòng này nên các dòng khác vẫn ghi (lô ROBUST: lỗi-lạ 1 dòng
+            # không abort cả lô).
             log.error(
                 "bulk_commit_row_unexpected_error",
                 batch_id=batch_id,
@@ -1560,10 +1564,10 @@ async def void_batch(
     # NGOÀI savepoint = đảo tiền bền trong outer txn; revert lỗi chỉ mất projection.
     await db.flush()
 
-    # Lùi lead (projection) cho hồ sơ HK1 KHÔNG còn cleared sau khi đảo tiền — đối xứng
-    # forward sync ở commit. Void = SỬA NHẦM ghi nhận (KHÔNG phải học sinh rút) → lùi về
-    # status TRƯỚC sts10, KHÔNG đẩy sts18 (đó là refund thật). Bọc savepoint + try/except
-    # MỖI hồ-sơ: lỗi projection KHÔNG hủy đảo tiền của cả lô (tiền đã đảo phải giữ).
+    # Lùi lead (projection) cho hồ sơ HK1 KHÔNG còn cleared sau khi đảo tiền — đối
+    # xứng forward sync ở commit. Void = SỬA NHẦM ghi nhận (KHÔNG phải học sinh rút)
+    # → lùi về status TRƯỚC sts10, KHÔNG đẩy sts18 (đó là refund thật). Bọc savepoint
+    # + try/except MỖI hồ-sơ: lỗi projection KHÔNG hủy đảo tiền cả lô (tiền đã đảo giữ).
     from app.services.fee_calculation_service import is_hk1_cleared
     from app.services.lead_admission_sync import revert_lead_tuition_paid
 
@@ -1697,7 +1701,8 @@ async def get_batch_detail_scoped(
 
 
 def _result_status_label(batch_status: str, row_status: str) -> str:
-    """Nhãn Trạng thái cho file kết quả — theo LÔ × DÒNG (P2: void KHÔNG "Thành công")."""
+    """Nhãn Trạng thái cho file kết quả — theo LÔ × DÒNG (P2: void KHÔNG "Thành
+    công")."""
     if row_status == PaymentImportRowStatusEnum.error.value:
         if batch_status == PaymentImportBatchStatusEnum.committed.value:
             return "Lỗi (không ghi)"
@@ -1722,8 +1727,8 @@ async def build_result_file(
     → ``(content, media_type, filename)``. IDOR scope.
 
     🔴 P1 chống formula injection: MỌI ô (raw = user nhập + header cột do file quyết) qua
-    ``sanitize_csv_cell`` (CSV + XLSX); XLSX thêm ``number_format='@'`` (text) phòng openpyxl
-    diễn giải chuỗi mở đầu '=' thành công thức.
+    ``sanitize_csv_cell`` (CSV + XLSX); XLSX thêm ``number_format='@'`` (text) phòng
+    openpyxl diễn giải chuỗi mở đầu '=' thành công thức.
     """
     batch, rows = await get_batch_detail_scoped(db, batch_id, unit_id)
     committed_v = PaymentImportBatchStatusEnum.committed.value
