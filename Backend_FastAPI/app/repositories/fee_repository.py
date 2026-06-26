@@ -15,7 +15,7 @@ Architecture:
 
 import re
 import unicodedata
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple, Union
 
@@ -701,16 +701,33 @@ class InvoiceRepository(BaseRepository[Invoice]):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
         today: Optional[date] = None,
+        major_id: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        academic_year: Optional[int] = None,
+        semester_no: Optional[int] = None,
+        officer_id: Optional[int] = None,
+        unit_id_filter: Optional[int] = None,
+        due_window: Optional[str] = None,
     ) -> list:
         """Build the shared WHERE for the invoice list + status-counts.
 
         Assumes the query joins Invoice -> Fee -> AdmissionProfile -> Lead.
+
+        Filter ngành/trình độ đọc ``Fee.resolved_major_id`` /
+        ``Fee.resolved_degree_level`` (snapshot denormalized — single source of
+        truth, đúng admitted-choice cho multi-NV), KHÔNG join offering/program
+        nên cả list + status-counts dùng chung không cần thêm join → parity.
         """
         today = today or date.today()
         conditions = []
         # IDOR (None = admin/accountant global scope)
         if unit_id is not None:
             conditions.append(models.Lead.unit_id == unit_id)
+        # Unit filter (manager/admin chọn đơn vị cụ thể) — INTERSECT với IDOR
+        # scope ở trên (ANDed): officer bị clamp unit_id của mình nên truyền
+        # unit_id_filter khác cũng ra rỗng, KHÔNG nới quyền.
+        if unit_id_filter is not None:
+            conditions.append(models.Lead.unit_id == unit_id_filter)
         if statuses:
             conditions.append(Invoice.status.in_(statuses))
         if fee_id:
@@ -719,6 +736,25 @@ class InvoiceRepository(BaseRepository[Invoice]):
             conditions.append(Fee.admission_profile_id == profile_id)
         if fee_type:
             conditions.append(Fee.fee_type == fee_type)
+        if major_id is not None:
+            conditions.append(Fee.resolved_major_id == major_id)
+        if degree_level:
+            conditions.append(Fee.resolved_degree_level == degree_level)
+        if academic_year is not None:
+            conditions.append(Fee.academic_year == academic_year)
+        if semester_no is not None:
+            conditions.append(Fee.semester_no == semester_no)
+        if officer_id is not None:
+            conditions.append(models.Lead.assigned_officer_id == officer_id)
+        # Hạn thanh toán: "sắp đến hạn ≤7 ngày" = invoice chưa thu (issued/
+        # partial/overdue-enum) due trong [today, today+7]; "overdue" = derived
+        # predicate. Tự chứa trong builder → list + counts khớp.
+        if due_window == "due_soon_7d":
+            conditions.append(Invoice.due_date >= today)
+            conditions.append(Invoice.due_date <= today + timedelta(days=7))
+            conditions.append(Invoice.status.in_(OVERDUE_DERIVED_STATUSES))
+        elif due_window == "overdue":
+            conditions.append(InvoiceRepository._overdue_predicate(today))
         if overdue_only:
             conditions.append(InvoiceRepository._overdue_predicate(today))
         if date_from:
@@ -772,6 +808,14 @@ class InvoiceRepository(BaseRepository[Invoice]):
             return [direction(Invoice.due_date), asc(Invoice.id)]
         if sort_by == "amount":
             return [direction(Invoice.amount), asc(Invoice.id)]
+        if sort_by == "paid":
+            return [direction(Invoice.paid_amount), asc(Invoice.id)]
+        if sort_by == "remaining":
+            # Khớp Invoice.remaining_amount = amount + penalty - paid (clamp ≥0).
+            remaining_expr = func.greatest(
+                Invoice.amount + Invoice.penalty_amount - Invoice.paid_amount, 0
+            )
+            return [direction(remaining_expr), asc(Invoice.id)]
         if sort_by == "status":
             return [direction(Invoice.status), asc(Invoice.due_date), asc(Invoice.id)]
         if sort_by == "created_at":
@@ -808,6 +852,13 @@ class InvoiceRepository(BaseRepository[Invoice]):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
         today: Optional[date] = None,
+        major_id: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        academic_year: Optional[int] = None,
+        semester_no: Optional[int] = None,
+        officer_id: Optional[int] = None,
+        unit_id_filter: Optional[int] = None,
+        due_window: Optional[str] = None,
     ) -> Tuple[List[Invoice], int]:
         """Filtered + paginated invoice list WITH total count (IDOR by unit)."""
         today = today or date.today()  # one "today" → predicate + sort agree
@@ -815,6 +866,10 @@ class InvoiceRepository(BaseRepository[Invoice]):
             unit_id=unit_id, statuses=statuses, fee_id=fee_id,
             profile_id=profile_id, overdue_only=overdue_only, search=search,
             fee_type=fee_type, date_from=date_from, date_to=date_to, today=today,
+            major_id=major_id, degree_level=degree_level,
+            academic_year=academic_year, semester_no=semester_no,
+            officer_id=officer_id, unit_id_filter=unit_id_filter,
+            due_window=due_window,
         )
 
         count_query = (
@@ -833,11 +888,9 @@ class InvoiceRepository(BaseRepository[Invoice]):
                 .joinedload(Fee.admission_profile)
                 .joinedload(models.AdmissionProfile.lead)
                 .joinedload(models.Lead.assigned_officer),
-                joinedload(Invoice.fee)
-                .joinedload(Fee.admission_profile)
-                .joinedload(models.AdmissionProfile.lead)
-                .joinedload(models.Lead.offering)
-                .joinedload(models.ProgramOffering.program),
+                # Ngành/trình độ hiển thị đọc từ snapshot Fee.resolved_major
+                # (single source khớp filter) — KHÔNG còn lead.offering.program.
+                joinedload(Invoice.fee).joinedload(Fee.resolved_major),
             )
             .order_by(*self._invoice_sort_clause(sort_by, sort_order, today))
             .offset(skip)
@@ -860,17 +913,30 @@ class InvoiceRepository(BaseRepository[Invoice]):
         date_from: Optional[date] = None,
         date_to: Optional[date] = None,
         today: Optional[date] = None,
+        major_id: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        academic_year: Optional[int] = None,
+        semester_no: Optional[int] = None,
+        officer_id: Optional[int] = None,
+        unit_id_filter: Optional[int] = None,
+        due_window: Optional[str] = None,
     ) -> dict:
         """Per-status counts + derived overdue count for the workspace tabs.
 
         Uses the SAME conditions as the list (minus status/overdue) so each
-        tab's count matches the rows clicking it would return.
+        tab's count matches the rows clicking it would return. Mọi filter mới
+        (ngành/trình độ/năm-HK/TVV/đơn vị/hạn) PHẢI truyền y hệt list để badge
+        khớp (parity).
         """
         today = today or date.today()
         conditions = self._build_invoice_list_conditions(
             unit_id=unit_id, statuses=None, fee_id=fee_id, profile_id=profile_id,
             overdue_only=None, search=search, fee_type=fee_type,
             date_from=date_from, date_to=date_to, today=today,
+            major_id=major_id, degree_level=degree_level,
+            academic_year=academic_year, semester_no=semester_no,
+            officer_id=officer_id, unit_id_filter=unit_id_filter,
+            due_window=due_window,
         )
 
         group_query = (

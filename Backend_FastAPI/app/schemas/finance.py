@@ -851,7 +851,8 @@ class InvoiceListItem(InvoiceSummaryResponse):
     profile_id: Optional[int] = None        # numeric id → opens the drawer
     profile_name: Optional[str] = None
     profile_code: Optional[str] = None      # "HS-000131"
-    program_name: Optional[str] = None      # ngành (batch-safe: lead.offering.program)
+    program_name: Optional[str] = None      # ngành (snapshot Fee.resolved_major — đúng NV admitted)
+    degree_level: Optional[str] = None      # trình độ (snapshot Fee.resolved_degree_level, TEXT name)
     officer_name: Optional[str] = None      # TVV phụ trách
     fee_type: Optional[FeeTypeEnum] = None
     semester_no: Optional[int] = None       # kỳ HK (NULL cho phí non-tuition)
