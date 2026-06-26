@@ -69,16 +69,26 @@ _TITLE_FONT = Font(bold=True, size=14, color="1F3864")
 _CTR = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-# Lead is year-scoped via its offering's academic year (lead has no year column);
-# leads without an offering are kept (year unknown → '(Chưa xác định ngành)').
+# Lead is year-scoped via its offering's academic year (lead has no year column).
+# A lead WITHOUT an offering has no year of its own → scope it by the VN-tz year of
+# its created_at (a brand-new lead that hasn't picked a ngành still counts in the
+# year it arrived). Without this guard an offering-less lead from ANY prior year
+# would show up in EVERY year's report and inflate "Tổng lead"/"Chưa tư vấn".
+# Shared by _LEAD_SQL and _OFFICER_SQL, so it may reference only lead/po columns
+# (the officer query doesn't join admission_profile) → both sheets stay reconciled.
 # Major attribution: nguyện vọng 1 of the year's profile (display_order=1) if any,
 # else the lead's intent offering. "đã đóng" = paid_amount>0 OR waived (miễn).
 _YEAR_SCOPE = """
       AND (
-          po.id IS NULL
-          OR EXISTS (
+          EXISTS (
               SELECT 1 FROM offering_academic_info oai
               WHERE oai.offering_id = po.id AND oai.academic_year = :year
+          )
+          OR (
+              po.id IS NULL
+              AND EXTRACT(
+                  YEAR FROM l.created_at AT TIME ZONE 'Asia/Ho_Chi_Minh'
+              )::int = :year
           )
       )"""
 _LEAD_SQL = text(
@@ -123,9 +133,13 @@ _OFFICER_SQL = text(
     GROUP BY 1, 2 ORDER BY c DESC, u.id
     """
 )
+# Include inactive majors too: a lead/profile may still point to a major archived
+# mid-year; filtering by is_active would drop it into '(Chưa xác định ngành)' instead
+# of its real name. Majors with no leads are dropped later by the ``ordered`` filter,
+# so this never adds empty rows.
 _MAJOR_SQL = text(
     """
-    SELECT id, code, name, degree_level FROM major_program WHERE is_active
+    SELECT id, code, name, degree_level FROM major_program
     ORDER BY name, CASE degree_level WHEN 'Cao đẳng' THEN 0 ELSE 1 END, code
     """
 )

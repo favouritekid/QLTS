@@ -1,4 +1,5 @@
 import { api } from "./client";
+import { filenameFromDisposition } from "@/lib/utils/download-blob";
 import {
   admissionWeeklyReportSchema,
   reportFiltersSchema,
@@ -43,21 +44,6 @@ export async function getReportFilters(
 export interface ExportedFile {
   blob: Blob;
   filename: string;
-}
-
-/** Lấy filename từ header Content-Disposition (giữ tên có timestamp của backend). */
-function filenameFromDisposition(
-  disposition: string | undefined,
-  fallback: string,
-): string {
-  if (!disposition) return fallback;
-  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
-  if (!match) return fallback;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return match[1];
-  }
 }
 
 /**
