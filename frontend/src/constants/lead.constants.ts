@@ -260,3 +260,35 @@ export function getLeadValidityOption(value: string): LeadValidityOption | undef
 export function getLeadValidityLabel(value: string): string {
   return LEAD_VALIDITY_MAP.get(value)?.label ?? value
 }
+
+// =============================================================================
+// STAGE BRANCHES — cây filter "Giai đoạn" 2 cấp (LEAD_STAGE_TREE_FILTER_PLAN)
+// =============================================================================
+// Cha = nhánh (gộp pipeline_stage theo "khâu lead dừng"), lá = consultation_status.
+// CHỈ hardcode stage→nhánh ở đây; tên/màu/đếm của lá lấy runtime từ API
+// (thin-client). Cây gửi consultation_status_id (KHÔNG phải pipeline_stage_id);
+// vì lead.pipeline_stage_id sync TỪ consultation_status.stage_id nên chọn nhánh
+// XẤP XỈ lọc theo stage — không khớp tuyệt đối nếu 2 cột lệch nhau.
+
+export interface StageBranch {
+  key: string
+  label: string
+  stageIds: string[] // pipeline_stage ids; [] = universal (stage_id == null)
+}
+
+export const STAGE_BRANCHES: StageBranch[] = [
+  { key: "tu_van", label: "Tư vấn", stageIds: ["stg01", "stg02"] },
+  { key: "ho_so", label: "Hồ sơ", stageIds: ["stg03", "stg04"] },
+  { key: "hoc_phi", label: "Học phí", stageIds: ["stg05"] },
+  { key: "nhap_hoc", label: "Đã nhập học", stageIds: ["stg06"] },
+  { key: "khong_di_hoc", label: "Không đi học", stageIds: ["stg07"] },
+  // "Hoạt động khác" = universal (stage_id null) + orphan (stage không thuộc nhánh)
+  { key: "khac", label: "Hoạt động khác", stageIds: [] },
+]
+
+// Preset "Đã vào hồ sơ/tài chính" = nhánh Hồ sơ + Học phí + Đã nhập học (loại
+// "Không đi học"). Derive từ STAGE_BRANCHES (1 nguồn) thay vì hardcode lại stage
+// ids — đổi nhánh thì preset tự cập nhật, không lệch.
+export const ONBOARDED_STAGE_IDS = STAGE_BRANCHES.filter((b) =>
+  ["ho_so", "hoc_phi", "nhap_hoc"].includes(b.key),
+).flatMap((b) => b.stageIds)

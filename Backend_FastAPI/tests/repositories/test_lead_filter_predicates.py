@@ -272,3 +272,48 @@ async def test_consultation_status_with_is_final(db, filter_dataset):
     )
     assert ids["L1"] not in res_empty
     assert ids["L4"] not in res_empty
+
+
+# ============================================================================
+# count_by_consultation_status — scope-only counts for the "Giai đoạn" tree
+# (LEAD_STAGE_TREE_FILTER_PLAN §2)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_count_by_consultation_status_groups(db, filter_dataset):
+    """Groups lead counts by consultation_status_id over the unscoped set."""
+    repo = LeadRepository(db)
+    counts = await repo.count_by_consultation_status(repo._build_filters())
+    assert counts.get(ACCEPTED_STATUS_ID) == 2   # L1, L4
+    assert counts.get(GIVEUP_STATUS_ID) == 1     # L2
+
+
+@pytest.mark.asyncio
+async def test_count_by_consultation_status_honours_scope(db, filter_dataset):
+    """Scope-only filters narrow counts exactly like the list: the unassigned
+    L2 (sts20) drops out once scoped to the officer — proving the count honours
+    the SAME scope plumbing as get_filtered (no RBAC leak)."""
+    officer_id = filter_dataset["officer_id"]
+    repo = LeadRepository(db)
+    scoped = repo._build_filters(assigned_officer_id=str(officer_id))
+    counts = await repo.count_by_consultation_status(scoped)
+    assert counts.get(ACCEPTED_STATUS_ID) == 2   # L1, L4 (officer's)
+    assert GIVEUP_STATUS_ID not in counts        # L2 unassigned → excluded
+
+
+@pytest.mark.asyncio
+async def test_count_by_consultation_status_null_bucket(
+    db, filter_dataset, seeded_dependencies
+):
+    """Leads with NULL consultation_status_id land in the '__null__' bucket so
+    the tree never hides a lead."""
+    db.add(models.Lead(
+        full_name="Khong Trang Thai", phone="0900000099", source="Website",
+        unit_id=seeded_dependencies["unit_id"],
+        status=seeded_dependencies["initial_status_id"],
+        consultation_status_id=None,
+    ))
+    await db.flush()
+    repo = LeadRepository(db)
+    counts = await repo.count_by_consultation_status(repo._build_filters())
+    assert counts.get("__null__") == 1

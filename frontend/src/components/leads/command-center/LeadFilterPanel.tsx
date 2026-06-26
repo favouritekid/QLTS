@@ -20,7 +20,7 @@
  */
 
 import React from "react";
-import { RotateCcw } from "lucide-react";
+import { ChevronRight, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -43,17 +43,16 @@ import { MultiOfferingSelector } from "@/components/common/selectors";
 import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import {
-  LEAD_STATUS_OPTIONS,
   LEAD_SOURCE_OPTIONS,
   LEAD_VALIDITY_OPTIONS,
+  STAGE_BRANCHES,
 } from "@/constants/lead.constants";
-import { STAGE_COLORS } from "@/types/pipeline.types";
-import { usePipelineStages, useConsultationStatuses } from "@/hooks/usePipeline";
+import { useConsultationStatuses } from "@/hooks/usePipeline";
+import { useConsultationStatusCounts } from "@/hooks/useLeads";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { useAuth } from "@/hooks/useAuth";
 import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
-import type { LeadStatus } from "@/types/lead.types";
 import type { LeadsFilterState, LeadsFilterHandlers } from "@/hooks/useLeadsFilter";
 
 interface LeadFilterPanelProps {
@@ -89,6 +88,10 @@ function toggle(arr: string[], value: string): string[] {
   return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value];
 }
 
+// All stage ids that belong to a NAMED branch — statuses whose stage_id is null
+// or not in this set route into the "Hoạt động khác" branch (no status vanishes).
+const NAMED_BRANCH_STAGE_IDS = new Set(STAGE_BRANCHES.flatMap((b) => b.stageIds));
+
 function GroupSubheading({ children }: { children: React.ReactNode }) {
   return (
     <div className="text-muted-foreground text-xs font-medium uppercase tracking-wide pt-1">
@@ -111,9 +114,26 @@ export const LeadFilterPanel = React.memo(function LeadFilterPanel({
   const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
 
   // Data sources (moved here from the bar — §5.0-C regression note)
-  const { data: pipelineStages = [] } = usePipelineStages();
   const { data: consultationStatuses = [] } = useConsultationStatuses();
+  const { data: statusCounts } = useConsultationStatusCounts();
   const { data: organizationUnits = [] } = useOrganizationUnits();
+  // Distinguish "loading" (undefined) from "genuinely 0" so the tree doesn't
+  // flash every branch as 0 before counts resolve.
+  const countsReady = statusCounts != null;
+  const countOf = (id: string) => statusCounts?.[id] ?? 0;
+
+  // Collapse state for the Giai đoạn tree (default collapsed → compact overview
+  // of branch totals; expand a branch to pick individual statuses).
+  const [expandedBranches, setExpandedBranches] = React.useState<Set<string>>(
+    () => new Set(),
+  );
+  const toggleBranch = (key: string) =>
+    setExpandedBranches((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const [officerSearch, setOfficerSearch] = React.useState("");
   const [debouncedOfficerSearch, setDebouncedOfficerSearch] = React.useState("");
@@ -148,31 +168,22 @@ export const LeadFilterPanel = React.memo(function LeadFilterPanel({
     return result;
   }, [organizationUnits]);
 
-  // Consultation statuses grouped by stage (§5.6). Display-only grouping; the
-  // selection state stays a flat array. Universal statuses (stage_id == null)
-  // fall into a final "Mọi giai đoạn" bucket.
-  const consultationGroups = React.useMemo(() => {
-    const orderedStages = [...pipelineStages].sort((a, b) => a.order - b.order);
-    const stageIds = new Set(orderedStages.map((s) => s.id));
-    const groups = orderedStages.map((stage) => ({
-      key: stage.id,
-      title: stage.name,
+  // Consultation statuses grouped into the 6 stage-branches (cây 2 cấp). The
+  // selection state stays a flat array; the tree is display-only. A status goes
+  // to "Hoạt động khác" when its stage_id is null OR references a stage not in
+  // any named branch (universal/orphan) — so no active status ever vanishes.
+  const consultationBranches = React.useMemo(() => {
+    return STAGE_BRANCHES.map((branch) => ({
+      ...branch,
       statuses: consultationStatuses
-        .filter((s) => s.stage_id === stage.id)
+        .filter((s) =>
+          branch.stageIds.length > 0
+            ? s.stage_id != null && branch.stageIds.includes(s.stage_id)
+            : !s.stage_id || !NAMED_BRANCH_STAGE_IDS.has(s.stage_id),
+        )
         .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0)),
-    }));
-    // "Mọi giai đoạn": universal statuses (stage_id == null) PLUS any orphan
-    // whose stage_id references a stage not in the loaded list (archived /
-    // not-yet-cached). Without the orphan catch they'd vanish from the drawer
-    // while still being active + removable as chips → no checkbox to toggle.
-    const universal = consultationStatuses
-      .filter((s) => !s.stage_id || !stageIds.has(s.stage_id))
-      .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
-    if (universal.length > 0) {
-      groups.push({ key: "__universal__", title: "Mọi giai đoạn", statuses: universal });
-    }
-    return groups.filter((g) => g.statuses.length > 0);
-  }, [pipelineStages, consultationStatuses]);
+    })).filter((b) => b.statuses.length > 0);
+  }, [consultationStatuses]);
 
   const showAssignmentGroup = canFilterByOfficerFlag || isAdminFlag;
 
@@ -305,80 +316,128 @@ export const LeadFilterPanel = React.memo(function LeadFilterPanel({
               🏷️ Trạng thái &amp; phân loại
             </AccordionTrigger>
             <AccordionContent className="space-y-4 pb-3">
-              {/* Tình trạng tư vấn (grouped by stage) */}
-              <div className="space-y-2">
-                <GroupSubheading>Tình trạng tư vấn</GroupSubheading>
-                {consultationGroups.map((group) => (
-                  <div key={group.key} className="space-y-1.5">
-                    <div className="text-muted-foreground/80 text-[11px] font-medium">
-                      {group.title}
-                    </div>
-                    <div className="space-y-1.5 pl-1">
-                      {group.statuses.map((s) => (
-                        <label
-                          key={s.id}
-                          className="flex cursor-pointer items-center gap-2 text-sm font-normal"
-                        >
-                          <Checkbox
-                            checked={state.consultationStatusFilters.includes(s.id)}
-                            onCheckedChange={() =>
-                              handlers.handleConsultationStatusChange(
-                                toggle(state.consultationStatusFilters, s.id),
-                              )
-                            }
-                          />
-                          <ColorDot color={sanitizeColorCode(s.color_code)} size="sm" />
-                          {s.name}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Giai đoạn */}
-              <div className="space-y-2">
+              {/* Giai đoạn — cây 2 cấp (cha = nhánh, lá = tình trạng tư vấn).
+                  HỢP NHẤT "Tình trạng tư vấn" + "Giai đoạn" cũ thành 1 trục.
+                  "Vòng đời Lead" (lead.status legacy) bỏ control nhưng GIỮ state
+                  + param ?status= cho preset "Mới" (LEAD_STAGE_TREE_FILTER_PLAN). */}
+              <div className="space-y-1.5">
                 <GroupSubheading>Giai đoạn</GroupSubheading>
-                {pipelineStages.map((stage) => (
-                  <label
-                    key={stage.id}
-                    className="flex cursor-pointer items-center gap-2 text-sm font-normal"
-                  >
-                    <Checkbox
-                      checked={state.stageFilters.includes(stage.id)}
-                      onCheckedChange={() =>
-                        handlers.handleStageChange(toggle(state.stageFilters, stage.id))
-                      }
-                    />
-                    <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
-                    {stage.name}
-                  </label>
-                ))}
+                {consultationBranches.map((branch) => {
+                  const ids = branch.statuses.map((s) => s.id);
+                  const selected = ids.filter((id) =>
+                    state.consultationStatusFilters.includes(id),
+                  ).length;
+                  const allSelected = selected === ids.length && ids.length > 0;
+                  const parentChecked = allSelected
+                    ? true
+                    : selected > 0
+                      ? "indeterminate"
+                      : false;
+                  // Branch total = Σ leaf counts. Leads with NULL
+                  // consultation_status (BE "__null__" bucket) are NOT folded in:
+                  // they can't be filtered via cstatus, so counting them here
+                  // would over-promise (parent count > clicked result). The
+                  // "Chưa có lần tư vấn" preset reaches not-yet-consulted leads.
+                  const branchTotal = ids.reduce(
+                    (sum, id) => sum + countOf(id),
+                    0,
+                  );
+                  const expanded = expandedBranches.has(branch.key);
+                  return (
+                    <div key={branch.key} className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          checked={parentChecked}
+                          onCheckedChange={() =>
+                            handlers.handleConsultationStatusChange(
+                              allSelected
+                                ? state.consultationStatusFilters.filter(
+                                    (id) => !ids.includes(id),
+                                  )
+                                : Array.from(
+                                    new Set([
+                                      ...state.consultationStatusFilters,
+                                      ...ids,
+                                    ]),
+                                  ),
+                            )
+                          }
+                          aria-label={`Chọn tất cả ${branch.label}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => toggleBranch(branch.key)}
+                          aria-expanded={expanded}
+                          className="flex flex-1 items-center justify-between gap-2 text-sm font-medium"
+                        >
+                          <span className="flex items-center gap-1">
+                            <ChevronRight
+                              className={cn(
+                                "h-3.5 w-3.5 shrink-0 transition-transform",
+                                expanded && "rotate-90",
+                              )}
+                            />
+                            {branch.label}
+                          </span>
+                          {countsReady && (
+                            <span
+                              className={cn(
+                                "text-xs tabular-nums",
+                                branchTotal === 0
+                                  ? "text-muted-foreground/50"
+                                  : "text-muted-foreground",
+                              )}
+                            >
+                              {branchTotal.toLocaleString("vi-VN")}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                      {expanded && (
+                        <div className="space-y-1.5 pl-6">
+                          {branch.statuses.map((s) => {
+                            const c = countOf(s.id);
+                            return (
+                              <label
+                                key={s.id}
+                                className="flex cursor-pointer items-center gap-2 text-sm font-normal"
+                              >
+                                <Checkbox
+                                  checked={state.consultationStatusFilters.includes(
+                                    s.id,
+                                  )}
+                                  onCheckedChange={() =>
+                                    handlers.handleConsultationStatusChange(
+                                      toggle(state.consultationStatusFilters, s.id),
+                                    )
+                                  }
+                                />
+                                <ColorDot
+                                  color={sanitizeColorCode(s.color_code)}
+                                  size="sm"
+                                />
+                                <span className="flex-1">{s.name}</span>
+                                {countsReady && (
+                                  <span
+                                    className={cn(
+                                      "text-xs tabular-nums",
+                                      c === 0
+                                        ? "text-muted-foreground/50"
+                                        : "text-muted-foreground",
+                                    )}
+                                  >
+                                    {c.toLocaleString("vi-VN")}
+                                  </span>
+                                )}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-
-              {/* Vòng đời Lead (admin only) */}
-              {isAdminFlag && (
-                <div className="space-y-2">
-                  <GroupSubheading>Vòng đời Lead</GroupSubheading>
-                  {LEAD_STATUS_OPTIONS.map((option) => (
-                    <label
-                      key={option.value}
-                      className="flex cursor-pointer items-center gap-2 text-sm font-normal"
-                    >
-                      <Checkbox
-                        checked={state.statusFilters.includes(option.value)}
-                        onCheckedChange={() =>
-                          handlers.handleStatusChange(
-                            toggle(state.statusFilters, option.value) as LeadStatus[],
-                          )
-                        }
-                      />
-                      <span className={`h-2 w-2 rounded-full ${option.color}`} />
-                      {option.label}
-                    </label>
-                  ))}
-                </div>
-              )}
 
               {/* Tính hợp lệ */}
               <div className="space-y-2">

@@ -238,6 +238,6 @@ describe("LEAD_FILTER_UX_PLAN §5.0 — filter drawer panel", () => {
     expect(filterPanel).toContain("Chưa có lần tư vấn"); // group 1 control (JSX)
     expect(filterPanel).toContain("Cán bộ phụ trách");   // group 3 sub-heading (JSX)
     expect(filterPanel).toContain("Ưu tiên follow-up");  // sort option (JSX)
-    expect(filterPanel).toContain("Mọi giai đoạn");      // universal consultation bucket (JSX)
+    expect(filterPanel).toContain("Chọn tất cả");          // tri-state parent aria-label (cây 2 cấp)
   });
 });

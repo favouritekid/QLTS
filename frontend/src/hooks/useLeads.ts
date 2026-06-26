@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
 import { leadsApi } from "@/lib/api/leads";
+import { api } from "@/lib/api/client";
 import { workflowContextKeys } from "@/hooks/useWorkflowContext";
 import type { ApiErrorResponse } from "@/types/api.types";
 import type { ReopenRequestItem } from "@/lib/api/leads";
@@ -39,6 +40,8 @@ export const leadsKeys = {
   detail: (id: number) => [...leadsKeys.details(), id] as const,
   timeline: (id: number) => [...leadsKeys.all, "timeline", id] as const,
   insights: (id: number) => [...leadsKeys.all, "insights", id] as const,
+  consultationStatusCounts: () =>
+    [...leadsKeys.all, "consultationStatusCounts"] as const,
 };
 
 // =====================================================================
@@ -136,6 +139,32 @@ export function useLeads(
     // table does not flash back to a skeleton when filters switch (e.g.
     // post-hydration localStorage restore, pagination, sort, etc.).
     placeholderData: (previousData) => previousData,
+  });
+}
+
+/**
+ * Scope-only lead counts per consultation_status_id for the "Giai đoạn" filter
+ * tree. Honours the caller's RBAC scope (BE get_lead_list_filter) but ignores
+ * secondary filters → a stable navigation map. Fetched once (page_size=1) and
+ * cached; the tree reads parent (Σ leaves) + leaf counts. Key "__null__" =
+ * leads with no consultation_status. See LEAD_STAGE_TREE_FILTER_PLAN.
+ */
+export function useConsultationStatusCounts(enabled: boolean = true) {
+  return useQuery<Record<string, number> | null, AxiosError<ApiErrorResponse>>({
+    queryKey: leadsKeys.consultationStatusCounts(),
+    queryFn: async () => {
+      const res = await api.get<LeadsPage>("/api/leads", {
+        params: { page: 1, page_size: 1, with_status_counts: true },
+      });
+      return res.data.consultation_status_counts ?? null;
+    },
+    enabled,
+    // staleTime 0 → refetch on each drawer open (the Sheet remounts the Panel),
+    // so branch counts are fresh after a status change without wiring every
+    // mutation. No window-focus refetch to avoid churn while the drawer is open.
+    staleTime: 0,
+    gcTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
   });
 }
 
