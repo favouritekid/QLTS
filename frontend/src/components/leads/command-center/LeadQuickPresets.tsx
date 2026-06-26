@@ -17,7 +17,9 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
+import { useConsultationStatuses } from "@/hooks/usePipeline";
 import { canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
+import { ONBOARDED_STAGE_IDS } from "@/constants/lead.constants";
 import type { LeadStatus } from "@/types/lead.types";
 import type { LeadsFilterState, LeadsFilterHandlers } from "@/hooks/useLeadsFilter";
 
@@ -38,6 +40,20 @@ export const LeadQuickPresets = React.memo(function LeadQuickPresets({
 
   const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
   const myId = user?.id != null ? String(user.id) : null;
+
+  // Preset "Đã vào hồ sơ/tài chính" = consultation_status thuộc nhánh Hồ sơ +
+  // Học phí + Đã nhập học (derive runtime từ stageIds — KHÔNG hardcode sts).
+  const { data: consultationStatuses = [] } = useConsultationStatuses();
+  const onboardedIds = React.useMemo(
+    () =>
+      consultationStatuses
+        .filter((s) => s.stage_id && ONBOARDED_STAGE_IDS.includes(s.stage_id))
+        .map((s) => s.id),
+    [consultationStatuses],
+  );
+  const onboardedActive =
+    onboardedIds.length > 0 &&
+    onboardedIds.every((id) => state.consultationStatusFilters.includes(id));
 
   const presets: { key: string; label: string; active: boolean; onClick: () => void; show: boolean }[] = [
     {
@@ -97,6 +113,24 @@ export const LeadQuickPresets = React.memo(function LeadQuickPresets({
         );
       },
       show: true,
+    },
+    {
+      // Đã vào khâu hồ sơ/tài chính (không sót ai vì fee-overlay). Toggle là
+      // additive: chỉ thêm/bỏ nhóm onboarded, KHÔNG đụng nhánh khác đang chọn.
+      key: "onboarded",
+      label: "Đã vào hồ sơ/tài chính",
+      active: onboardedActive,
+      onClick: () =>
+        handlers.handleConsultationStatusChange(
+          onboardedActive
+            ? state.consultationStatusFilters.filter(
+                (id) => !onboardedIds.includes(id),
+              )
+            : Array.from(
+                new Set([...state.consultationStatusFilters, ...onboardedIds]),
+              ),
+        ),
+      show: onboardedIds.length > 0,
     },
   ];
 

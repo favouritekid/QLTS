@@ -643,6 +643,8 @@ export interface LeadListParams extends PaginationParams {
   no_consultation?: boolean;
   is_hot?: boolean;
   consultation_status_id?: string;
+  // Also return consultation_status_counts (scope-only) for the Giai đoạn tree
+  with_status_counts?: boolean;
 }
 
 /**
@@ -671,6 +673,9 @@ export interface LeadsPage {
   leads: Lead[];
   summary?: LeadsSummary;
   effective_scope?: EffectiveScope;
+  // Scope-only counts per consultation_status_id (only when with_status_counts);
+  // key "__null__" = leads with no consultation_status. For the Giai đoạn tree.
+  consultation_status_counts?: Record<string, number> | null;
 }
 
 // ============================================
