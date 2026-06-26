@@ -1,6 +1,6 @@
 import type { Metadata } from "next"
 
-import { PaymentImportClient } from "./_components/PaymentImportClient"
+import { PaymentImportClientLoader } from "./_components/PaymentImportClientLoader"
 
 export const metadata: Metadata = {
   title: "Import thu học phí | QLTS",
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 }
 
 export default function PaymentImportPage() {
-  return <PaymentImportClient />
+  return <PaymentImportClientLoader />
 }
