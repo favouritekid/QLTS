@@ -1026,9 +1026,14 @@ class TestDiamondInheritance:
             if p.get("eft", "allow") == "allow"
         }
 
-        # Manager-exclusive objects (user management, admission workflow)
+        # Manager-exclusive objects (user management, admission workflow).
+        # NOTE: ``/api/admin/users`` is NO LONGER object-level manager-exclusive —
+        # accountant now has a GET grant returning the sanitized UserPickerSchema
+        # (no PII, read-only) to power the finance TVV filter picker
+        # (tcf20260627001). The WRITE-side separation (accountant must not MANAGE
+        # users) is still enforced action-level by
+        # ``test_accountant_does_not_have_user_management`` ((/api/admin/users, .*)).
         manager_exclusive = {
-            "/api/admin/users",
             "/api/leads/bulk-assign",
             "/api/leads/distribution-preview",
             "/api/admissions/{id}/approve",
