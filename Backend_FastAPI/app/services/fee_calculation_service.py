@@ -286,14 +286,25 @@ async def resnapshot_fee_academic_info_for_profile(
     # is the common state while a draft is built choice-by-choice — the new
     # add_choice/delete_choice callers fire on every NV mutation, long before
     # any fee exists. Bỏ qua fee đã huỷ — không relabel lịch sử theo ngành.
-    fees = (
-        await db.execute(
-            select(Fee).where(
-                Fee.admission_profile_id == profile_id,
-                Fee.status != "cancelled",
+    # Kept under the best-effort umbrella: this function MUST NOT raise into the
+    # money-creating callers, so a failing db.execute here returns 0 (same
+    # fail-soft contract the resolve block below has) rather than propagating.
+    try:
+        fees = (
+            await db.execute(
+                select(Fee).where(
+                    Fee.admission_profile_id == profile_id,
+                    Fee.status != "cancelled",
+                )
             )
+        ).scalars().all()
+    except Exception as exc:  # best-effort: KHÔNG để snapshot vỡ money flow
+        log.error(
+            "resnapshot_fee_academic_info_failed",
+            profile_id=profile_id,
+            error=str(exc),
         )
-    ).scalars().all()
+        return 0
     if not fees:
         return 0
 
