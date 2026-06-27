@@ -24,13 +24,46 @@ testing 2026-05-15 → documented in
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from app import models
 from app.database import AsyncSessionLocal
+from app.main import fastapi_app
+from app.security import get_password_hash
+from tests.fixtures.constants import AuthURLs
+from tests.fixtures.users import create_user_with_role, get_auth_headers
 
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest_asyncio.fixture
+async def accountant_token_headers(client: AsyncClient) -> dict:
+    """Accountant auth headers for picker-shape regression tests."""
+    try:
+        from casbin_async_sqlalchemy_adapter import CasbinRule
+    except ImportError:  # pragma: no cover
+        CasbinRule = None
+
+    info = await create_user_with_role(
+        session_factory=AsyncSessionLocal,
+        user_data={
+            "username": "qa_picker_accountant",
+            "email": "qa_picker_accountant@test.com",
+            "password": "AcctPicker123!",
+            "role": "accountant",
+            "status": "active",
+        },
+        casbin_role="role:accountant",
+        unit_id=None,
+        models=models,
+        get_password_hash=get_password_hash,
+        CasbinRule=CasbinRule,
+        app=fastapi_app,
+    )
+    return await get_auth_headers(client, info, AuthURLs.LOGIN)
 
 
 # =====================================================================
@@ -181,6 +214,57 @@ async def test_admin_users_endpoint_strips_pii_for_officer(
     )
 
     # Required UserPickerSchema fields MUST present (positive contract)
+    required_keys = {"id", "username", "full_name", "role", "status"}
+    missing = required_keys - set(sample_user.keys())
+    assert not missing, (
+        f"UserPickerSchema missing required fields: {missing}. "
+        f"Got: {list(sample_user.keys())}"
+    )
+
+
+async def test_admin_users_endpoint_strips_pii_for_accountant(
+    client: AsyncClient,
+    accountant_token_headers: dict,
+    officer_user_in_db: dict,
+) -> None:
+    """GET /api/admin/users for accountant powers finance TVV picker.
+
+    It must be allowed, but still return the sanitized UserPickerSchema shape.
+
+    ``officer_user_in_db`` seeds a ``role=officer status=active`` user so the
+    ``role=officer&status=active`` query (mirroring the finance TVV picker)
+    returns ≥1 row — otherwise ``body["users"]`` is empty and every PII/shape
+    assertion below would be skipped, leaving the regression sentinel inert.
+    """
+    response = await client.get(
+        "/api/admin/users?page_size=2&role=officer&status=active",
+        headers=accountant_token_headers,
+    )
+    assert response.status_code == 200, (
+        f"Accountant GET /api/admin/users must remain 200 for finance picker; "
+        f"got {response.status_code}: {response.text[:200]}"
+    )
+
+    body = response.json()
+    assert "users" in body and len(body["users"]) > 0, (
+        "Response must contain the seeded active officer so the PII/shape "
+        "assertions actually run; got: " + str(body)
+    )
+
+    forbidden_keys = {
+        "email",
+        "phone_number",
+        "mfa_enabled",
+        "password_reset_required",
+        "max_capacity",
+    }
+    sample_user = body["users"][0]
+    leaked_keys = forbidden_keys & set(sample_user.keys())
+    assert not leaked_keys, (
+        f"F3 regression - accountant response leaks PII keys: {leaked_keys}. "
+        f"Should be UserPickerSchema. Full keys returned: {list(sample_user.keys())}"
+    )
+
     required_keys = {"id", "username", "full_name", "role", "status"}
     missing = required_keys - set(sample_user.keys())
     assert not missing, (

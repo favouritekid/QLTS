@@ -2,13 +2,14 @@
 /**
  * Filter bar cho workspace "Thu học phí" (phỏng AdmissionsFilterBar).
  *
- * Bố cục: Search (tên HS / mã HS / số HĐ) · Loại phí (dropdown) · Sắp xếp
- * (dropdown) · "Xóa tất cả bộ lọc" · chips active. Thuần trình bày — đẩy qua
- * handler thật của useInvoicesFilter.
+ * Bố cục: Search (tên HS / mã HS / số HĐ) · Loại phí · Năm · HK · Ngành · Trình
+ * độ · TVV · Đơn vị · Hạn · Sắp xếp · "Xóa tất cả bộ lọc" · chips active. Thuần
+ * trình bày — đẩy qua handler thật của useInvoicesFilter.
  */
 
 "use client"
 
+import type { ReactNode } from "react"
 import { ArrowUpDown, Check, ChevronDown, Search, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -19,6 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { cn } from "@/lib/utils"
 import {
   FEE_TYPE_LABELS,
   type FeeType,
@@ -29,6 +31,17 @@ export interface MajorFilterOption {
   id: number
   name: string
   degree_level: string
+}
+
+export interface OfficerFilterOption {
+  id: number
+  name: string
+}
+
+export interface UnitFilterOption {
+  id: number
+  name: string
+  level: number
 }
 
 const DUE_WINDOW_OPTIONS: readonly {
@@ -60,6 +73,89 @@ function feeTypeLabel(feeType: string): string {
   return FEE_TYPE_LABELS[feeType as FeeType] ?? feeType
 }
 
+/** One selectable row of a {@link FilterDropdown}. */
+interface FilterDropdownOption {
+  key: string | number
+  label: string
+  active: boolean
+  onSelect: () => void
+  /** Hierarchy indentation in px (unit tree). Omitted = flat. */
+  indentPx?: number
+}
+
+/**
+ * Single-select dropdown filter (trigger button + "all" reset row + options
+ * with a Check on the active one). Replaces 7 near-identical inline blocks.
+ */
+function FilterDropdown({
+  ariaLabel,
+  triggerLabel,
+  triggerClassName,
+  contentClassName,
+  truncateTrigger = false,
+  allLabel,
+  allActive,
+  onSelectAll,
+  options,
+  truncateItems = false,
+}: {
+  ariaLabel: string
+  triggerLabel: ReactNode
+  triggerClassName?: string
+  contentClassName: string
+  truncateTrigger?: boolean
+  allLabel: string
+  allActive: boolean
+  onSelectAll: () => void
+  options: readonly FilterDropdownOption[]
+  truncateItems?: boolean
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          className={cn("h-10 gap-1.5", triggerClassName)}
+          aria-label={ariaLabel}
+        >
+          {truncateTrigger ? <span className="truncate">{triggerLabel}</span> : triggerLabel}
+          <ChevronDown
+            className={cn("size-4 text-muted-foreground", truncateTrigger && "shrink-0")}
+            aria-hidden="true"
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className={contentClassName}>
+        <DropdownMenuItem className="justify-between" onClick={onSelectAll}>
+          {allLabel}
+          {allActive && <Check className="size-4" />}
+        </DropdownMenuItem>
+        {options.map((o) => (
+          <DropdownMenuItem
+            key={o.key}
+            className={cn("justify-between", truncateItems && "gap-2")}
+            onClick={o.onSelect}
+          >
+            {truncateItems ? (
+              <span
+                className="truncate"
+                style={o.indentPx ? { paddingLeft: o.indentPx } : undefined}
+              >
+                {o.label}
+              </span>
+            ) : (
+              o.label
+            )}
+            {o.active && (
+              <Check className={cn("size-4", truncateItems && "shrink-0")} />
+            )}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export interface InvoiceFilterBarProps {
   search: string
   onSearchChange: (value: string) => void
@@ -70,14 +166,18 @@ export interface InvoiceFilterBarProps {
   onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void
   hasActiveFilters: boolean
   onReset: () => void
-  // Workspace filters (ngành/trình độ/hạn). majorOptions = danh sách ngành để
-  // chọn; trình độ derive từ distinct degree_level của majorOptions.
+  // Workspace filters (ngành/trình độ/năm-HK/TVV/đơn vị/hạn). majorOptions =
+  // danh sách ngành; trình độ derive từ distinct degree_level của majorOptions.
   workspaceFilters: InvoiceWorkspaceFilters
   setWorkspaceFilter: <K extends keyof InvoiceWorkspaceFilters>(
     key: K,
     value: InvoiceWorkspaceFilters[K],
   ) => void
   majorOptions: readonly MajorFilterOption[]
+  academicYearOptions: readonly number[]
+  semesterOptions: readonly number[]
+  officerOptions: readonly OfficerFilterOption[]
+  unitOptions: readonly UnitFilterOption[]
 }
 
 export function InvoiceFilterBar({
@@ -93,8 +193,14 @@ export function InvoiceFilterBar({
   workspaceFilters,
   setWorkspaceFilter,
   majorOptions,
+  academicYearOptions,
+  semesterOptions,
+  officerOptions,
+  unitOptions,
 }: InvoiceFilterBarProps) {
   const selectedMajor = majorOptions.find((m) => m.id === workspaceFilters.major_id)
+  const selectedOfficer = officerOptions.find((o) => o.id === workspaceFilters.officer_id)
+  const selectedUnit = unitOptions.find((u) => u.id === workspaceFilters.unit_id)
   // Trình độ: distinct degree_level từ danh sách ngành (gửi TEXT name xuống BE).
   const degreeOptions = Array.from(
     new Set(majorOptions.map((m) => m.degree_level).filter(Boolean)),
@@ -106,10 +212,29 @@ export function InvoiceFilterBar({
   if (feeType) {
     chips.push({ key: "fee_type", label: `Loại: ${feeTypeLabel(feeType)}`, onRemove: () => onFeeTypeChange("") })
   }
-  if (selectedMajor) {
+  if (workspaceFilters.academic_year) {
+    chips.push({
+      key: "academic_year",
+      label: `Năm: ${workspaceFilters.academic_year}`,
+      onRemove: () => setWorkspaceFilter("academic_year", undefined),
+    })
+  }
+  if (workspaceFilters.semester_no) {
+    chips.push({
+      key: "semester_no",
+      label: `HK: ${workspaceFilters.semester_no}`,
+      onRemove: () => setWorkspaceFilter("semester_no", undefined),
+    })
+  }
+  // Major/officer/unit chips all render from the RAW filter id with a #id
+  // fallback (not the options lookup) — so a selected value that drops out of
+  // its options list (archived major / deactivated officer / >500 cap /
+  // deep-linked URL) stays VISIBLE and clearable instead of silently filtering
+  // with no chip.
+  if (workspaceFilters.major_id) {
     chips.push({
       key: "major",
-      label: `Ngành: ${selectedMajor.name}`,
+      label: `Ngành: ${selectedMajor?.name ?? `#${workspaceFilters.major_id}`}`,
       onRemove: () => setWorkspaceFilter("major_id", undefined),
     })
   }
@@ -118,6 +243,20 @@ export function InvoiceFilterBar({
       key: "degree",
       label: `Trình độ: ${workspaceFilters.degree_level}`,
       onRemove: () => setWorkspaceFilter("degree_level", undefined),
+    })
+  }
+  if (workspaceFilters.officer_id) {
+    chips.push({
+      key: "officer",
+      label: `TVV: ${selectedOfficer?.name ?? `#${workspaceFilters.officer_id}`}`,
+      onRemove: () => setWorkspaceFilter("officer_id", undefined),
+    })
+  }
+  if (workspaceFilters.unit_id) {
+    chips.push({
+      key: "unit",
+      label: `Đơn vị: ${selectedUnit?.name ?? `#${workspaceFilters.unit_id}`}`,
+      onRemove: () => setWorkspaceFilter("unit_id", undefined),
     })
   }
   if (workspaceFilters.due_window) {
@@ -161,85 +300,147 @@ export function InvoiceFilterBar({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Fee type */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="h-10 gap-1.5" aria-label="Lọc theo loại phí">
-                {feeType ? feeTypeLabel(feeType) : "Tất cả loại phí"}
-                <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem className="justify-between" onClick={() => onFeeTypeChange("")}>
-                Tất cả loại phí
-                {!feeType && <Check className="size-4" />}
-              </DropdownMenuItem>
-              {FEE_TYPE_OPTIONS.map((o) => (
-                <DropdownMenuItem
-                  key={o.value}
-                  className="justify-between"
-                  onClick={() => onFeeTypeChange(o.value)}
-                >
-                  {o.label}
-                  {feeType === o.value && <Check className="size-4" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Loại phí */}
+          <FilterDropdown
+            ariaLabel="Lọc theo loại phí"
+            triggerLabel={feeType ? feeTypeLabel(feeType) : "Tất cả loại phí"}
+            contentClassName="w-48"
+            allLabel="Tất cả loại phí"
+            allActive={!feeType}
+            onSelectAll={() => onFeeTypeChange("")}
+            options={FEE_TYPE_OPTIONS.map((o) => ({
+              key: o.value,
+              label: o.label,
+              active: feeType === o.value,
+              onSelect: () => onFeeTypeChange(o.value),
+            }))}
+          />
+
+          {/* Năm học */}
+          <FilterDropdown
+            ariaLabel="Lọc theo năm học"
+            triggerLabel={workspaceFilters.academic_year ?? "Mọi năm"}
+            contentClassName="max-h-80 w-36 overflow-y-auto"
+            allLabel="Mọi năm"
+            allActive={workspaceFilters.academic_year === undefined}
+            onSelectAll={() => setWorkspaceFilter("academic_year", undefined)}
+            options={academicYearOptions.map((year) => ({
+              key: year,
+              label: String(year),
+              active: workspaceFilters.academic_year === year,
+              onSelect: () => setWorkspaceFilter("academic_year", year),
+            }))}
+          />
+
+          {/* Học kỳ */}
+          <FilterDropdown
+            ariaLabel="Lọc theo học kỳ"
+            triggerLabel={workspaceFilters.semester_no ? `HK${workspaceFilters.semester_no}` : "Mọi HK"}
+            contentClassName="w-32"
+            allLabel="Mọi HK"
+            allActive={workspaceFilters.semester_no === undefined}
+            onSelectAll={() => setWorkspaceFilter("semester_no", undefined)}
+            options={semesterOptions.map((semester) => ({
+              key: semester,
+              label: `HK${semester}`,
+              active: workspaceFilters.semester_no === semester,
+              onSelect: () => setWorkspaceFilter("semester_no", semester),
+            }))}
+          />
 
           {/* Ngành */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="h-10 max-w-[14rem] gap-1.5" aria-label="Lọc theo ngành">
-                <span className="truncate">{selectedMajor ? selectedMajor.name : "Tất cả ngành"}</span>
-                <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="max-h-80 w-64 overflow-y-auto">
-              <DropdownMenuItem className="justify-between" onClick={() => setWorkspaceFilter("major_id", undefined)}>
-                Tất cả ngành
-                {workspaceFilters.major_id === undefined && <Check className="size-4" />}
-              </DropdownMenuItem>
-              {majorOptions.map((m) => (
-                <DropdownMenuItem
-                  key={m.id}
-                  className="justify-between gap-2"
-                  onClick={() => setWorkspaceFilter("major_id", m.id)}
-                >
-                  <span className="truncate">{m.name}</span>
-                  {workspaceFilters.major_id === m.id && <Check className="size-4 shrink-0" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <FilterDropdown
+            ariaLabel="Lọc theo ngành"
+            triggerLabel={
+              selectedMajor
+                ? selectedMajor.name
+                : workspaceFilters.major_id
+                  ? `Ngành #${workspaceFilters.major_id}`
+                  : "Tất cả ngành"
+            }
+            triggerClassName="max-w-[14rem]"
+            truncateTrigger
+            contentClassName="max-h-80 w-64 overflow-y-auto"
+            allLabel="Tất cả ngành"
+            allActive={workspaceFilters.major_id === undefined}
+            onSelectAll={() => setWorkspaceFilter("major_id", undefined)}
+            options={majorOptions.map((m) => ({
+              key: m.id,
+              label: m.name,
+              active: workspaceFilters.major_id === m.id,
+              onSelect: () => setWorkspaceFilter("major_id", m.id),
+            }))}
+            truncateItems
+          />
 
           {/* Trình độ */}
           {degreeOptions.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="h-10 gap-1.5" aria-label="Lọc theo trình độ">
-                  {workspaceFilters.degree_level ?? "Mọi trình độ"}
-                  <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem className="justify-between" onClick={() => setWorkspaceFilter("degree_level", undefined)}>
-                  Mọi trình độ
-                  {!workspaceFilters.degree_level && <Check className="size-4" />}
-                </DropdownMenuItem>
-                {degreeOptions.map((d) => (
-                  <DropdownMenuItem
-                    key={d}
-                    className="justify-between"
-                    onClick={() => setWorkspaceFilter("degree_level", d)}
-                  >
-                    {d}
-                    {workspaceFilters.degree_level === d && <Check className="size-4" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <FilterDropdown
+              ariaLabel="Lọc theo trình độ"
+              triggerLabel={workspaceFilters.degree_level ?? "Mọi trình độ"}
+              contentClassName="w-48"
+              allLabel="Mọi trình độ"
+              allActive={!workspaceFilters.degree_level}
+              onSelectAll={() => setWorkspaceFilter("degree_level", undefined)}
+              options={degreeOptions.map((d) => ({
+                key: d,
+                label: d,
+                active: workspaceFilters.degree_level === d,
+                onSelect: () => setWorkspaceFilter("degree_level", d),
+              }))}
+            />
           )}
+
+          {/* Tư vấn viên */}
+          <FilterDropdown
+            ariaLabel="Lọc theo tư vấn viên"
+            triggerLabel={
+              selectedOfficer
+                ? selectedOfficer.name
+                : workspaceFilters.officer_id
+                  ? `TVV #${workspaceFilters.officer_id}`
+                  : "Tất cả TVV"
+            }
+            triggerClassName="max-w-[12rem]"
+            truncateTrigger
+            contentClassName="max-h-80 w-56 overflow-y-auto"
+            allLabel="Tất cả TVV"
+            allActive={workspaceFilters.officer_id === undefined}
+            onSelectAll={() => setWorkspaceFilter("officer_id", undefined)}
+            options={officerOptions.map((officer) => ({
+              key: officer.id,
+              label: officer.name,
+              active: workspaceFilters.officer_id === officer.id,
+              onSelect: () => setWorkspaceFilter("officer_id", officer.id),
+            }))}
+            truncateItems
+          />
+
+          {/* Đơn vị */}
+          <FilterDropdown
+            ariaLabel="Lọc theo đơn vị"
+            triggerLabel={
+              selectedUnit
+                ? selectedUnit.name
+                : workspaceFilters.unit_id
+                  ? `Đơn vị #${workspaceFilters.unit_id}`
+                  : "Tất cả đơn vị"
+            }
+            triggerClassName="max-w-[13rem]"
+            truncateTrigger
+            contentClassName="max-h-80 w-64 overflow-y-auto"
+            allLabel="Tất cả đơn vị"
+            allActive={workspaceFilters.unit_id === undefined}
+            onSelectAll={() => setWorkspaceFilter("unit_id", undefined)}
+            options={unitOptions.map((unit) => ({
+              key: unit.id,
+              label: unit.name,
+              active: workspaceFilters.unit_id === unit.id,
+              onSelect: () => setWorkspaceFilter("unit_id", unit.id),
+              indentPx: unit.level * 12,
+            }))}
+            truncateItems
+          />
 
           {/* Hạn thanh toán */}
           <DropdownMenu>

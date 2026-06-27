@@ -235,6 +235,8 @@ class AdmissionChoiceService:
                 "hoặc cùng thứ tự ưu tiên."
             ) from exc
 
+        await self._resnapshot_fee_academic_info(profile)
+
         return choice, _noop_callback
 
     async def list_choices(
@@ -384,6 +386,8 @@ class AdmissionChoiceService:
             changes={"before": snapshot, "reason": reason},
         )
 
+        await self._resnapshot_fee_academic_info(profile)
+
         return ({"choice_id": choice.id, "profile_id": profile.id},
                 _noop_callback)
 
@@ -499,16 +503,32 @@ class AdmissionChoiceService:
                 path_subject_group_config_id=choice.path_subject_group_config_id,
                 scores=scores,
             )
-
-        # Expire choice's loaded scores collection so the subsequent eager
-        # re-fetch in router sees the new rows (identity-map cache safety).
-        self.db.expire(choice, attribute_names=["scores"])
+            # _snapshot_and_store_scores already expires choice.scores.
+        else:
+            # Clear-all path skips the helper, so expire here so the router's
+            # subsequent eager re-fetch sees the empty collection instead of the
+            # stale pre-bulk-delete one (identity-map cache safety).
+            self.db.expire(choice, attribute_names=["scores"])
 
         return choice, _noop_callback
 
     # ============================================================
     # Internal helpers
     # ============================================================
+
+    async def _resnapshot_fee_academic_info(
+        self, profile: AdmissionProfile
+    ) -> None:
+        """Best-effort refresh of Fee.resolved_* after NV structure changes."""
+        from app.services.fee_calculation_service import (
+            resnapshot_fee_academic_info_for_profile,
+        )
+
+        await resnapshot_fee_academic_info_for_profile(
+            self.db,
+            profile.id,
+            profile=profile,
+        )
 
     def _assert_choice_editable(
         self, profile: AdmissionProfile, *, action: str
@@ -675,3 +695,5 @@ class AdmissionChoiceService:
                 weight_snapshot=wt_snap,
                 min_possible_score_snapshot=min_snap,
             )
+
+        self.db.expire(choice, attribute_names=["scores"])

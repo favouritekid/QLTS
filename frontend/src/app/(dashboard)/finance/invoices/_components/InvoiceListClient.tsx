@@ -16,6 +16,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Receipt, Plus, ClipboardCheck } from "lucide-react"
 import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
+import { useAdminUsersList } from "@/hooks/useAdminUsers"
+import { flattenOrganizationTree, useOrganizationUnits } from "@/hooks/useOrganization"
 import type { MajorProgram } from "@/types/organization.types"
 
 import { PageContainer } from "@/components/layouts/PageContainer"
@@ -37,6 +39,10 @@ import {
 } from "@/hooks/finance/useInvoiceViewModel"
 import { useInvoicesFilter } from "@/hooks/finance/useInvoicesFilter"
 import { INVOICE_STATUS_TABS } from "@/hooks/finance/filterDefaults"
+import {
+  INVOICE_SEMESTER_OPTIONS,
+  useInvoiceAcademicYears,
+} from "@/hooks/finance/useInvoiceFilterOptions"
 
 import { AdmissionsStatusTabs } from "@/app/(dashboard)/admissions/_components/AdmissionsStatusTabs"
 import {
@@ -108,7 +114,6 @@ export function InvoiceListClient() {
         qs ? `${window.location.pathname}?${qs}` : window.location.pathname,
       )
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Density (SSR-safe; read localStorage after mount) ───────────────────
@@ -181,6 +186,37 @@ export function InvoiceListClient() {
         degree_level: m.degree_level,
       })),
     [majors],
+  )
+  const { data: academicYearOptions = [] } = useInvoiceAcademicYears()
+  // Picker for the "Tư vấn viên" filter. Intentionally NO status:'active'
+  // filter — an officer who handled invoices then got deactivated must stay
+  // selectable (their invoices still exist). Gated off the payment-queue tab
+  // (where the filter bar isn't rendered) so we don't eagerly pull ~500 user
+  // rows the user can't see.
+  const { data: officerPage } = useAdminUsersList(
+    {
+      role: "officer",
+      page_size: 500,
+    },
+    { enabled: !isPendingTab },
+  )
+  const officerOptions = useMemo(
+    () =>
+      (officerPage?.users ?? []).map((user) => ({
+        id: user.id,
+        name: user.full_name || user.username || `#${user.id}`,
+      })),
+    [officerPage],
+  )
+  const { data: unitTree = [] } = useOrganizationUnits()
+  const unitOptions = useMemo(
+    () =>
+      flattenOrganizationTree(unitTree).map(({ unit, level }) => ({
+        id: unit.id,
+        name: unit.name,
+        level,
+      })),
+    [unitTree],
   )
 
   // ── Row interactions (PR2) ──────────────────────────────────────────────
@@ -387,6 +423,10 @@ export function InvoiceListClient() {
             workspaceFilters={state.workspaceFilters}
             setWorkspaceFilter={handlers.setWorkspaceFilter}
             majorOptions={majorOptions}
+            academicYearOptions={academicYearOptions}
+            semesterOptions={INVOICE_SEMESTER_OPTIONS}
+            officerOptions={officerOptions}
+            unitOptions={unitOptions}
           />
         )}
 
