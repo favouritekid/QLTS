@@ -346,6 +346,13 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # Picker data for finance filters. The route returns UserPickerSchema
         # for non-admin roles, so accountant can load TVV dropdowns without PII.
         {"subject": "{role}", "object": "/api/admin/users", "action": "GET"},
+        # Đơn vị dropdown for the invoice filters. Officer-tier read (accountant
+        # inherits it via the g-edge), but declared DIRECTLY here too so a
+        # template re-sync (refresh_role_from_template wipes a role's runtime
+        # rows then re-adds only its template rows) keeps the defensive grant the
+        # tcf20260627002 migration seeds — otherwise the direct runtime grant
+        # would be dropped on the next sync, leaving inheritance-only.
+        {"subject": "{role}", "object": "/api/organization-units", "action": "GET"},
 
         # FEES - Read + Calculate + Waive + Recalculate (not Cancel - admin only)
         {"subject": "{role}", "object": "/api/fees", "action": "GET"},

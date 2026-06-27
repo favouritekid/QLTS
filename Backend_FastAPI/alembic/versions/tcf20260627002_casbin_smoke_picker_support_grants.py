@@ -7,14 +7,18 @@ queries while the invoice filter picker APIs are loading.
 All three grants below ALREADY exist as template policy
 (``policy_templates.py``): ``/api/notifications/preferences`` GET in
 ``BASIC_USER_TEMPLATE``; ``/api/finance/dashboard`` GET in
-``ACCOUNTANT_TEMPLATE``; ``/api/organization-units`` GET in
+``ACCOUNTANT_TEMPLATE``; ``/api/organization-units`` GET in BOTH
 ``OFFICER_TEMPLATE`` (accountant inherits it via the ``role:accountant ->
-role:officer`` g-edge). This migration only HEALS runtime drift — it re-seeds
-rows the templates guarantee but that a stale runtime policy table may be
-missing. The ``/api/organization-units`` direct accountant grant is also a
-defensive belt-and-braces for the new "Đơn vị" invoice filter dropdown, since
-runtime inheritance has drifted before (cf. ``tcf20260626001`` for
-``/api/programs`` and ``tcf20260627001`` for ``/api/admin/users``).
+role:officer`` g-edge) AND, declared directly, ``ACCOUNTANT_TEMPLATE`` (so a
+``refresh_role_from_template`` re-sync that wipes+re-adds only a role's own
+template rows keeps this direct accountant grant — without the template entry
+the re-sync would drop the runtime row seeded here). This migration only HEALS
+runtime drift — it re-seeds rows the templates guarantee but that a stale
+runtime policy table may be missing. The ``/api/organization-units`` direct
+accountant grant is defensive belt-and-braces for the new "Đơn vị" invoice
+filter dropdown, since runtime inheritance has drifted before (cf.
+``tcf20260626001`` for ``/api/programs`` and ``tcf20260627001`` for
+``/api/admin/users``).
 
 Because the grants are template-owned, ``downgrade()`` is intentionally a
 no-op: ``upgrade()`` is conditional (``WHERE NOT EXISTS``) so on a normal env

@@ -226,10 +226,15 @@ export function InvoiceFilterBar({
       onRemove: () => setWorkspaceFilter("semester_no", undefined),
     })
   }
-  if (selectedMajor) {
+  // Major/officer/unit chips all render from the RAW filter id with a #id
+  // fallback (not the options lookup) — so a selected value that drops out of
+  // its options list (archived major / deactivated officer / >500 cap /
+  // deep-linked URL) stays VISIBLE and clearable instead of silently filtering
+  // with no chip.
+  if (workspaceFilters.major_id) {
     chips.push({
       key: "major",
-      label: `Ngành: ${selectedMajor.name}`,
+      label: `Ngành: ${selectedMajor?.name ?? `#${workspaceFilters.major_id}`}`,
       onRemove: () => setWorkspaceFilter("major_id", undefined),
     })
   }
@@ -240,10 +245,6 @@ export function InvoiceFilterBar({
       onRemove: () => setWorkspaceFilter("degree_level", undefined),
     })
   }
-  // TVV/Đơn vị chips render from the RAW filter value (not the options lookup)
-  // with a #id fallback label — so a selected officer/unit that drops out of
-  // the options list (deactivated, refetch, >500 cap) stays VISIBLE and
-  // clearable instead of silently filtering with no chip.
   if (workspaceFilters.officer_id) {
     chips.push({
       key: "officer",
@@ -350,7 +351,13 @@ export function InvoiceFilterBar({
           {/* Ngành */}
           <FilterDropdown
             ariaLabel="Lọc theo ngành"
-            triggerLabel={selectedMajor ? selectedMajor.name : "Tất cả ngành"}
+            triggerLabel={
+              selectedMajor
+                ? selectedMajor.name
+                : workspaceFilters.major_id
+                  ? `Ngành #${workspaceFilters.major_id}`
+                  : "Tất cả ngành"
+            }
             triggerClassName="max-w-[14rem]"
             truncateTrigger
             contentClassName="max-h-80 w-64 overflow-y-auto"
