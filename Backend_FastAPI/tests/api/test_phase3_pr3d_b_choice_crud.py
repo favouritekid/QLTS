@@ -155,6 +155,7 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
                 "subject_id": subj.id,
                 "round_id": round_id,
                 "lead_id": lead.id,
+                "major_program_id": seed_lead_dependencies["major_program_id"],
             }
 
 
@@ -829,6 +830,115 @@ async def _insert_tuition_fee(profile_id: int, status: str = "calculated") -> in
             s.add(fee)
             await s.flush()
             return fee.id
+
+
+async def _insert_application_fee(profile_id: int) -> int:
+    """Insert a minimal application Fee row that must NOT freeze NV edits."""
+    from app.models.finance import Fee
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            fee = Fee(
+                admission_profile_id=profile_id,
+                fee_type="application",
+                academic_year=2026,
+                semester_no=None,
+                base_amount=Decimal("200000"),
+                total_discount=Decimal("0"),
+                final_amount=Decimal("200000"),
+                paid_amount=Decimal("0"),
+                waived_amount=Decimal("0"),
+                status="calculated",
+                version=1,
+            )
+            s.add(fee)
+            await s.flush()
+            return fee.id
+
+
+async def _get_fee_resolved_snapshot(fee_id: int) -> tuple[int | None, str | None]:
+    from app.models.finance import Fee
+
+    async with AsyncSessionLocal() as s:
+        fee = await s.get(Fee, fee_id)
+        assert fee is not None
+        return fee.resolved_major_id, fee.resolved_degree_level
+
+
+@pytest.mark.asyncio
+async def test_add_choice_resnapshots_existing_application_fee(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3a_seed: dict,
+):
+    """Adding the first NV refreshes existing non-tuition fee snapshots.
+
+    Application fees do not freeze NV edits, but their finance workspace row
+    still reads Fee.resolved_*; without this hook the row stays NULL until the
+    next fee operation.
+    """
+    fee_id = await _insert_application_fee(pr3a_seed["profile_id"])
+    before_major_id, before_degree = await _get_fee_resolved_snapshot(fee_id)
+    assert before_major_id is None
+    assert before_degree is None
+
+    resp = await client.post(
+        f"/api/v2/admissions/{pr3a_seed['profile_id']}/choices",
+        headers=manager_token_headers,
+        json={
+            "admission_path_id": pr3a_seed["path_id"],
+            "path_subject_group_config_id": pr3a_seed["config_id"],
+            "display_order": 1,
+            "scores": [{"subject_id": pr3a_seed["subject_id"], "score": "8.50"}],
+        },
+    )
+    assert resp.status_code == 201, resp.text[:300]
+
+    after_major_id, after_degree = await _get_fee_resolved_snapshot(fee_id)
+    assert after_major_id == pr3a_seed["major_program_id"]
+    assert after_degree is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_choice_resnapshots_application_fee_to_null(
+    client: AsyncClient,
+    manager_token_headers: dict,
+    pr3d_b_seed_with_choice: dict,
+):
+    """Deleting the last NV clears existing non-tuition fee snapshots."""
+    from app.services.fee_calculation_service import (
+        resnapshot_fee_academic_info_for_profile,
+    )
+
+    fee_id = await _insert_application_fee(pr3d_b_seed_with_choice["profile_id"])
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            profile = await s.get(
+                models.AdmissionProfile,
+                pr3d_b_seed_with_choice["profile_id"],
+            )
+            assert profile is not None
+            await resnapshot_fee_academic_info_for_profile(
+                s,
+                profile.id,
+                profile=profile,
+            )
+
+    before_major_id, before_degree = await _get_fee_resolved_snapshot(fee_id)
+    assert before_major_id == pr3d_b_seed_with_choice["major_program_id"]
+    assert before_degree is not None
+
+    resp = await client.delete(
+        f"/api/v2/admissions/{pr3d_b_seed_with_choice['profile_id']}"
+        f"/choices/{pr3d_b_seed_with_choice['choice_id']}",
+        headers=manager_token_headers,
+    )
+    assert resp.status_code == 200, resp.text[:300]
+
+    after_major_id, after_degree = await _get_fee_resolved_snapshot(fee_id)
+    assert after_major_id is None
+    assert after_degree is None
 
 
 @pytest_asyncio.fixture

@@ -281,6 +281,22 @@ async def resnapshot_fee_academic_info_for_profile(
     if profile is None:
         return 0
 
+    # Cheap existence guard FIRST: a profile with no non-cancelled fee has
+    # nothing to stamp, so skip the (multi-query) ngành resolve entirely. This
+    # is the common state while a draft is built choice-by-choice — the new
+    # add_choice/delete_choice callers fire on every NV mutation, long before
+    # any fee exists. Bỏ qua fee đã huỷ — không relabel lịch sử theo ngành.
+    fees = (
+        await db.execute(
+            select(Fee).where(
+                Fee.admission_profile_id == profile_id,
+                Fee.status != "cancelled",
+            )
+        )
+    ).scalars().all()
+    if not fees:
+        return 0
+
     resolved_ai_id: Optional[int] = None
     resolved_major_id: Optional[int] = None
     resolved_degree_level: Optional[str] = None
@@ -321,21 +337,11 @@ async def resnapshot_fee_academic_info_for_profile(
         )
         return 0
 
-    # Bỏ qua fee đã huỷ — không relabel lịch sử theo ngành admitted hiện tại.
-    fees = (
-        await db.execute(
-            select(Fee).where(
-                Fee.admission_profile_id == profile_id,
-                Fee.status != "cancelled",
-            )
-        )
-    ).scalars().all()
     for fee in fees:
         fee.resolved_academic_info_id = resolved_ai_id
         fee.resolved_major_id = resolved_major_id
         fee.resolved_degree_level = resolved_degree_level
-    if fees:
-        await db.flush()
+    await db.flush()
     return len(fees)
 
 

@@ -343,6 +343,10 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
 
+        # Picker data for finance filters. The route returns UserPickerSchema
+        # for non-admin roles, so accountant can load TVV dropdowns without PII.
+        {"subject": "{role}", "object": "/api/admin/users", "action": "GET"},
+
         # FEES - Read + Calculate + Waive + Recalculate (not Cancel - admin only)
         {"subject": "{role}", "object": "/api/fees", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/{id}", "action": "GET"},
