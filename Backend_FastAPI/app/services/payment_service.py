@@ -362,10 +362,11 @@ class PaymentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
-        # Capture cleared state BEFORE mutation (PR 5 transition detection)
-        from app.services.fee_calculation_service import is_hk1_cleared
-        was_hk1_cleared = is_hk1_cleared(
-            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        # Capture settled state BEFORE mutation (PR 5 transition detection)
+        from app.services.fee_calculation_service import is_hk1_settled
+        was_hk1_settled = is_hk1_settled(
+            fee.fee_type, fee.semester_no, fee.status,
+            fee.paid_amount, fee.final_amount, fee.waived_amount,
         )
 
         # Update payment status
@@ -396,13 +397,15 @@ class PaymentService:
 
         await self.db.flush()
 
-        # ADR-002 PR 5: Sync lead only on HK1 cleared-state transition.
-        # "Cleared" = paid OR waived OR (partial + paid_amount > 0).
-        # Only fires once: pre=not-cleared -> post=cleared.
-        now_hk1_cleared = is_hk1_cleared(
-            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+        # ADR-002 PR 5: Sync lead only on HK1 SETTLED-state transition.
+        # "Settled" = paid OR waived OR remaining<=0. A PARTIAL payment
+        # (remaining>0) is NOT settled — lead stays at sts14, not sts10.
+        # Only fires once: pre=not-settled -> post=settled.
+        now_hk1_settled = is_hk1_settled(
+            fee.fee_type, fee.semester_no, fee.status,
+            fee.paid_amount, fee.final_amount, fee.waived_amount,
         )
-        if not was_hk1_cleared and now_hk1_cleared:
+        if not was_hk1_settled and now_hk1_settled:
             profile = await self._get_profile_for_fee(fee)
             if profile:
                 from app.services.lead_admission_sync import sync_lead_tuition_paid
@@ -411,7 +414,7 @@ class PaymentService:
                     profile=profile,
                     transaction_id=payment.reference_code or f"PAY-{payment.id}",
                     changed_by_user_id=verifier_id,
-                    reason=f"HK1 tuition cleared. Payment: {payment.amount:,.0f} VND",
+                    reason=f"HK1 tuition settled. Payment: {payment.amount:,.0f} VND",
                 )
 
         log.info(
@@ -436,7 +439,7 @@ class PaymentService:
         # ADR-002 D10: Under the per-semester model, each Fee is one semester.
         # fee_remaining <= 0 means "this semester's fee is fully paid", not
         # "all tuition fully paid". The lead sync above (gated via
-        # is_hk1_cleared transition) handles the pipeline projection;
+        # is_hk1_settled transition) handles the pipeline projection;
         # this notification payload is semester-scoped by construction.
         _notify_payload = {
             "payment_id": payment.id,

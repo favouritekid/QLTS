@@ -548,15 +548,17 @@ async def sync_lead_tuition_paid(
     reason: Optional[str] = None,
 ) -> bool:
     """
-    Sync lead consultation status when HK1 tuition reaches cleared state.
+    Sync lead consultation status when HK1 tuition reaches SETTLED state.
 
     Moves lead to sts10 (Đã hoàn tất học phí).
 
-    ADR-002 PR 5: "Cleared" means paid, waived, or partial with
-    paid_amount > 0. Does NOT require full payment. Callers MUST:
+    "Settled" means paid, waived, or remaining (final - paid - waived) <= 0.
+    A PARTIAL payment is NOT settled — the lead stays at sts14 "Chưa hoàn
+    tất học phí". (This is stricter than the enrollment gate, which per
+    ADR-002 still lets a partial payment pass.) Callers MUST:
     1. Gate invocation to semester_no == 1 (HK1 only)
-    2. Fire only on the first transition into cleared state (use
-       is_hk1_cleared pre/post pattern to avoid duplicate syncs)
+    2. Fire only on the first transition into settled state (use
+       is_hk1_settled pre/post pattern to avoid duplicate syncs)
 
     Args:
         db: Database session (same transaction as caller)

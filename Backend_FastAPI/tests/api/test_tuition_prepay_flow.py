@@ -15,10 +15,11 @@ Scenarios:
    tuition at ``submitted`` → invoice **auto-issued** (status ``issued``) →
    accountant records a PARTIAL prepay (3,000,000 / 9,200,000) → manager
    verifies → invoice + fee go ``partial`` with the right ``paid_amount`` AND
-   the HK1-cleared lead sync fires (lead advances to TUITION_PAID_STATUS / sts10
-   — the ``sync_lead_tuition_paid`` projection inside ``verify_payment``) →
+   the lead STAYS at ``sts14`` (Chưa hoàn tất học phí) — a partial payment is
+   NOT settled, so ``is_hk1_settled`` keeps the lead off sts10 →
    accountant records the remaining 6,200,000 → manager verifies → invoice +
-   fee go ``paid``.
+   fee go ``paid`` AND the lead now advances to TUITION_PAID_STATUS / sts10
+   (the ``sync_lead_tuition_paid`` projection fires only on FULL settlement).
 
 2. Approve gate in the integrated flow (cross-check C1.5 end-to-end): while the
    document debt is outstanding ``approve`` is blocked (400); after the owed doc
@@ -576,18 +577,21 @@ class TestPrepayHappyPath:
         assert fee["status"] == FeeStatusEnum.partial.value, fee
         assert Decimal(str(fee["paid_amount"])) == PREPAY
 
-        # HK1 cleared-state sync fired: the lead advanced to the
-        # "đã hoàn tất học phí" projection (sts10) on the FIRST partial
-        # clearance (sync_lead_tuition_paid inside verify_payment).
-        from app.services.lead_admission_sync import TUITION_PAID_STATUS
-
-        lead = await _load_lead(lead_id)
-        assert lead.consultation_status_id == TUITION_PAID_STATUS, (
-            f"HK1 sync should advance lead to {TUITION_PAID_STATUS}, "
-            f"got {lead.consultation_status_id}"
+        # A PARTIAL prepay is NOT settled → the lead must STAY at sts14
+        # (Chưa hoàn tất học phí). It must NOT jump to sts10 — that is the
+        # bug this change fixes (is_hk1_settled requires remaining <= 0).
+        from app.services.lead_admission_sync import (
+            TUITION_CALCULATED_STATUS,
+            TUITION_PAID_STATUS,
         )
 
-        # --- Step 4: pay the remainder (6,200,000) → paid -------------------
+        lead = await _load_lead(lead_id)
+        assert lead.consultation_status_id == TUITION_CALCULATED_STATUS, (
+            f"Partial prepay must keep lead at {TUITION_CALCULATED_STATUS} "
+            f"(chưa hoàn tất), got {lead.consultation_status_id}"
+        )
+
+        # --- Step 4: pay the remainder (6,200,000) → paid + sts10 ----------
         await _record_and_verify_payment(
             client, accountant, manager, invoice_id, REMAINDER
         )
@@ -601,6 +605,13 @@ class TestPrepayHappyPath:
         fee2 = (await client.get(f"/api/fees/{fee_id}", headers=accountant)).json()
         assert fee2["status"] == FeeStatusEnum.paid.value, fee2
         assert Decimal(str(fee2["paid_amount"])) == HK1_TUITION
+
+        # Now fully settled → lead advances to sts10 (Đã hoàn tất học phí).
+        lead2 = await _load_lead(lead_id)
+        assert lead2.consultation_status_id == TUITION_PAID_STATUS, (
+            f"Full settlement should advance lead to {TUITION_PAID_STATUS}, "
+            f"got {lead2.consultation_status_id}"
+        )
 
 
 # ===========================================================================

@@ -1067,7 +1067,7 @@ async def commit_batch(
       savepoint rollback CẢ dòng (không ghi nửa vời).
     - 1 dòng lỗi không abort cả lô (savepoint per-row).
     """
-    from app.services.fee_calculation_service import is_hk1_cleared
+    from app.services.fee_calculation_service import is_hk1_settled
     from app.services.lead_admission_sync import sync_lead_tuition_paid
 
     batch = (
@@ -1213,8 +1213,9 @@ async def commit_batch(
                     raise BusinessRuleViolation(
                         "hồ sơ đã bị xóa giữa preview→commit"
                     )
-                was_hk1 = is_hk1_cleared(
-                    fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+                was_hk1 = is_hk1_settled(
+                    fee.fee_type, fee.semester_no, fee.status,
+                    fee.paid_amount, fee.final_amount, fee.waived_amount,
                 )
 
                 left = amount
@@ -1254,8 +1255,9 @@ async def commit_batch(
                     )
 
                 if not was_hk1:
-                    now_hk1 = is_hk1_cleared(
-                        fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
+                    now_hk1 = is_hk1_settled(
+                        fee.fee_type, fee.semester_no, fee.status,
+                        fee.paid_amount, fee.final_amount, fee.waived_amount,
                     )
                     if now_hk1:
                         row_cleared = (
@@ -1556,15 +1558,18 @@ async def void_batch(
     # xứng forward sync ở commit. Void = SỬA NHẦM ghi nhận (KHÔNG phải học sinh rút)
     # → lùi về status TRƯỚC sts10, KHÔNG đẩy sts18 (đó là refund thật). Bọc savepoint
     # + try/except MỖI hồ-sơ: lỗi projection KHÔNG hủy đảo tiền cả lô (tiền đã đảo giữ).
-    from app.services.fee_calculation_service import is_hk1_cleared
+    from app.services.fee_calculation_service import is_hk1_settled
     from app.services.lead_admission_sync import revert_lead_tuition_paid
 
     reverted_leads = 0
     for fee in fee_by_id.values():
         if fee.fee_type != "tuition" or fee.semester_no != 1:
             continue  # chỉ HK1 đụng pipeline lead
-        if is_hk1_cleared(fee.fee_type, fee.semester_no, fee.status, fee.paid_amount):
-            continue  # HK1 vẫn còn cleared (nguồn thu khác) → giữ lead ở sts10
+        if is_hk1_settled(
+            fee.fee_type, fee.semester_no, fee.status,
+            fee.paid_amount, fee.final_amount, fee.waived_amount,
+        ):
+            continue  # HK1 vẫn settled (nguồn thu khác) → giữ lead ở sts10
         try:
             async with db.begin_nested():
                 profile = await _load_profile_with_lead(db, fee.admission_profile_id)
