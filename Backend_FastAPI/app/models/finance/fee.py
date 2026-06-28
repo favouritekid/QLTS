@@ -362,10 +362,10 @@ class Fee(Base):
         one semester. This property means "this semester's fee is fully
         settled", not "all tuition across all semesters is paid".
 
-        Note: admission pipeline projection uses is_hk1_cleared() from
-        fee_calculation_service instead of this property, because the
-        pipeline fires on first partial payment (cleared state), not
-        only on full payment.
+        Note: admission pipeline projection uses is_hk1_settled() from
+        fee_calculation_service, which (like this property) requires the
+        semester fee to be fully settled (remaining <= 0). A partial
+        payment does NOT project the lead to sts10 — it stays at sts14.
         """
         return self.remaining_amount <= Decimal("0")
 

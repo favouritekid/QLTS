@@ -49,29 +49,57 @@ from app.utils.text_helpers import escape_like_pattern, LIKE_ESCAPE_CHAR
 log = structlog.get_logger(__name__)
 
 
-def is_hk1_cleared(
+def is_hk1_settled(
     fee_type: str,
     semester_no: Optional[int],
     status: str,
     paid_amount: Decimal,
+    final_amount: Decimal,
+    waived_amount: Decimal,
 ) -> bool:
-    """Check if a fee is in HK1 cleared state.
+    """Check if an HK1 tuition fee is fully SETTLED (for lead pipeline projection).
 
-    Cleared = tuition + semester_no=1 + one of:
+    Settled = tuition + semester_no=1 + NOT cancelled + one of:
       - status in (paid, waived)
-      - status == partial AND paid_amount > 0
+      - remaining (final - paid - waived) <= 0
 
-    Used by PR 5 (ADR-002) to detect transition into cleared state
-    at payment/waiver call sites. Callers snapshot pre-state, apply
-    mutation, then check post-state: sync only on False -> True.
+    This is the SOLE chokepoint deciding whether the lead reaches sts10
+    "Đã hoàn tất học phí". A PARTIAL payment (remaining > 0) is NOT settled —
+    the lead stays at sts14 "Chưa hoàn tất học phí". This is intentionally
+    STRICTER than the enrollment gate (_check_fee_gate_semester_hk1) which,
+    per ADR-002, still lets a partial payment pass enrollment.
+
+    The ``cancelled`` guard is required: a cancelled fee can be zeroed-out
+    (final=paid=waived=0) so ``remaining <= 0`` would be True — without the
+    guard the void-revert call site would wrongly keep the lead at sts10.
+
+    Used to detect transition into settled state at payment/waiver call sites.
+    Callers snapshot pre-state, apply mutation, then check post-state: sync
+    only on False -> True.
     """
     if fee_type != "tuition" or semester_no != 1:
         return False
+    if status == "cancelled":
+        return False
     if status in ("paid", "waived"):
         return True
-    if status == "partial" and paid_amount > 0:
-        return True
-    return False
+    return (final_amount - paid_amount - waived_amount) <= 0
+
+
+def is_hk1_settled_fee(fee) -> bool:
+    """``is_hk1_settled`` for a Fee-like object — the form call sites should use.
+
+    The pure ``is_hk1_settled`` takes three ADJACENT same-type Decimal args
+    (paid/final/waived) that are easy to transpose at a call site; a silent swap
+    re-introduces the exact bug this guard fixes (partial wrongly read as
+    settled) with NO TypeError. Every runtime call site has the ``fee`` in hand,
+    so they call THIS wrapper and the positional order lives in exactly one
+    reviewed place.
+    """
+    return is_hk1_settled(
+        fee.fee_type, fee.semester_no, fee.status,
+        fee.paid_amount, fee.final_amount, fee.waived_amount,
+    )
 
 
 def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:

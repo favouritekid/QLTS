@@ -614,11 +614,9 @@ class PaymentIntentService:
         elif invoice.paid_amount > 0:
             invoice.status = InvoiceStatusEnum.partial.value
 
-        # ADR-002 PR 5: snapshot cleared state BEFORE fee mutation
-        from app.services.fee_calculation_service import is_hk1_cleared
-        was_hk1_cleared = is_hk1_cleared(
-            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
-        )
+        # ADR-002 PR 5: snapshot settled state BEFORE fee mutation
+        from app.services.fee_calculation_service import is_hk1_settled_fee
+        was_hk1_settled = is_hk1_settled_fee(fee)
 
         # Update fee paid_amount
         fee.paid_amount = fee.paid_amount + intent.amount
@@ -662,18 +660,17 @@ class PaymentIntentService:
             )
             profile = result.scalar_one_or_none()
 
-        # ADR-002 PR 5: Sync lead only on HK1 cleared-state transition.
-        now_hk1_cleared = is_hk1_cleared(
-            fee.fee_type, fee.semester_no, fee.status, fee.paid_amount
-        )
-        if not was_hk1_cleared and now_hk1_cleared and profile is not None:
+        # ADR-002 PR 5: Sync lead only on HK1 SETTLED-state transition
+        # (remaining<=0). Partial online payment leaves lead at sts14.
+        now_hk1_settled = is_hk1_settled_fee(fee)
+        if not was_hk1_settled and now_hk1_settled and profile is not None:
             from app.services.lead_admission_sync import sync_lead_tuition_paid
             await sync_lead_tuition_paid(
                 db=self.db,
                 profile=profile,
                 transaction_id=payment.reference_code or f"PAY-{payment.id}",
                 changed_by_user_id=1,
-                reason=f"HK1 tuition cleared via online payment ({intent.method.code})",
+                reason=f"HK1 tuition settled via online payment ({intent.method.code})",
             )
 
         return payment, fee, profile

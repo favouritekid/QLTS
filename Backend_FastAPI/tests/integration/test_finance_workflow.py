@@ -1142,86 +1142,128 @@ class TestSemesterTuitionRecalculation:
 
 
 # =============================================================================
-# HK1 CLEARED-STATE PIPELINE GATE TESTS (PR 5 — ADR-002)
+# HK1 SETTLED-STATE PIPELINE GATE TESTS (PR 5 — ADR-002; partial != settled)
 # =============================================================================
 
-class TestHK1ClearedStatePipelineGate:
-    """Test that admission pipeline projections use HK1 cleared-state
-    semantics: fires once on first HK1 clearance, never for HK2+."""
+class TestHK1SettledStatePipelineGate:
+    """Admission pipeline projections use HK1 SETTLED-state semantics: the
+    lead reaches sts10 (Đã hoàn tất học phí) only when the HK1 fee is fully
+    settled (remaining <= 0). A PARTIAL payment is NOT settled — the lead
+    stays at sts14 (Chưa hoàn tất học phí). Fires once on first HK1
+    settlement, never for HK2+."""
 
     @pytest.mark.asyncio
-    async def test_is_hk1_cleared_helper(self):
-        """Unit test for the shared is_hk1_cleared helper."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+    async def test_is_hk1_settled_helper(self):
+        """Unit test for the shared is_hk1_settled helper (6-arg signature)."""
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        # Cleared states for HK1
-        assert is_hk1_cleared("tuition", 1, "paid", Decimal("10000000")) is True
-        assert is_hk1_cleared("tuition", 1, "waived", Decimal("0")) is True
-        assert is_hk1_cleared("tuition", 1, "partial", Decimal("100000")) is True
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
 
-        # Not cleared
-        assert is_hk1_cleared("tuition", 1, "partial", Decimal("0")) is False
-        assert is_hk1_cleared("tuition", 1, "pending", Decimal("0")) is False
-        assert is_hk1_cleared("tuition", 1, "calculated", Decimal("0")) is False
-        assert is_hk1_cleared("tuition", 1, "invoiced", Decimal("0")) is False
-        assert is_hk1_cleared("tuition", 1, "overdue", Decimal("0")) is False
-        assert is_hk1_cleared("tuition", 1, "cancelled", Decimal("0")) is False
+        # Settled states for HK1 (remaining <= 0)
+        assert is_hk1_settled("tuition", 1, "paid", FINAL, FINAL, Z) is True
+        assert is_hk1_settled("tuition", 1, "waived", Z, FINAL, FINAL) is True
+        # 'partial' label but fully covered (remaining <= 0) is still settled
+        assert is_hk1_settled("tuition", 1, "partial", FINAL, FINAL, Z) is True
+
+        # NOT settled — partial payment with remaining > 0. THIS IS THE FIX:
+        # the lead must stay at sts14, NOT jump to sts10.
+        PART = Decimal("3000000")
+        assert is_hk1_settled("tuition", 1, "partial", PART, FINAL, Z) is False
+        assert is_hk1_settled("tuition", 1, "pending", Z, FINAL, Z) is False
+        assert is_hk1_settled("tuition", 1, "calculated", Z, FINAL, Z) is False
+        assert is_hk1_settled("tuition", 1, "invoiced", Z, FINAL, Z) is False
+        assert is_hk1_settled("tuition", 1, "overdue", Z, FINAL, Z) is False
+
+        # Cancelled guard: a cancelled fee zeroed-out (final=paid=waived=0)
+        # would satisfy remaining<=0 — the guard MUST keep it False so the
+        # void-revert call site does not wrongly retain the lead at sts10.
+        assert is_hk1_settled("tuition", 1, "cancelled", Z, Z, Z) is False
+        assert is_hk1_settled("tuition", 1, "cancelled", FINAL, FINAL, Z) is False
 
         # Wrong semester / wrong type
-        assert is_hk1_cleared("tuition", 2, "paid", Decimal("10000000")) is False
-        assert is_hk1_cleared("tuition", 3, "paid", Decimal("10000000")) is False
-        assert is_hk1_cleared("application", 1, "paid", Decimal("10000000")) is False
-        assert is_hk1_cleared("tuition", None, "paid", Decimal("10000000")) is False
+        assert is_hk1_settled("tuition", 2, "paid", FINAL, FINAL, Z) is False
+        assert is_hk1_settled("tuition", 3, "paid", FINAL, FINAL, Z) is False
+        assert is_hk1_settled("application", 1, "paid", FINAL, FINAL, Z) is False
+        assert is_hk1_settled("tuition", None, "paid", FINAL, FINAL, Z) is False
 
     @pytest.mark.asyncio
-    async def test_hk1_first_partial_triggers_transition(self):
-        """First partial HK1 payment: False -> True transition = sync fires."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+    async def test_hk1_first_partial_does_not_trigger(self):
+        """First partial HK1 payment stays NOT settled → no False->True
+        transition → sync does NOT fire → lead stays at sts14. (Bug fix.)"""
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        was = is_hk1_cleared("tuition", 1, "calculated", Decimal("0"))
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "calculated", Z, FINAL, Z)
+        now = is_hk1_settled("tuition", 1, "partial", Decimal("3000000"), FINAL, Z)
         assert was is False
-
-        now = is_hk1_cleared("tuition", 1, "partial", Decimal("3000000"))
-        assert now is True
-        assert not was and now  # Transition detected
+        assert now is False
+        assert not (not was and now)  # No transition → sync does NOT fire
 
     @pytest.mark.asyncio
-    async def test_hk1_second_payment_no_retrigger(self):
-        """Second payment on already-cleared HK1: True -> True = no sync."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+    async def test_hk1_partial_then_full_triggers_once(self):
+        """Partial (no trigger) then payment to full → settled triggers."""
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        was = is_hk1_cleared("tuition", 1, "partial", Decimal("3000000"))
-        assert was is True
-
-        now = is_hk1_cleared("tuition", 1, "partial", Decimal("6000000"))
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "partial", Decimal("3000000"), FINAL, Z)
+        now = is_hk1_settled("tuition", 1, "paid", FINAL, FINAL, Z)
+        assert was is False
         assert now is True
-        assert not (not was and now)  # No transition
+        assert not was and now  # Transition only on FULL settlement
+
+    @pytest.mark.asyncio
+    async def test_hk1_already_settled_no_retrigger(self):
+        """Already-settled fee + a further payment stays settled: True->True =
+        NO transition → sync_lead_tuition_paid does NOT re-fire (idempotency).
+        Pins the already-settled branch so a future change that flips a settled
+        fee back to False (e.g. overpaid) can't silently re-fire the sync."""
+        from app.services.fee_calculation_service import is_hk1_settled
+
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "paid", FINAL, FINAL, Z)
+        # An overpayment keeps remaining <= 0 → still settled.
+        now = is_hk1_settled("tuition", 1, "paid", Decimal("12000000"), FINAL, Z)
+        assert was is True
+        assert now is True
+        assert not (not was and now)  # No transition → sync does NOT re-fire
 
     @pytest.mark.asyncio
     async def test_hk2_payment_never_triggers(self):
         """HK2 payment: always False, no sync regardless of state."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        assert is_hk1_cleared("tuition", 2, "paid", Decimal("10000000")) is False
-        assert is_hk1_cleared("tuition", 2, "partial", Decimal("5000000")) is False
-        assert is_hk1_cleared("tuition", 2, "waived", Decimal("0")) is False
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        assert is_hk1_settled("tuition", 2, "paid", FINAL, FINAL, Z) is False
+        assert is_hk1_settled(
+            "tuition", 2, "partial", Decimal("5000000"), FINAL, Z
+        ) is False
+        assert is_hk1_settled("tuition", 2, "waived", Z, FINAL, FINAL) is False
 
     @pytest.mark.asyncio
     async def test_hk1_waiver_triggers_transition(self):
-        """HK1 waiver: False -> True transition = sync fires."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+        """HK1 full waiver: False -> True transition = sync fires."""
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        was = is_hk1_cleared("tuition", 1, "calculated", Decimal("0"))
-        now = is_hk1_cleared("tuition", 1, "waived", Decimal("0"))
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "calculated", Z, FINAL, Z)
+        now = is_hk1_settled("tuition", 1, "waived", Z, FINAL, FINAL)
         assert not was and now
 
     @pytest.mark.asyncio
     async def test_hk1_full_payment_triggers_transition(self):
         """HK1 full payment: False -> True transition = sync fires."""
-        from app.services.fee_calculation_service import is_hk1_cleared
+        from app.services.fee_calculation_service import is_hk1_settled
 
-        was = is_hk1_cleared("tuition", 1, "invoiced", Decimal("0"))
-        now = is_hk1_cleared("tuition", 1, "paid", Decimal("10000000"))
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "invoiced", Z, FINAL, Z)
+        now = is_hk1_settled("tuition", 1, "paid", FINAL, FINAL, Z)
         assert not was and now
 
 
