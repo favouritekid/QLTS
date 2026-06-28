@@ -241,6 +241,11 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # _compute_permissions narrow the scope to the owning officer on a
         # profile in approved/confirmed/enrolled status.
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
+        # Manual tuition override — preview giá chuẩn (read-only) cho add-on
+        # "Nhập học phí thủ công" của dialog Tính phí. IDOR-scoped trong route
+        # bằng _fee_calc_authorized (cùng officer-assigned scope như calculate).
+        # Manager kế thừa officer; admin qua wildcard.
+        {"subject": "{role}", "object": "/api/fees/tuition-preview", "action": "GET"},
         # PR #7 review — CalculateFeeDialog populates the installment-plan
         # Select from /api/installment-plans so the UI reflects the real
         # seed (FULL / TWO_TERM / QUARTERLY) rather than guessing codes.
@@ -366,6 +371,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # design, so the workspace fee picker uses this finance-scoped lookup.
         {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},
         {"subject": "{role}", "object": "/api/fees/calculate", "action": "POST"},
+        # Manual tuition override — preview giá chuẩn (read-only) cho add-on
+        # "Nhập học phí thủ công"; accountant tính phí toàn hệ thống nên cũng cần.
+        {"subject": "{role}", "object": "/api/fees/tuition-preview", "action": "GET"},
         # waive / recalculate are admin/manager only (route gate RequireManager
         # excludes accountant — separation of duties). NOT granted to accountant:
         # the grant would be DEAD (route rejects before Casbin) and a foot-gun if

@@ -291,6 +291,12 @@ async def calculate_fee(
         # resolve here (no double resolve) and closing the race where the router
         # resolved discount pre-lock while the service resolved amount post-lock
         # (a concurrent waitlist-promote could have mismatched the two ngành).
+        # Manual tuition override (accountant/officer nhập học phí đặc biệt). Số
+        # gõ = BASE; service VẪN áp discount → invoice khớp final. Guard kép:
+        # schema model_validator (422) + service-side guard (400) cho direct
+        # caller. base_amount vẫn None để service tự resolve giá chuẩn (làm audit
+        # + mặc định); manual_base_amount nới riêng cho tuition. Audit log riêng
+        # do service phát (``fee_calculated_manual``) — router giữ "dumb".
         fee, post_commit = await fee_service.calculate_fee(
             admission_profile_id=data.admission_profile_id,
             fee_type=data.fee_type,
@@ -301,6 +307,8 @@ async def calculate_fee(
             user_id=current_user.id,
             unit_id=unit_id,
             semester_no=data.semester_no,
+            manual_base_amount=data.manual_base_amount,
+            manual_reason=data.manual_reason,
         )
 
         # Generate invoices based on installment plan.
@@ -400,6 +408,55 @@ async def list_calculable_profiles(
             for p in profiles
         ]
     )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/tuition-preview",
+    response_model=finance_schemas.TuitionPreviewResponse,
+    summary="Preview giá chuẩn học phí (cho add-on nhập học phí thủ công)",
+)
+async def preview_tuition(
+    request: Request,
+    admission_profile_id: int = Query(..., gt=0, description="ID hồ sơ tuyển sinh"),
+    # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
+    # int32-guard codebase đã áp ở các route khác). HK thực tế ≤ 12.
+    semester_no: int = Query(1, ge=1, le=12, description="Số học kỳ (HK1=1)"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Giá chuẩn học phí (base / giảm giá / dự kiến phải thu) cho dialog "Tính
+    phí" khi bật toggle nhập học phí thủ công. Read-only, KHÔNG ghi DB.
+
+    Auth giống ``POST /api/fees/calculate``: ``_get_profile`` unscoped rồi
+    ``_fee_calc_authorized`` → 404 nếu ngoài scope (không leak existence). Khai
+    báo literal ``/tuition-preview`` TRƯỚC ``/{fee_id}`` để route match đúng (một
+    segment đặt sau ``/{fee_id}`` sẽ bị nuốt thành ``fee_id`` → 422). Cùng quy
+    ước với ``/calculable-profiles``.
+    """
+    fee_service = FeeCalculationService(db)
+
+    try:
+        profile = await fee_service._get_profile(admission_profile_id, unit_id=None)
+        if not profile or not _fee_calc_authorized(profile, current_user):
+            # 404 not 403: no existence leak beyond scope (same as calculate_fee).
+            raise ResourceNotFoundError("Admission profile not found")
+
+        base_amount, total_discount, final_amount = await fee_service.preview_tuition(
+            profile, semester_no
+        )
+        return finance_schemas.TuitionPreviewResponse(
+            base_amount=base_amount,
+            total_discount=total_discount,
+            final_amount=final_amount,
+            semester_no=semester_no,
+        )
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 # ==============================================================================

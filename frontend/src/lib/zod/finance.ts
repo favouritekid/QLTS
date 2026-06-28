@@ -563,15 +563,52 @@ export type PaymentPaginatedResponse = z.infer<typeof paymentPaginatedResponseSc
 // REQUEST SCHEMAS (for API calls - match backend request schemas)
 // ==============================================================================
 
-export const feeCalculateRequestSchema = z.object({
-  admission_profile_id: z.number().int().positive("Vui lòng chọn hồ sơ"),
-  fee_type: feeTypeSchema.optional(),
-  installment_plan_code: z.string().optional(), // defaults to "FULL"
-  // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
-  // contract (defaults to 1 when omitted for tuition; must be null/unset
-  // for non-tuition types).
-  semester_no: z.number().int().positive().nullable().optional(),
-})
+export const feeCalculateRequestSchema = z
+  .object({
+    admission_profile_id: z.number().int().positive("Vui lòng chọn hồ sơ"),
+    fee_type: feeTypeSchema.optional(),
+    installment_plan_code: z.string().optional(), // defaults to "FULL"
+    // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
+    // contract (defaults to 1 when omitted for tuition; must be null/unset
+    // for non-tuition types).
+    semester_no: z.number().int().positive().nullable().optional(),
+    // Manual tuition override — số nhập tay là BASE (Decimal as string). Backend
+    // vẫn áp discount → invoice khớp final. Mirror backend model_validator dưới.
+    manual_base_amount: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, "Mức học phí không hợp lệ")
+      .nullable()
+      .optional(),
+    manual_reason: z
+      .string()
+      .max(500, "Lý do không được quá 500 ký tự")
+      .nullable()
+      .optional(),
+  })
+  // Mirror backend FeeCalculateRequest.validate_manual_tuition: nhập tay ⟹
+  // fee_type=tuition + reason ≥10; có reason mà thiếu số ⟹ reject.
+  .refine(
+    (d) =>
+      d.manual_base_amount == null ||
+      (d.fee_type ?? "tuition") === "tuition",
+    {
+      message: "Nhập học phí thủ công chỉ áp dụng cho học phí",
+      path: ["manual_base_amount"],
+    }
+  )
+  .refine(
+    (d) =>
+      d.manual_base_amount == null ||
+      (!!d.manual_reason && d.manual_reason.trim().length >= 10),
+    {
+      message: "Cần lý do nhập học phí thủ công (tối thiểu 10 ký tự)",
+      path: ["manual_reason"],
+    }
+  )
+  .refine((d) => !d.manual_reason || d.manual_base_amount != null, {
+    message: "Có lý do nhập tay nhưng thiếu mức học phí",
+    path: ["manual_base_amount"],
+  })
 
 export type FeeCalculateRequest = z.infer<typeof feeCalculateRequestSchema>
 

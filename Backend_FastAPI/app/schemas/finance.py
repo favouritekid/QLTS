@@ -261,11 +261,55 @@ class FeeCalculateRequest(BaseModel):
         None, ge=1,
         description="Số học kỳ (HK1=1). Mặc định 1 cho tuition, None cho non-tuition."
     )
+    # Manual tuition override (accountant/officer nhập học phí đặc biệt — học
+    # bổng / chuyển trường / theo quyết định riêng). Số gõ là BASE (TRƯỚC giảm
+    # giá): service vẫn áp discount hiện hành → final = manual − total_discount,
+    # invoice khớp final (≠ số gõ nếu có giảm). CHỈ áp dụng cho fee_type=tuition.
+    # None = luồng cũ (lấy giá chuẩn từ offering_semester_tuition).
+    manual_base_amount: Optional[Decimal] = Field(None, gt=0, le=MAX_AMOUNT)
+    manual_reason: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("manual_reason")
+    @classmethod
+    def strip_manual_reason(cls, v: Optional[str]) -> Optional[str]:
+        # CHỈ strip — KHÔNG escape ở đây. Độ dài ≥10 phải đo trên chuỗi GỐC:
+        # ``html.escape`` chỉ làm DÀI thêm ('<'→'&lt;') nên reason rác vài ký tự
+        # đặc biệt ('<<<<' → 16 ký tự) sẽ lọt cửa ≥10, làm rỗng kiểm soát audit.
+        # Escape lùi xuống ``validate_manual_tuition`` SAU khi đã check độ dài raw.
+        if v is None:
+            return v
+        return v.strip()
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
         if self.fee_type == FeeTypeEnum.tuition and self.semester_no is None:
             self.semester_no = 1
+        return self
+
+    @model_validator(mode="after")
+    def validate_manual_tuition(self):
+        """Manual override invariant (HTTP layer → 422 on violation).
+
+        Mirror lớp guard service-side (``calculate_fee``) — defense-in-depth cho
+        tiền lõi: schema bắt caller HTTP, service guard bắt direct/test caller.
+        Độ dài reason đo trên chuỗi RAW (đã strip, CHƯA escape); chỉ escape SAU
+        khi hợp lệ để lưu/audit an toàn.
+        """
+        if self.manual_base_amount is not None:
+            if self.fee_type != FeeTypeEnum.tuition:
+                raise ValueError(
+                    "Nhập học phí thủ công chỉ áp dụng cho loại phí học phí (tuition)."
+                )
+            if not self.manual_reason or len(self.manual_reason) < 10:
+                raise ValueError(
+                    "Cần nhập lý do nhập học phí thủ công (tối thiểu 10 ký tự)."
+                )
+            # Độ dài đã đo trên RAW → giờ mới escape để lưu vào Fee.notes an toàn.
+            self.manual_reason = html.escape(self.manual_reason)
+        elif self.manual_reason:
+            raise ValueError(
+                "Có lý do nhập tay nhưng thiếu mức học phí thủ công."
+            )
         return self
 
     model_config = ConfigDict(from_attributes=True)
@@ -967,6 +1011,21 @@ class CalculableProfilesResponse(BaseModel):
     Finance-scoped so accountant — denied /api/admissions by design — can still
     pick a profile to calculate a fee for."""
     profiles: List[CalculableProfileItem]
+
+
+class TuitionPreviewResponse(BaseModel):
+    """Giá chuẩn học phí (read-only) cho add-on "Nhập học phí thủ công" của dialog
+    Tính phí (GET /api/fees/tuition-preview).
+
+    Trả về 3 con số để dialog hiển khi accountant/officer bật toggle nhập tay:
+    so sánh số gõ với giá chuẩn (``base_amount``), thấy giảm giá hiện hành
+    (``total_discount``) và dự kiến phải thu (``final_amount`` = base − discount).
+    KHÔNG persist gì — chỉ tái dùng resolver giá + discount như ``calculate_fee``.
+    """
+    base_amount: Decimal
+    total_discount: Decimal
+    final_amount: Decimal
+    semester_no: int
 
 
 class ProfileCollectionIdentity(BaseModel):

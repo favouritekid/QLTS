@@ -571,6 +571,20 @@ export interface FeeCalculateRequest {
   // PR #7 — semester number for tuition fees. Defaults to 1 (HK1) on the
   // backend when omitted; must stay null/undefined for non-tuition types.
   semester_no?: number | null
+  // Manual tuition override — số nhập tay là BASE (TRƯỚC giảm giá), Decimal as
+  // string. Backend vẫn áp discount hiện hành → invoice khớp final (≠ số gõ nếu
+  // có giảm). CHỈ hợp lệ khi fee_type === "tuition" + manual_reason ≥10 ký tự
+  // (mirror backend model_validator). Bỏ cả hai khi không nhập tay (luồng cũ).
+  manual_base_amount?: string | null
+  manual_reason?: string | null
+}
+
+/** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */
+export interface TuitionPreviewResponse {
+  base_amount: string
+  total_discount: string
+  final_amount: string
+  semester_no: number
 }
 
 export interface FeeWaiveRequest {

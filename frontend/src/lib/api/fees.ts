@@ -16,6 +16,7 @@ import type {
   FeeWaiveRequest,
   ProfileFinanceSummary,
   ProfileCollection,
+  TuitionPreviewResponse,
 } from "@/types/finance.types"
 
 // ============================================================================
@@ -139,6 +140,25 @@ export async function listCalculableProfiles(
   return response.data
 }
 
+/**
+ * Giá chuẩn học phí (read-only) cho add-on "Nhập học phí thủ công" của dialog
+ * Tính phí. Trả base / giảm giá hiện hành / dự kiến phải thu cho HK đã chọn.
+ *
+ * @param profileId - admission profile ID
+ * @param semesterNo - số học kỳ (HK1=1)
+ * @throws {AxiosError} 404 nếu hồ sơ ngoài scope; 400 nếu ngành chưa xác định
+ */
+export async function getTuitionPreview(
+  profileId: number,
+  semesterNo: number
+): Promise<TuitionPreviewResponse> {
+  const response = await api.get<TuitionPreviewResponse>(
+    API_ENDPOINTS.FINANCE.FEES.TUITION_PREVIEW,
+    { params: { admission_profile_id: profileId, semester_no: semesterNo } }
+  )
+  return response.data
+}
+
 // ============================================================================
 // FEE ACTIONS
 // ============================================================================
@@ -232,6 +252,7 @@ export const feesApi = {
   getProfileFinanceSummary,
   getProfileCollection,
   listCalculableProfiles,
+  getTuitionPreview,
   // Actions
   calculateFee,
   waiveFee,
