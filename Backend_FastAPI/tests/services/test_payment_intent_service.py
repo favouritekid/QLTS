@@ -168,6 +168,27 @@ class TestCreateIntent:
         assert intent.pay_url is not None
         assert intent.expires_at is not None
 
+    async def test_create_intent_blocked_when_fee_cancelled(
+        self, db, intent_fixtures, admin_user
+    ):
+        """Race guard: a cancelled fee cannot get a NEW intent (which would let
+        the gateway collect money the callback must later refuse). Invoice is
+        still 'issued' (payable) here — only the fee is cancelled."""
+        service = PaymentIntentService(db)
+        intent_fixtures["fee"].status = FeeStatusEnum.cancelled.value
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.create_intent(
+                invoice_id=intent_fixtures["invoice"].id,
+                method_id=intent_fixtures["online_method"].id,
+                amount=Decimal("1000000"),
+                idempotency_key=str(uuid.uuid4()),
+                return_url=VALID_RETURN_URL,
+                unit_id=intent_fixtures["unit_id"],
+            )
+        assert "đã bị huỷ" in str(exc.value)
+
     async def test_create_intent_rejects_foreign_return_url(
         self, db, intent_fixtures, admin_user
     ):

@@ -362,6 +362,19 @@ class PaymentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
+        # Defense-in-depth: the fee/invoice may have been cancelled (cancel_fee)
+        # AFTER this pending payment was recorded but BEFORE verification. Refuse
+        # to write money onto a cancelled target — the pending payment is left
+        # for rejection. cancel_fee blocks while a pending payment exists, so
+        # this only fires for the narrow record-during-cancel race window.
+        if (
+            fee.status == FeeStatusEnum.cancelled.value
+            or invoice.status == InvoiceStatusEnum.cancelled.value
+        ):
+            raise BusinessRuleViolation(
+                "Không thể xác minh thanh toán: khoản phí/hoá đơn đã bị huỷ."
+            )
+
         # Capture settled state BEFORE mutation (PR 5 transition detection)
         from app.services.fee_calculation_service import is_hk1_settled_fee
         was_hk1_settled = is_hk1_settled_fee(fee)

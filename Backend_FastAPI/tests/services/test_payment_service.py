@@ -270,6 +270,39 @@ class TestVerifyPayment:
         assert pf["fee"].paid_amount == Decimal("1000000")
         assert pf["fee"].status == FeeStatusEnum.paid.value
 
+    async def test_verify_payment_blocked_when_fee_cancelled(
+        self, db, payment_fixtures
+    ):
+        """Race guard: fee/invoice cancelled AFTER a pending payment was
+        recorded → verify refuses (never write money onto a cancelled target)."""
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        payment, _ = await service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("500000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Simulate cancel landing AFTER the pending payment (race window).
+        pf["fee"].status = FeeStatusEnum.cancelled.value
+        pf["invoice"].status = InvoiceStatusEnum.cancelled.value
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.verify_payment(
+                payment_id=payment.id,
+                verifier_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "đã bị huỷ" in str(exc.value)
+
+        await db.refresh(pf["fee"])
+        assert pf["fee"].paid_amount == Decimal("0")
+
     async def test_verify_payment_self_blocked(self, db, payment_fixtures):
         """C3: Maker cannot verify their own payment."""
         service = PaymentService(db)
