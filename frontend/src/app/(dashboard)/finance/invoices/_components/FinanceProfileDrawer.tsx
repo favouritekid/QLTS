@@ -24,7 +24,6 @@
 import * as React from "react"
 import Link from "next/link"
 import {
-  Receipt,
   Plus,
   CreditCard,
   FileText,
@@ -203,9 +202,7 @@ export function FinanceProfileDrawer({
           ) : data ? (
             <div className="space-y-6">
               <DrawerSummary collection={data} onAction={onAction} />
-              <FeeSection collection={data} onAction={onAction} profileId={profileId} />
-              <InvoiceSection collection={data} onAction={onAction} />
-              <PaymentSection collection={data} onAction={onAction} />
+              <FeeTree collection={data} onAction={onAction} profileId={profileId} />
             </div>
           ) : null}
         </div>
@@ -378,7 +375,7 @@ function SectionHeader({
   )
 }
 
-function FeeSection({
+function FeeTree({
   collection,
   onAction,
   profileId,
@@ -388,6 +385,32 @@ function FeeSection({
   profileId: number | null
 }) {
   const fees = collection.summary.fees
+  // Build the hierarchy client-side from the link keys already on each row:
+  // fee → its invoices (invoice.fee_id) → their payments (payment.invoice_id).
+  // The nesting itself shows the money flow, so rows no longer need "thuộc khoản
+  // phí / cho HĐ …" cross-reference labels.
+  const invoicesByFee = React.useMemo(() => {
+    const m = new Map<number, InvoiceListItem[]>()
+    for (const inv of collection.invoices) {
+      const arr = m.get(inv.fee_id)
+      if (arr) arr.push(inv)
+      else m.set(inv.fee_id, [inv])
+    }
+    return m
+  }, [collection.invoices])
+  const paymentsByInvoice = React.useMemo(() => {
+    const m = new Map<number, PaymentListItem[]>()
+    for (const p of collection.payments) {
+      const arr = m.get(p.invoice_id)
+      if (arr) arr.push(p)
+      else m.set(p.invoice_id, [p])
+    }
+    return m
+  }, [collection.payments])
+
+  const payerName = collection.identity.student_name ?? undefined
+  const referenceHint = collection.identity.profile_code
+
   return (
     <section>
       <SectionHeader
@@ -400,13 +423,17 @@ function FeeSection({
           Chưa có khoản phí nào. Dùng “Tính phí” để tạo.
         </p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-2.5">
           {fees.map((fee) => (
-            <FeeRow
+            <FeeGroup
               key={fee.id}
               fee={fee}
+              invoices={invoicesByFee.get(fee.id) ?? []}
+              paymentsByInvoice={paymentsByInvoice}
               onAction={onAction}
               profileId={profileId}
+              payerName={payerName}
+              referenceHint={referenceHint}
             />
           ))}
         </ul>
@@ -415,18 +442,30 @@ function FeeSection({
   )
 }
 
-function FeeRow({
+/**
+ * FeeGroup — cấp 1 của cây: một khoản phí, với các hóa đơn của nó lồng bên trong
+ * (mỗi hóa đơn lại lồng các lần thanh toán). Nesting = mạch "phí → hóa đơn →
+ * thanh toán" hiện rõ bằng phân cấp card-trong-card.
+ */
+function FeeGroup({
   fee,
+  invoices,
+  paymentsByInvoice,
   onAction,
   profileId,
+  payerName,
+  referenceHint,
 }: {
   fee: FeeSummary
+  invoices: InvoiceListItem[]
+  paymentsByInvoice: Map<number, PaymentListItem[]>
   onAction: (d: WorkspaceDialog) => void
   profileId: number | null
+  payerName?: string
+  referenceHint?: string
 }) {
   // Backend-owned (role + status + amount, matches each action's route gate) —
-  // do NOT re-derive on the client (thin-client; avoids showing a button the
-  // route would reject). Tính lại needs base_amount to prefill its dialog.
+  // do NOT re-derive on the client. Tính lại needs base_amount to prefill.
   const canWaive = fee.can_waive ?? false
   const canRecalculate = (fee.can_recalculate ?? false) && fee.base_amount != null
   const canCancel = fee.can_cancel ?? false
@@ -434,156 +473,142 @@ function FeeRow({
   const typeLabel = FEE_TYPE_LABELS[fee.fee_type as FeeType] ?? fee.fee_type
   const semester = fee.semester_no ? ` · HK${fee.semester_no}` : ""
   return (
-    <li className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">
-          {typeLabel}
-          <span className="text-muted-foreground">{semester}</span>
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-          {formatVND(fee.final_amount)} · còn {formatVND(fee.remaining_amount)}
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <FeeStatusBadge status={fee.status} size="sm" />
-        {/* "Chi tiết" = đào sâu (lịch sử / audit / breakdown) — icon-only để gọn,
-            không phải nơi DUY NHẤT để thao tác. Carries `?from=profile` so "Quay
-            lại" reopens THIS drawer (see lib/finance/nav-context). */}
-        {profileId != null && (
-          <Button
-            asChild
-            size="icon"
-            variant="ghost"
-            className="size-8 text-muted-foreground"
-            title="Mở chi tiết khoản phí"
-            aria-label="Mở chi tiết khoản phí"
-          >
-            <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
-              <ArrowUpRight className="size-4" aria-hidden="true" />
-            </Link>
-          </Button>
-        )}
-        {/* Fee-level actions in ONE overflow menu at the OUTERMOST edge (vertical
-            3-dots, matching the system's row/card action convention) so 80% of
-            the work happens in the drawer — each item role-gated by a BE flag,
-            raised through the shared dialog host. */}
-        {hasMenu && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-8"
-                aria-label={`Thao tác cho khoản ${typeLabel}`}
-              >
-                <MoreVertical className="size-4" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {canWaive && (
-                <DropdownMenuItem
-                  onClick={() =>
-                    onAction({
-                      type: "waive",
-                      feeId: fee.id,
-                      maxAmount: fee.remaining_amount,
-                      maxAmountFormatted: formatVND(fee.remaining_amount),
-                    })
-                  }
+    <li className="overflow-hidden rounded-xl border border-border bg-card">
+      {/* Khoản phí (cấp 1) */}
+      <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">
+            {typeLabel}
+            <span className="font-normal text-muted-foreground">{semester}</span>
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+            {formatVND(fee.final_amount)} · còn {formatVND(fee.remaining_amount)}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <FeeStatusBadge status={fee.status} size="sm" />
+          {/* "Chi tiết" = đào sâu (lịch sử / audit / breakdown) — icon-only. Carries
+              `?from=profile` so "Quay lại" reopens THIS drawer (nav-context). */}
+          {profileId != null && (
+            <Button
+              asChild
+              size="icon"
+              variant="ghost"
+              className="size-8 text-muted-foreground"
+              title="Mở chi tiết khoản phí"
+              aria-label="Mở chi tiết khoản phí"
+            >
+              <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
+                <ArrowUpRight className="size-4" aria-hidden="true" />
+              </Link>
+            </Button>
+          )}
+          {/* Fee-level actions in ONE overflow menu at the OUTERMOST edge (vertical
+              3-dots, system convention) — each item role-gated by a BE flag. */}
+          {hasMenu && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  aria-label={`Thao tác cho khoản ${typeLabel}`}
                 >
-                  <Percent className="size-4" aria-hidden="true" />
-                  Miễn giảm
-                </DropdownMenuItem>
-              )}
-              {canRecalculate && (
-                <DropdownMenuItem
-                  onClick={() =>
-                    onAction({
-                      type: "recalculate",
-                      feeId: fee.id,
-                      feeType: typeLabel,
-                      currentBaseAmount: fee.base_amount as string,
-                      currentBaseAmountFormatted: formatVND(fee.base_amount as string),
-                    })
-                  }
-                >
-                  <RefreshCw className="size-4" aria-hidden="true" />
-                  Tính lại
-                </DropdownMenuItem>
-              )}
-              {canCancel && (
-                <>
-                  <DropdownMenuSeparator />
+                  <MoreVertical className="size-4" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {canWaive && (
                   <DropdownMenuItem
-                    className="text-destructive focus:text-destructive"
                     onClick={() =>
                       onAction({
-                        type: "cancel-fee",
+                        type: "waive",
                         feeId: fee.id,
-                        feeType: typeLabel,
+                        maxAmount: fee.remaining_amount,
+                        maxAmountFormatted: formatVND(fee.remaining_amount),
                       })
                     }
                   >
-                    <Ban className="size-4" aria-hidden="true" />
-                    Hủy khoản phí
+                    <Percent className="size-4" aria-hidden="true" />
+                    Miễn giảm
                   </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+                )}
+                {canRecalculate && (
+                  <DropdownMenuItem
+                    onClick={() =>
+                      onAction({
+                        type: "recalculate",
+                        feeId: fee.id,
+                        feeType: typeLabel,
+                        currentBaseAmount: fee.base_amount as string,
+                        currentBaseAmountFormatted: formatVND(fee.base_amount as string),
+                      })
+                    }
+                  >
+                    <RefreshCw className="size-4" aria-hidden="true" />
+                    Tính lại
+                  </DropdownMenuItem>
+                )}
+                {canCancel && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() =>
+                        onAction({
+                          type: "cancel-fee",
+                          feeId: fee.id,
+                          feeType: typeLabel,
+                        })
+                      }
+                    >
+                      <Ban className="size-4" aria-hidden="true" />
+                      Hủy khoản phí
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
       </div>
+
+      {/* Hóa đơn của khoản phí (cấp 2) */}
+      {invoices.length > 0 ? (
+        <div className="space-y-2 border-t border-border/60 bg-muted/20 px-3 py-2.5">
+          {invoices.map((inv) => (
+            <InvoiceNode
+              key={inv.id}
+              invoice={inv}
+              payments={paymentsByInvoice.get(inv.id) ?? []}
+              onAction={onAction}
+              payerName={payerName}
+              referenceHint={referenceHint}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
+          Chưa có hóa đơn cho khoản phí này.
+        </p>
+      )}
     </li>
   )
 }
 
 // =============================================================================
-// HÓA ĐƠN SECTION
+// HÓA ĐƠN NODE (cấp 2) — lồng dưới khoản phí, chứa các lần thanh toán (cấp 3)
 // =============================================================================
 
-function InvoiceSection({
-  collection,
-  onAction,
-}: {
-  collection: ProfileCollection
-  onAction: (d: WorkspaceDialog) => void
-}) {
-  const invoices = collection.invoices
-  return (
-    <section>
-      <SectionHeader
-        icon={<Receipt className="size-4" />}
-        title="Hóa đơn"
-        count={invoices.length}
-      />
-      {invoices.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
-          Chưa có hóa đơn nào.
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {invoices.map((inv) => (
-            <InvoiceRow
-              key={inv.id}
-              invoice={inv}
-              onAction={onAction}
-              payerName={collection.identity.student_name ?? undefined}
-              referenceHint={collection.identity.profile_code}
-            />
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-function InvoiceRow({
+function InvoiceNode({
   invoice,
+  payments,
   onAction,
   payerName,
   referenceHint,
 }: {
   invoice: InvoiceListItem
+  payments: PaymentListItem[]
   onAction: (d: WorkspaceDialog) => void
   payerName?: string
   referenceHint?: string
@@ -594,27 +619,18 @@ function InvoiceRow({
     invoice.can_issue || invoice.can_cancel || invoice.can_apply_penalty
   // QR only makes sense once the invoice can actually receive money.
   const canQr = invoice.can_record_payment
-  // Which fee this invoice bills (BE-owned fee_type + semester) — makes the
-  // money-flow spine legible: invoice → its fee, no nesting needed.
-  const feeLabel = invoice.fee_type
-    ? `${FEE_TYPE_LABELS[invoice.fee_type as FeeType] ?? invoice.fee_type}${
-        invoice.semester_no ? ` · HK${invoice.semester_no}` : ""
-      }`
-    : null
+  // Fee reference dropped here: the invoice is nested under its fee already.
 
   return (
-    <li
+    <div
       className={cn(
-        "rounded-xl border bg-card px-3 py-2.5",
-        invoice.is_overdue ? "border-l-2 border-l-error-500 border-border" : "border-border",
+        "rounded-lg border bg-card",
+        invoice.is_overdue ? "border-l-2 border-l-error-500 border-border" : "border-border/70",
       )}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{invoice.invoice_number}</p>
-          {feeLabel ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{feeLabel}</p>
-          ) : null}
           <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
             Còn {remainingFormatted}
             {overdueDays > 0 && (
@@ -630,7 +646,8 @@ function InvoiceRow({
         />
       </div>
 
-      <div className="mt-2 flex items-center justify-end gap-1.5">
+      {(invoice.can_record_payment || hasMenu || canQr) && (
+      <div className="flex items-center justify-end gap-1.5 px-3 pb-2">
         {invoice.can_record_payment && (
           <Button
             size="sm"
@@ -732,52 +749,17 @@ function InvoiceRow({
           </DropdownMenu>
         )}
       </div>
-    </li>
-  )
-}
-
-// =============================================================================
-// THANH TOÁN SECTION
-// =============================================================================
-
-function PaymentSection({
-  collection,
-  onAction,
-}: {
-  collection: ProfileCollection
-  onAction: (d: WorkspaceDialog) => void
-}) {
-  const payments = collection.payments
-  // Map invoice_id → số HĐ (từ danh sách hóa đơn đã tải) để mỗi thanh toán nêu
-  // rõ trả cho hóa đơn nào — khép mạch hóa đơn → thanh toán, không cần BE thêm.
-  const invoiceNumberById = React.useMemo(
-    () => new Map(collection.invoices.map((inv) => [inv.id, inv.invoice_number])),
-    [collection.invoices],
-  )
-  return (
-    <section>
-      <SectionHeader
-        icon={<CreditCard className="size-4" />}
-        title="Thanh toán"
-        count={payments.length}
-      />
-      {payments.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
-          Chưa có giao dịch thanh toán nào.
-        </p>
-      ) : (
-        <ul className="space-y-2">
-          {payments.map((p) => (
-            <PaymentRow
-              key={p.id}
-              payment={p}
-              onAction={onAction}
-              invoiceNumber={invoiceNumberById.get(p.invoice_id) ?? null}
-            />
-          ))}
-        </ul>
       )}
-    </section>
+
+      {/* Thanh toán của hóa đơn (cấp 3) */}
+      {payments.length > 0 && (
+        <div className="space-y-1.5 border-t border-border/50 bg-muted/30 px-3 py-2">
+          {payments.map((p) => (
+            <PaymentLeaf key={p.id} payment={p} onAction={onAction} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -787,14 +769,12 @@ const PAYMENT_SOURCE_LABEL: Record<string, string> = {
   manual: "Thu tay",
 }
 
-function PaymentRow({
+function PaymentLeaf({
   payment,
   onAction,
-  invoiceNumber,
 }: {
   payment: PaymentListItem
   onAction: (d: WorkspaceDialog) => void
-  invoiceNumber?: string | null
 }) {
   const reviewTarget = {
     id: payment.id,
@@ -815,23 +795,18 @@ function PaymentRow({
     payment.verified_by_name ? `Duyệt: ${payment.verified_by_name}` : null,
   ].filter(Boolean)
   return (
-    <li className="rounded-xl border border-border bg-card px-3 py-2.5">
-      <div className="flex items-start justify-between gap-3">
+    <div className="rounded-md border border-border/50 bg-card px-2.5 py-1.5">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium tabular-nums">
+          <p className="truncate text-xs font-semibold tabular-nums">
             {formatVND(payment.amount)}
           </p>
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
             {payment.reference_code || `#${payment.id}`}
             {payment.payer_name ? ` · ${payment.payer_name}` : ""}
           </p>
-          {invoiceNumber ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              cho HĐ {invoiceNumber}
-            </p>
-          ) : null}
           {detailParts.length > 0 ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
               {detailParts.join(" · ")}
             </p>
           ) : null}
@@ -845,14 +820,14 @@ function PaymentRow({
       </div>
 
       {isPending && payment.is_own && (
-        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground" role="note">
+        <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground" role="note">
           <Clock className="size-3.5 shrink-0" aria-hidden="true" />
           Khoản bạn tạo — cần người khác duyệt
         </p>
       )}
 
       {(payment.can_verify || payment.can_reject) && (
-        <div className="mt-2 flex justify-end gap-1.5">
+        <div className="mt-1.5 flex justify-end gap-1.5">
           {payment.can_verify && (
             <Button
               size="sm"
@@ -876,7 +851,7 @@ function PaymentRow({
           )}
         </div>
       )}
-    </li>
+    </div>
   )
 }
 
