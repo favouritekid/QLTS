@@ -47,5 +47,9 @@ export function resolveFinanceReturn(from: string | null | undefined): {
  * dialog (which strips the `?action=` param) does NOT lose the return context.
  */
 export function withFrom(path: string, from: string | null | undefined): string {
-  return from ? `${path}?from=${encodeURIComponent(from)}` : path
+  if (!from) return path
+  // Use `&` if the path already carries a query string so we never emit a
+  // malformed double-`?` (which would fold `from` into the previous param).
+  const sep = path.includes("?") ? "&" : "?"
+  return `${path}${sep}from=${encodeURIComponent(from)}`
 }

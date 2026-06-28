@@ -64,7 +64,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { formatVND } from "@/lib/zod/finance"
 import { formatDate } from "@/lib/utils/admission-helpers"
-import { profileFrom } from "@/lib/finance/nav-context"
+import { profileFrom, withFrom } from "@/lib/finance/nav-context"
 import { CopyableCell } from "@/components/common/CopyableCell"
 
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
@@ -353,25 +353,14 @@ function DrawerSummary({
 // PHÍ SECTION
 // =============================================================================
 
-function SectionHeader({
-  icon,
-  title,
-  count,
-}: {
-  icon: React.ReactNode
-  title: string
-  count: number
-}) {
+/** Shared 3-dot overflow-menu trigger (vertical, the system row/card convention). */
+function OverflowMenuTrigger({ label }: { label: string }) {
   return (
-    <div className="mb-2 flex items-center gap-2">
-      <span className="text-muted-foreground" aria-hidden="true">
-        {icon}
-      </span>
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs tabular-nums text-muted-foreground">
-        {count}
-      </span>
-    </div>
+    <DropdownMenuTrigger asChild>
+      <Button size="icon" variant="ghost" className="size-8" aria-label={label}>
+        <MoreVertical className="size-4" aria-hidden="true" />
+      </Button>
+    </DropdownMenuTrigger>
   )
 }
 
@@ -408,35 +397,98 @@ function FeeTree({
     return m
   }, [collection.payments])
 
+  // Surface the most urgent fee first — overdue, then still-owing, then settled
+  // (stable sort keeps the backend order within each bucket). Restores the
+  // actionable-first signal the old flat invoice list carried.
+  const orderedFees = React.useMemo(() => {
+    const rank = (fee: FeeSummary) => {
+      const invs = invoicesByFee.get(fee.id) ?? []
+      if (invs.some((i) => i.is_overdue)) return 0
+      if (Number(fee.remaining_amount) > 0) return 1
+      return 2
+    }
+    return [...fees].sort((a, b) => rank(a) - rank(b))
+  }, [fees, invoicesByFee])
+
+  // Defensive: anything the backend sent that doesn't fit the fee→invoice→payment
+  // tree (impossible by today's collection contract, but a future overpayment /
+  // unallocated row could) is shown in a "Khác" bucket, never silently dropped.
+  const feeIds = React.useMemo(() => new Set(fees.map((f) => f.id)), [fees])
+  const invoiceIds = React.useMemo(
+    () => new Set(collection.invoices.map((i) => i.id)),
+    [collection.invoices],
+  )
+  const orphanInvoices = collection.invoices.filter((i) => !feeIds.has(i.fee_id))
+  const orphanPayments = collection.payments.filter((p) => !invoiceIds.has(p.invoice_id))
+
   const payerName = collection.identity.student_name ?? undefined
   const referenceHint = collection.identity.profile_code
 
   return (
     <section>
-      <SectionHeader
-        icon={<CircleDollarSign className="size-4" />}
-        title="Khoản phí"
-        count={fees.length}
-      />
+      <div className="mb-2 flex items-center gap-2">
+        <CircleDollarSign className="size-4 text-muted-foreground" aria-hidden="true" />
+        <h3 className="text-sm font-semibold">Khoản phí</h3>
+        <span className="rounded-full bg-muted px-1.5 py-0.5 text-2xs tabular-nums text-muted-foreground">
+          {fees.length}
+        </span>
+      </div>
+
       {fees.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
           Chưa có khoản phí nào. Dùng “Tính phí” để tạo.
         </p>
       ) : (
-        <ul className="space-y-2.5">
-          {fees.map((fee) => (
-            <FeeGroup
-              key={fee.id}
-              fee={fee}
-              invoices={invoicesByFee.get(fee.id) ?? []}
-              paymentsByInvoice={paymentsByInvoice}
-              onAction={onAction}
-              profileId={profileId}
-              payerName={payerName}
-              referenceHint={referenceHint}
-            />
-          ))}
-        </ul>
+        <>
+          {/* At-a-glance totals (restored — lost when the 3 section headers
+              collapsed into one). */}
+          <p className="-mt-1 mb-2 text-xs text-muted-foreground tabular-nums">
+            {collection.invoices.length} hóa đơn · {collection.payments.length} thanh toán
+          </p>
+          <ul className="space-y-2.5">
+            {orderedFees.map((fee) => (
+              <FeeGroup
+                key={fee.id}
+                fee={fee}
+                invoices={invoicesByFee.get(fee.id) ?? []}
+                paymentsByInvoice={paymentsByInvoice}
+                onAction={onAction}
+                profileId={profileId}
+                payerName={payerName}
+                referenceHint={referenceHint}
+              />
+            ))}
+          </ul>
+        </>
+      )}
+
+      {(orphanInvoices.length > 0 || orphanPayments.length > 0) && (
+        <div className="mt-3 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-2.5">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">
+            Khác (chưa gắn khoản phí)
+          </p>
+          {orphanInvoices.length > 0 && (
+            <ul className="space-y-2">
+              {orphanInvoices.map((inv) => (
+                <InvoiceNode
+                  key={inv.id}
+                  invoice={inv}
+                  payments={paymentsByInvoice.get(inv.id) ?? []}
+                  onAction={onAction}
+                  payerName={payerName}
+                  referenceHint={referenceHint}
+                />
+              ))}
+            </ul>
+          )}
+          {orphanPayments.length > 0 && (
+            <ul className="mt-2 space-y-1.5">
+              {orphanPayments.map((p) => (
+                <PaymentLeaf key={p.id} payment={p} onAction={onAction} />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   )
@@ -466,8 +518,10 @@ function FeeGroup({
 }) {
   // Backend-owned (role + status + amount, matches each action's route gate) —
   // do NOT re-derive on the client. Tính lại needs base_amount to prefill.
+  // Trust the backend capability flags (thin-client); base_amount only prefills
+  // the Tính lại dialog and degrades to 0 if ever absent.
   const canWaive = fee.can_waive ?? false
-  const canRecalculate = (fee.can_recalculate ?? false) && fee.base_amount != null
+  const canRecalculate = fee.can_recalculate ?? false
   const canCancel = fee.can_cancel ?? false
   const hasMenu = canWaive || canRecalculate || canCancel
   const typeLabel = FEE_TYPE_LABELS[fee.fee_type as FeeType] ?? fee.fee_type
@@ -498,7 +552,7 @@ function FeeGroup({
               title="Mở chi tiết khoản phí"
               aria-label="Mở chi tiết khoản phí"
             >
-              <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
+              <Link href={withFrom(`/finance/fees/${fee.id}`, profileFrom(profileId))}>
                 <ArrowUpRight className="size-4" aria-hidden="true" />
               </Link>
             </Button>
@@ -507,16 +561,7 @@ function FeeGroup({
               3-dots, system convention) — each item role-gated by a BE flag. */}
           {hasMenu && (
             <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-8"
-                  aria-label={`Thao tác cho khoản ${typeLabel}`}
-                >
-                  <MoreVertical className="size-4" aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
+              <OverflowMenuTrigger label={`Thao tác cho khoản ${typeLabel}`} />
               <DropdownMenuContent align="end">
                 {canWaive && (
                   <DropdownMenuItem
@@ -540,8 +585,8 @@ function FeeGroup({
                         type: "recalculate",
                         feeId: fee.id,
                         feeType: typeLabel,
-                        currentBaseAmount: fee.base_amount as string,
-                        currentBaseAmountFormatted: formatVND(fee.base_amount as string),
+                        currentBaseAmount: fee.base_amount ?? "0",
+                        currentBaseAmountFormatted: formatVND(fee.base_amount ?? "0"),
                       })
                     }
                   >
@@ -575,7 +620,7 @@ function FeeGroup({
 
       {/* Hóa đơn của khoản phí (cấp 2) */}
       {invoices.length > 0 ? (
-        <div className="space-y-2 border-t border-border/60 bg-muted/20 px-3 py-2.5">
+        <ul className="space-y-2 border-t border-border/60 bg-muted/20 px-3 py-2.5">
           {invoices.map((inv) => (
             <InvoiceNode
               key={inv.id}
@@ -586,7 +631,7 @@ function FeeGroup({
               referenceHint={referenceHint}
             />
           ))}
-        </div>
+        </ul>
       ) : (
         <p className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
           Chưa có hóa đơn cho khoản phí này.
@@ -622,7 +667,7 @@ function InvoiceNode({
   // Fee reference dropped here: the invoice is nested under its fee already.
 
   return (
-    <div
+    <li
       className={cn(
         "rounded-lg border bg-card",
         invoice.is_overdue ? "border-l-2 border-l-error-500 border-border" : "border-border/70",
@@ -646,7 +691,7 @@ function InvoiceNode({
         />
       </div>
 
-      {(invoice.can_record_payment || hasMenu || canQr) && (
+      {(invoice.can_record_payment || hasMenu) && (
       <div className="flex items-center justify-end gap-1.5 px-3 pb-2">
         {invoice.can_record_payment && (
           <Button
@@ -670,16 +715,7 @@ function InvoiceNode({
         )}
         {(hasMenu || canQr) && (
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-8"
-                aria-label={`Thao tác cho hóa đơn ${invoice.invoice_number}`}
-              >
-                <MoreVertical className="size-4" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
+            <OverflowMenuTrigger label={`Thao tác cho hóa đơn ${invoice.invoice_number}`} />
             <DropdownMenuContent align="end">
               {canQr && (
                 <DropdownMenuItem
@@ -752,14 +788,18 @@ function InvoiceNode({
       )}
 
       {/* Thanh toán của hóa đơn (cấp 3) */}
-      {payments.length > 0 && (
-        <div className="space-y-1.5 border-t border-border/50 px-3 py-2">
+      {payments.length > 0 ? (
+        <ul className="space-y-1.5 border-t border-border/50 px-3 py-2">
           {payments.map((p) => (
             <PaymentLeaf key={p.id} payment={p} onAction={onAction} />
           ))}
-        </div>
-      )}
-    </div>
+        </ul>
+      ) : invoice.can_record_payment ? (
+        <p className="border-t border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+          Chưa có lần thu nào.
+        </p>
+      ) : null}
+    </li>
   )
 }
 
@@ -795,7 +835,7 @@ function PaymentLeaf({
     payment.verified_by_name ? `Duyệt: ${payment.verified_by_name}` : null,
   ].filter(Boolean)
   return (
-    <div className="rounded-md bg-muted/40 px-2.5 py-1.5">
+    <li className="rounded-md bg-muted/40 px-2.5 py-1.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold tabular-nums">
@@ -851,7 +891,7 @@ function PaymentLeaf({
           )}
         </div>
       )}
-    </div>
+    </li>
   )
 }
 
