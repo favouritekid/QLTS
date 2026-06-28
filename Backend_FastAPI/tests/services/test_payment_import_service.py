@@ -1666,6 +1666,72 @@ class TestVoidBatch:
         )
         assert len(hist) >= 1
 
+    async def test_void_partial_combo_reverts_lead_off_sts10(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Combo manual + import: void lô import để lại remaining>0 → LÙI lead.
+
+        Khoá hành vi MỚI (is_hk1_settled, partial != settled): một fee HK1
+        được tất toán bởi CẢ một khoản thu tay (4tr) LẪN một lô import (6tr)
+        → settled → forward sync đẩy lead sts10. Void RIÊNG lô import (6tr)
+        để fee còn remaining 6tr (khoản tay giữ lại) → KHÔNG còn settled →
+        void_batch fall-through → revert lead KHỎI sts10.
+
+        Trước đây is_hk1_cleared coi (partial + paid>0) = cleared nên `continue`
+        GIỮ lead ở sts10 dù còn nợ — nay đã sửa cho đúng contract.
+        """
+        sts10 = await self._seed_sts10(db)
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+
+        cccd = "001999888777"
+        # Fee 10tr, invoice đã có khoản thu TAY 4tr (partial); fee.paid khớp.
+        prof, fee, _invs = await _seed_tuition(
+            db, seeded_dependencies, citizen_id=cccd,
+            invoices=[(1, "10000000", "partial", "4000000", "0")],
+        )
+        fee.paid_amount = Decimal("4000000")
+        fee.status = "partial"
+        await db.flush()
+        lead_id = prof.lead_id
+        orig = seeded_dependencies["initial_status_id"]
+        await db.commit()
+
+        # Import lô thu nốt 6tr → fee settled (remaining 0) → forward sync sts10.
+        content = _csv_bytes(
+            [pis.TEMPLATE_COLS, [cccd, "Nguyễn Văn An", "6.000.000",
+                                 "05/09/2026", "TM", "", ""]]
+        )
+        batch, _ = await pis.preview_import(
+            db, content=content, filename="thu.csv",
+            academic_year=2026, semester_no=1,
+            created_by_id=admin_user.id, unit_id=None,
+        )
+        batch_id = batch.id
+        await db.commit()
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        lead = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead.consultation_status_id == sts10  # tiền đề: settled → sts10
+
+        # Void RIÊNG lô import → fee còn remaining 6tr (khoản tay) → revert.
+        await pis.void_batch(
+            db, batch_id=batch_id, user_id=admin_user.id, unit_id=None,
+            reason="ghi nhầm lô import",
+        )
+        await db.commit()
+        lead2 = (
+            await db.execute(select(models.Lead).where(models.Lead.id == lead_id))
+        ).scalar_one()
+        assert lead2.consultation_status_id == orig, (
+            "fee còn remaining sau void → partial != settled → lead phải LÙI "
+            f"khỏi sts10, got {lead2.consultation_status_id}"
+        )
+
     async def test_void_skips_lead_revert_when_advanced_past_sts10(
         self, db, seeded_dependencies, admin_user
     ):
