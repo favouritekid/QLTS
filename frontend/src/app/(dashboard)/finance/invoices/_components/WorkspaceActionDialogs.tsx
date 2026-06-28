@@ -44,6 +44,8 @@ import { InvoiceIssueDialog } from "../[invoiceId]/_components/InvoiceIssueDialo
 import { InvoiceCancelDialog } from "../[invoiceId]/_components/InvoiceCancelDialog"
 import { InvoicePenaltyDialog } from "../[invoiceId]/_components/InvoicePenaltyDialog"
 import { FeeWaiveDialog } from "../../fees/[feeId]/_components/FeeWaiveDialog"
+import { FeeRecalculateDialog } from "../../fees/[feeId]/_components/FeeRecalculateDialog"
+import { FeeCancelDialog } from "../../fees/[feeId]/_components/FeeCancelDialog"
 import { CalculateFeeDialog } from "@/components/admissions/CalculateFeeDialog"
 
 // =============================================================================
@@ -79,6 +81,14 @@ export type WorkspaceDialog =
       daysOverdue: number
     }
   | { type: "waive"; feeId: number; maxAmount: string; maxAmountFormatted: string }
+  | {
+      type: "recalculate"
+      feeId: number
+      feeType: string
+      currentBaseAmount: string
+      currentBaseAmountFormatted: string
+    }
+  | { type: "cancel-fee"; feeId: number; feeType: string }
   | { type: "verify"; payment: PaymentReviewTarget }
   | { type: "reject"; payment: PaymentReviewTarget }
   | { type: "qr"; invoiceId: number; invoiceNumber: string }
@@ -151,6 +161,26 @@ export function WorkspaceActionDialogs({ dialog, onClose, onCalculated }: Worksp
           feeId={dialog.feeId}
           maxAmount={dialog.maxAmount}
           maxAmountFormatted={dialog.maxAmountFormatted}
+        />
+      )}
+
+      {dialog?.type === "recalculate" && (
+        <FeeRecalculateDialog
+          open
+          onOpenChange={handleOpenChange}
+          feeId={dialog.feeId}
+          feeType={dialog.feeType}
+          currentBaseAmount={dialog.currentBaseAmount}
+          currentBaseAmountFormatted={dialog.currentBaseAmountFormatted}
+        />
+      )}
+
+      {dialog?.type === "cancel-fee" && (
+        <FeeCancelDialog
+          open
+          onOpenChange={handleOpenChange}
+          feeId={dialog.feeId}
+          feeType={dialog.feeType}
         />
       )}
 

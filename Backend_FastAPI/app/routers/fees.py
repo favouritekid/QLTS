@@ -641,9 +641,14 @@ async def get_profile_collection(
                 paid_amount=f.paid_amount,
                 remaining_amount=f.remaining_amount,
                 status=f.status,
-                # Role-aware (route gate): drawer shows "Miễn giảm" only when the
-                # waive route would accept it — never a button that 400/403s.
+                # Role-aware (route gate): drawer shows each fee action only when
+                # the matching route would accept it — never a button that
+                # 400/403s. Same single-source helpers as the detail FeeResponse.
                 can_waive=_fee_can_waive(f, current_user.role),
+                can_recalculate=_fee_can_recalculate(f, current_user.role),
+                can_cancel=_fee_can_cancel(f, current_user.role),
+                # base_amount prefills the drawer's "Tính lại" dialog.
+                base_amount=f.base_amount,
             )
             for f in fees
         ],
@@ -929,6 +934,33 @@ def _fee_can_waive(fee, current_user_role: str = None) -> bool:
     return not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
 
 
+def _fee_can_recalculate(fee, current_user_role: str = None) -> bool:
+    """Role-aware recalculate capability — SINGLE source for the detail
+    ``FeeResponse`` and the collection drawer's ``FeeSummaryResponse``.
+
+    Mirrors the recalculate route gate (``RequireManager`` → admin/manager):
+    not terminal AND paid == 0 AND role in [admin, manager]. paid == 0 because
+    recomputing the base after money has come in would desync the ledger.
+    """
+    status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
+    is_terminal = status_value in _FEE_TERMINAL_STATUSES
+    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    return not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
+
+
+def _fee_can_cancel(fee, current_user_role: str = None) -> bool:
+    """Role-aware cancel capability — SINGLE source for the detail
+    ``FeeResponse`` and the collection drawer's ``FeeSummaryResponse``.
+
+    Mirrors the cancel route gate (``RequireAdmin`` → admin only — stricter than
+    waive/recalculate by design): not terminal AND paid == 0 AND role == admin.
+    """
+    status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
+    is_terminal = status_value in _FEE_TERMINAL_STATUSES
+    is_admin = current_user_role == UserRole.ADMIN
+    return not is_terminal and fee.paid_amount == 0 and is_admin
+
+
 def _build_fee_response(
     fee, first_due_date=None, current_user_role: str = None
 ) -> finance_schemas.FeeResponse:
@@ -960,18 +992,12 @@ def _build_fee_response(
             )
         )
 
-    # P1: Compute permission flags based on status, amounts, AND role.
-    # can_waive shares _fee_can_waive with the collection drawer (single source).
-    # can_cancel is admin-only (RequireAdmin); can_recalculate is manager+ — both
-    # kept aligned with their route gate (thin-client: no button the route 403s).
-    status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
-    is_terminal = status_value in _FEE_TERMINAL_STATUSES
-    is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
-    is_admin = current_user_role == UserRole.ADMIN
-
+    # P1: Compute permission flags based on status, amounts, AND role — all three
+    # share their helper with the collection drawer (single source). Each mirrors
+    # its route gate (thin-client: no button the route 403s).
     can_waive = _fee_can_waive(fee, current_user_role)
-    can_cancel = not is_terminal and fee.paid_amount == 0 and is_admin
-    can_recalculate = not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
+    can_cancel = _fee_can_cancel(fee, current_user_role)
+    can_recalculate = _fee_can_recalculate(fee, current_user_role)
 
     return finance_schemas.FeeResponse(
         id=fee.id,

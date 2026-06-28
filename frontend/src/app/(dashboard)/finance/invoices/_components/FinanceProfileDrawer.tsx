@@ -37,6 +37,8 @@ import {
   CircleDollarSign,
   Clock,
   ArrowUpRight,
+  Percent,
+  RefreshCw,
 } from "lucide-react"
 
 import {
@@ -381,10 +383,13 @@ function FeeRow({
   onAction: (d: WorkspaceDialog) => void
   profileId: number | null
 }) {
-  // Backend-owned (role + status + amount, matches the waive route gate) — do
-  // NOT re-derive on the client (thin-client; avoids showing a button the route
-  // would reject).
+  // Backend-owned (role + status + amount, matches each action's route gate) —
+  // do NOT re-derive on the client (thin-client; avoids showing a button the
+  // route would reject). Tính lại needs base_amount to prefill its dialog.
   const canWaive = fee.can_waive ?? false
+  const canRecalculate = (fee.can_recalculate ?? false) && fee.base_amount != null
+  const canCancel = fee.can_cancel ?? false
+  const hasMenu = canWaive || canRecalculate || canCancel
   const typeLabel = FEE_TYPE_LABELS[fee.fee_type as FeeType] ?? fee.fee_type
   const semester = fee.semester_no ? ` · HK${fee.semester_no}` : ""
   return (
@@ -398,29 +403,79 @@ function FeeRow({
           {formatVND(fee.final_amount)} · còn {formatVND(fee.remaining_amount)}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1.5">
         <FeeStatusBadge status={fee.status} size="sm" />
-        {canWaive && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 px-2 text-xs"
-            onClick={() =>
-              onAction({
-                type: "waive",
-                feeId: fee.id,
-                maxAmount: fee.remaining_amount,
-                maxAmountFormatted: formatVND(fee.remaining_amount),
-              })
-            }
-          >
-            Miễn giảm
-          </Button>
+        {/* Fee-level actions live in ONE overflow menu (mirrors InvoiceRow) so
+            80% of the work happens in the drawer without leaving — each item is
+            role-gated by a BE flag and raised through the shared dialog host. */}
+        {hasMenu && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label={`Thao tác cho khoản ${typeLabel}`}
+              >
+                <MoreHorizontal className="size-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {canWaive && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    onAction({
+                      type: "waive",
+                      feeId: fee.id,
+                      maxAmount: fee.remaining_amount,
+                      maxAmountFormatted: formatVND(fee.remaining_amount),
+                    })
+                  }
+                >
+                  <Percent className="size-4" aria-hidden="true" />
+                  Miễn giảm
+                </DropdownMenuItem>
+              )}
+              {canRecalculate && (
+                <DropdownMenuItem
+                  onClick={() =>
+                    onAction({
+                      type: "recalculate",
+                      feeId: fee.id,
+                      feeType: typeLabel,
+                      currentBaseAmount: fee.base_amount as string,
+                      currentBaseAmountFormatted: formatVND(fee.base_amount as string),
+                    })
+                  }
+                >
+                  <RefreshCw className="size-4" aria-hidden="true" />
+                  Tính lại
+                </DropdownMenuItem>
+              )}
+              {canCancel && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() =>
+                      onAction({
+                        type: "cancel-fee",
+                        feeId: fee.id,
+                        feeType: typeLabel,
+                      })
+                    }
+                  >
+                    <Ban className="size-4" aria-hidden="true" />
+                    Hủy khoản phí
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
-        {/* Reachability: a fee with no invoice yet can't be reached via invoice
-            detail — link to the fee page (recalc / huỷ khoản phí live there,
-            role-gated). Carries `?from=profile` so "Quay lại" reopens THIS
-            drawer (see lib/finance/nav-context). */}
+        {/* "Chi tiết" = đào sâu (lịch sử / audit / breakdown), không phải nơi
+            DUY NHẤT để thao tác. Carries `?from=profile` so "Quay lại" reopens
+            THIS drawer (see lib/finance/nav-context). */}
         {profileId != null && (
           <Button
             asChild

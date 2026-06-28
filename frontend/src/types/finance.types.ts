@@ -135,10 +135,15 @@ export interface FeeSummary {
   paid_amount: string
   remaining_amount: string
   status: FeeStatus
-  // Role-aware waive capability (backend-owned, matches the RequireManager
-  // route gate). Optional: only the collection drawer populates it; other
-  // FeeSummary sources leave it falsy → no waive button (safe default).
+  // Role-aware capability flags (backend-owned, each mirrors its route gate).
+  // Optional: only the collection drawer populates them; other FeeSummary
+  // sources leave them falsy → no action button (safe default).
   can_waive?: boolean
+  can_recalculate?: boolean
+  can_cancel?: boolean
+  // Current base amount — only the drawer sets it (prefills the "Tính lại"
+  // dialog). Absent elsewhere (no recalculate button there).
+  base_amount?: string
 }
 
 export interface FeeDetail extends Fee {
