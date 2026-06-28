@@ -28,7 +28,7 @@ import {
   Plus,
   CreditCard,
   FileText,
-  MoreHorizontal,
+  MoreVertical,
   QrCode,
   Ban,
   AlertTriangle,
@@ -39,6 +39,10 @@ import {
   ArrowUpRight,
   Percent,
   RefreshCw,
+  User,
+  Phone,
+  MapPin,
+  Fingerprint,
 } from "lucide-react"
 
 import {
@@ -62,6 +66,7 @@ import { cn } from "@/lib/utils"
 import { formatVND } from "@/lib/zod/finance"
 import { formatDate } from "@/lib/utils/admission-helpers"
 import { profileFrom } from "@/lib/finance/nav-context"
+import { CopyableCell } from "@/components/common/CopyableCell"
 
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import {
@@ -222,17 +227,53 @@ function DrawerIdentity({ collection }: { collection: ProfileCollection }) {
     .filter(Boolean)
     .join(" · ")
   return (
-    <div className="flex items-center gap-3 pr-10">
-      <Monogram name={name} className="size-10" />
-      <div className="min-w-0">
+    <div className="flex items-start gap-3 pr-10">
+      <Monogram name={name} className="size-10 shrink-0" />
+      <div className="min-w-0 space-y-1">
         <SheetTitle className="truncate text-base">{name}</SheetTitle>
-        <SheetDescription className="truncate">
-          {sub || "Hồ sơ tài chính"}
-          {identity.officer_name ? ` · TVV ${identity.officer_name}` : ""}
-        </SheetDescription>
-        {identity.citizen_id_masked ? (
-          <p className="truncate text-xs text-muted-foreground">
-            CCCD: {identity.citizen_id_masked}
+        <SheetDescription className="truncate">{sub || "Hồ sơ tài chính"}</SheetDescription>
+
+        {/* Tư vấn viên phụ trách — tên trần, không nhãn "TVV". */}
+        {identity.officer_name ? (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <User className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{identity.officer_name}</span>
+          </p>
+        ) : null}
+
+        {/* CCCD (hiển thị che, copy đầy đủ) + SĐT (copy) — click-to-copy. */}
+        {(identity.citizen_id_full || identity.citizen_id_masked || identity.phone) ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            {identity.citizen_id_full ? (
+              <CopyableCell
+                value={identity.citizen_id_full}
+                displayValue={identity.citizen_id_masked ?? identity.citizen_id_full}
+                label="CCCD"
+                className="text-muted-foreground"
+                icon={<Fingerprint className="size-3.5 text-muted-foreground" aria-hidden="true" />}
+              />
+            ) : identity.citizen_id_masked ? (
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                <Fingerprint className="size-3.5" aria-hidden="true" />
+                {identity.citizen_id_masked}
+              </span>
+            ) : null}
+            {identity.phone ? (
+              <CopyableCell
+                value={identity.phone}
+                label="Số điện thoại"
+                className="text-muted-foreground"
+                icon={<Phone className="size-3.5 text-muted-foreground" aria-hidden="true" />}
+              />
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Địa chỉ thường trú (BE ghép 1 dòng). */}
+        {identity.permanent_address ? (
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+            <MapPin className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            <span className="line-clamp-2">{identity.permanent_address}</span>
           </p>
         ) : null}
       </div>
@@ -403,11 +444,29 @@ function FeeRow({
           {formatVND(fee.final_amount)} · còn {formatVND(fee.remaining_amount)}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1">
         <FeeStatusBadge status={fee.status} size="sm" />
-        {/* Fee-level actions live in ONE overflow menu (mirrors InvoiceRow) so
-            80% of the work happens in the drawer without leaving — each item is
-            role-gated by a BE flag and raised through the shared dialog host. */}
+        {/* "Chi tiết" = đào sâu (lịch sử / audit / breakdown) — icon-only để gọn,
+            không phải nơi DUY NHẤT để thao tác. Carries `?from=profile` so "Quay
+            lại" reopens THIS drawer (see lib/finance/nav-context). */}
+        {profileId != null && (
+          <Button
+            asChild
+            size="icon"
+            variant="ghost"
+            className="size-8 text-muted-foreground"
+            title="Mở chi tiết khoản phí"
+            aria-label="Mở chi tiết khoản phí"
+          >
+            <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
+              <ArrowUpRight className="size-4" aria-hidden="true" />
+            </Link>
+          </Button>
+        )}
+        {/* Fee-level actions in ONE overflow menu at the OUTERMOST edge (vertical
+            3-dots, matching the system's row/card action convention) so 80% of
+            the work happens in the drawer — each item role-gated by a BE flag,
+            raised through the shared dialog host. */}
         {hasMenu && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -417,7 +476,7 @@ function FeeRow({
                 className="size-8"
                 aria-label={`Thao tác cho khoản ${typeLabel}`}
               >
-                <MoreHorizontal className="size-4" aria-hidden="true" />
+                <MoreVertical className="size-4" aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -472,23 +531,6 @@ function FeeRow({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-        )}
-        {/* "Chi tiết" = đào sâu (lịch sử / audit / breakdown), không phải nơi
-            DUY NHẤT để thao tác. Carries `?from=profile` so "Quay lại" reopens
-            THIS drawer (see lib/finance/nav-context). */}
-        {profileId != null && (
-          <Button
-            asChild
-            size="sm"
-            variant="ghost"
-            className="h-8 px-2 text-xs"
-            title="Chi tiết khoản phí"
-          >
-            <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
-              Chi tiết
-              <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
-            </Link>
-          </Button>
         )}
       </div>
     </li>
@@ -552,6 +594,13 @@ function InvoiceRow({
     invoice.can_issue || invoice.can_cancel || invoice.can_apply_penalty
   // QR only makes sense once the invoice can actually receive money.
   const canQr = invoice.can_record_payment
+  // Which fee this invoice bills (BE-owned fee_type + semester) — makes the
+  // money-flow spine legible: invoice → its fee, no nesting needed.
+  const feeLabel = invoice.fee_type
+    ? `${FEE_TYPE_LABELS[invoice.fee_type as FeeType] ?? invoice.fee_type}${
+        invoice.semester_no ? ` · HK${invoice.semester_no}` : ""
+      }`
+    : null
 
   return (
     <li
@@ -563,6 +612,9 @@ function InvoiceRow({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{invoice.invoice_number}</p>
+          {feeLabel ? (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{feeLabel}</p>
+          ) : null}
           <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
             Còn {remainingFormatted}
             {overdueDays > 0 && (
@@ -608,7 +660,7 @@ function InvoiceRow({
                 className="size-8"
                 aria-label={`Thao tác cho hóa đơn ${invoice.invoice_number}`}
               >
-                <MoreHorizontal className="size-4" aria-hidden="true" />
+                <MoreVertical className="size-4" aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -696,6 +748,12 @@ function PaymentSection({
   onAction: (d: WorkspaceDialog) => void
 }) {
   const payments = collection.payments
+  // Map invoice_id → số HĐ (từ danh sách hóa đơn đã tải) để mỗi thanh toán nêu
+  // rõ trả cho hóa đơn nào — khép mạch hóa đơn → thanh toán, không cần BE thêm.
+  const invoiceNumberById = React.useMemo(
+    () => new Map(collection.invoices.map((inv) => [inv.id, inv.invoice_number])),
+    [collection.invoices],
+  )
   return (
     <section>
       <SectionHeader
@@ -710,7 +768,12 @@ function PaymentSection({
       ) : (
         <ul className="space-y-2">
           {payments.map((p) => (
-            <PaymentRow key={p.id} payment={p} onAction={onAction} />
+            <PaymentRow
+              key={p.id}
+              payment={p}
+              onAction={onAction}
+              invoiceNumber={invoiceNumberById.get(p.invoice_id) ?? null}
+            />
           ))}
         </ul>
       )}
@@ -727,9 +790,11 @@ const PAYMENT_SOURCE_LABEL: Record<string, string> = {
 function PaymentRow({
   payment,
   onAction,
+  invoiceNumber,
 }: {
   payment: PaymentListItem
   onAction: (d: WorkspaceDialog) => void
+  invoiceNumber?: string | null
 }) {
   const reviewTarget = {
     id: payment.id,
@@ -760,6 +825,11 @@ function PaymentRow({
             {payment.reference_code || `#${payment.id}`}
             {payment.payer_name ? ` · ${payment.payer_name}` : ""}
           </p>
+          {invoiceNumber ? (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              cho HĐ {invoiceNumber}
+            </p>
+          ) : null}
           {detailParts.length > 0 ? (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               {detailParts.join(" · ")}

@@ -603,10 +603,13 @@ async def get_profile_collection(
         profile_code=format_profile_code(profile.id),
         student_name=lead.full_name if lead else None,
         citizen_id_masked=mask_citizen_id(getattr(profile, "citizen_id", None)),
+        # Full CCCD for the drawer's copy button only (display stays masked).
+        citizen_id_full=getattr(profile, "citizen_id", None),
         program_name=_resolved_major.name if _resolved_major else None,
         degree_level=_resolved_degree,
         officer_name=officer.full_name if officer else None,
         phone=lead.phone if lead else None,
+        permanent_address=_format_permanent_address(profile),
     )
     all_invoices = []
     all_payments = []
@@ -959,6 +962,25 @@ def _fee_can_cancel(fee, current_user_role: str = None) -> bool:
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_admin = current_user_role == UserRole.ADMIN
     return not is_terminal and fee.paid_amount == 0 and is_admin
+
+
+def _format_permanent_address(profile) -> Optional[str]:
+    """Join the profile's stored permanent-address parts into ONE readable line
+    (số nhà/đường → tổ/thôn → xã/phường → quận/huyện → tỉnh) for the drawer.
+
+    Displays the stored free-text as-is — no GSO re-resolve (that legacy
+    ward-jump handling belongs to the admissions display, out of scope here).
+    Returns None when nothing is filled.
+    """
+    parts = [
+        getattr(profile, "permanent_street_address", None),
+        getattr(profile, "permanent_residential_group", None),
+        getattr(profile, "permanent_ward", None),
+        getattr(profile, "permanent_district", None),
+        getattr(profile, "permanent_province", None),
+    ]
+    cleaned = [p.strip() for p in parts if p and p.strip()]
+    return ", ".join(cleaned) or None
 
 
 def _build_fee_response(

@@ -484,12 +484,17 @@ export interface ProfileCollectionIdentity {
   profile_id: number
   profile_code: string
   student_name: string | null
-  // CCCD đã che giữa (PII-safe). Ngành/trình độ từ snapshot Fee.resolved_*.
+  // CCCD đã che giữa (PII-safe, dùng để HIỂN THỊ). Ngành/trình độ từ snapshot
+  // Fee.resolved_*.
   citizen_id_masked: string | null
+  // CCCD đầy đủ — CHỈ cho nút copy (vai trò tài chính đã xem được hồ sơ đầy đủ).
+  citizen_id_full: string | null
   program_name: string | null
   degree_level: string | null
   officer_name: string | null
   phone: string | null
+  // Địa chỉ thường trú đã ghép 1 dòng (BE-owned). Null khi chưa có.
+  permanent_address: string | null
 }
 
 export interface ProfileCollection {

@@ -980,11 +980,17 @@ class ProfileCollectionIdentity(BaseModel):
     profile_id: int
     profile_code: str                      # "HS-000131"
     student_name: Optional[str] = None
-    citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (PII-safe)
+    citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (display, PII-safe)
+    # CCCD đầy đủ — CHỈ để nút copy của drawer (vai trò tài chính đã xem được hồ
+    # sơ đầy đủ). Hiển thị vẫn dùng bản che ``citizen_id_masked``.
+    citizen_id_full: Optional[str] = None
     program_name: Optional[str] = None     # ngành (snapshot Fee.resolved_major)
     degree_level: Optional[str] = None     # trình độ (snapshot, TEXT name)
-    officer_name: Optional[str] = None     # TVV phụ trách
+    officer_name: Optional[str] = None     # tư vấn viên phụ trách
     phone: Optional[str] = None            # parent phone (accountant lookup)
+    # Địa chỉ thường trú đã ghép 1 dòng đọc được (số nhà → đường → tổ/thôn → xã →
+    # huyện → tỉnh). None khi hồ sơ chưa có địa chỉ.
+    permanent_address: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

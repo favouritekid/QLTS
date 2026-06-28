@@ -47,6 +47,7 @@ from app.routers.fees import (
     _fee_can_waive,
     _fee_can_recalculate,
     _fee_can_cancel,
+    _format_permanent_address,
     _total_remaining_with_penalty,
 )
 from types import SimpleNamespace
@@ -518,6 +519,39 @@ async def test_fee_can_recalculate_role_and_paid_gate():
     # …and terminal statuses are never recalculable.
     for terminal in ("paid", "cancelled", "waived"):
         assert _fee_can_recalculate(_stub_fee(status=terminal), "admin") is False
+
+
+async def test_format_permanent_address_joins_in_reading_order():
+    """The drawer's địa chỉ thường trú joins stored parts số nhà → tổ → xã →
+    huyện → tỉnh, drops blanks, and is None when nothing is filled."""
+    full = SimpleNamespace(
+        permanent_street_address="Số 12, đường Lê Lợi",
+        permanent_residential_group="Tổ 4",
+        permanent_ward="Phường Tân Hòa",
+        permanent_district="TP Buôn Ma Thuột",
+        permanent_province="Đắk Lắk",
+    )
+    assert _format_permanent_address(full) == (
+        "Số 12, đường Lê Lợi, Tổ 4, Phường Tân Hòa, TP Buôn Ma Thuột, Đắk Lắk"
+    )
+    # Blank / whitespace-only parts are dropped, order preserved.
+    partial = SimpleNamespace(
+        permanent_street_address=None,
+        permanent_residential_group="   ",
+        permanent_ward="Phường Tân Hòa",
+        permanent_district="",
+        permanent_province="Đắk Lắk",
+    )
+    assert _format_permanent_address(partial) == "Phường Tân Hòa, Đắk Lắk"
+    # Nothing filled → None (FE hides the line).
+    empty = SimpleNamespace(
+        permanent_street_address=None,
+        permanent_residential_group=None,
+        permanent_ward=None,
+        permanent_district=None,
+        permanent_province=None,
+    )
+    assert _format_permanent_address(empty) is None
 
 
 async def test_fee_can_cancel_admin_only_and_paid_gate():
