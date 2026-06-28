@@ -31,12 +31,8 @@ def to_bank_transfer_note(raw: Optional[str], max_len: int = 90) -> str:
     """
     if not raw:
         return ""
-    # NFD decomposition splits accented chars into base + combining mark;
-    # dropping Mn (Mark, nonspacing) removes the accent while keeping the letter.
-    normalized = unicodedata.normalize("NFD", raw)
-    ascii_str = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
-    # Replace đ/Đ separately — NFD doesn't decompose them (Latin Extended).
-    ascii_str = ascii_str.replace("đ", "d").replace("Đ", "D")
+    # Bỏ dấu (NFD drop-Mn + đ/Đ) qua helper dùng chung — xem ``strip_accents``.
+    ascii_str = strip_accents(raw)
     # Collapse any non-[a-zA-Z0-9] run into a single space, then trim.
     ascii_str = re.sub(r"[^a-zA-Z0-9 ]+", " ", ascii_str)
     ascii_str = re.sub(r"\s+", " ", ascii_str).strip()

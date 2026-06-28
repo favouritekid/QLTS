@@ -126,6 +126,42 @@ class TestIntakeCreated:
         assert "Đăng ký qua website" in note
         assert "Công nghệ thông tin" in note  # ngành nằm trong note
 
+    async def test_email_goes_to_note_not_lead(
+        self, db: AsyncSession, configured_unit: int
+    ):
+        # Email KHÔNG ghi vào Lead.email (tránh xung đột unique + oracle) — vào note.
+        result = await _run_intake(
+            db, _payload(phone="0901230004", email="parent@example.com")
+        )
+        lead = await db.get(models.Lead, result.lead_id)
+        assert lead.email is None
+        cons = (
+            await db.execute(
+                select(models.Consultation.notes).where(
+                    models.Consultation.lead_id == result.lead_id,
+                    models.Consultation.method == "website",
+                )
+            )
+        ).scalar_one()
+        assert "parent@example.com" in cons
+
+    async def test_dedup_skips_second_website_consultation(
+        self, db: AsyncSession, configured_unit: int
+    ):
+        # Submit lại trong cửa sổ dedup → KHÔNG chèn thêm website-consultation
+        # (chống amplification note/notif/version-churn).
+        first = await _run_intake(db, _payload(phone="0901230005"))
+        await _run_intake(db, _payload(phone="0901230005"))
+        count = (
+            await db.execute(
+                select(func.count(models.Consultation.id)).where(
+                    models.Consultation.lead_id == first.lead_id,
+                    models.Consultation.method == "website",
+                )
+            )
+        ).scalar()
+        assert count == 1
+
     async def test_pipeline_not_changed_by_intake(
         self, db: AsyncSession, configured_unit: int
     ):
@@ -317,11 +353,22 @@ class TestIntakeUnit:
             full_name="A", phone="0901234567", extra_note=long_note
         )
         assert len(p2.extra_note) == 2000
-        # Email rác (không có '@') → None thay vì 422.
-        p3 = schemas.PublicLeadIntake(
-            full_name="A", phone="0901234567", email="not-an-email"
+        # Email lenient: giữ giá trị (chỉ vào note, service KHÔNG ghi Lead.email);
+        # non-str/rỗng → None, KHÔNG bao giờ 422 đánh rớt lead.
+        assert (
+            schemas.PublicLeadIntake(
+                full_name="A", phone="0901234567", email="  x@y.z "
+            ).email
+            == "x@y.z"
         )
-        assert p3.email is None
+        assert (
+            schemas.PublicLeadIntake(full_name="A", phone="0901234567", email="").email
+            is None
+        )
+        assert (
+            schemas.PublicLeadIntake(full_name="A", phone="0901234567", email=123).email
+            is None
+        )
 
     def test_schema_rejects_invalid_phone(self):
         with pytest.raises(ValidationError):
@@ -359,7 +406,7 @@ class TestIntakeApi:
         resp = await client.post(self.URL, json=self.BODY)
         assert resp.status_code == 401
 
-    async def test_honeypot_returns_fake_200_no_lead(self, db, client, monkeypatch):
+    async def test_honeypot_returns_generic_200_no_lead(self, db, client, monkeypatch):
         monkeypatch.setattr(settings, "PUBLIC_INTAKE_API_KEY", "secret-key")
         resp = await client.post(
             self.URL,
@@ -367,7 +414,8 @@ class TestIntakeApi:
             headers={"X-API-Key": "secret-key"},
         )
         assert resp.status_code == 200
-        assert resp.json()["lead_id"] == 0
+        # Response GENERIC (không lộ created/updated/noted/lead_id).
+        assert resp.json() == {"status": "received"}
         # Honeypot KHÔNG được tạo lead nào.
         count = (
             await db.execute(
@@ -377,6 +425,11 @@ class TestIntakeApi:
             )
         ).scalar()
         assert count == 0
+
+    async def test_honeypot_whitespace_is_not_bot(self):
+        # hp toàn khoảng trắng (autofill) → trim về None → KHÔNG bị coi là bot.
+        p = schemas.PublicLeadIntake(full_name="A", phone="0901234567", hp="   ")
+        assert p.hp is None
 
     async def test_non_ascii_api_key_raises_401_not_typeerror(self, monkeypatch):
         # Test thẳng dependency (httpx tự encode header client-side, khó gửi raw
@@ -392,7 +445,7 @@ class TestIntakeApi:
     async def test_http_happy_path_creates_lead(
         self, db, seeded_dependencies, client, monkeypatch
     ):
-        # Exercise đầy đủ router→service→commit→callback→response_model qua HTTP.
+        # Exercise đầy đủ router→service→commit→callback→response qua HTTP.
         await _seed_system_user(db)
         await db.commit()  # persist unit + system user để app session thấy
         monkeypatch.setattr(settings, "PUBLIC_INTAKE_API_KEY", "secret-key")
@@ -413,6 +466,14 @@ class TestIntakeApi:
                 headers={"X-API-Key": "secret-key"},
             )
         assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["status"] == "created"
-        assert body["lead_id"] > 0
+        # Response generic (chống enumeration).
+        assert resp.json() == {"status": "received"}
+        # XÁC NHẬN lead THẬT đã persist trong DB (không chỉ tin response).
+        lead = (
+            await db.execute(
+                select(models.Lead).where(models.Lead.phone == "0907654399")
+            )
+        ).scalar_one_or_none()
+        assert lead is not None
+        assert lead.source == "website"
+        assert lead.unit_id == seeded_dependencies["unit_id"]

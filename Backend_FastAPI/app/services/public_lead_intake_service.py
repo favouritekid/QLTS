@@ -5,22 +5,24 @@ Không nhận ``current_user`` (luồng hệ thống). Tuân kiến trúc V3: ch
 ``(result, post_commit_callback)`` cho router commit + chạy callback.
 
 Hành vi (xem ``Documents/WEBSITE_LEAD_INTAKE_PLAN.md``):
-- Honeypot ``hp`` có giá trị ⇒ coi là bot → trả 200 "thành công" GIẢ, KHÔNG tạo lead.
+- Honeypot ``hp`` có giá trị ⇒ coi là bot → KHÔNG tạo lead.
 - Upsert-by-phone qua bảng canonical ``lead_phone_identity`` dưới advisory lock
   (race-safe). Trùng SĐT → cập nhật / ghi nhận, KHÔNG tạo trùng.
 - SĐT mới → tạo lead ``source="website"`` ở đơn vị mặc định (env) → auto-assign.
 - Lead đã ngừng tư vấn (terminal) / đã có hồ sơ → CHỈ ghi nhận, KHÔNG reopen.
-- Mọi lead cũ đều được thông báo cho officer/quản lý đơn vị (re-engagement signal).
-- Hệ/ngành/ghi-chú từ web → lưu vào một Consultation HỆ THỐNG (officer = system user,
-  insert raw, KHÔNG đổi pipeline) để officer đọc trong timeline. Consultation này
-  KHÔNG cập nhật ``last_consultation_at``/``consultation_count`` (không phải lần
-  officer liên hệ thật → tránh phá SLA auto-close + méo urgency/recency).
+- Email KHÔNG ghi vào Lead.email (tránh xung đột unique + oracle) — chỉ vào note.
+- Hệ/ngành/ghi-chú/email → một Consultation HỆ THỐNG (officer = system user, insert
+  raw, method="website") để officer đọc trong timeline. Consultation này bị LOẠI
+  khỏi aggregate recency/count (xem ``get_consultation_aggregates``) nên KHÔNG phá
+  SLA auto-close / méo urgency.
+- Chống amplification: bỏ qua nếu đã có website-consultation gần đây cho lead này.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -43,14 +45,15 @@ from app.utils.text_helpers import strip_accents
 log = structlog.get_logger("public_lead_intake")
 
 # Namespace cố định cho pg_advisory_xact_lock (2 tham số int: ns + hashtext(phone)).
-# Giá trị tùy ý, miễn ổn định + riêng cho luồng intake để không đụng lock khác.
 _INTAKE_ADVISORY_NS = 815074  # "intake"
 
 # Múi giờ Việt Nam cho nhãn ngày trong note (officer đọc theo giờ địa phương).
 _VN_TZ = timezone(timedelta(hours=7))
 
-# Chuẩn hoá nhãn trình độ thô từ web → EducationLevelEnum của Lead (bind enum để
-# không drift khi đổi tên member).
+# Cửa sổ chống lặp: trong khoảng này KHÔNG chèn thêm website-consultation/notif.
+_DEDUP_WINDOW = timedelta(hours=6)
+
+# Chuẩn hoá nhãn trình độ thô từ web → EducationLevelEnum của Lead (bind enum).
 _EDUCATION_MAP = {
     "thpt": EducationLevelEnum.high_school.value,
     "trung hoc pho thong": EducationLevelEnum.high_school.value,
@@ -74,7 +77,11 @@ def _normalize_education(raw: Optional[str]) -> Optional[str]:
 
 
 def _build_intake_note(data: schemas.PublicLeadIntake) -> str:
-    """Gộp hệ/ngành/ghi-chú + địa chỉ thành 1 ghi chú có tiền tố ngày (giờ VN)."""
+    """Gộp hệ/ngành/ghi-chú + địa chỉ + email thành 1 ghi chú có tiền tố ngày (giờ VN).
+
+    Note luôn bắt đầu bằng "[" → khi export cell KHÔNG bị Excel hiểu là công thức
+    (CSV/formula-injection chỉ kích hoạt khi cell BẮT ĐẦU bằng = + - @).
+    """
     today = datetime.now(_VN_TZ).strftime("%d/%m/%Y")
     parts: List[str] = []
     if data.he:
@@ -85,6 +92,8 @@ def _build_intake_note(data: schemas.PublicLeadIntake) -> str:
         parts.append(f"Ngành đăng ký: {data.nganh_dang_ky}")
     if data.address:
         parts.append(f"Địa chỉ: {data.address}")
+    if data.email:
+        parts.append(f"Email: {data.email}")
     if data.extra_note:
         parts.append(f"Ghi chú: {data.extra_note}")
     body = " | ".join(parts) if parts else "Đăng ký không kèm thông tin bổ sung"
@@ -100,15 +109,16 @@ async def _advisory_lock_phone(db: AsyncSession, phone_normalized: str) -> None:
 
 
 def _lead_has_profile(lead: models.Lead) -> bool:
-    """True nếu lead đã có hồ sơ tuyển sinh (AdmissionProfile hard-delete, không có
-    cột deleted_at → chỉ cần kiểm tra tồn tại)."""
+    """True nếu lead đã có hồ sơ tuyển sinh (AdmissionProfile hard-delete → chỉ cần
+    kiểm tra tồn tại)."""
     return bool(lead.admission_profiles)
 
 
 def _backfill_empty_fields(lead: models.Lead, data: schemas.PublicLeadIntake) -> bool:
     """Điền các trường cấu trúc còn TRỐNG từ web (KHÔNG ghi đè dữ liệu officer đã có).
 
-    Trả True nếu có thay đổi (để bump version).
+    Trả True nếu có thay đổi. CHỈ gọi cho lead active (nhánh 'updated') — KHÔNG đụng
+    lead terminal/đã-có-hồ-sơ để hạn chế bề mặt poisoning từ caller ẩn danh.
     """
     changed = False
     if not lead.location and data.address:
@@ -122,24 +132,33 @@ def _backfill_empty_fields(lead: models.Lead, data: schemas.PublicLeadIntake) ->
     return changed
 
 
+async def _recent_website_consultation_exists(db: AsyncSession, lead_id: int) -> bool:
+    """True nếu lead đã có website-consultation trong ``_DEDUP_WINDOW`` (chống lặp
+    note/notif/version-churn khi WP retry hoặc bị spam)."""
+    cutoff = datetime.now(timezone.utc) - _DEDUP_WINDOW
+    result = await db.execute(
+        select(models.Consultation.id)
+        .where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.method == "website",
+            models.Consultation.deleted_at.is_(None),
+            models.Consultation.consultation_date >= cutoff,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def _insert_system_consultation(
     db: AsyncSession, lead: models.Lead, note: str
 ) -> Optional[models.Consultation]:
     """Chèn Consultation HỆ THỐNG (timeline note) — KHÔNG qua add_consultation.
 
-    officer = system user; status = trạng thái hiện tại của lead (tránh "Status
-    #null" trên UI); KHÔNG đổi ``lead.consultation_status_id``/pipeline → không
-    reopen lead terminal.
+    officer = system user; status = trạng thái hiện tại của lead; KHÔNG đổi
+    pipeline → không reopen lead terminal. KHÔNG bump version ở đây (caller bump).
 
-    KHÔNG gọi ``update_lead_cache``: system note KHÔNG phải lần officer liên hệ
-    thật, nên KHÔNG được đẩy ``last_consultation_at``=now (phá SLA auto-close
-    sts04) hay tăng ``consultation_count``/``cached_urgency_score``.
-
-    Nếu user kỹ thuật 'system' không khả dụng (thiếu/fingerprint sai) → bỏ note,
-    GIỮ lead (không làm mất lead vì một phụ thuộc phụ trợ). Trả None khi đó.
+    Nếu user kỹ thuật 'system' không khả dụng → bỏ note, GIỮ lead. Trả None khi đó.
     """
-    # Lazy import: payment_import_service kéo theo finance models → tránh
-    # circular import lúc load module.
     from app.services.payment_import_service import get_system_user
 
     try:
@@ -162,9 +181,32 @@ async def _insert_system_consultation(
     )
     db.add(consultation)
     await db.flush()
-    # Đánh dấu state đổi cho optimistic-lock (officer giữ version cũ → PUT sẽ 409).
-    lead.version = (lead.version or 1) + 1
     return consultation
+
+
+async def _dispatch_existing_notif(
+    db: AsyncSession, lead: models.Lead, consultation: models.Consultation
+) -> Optional[Callable]:
+    """Dispatch CONSULTATION_CREATED cho lead cũ trong SAVEPOINT — lỗi persist
+    notification CHỈ rollback savepoint, KHÔNG kéo cả intake (chống mất dữ liệu)."""
+    try:
+        async with db.begin_nested():
+            _, notif_cb = await dispatch(
+                db=db,
+                event=SystemEvents.CONSULTATION_CREATED,
+                payload=EventPayload.for_consultation_created(consultation, lead, None),
+                dedupe_key=f"intake_existing:{consultation.id}",
+                rooms=rooms_for_lead(lead),
+                strict=True,
+            )
+        return notif_cb
+    except Exception as exc:  # noqa: BLE001 — best-effort, savepoint đã rollback
+        log.warning(
+            "intake: notification dispatch failed (savepoint rolled back)",
+            lead_id=lead.id,
+            error=str(exc),
+        )
+        return None
 
 
 async def _handle_existing_lead(
@@ -172,41 +214,42 @@ async def _handle_existing_lead(
 ) -> Tuple[schemas.PublicLeadIntakeResult, List[Callable]]:
     """Lead đã tồn tại (trùng SĐT): cập nhật field trống + ghi nhận, KHÔNG reopen."""
     callbacks: List[Callable] = []
-
     is_terminal = is_consultation_terminal_status(lead.consultation_status)
     has_profile = _lead_has_profile(lead)
+    status = "noted" if (is_terminal or has_profile) else "updated"
 
-    # Backfill field cấu trúc còn trống (location/education) — KHÔNG ghi đè.
-    changed = _backfill_empty_fields(lead, data)
+    # Chống amplification: đã có website-consultation gần đây → no-op idempotent.
+    if await _recent_website_consultation_exists(db, lead.id):
+        return schemas.PublicLeadIntakeResult(status=status, lead_id=lead.id), callbacks
+
+    mutated = False
+    # Backfill CHỈ cho lead active (updated) — không đụng terminal/đã-có-hồ-sơ.
+    if status == "updated" and _backfill_empty_fields(lead, data):
+        mutated = True
 
     consultation = await _insert_system_consultation(db, lead, note)
-    if changed and consultation is None:
-        # Có backfill nhưng không chèn được consultation → vẫn bump version.
-        lead.version = (lead.version or 1) + 1
-
-    # Thông báo officer/quản lý đơn vị cho MỌI lead cũ (re-engagement signal) —
-    # rule sẵn fanout lead_owner + unit_managers; actor=None → actor_excluded
-    # không loại ai. Chỉ dispatch khi có consultation (cần consultation.id).
     if consultation is not None:
-        _, notif_cb = await dispatch(
-            db=db,
-            event=SystemEvents.CONSULTATION_CREATED,
-            payload=EventPayload.for_consultation_created(consultation, lead, None),
-            dedupe_key=f"intake_existing:{consultation.id}",
-            rooms=rooms_for_lead(lead),
-        )
+        mutated = True
+        notif_cb = await _dispatch_existing_notif(db, lead, consultation)
         if notif_cb:
             callbacks.append(notif_cb)
 
-    status = "noted" if (is_terminal or has_profile) else "updated"
+    # Bump version 1 lần nếu có thay đổi state (optimistic-lock cho officer).
+    if mutated:
+        lead.version = (lead.version or 1) + 1
+
     return schemas.PublicLeadIntakeResult(status=status, lead_id=lead.id), callbacks
 
 
 async def intake_public_lead(
     db: AsyncSession, data: schemas.PublicLeadIntake
 ) -> Tuple[schemas.PublicLeadIntakeResult, Optional[Callable]]:
-    """Điểm vào: nhận 1 lead từ website. Trả ``(result, post_commit_callback)``."""
-    # 0. Honeypot — bot điền ``hp`` → trả 200 GIẢ, KHÔNG tạo lead (bot không biết).
+    """Điểm vào: nhận 1 lead từ website. Trả ``(result, post_commit_callback)``.
+
+    Lưu ý: ``result`` (created/updated/noted + lead_id thật) chỉ dùng NỘI BỘ
+    (log/test). Router trả response GENERIC cho caller (chống enumeration).
+    """
+    # 0. Honeypot — bot điền ``hp`` (đã trim ở schema) → KHÔNG tạo lead.
     if data.hp:
         return schemas.PublicLeadIntakeResult(status="created", lead_id=0), None
 
@@ -243,11 +286,12 @@ async def intake_public_lead(
             label="intake", callbacks=callbacks
         )
 
-    # 4. Tạo lead mới (source=website, unit mặc định) → auto-assign qua callback.
+    # 4. Tạo lead mới (source=website, unit mặc định). KHÔNG set Lead.email (tránh
+    # xung đột unique uq_lead_email_unit_active + email-existence oracle) — email
+    # đã nằm trong note. → DuplicateResourceError giờ chỉ còn từ SĐT (race hiếm).
     lead_in = schemas.LeadCreate(
         full_name=data.full_name,
         phone=phone,
-        email=data.email,
         source="website",
         unit_id=default_unit_id,
         education_level=_normalize_education(data.education_level_raw),
@@ -255,11 +299,10 @@ async def intake_public_lead(
     )
     try:
         lead, create_cb = await lead_service.create_lead(db, lead_in, created_by=None)
-    except DuplicateResourceError:
-        # create_lead chặn trùng theo SĐT (phone/phone2) HOẶC email (cùng đơn vị).
-        # Nếu reload canonical thấy lead → xử lý như existing (race SĐT). Nếu KHÔNG
-        # (vd trùng EMAIL khác SĐT) → raise lỗi ĐÃ LÀM SẠCH PII (detail gốc chứa
-        # tên/SĐT/đơn vị/officer của lead khác — KHÔNG được rò ra caller công khai).
+    except (DuplicateResourceError, IntegrityError):
+        # Race SĐT giữa lookup và create (advisory lock chặn phần lớn). Reload
+        # canonical → xử lý như existing; nếu vẫn None → lỗi ĐÃ LÀM SẠCH PII
+        # (detail gốc chứa tên/SĐT/đơn vị/officer lead khác — KHÔNG rò ra caller).
         existing = await repo.get_active_lead_by_phone_identity(phone)
         if existing is None:
             raise DuplicateResourceError(

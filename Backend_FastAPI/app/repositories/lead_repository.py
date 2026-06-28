@@ -619,8 +619,9 @@ class LeadRepository(BaseRepository[models.Lead]):
                 models.Lead.deleted_at.is_(None),
             )
             .options(
-                selectinload(models.Lead.assigned_officer),
-                selectinload(models.Lead.unit),
+                # Chỉ load quan hệ thực sự đọc ở luồng intake: consultation_status
+                # (terminal check) + admission_profiles (has-profile). unit_id /
+                # assigned_officer_id dùng dạng FK column (đã có trên Lead row).
                 selectinload(models.Lead.consultation_status),
                 selectinload(models.Lead.admission_profiles),
             )
@@ -885,12 +886,21 @@ class LeadRepository(BaseRepository[models.Lead]):
                        update_next_activity)
         """
         # Query 1: Get consultation stats (exclude soft-deleted)
+        # ✅ LOẠI consultation HỆ THỐNG (method='website' từ public intake,
+        # 'system' từ SLA auto-close audit) khỏi recency/count: chúng KHÔNG phải
+        # lần officer liên hệ thật → nếu tính vào last_consultation_at sẽ reset
+        # đồng hồ SLA auto-close (sts04) và méo consultation_count/urgency. NULL
+        # method (consultation cũ) vẫn được tính (or_ giữ lại).
         stats_query = select(
             func.max(models.Consultation.consultation_date).label("last_consultation_at"),
             func.count(models.Consultation.id).label("consultation_count"),
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            or_(
+                models.Consultation.method.is_(None),
+                models.Consultation.method.notin_(["website", "system"]),
+            ),
         )
 
         stats_result = await self.db.execute(stats_query)

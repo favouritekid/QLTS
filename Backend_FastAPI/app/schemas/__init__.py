@@ -147,6 +147,7 @@ from .lead import (
 )
 from .public_lead_intake import (  # ✅ Website lead intake (public endpoint)
     PublicLeadIntake,
+    PublicLeadIntakeAck,
     PublicLeadIntakeResult,
 )
 

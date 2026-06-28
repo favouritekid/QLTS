@@ -21,6 +21,8 @@ _FIELD_CAPS = {
     "nganh_xet": 255,
     "nganh_dang_ky": 255,
     "extra_note": 2000,
+    "email": 255,
+    "hp": 255,
 }
 
 
@@ -33,7 +35,9 @@ class PublicLeadIntake(BaseModel):
 
     full_name: str = Field(..., min_length=1, max_length=255)
     phone: str = Field(..., min_length=1, max_length=20)
-    email: Optional[str] = Field(None, max_length=255)
+    # Email CHỈ để hiển thị trong note (service KHÔNG ghi vào Lead.email) → khoan
+    # dung tuyệt đối: rác/sai/non-str → None, không bao giờ 422 đánh rớt lead.
+    email: Optional[str] = None
     # Nhãn trình độ thô từ web (vd "Cao đẳng", "THPT") — service chuẩn hoá sang enum.
     education_level_raw: Optional[str] = None
     # Địa chỉ liên hệ — map sang Lead.location.
@@ -43,41 +47,34 @@ class PublicLeadIntake(BaseModel):
     nganh_xet: Optional[str] = None
     nganh_dang_ky: Optional[str] = None
     extra_note: Optional[str] = None
-    # Honeypot — phải để trống. Bot điền tự động → reject ở service (200 giả).
-    hp: Optional[str] = Field(None, max_length=255)
+    # Honeypot — phải để trống. Bot điền tự động → reject ở service.
+    hp: Optional[str] = None
 
     @field_validator(
         "full_name",
+        "email",
         "education_level_raw",
         "address",
         "he",
         "nganh_xet",
         "nganh_dang_ky",
         "extra_note",
+        "hp",
         mode="before",
     )
     @classmethod
     def _strip_and_cap(cls, v, info):
         """Trim khoảng trắng (Field strip_whitespace là no-op ở Pydantic v2);
-        rỗng → None; thừa độ dài → TRUNCATE (không 422 đánh rớt lead)."""
-        if not isinstance(v, str):
-            return v
+        non-str → None; rỗng → None; thừa độ dài → TRUNCATE (không 422 rớt lead).
+
+        Áp cả ``hp`` (khoảng-trắng autofill → None, không bị coi là bot) và
+        ``email`` (rác → None, chỉ vào note)."""
+        if v is None or not isinstance(v, str):
+            return None
         v = v.strip()
         if not v:
             return None
         return v[: _FIELD_CAPS.get(info.field_name, 2000)]
-
-    @field_validator("email", mode="before")
-    @classmethod
-    def _lenient_email(cls, v):
-        """Email optional & khoan dung: rỗng/rác (không có '@') → None thay vì 422
-        (form web không gửi email; không được vì email lỗi mà đánh rớt cả lead)."""
-        if v is None or not isinstance(v, str):
-            return None if v is None else v
-        v = v.strip()
-        if not v or "@" not in v:
-            return None
-        return v[:255]
 
     @field_validator("phone", mode="before")
     @classmethod
@@ -100,7 +97,7 @@ class PublicLeadIntake(BaseModel):
 
 
 class PublicLeadIntakeResult(BaseModel):
-    """Phản hồi intake — CHỈ id + trạng thái xử lý (không trả PII).
+    """Kết quả NỘI BỘ của service (log/test) — KHÔNG trả thẳng ra caller.
 
     - ``created``: tạo lead mới.
     - ``updated``: cập nhật lead đang hoạt động (trùng SĐT).
@@ -109,3 +106,10 @@ class PublicLeadIntakeResult(BaseModel):
 
     status: Literal["created", "updated", "noted"]
     lead_id: int
+
+
+class PublicLeadIntakeAck(BaseModel):
+    """Phản hồi CÔNG KHAI cho caller — GENERIC, không lộ created/updated/noted hay
+    lead_id thật (chống enumeration ứng viên theo SĐT từ endpoint công khai)."""
+
+    status: Literal["received"] = "received"
