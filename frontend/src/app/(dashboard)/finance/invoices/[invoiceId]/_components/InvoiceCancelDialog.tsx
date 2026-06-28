@@ -106,12 +106,14 @@ export function InvoiceCancelDialog({
             Xác nhận hủy hóa đơn
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-2">
-            <p>
+            {/* AlertDialogDescription renders a <p>; use block spans so we don't
+                nest <p> in <p> (invalid HTML → hydration error). */}
+            <span className="block">
               Bạn có chắc chắn muốn hủy hóa đơn <strong className="font-mono">{invoiceNumber}</strong>?
-            </p>
-            <p className="text-destructive font-medium">
+            </span>
+            <span className="block text-destructive font-medium">
               Hành động này không thể hoàn tác.
-            </p>
+            </span>
           </AlertDialogDescription>
         </AlertDialogHeader>
 
