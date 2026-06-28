@@ -20,6 +20,24 @@ Usage:
     - reject_profile() → sts16 (Không đạt)
     - request_revision() → sts17 (Yêu cầu bổ sung hồ sơ)
     - enroll_student() → sts11 (Đã xác nhận nhập học)
+
+Finance → Lead projection contract (HK1 tuition lifecycle):
+    Each forward sync that overlays a finance state onto the lead has a matching
+    REVERSE that restores the prior state verbatim from LeadStatusHistory (never
+    a hardcoded target). Keep this table in lock-step when adding a new finance
+    overlay — a forward without a reverse is the bug class this contract guards.
+
+    | Finance event              | Forward                        | Reverse                          |
+    |----------------------------|--------------------------------|----------------------------------|
+    | Lệ phí xét tuyển đã đóng    | sync_lead_fee_paid → sts13     | (lệ phí không hoàn — N/A)         |
+    | Học phí HK1 đã TÍNH         | sync_lead_tuition_calculated → sts14 | revert_lead_tuition_calculated (cancel_fee) |
+    | Học phí HK1 đã đóng ĐỦ      | sync_lead_tuition_paid → sts10 | revert_lead_tuition_paid (void import) |
+    | Học phí HK1 đã hoàn         | sync_lead_tuition_refunded → sts18 | (terminal)                       |
+
+    "Settled" (→ sts10) means remaining ≤ 0 (paid/waived đủ) — a PARTIAL payment
+    stays at sts14. See fee_calculation_service.is_hk1_settled. Both reverts
+    share _revert_lead_projection and only act while the lead is still at the
+    projected status (an advanced lead — enrolled… — is left untouched).
 """
 
 from typing import Optional
