@@ -304,6 +304,18 @@ class PermissionDeniedError(BaseAppException):
 ForbiddenError = PermissionDeniedError
 
 
+class ServiceUnavailableError(BaseAppException):
+    """Feature/endpoint chưa cấu hình đủ để phục vụ (HTTP 503).
+
+    Dùng cho fail-closed: vd website lead intake khi thiếu API key hoặc đơn vị
+    mặc định → trả 503 thay vì tạo dữ liệu treo.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    detail = "Dịch vụ tạm thời chưa sẵn sàng."
+    error_code = "SERVICE_UNAVAILABLE"
+
+
 # ============================================================================
 # SERVICE LAYER EXCEPTIONS (500)
 # ============================================================================

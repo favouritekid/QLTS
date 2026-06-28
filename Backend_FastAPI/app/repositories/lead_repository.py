@@ -588,6 +588,46 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         return result.scalars().first()
 
+    async def get_active_lead_by_phone_identity(
+        self, phone_normalized: str
+    ) -> Optional[models.Lead]:
+        """Tra lead ĐANG HOẠT ĐỘNG theo SĐT chuẩn hoá qua bảng canonical.
+
+        Uniqueness thật của SĐT nằm ở ``lead_phone_identity`` (partial unique
+        ``uq_lead_phone_active`` ON ``phone_normalized`` WHERE deleted_at IS NULL),
+        KHÔNG ở cột raw ``Lead.phone/phone2`` (có thể lệch format). Dùng hàm này
+        cho luồng intake công khai (upsert-by-phone) để khớp đúng theo nguồn sự
+        thật, tránh tạo trùng khi raw-phone lệch chuẩn.
+
+        Args:
+            phone_normalized: SĐT đã chuẩn hoá (``normalize_vietnam_phone``).
+
+        Returns:
+            Lead (eager-load officer/unit/consultation_status) hoặc None.
+        """
+        if not phone_normalized:
+            return None
+        result = await self.db.execute(
+            select(models.Lead)
+            .join(
+                models.LeadPhoneIdentity,
+                models.LeadPhoneIdentity.lead_id == models.Lead.id,
+            )
+            .where(
+                models.LeadPhoneIdentity.phone_normalized == phone_normalized,
+                models.LeadPhoneIdentity.deleted_at.is_(None),
+                models.Lead.deleted_at.is_(None),
+            )
+            .options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.unit),
+                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.admission_profiles),
+            )
+            .limit(1)
+        )
+        return result.scalars().first()
+
     async def get_by_email(self, email: str) -> Optional[models.Lead]:
         """
         Get lead by email address (case-insensitive).

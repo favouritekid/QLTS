@@ -85,6 +85,18 @@ class Settings(BaseSettings):
         default="http://localhost:5173", validation_alias="CORS_ORIGINS"
     )  # Mặc định lấy từ FRONTEND_URL không hoạt động tốt với pydantic-settings, nên đặt giá trị mặc định rõ ràng
 
+    # === Website Lead Intake (public endpoint POST /api/public/leads/intake) ===
+    # Khóa API bảo vệ endpoint công khai nhận lead từ website (WordPress/Formidable).
+    # Rỗng = endpoint trả 503 (chưa cấu hình) — fail-closed, không mở toang.
+    PUBLIC_INTAKE_API_KEY: str = Field(
+        default="", validation_alias="PUBLIC_INTAKE_API_KEY"
+    )
+    # Đơn vị mặc định nhận lead từ website (D9). None = endpoint trả 503 (không tạo
+    # lead treo vì auto-assign lọc officer theo unit; xem assignment_service).
+    PUBLIC_INTAKE_DEFAULT_UNIT_ID: Optional[int] = Field(
+        default=None, validation_alias="PUBLIC_INTAKE_DEFAULT_UNIT_ID"
+    )
+
     # Mail Settings - Bắt buộc
     MAIL_USERNAME: str
     MAIL_PASSWORD: str

@@ -145,6 +145,10 @@ from .lead import (
     WorkflowContext,
     WorkflowAllowedStatus,
 )
+from .public_lead_intake import (  # ✅ Website lead intake (public endpoint)
+    PublicLeadIntake,
+    PublicLeadIntakeResult,
+)
 
 
 # --- 5. Từ admission.py (Depends on: lead, organization) ---

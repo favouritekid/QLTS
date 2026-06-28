@@ -10,6 +10,18 @@ import unicodedata
 from typing import Optional
 
 
+def strip_accents(s: str) -> str:
+    """Bỏ dấu tiếng Việt, giữ chữ cái gốc (giữ nguyên hoa/thường + ký tự khác).
+
+    NFD tách chữ có dấu thành base + combining mark (drop Mn); ``đ/Đ`` là
+    Latin-Extended không tách được nên thay tay trước.
+    """
+    s = s.replace("đ", "d").replace("Đ", "D")
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn"
+    )
+
+
 def to_bank_transfer_note(raw: Optional[str], max_len: int = 90) -> str:
     """Strip Vietnamese diacritics and non-alphanumeric characters.
 

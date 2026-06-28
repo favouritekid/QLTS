@@ -78,6 +78,24 @@ def get_user_id_key(request: Request) -> str:
         return get_remote_address(request)
 
 
+def get_intake_key(request: Request) -> str:
+    """Rate-limit key cho website lead intake = HASH của header ``X-API-Key``.
+
+    ``wp_remote_post`` gọi server-side nên mọi lead đến từ MỘT IP (server
+    WordPress) → limit theo IP sẽ chặn nhầm toàn bộ traffic hợp lệ. Limit theo
+    key thay vào đó (per-key bucket). KHÔNG nhúng API key thô vào key Redis (lộ
+    secret trong keyspace) → hash SHA-256 trước (theo tiền lệ magic-link token).
+    Verify tính hợp lệ của key là dependency riêng (401/503) chạy TRƯỚC limiter.
+    """
+    import hashlib
+
+    api_key = request.headers.get("X-API-Key")
+    if api_key:
+        digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        return f"intake_{digest}"
+    return get_remote_address(request)
+
+
 # ============================================================================
 # RATE LIMIT TIERS
 # ============================================================================
@@ -136,6 +154,11 @@ class RateLimits:
 
     PUBLIC_READ = "100/hour" if settings.APP_ENV != "test" else "10000/hour"
     PUBLIC_CONTACT = "5/hour" if settings.APP_ENV != "test" else "1000/hour"
+    # Website lead intake (server-to-server từ WordPress). Vì wp_remote_post
+    # chạy server-side → mọi lead chung 1 IP → KHÔNG dùng limit theo IP mà theo
+    # API key (get_intake_key) với cap cao. Verify key là dependency riêng (401/503)
+    # chạy TRƯỚC limiter nên chỉ request đã qua key mới bị đếm.
+    PUBLIC_INTAKE = "500/hour" if settings.APP_ENV != "test" else "10000/hour"
 
     # ============================================================================
     # REAL-TIME ENDPOINTS (HIGH)

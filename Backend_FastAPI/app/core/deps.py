@@ -10,20 +10,47 @@ from fastapi.security import OAuth2PasswordBearer
 from jwt.exceptions import PyJWTError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import hmac
+
 from .. import database, models, security  # ✅ THÊM IMPORT security
+from ..config import settings
 from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get
 from ..services import user_service
 from ..utils.exceptions import (
+    AuthenticationError,
     BusinessRuleViolation,
     InvalidToken,
     PermissionDeniedError,
     ResourceNotFoundError,
+    ServiceUnavailableError,
 )
 # ✅ IMPORT REPOSITORY FOR DEPENDENCY
 from ..repositories.admission_config_repository import AdmissionConfigRepository
 
 
 log = structlog.get_logger(__name__)
+
+
+async def verify_intake_api_key(
+    x_api_key: str = Header(None, alias="X-API-Key"),
+) -> None:
+    """Xác thực ``X-API-Key`` cho endpoint website lead intake công khai.
+
+    - Key chưa cấu hình (env rỗng) → 503 (fail-closed, không mở toang).
+    - Key thiếu/sai → 401 (so sánh hằng-thời-gian trên BYTES — tránh ``TypeError``
+      của ``hmac.compare_digest`` với chuỗi non-ASCII từ header latin-1).
+
+    Là FastAPI dependency nên chạy TRƯỚC thân hàm bọc ``@limiter.limit`` → 401/503
+    xảy ra trước khi limiter đếm.
+    """
+    configured = settings.PUBLIC_INTAKE_API_KEY or ""
+    if not configured:
+        raise ServiceUnavailableError(
+            detail="Website lead intake chưa được cấu hình (PUBLIC_INTAKE_API_KEY)."
+        )
+    provided = x_api_key or ""
+    if not hmac.compare_digest(provided.encode("utf-8"), configured.encode("utf-8")):
+        raise AuthenticationError(detail="X-API-Key không hợp lệ.")
 
 # =============================================================================
 # MODULE EXPORTS (AUTHORIZATION_GUIDELINES.md v1.0)
@@ -33,6 +60,7 @@ __all__ = [
     "get_current_user",
     "get_current_active_user",
     "require_password_not_forced",
+    "verify_intake_api_key",  # Public website lead intake (X-API-Key gate)
 
     # Authorization (Layer 2)
     "check_permission",

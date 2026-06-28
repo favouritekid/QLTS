@@ -82,6 +82,7 @@ from .routers import (
     pipeline,
     profile,
     public_admissions,  # ✅ Public admissions portal API
+    public_leads,  # ✅ Public website lead intake (no auth, X-API-Key)
     refunds,
     security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
     sessions,
@@ -909,6 +910,7 @@ fastapi_app.include_router(kpi_planning.router)  # ✅ PHASE A6: KPI Planning En
 fastapi_app.include_router(kpi_setup.router)  # ✅ KPI Setup: Coverage Dashboard
 fastapi_app.include_router(meta.router)  # ✅ Public metadata (KPI catalog, no auth)
 fastapi_app.include_router(public_admissions.router)  # ✅ Public admissions portal (no auth)
+fastapi_app.include_router(public_leads.router)  # ✅ Public website lead intake (no auth, X-API-Key)
 # ✅ SMS MARKETING MODULE (Phase 1): router stubs wired in PR-1; routes filled PR-2..5.
 # Mỗi router tự mang prefix (/api/sms, /api/public/sms) — shortlink không prefix (/r/{code}).
 fastapi_app.include_router(sms_contacts.router)
