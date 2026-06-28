@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils"
 import { FeeWaiveDialog } from "./FeeWaiveDialog"
 import { FeeCancelDialog } from "./FeeCancelDialog"
 import { FeeRecalculateDialog } from "./FeeRecalculateDialog"
+import { resolveFinanceReturn, withFrom } from "@/lib/finance/nav-context"
 
 // =============================================================================
 // TYPES
@@ -63,6 +64,12 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
+  // Controlled return target: the workspace stamps `?from=profile:<id>` when it
+  // links here, so "Quay lại" reopens that profile's drawer (never a blind
+  // browser-back). Falls back to the Thu học phí workspace.
+  const from = searchParams.get("from")
+  const back = React.useMemo(() => resolveFinanceReturn(from), [from])
+
   // State for dialogs
   const [waiveDialogOpen, setWaiveDialogOpen] = React.useState(
     searchParams.get("action") === "waive"
@@ -82,9 +89,10 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
     setWaiveDialogOpen(false)
     setCancelDialogOpen(false)
     setRecalculateDialogOpen(false)
-    // Remove action from URL
-    router.replace(`/finance/fees/${feeId}`)
-  }, [feeId, router])
+    // Drop the `?action=` param but PRESERVE `?from=` so the return context
+    // survives closing a dialog.
+    router.replace(withFrom(`/finance/fees/${feeId}`, from))
+  }, [feeId, router, from])
 
   if (isLoading) {
     return <FeeDetailSkeleton />
@@ -93,9 +101,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   if (error || !fee) {
     return (
       <div className="h-full flex flex-col p-4 sm:p-6">
-        <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit mb-4">
+        <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Quay lại
+          {back.label}
         </Button>
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
@@ -113,9 +121,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit">
+      <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit">
         <ArrowLeft className="h-4 w-4 mr-2" />
-        Quay lại
+        {back.label}
       </Button>
 
       {/* Header */}

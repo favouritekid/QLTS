@@ -22,6 +22,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import {
   Receipt,
   Plus,
@@ -35,6 +36,7 @@ import {
   XCircle,
   CircleDollarSign,
   Clock,
+  ArrowUpRight,
 } from "lucide-react"
 
 import {
@@ -57,6 +59,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { formatVND } from "@/lib/zod/finance"
 import { formatDate } from "@/lib/utils/admission-helpers"
+import { profileFrom } from "@/lib/finance/nav-context"
 
 import { Monogram } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import {
@@ -193,7 +196,7 @@ export function FinanceProfileDrawer({
           ) : data ? (
             <div className="space-y-6">
               <DrawerSummary collection={data} onAction={onAction} />
-              <FeeSection collection={data} onAction={onAction} />
+              <FeeSection collection={data} onAction={onAction} profileId={profileId} />
               <InvoiceSection collection={data} onAction={onAction} />
               <PaymentSection collection={data} onAction={onAction} />
             </div>
@@ -335,9 +338,11 @@ function SectionHeader({
 function FeeSection({
   collection,
   onAction,
+  profileId,
 }: {
   collection: ProfileCollection
   onAction: (d: WorkspaceDialog) => void
+  profileId: number | null
 }) {
   const fees = collection.summary.fees
   return (
@@ -354,7 +359,12 @@ function FeeSection({
       ) : (
         <ul className="space-y-2">
           {fees.map((fee) => (
-            <FeeRow key={fee.id} fee={fee} onAction={onAction} />
+            <FeeRow
+              key={fee.id}
+              fee={fee}
+              onAction={onAction}
+              profileId={profileId}
+            />
           ))}
         </ul>
       )}
@@ -365,9 +375,11 @@ function FeeSection({
 function FeeRow({
   fee,
   onAction,
+  profileId,
 }: {
   fee: FeeSummary
   onAction: (d: WorkspaceDialog) => void
+  profileId: number | null
 }) {
   // Backend-owned (role + status + amount, matches the waive route gate) — do
   // NOT re-derive on the client (thin-client; avoids showing a button the route
@@ -403,6 +415,24 @@ function FeeRow({
             }
           >
             Miễn giảm
+          </Button>
+        )}
+        {/* Reachability: a fee with no invoice yet can't be reached via invoice
+            detail — link to the fee page (recalc / huỷ khoản phí live there,
+            role-gated). Carries `?from=profile` so "Quay lại" reopens THIS
+            drawer (see lib/finance/nav-context). */}
+        {profileId != null && (
+          <Button
+            asChild
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-xs"
+            title="Chi tiết khoản phí"
+          >
+            <Link href={`/finance/fees/${fee.id}?from=${profileFrom(profileId)}`}>
+              Chi tiết
+              <ArrowUpRight className="ml-1 h-3.5 w-3.5" />
+            </Link>
           </Button>
         )}
       </div>

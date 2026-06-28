@@ -41,6 +41,7 @@ import { InvoiceIssueDialog } from "./InvoiceIssueDialog"
 import { InvoiceCancelDialog } from "./InvoiceCancelDialog"
 import { InvoicePenaltyDialog } from "./InvoicePenaltyDialog"
 import { OnlinePaymentDialog } from "./OnlinePaymentDialog"
+import { resolveFinanceReturn, withFrom } from "@/lib/finance/nav-context"
 
 // =============================================================================
 // TYPES
@@ -65,6 +66,11 @@ interface InvoiceDetailClientProps {
 export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  // Controlled return target from the workspace `?from=profile:<id>` context
+  // (never a blind browser-back; falls back to the Thu học phí workspace).
+  const from = searchParams.get("from")
+  const back = React.useMemo(() => resolveFinanceReturn(from), [from])
 
   // Dialog states
   const [recordPaymentOpen, setRecordPaymentOpen] = React.useState(
@@ -101,8 +107,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
     setCancelDialogOpen(false)
     setPenaltyDialogOpen(false)
     setOnlinePaymentOpen(false)
-    router.replace(`/finance/invoices/${invoiceId}`)
-  }, [invoiceId, router])
+    // Drop `?action=` but PRESERVE `?from=` so the return context survives.
+    router.replace(withFrom(`/finance/invoices/${invoiceId}`, from))
+  }, [invoiceId, router, from])
 
   if (isLoading) {
     return <InvoiceDetailSkeleton />
@@ -111,9 +118,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   if (error || !invoice) {
     return (
       <div className="h-full flex flex-col p-4 sm:p-6">
-        <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit mb-4">
+        <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Quay lại
+          {back.label}
         </Button>
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
@@ -131,9 +138,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit">
+      <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit">
         <ArrowLeft className="h-4 w-4 mr-2" />
-        Quay lại
+        {back.label}
       </Button>
 
       {/* Header */}
