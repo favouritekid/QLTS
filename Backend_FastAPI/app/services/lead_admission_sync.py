@@ -643,70 +643,67 @@ async def sync_lead_tuition_paid(
     return True
 
 
-async def revert_lead_tuition_paid(
+async def _revert_lead_projection(
     db: AsyncSession,
     profile: models.AdmissionProfile,
+    *,
+    projected_status: str,
+    default_reason: str,
+    log_label: str,
     changed_by_user_id: Optional[int] = None,
     reason: Optional[str] = None,
 ) -> bool:
-    """Đảo projection "HK1 đã đóng": đưa lead VỀ status TRƯỚC khi
-    ``sync_lead_tuition_paid`` đẩy lên sts10 (Đã hoàn tất học phí).
+    """Shared body for reverting a finance→lead projection.
 
-    Dùng khi VOID (đảo) lô import đã ghi nhận học phí HK1 — đây là KẾ TOÁN SỬA
-    NHẦM ghi nhận, KHÔNG phải học sinh rút (luồng rút =
-    ``sync_lead_tuition_refunded`` → sts18). Đối xứng forward sync.
+    Restores the lead to the status it held BEFORE it was projected into
+    ``projected_status`` — read VERBATIM (no re-derive) from the most-recent
+    ``LeadStatusHistory`` row that set it. Symmetric to the forward sync.
 
-    An toàn:
-      1. Chỉ lùi khi lead ĐANG ở sts10. Đã chuyển tiếp (nhập học…) → tôn trọng
-         trạng thái hiện tại, KHÔNG kéo lùi pipeline.
-      2. Khôi phục từ LeadStatusHistory GẦN NHẤT đã đẩy lead VÀO sts10 (trường
-         old_*). Không có bản ghi → không biết lùi đâu → bỏ qua + log.
+    Safety (same for both the sts10 and sts14 reverts):
+      1. Only acts when the lead is CURRENTLY at ``projected_status`` — a lead
+         that advanced afterwards is left untouched (never drag the pipeline
+         back).
+      2. No forward history row → cannot know the prior state → skip + log.
 
-    Caller PHẢI gate: chỉ HK1 + chỉ khi fee KHÔNG còn cleared sau khi đảo tiền.
-
-    Returns True nếu đã lùi, False nếu bỏ qua.
+    Returns True if reverted, False if skipped.
     """
     lead = profile.lead
     if not lead:
-        log.warning(
-            "revert_lead_tuition_paid: Lead not loaded", profile_id=profile.id
-        )
+        log.warning(f"{log_label}: Lead not loaded", profile_id=profile.id)
         return False
 
-    # Guard 1: chỉ lùi khi lead đang ở sts10 (chưa ai chuyển tiếp).
-    if lead.consultation_status_id != TUITION_PAID_STATUS:
+    # Guard 1: only revert while the lead still sits at the projected status.
+    if lead.consultation_status_id != projected_status:
         log.debug(
-            "revert_lead_tuition_paid: lead not at tuition-paid, skip",
+            f"{log_label}: lead not at projected status, skip",
             lead_id=lead.id,
             current_status=lead.consultation_status_id,
         )
         return False
 
-    # Bản ghi forward GẦN NHẤT (→ sts10) → biết status TRƯỚC đó.
+    # Most-recent forward row (→ projected_status) carries the prior state.
     hist = (
         await db.execute(
             select(models.LeadStatusHistory)
             .where(
                 models.LeadStatusHistory.lead_id == lead.id,
                 models.LeadStatusHistory.new_consultation_status_id
-                == TUITION_PAID_STATUS,
+                == projected_status,
             )
             .order_by(models.LeadStatusHistory.id.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
     if hist is None:
-        log.warning(
-            "revert_lead_tuition_paid: no forward history, skip", lead_id=lead.id
-        )
+        log.warning(f"{log_label}: no forward history, skip", lead_id=lead.id)
         return False
 
     cur_status = lead.status
     cur_consult = lead.consultation_status_id
     cur_stage = lead.pipeline_stage_id
 
-    # Khôi phục giá trị TRƯỚC forward-sync. lead.status NOT NULL → fallback giữ hiện
-    # tại nếu history old_status rỗng (gần như không xảy ra: Lead.status default 'new').
+    # Restore the pre-projection values. lead.status is NOT NULL → fall back to
+    # the current value if the history old_status is empty (≈never: default 'new').
     lead.consultation_status_id = hist.old_consultation_status_id
     lead.pipeline_stage_id = hist.old_pipeline_stage_id
     lead.status = hist.old_status or cur_status
@@ -721,18 +718,42 @@ async def revert_lead_tuition_paid(
             old_pipeline_stage_id=cur_stage,
             new_pipeline_stage_id=lead.pipeline_stage_id,
             changed_by_user_id=changed_by_user_id,
-            reason=reason or "Đảo ghi nhận học phí (void lô import)",
+            reason=reason or default_reason,
         )
     )
     await db.flush()
 
     log.info(
-        "revert_lead_tuition_paid: lead reverted from tuition-paid",
+        f"{log_label}: lead reverted",
         lead_id=lead.id,
         profile_id=profile.id,
         to_consultation_status=lead.consultation_status_id,
     )
     return True
+
+
+async def revert_lead_tuition_paid(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    changed_by_user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> bool:
+    """Đảo projection "HK1 đã đóng": đưa lead VỀ status TRƯỚC khi
+    ``sync_lead_tuition_paid`` đẩy lên sts10 (Đã hoàn tất học phí).
+
+    Dùng khi VOID (đảo) lô import đã ghi nhận học phí HK1 — KẾ TOÁN SỬA NHẦM ghi
+    nhận, KHÔNG phải học sinh rút (luồng rút = ``sync_lead_tuition_refunded`` →
+    sts18). Caller PHẢI gate: chỉ HK1 + chỉ khi fee KHÔNG còn settled sau đảo.
+    """
+    return await _revert_lead_projection(
+        db,
+        profile,
+        projected_status=TUITION_PAID_STATUS,
+        default_reason="Đảo ghi nhận học phí (void lô import)",
+        log_label="revert_lead_tuition_paid",
+        changed_by_user_id=changed_by_user_id,
+        reason=reason,
+    )
 
 
 async def revert_lead_tuition_calculated(
@@ -744,89 +765,21 @@ async def revert_lead_tuition_calculated(
     """Đảo projection "HK1 đã tính học phí": đưa lead VỀ status TRƯỚC khi
     ``sync_lead_tuition_calculated`` đẩy lên sts14 (Chưa hoàn tất học phí).
 
-    Dùng khi HUỶ khoản học phí HK1 tính NHẦM (``cancel_fee``) — KẾ TOÁN SỬA
-    NHẦM ghi nhận, KHÔNG phải học sinh rút. Đối xứng forward sync. KHÔNG hardcode
-    đích (vd sts09): khôi phục đúng status TRƯỚC đó từ LeadStatusHistory — ca
-    thực tế có thể là sts13 "đã hoàn lệ phí" khi profile vẫn ``submitted``, ÉP
-    sts09 sẽ nâng sai lên "đủ điều kiện".
-
-    An toàn:
-      1. Chỉ lùi khi lead ĐANG ở sts14. Đã chuyển tiếp (đóng đủ → sts10, nhập
-         học…) → tôn trọng trạng thái hiện tại, KHÔNG kéo lùi pipeline.
-      2. Khôi phục từ LeadStatusHistory GẦN NHẤT đã đẩy lead VÀO sts14 (trường
-         old_*). Không có bản ghi → không biết lùi đâu → bỏ qua + log.
-
-    Caller PHẢI gate: chỉ HK1 tuition + chỉ khi fee bị huỷ (paid_amount == 0).
-
-    Returns True nếu đã lùi, False nếu bỏ qua.
+    Dùng khi HUỶ khoản học phí HK1 tính NHẦM (``cancel_fee``). KHÔNG hardcode đích
+    (vd sts09): khôi phục đúng status TRƯỚC đó từ history — ca thực tế có thể là
+    sts13 "đã hoàn lệ phí" khi profile vẫn ``submitted``, ÉP sts09 sẽ nâng sai
+    lên "đủ điều kiện". Caller PHẢI gate: chỉ HK1 tuition + fee bị huỷ
+    (paid_amount == 0) + lead không còn nợ HK1 năm/profile khác.
     """
-    lead = profile.lead
-    if not lead:
-        log.warning(
-            "revert_lead_tuition_calculated: Lead not loaded", profile_id=profile.id
-        )
-        return False
-
-    # Guard 1: chỉ lùi khi lead đang ở sts14 (chưa ai chuyển tiếp).
-    if lead.consultation_status_id != TUITION_CALCULATED_STATUS:
-        log.debug(
-            "revert_lead_tuition_calculated: lead not at tuition-calculated, skip",
-            lead_id=lead.id,
-            current_status=lead.consultation_status_id,
-        )
-        return False
-
-    # Bản ghi forward GẦN NHẤT (→ sts14) → biết status TRƯỚC đó.
-    hist = (
-        await db.execute(
-            select(models.LeadStatusHistory)
-            .where(
-                models.LeadStatusHistory.lead_id == lead.id,
-                models.LeadStatusHistory.new_consultation_status_id
-                == TUITION_CALCULATED_STATUS,
-            )
-            .order_by(models.LeadStatusHistory.id.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if hist is None:
-        log.warning(
-            "revert_lead_tuition_calculated: no forward history, skip",
-            lead_id=lead.id,
-        )
-        return False
-
-    cur_status = lead.status
-    cur_consult = lead.consultation_status_id
-    cur_stage = lead.pipeline_stage_id
-
-    # Khôi phục giá trị TRƯỚC forward-sync (verbatim từ history, KHÔNG re-derive).
-    lead.consultation_status_id = hist.old_consultation_status_id
-    lead.pipeline_stage_id = hist.old_pipeline_stage_id
-    lead.status = hist.old_status or cur_status
-
-    db.add(
-        models.LeadStatusHistory(
-            lead_id=lead.id,
-            old_status=cur_status,
-            new_status=lead.status,
-            old_consultation_status_id=cur_consult,
-            new_consultation_status_id=lead.consultation_status_id,
-            old_pipeline_stage_id=cur_stage,
-            new_pipeline_stage_id=lead.pipeline_stage_id,
-            changed_by_user_id=changed_by_user_id,
-            reason=reason or "Huỷ khoản học phí tính nhầm (cancel_fee)",
-        )
+    return await _revert_lead_projection(
+        db,
+        profile,
+        projected_status=TUITION_CALCULATED_STATUS,
+        default_reason="Huỷ khoản học phí tính nhầm (cancel_fee)",
+        log_label="revert_lead_tuition_calculated",
+        changed_by_user_id=changed_by_user_id,
+        reason=reason,
     )
-    await db.flush()
-
-    log.info(
-        "revert_lead_tuition_calculated: lead reverted from tuition-calculated",
-        lead_id=lead.id,
-        profile_id=profile.id,
-        to_consultation_status=lead.consultation_status_id,
-    )
-    return True
 
 
 async def sync_lead_tuition_refunded(

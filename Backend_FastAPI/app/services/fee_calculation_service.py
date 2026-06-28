@@ -940,39 +940,44 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
-        # Non-cancelled invoices (draft/issued/partial/overdue). fee.paid_amount
-        # == 0 ⟹ every one of these is unpaid → safe to cancel.
-        active_invoices = await self.invoice_repo.get_by_fee_id(
-            fee_id, unit_id, active_only=True
+        # ALL invoices of the fee (incl cancelled). The guards must see a
+        # payment/intent even on an invoice cancelled INDEPENDENTLY (e.g. the
+        # MISA cancel-and-reissue flow): a still-live intent on a cancelled
+        # invoice would otherwise slip past and later land gateway money the
+        # callback must refuse. The cascade below only re-cancels the
+        # non-cancelled ones.
+        all_invoices = await self.invoice_repo.get_by_fee_id(
+            fee_id, unit_id, active_only=False
         )
-        invoice_ids = [inv.id for inv in active_invoices]
+        all_invoice_ids = [inv.id for inv in all_invoices]
+        active_invoices = [
+            inv for inv in all_invoices
+            if inv.status != InvoiceStatusEnum.cancelled.value
+        ]
 
-        if invoice_ids:
+        if all_invoice_ids:
             # Guard A: a pending (unverified) manual payment must be resolved
-            # first — it is not in fee.paid_amount yet but would write money on
-            # a cancelled fee when verified.
-            pending_payments = (
-                await self.db.execute(
-                    sa.select(sa.func.count(Payment.id)).where(
-                        Payment.invoice_id.in_(invoice_ids),
-                        Payment.status == PaymentStatusEnum.pending.value,
-                    )
-                )
-            ).scalar() or 0
-            if pending_payments:
+            # first — it is not in fee.paid_amount yet but would write money on a
+            # cancelled fee when verified. Invoice.payments is eager-loaded by
+            # get_by_fee_id → check in-Python (no extra round-trip).
+            if any(
+                p.status == PaymentStatusEnum.pending.value
+                for inv in all_invoices
+                for p in inv.payments
+            ):
                 raise BusinessRuleViolation(
                     "Không thể huỷ khoản phí: đang có khoản thanh toán chờ xác "
                     "minh. Vui lòng xác minh hoặc từ chối trước khi huỷ."
                 )
 
-            # Guard B: an active online intent could still report success. If we
-            # cancel now, the late callback is rejected by can_process_callback
-            # (terminal/cancelled) → money received but unrecorded. Block.
+            # Guard B: a still-processable online intent on ANY invoice of the
+            # fee could report success after cancel; the callback would then be
+            # rejected (cancelled target) → money received but unrecorded. Block.
             now = datetime.now(timezone.utc)
             active_intents = (
                 await self.db.execute(
                     sa.select(sa.func.count(PaymentIntent.id)).where(
-                        PaymentIntent.invoice_id.in_(invoice_ids),
+                        PaymentIntent.invoice_id.in_(all_invoice_ids),
                         PaymentIntent.status.in_(
                             [
                                 PaymentIntentStatusEnum.created.value,
@@ -1004,23 +1009,55 @@ class FeeCalculationService:
 
         await self.db.flush()
 
-        # Lead projection reverse: ONLY HK1 tuition projects onto the lead.
-        # Restore the pre-sts14 status from history (symmetric forward sync) —
-        # NOT a hardcoded target. revert_lead_tuition_calculated guards on the
-        # lead still being at sts14, so a lead that advanced (paid/enrolled) is
-        # left untouched. Best-effort: a missing profile/lead never blocks cancel.
+        # Lead projection reverse: ONLY HK1 tuition projects onto the lead, and
+        # ONLY when NO OTHER non-cancelled HK1 tuition fee remains for the lead.
+        # A multi-year lead may still owe HK1 on another profile/year — the
+        # forward sync floors the lead at sts14 once (lead-level idempotent), so
+        # cancelling one HK1 fee must not clear that label while another HK1
+        # obligation stands. revert_lead_tuition_calculated additionally guards
+        # on the lead still being at sts14. Best-effort: wrap in a SAVEPOINT so a
+        # projection failure never rolls back the cancel itself.
         if fee.fee_type == FeeTypeEnum.tuition.value and fee.semester_no == 1:
             profile = await self._get_profile(fee.admission_profile_id, unit_id)
             if profile is not None:
-                from app.services.lead_admission_sync import (
-                    revert_lead_tuition_calculated,
-                )
-                await revert_lead_tuition_calculated(
-                    db=self.db,
-                    profile=profile,
-                    changed_by_user_id=user_id,
-                    reason=f"Huỷ khoản học phí HK1 (tính nhầm). Lý do: {reason}",
-                )
+                other_hk1 = (
+                    await self.db.execute(
+                        sa.select(sa.func.count(Fee.id))
+                        .join(
+                            models.AdmissionProfile,
+                            models.AdmissionProfile.id
+                            == Fee.admission_profile_id,
+                        )
+                        .where(
+                            models.AdmissionProfile.lead_id == profile.lead_id,
+                            Fee.fee_type == FeeTypeEnum.tuition.value,
+                            Fee.semester_no == 1,
+                            Fee.status != FeeStatusEnum.cancelled.value,
+                        )
+                    )
+                ).scalar() or 0
+                if other_hk1 == 0:
+                    from app.services.lead_admission_sync import (
+                        revert_lead_tuition_calculated,
+                    )
+                    try:
+                        async with self.db.begin_nested():
+                            await revert_lead_tuition_calculated(
+                                db=self.db,
+                                profile=profile,
+                                changed_by_user_id=user_id,
+                                reason=(
+                                    "Huỷ khoản học phí HK1 (tính nhầm). "
+                                    f"Lý do: {reason}"
+                                ),
+                            )
+                    except Exception:
+                        log.warning(
+                            "cancel_fee: lead projection revert failed "
+                            "(best-effort, cancel kept)",
+                            fee_id=fee_id,
+                            exc_info=True,
+                        )
 
         log.info(
             "fee_cancelled",

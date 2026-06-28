@@ -46,6 +46,7 @@ from app.repositories.payment_repository import (
     PaymentIntentRepository,
     PaymentTransactionRepository,
 )
+from app.services.payment_service import assert_payable_target
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -209,10 +210,9 @@ class PaymentIntentService:
         # cancelled when we check here (we refuse). create_intent takes only the
         # fee lock (no invoice lock) → no ABBA with verify/callback (invoice→fee).
         fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
-        if fee is None or fee.status == FeeStatusEnum.cancelled.value:
-            raise BusinessRuleViolation(
-                "Không thể tạo giao dịch thanh toán: khoản phí đã bị huỷ."
-            )
+        if fee is None:
+            raise ResourceNotFoundError("Fee not found")
+        assert_payable_target(fee, invoice, action="tạo giao dịch thanh toán")
 
         # Get payment method
         method = await self._get_payment_method(method_id)
@@ -603,13 +603,7 @@ class PaymentIntentService:
         # path can't reach here; this also closes the manual cancel-invoice /
         # cancel-intent surface. A late gateway success on a dead target is
         # refused — the caller marks the intent failed; reconcile out-of-band.
-        if (
-            fee.status == FeeStatusEnum.cancelled.value
-            or invoice.status == InvoiceStatusEnum.cancelled.value
-        ):
-            raise BusinessRuleViolation(
-                "Không thể ghi nhận thanh toán: khoản phí/hoá đơn đã bị huỷ."
-            )
+        assert_payable_target(fee, invoice, action="ghi nhận thanh toán")
 
         # Capture balance before
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount

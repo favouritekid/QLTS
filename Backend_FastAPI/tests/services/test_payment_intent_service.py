@@ -356,6 +356,47 @@ class TestProcessCallback:
         assert payment is not None
         assert payment.amount == amount
 
+    async def test_process_callback_refused_on_cancelled_fee(
+        self, db, intent_fixtures, admin_user
+    ):
+        """2b-bis (money-critical): a SUCCESS callback whose fee was cancelled
+        AFTER the intent was created is REFUSED — never write money onto a
+        cancelled target. paid_amount stays 0 (no half-applied payment)."""
+        service = PaymentIntentService(db)
+        invoice = intent_fixtures["invoice"]
+        method = intent_fixtures["online_method"]
+        amount = Decimal("5000000")
+
+        intent, _ = await service.create_intent(
+            invoice_id=invoice.id,
+            method_id=method.id,
+            amount=amount,
+            idempotency_key=str(uuid.uuid4()),
+            return_url=VALID_RETURN_URL,
+            unit_id=intent_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Fee cancelled out-of-band AFTER the intent exists (race / reissue).
+        intent_fixtures["fee"].status = FeeStatusEnum.cancelled.value
+        await db.commit()
+
+        callback_data = {
+            "gateway_ref": intent.gateway_ref,
+            "status": "success",
+            "amount": str(amount),
+        }
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.process_callback(
+                gateway_code=method.code,
+                callback_data=callback_data,
+                unit_id=intent_fixtures["unit_id"],
+            )
+        assert "đã bị huỷ" in str(exc.value)
+
+        await db.refresh(invoice)
+        assert invoice.paid_amount == Decimal("0")
+
     async def test_process_callback_amount_mismatch(self, db, intent_fixtures, admin_user):
         """Amount mismatch in callback marks intent as failed (C1)."""
         service = PaymentIntentService(db)

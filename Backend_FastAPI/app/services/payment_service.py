@@ -130,6 +130,24 @@ def reverse_payment_balances(
     return fee_balance_before, fee_remaining
 
 
+def assert_payable_target(
+    fee: Optional[Fee], invoice: Optional[Invoice], *, action: str
+) -> None:
+    """Refuse to act on a cancelled fee/invoice — the SINGLE invariant every
+    money-touching entry runs right after locking the fee+invoice (manual
+    verify, online callback, intent creation). Centralising it means a future
+    fourth entry point can't silently re-open the "ghi tiền vào fee đã huỷ"
+    hole. ``action`` customises the Vietnamese message.
+    """
+    if (fee is not None and fee.status == FeeStatusEnum.cancelled.value) or (
+        invoice is not None
+        and invoice.status == InvoiceStatusEnum.cancelled.value
+    ):
+        raise BusinessRuleViolation(
+            f"Không thể {action}: khoản phí/hoá đơn đã bị huỷ."
+        )
+
+
 class PaymentService:
     """
     Service for manual payment processing with maker-checker workflow.
@@ -367,13 +385,7 @@ class PaymentService:
         # to write money onto a cancelled target — the pending payment is left
         # for rejection. cancel_fee blocks while a pending payment exists, so
         # this only fires for the narrow record-during-cancel race window.
-        if (
-            fee.status == FeeStatusEnum.cancelled.value
-            or invoice.status == InvoiceStatusEnum.cancelled.value
-        ):
-            raise BusinessRuleViolation(
-                "Không thể xác minh thanh toán: khoản phí/hoá đơn đã bị huỷ."
-            )
+        assert_payable_target(fee, invoice, action="xác minh thanh toán")
 
         # Capture settled state BEFORE mutation (PR 5 transition detection)
         from app.services.fee_calculation_service import is_hk1_settled_fee
