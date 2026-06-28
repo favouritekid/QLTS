@@ -583,6 +583,19 @@ class PaymentIntentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
+        # Defense-in-depth (Nhóm B): never write money onto a cancelled fee or
+        # invoice. cancel_fee blocks while an active intent exists, so the normal
+        # path can't reach here; this also closes the manual cancel-invoice /
+        # cancel-intent surface. A late gateway success on a dead target is
+        # refused — the caller marks the intent failed; reconcile out-of-band.
+        if (
+            fee.status == FeeStatusEnum.cancelled.value
+            or invoice.status == InvoiceStatusEnum.cancelled.value
+        ):
+            raise BusinessRuleViolation(
+                "Không thể ghi nhận thanh toán: khoản phí/hoá đơn đã bị huỷ."
+            )
+
         # Capture balance before
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
 

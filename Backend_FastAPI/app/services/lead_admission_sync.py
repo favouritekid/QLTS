@@ -735,6 +735,100 @@ async def revert_lead_tuition_paid(
     return True
 
 
+async def revert_lead_tuition_calculated(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    changed_by_user_id: Optional[int] = None,
+    reason: Optional[str] = None,
+) -> bool:
+    """Đảo projection "HK1 đã tính học phí": đưa lead VỀ status TRƯỚC khi
+    ``sync_lead_tuition_calculated`` đẩy lên sts14 (Chưa hoàn tất học phí).
+
+    Dùng khi HUỶ khoản học phí HK1 tính NHẦM (``cancel_fee``) — KẾ TOÁN SỬA
+    NHẦM ghi nhận, KHÔNG phải học sinh rút. Đối xứng forward sync. KHÔNG hardcode
+    đích (vd sts09): khôi phục đúng status TRƯỚC đó từ LeadStatusHistory — ca
+    thực tế có thể là sts13 "đã hoàn lệ phí" khi profile vẫn ``submitted``, ÉP
+    sts09 sẽ nâng sai lên "đủ điều kiện".
+
+    An toàn:
+      1. Chỉ lùi khi lead ĐANG ở sts14. Đã chuyển tiếp (đóng đủ → sts10, nhập
+         học…) → tôn trọng trạng thái hiện tại, KHÔNG kéo lùi pipeline.
+      2. Khôi phục từ LeadStatusHistory GẦN NHẤT đã đẩy lead VÀO sts14 (trường
+         old_*). Không có bản ghi → không biết lùi đâu → bỏ qua + log.
+
+    Caller PHẢI gate: chỉ HK1 tuition + chỉ khi fee bị huỷ (paid_amount == 0).
+
+    Returns True nếu đã lùi, False nếu bỏ qua.
+    """
+    lead = profile.lead
+    if not lead:
+        log.warning(
+            "revert_lead_tuition_calculated: Lead not loaded", profile_id=profile.id
+        )
+        return False
+
+    # Guard 1: chỉ lùi khi lead đang ở sts14 (chưa ai chuyển tiếp).
+    if lead.consultation_status_id != TUITION_CALCULATED_STATUS:
+        log.debug(
+            "revert_lead_tuition_calculated: lead not at tuition-calculated, skip",
+            lead_id=lead.id,
+            current_status=lead.consultation_status_id,
+        )
+        return False
+
+    # Bản ghi forward GẦN NHẤT (→ sts14) → biết status TRƯỚC đó.
+    hist = (
+        await db.execute(
+            select(models.LeadStatusHistory)
+            .where(
+                models.LeadStatusHistory.lead_id == lead.id,
+                models.LeadStatusHistory.new_consultation_status_id
+                == TUITION_CALCULATED_STATUS,
+            )
+            .order_by(models.LeadStatusHistory.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if hist is None:
+        log.warning(
+            "revert_lead_tuition_calculated: no forward history, skip",
+            lead_id=lead.id,
+        )
+        return False
+
+    cur_status = lead.status
+    cur_consult = lead.consultation_status_id
+    cur_stage = lead.pipeline_stage_id
+
+    # Khôi phục giá trị TRƯỚC forward-sync (verbatim từ history, KHÔNG re-derive).
+    lead.consultation_status_id = hist.old_consultation_status_id
+    lead.pipeline_stage_id = hist.old_pipeline_stage_id
+    lead.status = hist.old_status or cur_status
+
+    db.add(
+        models.LeadStatusHistory(
+            lead_id=lead.id,
+            old_status=cur_status,
+            new_status=lead.status,
+            old_consultation_status_id=cur_consult,
+            new_consultation_status_id=lead.consultation_status_id,
+            old_pipeline_stage_id=cur_stage,
+            new_pipeline_stage_id=lead.pipeline_stage_id,
+            changed_by_user_id=changed_by_user_id,
+            reason=reason or "Huỷ khoản học phí tính nhầm (cancel_fee)",
+        )
+    )
+    await db.flush()
+
+    log.info(
+        "revert_lead_tuition_calculated: lead reverted from tuition-calculated",
+        lead_id=lead.id,
+        profile_id=profile.id,
+        to_consultation_status=lead.consultation_status_id,
+    )
+    return True
+
+
 async def sync_lead_tuition_refunded(
     db: AsyncSession,
     profile: models.AdmissionProfile,

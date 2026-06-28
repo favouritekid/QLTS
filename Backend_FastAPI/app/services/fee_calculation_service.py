@@ -33,7 +33,8 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.models.finance import (
     Fee, FeeAppliedDiscount, Invoice, Payment, InstallmentPlan,
-    FeeTypeEnum, FeeStatusEnum,
+    FeeTypeEnum, FeeStatusEnum, InvoiceStatusEnum, PaymentStatusEnum,
+    PaymentIntent, PaymentIntentStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
@@ -899,7 +900,21 @@ class FeeCalculationService:
         unit_id: Optional[int] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
-        Cancel a fee (only if no payments made).
+        Cancel a fee — back out a mistakenly-created/calculated fee.
+
+        Only allowed when nothing has been collected (``fee.paid_amount == 0``)
+        and no payment is mid-flight. Hardening (Nhóm B):
+          * Block if any unverified ``pending`` payment exists on the fee's
+            invoices (would land money on a dead fee once verified).
+          * Block if an active online ``PaymentIntent`` (created/pending, not
+            expired) exists — a late gateway success would be rejected by
+            ``can_process_callback`` AFTER the fee is cancelled, black-holing the
+            money. Let the intent complete/expire first.
+          * Cascade-cancel EVERY non-cancelled invoice of the fee (incl
+            ``draft``) in the SAME transaction — matches the FE FeeCancelDialog
+            promise and removes the payable surface.
+          * For HK1 tuition only, revert the lead off sts14 (symmetric to the
+            forward ``sync_lead_tuition_calculated`` projection).
 
         Args:
             fee_id: Fee to cancel
@@ -912,7 +927,8 @@ class FeeCalculationService:
 
         Raises:
             ResourceNotFoundError: If fee not found
-            BusinessRuleViolation: If fee has payments
+            BusinessRuleViolation: If fee has payments / pending payment /
+                active online intent
         """
         fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
@@ -924,18 +940,94 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
+        # Non-cancelled invoices (draft/issued/partial/overdue). fee.paid_amount
+        # == 0 ⟹ every one of these is unpaid → safe to cancel.
+        active_invoices = await self.invoice_repo.get_by_fee_id(
+            fee_id, unit_id, active_only=True
+        )
+        invoice_ids = [inv.id for inv in active_invoices]
+
+        if invoice_ids:
+            # Guard A: a pending (unverified) manual payment must be resolved
+            # first — it is not in fee.paid_amount yet but would write money on
+            # a cancelled fee when verified.
+            pending_payments = (
+                await self.db.execute(
+                    sa.select(sa.func.count(Payment.id)).where(
+                        Payment.invoice_id.in_(invoice_ids),
+                        Payment.status == PaymentStatusEnum.pending.value,
+                    )
+                )
+            ).scalar() or 0
+            if pending_payments:
+                raise BusinessRuleViolation(
+                    "Không thể huỷ khoản phí: đang có khoản thanh toán chờ xác "
+                    "minh. Vui lòng xác minh hoặc từ chối trước khi huỷ."
+                )
+
+            # Guard B: an active online intent could still report success. If we
+            # cancel now, the late callback is rejected by can_process_callback
+            # (terminal/cancelled) → money received but unrecorded. Block.
+            now = datetime.now(timezone.utc)
+            active_intents = (
+                await self.db.execute(
+                    sa.select(sa.func.count(PaymentIntent.id)).where(
+                        PaymentIntent.invoice_id.in_(invoice_ids),
+                        PaymentIntent.status.in_(
+                            [
+                                PaymentIntentStatusEnum.created.value,
+                                PaymentIntentStatusEnum.pending.value,
+                            ]
+                        ),
+                        PaymentIntent.expires_at > now,
+                    )
+                )
+            ).scalar() or 0
+            if active_intents:
+                raise BusinessRuleViolation(
+                    "Không thể huỷ khoản phí: đang có giao dịch online chờ xử "
+                    "lý. Vui lòng đợi giao dịch hoàn tất/hết hạn rồi huỷ."
+                )
+
+        now = datetime.now(timezone.utc)
+        # Cascade-cancel every non-cancelled invoice in the same transaction.
+        for inv in active_invoices:
+            inv.status = InvoiceStatusEnum.cancelled.value
+            inv.cancelled_at = now
+            inv.cancelled_by_id = user_id
+            inv.cancelled_reason = reason
+
         fee.status = FeeStatusEnum.cancelled.value
         fee.version += 1
-        fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
+        fee.notes = f"{fee.notes or ''}\n[{now.isoformat()}] " \
                     f"Cancelled by user {user_id}. Reason: {reason}"
 
         await self.db.flush()
+
+        # Lead projection reverse: ONLY HK1 tuition projects onto the lead.
+        # Restore the pre-sts14 status from history (symmetric forward sync) —
+        # NOT a hardcoded target. revert_lead_tuition_calculated guards on the
+        # lead still being at sts14, so a lead that advanced (paid/enrolled) is
+        # left untouched. Best-effort: a missing profile/lead never blocks cancel.
+        if fee.fee_type == FeeTypeEnum.tuition.value and fee.semester_no == 1:
+            profile = await self._get_profile(fee.admission_profile_id, unit_id)
+            if profile is not None:
+                from app.services.lead_admission_sync import (
+                    revert_lead_tuition_calculated,
+                )
+                await revert_lead_tuition_calculated(
+                    db=self.db,
+                    profile=profile,
+                    changed_by_user_id=user_id,
+                    reason=f"Huỷ khoản học phí HK1 (tính nhầm). Lý do: {reason}",
+                )
 
         log.info(
             "fee_cancelled",
             fee_id=fee_id,
             reason=reason,
             user_id=user_id,
+            invoices_cancelled=len(active_invoices),
         )
 
         return fee, None
