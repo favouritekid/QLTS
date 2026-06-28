@@ -360,6 +360,11 @@ class FeeRepository(BaseRepository[Fee]):
         Returns:
             True if duplicate exists
         """
+        # Exclude cancelled fees: they no longer occupy the partial unique
+        # index (uq_fee_*_active, status <> 'cancelled'), so a fee that was
+        # cancelled (e.g. tính nhầm) must NOT block re-calculating a correct
+        # one. Keep this predicate in lock-step with those partial indexes.
+        not_cancelled = Fee.status != FeeStatusEnum.cancelled.value
         if fee_type == "tuition" and semester_no is not None:
             query = (
                 select(func.count(Fee.id))
@@ -368,6 +373,7 @@ class FeeRepository(BaseRepository[Fee]):
                         Fee.admission_profile_id == profile_id,
                         Fee.fee_type == fee_type,
                         Fee.semester_no == semester_no,
+                        not_cancelled,
                     )
                 )
             )
@@ -384,6 +390,7 @@ class FeeRepository(BaseRepository[Fee]):
                         Fee.admission_profile_id == profile_id,
                         Fee.fee_type == fee_type,
                         Fee.academic_year == academic_year_int,
+                        not_cancelled,
                     )
                 )
             )

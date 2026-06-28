@@ -46,6 +46,7 @@ from app.repositories.payment_repository import (
     PaymentIntentRepository,
     PaymentTransactionRepository,
 )
+from app.services.payment_service import assert_payable_target
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -198,6 +199,20 @@ class PaymentIntentService:
             raise BusinessRuleViolation(
                 f"Payment amount ({amount}) exceeds remaining balance ({remaining})"
             )
+
+        # Serialize against cancel_fee, which holds the fee row lock: acquire it
+        # before creating the intent and refuse if the fee is cancelled. This
+        # closes the race where an intent is created on a fee being cancelled —
+        # the gateway could later collect money the callback must refuse
+        # (reconciliation hole). cancel_fee blocks while an active intent exists,
+        # so with this lock the two operations cannot interleave: either the
+        # intent exists when cancel_fee checks (it blocks), or the fee is already
+        # cancelled when we check here (we refuse). create_intent takes only the
+        # fee lock (no invoice lock) → no ABBA with verify/callback (invoice→fee).
+        fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
+        if fee is None:
+            raise ResourceNotFoundError("Fee not found")
+        assert_payable_target(fee, invoice, action="tạo giao dịch thanh toán")
 
         # Get payment method
         method = await self._get_payment_method(method_id)
@@ -582,6 +597,13 @@ class PaymentIntentService:
         fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
+
+        # Defense-in-depth (Nhóm B): never write money onto a cancelled fee or
+        # invoice. cancel_fee blocks while an active intent exists, so the normal
+        # path can't reach here; this also closes the manual cancel-invoice /
+        # cancel-intent surface. A late gateway success on a dead target is
+        # refused — the caller marks the intent failed; reconcile out-of-band.
+        assert_payable_target(fee, invoice, action="ghi nhận thanh toán")
 
         # Capture balance before
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount

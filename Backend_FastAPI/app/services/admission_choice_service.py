@@ -582,11 +582,10 @@ class AdmissionChoiceService:
         there is no fee delete/supersede flow). Hence only non-cancelled tuition
         fees freeze add/delete/reorder/score-replace.
 
-        Residual (tracked as debt): re-creating an HK1 fee AFTER a cancel is
-        still blocked by ``check_duplicate`` + the partial-unique index
-        ``uq_fee_profile_type_semester_tuition`` (both ignore status, so the
-        cancelled row keeps the ``(profile, tuition, semester_no)`` slot) — that
-        needs a dedicated void/supersede flow.
+        Re-creating an HK1 fee AFTER a cancel IS now allowed: ``check_duplicate``
+        and the partial-unique index ``uq_fee_profile_type_semester_tuition``
+        both exclude ``status = 'cancelled'`` (PR-2), so a cancelled row no
+        longer reserves the ``(profile, tuition, semester_no)`` slot.
         """
         if await self.fee_repo.has_active_tuition_fee(profile.id):
             raise BusinessRuleViolation(

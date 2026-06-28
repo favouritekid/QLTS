@@ -14,20 +14,25 @@ Covers:
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, date
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.models.finance import (
-    Fee, PaymentMethod, InstallmentPlan,
-    FeeTypeEnum, FeeStatusEnum,
+    Fee, Invoice, Payment, PaymentMethod, InstallmentPlan, PaymentIntent,
+    FeeTypeEnum, FeeStatusEnum, InvoiceStatusEnum,
+    PaymentStatusEnum, PaymentIntentStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
 from app.services.fee_calculation_service import (
     FeeCalculationService,
     calculate_installment_amounts,
+)
+from app.services.lead_admission_sync import (
+    TUITION_CALCULATED_STATUS,
+    TUITION_PAID_STATUS,
 )
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -528,6 +533,291 @@ class TestFeeCancellation:
             )
 
         assert "existing payments" in str(exc_info.value).lower()
+
+    # ---- PR-2 hardening: cascade invoices, guards, lead revert ------------
+
+    async def _mk_tuition_hk1(
+        self, db, profile, *, final="10000000", invoices=(), status="invoiced"
+    ):
+        """Create an HK1 tuition fee (+ optional invoices) directly."""
+        fee = Fee(
+            admission_profile_id=profile.id,
+            fee_type="tuition",
+            academic_year=2025,
+            semester_no=1,
+            base_amount=Decimal(final),
+            final_amount=Decimal(final),
+            status=status,
+        )
+        db.add(fee)
+        await db.flush()
+        inv_objs = []
+        for i, (amount, st) in enumerate(invoices, start=1):
+            inv = Invoice(
+                fee_id=fee.id,
+                invoice_number=f"INV-CF-{fee.id}-{i}",
+                installment_no=i,
+                amount=Decimal(str(amount)),
+                paid_amount=Decimal("0"),
+                penalty_amount=Decimal("0"),
+                status=st,
+                due_date=date(2025, 9, 5),
+            )
+            db.add(inv)
+            inv_objs.append(inv)
+        await db.flush()
+        return fee, inv_objs
+
+    async def _seed_consult(self, db, status_id, stage_id="stg01"):
+        if await db.get(models.ConsultationStatus, status_id) is None:
+            db.add(models.ConsultationStatus(
+                id=status_id, name=status_id, color_code="#888888",
+                stage_id=stage_id,
+            ))
+            await db.flush()
+
+    async def _put_lead_at_sts14(self, db, lead):
+        """Move lead to sts14 + forward LeadStatusHistory row (old = current)."""
+        await self._seed_consult(db, TUITION_CALCULATED_STATUS)
+        orig_cs = lead.consultation_status_id
+        orig_stage = lead.pipeline_stage_id
+        db.add(models.LeadStatusHistory(
+            lead_id=lead.id,
+            old_status=lead.status,
+            new_status=lead.status,
+            old_consultation_status_id=orig_cs,
+            new_consultation_status_id=TUITION_CALCULATED_STATUS,
+            old_pipeline_stage_id=orig_stage,
+            new_pipeline_stage_id="stg01",
+            changed_by_user_id=None,
+            reason="test setup: forward to sts14",
+        ))
+        lead.consultation_status_id = TUITION_CALCULATED_STATUS
+        lead.pipeline_stage_id = "stg01"
+        await db.flush()
+        return orig_cs
+
+    async def test_cancel_fee_cascades_active_invoices(
+        self, db, fee_fixtures, admin_user
+    ):
+        """cancel_fee huỷ MỌI invoice non-cancelled (gồm cả draft)."""
+        service = FeeCalculationService(db)
+        fee, invs = await self._mk_tuition_hk1(
+            db, fee_fixtures["profile"],
+            invoices=[("6000000", InvoiceStatusEnum.issued.value),
+                      ("4000000", InvoiceStatusEnum.draft.value)],
+        )
+        await db.commit()
+
+        await service.cancel_fee(
+            fee_id=fee.id, reason="tính nhầm", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        for inv in invs:
+            await db.refresh(inv)
+            assert inv.status == InvoiceStatusEnum.cancelled.value
+            assert inv.cancelled_by_id == admin_user.id
+            assert inv.cancelled_reason == "tính nhầm"
+        await db.refresh(fee)
+        assert fee.status == FeeStatusEnum.cancelled.value
+
+    async def test_cancel_fee_blocked_pending_payment(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Có payment pending trên invoice của fee → chặn huỷ."""
+        service = FeeCalculationService(db)
+        fee, invs = await self._mk_tuition_hk1(
+            db, fee_fixtures["profile"],
+            invoices=[("10000000", InvoiceStatusEnum.issued.value)],
+        )
+        db.add(Payment(
+            invoice_id=invs[0].id,
+            method_id=fee_fixtures["cash_method"].id,
+            amount=Decimal("1000000"),
+            status=PaymentStatusEnum.pending.value,
+            payment_date=datetime.now(timezone.utc),
+            created_by_id=admin_user.id,
+        ))
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.cancel_fee(
+                fee_id=fee.id, reason="x", user_id=admin_user.id,
+                unit_id=fee_fixtures["unit_id"],
+            )
+        assert "chờ xác minh" in str(exc.value)
+
+    async def test_cancel_fee_blocked_active_intent(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Có PaymentIntent created/pending chưa hết hạn → chặn huỷ."""
+        service = FeeCalculationService(db)
+        fee, invs = await self._mk_tuition_hk1(
+            db, fee_fixtures["profile"],
+            invoices=[("10000000", InvoiceStatusEnum.issued.value)],
+        )
+        db.add(PaymentIntent(
+            invoice_id=invs[0].id,
+            method_id=fee_fixtures["cash_method"].id,
+            amount=Decimal("10000000"),
+            idempotency_key="cf-intent-1",
+            status=PaymentIntentStatusEnum.pending.value,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ))
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.cancel_fee(
+                fee_id=fee.id, reason="x", user_id=admin_user.id,
+                unit_id=fee_fixtures["unit_id"],
+            )
+        assert "giao dịch online" in str(exc.value)
+
+    async def test_cancel_fee_allows_when_intent_expired(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Intent đã hết hạn (can_process_callback=False) → KHÔNG chặn huỷ."""
+        service = FeeCalculationService(db)
+        fee, invs = await self._mk_tuition_hk1(
+            db, fee_fixtures["profile"],
+            invoices=[("10000000", InvoiceStatusEnum.issued.value)],
+        )
+        db.add(PaymentIntent(
+            invoice_id=invs[0].id,
+            method_id=fee_fixtures["cash_method"].id,
+            amount=Decimal("10000000"),
+            idempotency_key="cf-intent-exp",
+            status=PaymentIntentStatusEnum.pending.value,
+            expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        ))
+        await db.commit()
+
+        cancelled, _ = await service.cancel_fee(
+            fee_id=fee.id, reason="x", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+        assert cancelled.status == FeeStatusEnum.cancelled.value
+
+    async def test_cancel_fee_reverts_hk1_lead_from_sts14(
+        self, db, fee_fixtures, admin_user
+    ):
+        """HK1 tuition + lead đang sts14 → huỷ fee lùi lead về status TRƯỚC."""
+        service = FeeCalculationService(db)
+        lead = fee_fixtures["lead"]
+        orig_cs = await self._put_lead_at_sts14(db, lead)
+        fee, _ = await self._mk_tuition_hk1(db, fee_fixtures["profile"])
+        await db.commit()
+
+        await service.cancel_fee(
+            fee_id=fee.id, reason="tính nhầm", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        await db.refresh(lead)
+        assert lead.consultation_status_id == orig_cs
+
+    async def test_cancel_fee_no_revert_for_non_tuition(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Phí KHÔNG phải HK1 tuition → KHÔNG đụng lead dù lead ở sts14."""
+        service = FeeCalculationService(db)
+        lead = fee_fixtures["lead"]
+        await self._put_lead_at_sts14(db, lead)
+        fee, _ = await service.calculate_fee(
+            admission_profile_id=fee_fixtures["profile"].id,
+            fee_type=FeeTypeEnum.application,
+            base_amount=Decimal("70000"),
+            academic_year=2025,
+            user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        await service.cancel_fee(
+            fee_id=fee.id, reason="x", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        await db.refresh(lead)
+        assert lead.consultation_status_id == TUITION_CALCULATED_STATUS
+
+    async def test_cancel_fee_no_revert_when_lead_advanced(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Lead đã tiến tiếp khỏi sts14 (sts10) → huỷ fee KHÔNG kéo lùi."""
+        service = FeeCalculationService(db)
+        lead = fee_fixtures["lead"]
+        await self._seed_consult(db, TUITION_PAID_STATUS)
+        lead.consultation_status_id = TUITION_PAID_STATUS
+        await db.flush()
+        fee, _ = await self._mk_tuition_hk1(db, fee_fixtures["profile"])
+        await db.commit()
+
+        await service.cancel_fee(
+            fee_id=fee.id, reason="x", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        await db.refresh(lead)
+        assert lead.consultation_status_id == TUITION_PAID_STATUS
+
+    async def test_check_duplicate_excludes_cancelled_tuition(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Fee HK1 đã huỷ KHÔNG tính là trùng → cho phép tính lại."""
+        service = FeeCalculationService(db)
+        fee, _ = await self._mk_tuition_hk1(db, fee_fixtures["profile"])
+        await db.commit()
+        pid = fee_fixtures["profile"].id
+
+        # Còn active → là trùng.
+        assert await service.fee_repo.check_duplicate(
+            pid, "tuition", 2025, semester_no=1
+        ) is True
+
+        await service.cancel_fee(
+            fee_id=fee.id, reason="x", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Đã huỷ → KHÔNG còn trùng.
+        assert await service.fee_repo.check_duplicate(
+            pid, "tuition", 2025, semester_no=1
+        ) is False
+
+    async def test_recalc_nontuition_after_cancel(
+        self, db, fee_fixtures, admin_user
+    ):
+        """Huỷ fee non-tuition rồi tính lại cùng năm → KHÔNG raise trùng."""
+        service = FeeCalculationService(db)
+        pid = fee_fixtures["profile"].id
+        fee1, _ = await service.calculate_fee(
+            admission_profile_id=pid, fee_type=FeeTypeEnum.enrollment,
+            base_amount=Decimal("1000000"), academic_year=2025,
+            user_id=admin_user.id, unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+        await service.cancel_fee(
+            fee_id=fee1.id, reason="x", user_id=admin_user.id,
+            unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        fee2, _ = await service.calculate_fee(
+            admission_profile_id=pid, fee_type=FeeTypeEnum.enrollment,
+            base_amount=Decimal("1000000"), academic_year=2025,
+            user_id=admin_user.id, unit_id=fee_fixtures["unit_id"],
+        )
+        await db.commit()
+        assert fee2.id != fee1.id
+        assert fee2.status == FeeStatusEnum.calculated.value
 
 
 # =============================================================================

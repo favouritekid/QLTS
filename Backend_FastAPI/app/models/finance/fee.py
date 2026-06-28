@@ -93,20 +93,23 @@ class Fee(Base):
 
     __table_args__ = (
         # Partial unique index: preserve pre-PR1 non-tuition behavior.
-        # Matches fee_repository.check_duplicate() semantics exactly.
+        # Excludes cancelled fees so a cancelled (e.g. tính nhầm) fee does NOT
+        # block re-calculating a correct one. Matches
+        # fee_repository.check_duplicate() semantics exactly.
         Index(
             'uq_fee_profile_type_year_nontuition',
             'admission_profile_id', 'fee_type', 'academic_year',
             unique=True,
-            postgresql_where=text("fee_type <> 'tuition'"),
+            postgresql_where=text("fee_type <> 'tuition' AND status <> 'cancelled'"),
         ),
         # Partial unique index: new per-semester uniqueness for tuition.
-        # Allows HK1/HK2/HK3/... on the same profile in the same year.
+        # Allows HK1/HK2/HK3/... on the same profile in the same year, and
+        # allows re-calc after a cancelled (status <> 'cancelled').
         Index(
             'uq_fee_profile_type_semester_tuition',
             'admission_profile_id', 'fee_type', 'semester_no',
             unique=True,
-            postgresql_where=text("fee_type = 'tuition'"),
+            postgresql_where=text("fee_type = 'tuition' AND status <> 'cancelled'"),
         ),
         CheckConstraint(
             'base_amount >= 0 AND total_discount >= 0 AND final_amount >= 0 '
