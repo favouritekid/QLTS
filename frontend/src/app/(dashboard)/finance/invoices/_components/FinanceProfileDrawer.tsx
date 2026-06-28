@@ -753,7 +753,7 @@ function InvoiceNode({
 
       {/* Thanh toán của hóa đơn (cấp 3) */}
       {payments.length > 0 && (
-        <div className="space-y-1.5 border-t border-border/50 bg-muted/30 px-3 py-2">
+        <div className="space-y-1.5 border-t border-border/50 px-3 py-2">
           {payments.map((p) => (
             <PaymentLeaf key={p.id} payment={p} onAction={onAction} />
           ))}
@@ -795,7 +795,7 @@ function PaymentLeaf({
     payment.verified_by_name ? `Duyệt: ${payment.verified_by_name}` : null,
   ].filter(Boolean)
   return (
-    <div className="rounded-md border border-border/50 bg-card px-2.5 py-1.5">
+    <div className="rounded-md bg-muted/40 px-2.5 py-1.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-xs font-semibold tabular-nums">
