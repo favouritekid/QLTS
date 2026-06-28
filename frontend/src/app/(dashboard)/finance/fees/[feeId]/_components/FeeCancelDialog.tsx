@@ -116,6 +116,10 @@ export function FeeCancelDialog({
             <p className="text-destructive font-medium">
               Hành động này không thể hoàn tác. Tất cả hóa đơn liên quan sẽ bị hủy theo.
             </p>
+            <p className="text-muted-foreground text-sm">
+              Nếu đây là học phí học kỳ 1 chưa thu, trạng thái tuyển sinh của ứng
+              viên sẽ tự động lùi về bước trước khi tính học phí.
+            </p>
           </AlertDialogDescription>
         </AlertDialogHeader>
 
