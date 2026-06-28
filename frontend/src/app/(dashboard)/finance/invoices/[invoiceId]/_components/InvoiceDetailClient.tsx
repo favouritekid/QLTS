@@ -156,7 +156,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
             Đợt {invoice.installment_no}
             {invoice.fee && (
               <>
-                {" "}• <Link href={`/finance/fees/${invoice.fee.id}`} className="hover:underline">
+                {" "}• <Link href={withFrom(`/finance/fees/${invoice.fee.id}`, from)} className="hover:underline">
                   {FEE_TYPE_LABELS[invoice.fee.fee_type as FeeType] ?? invoice.fee.fee_type}
                 </Link>
               </>
@@ -379,7 +379,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
                 </div>
                 <Separator className="my-2" />
                 <Button variant="outline" size="sm" className="w-full" asChild>
-                  <Link href={`/finance/fees/${invoice.fee.id}`}>
+                  <Link href={withFrom(`/finance/fees/${invoice.fee.id}`, from)}>
                     Xem chi tiết học phí
                   </Link>
                 </Button>

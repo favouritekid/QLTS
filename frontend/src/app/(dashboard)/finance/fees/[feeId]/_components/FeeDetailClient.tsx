@@ -243,7 +243,7 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
                     <TableRow
                       key={invoice.id}
                       className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => router.push(`/finance/invoices/${invoice.id}`)}
+                      onClick={() => router.push(withFrom(`/finance/invoices/${invoice.id}`, from))}
                     >
                       <TableCell className="font-mono text-sm">
                         {invoice.invoice_number}
