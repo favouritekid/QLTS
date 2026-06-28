@@ -514,7 +514,10 @@ function ClosePeriodDialog({
             <Lock className="h-5 w-5" />
             Đóng kỳ kế toán
           </AlertDialogTitle>
-          <AlertDialogDescription className="space-y-3">
+          {/* asChild → Description renders AS this <div> so block children
+              (<p>/<div>/<ul>) are valid HTML (no <p>-in-<p> hydration error). */}
+          <AlertDialogDescription asChild>
+          <div className="space-y-3 text-sm text-muted-foreground">
             <p>
               Bạn có chắc chắn muốn đóng kỳ kế toán{" "}
               <strong>{formatPeriodLabel(period.month, period.year)}</strong>?
@@ -534,6 +537,7 @@ function ClosePeriodDialog({
                 </div>
               </div>
             </div>
+          </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
 

@@ -487,7 +487,8 @@ export interface ProfileCollectionIdentity {
   // CCCD đã che giữa (PII-safe, dùng để HIỂN THỊ). Ngành/trình độ từ snapshot
   // Fee.resolved_*.
   citizen_id_masked: string | null
-  // CCCD đầy đủ — CHỈ cho nút copy (vai trò tài chính đã xem được hồ sơ đầy đủ).
+  // CCCD đầy đủ — CHỈ cho nút copy (kế toán cần để xuất hóa đơn GTGT; lộ PII có
+  // chủ đích cho nhân viên tài chính). Hiển thị vẫn dùng bản che bên trên.
   citizen_id_full: string | null
   program_name: string | null
   degree_level: string | null

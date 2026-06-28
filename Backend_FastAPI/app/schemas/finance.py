@@ -981,8 +981,10 @@ class ProfileCollectionIdentity(BaseModel):
     profile_code: str                      # "HS-000131"
     student_name: Optional[str] = None
     citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (display, PII-safe)
-    # CCCD đầy đủ — CHỈ để nút copy của drawer (vai trò tài chính đã xem được hồ
-    # sơ đầy đủ). Hiển thị vẫn dùng bản che ``citizen_id_masked``.
+    # CCCD đầy đủ — CHỈ cho nút copy của drawer (hiển thị vẫn dùng bản che
+    # ``citizen_id_masked``). LỘ PII CÓ CHỦ ĐÍCH cho nhân viên tài chính (gồm cả
+    # accountant — vốn bị từ chối /api/admissions): kế toán cần CCCD + địa chỉ
+    # người mua đầy đủ để xuất hóa đơn GTGT ngay từ workspace thu học phí.
     citizen_id_full: Optional[str] = None
     program_name: Optional[str] = None     # ngành (snapshot Fee.resolved_major)
     degree_level: Optional[str] = None     # trình độ (snapshot, TEXT name)

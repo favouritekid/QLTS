@@ -69,6 +69,15 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   // browser-back). Falls back to the Thu học phí workspace.
   const from = searchParams.get("from")
   const back = React.useMemo(() => resolveFinanceReturn(from), [from])
+  // With an explicit ?from we push to the controlled return target (reopens the
+  // right drawer). WITHOUT one — e.g. reached from the admission Tuition tab,
+  // which links here without stamping ?from — fall back to browser history so we
+  // return to where the user actually came from, not the finance workspace.
+  const goBack = React.useCallback(
+    () => (from ? router.push(back.href) : router.back()),
+    [from, back.href, router],
+  )
+  const backLabel = from ? back.label : "Quay lại"
 
   // State for dialogs
   const [waiveDialogOpen, setWaiveDialogOpen] = React.useState(
@@ -101,9 +110,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   if (error || !fee) {
     return (
       <div className="h-full flex flex-col p-4 sm:p-6">
-        <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit mb-4">
+        <Button variant="ghost" size="sm" onClick={goBack} className="w-fit mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          {back.label}
+          {backLabel}
         </Button>
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
@@ -121,9 +130,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit">
+      <Button variant="ghost" size="sm" onClick={goBack} className="w-fit">
         <ArrowLeft className="h-4 w-4 mr-2" />
-        {back.label}
+        {backLabel}
       </Button>
 
       {/* Header */}

@@ -71,6 +71,14 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   // (never a blind browser-back; falls back to the Thu học phí workspace).
   const from = searchParams.get("from")
   const back = React.useMemo(() => resolveFinanceReturn(from), [from])
+  // With ?from → controlled return target; without → browser history (so entry
+  // points that don't stamp ?from return where the user came from, not the
+  // finance workspace). See FeeDetailClient for the same rationale.
+  const goBack = React.useCallback(
+    () => (from ? router.push(back.href) : router.back()),
+    [from, back.href, router],
+  )
+  const backLabel = from ? back.label : "Quay lại"
 
   // Dialog states
   const [recordPaymentOpen, setRecordPaymentOpen] = React.useState(
@@ -118,9 +126,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   if (error || !invoice) {
     return (
       <div className="h-full flex flex-col p-4 sm:p-6">
-        <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit mb-4">
+        <Button variant="ghost" size="sm" onClick={goBack} className="w-fit mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          {back.label}
+          {backLabel}
         </Button>
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
@@ -138,9 +146,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => router.push(back.href)} className="w-fit">
+      <Button variant="ghost" size="sm" onClick={goBack} className="w-fit">
         <ArrowLeft className="h-4 w-4 mr-2" />
-        {back.label}
+        {backLabel}
       </Button>
 
       {/* Header */}

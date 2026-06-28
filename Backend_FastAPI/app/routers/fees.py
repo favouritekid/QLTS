@@ -603,7 +603,11 @@ async def get_profile_collection(
         profile_code=format_profile_code(profile.id),
         student_name=lead.full_name if lead else None,
         citizen_id_masked=mask_citizen_id(getattr(profile, "citizen_id", None)),
-        # Full CCCD for the drawer's copy button only (display stays masked).
+        # Full CCCD for the drawer's copy button (display stays masked). DELIBERATE
+        # PII exposure to finance staff INCLUDING accountant — accountant is denied
+        # /api/admissions (PII minimization) but legitimately needs the full buyer
+        # CCCD + address to issue a VAT invoice (hóa đơn GTGT) from the collection
+        # workspace. This is an accepted business need, not an oversight.
         citizen_id_full=getattr(profile, "citizen_id", None),
         program_name=_resolved_major.name if _resolved_major else None,
         degree_level=_resolved_degree,
@@ -645,8 +649,11 @@ async def get_profile_collection(
                 remaining_amount=f.remaining_amount,
                 status=f.status,
                 # Role-aware (route gate): drawer shows each fee action only when
-                # the matching route would accept it — never a button that
-                # 400/403s. Same single-source helpers as the detail FeeResponse.
+                # the matching route would accept it. Same single-source helpers as
+                # the detail FeeResponse. CAVEAT: can_cancel mirrors only the
+                # role + paid==0 gate; cancel_fee ALSO blocks on a pending payment
+                # / active online intent (data not loaded here) — those rare cases
+                # surface as a graceful 400 with a clear message, not a silent fail.
                 can_waive=_fee_can_waive(f, current_user.role),
                 can_recalculate=_fee_can_recalculate(f, current_user.role),
                 can_cancel=_fee_can_cancel(f, current_user.role),
