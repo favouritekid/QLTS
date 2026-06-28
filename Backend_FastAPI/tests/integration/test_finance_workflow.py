@@ -1215,6 +1215,23 @@ class TestHK1SettledStatePipelineGate:
         assert not was and now  # Transition only on FULL settlement
 
     @pytest.mark.asyncio
+    async def test_hk1_already_settled_no_retrigger(self):
+        """Already-settled fee + a further payment stays settled: True->True =
+        NO transition → sync_lead_tuition_paid does NOT re-fire (idempotency).
+        Pins the already-settled branch so a future change that flips a settled
+        fee back to False (e.g. overpaid) can't silently re-fire the sync."""
+        from app.services.fee_calculation_service import is_hk1_settled
+
+        FINAL = Decimal("10000000")
+        Z = Decimal("0")
+        was = is_hk1_settled("tuition", 1, "paid", FINAL, FINAL, Z)
+        # An overpayment keeps remaining <= 0 → still settled.
+        now = is_hk1_settled("tuition", 1, "paid", Decimal("12000000"), FINAL, Z)
+        assert was is True
+        assert now is True
+        assert not (not was and now)  # No transition → sync does NOT re-fire
+
+    @pytest.mark.asyncio
     async def test_hk2_payment_never_triggers(self):
         """HK2 payment: always False, no sync regardless of state."""
         from app.services.fee_calculation_service import is_hk1_settled

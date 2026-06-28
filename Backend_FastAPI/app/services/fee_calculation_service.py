@@ -86,6 +86,22 @@ def is_hk1_settled(
     return (final_amount - paid_amount - waived_amount) <= 0
 
 
+def is_hk1_settled_fee(fee) -> bool:
+    """``is_hk1_settled`` for a Fee-like object — the form call sites should use.
+
+    The pure ``is_hk1_settled`` takes three ADJACENT same-type Decimal args
+    (paid/final/waived) that are easy to transpose at a call site; a silent swap
+    re-introduces the exact bug this guard fixes (partial wrongly read as
+    settled) with NO TypeError. Every runtime call site has the ``fee`` in hand,
+    so they call THIS wrapper and the positional order lives in exactly one
+    reviewed place.
+    """
+    return is_hk1_settled(
+        fee.fee_type, fee.semester_no, fee.status,
+        fee.paid_amount, fee.final_amount, fee.waived_amount,
+    )
+
+
 def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:
     """OfferingAcademicInfo behind a choice's admission_path (or None).
 

@@ -615,11 +615,8 @@ class PaymentIntentService:
             invoice.status = InvoiceStatusEnum.partial.value
 
         # ADR-002 PR 5: snapshot settled state BEFORE fee mutation
-        from app.services.fee_calculation_service import is_hk1_settled
-        was_hk1_settled = is_hk1_settled(
-            fee.fee_type, fee.semester_no, fee.status,
-            fee.paid_amount, fee.final_amount, fee.waived_amount,
-        )
+        from app.services.fee_calculation_service import is_hk1_settled_fee
+        was_hk1_settled = is_hk1_settled_fee(fee)
 
         # Update fee paid_amount
         fee.paid_amount = fee.paid_amount + intent.amount
@@ -665,10 +662,7 @@ class PaymentIntentService:
 
         # ADR-002 PR 5: Sync lead only on HK1 SETTLED-state transition
         # (remaining<=0). Partial online payment leaves lead at sts14.
-        now_hk1_settled = is_hk1_settled(
-            fee.fee_type, fee.semester_no, fee.status,
-            fee.paid_amount, fee.final_amount, fee.waived_amount,
-        )
+        now_hk1_settled = is_hk1_settled_fee(fee)
         if not was_hk1_settled and now_hk1_settled and profile is not None:
             from app.services.lead_admission_sync import sync_lead_tuition_paid
             await sync_lead_tuition_paid(

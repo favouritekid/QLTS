@@ -363,11 +363,8 @@ class PaymentService:
             raise ResourceNotFoundError("Fee not found")
 
         # Capture settled state BEFORE mutation (PR 5 transition detection)
-        from app.services.fee_calculation_service import is_hk1_settled
-        was_hk1_settled = is_hk1_settled(
-            fee.fee_type, fee.semester_no, fee.status,
-            fee.paid_amount, fee.final_amount, fee.waived_amount,
-        )
+        from app.services.fee_calculation_service import is_hk1_settled_fee
+        was_hk1_settled = is_hk1_settled_fee(fee)
 
         # Update payment status
         now = datetime.now(timezone.utc)
@@ -401,10 +398,7 @@ class PaymentService:
         # "Settled" = paid OR waived OR remaining<=0. A PARTIAL payment
         # (remaining>0) is NOT settled — lead stays at sts14, not sts10.
         # Only fires once: pre=not-settled -> post=settled.
-        now_hk1_settled = is_hk1_settled(
-            fee.fee_type, fee.semester_no, fee.status,
-            fee.paid_amount, fee.final_amount, fee.waived_amount,
-        )
+        now_hk1_settled = is_hk1_settled_fee(fee)
         if not was_hk1_settled and now_hk1_settled:
             profile = await self._get_profile_for_fee(fee)
             if profile:

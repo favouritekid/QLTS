@@ -66,6 +66,8 @@ _AFFECTED_SQL = text(
         ON f.admission_profile_id = ap.id
        AND f.fee_type = 'tuition'
        AND f.semester_no = 1
+       AND f.status <> 'cancelled'
+       AND (f.final_amount - f.paid_amount - f.waived_amount) > 0
     LEFT JOIN LATERAL (
         SELECT old_consultation_status_id
         FROM lead_status_history
@@ -75,7 +77,21 @@ _AFFECTED_SQL = text(
         LIMIT 1
     ) h ON TRUE
     WHERE l.consultation_status_id = :sts10
-      AND (f.final_amount - f.paid_amount - f.waived_amount) > 0
+      -- Only revert when NO HK1 fee justifies the sts10 label: a lead with any
+      -- SETTLED (non-cancelled) HK1 tuition fee genuinely "đã hoàn tất học phí"
+      -- (e.g. a prior year/profile fully paid) — never strip its valid label.
+      -- Cancelled fees are excluded from the offending JOIN above too, so a
+      -- cancelled fee with a residual remaining>0 cannot drag a lead here.
+      AND NOT EXISTS (
+          SELECT 1
+          FROM admission_profile ap2
+          JOIN fee f2 ON f2.admission_profile_id = ap2.id
+          WHERE ap2.lead_id = l.id
+            AND f2.fee_type = 'tuition'
+            AND f2.semester_no = 1
+            AND f2.status <> 'cancelled'
+            AND (f2.final_amount - f2.paid_amount - f2.waived_amount) <= 0
+      )
     ORDER BY l.id
     """
 )
