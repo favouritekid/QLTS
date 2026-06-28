@@ -86,6 +86,28 @@ export const routes: Record<string, RouteConfig> = {
     label: "Notifications",
     parent: "dashboard",
   },
+
+  // Finance — hub & spoke quanh "Thu học phí"
+  // Workspace /finance/invoices là hub (có trong sidebar); trang chi tiết khoản
+  // phí / hóa đơn là spoke. Khai báo tường minh để breadcrumb đi qua hub thật,
+  // KHÔNG rơi vào auto-generation trỏ /finance/fees (trang redirect, mồ côi nav).
+  // Lưu ý: nút "Quay lại hồ sơ" trên trang chi tiết mới là đường về đúng drawer
+  // (?from=profile:<id>); breadcrumb chỉ đưa về hub workspace.
+  financeWorkspace: {
+    path: "/finance/invoices",
+    label: "Thu học phí",
+    parent: "dashboard",
+  },
+  financeFeeDetail: {
+    path: "/finance/fees/[feeId]",
+    label: "Chi tiết khoản phí",
+    parent: "financeWorkspace",
+  },
+  financeInvoiceDetail: {
+    path: "/finance/invoices/[invoiceId]",
+    label: "Chi tiết hóa đơn",
+    parent: "financeWorkspace",
+  },
 };
 
 /**

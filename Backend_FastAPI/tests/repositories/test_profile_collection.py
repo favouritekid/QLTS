@@ -43,7 +43,14 @@ from app.repositories.payment_repository import PaymentRepository
 from app.services.fee_calculation_service import FeeCalculationService
 from app.routers.invoices import _build_invoice_list_item, _invoice_is_overdue
 from app.routers.payments import _build_payment_list_item
-from app.routers.fees import _fee_can_waive, _total_remaining_with_penalty
+from app.routers.fees import (
+    _fee_can_waive,
+    _fee_can_recalculate,
+    _fee_can_cancel,
+    _format_permanent_address,
+    _total_remaining_with_penalty,
+)
+from types import SimpleNamespace
 from app.utils.id_helpers import format_profile_code
 
 pytestmark = pytest.mark.asyncio
@@ -486,6 +493,101 @@ async def test_collection_fee_can_waive_role_aware(db, seeded_collection):
     assert _fee_can_waive(tuition, "accountant") is False
     # …and a fully-paid (terminal) fee is never waivable, even for admin.
     assert _fee_can_waive(application, "admin") is False
+
+
+def _stub_fee(status="invoiced", paid="0", remaining="1000000"):
+    """Lightweight fee for the pure flag-helper truth table (no DB needed)."""
+    return SimpleNamespace(
+        status=status,
+        paid_amount=Decimal(paid),
+        remaining_amount=Decimal(remaining),
+    )
+
+
+async def test_fee_can_recalculate_role_and_paid_gate():
+    """Tính lại mirrors the recalculate route (RequireManager → admin/manager;
+    not terminal; paid == 0). A True flag the route would 403 is a broken button.
+    """
+    fresh = _stub_fee(status="invoiced", paid="0")
+    # admin/manager may recalculate a non-terminal, un-paid fee…
+    assert _fee_can_recalculate(fresh, "admin") is True
+    assert _fee_can_recalculate(fresh, "manager") is True
+    # …accountant may NOT (separation of duties)…
+    assert _fee_can_recalculate(fresh, "accountant") is False
+    # …once any money has come in, recompute is blocked (ledger would desync)…
+    assert _fee_can_recalculate(_stub_fee(paid="200000"), "admin") is False
+    # …and terminal statuses are never recalculable.
+    for terminal in ("paid", "cancelled", "waived"):
+        assert _fee_can_recalculate(_stub_fee(status=terminal), "admin") is False
+
+
+async def test_format_permanent_address_joins_in_reading_order():
+    """The drawer's địa chỉ thường trú joins stored parts số nhà → tổ → xã →
+    huyện → tỉnh, drops blanks, and is None when nothing is filled."""
+    full = SimpleNamespace(
+        permanent_street_address="Số 12, đường Lê Lợi",
+        permanent_residential_group="Tổ 4",
+        permanent_ward="Phường Tân Hòa",
+        permanent_district="TP Buôn Ma Thuột",
+        permanent_province="Đắk Lắk",
+    )
+    assert _format_permanent_address(full) == (
+        "Số 12, đường Lê Lợi, Tổ 4, Phường Tân Hòa, TP Buôn Ma Thuột, Đắk Lắk"
+    )
+    # Blank / whitespace-only parts are dropped, order preserved.
+    partial = SimpleNamespace(
+        permanent_street_address=None,
+        permanent_residential_group="   ",
+        permanent_ward="Phường Tân Hòa",
+        permanent_district="",
+        permanent_province="Đắk Lắk",
+    )
+    assert _format_permanent_address(partial) == "Phường Tân Hòa, Đắk Lắk"
+    # Nothing filled → None (FE hides the line).
+    empty = SimpleNamespace(
+        permanent_street_address=None,
+        permanent_residential_group=None,
+        permanent_ward=None,
+        permanent_district=None,
+        permanent_province=None,
+    )
+    assert _format_permanent_address(empty) is None
+
+
+async def test_fee_can_cancel_admin_only_and_paid_gate():
+    """Hủy khoản phí mirrors the cancel route (RequireAdmin → admin ONLY —
+    stricter than waive/recalculate; not terminal; paid == 0)."""
+    fresh = _stub_fee(status="invoiced", paid="0")
+    # admin only…
+    assert _fee_can_cancel(fresh, "admin") is True
+    assert _fee_can_cancel(fresh, "manager") is False
+    assert _fee_can_cancel(fresh, "accountant") is False
+    # …paid fee can't be cancelled…
+    assert _fee_can_cancel(_stub_fee(paid="200000"), "admin") is False
+    # …terminal never.
+    for terminal in ("paid", "cancelled", "waived"):
+        assert _fee_can_cancel(_stub_fee(status=terminal), "admin") is False
+
+
+async def test_collection_fee_recalc_cancel_gates_on_real_fees(db, seeded_collection):
+    """End-to-end on the real seeded ORM fees the router feeds into FeeSummary:
+    the seeded tuition is PARTIAL (paid 200k) so Tính lại / Hủy are paid-gated
+    off even for admin, and the fully-paid application is terminal → off too.
+    (The True/role/terminal matrix is covered by the stub truth-table tests.)"""
+    service = FeeCalculationService(db)
+    profile = await service.get_profile_collection(
+        seeded_collection["prof_a_id"], unit_id=seeded_collection["unit_a"]
+    )
+    by_type = {f.fee_type: f for f in profile.fees}
+    tuition = by_type["tuition"]       # partial, paid 200k
+    application = by_type["application"]  # paid (terminal)
+
+    assert _fee_can_recalculate(tuition, "admin") is False
+    assert _fee_can_cancel(tuition, "admin") is False
+    assert _fee_can_recalculate(application, "admin") is False
+    assert _fee_can_cancel(application, "admin") is False
+    # base_amount the router surfaces for the Tính lại prefill is present.
+    assert tuition.base_amount == Decimal("1000000")
 
 
 # =============================================================================

@@ -65,12 +65,13 @@ export function InvoiceIssueDialog({
             Xuất hóa đơn
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-2">
-            <p>
+            {/* Description renders a <p>; block spans avoid <p>-in-<p>. */}
+            <span className="block">
               Bạn có chắc chắn muốn xuất hóa đơn <strong className="font-mono">{invoiceNumber}</strong>?
-            </p>
-            <p>
+            </span>
+            <span className="block">
               Sau khi xuất, hóa đơn sẽ chuyển sang trạng thái &quot;Đã xuất&quot; và có thể ghi nhận thanh toán.
-            </p>
+            </span>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

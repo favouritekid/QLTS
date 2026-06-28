@@ -322,12 +322,21 @@ class FeeSummaryResponse(BaseModel):
     paid_amount: Decimal
     remaining_amount: Decimal
     status: FeeStatusEnum
-    # Role-aware waive capability (same rule as FeeResponse.can_waive: not
-    # terminal AND remaining > 0 AND role in [admin, manager] — the RequireManager
-    # route gate). Default False so any builder that doesn't set it shows no
-    # waive button rather than a button the route would 403. The collection
-    # drawer populates it per the viewing user.
+    # Role-aware capability flags (same rules as FeeResponse: each mirrors its
+    # route gate so the thin client never shows a button the route would 403).
+    #   can_waive       — not terminal AND remaining > 0 AND role in [admin, manager]
+    #   can_recalculate — not terminal AND paid == 0  AND role in [admin, manager]
+    #   can_cancel      — not terminal AND paid == 0  AND role == admin (RequireAdmin)
+    # All default False so any builder that doesn't set them shows no button.
+    # The collection drawer populates them per the viewing user.
     can_waive: bool = False
+    can_recalculate: bool = False
+    can_cancel: bool = False
+    # Current base amount — only the collection drawer sets it (to prefill the
+    # "Tính lại" dialog). Optional/None elsewhere: other summary builders don't
+    # drive a recalculate dialog, and None makes "not provided" explicit rather
+    # than a misleading 0.
+    base_amount: Optional[Decimal] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -971,11 +980,19 @@ class ProfileCollectionIdentity(BaseModel):
     profile_id: int
     profile_code: str                      # "HS-000131"
     student_name: Optional[str] = None
-    citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (PII-safe)
+    citizen_id_masked: Optional[str] = None  # CCCD đã che giữa (display, PII-safe)
+    # CCCD đầy đủ — CHỈ cho nút copy của drawer (hiển thị vẫn dùng bản che
+    # ``citizen_id_masked``). LỘ PII CÓ CHỦ ĐÍCH cho nhân viên tài chính (gồm cả
+    # accountant — vốn bị từ chối /api/admissions): kế toán cần CCCD + địa chỉ
+    # người mua đầy đủ để xuất hóa đơn GTGT ngay từ workspace thu học phí.
+    citizen_id_full: Optional[str] = None
     program_name: Optional[str] = None     # ngành (snapshot Fee.resolved_major)
     degree_level: Optional[str] = None     # trình độ (snapshot, TEXT name)
-    officer_name: Optional[str] = None     # TVV phụ trách
+    officer_name: Optional[str] = None     # tư vấn viên phụ trách
     phone: Optional[str] = None            # parent phone (accountant lookup)
+    # Địa chỉ thường trú đã ghép 1 dòng đọc được (số nhà → đường → tổ/thôn → xã →
+    # huyện → tỉnh). None khi hồ sơ chưa có địa chỉ.
+    permanent_address: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

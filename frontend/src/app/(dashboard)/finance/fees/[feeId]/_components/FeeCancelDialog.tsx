@@ -110,12 +110,13 @@ export function FeeCancelDialog({
             Xác nhận hủy học phí
           </AlertDialogTitle>
           <AlertDialogDescription className="space-y-2">
-            <p>
+            {/* Description renders a <p>; block spans avoid <p>-in-<p>. */}
+            <span className="block">
               Bạn có chắc chắn muốn hủy khoản <strong>{feeType}</strong> này?
-            </p>
-            <p className="text-destructive font-medium">
+            </span>
+            <span className="block text-destructive font-medium">
               Hành động này không thể hoàn tác. Tất cả hóa đơn liên quan sẽ bị hủy theo.
-            </p>
+            </span>
           </AlertDialogDescription>
         </AlertDialogHeader>
 

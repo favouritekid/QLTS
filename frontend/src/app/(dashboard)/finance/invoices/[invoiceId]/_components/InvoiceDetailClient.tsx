@@ -41,6 +41,7 @@ import { InvoiceIssueDialog } from "./InvoiceIssueDialog"
 import { InvoiceCancelDialog } from "./InvoiceCancelDialog"
 import { InvoicePenaltyDialog } from "./InvoicePenaltyDialog"
 import { OnlinePaymentDialog } from "./OnlinePaymentDialog"
+import { resolveFinanceReturn, withFrom } from "@/lib/finance/nav-context"
 
 // =============================================================================
 // TYPES
@@ -65,6 +66,19 @@ interface InvoiceDetailClientProps {
 export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  // Controlled return target from the workspace `?from=profile:<id>` context
+  // (never a blind browser-back; falls back to the Thu học phí workspace).
+  const from = searchParams.get("from")
+  const back = React.useMemo(() => resolveFinanceReturn(from), [from])
+  // With ?from → controlled return target; without → browser history (so entry
+  // points that don't stamp ?from return where the user came from, not the
+  // finance workspace). See FeeDetailClient for the same rationale.
+  const goBack = React.useCallback(
+    () => (from ? router.push(back.href) : router.back()),
+    [from, back.href, router],
+  )
+  const backLabel = from ? back.label : "Quay lại"
 
   // Dialog states
   const [recordPaymentOpen, setRecordPaymentOpen] = React.useState(
@@ -101,8 +115,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
     setCancelDialogOpen(false)
     setPenaltyDialogOpen(false)
     setOnlinePaymentOpen(false)
-    router.replace(`/finance/invoices/${invoiceId}`)
-  }, [invoiceId, router])
+    // Drop `?action=` but PRESERVE `?from=` so the return context survives.
+    router.replace(withFrom(`/finance/invoices/${invoiceId}`, from))
+  }, [invoiceId, router, from])
 
   if (isLoading) {
     return <InvoiceDetailSkeleton />
@@ -111,9 +126,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   if (error || !invoice) {
     return (
       <div className="h-full flex flex-col p-4 sm:p-6">
-        <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit mb-4">
+        <Button variant="ghost" size="sm" onClick={goBack} className="w-fit mb-4">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Quay lại
+          {backLabel}
         </Button>
         <Card className="border-destructive">
           <CardContent className="p-6 text-center">
@@ -131,9 +146,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
   return (
     <div className="h-full flex flex-col p-4 sm:p-6 space-y-6">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => router.back()} className="w-fit">
+      <Button variant="ghost" size="sm" onClick={goBack} className="w-fit">
         <ArrowLeft className="h-4 w-4 mr-2" />
-        Quay lại
+        {backLabel}
       </Button>
 
       {/* Header */}
@@ -149,7 +164,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
             Đợt {invoice.installment_no}
             {invoice.fee && (
               <>
-                {" "}• <Link href={`/finance/fees/${invoice.fee.id}`} className="hover:underline">
+                {" "}• <Link href={withFrom(`/finance/fees/${invoice.fee.id}`, from)} className="hover:underline">
                   {FEE_TYPE_LABELS[invoice.fee.fee_type as FeeType] ?? invoice.fee.fee_type}
                 </Link>
               </>
@@ -372,7 +387,7 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
                 </div>
                 <Separator className="my-2" />
                 <Button variant="outline" size="sm" className="w-full" asChild>
-                  <Link href={`/finance/fees/${invoice.fee.id}`}>
+                  <Link href={withFrom(`/finance/fees/${invoice.fee.id}`, from)}>
                     Xem chi tiết học phí
                   </Link>
                 </Button>

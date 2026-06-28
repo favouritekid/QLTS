@@ -135,10 +135,15 @@ export interface FeeSummary {
   paid_amount: string
   remaining_amount: string
   status: FeeStatus
-  // Role-aware waive capability (backend-owned, matches the RequireManager
-  // route gate). Optional: only the collection drawer populates it; other
-  // FeeSummary sources leave it falsy → no waive button (safe default).
+  // Role-aware capability flags (backend-owned, each mirrors its route gate).
+  // Optional: only the collection drawer populates them; other FeeSummary
+  // sources leave them falsy → no action button (safe default).
   can_waive?: boolean
+  can_recalculate?: boolean
+  can_cancel?: boolean
+  // Current base amount — only the drawer sets it (prefills the "Tính lại"
+  // dialog). Absent elsewhere (no recalculate button there).
+  base_amount?: string
 }
 
 export interface FeeDetail extends Fee {
@@ -479,12 +484,18 @@ export interface ProfileCollectionIdentity {
   profile_id: number
   profile_code: string
   student_name: string | null
-  // CCCD đã che giữa (PII-safe). Ngành/trình độ từ snapshot Fee.resolved_*.
+  // CCCD đã che giữa (PII-safe, dùng để HIỂN THỊ). Ngành/trình độ từ snapshot
+  // Fee.resolved_*.
   citizen_id_masked: string | null
+  // CCCD đầy đủ — CHỈ cho nút copy (kế toán cần để xuất hóa đơn GTGT; lộ PII có
+  // chủ đích cho nhân viên tài chính). Hiển thị vẫn dùng bản che bên trên.
+  citizen_id_full: string | null
   program_name: string | null
   degree_level: string | null
   officer_name: string | null
   phone: string | null
+  // Địa chỉ thường trú đã ghép 1 dòng (BE-owned). Null khi chưa có.
+  permanent_address: string | null
 }
 
 export interface ProfileCollection {
