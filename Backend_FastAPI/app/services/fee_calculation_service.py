@@ -378,6 +378,26 @@ async def resnapshot_fee_academic_info_for_profile(
         return 0
 
     for fee in fees:
+        # E2 hardening (audit 29-06): fee đã gắn ngành (resolved_ai cũ) mà nay
+        # resolve ra ngành KHÁC → cấu hình AdmissionPath/academic_info có thể đã bị
+        # sửa SAU khi tính phí; ``final_amount`` (đóng băng theo ngành cũ) có thể
+        # KHÔNG còn khớp ngành mới. Snapshot vẫn cập nhật để display khớp ngành
+        # hiện tại, nhưng phát log.warning để kế-toán/admin soát tiền (biến vi phạm
+        # invariant thành tín hiệu quan sát được thay vì ghi đè im lặng).
+        prior_ai = fee.resolved_academic_info_id
+        if (
+            resolved_ai_id is not None
+            and prior_ai is not None
+            and prior_ai != resolved_ai_id
+        ):
+            log.warning(
+                "fee_resolved_major_drift",
+                fee_id=fee.id,
+                profile_id=profile_id,
+                prior_academic_info_id=prior_ai,
+                new_academic_info_id=resolved_ai_id,
+                fee_final_amount=str(fee.final_amount),
+            )
         fee.resolved_academic_info_id = resolved_ai_id
         fee.resolved_major_id = resolved_major_id
         fee.resolved_degree_level = resolved_degree_level

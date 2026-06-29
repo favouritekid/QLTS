@@ -297,6 +297,7 @@ describe("useInvoices Hooks", () => {
 
         const penaltyData: InvoicePenaltyRequest = {
           penalty_amount: "500000",
+          reason: "Phạt trễ hạn",
         };
 
         const { result } = renderHook(() => useApplyPenalty(), {
@@ -332,7 +333,7 @@ describe("useInvoices Hooks", () => {
         result.current.mutate({
           invoiceId: 2,
           feeId: 2,
-          data: { penalty_amount: "100000" },
+          data: { penalty_amount: "100000", reason: "Phạt trễ hạn" },
         });
 
         await waitFor(() => expect(result.current.isError).toBe(true));

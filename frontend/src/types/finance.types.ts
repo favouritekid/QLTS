@@ -615,6 +615,7 @@ export interface PaymentRejectRequest {
 
 export interface InvoicePenaltyRequest {
   penalty_amount: string
+  reason: string // bắt buộc — backend route apply-penalty yêu cầu lý do
 }
 
 export interface OverpaymentApplyRequest {

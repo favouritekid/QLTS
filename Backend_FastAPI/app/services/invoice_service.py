@@ -675,18 +675,28 @@ class InvoiceService:
         if not invoice:
             raise ResourceNotFoundError("Invoice not found")
 
+        # (1) Input: ``is None`` guard cho direct caller (route đã ép required gt=0;
+        # HTTP không gửi None được nữa, nhưng service là business boundary → tự bảo
+        # vệ khỏi None→TypeError).
+        if penalty_amount is None or penalty_amount <= 0:
+            raise BadRequest("Penalty amount must be positive")
+
+        # (2) Trạng thái: không áp phạt hóa đơn đã thanh toán / đã hủy.
         if invoice.status in [InvoiceStatusEnum.paid.value, InvoiceStatusEnum.cancelled.value]:
             raise BusinessRuleViolation(
                 f"Cannot apply penalty to {invoice.status} invoice"
             )
 
-        # ``is None`` guard cho direct caller (route đã ép required gt=0; HTTP
-        # không thể gửi None nữa, nhưng service là business boundary → tự bảo vệ
-        # khỏi None→TypeError).
-        if penalty_amount is None or penalty_amount <= 0:
-            raise BadRequest("Penalty amount must be positive")
+        # (3) CHỈ áp phạt khi ĐÃ QUÁ HẠN (phí TRỄ hạn): quá ngày đến hạn + chưa thu
+        # đủ. Dùng ``is_overdue`` (derived: today > due_date) nên bắt cả HĐ quá hạn
+        # mà beat job chưa kịp lật status='overdue'; đồng thời CHẶN áp phạt HĐ chưa
+        # tới hạn (issued, due tương lai) — khớp cờ FE can_apply_penalty.
+        if not invoice.is_overdue:
+            raise BusinessRuleViolation(
+                "Chỉ áp phạt cho hóa đơn ĐÃ QUÁ HẠN (quá ngày đến hạn, chưa thu đủ)."
+            )
 
-        # Trần: tổng phạt cộng dồn không vượt số tiền hóa đơn (chống áp phạt lặp
+        # (4) Trần: tổng phạt cộng dồn không vượt số tiền hóa đơn (chống áp phạt lặp
         # nhiều lần đẩy nợ vô lý).
         if invoice.penalty_amount + penalty_amount > invoice.amount:
             raise BusinessRuleViolation(

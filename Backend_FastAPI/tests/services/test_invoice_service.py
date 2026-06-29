@@ -462,13 +462,13 @@ class TestInvoiceLifecycle:
         assert "already cancelled" in str(exc_info.value).lower()
 
     async def test_apply_penalty(self, db, invoice_fixtures, admin_user):
-        """Penalty increases penalty_amount."""
+        """Penalty increases penalty_amount (hóa đơn ĐÃ QUÁ HẠN)."""
         service = InvoiceService(db)
         fee = invoice_fixtures["fee"]
 
         invoices, _ = await service.generate_invoices_for_fee(
             fee_id=fee.id,
-            due_date_base=date.today() + timedelta(days=30),
+            due_date_base=date.today() - timedelta(days=5),  # quá hạn → áp phạt được
             user_id=admin_user.id,
             unit_id=invoice_fixtures["unit_id"],
             auto_issue=True,
@@ -960,11 +960,16 @@ class TestRecalculateInvoiceSync:
 class TestApplyPenaltyGuards:
     """#8 — penalty: None→reject (không 500), trần ≤ amount, happy-path."""
 
-    async def _issued_invoice(self, db, invoice_fixtures, admin_user):
+    async def _issued_invoice(self, db, invoice_fixtures, admin_user, *, overdue=True):
         inv_service = InvoiceService(db)
+        due = (
+            date.today() - timedelta(days=5)  # quá hạn → áp phạt được
+            if overdue
+            else date.today() + timedelta(days=30)  # chưa tới hạn
+        )
         invs, _ = await inv_service.generate_invoices_for_fee(
             fee_id=invoice_fixtures["fee"].id,
-            due_date_base=date.today() + timedelta(days=30),
+            due_date_base=due,
             user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"], auto_issue=True,
         )
         await db.commit()
@@ -995,7 +1000,7 @@ class TestApplyPenaltyGuards:
             )
 
     async def test_penalty_within_cap_ok(self, db, invoice_fixtures, admin_user):
-        """Phạt trong trần → cộng vào penalty_amount."""
+        """Phạt trong trần (HĐ quá hạn) → cộng vào penalty_amount."""
         inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
         service = InvoiceService(db)
         out, _ = await service.apply_penalty(
@@ -1004,6 +1009,20 @@ class TestApplyPenaltyGuards:
         )
         await db.commit()
         assert out.penalty_amount == Decimal("100000")
+
+    async def test_penalty_blocked_when_not_overdue(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """#8-B: HĐ issued CHƯA tới hạn (due tương lai) → KHÔNG được áp phạt."""
+        inv = await self._issued_invoice(
+            db, invoice_fixtures, admin_user, overdue=False
+        )
+        service = InvoiceService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await service.apply_penalty(
+                invoice_id=inv.id, penalty_amount=Decimal("50000"), reason="phạt sớm",
+                user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            )
 
 
 class TestInstallmentScheduleGuard:
