@@ -257,8 +257,11 @@ class FeeCalculateRequest(BaseModel):
     admission_profile_id: int
     fee_type: FeeTypeEnum = FeeTypeEnum.tuition
     installment_plan_code: str = Field(default="FULL", max_length=50)
+    # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
+    # int32-guard codebase đã áp). Mirror route GET /api/fees/tuition-preview
+    # (semester_no Query le=12). HK thực tế ≤ 12.
     semester_no: Optional[int] = Field(
-        None, ge=1,
+        None, ge=1, le=12,
         description="Số học kỳ (HK1=1). Mặc định 1 cho tuition, None cho non-tuition."
     )
     # Manual tuition override (accountant/officer nhập học phí đặc biệt — học

@@ -570,8 +570,9 @@ export const feeCalculateRequestSchema = z
     installment_plan_code: z.string().optional(), // defaults to "FULL"
     // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
     // contract (defaults to 1 when omitted for tuition; must be null/unset
-    // for non-tuition types).
-    semester_no: z.number().int().positive().nullable().optional(),
+    // for non-tuition types). max(12) mirrors backend FeeCalculateRequest
+    // (Field le=12) — chặn HK ngoài int32.
+    semester_no: z.number().int().positive().max(12).nullable().optional(),
     // Manual tuition override — số nhập tay là BASE (Decimal as string). Backend
     // vẫn áp discount → invoice khớp final. Mirror backend model_validator dưới.
     manual_base_amount: z
