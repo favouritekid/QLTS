@@ -668,7 +668,8 @@ def _compute_invoice_permissions(
       (POST /api/payments → ACCOUNTANT_TEMPLATE; manager lacks it)
     - can_cancel: status not terminal AND paid == 0 AND role in [admin, manager]
       (PUT /api/invoices/{id}/cancel → RequireManager; accountant excluded)
-    - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
+    - can_apply_penalty: derived-overdue (issued/partial/overdue đã quá due_date)
+      AND role in [admin, manager]
       (POST /api/invoices/{id}/apply-penalty → RequireManager; accountant excluded)
     """
     status_value = (
@@ -688,7 +689,10 @@ def _compute_invoice_permissions(
             and invoice.remaining_amount > 0
             and is_accountant_or_admin
         ),
-        "can_apply_penalty": status_value == "overdue" and is_manager_or_admin,
+        # Derived-overdue (issued/partial/overdue ĐÃ quá due_date), KHÔNG dùng enum
+        # 'overdue' (lag theo beat job) → nút hiện đúng khi service apply_penalty
+        # chấp nhận (service cũng gate ``invoice.is_overdue``).
+        "can_apply_penalty": _invoice_is_overdue(invoice) and is_manager_or_admin,
     }
 
 

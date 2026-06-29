@@ -421,6 +421,10 @@ async def resolve_and_validate(
     existing_ref_sums: Dict[Tuple[int, str], Decimal] = {}
     _prof_ids = [p.id for p in profiles.values()]
     if _prof_ids:
+        # Scope ĐÚNG fee mà dòng import sẽ áp (tuition + ĐÚNG học kỳ S): nếu gộp mọi
+        # loại phí/kỳ, ref chung (vd lệ phí 500k cùng ref 'TIENMAT' với học phí 500k)
+        # sẽ false-positive "nghi trùng". sum-on-collision phòng 2 ref raw _norm về
+        # cùng key.
         for pid, ref, total in (
             await db.execute(
                 select(
@@ -436,6 +440,8 @@ async def resolve_and_validate(
                 )
                 .where(
                     models.AdmissionProfile.id.in_(_prof_ids),
+                    Fee.fee_type == "tuition",
+                    Fee.semester_no == semester_no,
                     Payment.status == PaymentStatusEnum.verified.value,
                     Payment.reference_code.isnot(None),
                     Payment.reference_code != "",
@@ -443,7 +449,8 @@ async def resolve_and_validate(
                 .group_by(models.AdmissionProfile.id, Payment.reference_code)
             )
         ).all():
-            existing_ref_sums[(pid, _norm(ref))] = total
+            _k = (pid, _norm(ref))
+            existing_ref_sums[_k] = existing_ref_sums.get(_k, Decimal("0")) + total
 
     # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
     # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR

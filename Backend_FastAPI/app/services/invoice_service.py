@@ -690,7 +690,9 @@ class InvoiceService:
         # (3) CHỈ áp phạt khi ĐÃ QUÁ HẠN (phí TRỄ hạn): quá ngày đến hạn + chưa thu
         # đủ. Dùng ``is_overdue`` (derived: today > due_date) nên bắt cả HĐ quá hạn
         # mà beat job chưa kịp lật status='overdue'; đồng thời CHẶN áp phạt HĐ chưa
-        # tới hạn (issued, due tương lai) — khớp cờ FE can_apply_penalty.
+        # tới hạn (issued, due tương lai). Cờ FE ``can_apply_penalty`` cũng tính
+        # theo derived-overdue (``_invoice_is_overdue``) nên nút chỉ hiện đúng khi
+        # service chấp nhận (không lệch enum 'overdue' lag theo beat job).
         if not invoice.is_overdue:
             raise BusinessRuleViolation(
                 "Chỉ áp phạt cho hóa đơn ĐÃ QUÁ HẠN (quá ngày đến hạn, chưa thu đủ)."

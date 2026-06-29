@@ -839,10 +839,27 @@ class FeeCalculationService:
         draft_invoices = [
             inv for inv in fee_invoices if inv.status == "draft"
         ]
-        if draft_invoices and fee.installment_plan:
+        if len(draft_invoices) == 1:
+            # 1 đợt draft (FULL plan, hoặc multi-plan còn đúng 1 đợt sau khi hủy) →
+            # toàn bộ final vào đó, giữ sum(invoice)==final.
+            await self.db.execute(
+                sa.update(Invoice)
+                .where(Invoice.id == draft_invoices[0].id)
+                .values(amount=fee.final_amount)
+            )
+        elif draft_invoices and fee.installment_plan:
             new_schedule = fee.installment_plan.get_installment_schedule(
                 fee.final_amount
             )
+            # zip theo VỊ TRÍ → chỉ đúng khi số HĐ draft KHỚP số đợt kế hoạch. Nếu
+            # lệch (vd 1 đợt giữa chừng đã hủy, cancelled không bị block ở trên) →
+            # gán lệch số tiền → fee↔invoice lệch (undercharge). Chặn an toàn thay
+            # vì rewrite mù.
+            if len(draft_invoices) != len(new_schedule):
+                raise BusinessRuleViolation(
+                    "Bộ hóa đơn không khớp kế hoạch trả góp (có đợt đã hủy) — hãy "
+                    "hủy các hóa đơn còn lại rồi phát hành lại để tính lại phí."
+                )
             for inv, sched in zip(
                 sorted(draft_invoices, key=lambda x: x.installment_no),
                 new_schedule,
@@ -852,12 +869,6 @@ class FeeCalculationService:
                     .where(Invoice.id == inv.id)
                     .values(amount=sched["amount"])
                 )
-        elif len(draft_invoices) == 1:
-            await self.db.execute(
-                sa.update(Invoice)
-                .where(Invoice.id == draft_invoices[0].id)
-                .values(amount=fee.final_amount)
-            )
 
         await self.db.flush()
 

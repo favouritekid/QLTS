@@ -956,6 +956,31 @@ class TestRecalculateInvoiceSync:
         assert fee2.final_amount == Decimal("700000")
         assert invs[0].amount == Decimal("700000"), "HĐ draft phải đồng bộ final mới"
 
+    async def test_recalculate_blocked_when_draft_count_mismatches_plan(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """F1: hủy 1 đợt GIỮA kế hoạch trả góp (3 đợt) → còn 2 HĐ draft ≠ 3 đợt →
+        recalc CHẶN (tránh zip gán lệch số tiền → fee↔invoice lệch)."""
+        inv_service = InvoiceService(db)
+        fee = invoice_fixtures["fee_with_plan"]  # plan 3 đợt
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await inv_service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id, auto_issue=False,
+        )
+        await db.commit()
+        assert len(invs) == 3
+        await inv_service.cancel_invoice(invs[0].id, "hủy đợt 1", admin_user.id, unit_id)
+        await db.commit()
+
+        fee_service = FeeCalculationService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await fee_service.recalculate_fee(
+                fee_id=fee.id, new_base_amount=Decimal("8000000"),
+                reason="Điều chỉnh sau khi hủy 1 đợt giữa kế hoạch",
+                user_id=admin_user.id, unit_id=unit_id,
+            )
+
 
 class TestApplyPenaltyGuards:
     """#8 — penalty: None→reject (không 500), trần ≤ amount, happy-path."""
@@ -1039,7 +1064,7 @@ class TestInstallmentScheduleGuard:
             ],
             is_active=True,
         )
-        with pytest.raises(ValueError):
+        with pytest.raises(BusinessRuleViolation):
             plan.get_installment_schedule(Decimal("1000000"))
 
     async def test_generate_inactive_plan_raises(

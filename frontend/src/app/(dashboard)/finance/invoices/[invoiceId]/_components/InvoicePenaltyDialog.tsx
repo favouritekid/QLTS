@@ -34,8 +34,11 @@ const penaltyFormSchema = z.object({
     .number({ message: "Vui lòng nhập số tiền phạt" })
     .positive("Số tiền phải lớn hơn 0"),
   // Backend route apply-penalty yêu cầu reason (1..500). Không gửi → 422.
+  // .trim() trước min(1): chuỗi toàn khoảng trắng → invalid ngay ở FE (tránh gửi
+  // reason='' sau trim → backend 422 với toast lỗi chung).
   reason: z
     .string()
+    .trim()
     .min(1, "Vui lòng nhập lý do áp phạt")
     .max(500, "Lý do không được quá 500 ký tự"),
 })
