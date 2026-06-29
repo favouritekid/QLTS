@@ -15,7 +15,7 @@ Architecture Compliance:
 
 from datetime import datetime, date
 from decimal import Decimal
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import html
 
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
@@ -264,24 +264,21 @@ class FeeCalculateRequest(BaseModel):
         None, ge=1, le=12,
         description="Số học kỳ (HK1=1). Mặc định 1 cho tuition, None cho non-tuition."
     )
-    # Manual tuition override (accountant/officer nhập học phí đặc biệt — học
-    # bổng / chuyển trường / theo quyết định riêng). Số gõ là BASE (TRƯỚC giảm
-    # giá): service vẫn áp discount hiện hành → final = manual − total_discount,
-    # invoice khớp final (≠ số gõ nếu có giảm). CHỈ áp dụng cho fee_type=tuition.
-    # None = luồng cũ (lấy giá chuẩn từ offering_semester_tuition).
-    manual_base_amount: Optional[Decimal] = Field(None, gt=0, le=MAX_AMOUNT)
-    manual_reason: Optional[str] = Field(None, max_length=500)
-
-    @field_validator("manual_reason")
-    @classmethod
-    def strip_manual_reason(cls, v: Optional[str]) -> Optional[str]:
-        # CHỈ strip — KHÔNG escape ở đây. Độ dài ≥10 phải đo trên chuỗi GỐC:
-        # ``html.escape`` chỉ làm DÀI thêm ('<'→'&lt;') nên reason rác vài ký tự
-        # đặc biệt ('<<<<' → 16 ký tự) sẽ lọt cửa ≥10, làm rỗng kiểm soát audit.
-        # Escape lùi xuống ``validate_manual_tuition`` SAU khi đã check độ dài raw.
-        if v is None:
-            return v
-        return v.strip()
+    # Lịch thu tùy chỉnh — Pha 1: "đóng trước + phần còn lại" (2 đợt). KHÔNG đổi
+    # NGHĨA VỤ (base_amount/final_amount giữ giá chuẩn) — chỉ chia final thành 2
+    # hóa đơn. mode="standard" = theo kế hoạch trả góp như cũ. CHỈ cho tuition.
+    # (Mở rộng sau: thêm mode "custom" cho N đợt.)
+    collection_schedule_mode: Literal["standard", "down_payment"] = "standard"
+    down_payment: Optional[Decimal] = Field(
+        None, gt=0, le=MAX_AMOUNT,
+        description="Số tiền đóng trước (đợt 1) — chỉ khi mode='down_payment'.",
+    )
+    down_payment_due: Optional[date] = Field(
+        None, description="Hạn đóng đợt 1 (down_payment)."
+    )
+    remainder_due: Optional[date] = Field(
+        None, description="Hạn đóng đợt 2 (phần còn lại)."
+    )
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
@@ -290,28 +287,37 @@ class FeeCalculateRequest(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_manual_tuition(self):
-        """Manual override invariant (HTTP layer → 422 on violation).
-
-        Mirror lớp guard service-side (``calculate_fee``) — defense-in-depth cho
-        tiền lõi: schema bắt caller HTTP, service guard bắt direct/test caller.
-        Độ dài reason đo trên chuỗi RAW (đã strip, CHƯA escape); chỉ escape SAU
-        khi hợp lệ để lưu/audit an toàn.
+    def validate_collection_schedule(self):
+        """Lịch thu 'đóng trước' (HTTP layer → 422). CHỈ kiểm cấu trúc lịch —
+        KHÔNG đụng số tiền nghĩa vụ. Ràng buộc ``down_payment < final`` đo ở
+        service (final chỉ biết sau khi resolve giá chuẩn HK).
         """
-        if self.manual_base_amount is not None:
+        if self.collection_schedule_mode == "down_payment":
             if self.fee_type != FeeTypeEnum.tuition:
                 raise ValueError(
-                    "Nhập học phí thủ công chỉ áp dụng cho loại phí học phí (tuition)."
+                    "Lịch thu 'đóng trước' chỉ áp dụng cho học phí (tuition)."
                 )
-            if not self.manual_reason or len(self.manual_reason) < 10:
+            if (
+                self.down_payment is None
+                or self.down_payment_due is None
+                or self.remainder_due is None
+            ):
                 raise ValueError(
-                    "Cần nhập lý do nhập học phí thủ công (tối thiểu 10 ký tự)."
+                    "Lịch 'đóng trước' cần: số đóng trước, hạn đợt 1 và hạn đợt 2."
                 )
-            # Độ dài đã đo trên RAW → giờ mới escape để lưu vào Fee.notes an toàn.
-            self.manual_reason = html.escape(self.manual_reason)
-        elif self.manual_reason:
+            if self.remainder_due < self.down_payment_due:
+                raise ValueError(
+                    "Hạn đợt còn lại phải >= hạn đợt đóng trước."
+                )
+        elif (
+            self.down_payment is not None
+            or self.down_payment_due is not None
+            or self.remainder_due is not None
+        ):
+            # mode="standard" mà vẫn gửi field down_payment → từ chối (tránh dữ
+            # liệu lạc bị bỏ thầm).
             raise ValueError(
-                "Có lý do nhập tay nhưng thiếu mức học phí thủ công."
+                "Chỉ truyền down_payment khi collection_schedule_mode='down_payment'."
             )
         return self
 
@@ -1017,13 +1023,13 @@ class CalculableProfilesResponse(BaseModel):
 
 
 class TuitionPreviewResponse(BaseModel):
-    """Giá chuẩn học phí (read-only) cho add-on "Nhập học phí thủ công" của dialog
-    Tính phí (GET /api/fees/tuition-preview).
+    """Giá chuẩn học phí (read-only) cho dialog "Tính phí"
+    (GET /api/fees/tuition-preview).
 
-    Trả về 3 con số để dialog hiển khi accountant/officer bật toggle nhập tay:
-    so sánh số gõ với giá chuẩn (``base_amount``), thấy giảm giá hiện hành
-    (``total_discount``) và dự kiến phải thu (``final_amount`` = base − discount).
-    KHÔNG persist gì — chỉ tái dùng resolver giá + discount như ``calculate_fee``.
+    Trả về 3 con số để dialog đối chiếu khi chọn lịch thu: giá chuẩn
+    (``base_amount``), giảm giá hiện hành (``total_discount``) và dự kiến phải thu
+    (``final_amount`` = base − discount). KHÔNG persist — chỉ tái dùng resolver
+    giá + discount như ``calculate_fee``.
     """
     base_amount: Decimal
     total_discount: Decimal

@@ -225,9 +225,9 @@ export function useProfileCollection(
 }
 
 /**
- * Giá chuẩn học phí (base / giảm giá / dự kiến phải thu) cho add-on "Nhập học
- * phí thủ công" của dialog Tính phí. Chỉ fetch khi toggle nhập tay bật (caller
- * truyền enabled). Refetch khi đổi semesterNo (nằm trong queryKey).
+ * Giá chuẩn học phí (base / giảm giá / dự kiến phải thu) cho dialog Tính phí —
+ * hiển tổng phải thu để đối chiếu khi chọn lịch thu (vd chia "đóng trước + còn
+ * lại"). Chỉ fetch khi caller bật (enabled). Refetch khi đổi semesterNo.
  */
 export function useTuitionPreview(
   profileId: number,

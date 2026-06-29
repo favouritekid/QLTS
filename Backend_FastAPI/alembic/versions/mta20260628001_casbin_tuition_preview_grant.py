@@ -1,13 +1,14 @@
-"""Manual-tuition-amount: Casbin grant cho GET /api/fees/tuition-preview.
+"""Casbin grant cho GET /api/fees/tuition-preview.
 
 Seeds GET /api/fees/tuition-preview cho officer + accountant — endpoint preview
-giá chuẩn học phí (read-only) của add-on "Nhập học phí thủ công" trong dialog
-Tính phí. Mirror đúng pattern grant /api/fees/calculate (officer + accountant
-trong template; manager kế thừa officer qua edge g; admin qua wildcard).
+giá chuẩn học phí (read-only) của dialog "Tính phí" (hiển base / giảm giá / dự
+kiến phải thu để đối chiếu khi chọn lịch thu). Mirror đúng pattern grant
+/api/fees/calculate (officer + accountant trong template; manager kế thừa officer
+qua edge g; admin qua wildcard).
 
 Không có migration này, entrypoint deploy không sync grant template mới →
-enforcer 403 officer/accountant trên endpoint preview (toggle nhập tay sẽ không
-thấy được giá chuẩn / giảm giá / dự kiến phải thu).
+enforcer 403 officer/accountant trên endpoint preview (không thấy được giá chuẩn
+/ giảm giá / dự kiến phải thu).
 
 Idempotent (INSERT WHERE NOT EXISTS) — cùng kiểu feepicker_casbin_20260621.
 

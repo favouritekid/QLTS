@@ -141,8 +141,8 @@ export async function listCalculableProfiles(
 }
 
 /**
- * Giá chuẩn học phí (read-only) cho add-on "Nhập học phí thủ công" của dialog
- * Tính phí. Trả base / giảm giá hiện hành / dự kiến phải thu cho HK đã chọn.
+ * Giá chuẩn học phí (read-only) cho dialog Tính phí — trả base / giảm giá hiện
+ * hành / dự kiến phải thu cho HK đã chọn (đối chiếu khi chọn lịch thu).
  *
  * @param profileId - admission profile ID
  * @param semesterNo - số học kỳ (HK1=1)

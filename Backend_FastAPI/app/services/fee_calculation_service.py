@@ -485,8 +485,6 @@ class FeeCalculationService:
         user_id: Optional[int] = None,
         unit_id: Optional[int] = None,
         semester_no: Optional[int] = None,
-        manual_base_amount: Optional[Decimal] = None,
-        manual_reason: Optional[str] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
         Calculate fee for an admission profile.
@@ -525,30 +523,6 @@ class FeeCalculationService:
             ResourceNotFoundError: If profile not found
             BadRequest: If fee already exists or semester tuition not configured
         """
-        # 🔴 GUARD SERVICE-SIDE (manual tuition override) — đặt TRƯỚC mọi resolve
-        # giá / DB. ``calculate_fee`` là business boundary có direct/test caller
-        # KHÔNG đi qua schema ``model_validator`` (lo HTTP→422), nên tự bảo vệ
-        # invariant cho con số tài chính lõi: nhập tay chỉ cho tuition + lý do
-        # ≥10. Domain error (BadRequest ⊂ ValidationError → 400). Hai lớp bổ trợ,
-        # không trùng path (schema 422 cho HTTP, guard này cho direct caller).
-        if manual_base_amount is not None:
-            if fee_type != FeeTypeEnum.tuition:
-                raise BadRequest("Nhập học phí thủ công chỉ áp dụng cho học phí (tuition).")
-            if not manual_reason or len(manual_reason.strip()) < 10:
-                raise BadRequest("Cần lý do nhập học phí thủ công (tối thiểu 10 ký tự).")
-            # Manual override CHỈ chạy ở nhánh service-resolve (base_amount=None,
-            # đường router). Nếu caller truyền KÈM base_amount tường minh thì nhánh
-            # ``elif fee_type == tuition`` ép giá chuẩn → manual bị BỎ THẦM +
-            # audit note "chuẩn None". Chặn combo mâu thuẫn fail-fast (đối xứng
-            # guard base_amount/discount_policy_ids ngay dưới).
-            if base_amount is not None:
-                raise BadRequest(
-                    "Nhập học phí thủ công cần chế độ service-resolve "
-                    "(base_amount=None) — không truyền kèm base_amount tường minh."
-                )
-        elif manual_reason:  # lý do có nhưng thiếu mức học phí → vô nghĩa
-            raise BadRequest("Có lý do nhập tay nhưng thiếu mức học phí thủ công.")
-
         # Normalize semester_no: tuition defaults to HK1, non-tuition
         # MUST be None (the DB CHECK chk_fee_nontuition_semester_no_null
         # rejects non-tuition rows with a non-NULL semester_no). Lives in
@@ -611,9 +585,6 @@ class FeeCalculationService:
         # removing the double resolve. Direct/test callers pass an explicit
         # base_amount → their values are used as-is; a ``discount_policy_ids`` of
         # None then keeps the legacy "no discount" meaning (NOT auto-derive).
-        # Audit: giá chuẩn HK resolve được — ghi vào notes khi nhập tay để so
-        # sánh chuẩn → tay. None khi không nhập tay (luồng cũ, không cần).
-        canonical_tuition_amount: Optional[Decimal] = None
         if base_amount is None:
             academic_info = await resolve_fee_academic_info(self.db, profile)
             if discount_policy_ids is None:
@@ -621,30 +592,12 @@ class FeeCalculationService:
                     academic_info.applied_discount_policy_ids or []
                 )
             if fee_type == FeeTypeEnum.tuition:
-                if manual_base_amount is not None:
-                    # Số gõ là BASE (đã qua guard tuition + reason ≥10); discount
-                    # VẪN áp như cũ ở dưới → final = manual − discount, invoice
-                    # khớp final. Giá chuẩn chỉ để AUDIT (best-effort): hồ sơ học
-                    # bổng / chuyển trường có thể CHƯA cấu hình học phí chuẩn HK —
-                    # không được chặn override vì lý do đó (canonical=None → note
-                    # ghi "chưa cấu hình").
-                    try:
-                        canonical_tuition_amount = (
-                            await self._semester_tuition_amount_for_ai(
-                                academic_info.id, semester_no
-                            )
-                        )
-                    except BadRequest:
-                        canonical_tuition_amount = None
-                    base_amount = manual_base_amount
-                else:
-                    # Luồng cũ: giá chuẩn là BASE (bắt buộc có cấu hình HK).
-                    canonical_tuition_amount = (
-                        await self._semester_tuition_amount_for_ai(
-                            academic_info.id, semester_no
-                        )
-                    )
-                    base_amount = canonical_tuition_amount
+                # Giá chuẩn HK từ offering_semester_tuition là BASE (bắt buộc có
+                # cấu hình HK). Số tiền nghĩa vụ KHÔNG do người dùng nhập tay —
+                # mọi tuỳ chỉnh (giãn lịch) nằm ở tầng hoá đơn, không đổi base.
+                base_amount = await self._semester_tuition_amount_for_ai(
+                    academic_info.id, semester_no
+                )
             else:
                 base_amount = academic_info.tuition_fee_per_year or Decimal("0")
                 if base_amount <= 0:
@@ -693,23 +646,6 @@ class FeeCalculationService:
         else:
             academic_year_int = academic_year
 
-        # Audit note khi nhập học phí thủ công — mirror format ``recalculate_fee``
-        # ("chuẩn {canonical} → {manual}. Lý do: {reason}") để lưu vết kiểm soát
-        # (officer/accountant tự đặt học phí đặc biệt). None khi luồng cũ.
-        manual_note: Optional[str] = None
-        if manual_base_amount is not None:
-            _canonical_str = (
-                str(canonical_tuition_amount)
-                if canonical_tuition_amount is not None
-                else "chưa cấu hình"
-            )
-            manual_note = (
-                f"[{datetime.now(timezone.utc).isoformat()}] "
-                f"Học phí nhập tay bởi user {user_id}: "
-                f"chuẩn {_canonical_str} → {base_amount}. "
-                f"Lý do: {manual_reason}"
-            )
-
         # Create fee record. semester_no is set from the service-level
         # default or caller-provided value (tuition) / None (non-tuition).
         fee = Fee(
@@ -726,7 +662,6 @@ class FeeCalculationService:
             status=FeeStatusEnum.calculated.value,
             calculated_by_id=user_id,
             calculated_at=datetime.now(timezone.utc),
-            notes=manual_note,
             version=1,
         )
 
@@ -765,20 +700,6 @@ class FeeCalculationService:
             final_amount=str(final_amount),
             user_id=user_id,
         )
-
-        # Audit log riêng cho học phí nhập tay — surface trong lead-fraud monitor
-        # (officer tự đặt học phí hồ sơ mình phụ trách). Chỉ fire khi override.
-        if manual_base_amount is not None:
-            log.info(
-                "fee_calculated_manual",
-                fee_id=fee.id,
-                profile_id=admission_profile_id,
-                semester_no=semester_no,
-                canonical_amount=str(canonical_tuition_amount),
-                manual_base_amount=str(base_amount),
-                final_amount=str(final_amount),
-                user_id=user_id,
-            )
 
         # ADR-002 PR 5: Only HK1 fee creation projects into admission pipeline.
         # PR #8 — capture pipeline stage around the sync call so the closure
@@ -834,8 +755,9 @@ class FeeCalculationService:
         profile: "models.AdmissionProfile",
         semester_no: int,
     ) -> Tuple[Decimal, Decimal, Decimal]:
-        """Giá chuẩn học phí (read-only, KHÔNG persist) cho add-on "Nhập học phí
-        thủ công" của dialog Tính phí.
+        """Giá chuẩn học phí (read-only, KHÔNG persist) cho dialog "Tính phí" —
+        hiển base / giảm giá / dự kiến phải thu để người dùng đối chiếu khi chọn
+        lịch thu (vd chia "đóng trước + còn lại").
 
         Tái dùng ĐÚNG resolver giá + discount như ``calculate_fee`` (cùng nguồn
         sự thật ``resolve_fee_academic_info`` + ``_semester_tuition_amount_for_ai``

@@ -1216,12 +1216,11 @@ async def test_calculate_tuition_auto_derives_discount_from_academic_info(
 
 
 # ==============================================================================
-# Manual tuition override (2026-06-28) — accountant/officer nhập học phí thủ công
+# Lịch thu "đóng trước" (Pha 1, 2026-06-29) — giãn lịch, GIỮ nguyên tổng học phí
 # ==============================================================================
 #
-# Số gõ là BASE (TRƯỚC giảm giá): service VẪN áp discount → final = manual −
-# discount; invoice khớp final (≠ số gõ nếu có giảm). Guard kép: schema
-# model_validator (HTTP→422) + service-side guard (direct caller→400/BadRequest).
+# collection_schedule_mode="down_payment": chia số PHẢI THU (final − waived)
+# thành 2 hóa đơn (đợt đầu + phần còn lại) — KHÔNG đụng base_amount/final_amount.
 # Canonical HK1 trong fee_calc_config = 5,000,000.
 
 
@@ -1257,245 +1256,6 @@ async def _link_fixed_discount(cfg: dict, amount: str = "500000") -> int:
                 .values(applied_discount_policy_ids=[pid])
             )
     return pid
-
-
-@pytest.mark.asyncio
-async def test_manual_tuition_honored_no_discount(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """Owning officer nhập học phí thủ công (không discount): base_amount = số gõ
-    (9,000,000 ≠ canonical 5,000,000), final = base, notes có dòng audit, invoice
-    khớp final."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual NoDiscount",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 1,
-            "manual_base_amount": "9000000",
-            "manual_reason": "Học phí theo quyết định riêng của nhà trường",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert Decimal(str(body["base_amount"])) == Decimal("9000000"), body
-    assert Decimal(str(body["total_discount"])) == Decimal("0"), body
-    assert Decimal(str(body["final_amount"])) == Decimal("9000000"), body
-    # Audit note lưu vết nhập tay + giá chuẩn → tay.
-    assert "Học phí nhập tay" in (body.get("notes") or ""), body.get("notes")
-    # Invoice khớp final (FULL = 1 installment 100%).
-    invoices = body.get("invoices") or []
-    assert invoices, body
-    assert sum(Decimal(str(inv["amount"])) for inv in invoices) == Decimal("9000000"), invoices
-
-
-@pytest.mark.asyncio
-async def test_manual_tuition_applies_existing_discount(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """Số gõ = BASE, discount VẪN áp: manual 8,000,000 − fixed 500,000 =
-    7,500,000 (final). Invoice khớp final, KHÔNG bằng số gõ."""
-    await _link_fixed_discount(fee_calc_config, amount="500000")
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual WithDiscount",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 1,
-            "manual_base_amount": "8000000",
-            "manual_reason": "Học bổng đặc biệt theo quyết định khen thưởng",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert Decimal(str(body["base_amount"])) == Decimal("8000000"), body
-    assert Decimal(str(body["total_discount"])) == Decimal("500000"), body
-    assert Decimal(str(body["final_amount"])) == Decimal("7500000"), body
-    invoices = body.get("invoices") or []
-    assert sum(Decimal(str(inv["amount"])) for inv in invoices) == Decimal("7500000"), invoices
-
-
-@pytest.mark.asyncio
-async def test_manual_tuition_unconfigured_semester_ok(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """Mục đích của tính năng: nhập tay học bổng/chuyển trường cho hồ sơ CHƯA cấu
-    hình học phí chuẩn HK. fixture chỉ seed HK1 → nhập tay HK2 (không có cấu hình)
-    vẫn phải tạo được (canonical best-effort = None, base = số gõ, note ghi 'chưa
-    cấu hình'). Trước fix: 400 'Chưa cấu hình học phí cho HK2'."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual NoConfigHK",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 2,  # KHÔNG có offering_semester_tuition cho HK2
-            "manual_base_amount": "7000000",
-            "manual_reason": "Học phí học kỳ 2 theo quyết định riêng",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert Decimal(str(body["base_amount"])) == Decimal("7000000"), body
-    assert Decimal(str(body["final_amount"])) == Decimal("7000000"), body
-    assert "chưa cấu hình" in (body.get("notes") or ""), body.get("notes")
-
-
-@pytest.mark.asyncio
-async def test_manual_reason_special_chars_short_422(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """Bypass-guard: reason '<<<<' (4 ký tự raw) escape thành 16 ký tự — KHÔNG
-    được lọt cửa ≥10. Độ dài phải đo trên chuỗi GỐC → 422."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual SpecialShort",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 1,
-            "manual_base_amount": "9000000",
-            "manual_reason": "<<<<",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 422, resp.text
-
-
-@pytest.mark.asyncio
-async def test_manual_tuition_reason_too_short_422(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """Lý do <10 ký tự → schema model_validator → 422 (RequestValidationError)."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual ShortReason",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 1,
-            "manual_base_amount": "9000000",
-            "manual_reason": "ngắn",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 422, resp.text
-
-
-@pytest.mark.asyncio
-async def test_manual_amount_on_nontuition_422(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    fee_calc_config: dict,
-):
-    """manual_base_amount kèm non-tuition → schema model_validator → 422."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual NonTuition",
-    )
-    oh = await _login(
-        client, officer_user_in_db["username"], officer_user_in_db["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "application",
-            "installment_plan_code": "FULL",
-            "manual_base_amount": "9000000",
-            "manual_reason": "Lý do hợp lệ đủ mười ký tự trở lên",
-        },
-        headers=oh,
-    )
-    assert resp.status_code == 422, resp.text
-
-
-@pytest.mark.asyncio
-async def test_accountant_can_manual_tuition(
-    client: AsyncClient,
-    admin_token_headers: dict,
-    officer_user_in_db: dict,
-    accountant_same_unit: dict,
-    fee_calc_config: dict,
-):
-    """Accountant cũng nhập học phí thủ công được (vai trò tài chính trung tâm)."""
-    pid = await _create_approved_profile(
-        client, admin_token_headers, officer_user_in_db, fee_calc_config,
-        lead_name="Manual Accountant", approve=False,
-    )
-    ah = await _login(
-        client, accountant_same_unit["username"], accountant_same_unit["password"]
-    )
-    resp = await client.post(
-        "/api/fees/calculate",
-        json={
-            "admission_profile_id": pid,
-            "fee_type": "tuition",
-            "installment_plan_code": "FULL",
-            "semester_no": 1,
-            "manual_base_amount": "12000000",
-            "manual_reason": "Điều chỉnh học phí theo trường hợp đặc biệt",
-        },
-        headers=ah,
-    )
-    assert resp.status_code == 201, resp.text
-    assert Decimal(str(resp.json()["base_amount"])) == Decimal("12000000")
 
 
 @pytest.mark.asyncio
@@ -1564,63 +1324,110 @@ async def test_tuition_preview_reflects_discount(
 
 
 @pytest.mark.asyncio
-async def test_service_guard_rejects_invalid_manual_before_resolve():
-    """🔴 REVISIONS #7 — guard TẦNG SERVICE: gọi thẳng calculate_fee() với manual
-    params invalid raise domain error (BadRequest) TRƯỚC mọi resolve giá / DB.
+async def test_down_payment_splits_into_two_invoices(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Đóng trước 2,000,000 (canonical 5,000,000) → GIỮ tổng (base/final =
+    5,000,000), 2 hóa đơn issued (2,000,000 + 3,000,000), còn nợ 3,000,000."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="DownPay Split",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "collection_schedule_mode": "down_payment",
+            "down_payment": "2000000",
+            "down_payment_due": "2026-09-01",
+            "remainder_due": "2026-11-01",
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # NGHĨA VỤ không đổi (đóng trước chỉ giãn lịch thu).
+    assert Decimal(str(body["base_amount"])) == Decimal("5000000"), body
+    assert Decimal(str(body["final_amount"])) == Decimal("5000000"), body
+    assert Decimal(str(body["remaining_amount"])) == Decimal("5000000"), body
+    invoices = sorted(
+        body.get("invoices") or [], key=lambda i: i["installment_no"]
+    )
+    assert len(invoices) == 2, invoices
+    assert Decimal(str(invoices[0]["amount"])) == Decimal("2000000"), invoices
+    assert Decimal(str(invoices[1]["amount"])) == Decimal("3000000"), invoices
+    assert sum(Decimal(str(i["amount"])) for i in invoices) == Decimal("5000000")
+    # Đợt 2 (phần còn lại = công nợ) có hạn tương lai cụ thể, cả 2 đã phát hành.
+    assert invoices[0]["due_date"] == "2026-09-01", invoices
+    assert invoices[1]["due_date"] == "2026-11-01", invoices
+    assert all(i["status"] == "issued" for i in invoices), invoices
 
-    Dùng profile_id không tồn tại: nếu guard KHÔNG fire trước, hàm sẽ chạy tới
-    lookup profile rồi raise ResourceNotFoundError (404) thay vì BadRequest (400)
-    — test này khóa thứ tự guard-trước-resolve cho direct/test caller (lớp ngoài
-    HTTP 422)."""
-    from app.services.fee_calculation_service import FeeCalculationService
-    from app.utils.exceptions import BadRequest
-    from app.models.finance import FeeTypeEnum
 
-    GHOST = 99999999
-    async with AsyncSessionLocal() as s:
-        svc = FeeCalculationService(s)
+@pytest.mark.asyncio
+async def test_down_payment_exceeds_total_rejected(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Đóng trước >= tổng phải thu (canonical 5,000,000) → 400 (remainder <= 0)."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="DownPay TooBig",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "collection_schedule_mode": "down_payment",
+            "down_payment": "6000000",
+            "down_payment_due": "2026-09-01",
+            "remainder_due": "2026-11-01",
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 400, resp.text
 
-        # (a) non-tuition + manual
-        with pytest.raises(BadRequest):
-            await svc.calculate_fee(
-                admission_profile_id=GHOST,
-                fee_type=FeeTypeEnum.application,
-                base_amount=None,
-                academic_year="2026",
-                manual_base_amount=Decimal("5000000"),
-                manual_reason="Lý do hợp lệ đủ mười ký tự",
-            )
 
-        # (b) reason <10
-        with pytest.raises(BadRequest):
-            await svc.calculate_fee(
-                admission_profile_id=GHOST,
-                fee_type=FeeTypeEnum.tuition,
-                base_amount=None,
-                academic_year="2026",
-                manual_base_amount=Decimal("5000000"),
-                manual_reason="ngắn",
-            )
-
-        # (c) reason nhưng thiếu mức học phí
-        with pytest.raises(BadRequest):
-            await svc.calculate_fee(
-                admission_profile_id=GHOST,
-                fee_type=FeeTypeEnum.tuition,
-                base_amount=None,
-                academic_year="2026",
-                manual_base_amount=None,
-                manual_reason="Lý do hợp lệ đủ mười ký tự",
-            )
-
-        # (d) manual_base_amount kèm base_amount tường minh → combo mâu thuẫn
-        # (nhánh ép giá chuẩn sẽ bỏ thầm manual). Phải raise TRƯỚC resolve.
-        with pytest.raises(BadRequest):
-            await svc.calculate_fee(
-                admission_profile_id=GHOST,
-                fee_type=FeeTypeEnum.tuition,
-                base_amount=Decimal("5000000"),
-                academic_year="2026",
-                manual_base_amount=Decimal("9000000"),
-                manual_reason="Lý do hợp lệ đủ mười ký tự",
-            )
+@pytest.mark.asyncio
+async def test_down_payment_remainder_due_before_first_422(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Hạn phần còn lại < hạn đợt đầu → schema model_validator → 422."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="DownPay BadDates",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "collection_schedule_mode": "down_payment",
+            "down_payment": "2000000",
+            "down_payment_due": "2026-11-01",
+            "remainder_due": "2026-09-01",
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 422, resp.text

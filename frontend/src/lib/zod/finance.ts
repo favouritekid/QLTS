@@ -573,43 +573,49 @@ export const feeCalculateRequestSchema = z
     // for non-tuition types). max(12) mirrors backend FeeCalculateRequest
     // (Field le=12) — chặn HK ngoài int32.
     semester_no: z.number().int().positive().max(12).nullable().optional(),
-    // Manual tuition override — số nhập tay là BASE (Decimal as string). Backend
-    // vẫn áp discount → invoice khớp final. Mirror backend model_validator dưới.
-    manual_base_amount: z
+    // Lịch thu "đóng trước" (Pha 1) — GIỮ tổng học phí, chỉ chia 2 đợt. Mirror
+    // backend validate_collection_schedule. down_payment là Decimal-as-string;
+    // các hạn là chuỗi ISO YYYY-MM-DD.
+    collection_schedule_mode: z.enum(["standard", "down_payment"]).optional(),
+    down_payment: z
       .string()
-      .regex(/^\d+(\.\d{1,2})?$/, "Mức học phí không hợp lệ")
+      .regex(/^\d+(\.\d{1,2})?$/, "Số đóng trước không hợp lệ")
       .nullable()
       .optional(),
-    manual_reason: z
-      .string()
-      .max(500, "Lý do không được quá 500 ký tự")
-      .nullable()
-      .optional(),
+    down_payment_due: z.string().nullable().optional(),
+    remainder_due: z.string().nullable().optional(),
   })
-  // Mirror backend FeeCalculateRequest.validate_manual_tuition: nhập tay ⟹
-  // fee_type=tuition + reason ≥10; có reason mà thiếu số ⟹ reject.
+  // Mirror backend validate_collection_schedule: mode="down_payment" ⟹
+  // fee_type=tuition + đủ số đóng trước & 2 hạn + hạn đợt 2 >= đợt 1.
   .refine(
     (d) =>
-      d.manual_base_amount == null ||
+      d.collection_schedule_mode !== "down_payment" ||
       (d.fee_type ?? "tuition") === "tuition",
     {
-      message: "Nhập học phí thủ công chỉ áp dụng cho học phí",
-      path: ["manual_base_amount"],
+      message: "Lịch 'đóng trước' chỉ áp dụng cho học phí",
+      path: ["collection_schedule_mode"],
     }
   )
   .refine(
     (d) =>
-      d.manual_base_amount == null ||
-      (!!d.manual_reason && d.manual_reason.trim().length >= 10),
+      d.collection_schedule_mode !== "down_payment" ||
+      (d.down_payment != null && !!d.down_payment_due && !!d.remainder_due),
     {
-      message: "Cần lý do nhập học phí thủ công (tối thiểu 10 ký tự)",
-      path: ["manual_reason"],
+      message: "Lịch 'đóng trước' cần số đóng trước và hạn cả hai đợt",
+      path: ["down_payment"],
     }
   )
-  .refine((d) => !d.manual_reason || d.manual_base_amount != null, {
-    message: "Có lý do nhập tay nhưng thiếu mức học phí",
-    path: ["manual_base_amount"],
-  })
+  .refine(
+    (d) =>
+      d.collection_schedule_mode !== "down_payment" ||
+      !d.down_payment_due ||
+      !d.remainder_due ||
+      d.remainder_due >= d.down_payment_due,
+    {
+      message: "Hạn phần còn lại phải >= hạn đợt đầu",
+      path: ["remainder_due"],
+    }
+  )
 
 export type FeeCalculateRequest = z.infer<typeof feeCalculateRequestSchema>
 

@@ -22,8 +22,8 @@ vi.mock("@/hooks/finance/useFees", async () => {
   return {
     ...actual,
     useCalculateFee: () => ({ mutateAsync, isPending: false }),
-    // Manual override add-on (#2) — stub giá chuẩn so the preview block renders
-    // deterministically without a network call when the toggle is on.
+    // Lịch thu "đóng trước" — stub tổng phải thu (final) để khối preview render
+    // tất định, không gọi mạng, khi bật toggle.
     useTuitionPreview: () => ({
       data: {
         base_amount: "5000000",
@@ -91,76 +91,68 @@ describe("CalculateFeeDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  // ---- Manual tuition override (2026-06-28) ----
+  // ---- Lịch thu "đóng trước" (2026-06-29) ----
 
-  it("manual toggle reveals amount + reason inputs", () => {
+  it("down-payment toggle reveals amount + due-date inputs", () => {
     render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
     // Hidden by default.
-    expect(screen.queryByLabelText(/mức học phí/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("switch", { name: /nhập học phí thủ công/i }));
-    expect(screen.getByLabelText(/mức học phí/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/lý do nhập tay/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/số đóng đợt đầu/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
+    expect(screen.getByLabelText(/số đóng đợt đầu/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hạn đợt đầu/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hạn phần còn lại/i)).toBeInTheDocument();
   });
 
-  it("submit is blocked until a manual amount + reason ≥10 chars are present", () => {
+  it("submit is blocked until down-payment + both due dates are present", () => {
     render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
-    fireEvent.click(screen.getByRole("switch", { name: /nhập học phí thủ công/i }));
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
 
     const submit = screen.getByRole("button", { name: /^tính học phí$/i });
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/mức học phí/i), {
-      target: { value: "9000000" },
+    fireEvent.change(screen.getByLabelText(/số đóng đợt đầu/i), {
+      target: { value: "2000000" },
     });
-    // Reason still empty → blocked.
+    // Dates still empty → blocked.
     expect(submit).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText(/lý do nhập tay/i), {
-      target: { value: "Hoc bong dac biet theo quyet dinh" },
+    fireEvent.change(screen.getByLabelText(/hạn đợt đầu/i), {
+      target: { value: "2026-09-01" },
+    });
+    fireEvent.change(screen.getByLabelText(/hạn phần còn lại/i), {
+      target: { value: "2026-11-01" },
     });
     expect(submit).toBeEnabled();
   });
 
-  it("reason chip sets a ≥10-char reason value", () => {
+  it("posts collection_schedule_mode + down-payment fields (no plan code)", async () => {
     render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
-    fireEvent.click(screen.getByRole("switch", { name: /nhập học phí thủ công/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^học bổng$/i }));
-    const reason = screen.getByLabelText(/lý do nhập tay/i) as HTMLTextAreaElement;
-    expect(reason.value.length).toBeGreaterThanOrEqual(10);
-  });
-
-  it("manual submit opens the confirm dialog, then posts manual fields", async () => {
-    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
-    fireEvent.click(screen.getByRole("switch", { name: /nhập học phí thủ công/i }));
-    fireEvent.change(screen.getByLabelText(/mức học phí/i), {
-      target: { value: "9000000" },
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
+    fireEvent.change(screen.getByLabelText(/số đóng đợt đầu/i), {
+      target: { value: "2000000" },
     });
-    fireEvent.change(screen.getByLabelText(/lý do nhập tay/i), {
-      target: { value: "Hoc bong dac biet theo quyet dinh" },
+    fireEvent.change(screen.getByLabelText(/hạn đợt đầu/i), {
+      target: { value: "2026-09-01" },
+    });
+    fireEvent.change(screen.getByLabelText(/hạn phần còn lại/i), {
+      target: { value: "2026-11-01" },
     });
 
-    // First click only opens the confirm dialog — no mutation yet (#3).
     fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
-    expect(mutateAsync).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(/xác nhận nhập học phí thủ công/i)
-    ).toBeInTheDocument();
-
-    // Confirm → mutation fires with the manual fields.
-    fireEvent.click(screen.getByRole("button", { name: /xác nhận tạo/i }));
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith({
         admission_profile_id: 42,
         fee_type: "tuition",
         semester_no: 1,
-        installment_plan_code: "FULL",
-        manual_base_amount: "9000000",
-        manual_reason: "Hoc bong dac biet theo quyet dinh",
+        collection_schedule_mode: "down_payment",
+        down_payment: "2000000",
+        down_payment_due: "2026-09-01",
+        remainder_due: "2026-11-01",
       });
     });
   });
 
-  it("does NOT include manual fields when the toggle stays off", async () => {
+  it("posts installment_plan_code (no schedule fields) when toggle stays off", async () => {
     render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
     fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
     await waitFor(() => {
