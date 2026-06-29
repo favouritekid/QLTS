@@ -18,6 +18,7 @@ import type {
   FeeWaiveRequest,
   ProfileFinanceSummary,
   ProfileCollection,
+  TuitionPreviewResponse,
 } from "@/types/finance.types"
 
 // =====================================================================
@@ -33,6 +34,8 @@ export const feesKeys = {
   byProfile: (profileId: number) => [...feesKeys.all, "by-profile", profileId] as const,
   profileSummary: (profileId: number) => [...feesKeys.all, "profile-summary", profileId] as const,
   collection: (profileId: number) => [...feesKeys.all, "collection", profileId] as const,
+  tuitionPreview: (profileId: number, semesterNo: number) =>
+    [...feesKeys.all, "tuition-preview", profileId, semesterNo] as const,
 }
 
 // =====================================================================
@@ -218,6 +221,24 @@ export function useProfileCollection(
     enabled: (options?.enabled ?? true) && !!profileId,
     staleTime: 1000 * 15,
     gcTime: 1000 * 60 * 5,
+  })
+}
+
+/**
+ * Giá chuẩn học phí (base / giảm giá / dự kiến phải thu) cho dialog Tính phí —
+ * hiển tổng phải thu để đối chiếu khi chọn lịch thu (vd chia "đóng trước + còn
+ * lại"). Chỉ fetch khi caller bật (enabled). Refetch khi đổi semesterNo.
+ */
+export function useTuitionPreview(
+  profileId: number,
+  semesterNo: number,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<TuitionPreviewResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: feesKeys.tuitionPreview(profileId, semesterNo),
+    queryFn: () => feesApi.getTuitionPreview(profileId, semesterNo),
+    enabled: (options?.enabled ?? true) && !!profileId && !!semesterNo,
+    staleTime: 1000 * 60, // 1 minute — giá chuẩn ít đổi
   })
 }
 

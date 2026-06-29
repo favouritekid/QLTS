@@ -260,23 +260,29 @@ async def calculate_fee(
             # 404 not 403: no existence leak beyond scope, same as other IDOR sites.
             raise ResourceNotFoundError("Admission profile not found")
 
-        # Get installment plan by code. PR #7 review: reject unknown or
-        # inactive codes explicitly instead of falling through to plan_id=None
-        # (which InvoiceService silently downgrades to a single-payment
-        # invoice). Previously the dialog could post INSTALLMENT (not a real
-        # seed code) and the user would still see the fee created but with a
-        # single-installment schedule — actively misleading.
-        plan = await fee_service.fee_repo.get_installment_plan_by_code(data.installment_plan_code)
-        if plan is None:
-            raise BadRequest(
-                f"Kế hoạch thanh toán '{data.installment_plan_code}' không tồn tại "
-                "hoặc không còn hoạt động."
-            )
-        if getattr(plan, "is_active", True) is False:
-            raise BadRequest(
-                f"Kế hoạch thanh toán '{data.installment_plan_code}' đã ngừng hoạt động."
-            )
-        plan_id = plan.id
+        # Lịch thu "đóng trước" (Pha 1): KHÔNG gắn kế hoạch trả góp — hóa đơn do
+        # generate_invoices_for_fee tạo theo 2 đợt tùy chỉnh (đợt đầu + còn lại).
+        # plan_id=None để fee không gắn plan (tránh lệch "plan 1 đợt nhưng 2 HĐ").
+        if data.collection_schedule_mode == "down_payment":
+            plan_id = None
+        else:
+            # Get installment plan by code. PR #7 review: reject unknown or
+            # inactive codes explicitly instead of falling through to plan_id=None
+            # (which InvoiceService silently downgrades to a single-payment
+            # invoice). Previously the dialog could post INSTALLMENT (not a real
+            # seed code) and the user would still see the fee created but with a
+            # single-installment schedule — actively misleading.
+            plan = await fee_service.fee_repo.get_installment_plan_by_code(data.installment_plan_code)
+            if plan is None:
+                raise BadRequest(
+                    f"Kế hoạch thanh toán '{data.installment_plan_code}' không tồn tại "
+                    "hoặc không còn hoạt động."
+                )
+            if getattr(plan, "is_active", True) is False:
+                raise BadRequest(
+                    f"Kế hoạch thanh toán '{data.installment_plan_code}' đã ngừng hoạt động."
+                )
+            plan_id = plan.id
 
         # Service-layer unit_id kept for downstream IDOR inside
         # calculate_fee / generate_invoices_for_fee — admin skips, everyone
@@ -321,6 +327,9 @@ async def calculate_fee(
         # flow. CAPTURE invoice_cb (was discarded with `_`): the issue path
         # builds an INVOICE_ISSUED post-commit fanout that must be awaited,
         # otherwise the invoice is issued silently with no notification/sync.
+        # Lịch thu "đóng trước" (Pha 1): truyền 2 đợt tùy chỉnh xuống service —
+        # GIỮ nghĩa vụ (final), chỉ chia thành đợt đầu + còn lại; cả hai auto-issue
+        # (tuition) → công nợ đợt 2 có hạn cụ thể. None = luồng kế hoạch như cũ.
         invoices, invoice_cb = await invoice_service.generate_invoices_for_fee(
             fee_id=fee.id,
             due_date_base=date.today() + timedelta(days=30),
@@ -328,6 +337,9 @@ async def calculate_fee(
             unit_id=unit_id,
             auto_issue=(data.fee_type == FeeTypeEnum.tuition),
             anchor_date=invoice_anchor,
+            down_payment=data.down_payment,
+            down_payment_due=data.down_payment_due,
+            remainder_due=data.remainder_due,
         )
 
         await db.commit()
@@ -400,6 +412,56 @@ async def list_calculable_profiles(
             for p in profiles
         ]
     )
+
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/tuition-preview",
+    response_model=finance_schemas.TuitionPreviewResponse,
+    summary="Preview giá chuẩn học phí (base / giảm giá / dự kiến phải thu)",
+)
+async def preview_tuition(
+    request: Request,
+    admission_profile_id: int = Query(..., gt=0, description="ID hồ sơ tuyển sinh"),
+    # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
+    # int32-guard codebase đã áp ở các route khác). HK thực tế ≤ 12.
+    semester_no: int = Query(1, ge=1, le=12, description="Số học kỳ (HK1=1)"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Giá chuẩn học phí (base / giảm giá / dự kiến phải thu) cho dialog "Tính
+    phí" — hiển để đối chiếu khi chọn lịch thu (vd "đóng trước + còn lại").
+    Read-only, KHÔNG ghi DB.
+
+    Auth giống ``POST /api/fees/calculate``: ``_get_profile`` unscoped rồi
+    ``_fee_calc_authorized`` → 404 nếu ngoài scope (không leak existence). Khai
+    báo literal ``/tuition-preview`` TRƯỚC ``/{fee_id}`` để route match đúng (một
+    segment đặt sau ``/{fee_id}`` sẽ bị nuốt thành ``fee_id`` → 422). Cùng quy
+    ước với ``/calculable-profiles``.
+    """
+    fee_service = FeeCalculationService(db)
+
+    try:
+        profile = await fee_service._get_profile(admission_profile_id, unit_id=None)
+        if not profile or not _fee_calc_authorized(profile, current_user):
+            # 404 not 403: no existence leak beyond scope (same as calculate_fee).
+            raise ResourceNotFoundError("Admission profile not found")
+
+        base_amount, total_discount, final_amount = await fee_service.preview_tuition(
+            profile, semester_no
+        )
+        return finance_schemas.TuitionPreviewResponse(
+            base_amount=base_amount,
+            total_discount=total_discount,
+            final_amount=final_amount,
+            semester_no=semester_no,
+        )
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 # ==============================================================================

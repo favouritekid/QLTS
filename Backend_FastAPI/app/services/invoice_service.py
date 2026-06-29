@@ -80,6 +80,9 @@ class InvoiceService:
         unit_id: Optional[int] = None,
         auto_issue: bool = False,
         anchor_date: Optional[date] = None,
+        down_payment: Optional[Decimal] = None,
+        down_payment_due: Optional[date] = None,
+        remainder_due: Optional[date] = None,
     ) -> Tuple[List[Invoice], Optional[Callable]]:
         """
         Generate all invoices for a fee based on its installment plan.
@@ -135,10 +138,40 @@ class InvoiceService:
             raise BadRequest("No amount to invoice (fee fully waived)")
 
         # Get installment schedule
-        if fee.installment_plan:
-            # Chặn dùng plan đã NGỪNG hoạt động: lúc gắn plan đã lọc is_active
-            # (fee_calculation_service), nhưng admin có thể tắt plan SAU đó →
-            # không được tiếp tục sinh hóa đơn theo schedule của plan đã tắt.
+        if down_payment is not None:
+            # Pha 1 — lịch thu "đóng trước + phần còn lại" (2 đợt). KHÔNG đụng
+            # NGHĨA VỤ (final/waived) — chỉ chia ``amount_to_invoice`` (= final −
+            # waived) thành 2 hóa đơn. Bất biến: Σ HĐ = amount_to_invoice. Yêu cầu
+            # 0 < down_payment < amount_to_invoice (remainder > 0).
+            if down_payment <= 0:
+                raise BadRequest("Số đóng trước phải lớn hơn 0.")
+            if down_payment >= amount_to_invoice:
+                raise BadRequest(
+                    f"Số đóng trước ({down_payment}) phải nhỏ hơn tổng phải thu "
+                    f"({amount_to_invoice}). Nếu đóng đủ, dùng kế hoạch trả góp thường."
+                )
+            if down_payment_due is None or remainder_due is None:
+                raise BadRequest("Lịch 'đóng trước' cần hạn của cả hai đợt.")
+            if remainder_due < down_payment_due:
+                raise BadRequest("Hạn đợt còn lại phải >= hạn đợt đóng trước.")
+            installment_schedule = [
+                {
+                    "installment_no": 1,
+                    "amount": down_payment,
+                    "due_days_offset": 0,
+                    "due_date": down_payment_due.isoformat(),
+                },
+                {
+                    "installment_no": 2,
+                    "amount": amount_to_invoice - down_payment,
+                    "due_days_offset": 0,
+                    "due_date": remainder_due.isoformat(),
+                },
+            ]
+        elif fee.installment_plan:
+            # Chặn dùng plan đã NGỪNG hoạt động (#445): lúc gắn plan đã lọc
+            # is_active (fee_calculation_service), nhưng admin có thể tắt plan SAU
+            # đó → không được tiếp tục sinh hóa đơn theo schedule của plan đã tắt.
             if not getattr(fee.installment_plan, "is_active", True):
                 raise BusinessRuleViolation(
                     f"Kế hoạch thanh toán '{fee.installment_plan.code}' đã ngừng "

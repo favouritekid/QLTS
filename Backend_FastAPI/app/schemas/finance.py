@@ -15,7 +15,7 @@ Architecture Compliance:
 
 from datetime import datetime, date
 from decimal import Decimal
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import html
 
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
@@ -257,15 +257,68 @@ class FeeCalculateRequest(BaseModel):
     admission_profile_id: int
     fee_type: FeeTypeEnum = FeeTypeEnum.tuition
     installment_plan_code: str = Field(default="FULL", max_length=50)
+    # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
+    # int32-guard codebase đã áp). Mirror route GET /api/fees/tuition-preview
+    # (semester_no Query le=12). HK thực tế ≤ 12.
     semester_no: Optional[int] = Field(
-        None, ge=1,
+        None, ge=1, le=12,
         description="Số học kỳ (HK1=1). Mặc định 1 cho tuition, None cho non-tuition."
+    )
+    # Lịch thu tùy chỉnh — Pha 1: "đóng trước + phần còn lại" (2 đợt). KHÔNG đổi
+    # NGHĨA VỤ (base_amount/final_amount giữ giá chuẩn) — chỉ chia final thành 2
+    # hóa đơn. mode="standard" = theo kế hoạch trả góp như cũ. CHỈ cho tuition.
+    # (Mở rộng sau: thêm mode "custom" cho N đợt.)
+    collection_schedule_mode: Literal["standard", "down_payment"] = "standard"
+    down_payment: Optional[Decimal] = Field(
+        None, gt=0, le=MAX_AMOUNT,
+        description="Số tiền đóng trước (đợt 1) — chỉ khi mode='down_payment'.",
+    )
+    down_payment_due: Optional[date] = Field(
+        None, description="Hạn đóng đợt 1 (down_payment)."
+    )
+    remainder_due: Optional[date] = Field(
+        None, description="Hạn đóng đợt 2 (phần còn lại)."
     )
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
         if self.fee_type == FeeTypeEnum.tuition and self.semester_no is None:
             self.semester_no = 1
+        return self
+
+    @model_validator(mode="after")
+    def validate_collection_schedule(self):
+        """Lịch thu 'đóng trước' (HTTP layer → 422). CHỈ kiểm cấu trúc lịch —
+        KHÔNG đụng số tiền nghĩa vụ. Ràng buộc ``down_payment < final`` đo ở
+        service (final chỉ biết sau khi resolve giá chuẩn HK).
+        """
+        if self.collection_schedule_mode == "down_payment":
+            if self.fee_type != FeeTypeEnum.tuition:
+                raise ValueError(
+                    "Lịch thu 'đóng trước' chỉ áp dụng cho học phí (tuition)."
+                )
+            if (
+                self.down_payment is None
+                or self.down_payment_due is None
+                or self.remainder_due is None
+            ):
+                raise ValueError(
+                    "Lịch 'đóng trước' cần: số đóng trước, hạn đợt 1 và hạn đợt 2."
+                )
+            if self.remainder_due < self.down_payment_due:
+                raise ValueError(
+                    "Hạn đợt còn lại phải >= hạn đợt đóng trước."
+                )
+        elif (
+            self.down_payment is not None
+            or self.down_payment_due is not None
+            or self.remainder_due is not None
+        ):
+            # mode="standard" mà vẫn gửi field down_payment → từ chối (tránh dữ
+            # liệu lạc bị bỏ thầm).
+            raise ValueError(
+                "Chỉ truyền down_payment khi collection_schedule_mode='down_payment'."
+            )
         return self
 
     model_config = ConfigDict(from_attributes=True)
@@ -967,6 +1020,21 @@ class CalculableProfilesResponse(BaseModel):
     Finance-scoped so accountant — denied /api/admissions by design — can still
     pick a profile to calculate a fee for."""
     profiles: List[CalculableProfileItem]
+
+
+class TuitionPreviewResponse(BaseModel):
+    """Giá chuẩn học phí (read-only) cho dialog "Tính phí"
+    (GET /api/fees/tuition-preview).
+
+    Trả về 3 con số để dialog đối chiếu khi chọn lịch thu: giá chuẩn
+    (``base_amount``), giảm giá hiện hành (``total_discount``) và dự kiến phải thu
+    (``final_amount`` = base − discount). KHÔNG persist — chỉ tái dùng resolver
+    giá + discount như ``calculate_fee``.
+    """
+    base_amount: Decimal
+    total_discount: Decimal
+    final_amount: Decimal
+    semester_no: int
 
 
 class ProfileCollectionIdentity(BaseModel):

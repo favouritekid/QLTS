@@ -22,6 +22,18 @@ vi.mock("@/hooks/finance/useFees", async () => {
   return {
     ...actual,
     useCalculateFee: () => ({ mutateAsync, isPending: false }),
+    // Lịch thu "đóng trước" — stub tổng phải thu (final) để khối preview render
+    // tất định, không gọi mạng, khi bật toggle.
+    useTuitionPreview: () => ({
+      data: {
+        base_amount: "5000000",
+        total_discount: "0",
+        final_amount: "5000000",
+        semester_no: 1,
+      },
+      isLoading: false,
+      isError: false,
+    }),
   };
 });
 
@@ -77,5 +89,79 @@ describe("CalculateFeeDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /hủy/i }));
     expect(mutateAsync).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // ---- Lịch thu "đóng trước" (2026-06-29) ----
+
+  it("down-payment toggle reveals amount + due-date inputs", () => {
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    // Hidden by default.
+    expect(screen.queryByLabelText(/số đóng đợt đầu/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
+    expect(screen.getByLabelText(/số đóng đợt đầu/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hạn đợt đầu/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/hạn phần còn lại/i)).toBeInTheDocument();
+  });
+
+  it("submit is blocked until down-payment + both due dates are present", () => {
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
+
+    const submit = screen.getByRole("button", { name: /^tính học phí$/i });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/số đóng đợt đầu/i), {
+      target: { value: "2000000" },
+    });
+    // Dates still empty → blocked.
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/hạn đợt đầu/i), {
+      target: { value: "2026-09-01" },
+    });
+    fireEvent.change(screen.getByLabelText(/hạn phần còn lại/i), {
+      target: { value: "2026-11-01" },
+    });
+    expect(submit).toBeEnabled();
+  });
+
+  it("posts collection_schedule_mode + down-payment fields (no plan code)", async () => {
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("switch", { name: /đóng trước theo đợt/i }));
+    fireEvent.change(screen.getByLabelText(/số đóng đợt đầu/i), {
+      target: { value: "2000000" },
+    });
+    fireEvent.change(screen.getByLabelText(/hạn đợt đầu/i), {
+      target: { value: "2026-09-01" },
+    });
+    fireEvent.change(screen.getByLabelText(/hạn phần còn lại/i), {
+      target: { value: "2026-11-01" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        collection_schedule_mode: "down_payment",
+        down_payment: "2000000",
+        down_payment_due: "2026-09-01",
+        remainder_due: "2026-11-01",
+      });
+    });
+  });
+
+  it("posts installment_plan_code (no schedule fields) when toggle stays off", async () => {
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        installment_plan_code: "FULL",
+      });
+    });
   });
 });

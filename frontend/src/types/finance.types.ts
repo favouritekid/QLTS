@@ -571,6 +571,22 @@ export interface FeeCalculateRequest {
   // PR #7 — semester number for tuition fees. Defaults to 1 (HK1) on the
   // backend when omitted; must stay null/undefined for non-tuition types.
   semester_no?: number | null
+  // Lịch thu "đóng trước" (Pha 1) — GIỮ nguyên tổng học phí, chỉ chia số phải
+  // thu thành đợt đầu + phần còn lại (2 hóa đơn). "down_payment" CHỈ cho tuition;
+  // cần down_payment + cả 2 hạn (mirror backend validate_collection_schedule).
+  // Bỏ hết khi mode "standard" (theo kế hoạch trả góp như cũ).
+  collection_schedule_mode?: "standard" | "down_payment"
+  down_payment?: string | null // Decimal as string
+  down_payment_due?: string | null // YYYY-MM-DD
+  remainder_due?: string | null // YYYY-MM-DD
+}
+
+/** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */
+export interface TuitionPreviewResponse {
+  base_amount: string
+  total_discount: string
+  final_amount: string
+  semester_no: number
 }
 
 export interface FeeWaiveRequest {

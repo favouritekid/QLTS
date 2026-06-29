@@ -563,15 +563,59 @@ export type PaymentPaginatedResponse = z.infer<typeof paymentPaginatedResponseSc
 // REQUEST SCHEMAS (for API calls - match backend request schemas)
 // ==============================================================================
 
-export const feeCalculateRequestSchema = z.object({
-  admission_profile_id: z.number().int().positive("Vui lòng chọn hồ sơ"),
-  fee_type: feeTypeSchema.optional(),
-  installment_plan_code: z.string().optional(), // defaults to "FULL"
-  // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
-  // contract (defaults to 1 when omitted for tuition; must be null/unset
-  // for non-tuition types).
-  semester_no: z.number().int().positive().nullable().optional(),
-})
+export const feeCalculateRequestSchema = z
+  .object({
+    admission_profile_id: z.number().int().positive("Vui lòng chọn hồ sơ"),
+    fee_type: feeTypeSchema.optional(),
+    installment_plan_code: z.string().optional(), // defaults to "FULL"
+    // PR #7 — HK number for tuition. Optional + nullable mirrors the backend
+    // contract (defaults to 1 when omitted for tuition; must be null/unset
+    // for non-tuition types). max(12) mirrors backend FeeCalculateRequest
+    // (Field le=12) — chặn HK ngoài int32.
+    semester_no: z.number().int().positive().max(12).nullable().optional(),
+    // Lịch thu "đóng trước" (Pha 1) — GIỮ tổng học phí, chỉ chia 2 đợt. Mirror
+    // backend validate_collection_schedule. down_payment là Decimal-as-string;
+    // các hạn là chuỗi ISO YYYY-MM-DD.
+    collection_schedule_mode: z.enum(["standard", "down_payment"]).optional(),
+    down_payment: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, "Số đóng trước không hợp lệ")
+      .nullable()
+      .optional(),
+    down_payment_due: z.string().nullable().optional(),
+    remainder_due: z.string().nullable().optional(),
+  })
+  // Mirror backend validate_collection_schedule: mode="down_payment" ⟹
+  // fee_type=tuition + đủ số đóng trước & 2 hạn + hạn đợt 2 >= đợt 1.
+  .refine(
+    (d) =>
+      d.collection_schedule_mode !== "down_payment" ||
+      (d.fee_type ?? "tuition") === "tuition",
+    {
+      message: "Lịch 'đóng trước' chỉ áp dụng cho học phí",
+      path: ["collection_schedule_mode"],
+    }
+  )
+  .refine(
+    (d) =>
+      d.collection_schedule_mode !== "down_payment" ||
+      (d.down_payment != null && !!d.down_payment_due && !!d.remainder_due),
+    {
+      message: "Lịch 'đóng trước' cần số đóng trước và hạn cả hai đợt",
+      path: ["down_payment"],
+    }
+  )
+  .refine(
+    (d) =>
+      d.collection_schedule_mode !== "down_payment" ||
+      !d.down_payment_due ||
+      !d.remainder_due ||
+      d.remainder_due >= d.down_payment_due,
+    {
+      message: "Hạn phần còn lại phải >= hạn đợt đầu",
+      path: ["remainder_due"],
+    }
+  )
 
 export type FeeCalculateRequest = z.infer<typeof feeCalculateRequestSchema>
 

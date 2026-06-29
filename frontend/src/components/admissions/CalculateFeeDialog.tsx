@@ -12,12 +12,15 @@
  * PR #7 review (2026-04-24):
  *  - Installment plan codes now come from `useInstallmentPlans` rather
  *    than a hard-coded list. Backend seed currently ships FULL /
- *    TWO_TERM / QUARTERLY; the dialog no longer guesses codes that
- *    might not exist. Backend also now rejects unknown codes with 400
- *    so a drift gets surfaced instead of silently creating a
- *    single-payment invoice.
- *  - Form schema no longer uses z.coerce + default() defaults so the
- *    RHF<Values> generic resolves cleanly under strict tsc.
+ *    TWO_TERM / QUARTERLY; the dialog no longer guesses codes.
+ *
+ * Lịch thu "đóng trước" (Pha 1, 2026-06-29):
+ *  - Khi loại phí là HỌC PHÍ, có thể bật "Đóng trước theo đợt" để chia
+ *    số phải thu thành ĐỢT ĐẦU + PHẦN CÒN LẠI (2 hóa đơn). NGHĨA VỤ
+ *    (tổng học phí) KHÔNG đổi — chỉ giãn lịch thu; phần còn lại thành
+ *    công nợ có hạn. Khác hẳn "giảm học phí" (sẽ làm ở pha sau).
+ *  - useTuitionPreview hiển tổng phải thu (final) để chia + kiểm số
+ *    đóng trước < tổng trước khi gửi.
  */
 import { useMemo, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
@@ -33,6 +36,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
+import { CurrencyInput } from "@/components/ui/currency-input"
 import {
   Select,
   SelectContent,
@@ -41,10 +47,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-import { useCalculateFee, feesKeys } from "@/hooks/finance/useFees"
+import { useCalculateFee, useTuitionPreview, feesKeys } from "@/hooks/finance/useFees"
 import { useInstallmentPlans } from "@/hooks/finance/useInstallmentPlans"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard"
+import { formatVND } from "@/lib/zod/finance"
 
 type FeeType = "tuition" | "application" | "dormitory" | "other"
 
@@ -67,23 +74,23 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
   const calculateFee = useCalculateFee()
   const plansQuery = useInstallmentPlans({ enabled: open })
 
-  // Local state — simpler than RHF for 3 controlled selects and avoids
-  // the strict-tsc friction with zod `z.coerce` + `.default()` generics.
+  // Local state — simpler than RHF for a few controlled inputs.
   const [feeType, setFeeType] = useState<FeeType>("tuition")
   const [semesterNo, setSemesterNo] = useState<number>(1)
   const [planCode, setPlanCode] = useState<string>("")
+
+  // Lịch thu "đóng trước" — giãn lịch, KHÔNG đổi tổng học phí.
+  const [downPaymentMode, setDownPaymentMode] = useState<boolean>(false)
+  const [downPayment, setDownPayment] = useState<number | null>(null)
+  const [downPaymentDue, setDownPaymentDue] = useState<string>("")
+  const [remainderDue, setRemainderDue] = useState<string>("")
 
   const activePlans = useMemo(
     () => (plansQuery.data ?? []).filter((p) => p.is_active !== false),
     [plansQuery.data]
   )
 
-  // Derived default (no useEffect — avoids react-hooks/incompatible-library
-  // setState-in-effect lint error). When user hasn't explicitly picked,
-  // prefer FULL (matches backend FeeCalculateRequest.installment_plan_code
-  // default), otherwise the first active option. setPlanCode only fires on
-  // explicit user choice, so derived value flips back to default if the
-  // plan list reloads after a reset.
+  // Derived default plan (no useEffect). Prefer FULL, else first active.
   const effectivePlanCode = useMemo(() => {
     if (planCode) return planCode
     if (activePlans.length === 0) return ""
@@ -91,13 +98,47 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
   }, [planCode, activePlans])
 
   const isTuition = feeType === "tuition"
+  const isDownPayment = isTuition && downPaymentMode
   const isPending = calculateFee.isPending
-  const canSubmit = effectivePlanCode !== "" && !isPending && activePlans.length > 0
+
+  // Giá chuẩn — chỉ fetch khi bật "đóng trước" để hiển tổng phải thu + chia đợt.
+  const preview = useTuitionPreview(profileId, semesterNo, {
+    enabled: open && isDownPayment && !!profileId,
+  })
+
+  // Tổng PHẢI THU (final) — lịch thu chia con số này (Σ hóa đơn = final − waived;
+  // waived=0 lúc tạo). NULL khi preview chưa tải / lỗi (ngành chưa xác định).
+  const finalAmount = preview.data ? Number(preview.data.final_amount) : null
+  const remainder =
+    finalAmount != null && downPayment != null ? finalAmount - downPayment : null
+
+  // Hợp lệ khi: có số đóng trước > 0, có cả 2 hạn, hạn đợt 2 >= đợt 1, VÀ đã biết
+  // tổng phải thu (preview.data) với số đóng trước < tổng. Bắt buộc có giá chuẩn:
+  // chia "đóng trước" cần biết tổng để tính phần còn lại — nếu preview đang tải /
+  // lỗi (ngành chưa xác định), chặn submit thay vì để backend từ chối (400).
+  const downPaymentValid =
+    downPayment != null &&
+    downPayment > 0 &&
+    !!downPaymentDue &&
+    !!remainderDue &&
+    remainderDue >= downPaymentDue &&
+    finalAmount != null &&
+    downPayment < finalAmount
+
+  const canSubmit =
+    !isPending &&
+    (isDownPayment
+      ? downPaymentValid
+      : effectivePlanCode !== "" && activePlans.length > 0)
 
   const reset = () => {
     setFeeType("tuition")
     setSemesterNo(1)
     setPlanCode("")
+    setDownPaymentMode(false)
+    setDownPayment(null)
+    setDownPaymentDue("")
+    setRemainderDue("")
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -107,18 +148,22 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
     await calculateFee.mutateAsync({
       admission_profile_id: profileId,
       fee_type: feeType,
-      // Only tuition carries semester_no; backend validator rejects it
-      // for non-tuition fee types, so omit entirely when switching away.
+      // Only tuition carries semester_no; backend rejects it for non-tuition.
       semester_no: isTuition ? semesterNo : undefined,
-      installment_plan_code: effectivePlanCode,
+      // Lịch thu "đóng trước" GIỮ tổng học phí — chỉ chia 2 đợt; KHÔNG gửi
+      // installment_plan_code (backend bỏ plan ở mode này). Ngược lại gửi plan.
+      ...(isDownPayment && downPayment != null
+        ? {
+            collection_schedule_mode: "down_payment" as const,
+            down_payment: String(downPayment),
+            down_payment_due: downPaymentDue,
+            remainder_due: remainderDue,
+          }
+        : { installment_plan_code: effectivePlanCode }),
     })
 
-    // useCalculateFee already invalidates finance caches + toasts on
-    // success. Extend to the admission caches + dashboard so the
-    // Tuition tab refreshes without a reload. Use admissionsKeys.all
-    // (root) so status-counts + stats refetch alongside list/detail —
-    // calculating a fee flips the row's payment-status tab, so the
-    // tab badges on /admissions need to update too.
+    // useCalculateFee already invalidates finance caches + toasts on success.
+    // Extend to admission caches + dashboard so the Tuition tab refreshes.
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all }),
       queryClient.invalidateQueries({ queryKey: feesKeys.lists() }),
@@ -151,7 +196,18 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
             <Label htmlFor="fee_type">Loại phí</Label>
             <Select
               value={feeType}
-              onValueChange={(v) => setFeeType(v as FeeType)}
+              onValueChange={(v) => {
+                const next = v as FeeType
+                setFeeType(next)
+                // Lịch "đóng trước" chỉ cho tuition → đổi sang loại phí khác thì
+                // tắt + xóa luôn để toggle không kẹt "bật" khi quay lại tuition.
+                if (next !== "tuition") {
+                  setDownPaymentMode(false)
+                  setDownPayment(null)
+                  setDownPaymentDue("")
+                  setRemainderDue("")
+                }
+              }}
               disabled={isPending}
             >
               <SelectTrigger id="fee_type">
@@ -188,36 +244,146 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
             </div>
           )}
 
-          <div className="space-y-2">
-            <Label htmlFor="installment_plan_code">Kế hoạch thanh toán</Label>
-            <Select
-              value={effectivePlanCode}
-              onValueChange={setPlanCode}
-              disabled={isPending || plansQuery.isLoading || activePlans.length === 0}
-            >
-              <SelectTrigger id="installment_plan_code">
-                <SelectValue
-                  placeholder={
-                    plansQuery.isLoading
-                      ? "Đang tải kế hoạch…"
-                      : activePlans.length === 0
-                      ? "Chưa có kế hoạch nào"
-                      : "Chọn kế hoạch"
-                  }
+          {/* Toggle "đóng trước theo đợt" — chỉ cho học phí. */}
+          {isTuition && (
+            <div className="rounded-lg border p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="down_payment_mode" className="cursor-pointer">
+                    Đóng trước theo đợt
+                  </Label>
+                  <p className="text-muted-foreground text-xs">
+                    Chia số phải thu thành đợt đầu + phần còn lại (giữ nguyên tổng
+                    học phí). Phần còn lại thành công nợ có hạn.
+                  </p>
+                </div>
+                <Switch
+                  id="down_payment_mode"
+                  checked={downPaymentMode}
+                  onCheckedChange={setDownPaymentMode}
+                  disabled={isPending}
                 />
-              </SelectTrigger>
-              <SelectContent>
-                {activePlans.map((plan) => (
-                  <SelectItem key={plan.code} value={plan.code}>
-                    {plan.name}
-                    <span className="text-muted-foreground ml-2 text-xs">
-                      ({plan.code})
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+              </div>
+
+              {isDownPayment && (
+                <div className="space-y-3 pt-1">
+                  {/* Tổng phải thu (final) để người dùng chia đợt. */}
+                  <div className="text-xs">
+                    {preview.isLoading && (
+                      <p className="text-muted-foreground">Đang tải tổng phải thu…</p>
+                    )}
+                    {preview.isError && (
+                      <p className="text-destructive">
+                        Không tải được giá chuẩn (hồ sơ có thể chưa xác định ngành).
+                      </p>
+                    )}
+                    {preview.data && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Tổng phải thu:</span>
+                        <span className="font-semibold text-primary">
+                          {formatVND(preview.data.final_amount)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="down_payment">
+                      Số đóng đợt đầu <span className="text-destructive">*</span>
+                    </Label>
+                    <CurrencyInput
+                      id="down_payment"
+                      value={downPayment}
+                      onChange={setDownPayment}
+                      placeholder="Nhập số tiền đóng trước…"
+                      disabled={isPending}
+                    />
+                    {remainder != null && (
+                      <p
+                        className={
+                          remainder <= 0
+                            ? "text-destructive text-xs"
+                            : "text-muted-foreground text-xs"
+                        }
+                      >
+                        {remainder > 0
+                          ? `Phần còn lại (công nợ): ${formatVND(remainder)}`
+                          : "Số đóng trước phải nhỏ hơn tổng phải thu."}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="down_payment_due">
+                        Hạn đợt đầu <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="down_payment_due"
+                        type="date"
+                        value={downPaymentDue}
+                        onChange={(e) => setDownPaymentDue(e.target.value)}
+                        disabled={isPending}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="remainder_due">
+                        Hạn phần còn lại <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="remainder_due"
+                        type="date"
+                        value={remainderDue}
+                        onChange={(e) => setRemainderDue(e.target.value)}
+                        disabled={isPending}
+                      />
+                    </div>
+                  </div>
+                  {!!downPaymentDue &&
+                    !!remainderDue &&
+                    remainderDue < downPaymentDue && (
+                      <p className="text-destructive text-xs">
+                        Hạn phần còn lại phải sau hoặc bằng hạn đợt đầu.
+                      </p>
+                    )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Kế hoạch thanh toán — ẩn khi chia "đóng trước" (dùng lịch tùy chỉnh). */}
+          {!isDownPayment && (
+            <div className="space-y-2">
+              <Label htmlFor="installment_plan_code">Kế hoạch thanh toán</Label>
+              <Select
+                value={effectivePlanCode}
+                onValueChange={setPlanCode}
+                disabled={isPending || plansQuery.isLoading || activePlans.length === 0}
+              >
+                <SelectTrigger id="installment_plan_code">
+                  <SelectValue
+                    placeholder={
+                      plansQuery.isLoading
+                        ? "Đang tải kế hoạch…"
+                        : activePlans.length === 0
+                        ? "Chưa có kế hoạch nào"
+                        : "Chọn kế hoạch"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {activePlans.map((plan) => (
+                    <SelectItem key={plan.code} value={plan.code}>
+                      {plan.name}
+                      <span className="text-muted-foreground ml-2 text-xs">
+                        ({plan.code})
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <DialogFooter>
             <Button

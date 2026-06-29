@@ -245,6 +245,7 @@ export const API_ENDPOINTS = {
       PROFILE_SUMMARY: (profileId: number) => `/api/fees/summary/${profileId}`,
       COLLECTION: (profileId: number) => `/api/fees/collection/${profileId}`,
       CALCULABLE_PROFILES: "/api/fees/calculable-profiles",
+      TUITION_PREVIEW: "/api/fees/tuition-preview",
       WAIVE: (feeId: number) => `/api/fees/${feeId}/waive`,
       CANCEL: (feeId: number) => `/api/fees/${feeId}/cancel`,
       RECALCULATE: (feeId: number) => `/api/fees/${feeId}/recalculate`,

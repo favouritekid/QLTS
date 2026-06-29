@@ -592,6 +592,9 @@ class FeeCalculationService:
                     academic_info.applied_discount_policy_ids or []
                 )
             if fee_type == FeeTypeEnum.tuition:
+                # Giá chuẩn HK từ offering_semester_tuition là BASE (bắt buộc có
+                # cấu hình HK). Số tiền nghĩa vụ KHÔNG do người dùng nhập tay —
+                # mọi tuỳ chỉnh (giãn lịch) nằm ở tầng hoá đơn, không đổi base.
                 base_amount = await self._semester_tuition_amount_for_ai(
                     academic_info.id, semester_no
                 )
@@ -746,6 +749,38 @@ class FeeCalculationService:
             )
 
         return fee, post_commit
+
+    async def preview_tuition(
+        self,
+        profile: "models.AdmissionProfile",
+        semester_no: int,
+    ) -> Tuple[Decimal, Decimal, Decimal]:
+        """Giá chuẩn học phí (read-only, KHÔNG persist) cho dialog "Tính phí" —
+        hiển base / giảm giá / dự kiến phải thu để người dùng đối chiếu khi chọn
+        lịch thu (vd chia "đóng trước + còn lại").
+
+        Tái dùng ĐÚNG resolver giá + discount như ``calculate_fee`` (cùng nguồn
+        sự thật ``resolve_fee_academic_info`` + ``_semester_tuition_amount_for_ai``
+        + ``_calculate_discounts``) nên số preview khớp với số luồng cũ tạo ra.
+        Router lo IDOR (``_fee_calc_authorized``) trước khi gọi — service chỉ tính.
+
+        Returns:
+            (base_amount, total_discount, final_amount) cho HK ``semester_no``.
+
+        Raises:
+            BadRequest: ngành chưa xác định (multi-NV chưa công bố) / chưa cấu
+                hình học phí HK.
+        """
+        academic_info = await resolve_fee_academic_info(self.db, profile)
+        base_amount = await self._semester_tuition_amount_for_ai(
+            academic_info.id, semester_no
+        )
+        discount_policy_ids = list(academic_info.applied_discount_policy_ids or [])
+        total_discount, _ = await self._calculate_discounts(
+            base_amount, discount_policy_ids
+        )
+        final_amount = max(Decimal("0"), base_amount - total_discount)
+        return base_amount, total_discount, final_amount
 
     async def recalculate_fee(
         self,
