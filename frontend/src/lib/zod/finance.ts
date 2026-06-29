@@ -584,6 +584,18 @@ export const feeCalculateRequestSchema = z
       .optional(),
     down_payment_due: z.string().nullable().optional(),
     remainder_due: z.string().nullable().optional(),
+    // Miễn/giảm học phí THẬT (Pha 2) — "Học phí áp dụng" = final sau MỌI giảm
+    // (Decimal-as-string). Mirror backend validate_manual_tuition.
+    target_final_amount: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, "Học phí áp dụng không hợp lệ")
+      .nullable()
+      .optional(),
+    manual_discount_reason: z
+      .string()
+      .max(500, "Lý do không được quá 500 ký tự")
+      .nullable()
+      .optional(),
   })
   // Mirror backend validate_collection_schedule: mode="down_payment" ⟹
   // fee_type=tuition + đủ số đóng trước & 2 hạn + hạn đợt 2 >= đợt 1.
@@ -616,6 +628,29 @@ export const feeCalculateRequestSchema = z
       path: ["remainder_due"],
     }
   )
+  // Mirror backend validate_manual_tuition: có target ⟹ tuition + reason ≥10;
+  // có reason ⟹ phải có target. (target < mức nền kiểm ở service — cần canonical.)
+  .refine(
+    (d) =>
+      d.target_final_amount == null || (d.fee_type ?? "tuition") === "tuition",
+    {
+      message: "Miễn/giảm học phí chỉ áp dụng cho học phí",
+      path: ["target_final_amount"],
+    }
+  )
+  .refine(
+    (d) =>
+      d.target_final_amount == null ||
+      (!!d.manual_discount_reason && d.manual_discount_reason.trim().length >= 10),
+    {
+      message: "Cần lý do miễn/giảm học phí (tối thiểu 10 ký tự)",
+      path: ["manual_discount_reason"],
+    }
+  )
+  .refine((d) => !d.manual_discount_reason || d.target_final_amount != null, {
+    message: "Có lý do miễn/giảm nhưng thiếu mức học phí áp dụng",
+    path: ["target_final_amount"],
+  })
 
 export type FeeCalculateRequest = z.infer<typeof feeCalculateRequestSchema>
 
