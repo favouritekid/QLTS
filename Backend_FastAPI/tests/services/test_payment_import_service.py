@@ -2543,3 +2543,65 @@ class TestMultiCollectionTimeline:
         )
         assert res.rows[0].status == WARNED
         assert len(res.rows[0].allocations) == 2  # 2.5tr đợt1 + 2.5tr đợt2
+
+
+# =============================================================================
+# #4 — void lead-level: giữ sts10 khi lead còn HK1 settled ở hồ sơ/năm KHÁC
+# =============================================================================
+class TestLeadHasOtherSettledHk1:
+    """Audit 2026-06-29 #4 — ``_lead_has_other_settled_hk1`` (chống tụt nhãn
+    lead khỏi sts10 oan khi void 1 fee HK1 của lead multi-profile/multi-year)."""
+
+    async def _two_profile_lead(self, db, deps):
+        lead = models.Lead(
+            full_name="Multi Hồ Sơ",
+            phone=f"09{next(_phone_seq):08d}",
+            source="bulk_test",
+            unit_id=deps["unit_id"],
+            consultation_status_id=deps["initial_status_id"],
+        )
+        db.add(lead)
+        await db.flush()
+        out = []
+        for yr in (2025, 2026):
+            prof = models.AdmissionProfile(
+                lead_id=lead.id, status="submitted", academic_year=yr, applied_rules={},
+            )
+            db.add(prof)
+            await db.flush()
+            fee = Fee(
+                admission_profile_id=prof.id, fee_type="tuition", academic_year=yr,
+                semester_no=1, base_amount=Decimal("7000000"),
+                final_amount=Decimal("7000000"), paid_amount=Decimal("7000000"),
+                status="paid",
+            )
+            db.add(fee)
+            await db.flush()
+            out.append((prof, fee))
+        return out
+
+    async def test_other_settled_hk1_keeps_sts10(self, db, seeded_dependencies):
+        """Void feeB → feeA (HK1, paid, hồ sơ khác) vẫn settled → True (giữ sts10)."""
+        (profA, feeA), (profB, feeB) = await self._two_profile_lead(
+            db, seeded_dependencies
+        )
+        assert await pis._lead_has_other_settled_hk1(db, profB.id, {feeB.id}) is True
+
+    async def test_no_other_settled_when_all_excluded(self, db, seeded_dependencies):
+        """Void CẢ HAI → không còn HK1 settled khác → False (cho phép lùi lead)."""
+        (profA, feeA), (profB, feeB) = await self._two_profile_lead(
+            db, seeded_dependencies
+        )
+        assert (
+            await pis._lead_has_other_settled_hk1(db, profB.id, {feeA.id, feeB.id})
+            is False
+        )
+
+    async def test_cancelled_other_fee_not_counted(self, db, seeded_dependencies):
+        """feeA cancelled → KHÔNG tính là settled → False."""
+        (profA, feeA), (profB, feeB) = await self._two_profile_lead(
+            db, seeded_dependencies
+        )
+        feeA.status = "cancelled"
+        await db.flush()
+        assert await pis._lead_has_other_settled_hk1(db, profB.id, {feeB.id}) is False

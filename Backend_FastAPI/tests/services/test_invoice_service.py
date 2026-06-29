@@ -898,3 +898,143 @@ class TestFeeRecomputeOnCancelPRB:
 
         with pytest.raises(BusinessRuleViolation):
             await service.cancel_invoice(invs[0].id, "x", admin_user.id, unit_id)
+
+
+# =============================================================================
+# FINANCE EDGE-CASE FIXES (audit 2026-06-29)
+# =============================================================================
+
+
+class TestRecalculateInvoiceSync:
+    """#2 — recalculate phải chặn khi HĐ đã phát hành + đồng bộ HĐ draft."""
+
+    async def test_recalculate_blocked_when_invoice_issued(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Fee có HĐ issued (paid=0) → recalc raise BusinessRuleViolation (tránh
+        fee.final lệch invoice.amount → thu dư/thiếu vì payment thu theo HĐ)."""
+        inv_service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]
+        unit_id = invoice_fixtures["unit_id"]
+        await inv_service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id, auto_issue=True,
+        )
+        await db.commit()
+
+        fee_service = FeeCalculationService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await fee_service.recalculate_fee(
+                fee_id=fee.id, new_base_amount=Decimal("800000"),
+                reason="Điều chỉnh giảm sau khi đã phát hành HĐ", user_id=admin_user.id,
+                unit_id=unit_id,
+            )
+
+    async def test_recalculate_rewrites_draft_invoice(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Fee chỉ có HĐ draft → recalc OK + rewrite amount HĐ draft theo final
+        mới (fee↔invoice không lệch)."""
+        inv_service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]  # application 900,000, paid 0
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await inv_service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id, auto_issue=False,  # draft
+        )
+        await db.commit()
+        assert invs[0].status == InvoiceStatusEnum.draft.value
+
+        fee_service = FeeCalculationService(db)
+        fee2, _ = await fee_service.recalculate_fee(
+            fee_id=fee.id, new_base_amount=Decimal("700000"),
+            reason="Điều chỉnh mức phí gốc xuống", user_id=admin_user.id,
+            unit_id=unit_id,
+        )
+        await db.commit()
+        await db.refresh(invs[0])
+        assert fee2.final_amount == Decimal("700000")
+        assert invs[0].amount == Decimal("700000"), "HĐ draft phải đồng bộ final mới"
+
+
+class TestApplyPenaltyGuards:
+    """#8 — penalty: None→reject (không 500), trần ≤ amount, happy-path."""
+
+    async def _issued_invoice(self, db, invoice_fixtures, admin_user):
+        inv_service = InvoiceService(db)
+        invs, _ = await inv_service.generate_invoices_for_fee(
+            fee_id=invoice_fixtures["fee"].id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"], auto_issue=True,
+        )
+        await db.commit()
+        return invs[0]
+
+    async def test_penalty_none_rejected_not_500(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Direct caller truyền None → BadRequest (không TypeError/500)."""
+        inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
+        service = InvoiceService(db)
+        with pytest.raises(BadRequest):
+            await service.apply_penalty(
+                invoice_id=inv.id, penalty_amount=None, reason="late",
+                user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            )
+
+    async def test_penalty_exceeds_amount_rejected(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Tổng phạt > số tiền HĐ (900,000) → BusinessRuleViolation."""
+        inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
+        service = InvoiceService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await service.apply_penalty(
+                invoice_id=inv.id, penalty_amount=Decimal("1000000"), reason="late",
+                user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            )
+
+    async def test_penalty_within_cap_ok(self, db, invoice_fixtures, admin_user):
+        """Phạt trong trần → cộng vào penalty_amount."""
+        inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
+        service = InvoiceService(db)
+        out, _ = await service.apply_penalty(
+            invoice_id=inv.id, penalty_amount=Decimal("100000"), reason="trễ hạn 5 ngày",
+            user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+        )
+        await db.commit()
+        assert out.penalty_amount == Decimal("100000")
+
+
+class TestInstallmentScheduleGuard:
+    """#9 — schedule defense-in-depth + chặn plan inactive khi sinh HĐ."""
+
+    async def test_schedule_over_100_percent_raises(self):
+        """Plan dị dạng (đợt đầu cộng >100%) → đợt cuối âm → ValueError."""
+        plan = InstallmentPlan(
+            code="BAD_OVER100", name="Bad", installment_count=3,
+            schedule=[
+                {"installment_no": 1, "due_days_offset": 0, "percent": 60.0},
+                {"installment_no": 2, "due_days_offset": 30, "percent": 60.0},
+                {"installment_no": 3, "due_days_offset": 60, "percent": 60.0},
+            ],
+            is_active=True,
+        )
+        with pytest.raises(ValueError):
+            plan.get_installment_schedule(Decimal("1000000"))
+
+    async def test_generate_inactive_plan_raises(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Plan bị tắt SAU khi gắn fee → generate raise (không sinh HĐ schedule chết)."""
+        plan = invoice_fixtures["installment_plan"]
+        plan.is_active = False
+        await db.flush()
+
+        service = InvoiceService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await service.generate_invoices_for_fee(
+                fee_id=invoice_fixtures["fee_with_plan"].id,
+                due_date_base=date.today() + timedelta(days=30),
+                user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            )

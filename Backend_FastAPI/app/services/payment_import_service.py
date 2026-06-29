@@ -30,7 +30,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1023,6 +1023,54 @@ async def _load_profile_with_lead(
     ).scalar_one_or_none()
 
 
+async def _lead_has_other_settled_hk1(
+    db: AsyncSession, profile_id: int, exclude_fee_ids: "set[int]"
+) -> bool:
+    """LEAD này (qua MỌI hồ sơ) còn HK1 tuition fee đã SETTLED nào KHÁC không
+    (loại trừ các fee đang void trong lô)?
+
+    Void 1 fee HK1 chỉ nên lùi lead khỏi sts10 khi lead KHÔNG còn HK1 settled ở
+    bất kỳ hồ sơ/năm nào khác — nếu không sẽ tụt nhãn oan (lead multi-profile/
+    multi-year, forward sync chỉ fire 1 lần). Settled = mirror ``is_hk1_settled``
+    (paid/waived HOẶC remaining<=0), trừ cancelled.
+    """
+    lead_id = (
+        await db.execute(
+            select(models.AdmissionProfile.lead_id).where(
+                models.AdmissionProfile.id == profile_id
+            )
+        )
+    ).scalar_one_or_none()
+    if lead_id is None:
+        return False
+
+    conditions = [
+        models.AdmissionProfile.lead_id == lead_id,
+        Fee.fee_type == "tuition",
+        Fee.semester_no == 1,
+        Fee.status != FeeStatusEnum.cancelled.value,
+        or_(
+            Fee.status.in_(
+                [FeeStatusEnum.paid.value, FeeStatusEnum.waived.value]
+            ),
+            (Fee.final_amount - Fee.paid_amount - Fee.waived_amount) <= 0,
+        ),
+    ]
+    if exclude_fee_ids:
+        conditions.append(~Fee.id.in_(exclude_fee_ids))
+
+    stmt = (
+        select(Fee.id)
+        .join(
+            models.AdmissionProfile,
+            models.AdmissionProfile.id == Fee.admission_profile_id,
+        )
+        .where(*conditions)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).first() is not None
+
+
 @dataclass
 class CommitResult:
     batch_id: int
@@ -1556,11 +1604,18 @@ async def void_batch(
     from app.services.lead_admission_sync import revert_lead_tuition_paid
 
     reverted_leads = 0
+    _voided_fee_ids = set(fee_by_id.keys())
     for fee in fee_by_id.values():
         if fee.fee_type != "tuition" or fee.semester_no != 1:
             continue  # chỉ HK1 đụng pipeline lead
         if is_hk1_settled_fee(fee):
-            continue  # HK1 vẫn settled (nguồn thu khác) → giữ lead ở sts10
+            continue  # HK1 fee NÀY vẫn settled (nguồn thu khác) → giữ lead sts10
+        # (#4) Lead-level: lead còn HK1 settled ở hồ-sơ/năm KHÁC (ngoài lô đang
+        # void) → KHÔNG lùi nhãn (tránh tụt sts10 oan khi multi-profile/year).
+        if await _lead_has_other_settled_hk1(
+            db, fee.admission_profile_id, _voided_fee_ids
+        ):
+            continue
         try:
             async with db.begin_nested():
                 profile = await _load_profile_with_lead(db, fee.admission_profile_id)

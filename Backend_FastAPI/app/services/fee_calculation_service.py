@@ -765,6 +765,32 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
+        # Block when any non-cancelled invoice is beyond draft. Recalc đổi
+        # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
+        # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
+        # ngược lại tăng giá ⇒ thu thiếu. Đối xứng
+        # ``recalculate_fees_for_semester_tuition_change`` (chỉ recalc khi mọi HĐ
+        # còn draft). Muốn đổi phí đã phát hành: hủy hóa đơn rồi tính lại.
+        # Query invoices TƯƠI (không dựa ``fee.invoices`` relationship — có thể
+        # stale dưới session tái dùng; prod mỗi request session mới nhưng đây là
+        # tiền lõi nên load tường minh).
+        fee_invoices = list(
+            (
+                await self.db.execute(
+                    select(Invoice).where(Invoice.fee_id == fee_id)
+                )
+            ).scalars().all()
+        )
+        active_invoices = [
+            inv for inv in fee_invoices if inv.status != "cancelled"
+        ]
+        if any(inv.status != "draft" for inv in active_invoices):
+            raise BusinessRuleViolation(
+                "Không thể tính lại phí khi đã phát hành hóa đơn "
+                "(issued/partial/paid). Hãy hủy hóa đơn liên quan trước rồi "
+                "tính lại."
+            )
+
         # Get existing discount policy IDs
         existing_policy_ids = [
             ad.policy_id for ad in fee.applied_discounts if ad.policy_id
@@ -786,6 +812,32 @@ class FeeCalculationService:
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Recalculated by user {user_id}: {old_base} → {new_base_amount}. " \
                     f"Reason: {reason}"
+
+        # Đồng bộ hóa đơn DRAFT (nếu có) theo final mới để fee↔invoice không lệch
+        # — chỉ tới đây khi mọi HĐ còn draft (guard non-draft ở trên). Mirror
+        # recalculate_fees_for_semester_tuition_change.
+        draft_invoices = [
+            inv for inv in fee_invoices if inv.status == "draft"
+        ]
+        if draft_invoices and fee.installment_plan:
+            new_schedule = fee.installment_plan.get_installment_schedule(
+                fee.final_amount
+            )
+            for inv, sched in zip(
+                sorted(draft_invoices, key=lambda x: x.installment_no),
+                new_schedule,
+            ):
+                await self.db.execute(
+                    sa.update(Invoice)
+                    .where(Invoice.id == inv.id)
+                    .values(amount=sched["amount"])
+                )
+        elif len(draft_invoices) == 1:
+            await self.db.execute(
+                sa.update(Invoice)
+                .where(Invoice.id == draft_invoices[0].id)
+                .values(amount=fee.final_amount)
+            )
 
         await self.db.flush()
 

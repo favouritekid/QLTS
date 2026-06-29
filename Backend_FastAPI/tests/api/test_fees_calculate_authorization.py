@@ -838,7 +838,7 @@ async def test_accountant_denied_heavy_finance_mutations(
 
     penalty = await client.post(
         "/api/invoices/1/apply-penalty",
-        params={"penalty_amount": "1000"},
+        params={"penalty_amount": "1000", "reason": "trễ hạn"},
         headers=ah,
     )
     assert penalty.status_code == 403, f"penalty: {penalty.text[:200]}"

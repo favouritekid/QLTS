@@ -135,6 +135,14 @@ class InvoiceService:
 
         # Get installment schedule
         if fee.installment_plan:
+            # Chặn dùng plan đã NGỪNG hoạt động: lúc gắn plan đã lọc is_active
+            # (fee_calculation_service), nhưng admin có thể tắt plan SAU đó →
+            # không được tiếp tục sinh hóa đơn theo schedule của plan đã tắt.
+            if not getattr(fee.installment_plan, "is_active", True):
+                raise BusinessRuleViolation(
+                    f"Kế hoạch thanh toán '{fee.installment_plan.code}' đã ngừng "
+                    "hoạt động — không thể sinh hóa đơn."
+                )
             # Use plan's schedule with proper due_days_offset per installment
             installment_schedule = fee.installment_plan.get_installment_schedule(
                 amount_to_invoice, anchor_date=anchor_date
@@ -672,8 +680,19 @@ class InvoiceService:
                 f"Cannot apply penalty to {invoice.status} invoice"
             )
 
-        if penalty_amount <= 0:
+        # ``is None`` guard cho direct caller (route đã ép required gt=0; HTTP
+        # không thể gửi None nữa, nhưng service là business boundary → tự bảo vệ
+        # khỏi None→TypeError).
+        if penalty_amount is None or penalty_amount <= 0:
             raise BadRequest("Penalty amount must be positive")
+
+        # Trần: tổng phạt cộng dồn không vượt số tiền hóa đơn (chống áp phạt lặp
+        # nhiều lần đẩy nợ vô lý).
+        if invoice.penalty_amount + penalty_amount > invoice.amount:
+            raise BusinessRuleViolation(
+                f"Tổng phạt ({invoice.penalty_amount + penalty_amount}) vượt số "
+                f"tiền hóa đơn ({invoice.amount})."
+            )
 
         old_penalty = invoice.penalty_amount
         invoice.penalty_amount = invoice.penalty_amount + penalty_amount

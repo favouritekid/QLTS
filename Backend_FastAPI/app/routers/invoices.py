@@ -596,9 +596,10 @@ async def create_invoice(
 async def apply_penalty(
     request: Request,
     invoice_id: int,
-    penalty_amount: Optional[Decimal] = Query(
-        None, gt=0, description="Penalty amount (auto-calculated if not provided)"
+    penalty_amount: Decimal = Query(
+        ..., gt=0, le=finance_schemas.MAX_AMOUNT, description="Số tiền phạt (VND, bắt buộc)"
     ),
+    reason: str = Query(..., min_length=1, max_length=500, description="Lý do áp phạt"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = RequireManager,
 ):
@@ -606,8 +607,8 @@ async def apply_penalty(
     Apply late payment penalty to an overdue invoice.
 
     **Business Rules:**
-    - Only applies to overdue invoices
-    - If penalty_amount not provided, calculated based on installment plan penalty_rate
+    - ``penalty_amount`` bắt buộc (> 0); tổng phạt không vượt số tiền hóa đơn.
+    - Không áp phạt cho hóa đơn đã thanh toán / đã hủy.
     - Requires manager or admin role
 
     **Security:**
@@ -621,6 +622,7 @@ async def apply_penalty(
         invoice, _ = await invoice_service.apply_penalty(
             invoice_id=invoice_id,
             penalty_amount=penalty_amount,
+            reason=reason,
             user_id=current_user.id,
             unit_id=unit_id,
         )
