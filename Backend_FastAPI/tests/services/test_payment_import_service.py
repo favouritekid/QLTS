@@ -2605,3 +2605,64 @@ class TestLeadHasOtherSettledHk1:
         feeA.status = "cancelled"
         await db.flush()
         assert await pis._lead_has_other_settled_hk1(db, profB.id, {feeB.id}) is False
+
+
+# =============================================================================
+# #6 — cảnh báo mềm nghi TRÙNG GIAO DỊCH khi re-import (cùng hồ sơ+ref+số tiền)
+# =============================================================================
+class TestDuplicateTransactionWarning:
+    """Audit 2026-06-29 #6 — re-import sao kê chồng ngày (cùng Mã tham chiếu +
+    số tiền cho hồ sơ CÒN NỢ) → preview WARNED (không chặn). Thu góp KHÁC số
+    tiền cùng ref → KHÔNG cảnh báo."""
+
+    async def _commit_partial(self, db, deps, admin_user, *, cccd, ref, amount):
+        """Seed hồ sơ + HĐ issued 10tr, import 1 dòng (ref, amount) rồi commit →
+        có Payment verified(ref, amount); HĐ còn nợ (partial)."""
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        await _seed_tuition(
+            db, deps, citizen_id=cccd, lead_name="Re Import",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        content = _csv_bytes([
+            pis.TEMPLATE_COLS,
+            [cccd, "Re Import", amount, "05/09/2026", "TM", ref, ""],
+        ])
+        batch, _ = await pis.preview_import(
+            db, content=content, filename="dot1.csv", academic_year=2026,
+            semester_no=1, created_by_id=admin_user.id, unit_id=None,
+        )
+        bid = batch.id
+        await db.commit()
+        await pis.commit_batch(db, batch_id=bid, importer_id=admin_user.id, unit_id=None)
+        await db.commit()
+
+    async def test_reimport_same_ref_amount_warns(
+        self, db, seeded_dependencies, admin_user
+    ):
+        cccd = "077200000001"
+        # Commit 4tr (HĐ 10tr → còn nợ 6tr). Re-import CÙNG ref + CÙNG 4tr: 4tr ≤
+        # 6tr còn nợ → KHÔNG dính guard "vượt nợ gốc" → tới dup-check → nghi trùng.
+        # (Re-import > nợ còn lại thì guard nợ-gốc đã chặn rồi.)
+        await self._commit_partial(
+            db, seeded_dependencies, admin_user, cccd=cccd, ref="PT-DUP-1", amount="4.000.000"
+        )
+        res = await pis.resolve_and_validate(
+            db, [_draft(cccd, "4000000", reference="PT-DUP-1")], 2026, 1, None
+        )
+        assert res.rows[0].status == WARNED, res.rows[0].message
+        assert "nghi trùng giao dịch" in res.rows[0].message, res.rows[0].message
+
+    async def test_legit_partial_different_amount_no_dup_warn(
+        self, db, seeded_dependencies, admin_user
+    ):
+        cccd = "077200000002"
+        # Commit 4tr (còn nợ 6tr). Thu góp tiếp 5tr (cùng ref nhưng KHÁC số tiền,
+        # 5tr ≤ 6tr) → tới dup-check nhưng tổng đã ghi 4tr ≠ 5tr → KHÔNG cảnh báo.
+        await self._commit_partial(
+            db, seeded_dependencies, admin_user, cccd=cccd, ref="PT-DUP-1", amount="4.000.000"
+        )
+        res = await pis.resolve_and_validate(
+            db, [_draft(cccd, "5000000", reference="PT-DUP-1")], 2026, 1, None
+        )
+        assert "nghi trùng giao dịch" not in (res.rows[0].message or ""), res.rows[0].message

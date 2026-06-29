@@ -412,6 +412,39 @@ async def resolve_and_validate(
     no_payable_fee_ids = [fid for fid in fee_ids if fid not in invoices_by_fee]
     invoice_statuses = await _fetch_invoice_status_sets(db, no_payable_fee_ids)
 
+    # #6 — nghi TRÙNG GIAO DỊCH (re-import sao kê chồng ngày → tạo Payment thứ 2
+    # cho cùng giao dịch khi hồ sơ còn nợ). reference_code là FREE-TEXT (phiếu thu
+    # PT-/mã hồ sơ HS-/cash), TÁI DÙNG hợp lệ được ở thu góp KHÁC số tiền → KHÔNG
+    # đặt unique. Tín hiệu re-import = tổng payment verified đã ghi cho (hồ sơ, ref)
+    # KHỚP số tiền dòng. Prefetch 1 query group; bỏ ref rỗng/synthetic. CẢNH BÁO
+    # mềm (không chặn — kế toán quyết).
+    existing_ref_sums: Dict[Tuple[int, str], Decimal] = {}
+    _prof_ids = [p.id for p in profiles.values()]
+    if _prof_ids:
+        for pid, ref, total in (
+            await db.execute(
+                select(
+                    models.AdmissionProfile.id,
+                    Payment.reference_code,
+                    func.sum(Payment.amount),
+                )
+                .join(Invoice, Invoice.id == Payment.invoice_id)
+                .join(Fee, Fee.id == Invoice.fee_id)
+                .join(
+                    models.AdmissionProfile,
+                    models.AdmissionProfile.id == Fee.admission_profile_id,
+                )
+                .where(
+                    models.AdmissionProfile.id.in_(_prof_ids),
+                    Payment.status == PaymentStatusEnum.verified.value,
+                    Payment.reference_code.isnot(None),
+                    Payment.reference_code != "",
+                )
+                .group_by(models.AdmissionProfile.id, Payment.reference_code)
+            )
+        ).all():
+            existing_ref_sums[(pid, _norm(ref))] = total
+
     # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
     # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR
     # ngay ở preview (đối xứng commit, hết "khớp giả" rồi commit fail).
@@ -554,6 +587,19 @@ async def resolve_and_validate(
                 warnings.append(
                     f"CCCD xuất hiện {dup_n} dòng trong file — kiểm tra trùng "
                     "(nếu thu nhiều đợt thì bỏ qua)"
+                )
+
+        # (#6) nghi TRÙNG GIAO DỊCH với payment ĐÃ GHI (re-import) — prefetch ở trên.
+        # Khớp (hồ sơ, mã tham chiếu, tổng đã ghi == số tiền dòng): thu góp hợp lệ
+        # khác số tiền nên KHÔNG dính. Bỏ ref rỗng/synthetic (không dedup được).
+        _ref = _norm(d.reference or "")
+        if _ref and not _ref.startswith(("BULK-", "PAY-")):
+            _prior = existing_ref_sums.get((profile.id, _ref))
+            if _prior is not None and _prior == d.amount:
+                warnings.append(
+                    f"nghi trùng giao dịch: mã tham chiếu '{_ref}' + số tiền "
+                    f"{_money(d.amount)} đã ghi nhận cho hồ sơ này — kiểm tra "
+                    "trước khi thu lại (re-import?)"
                 )
 
         # FIFO allocate
