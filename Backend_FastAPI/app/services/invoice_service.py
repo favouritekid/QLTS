@@ -37,6 +37,7 @@ from app.models.finance import (
     Fee, Invoice, InstallmentPlan,
     FeeStatusEnum, InvoiceStatusEnum,
 )
+from app.models.finance.invoice import OVERDUE_DERIVED_STATUSES
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -135,6 +136,14 @@ class InvoiceService:
 
         # Get installment schedule
         if fee.installment_plan:
+            # Chặn dùng plan đã NGỪNG hoạt động: lúc gắn plan đã lọc is_active
+            # (fee_calculation_service), nhưng admin có thể tắt plan SAU đó →
+            # không được tiếp tục sinh hóa đơn theo schedule của plan đã tắt.
+            if not getattr(fee.installment_plan, "is_active", True):
+                raise BusinessRuleViolation(
+                    f"Kế hoạch thanh toán '{fee.installment_plan.code}' đã ngừng "
+                    "hoạt động — không thể sinh hóa đơn."
+                )
             # Use plan's schedule with proper due_days_offset per installment
             installment_schedule = fee.installment_plan.get_installment_schedule(
                 amount_to_invoice, anchor_date=anchor_date
@@ -667,13 +676,38 @@ class InvoiceService:
         if not invoice:
             raise ResourceNotFoundError("Invoice not found")
 
+        # (1) Input: ``is None`` guard cho direct caller (route đã ép required gt=0;
+        # HTTP không gửi None được nữa, nhưng service là business boundary → tự bảo
+        # vệ khỏi None→TypeError).
+        if penalty_amount is None or penalty_amount <= 0:
+            raise BadRequest("Penalty amount must be positive")
+
+        # (2) Trạng thái: không áp phạt hóa đơn đã thanh toán / đã hủy.
         if invoice.status in [InvoiceStatusEnum.paid.value, InvoiceStatusEnum.cancelled.value]:
             raise BusinessRuleViolation(
                 f"Cannot apply penalty to {invoice.status} invoice"
             )
 
-        if penalty_amount <= 0:
-            raise BadRequest("Penalty amount must be positive")
+        # (3) CHỈ áp phạt HĐ ĐÃ PHÁT HÀNH và ĐÃ QUÁ HẠN. Khớp ĐÚNG cờ FE
+        # ``can_apply_penalty`` = ``_invoice_is_overdue`` (status ∈ issued/partial/
+        # overdue ∧ quá due_date). LƯU Ý: ``invoice.is_overdue`` (model) KHÔNG check
+        # status nên một mình nó cho áp phạt cả HĐ **draft** quá hạn (FE đã ẩn nút)
+        # → phải kèm gate status ``OVERDUE_DERIVED_STATUSES`` để chặn HĐ chưa phát
+        # hành + giữ service KHÔNG rộng hơn cờ FE. ``is_overdue`` bổ sung điều kiện
+        # quá-hạn (bắt cả HĐ issued quá hạn mà beat job chưa lật status='overdue').
+        if invoice.status not in OVERDUE_DERIVED_STATUSES or not invoice.is_overdue:
+            raise BusinessRuleViolation(
+                "Chỉ áp phạt cho hóa đơn ĐÃ PHÁT HÀNH và ĐÃ QUÁ HẠN "
+                "(quá ngày đến hạn, chưa thu đủ)."
+            )
+
+        # (4) Trần: tổng phạt cộng dồn không vượt số tiền hóa đơn (chống áp phạt lặp
+        # nhiều lần đẩy nợ vô lý).
+        if invoice.penalty_amount + penalty_amount > invoice.amount:
+            raise BusinessRuleViolation(
+                f"Tổng phạt ({invoice.penalty_amount + penalty_amount}) vượt số "
+                f"tiền hóa đơn ({invoice.amount})."
+            )
 
         old_penalty = invoice.penalty_amount
         invoice.penalty_amount = invoice.penalty_amount + penalty_amount

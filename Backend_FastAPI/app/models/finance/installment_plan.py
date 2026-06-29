@@ -184,4 +184,17 @@ class InstallmentPlan(Base):
                 entry["due_date"] = (anchor_date + timedelta(days=offset)).isoformat()
             result.append(entry)
 
+        # Defense-in-depth: tổng % các đợt vượt 100 → đợt cuối (remainder-to-last)
+        # ra ÂM → Invoice amount âm. Schema validate sum==100 ở biên API, nhưng
+        # plan dị dạng (sửa JSONB/seed tay) có thể lọt vào runtime — fail-fast.
+        # Domain exception (→400) thay vì ValueError (→500 không bắt) để caller
+        # (generate_invoices_for_fee / recalculate_fee) trả lỗi sạch.
+        if any(e["amount"] < 0 for e in result):
+            from app.utils.exceptions import BusinessRuleViolation
+
+            raise BusinessRuleViolation(
+                f"Lịch trả góp lỗi (plan id={self.id}): tổng phần trăm các đợt "
+                "vượt 100% khiến đợt cuối âm."
+            )
+
         return result

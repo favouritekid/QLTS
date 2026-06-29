@@ -655,6 +655,12 @@ export const invoicePenaltyRequestSchema = z.object({
     .string()
     .min(1, "Vui lòng nhập số tiền phạt")
     .regex(/^\d+(\.\d{1,2})?$/, "Số tiền không hợp lệ"),
+  // Backend route apply-penalty yêu cầu reason (1..500) — mirror để không lệch.
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Vui lòng nhập lý do áp phạt")
+    .max(500, "Lý do không được quá 500 ký tự"),
 })
 
 export type InvoicePenaltyRequest = z.infer<typeof invoicePenaltyRequestSchema>

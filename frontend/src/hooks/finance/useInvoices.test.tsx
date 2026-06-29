@@ -270,9 +270,15 @@ describe("useInvoices Hooks", () => {
           http.post(`${API_BASE_URL}/api/invoices/:invoiceId/apply-penalty`, ({ request }) => {
             const url = new URL(request.url);
             const penaltyAmount = url.searchParams.get("penalty_amount");
+            const reason = url.searchParams.get("reason");
 
             if (!penaltyAmount) {
               return HttpResponse.json({ detail: "Penalty amount is required" }, { status: 400 });
+            }
+            // Guard regression #8-A: route mới yêu cầu reason; nếu FE bỏ gửi reason
+            // thì handler trả 400 → isSuccess không true → test fail.
+            if (!reason) {
+              return HttpResponse.json({ detail: "Reason is required" }, { status: 400 });
             }
 
             return HttpResponse.json({
@@ -297,6 +303,7 @@ describe("useInvoices Hooks", () => {
 
         const penaltyData: InvoicePenaltyRequest = {
           penalty_amount: "500000",
+          reason: "Phạt trễ hạn",
         };
 
         const { result } = renderHook(() => useApplyPenalty(), {
@@ -332,7 +339,7 @@ describe("useInvoices Hooks", () => {
         result.current.mutate({
           invoiceId: 2,
           feeId: 2,
-          data: { penalty_amount: "100000" },
+          data: { penalty_amount: "100000", reason: "Phạt trễ hạn" },
         });
 
         await waitFor(() => expect(result.current.isError).toBe(true));

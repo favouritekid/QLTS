@@ -596,9 +596,10 @@ async def create_invoice(
 async def apply_penalty(
     request: Request,
     invoice_id: int,
-    penalty_amount: Optional[Decimal] = Query(
-        None, gt=0, description="Penalty amount (auto-calculated if not provided)"
+    penalty_amount: Decimal = Query(
+        ..., gt=0, le=finance_schemas.MAX_AMOUNT, description="Số tiền phạt (VND, bắt buộc)"
     ),
+    reason: str = Query(..., min_length=1, max_length=500, description="Lý do áp phạt"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = RequireManager,
 ):
@@ -606,8 +607,8 @@ async def apply_penalty(
     Apply late payment penalty to an overdue invoice.
 
     **Business Rules:**
-    - Only applies to overdue invoices
-    - If penalty_amount not provided, calculated based on installment plan penalty_rate
+    - ``penalty_amount`` bắt buộc (> 0); tổng phạt không vượt số tiền hóa đơn.
+    - Không áp phạt cho hóa đơn đã thanh toán / đã hủy.
     - Requires manager or admin role
 
     **Security:**
@@ -621,6 +622,7 @@ async def apply_penalty(
         invoice, _ = await invoice_service.apply_penalty(
             invoice_id=invoice_id,
             penalty_amount=penalty_amount,
+            reason=reason,
             user_id=current_user.id,
             unit_id=unit_id,
         )
@@ -666,7 +668,8 @@ def _compute_invoice_permissions(
       (POST /api/payments → ACCOUNTANT_TEMPLATE; manager lacks it)
     - can_cancel: status not terminal AND paid == 0 AND role in [admin, manager]
       (PUT /api/invoices/{id}/cancel → RequireManager; accountant excluded)
-    - can_apply_penalty: status == 'overdue' AND role in [admin, manager]
+    - can_apply_penalty: derived-overdue (issued/partial/overdue đã quá due_date)
+      AND role in [admin, manager]
       (POST /api/invoices/{id}/apply-penalty → RequireManager; accountant excluded)
     """
     status_value = (
@@ -686,7 +689,10 @@ def _compute_invoice_permissions(
             and invoice.remaining_amount > 0
             and is_accountant_or_admin
         ),
-        "can_apply_penalty": status_value == "overdue" and is_manager_or_admin,
+        # Derived-overdue (issued/partial/overdue ĐÃ quá due_date), KHÔNG dùng enum
+        # 'overdue' (lag theo beat job) → nút hiện đúng khi service apply_penalty
+        # chấp nhận (service cũng gate ``invoice.is_overdue``).
+        "can_apply_penalty": _invoice_is_overdue(invoice) and is_manager_or_admin,
     }
 
 

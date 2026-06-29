@@ -30,7 +30,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -412,6 +412,46 @@ async def resolve_and_validate(
     no_payable_fee_ids = [fid for fid in fee_ids if fid not in invoices_by_fee]
     invoice_statuses = await _fetch_invoice_status_sets(db, no_payable_fee_ids)
 
+    # #6 — nghi TRÙNG GIAO DỊCH (re-import sao kê chồng ngày → tạo Payment thứ 2
+    # cho cùng giao dịch khi hồ sơ còn nợ). reference_code là FREE-TEXT (phiếu thu
+    # PT-/mã hồ sơ HS-/cash), TÁI DÙNG hợp lệ được ở thu góp KHÁC số tiền → KHÔNG
+    # đặt unique. Tín hiệu re-import = tổng payment verified đã ghi cho (hồ sơ, ref)
+    # KHỚP số tiền dòng. Prefetch 1 query group; bỏ ref rỗng/synthetic. CẢNH BÁO
+    # mềm (không chặn — kế toán quyết).
+    existing_ref_sums: Dict[Tuple[int, str], Decimal] = {}
+    _prof_ids = [p.id for p in profiles.values()]
+    if _prof_ids:
+        # Scope ĐÚNG fee mà dòng import sẽ áp (tuition + ĐÚNG học kỳ S): nếu gộp mọi
+        # loại phí/kỳ, ref chung (vd lệ phí 500k cùng ref 'TIENMAT' với học phí 500k)
+        # sẽ false-positive "nghi trùng". sum-on-collision phòng 2 ref raw _norm về
+        # cùng key.
+        for pid, ref, total in (
+            await db.execute(
+                select(
+                    models.AdmissionProfile.id,
+                    Payment.reference_code,
+                    func.sum(Payment.amount),
+                )
+                .join(Invoice, Invoice.id == Payment.invoice_id)
+                .join(Fee, Fee.id == Invoice.fee_id)
+                .join(
+                    models.AdmissionProfile,
+                    models.AdmissionProfile.id == Fee.admission_profile_id,
+                )
+                .where(
+                    models.AdmissionProfile.id.in_(_prof_ids),
+                    Fee.fee_type == "tuition",
+                    Fee.semester_no == semester_no,
+                    Payment.status == PaymentStatusEnum.verified.value,
+                    Payment.reference_code.isnot(None),
+                    Payment.reference_code != "",
+                )
+                .group_by(models.AdmissionProfile.id, Payment.reference_code)
+            )
+        ).all():
+            _k = (pid, _norm(ref))
+            existing_ref_sums[_k] = existing_ref_sums.get(_k, Decimal("0")) + total
+
     # G2 — code hình thức ĐANG hoạt động (mirror commit:1017). Parser đã loại method
     # text lạ (:346); đây bắt method map-OK nhưng PaymentMethod inactive/missing → ERROR
     # ngay ở preview (đối xứng commit, hết "khớp giả" rồi commit fail).
@@ -554,6 +594,19 @@ async def resolve_and_validate(
                 warnings.append(
                     f"CCCD xuất hiện {dup_n} dòng trong file — kiểm tra trùng "
                     "(nếu thu nhiều đợt thì bỏ qua)"
+                )
+
+        # (#6) nghi TRÙNG GIAO DỊCH với payment ĐÃ GHI (re-import) — prefetch ở trên.
+        # Khớp (hồ sơ, mã tham chiếu, tổng đã ghi == số tiền dòng): thu góp hợp lệ
+        # khác số tiền nên KHÔNG dính. Bỏ ref rỗng/synthetic (không dedup được).
+        _ref = _norm(d.reference or "")
+        if _ref and not _ref.startswith(("BULK-", "PAY-")):
+            _prior = existing_ref_sums.get((profile.id, _ref))
+            if _prior is not None and _prior == d.amount:
+                warnings.append(
+                    f"nghi trùng giao dịch: mã tham chiếu '{_ref}' + số tiền "
+                    f"{_money(d.amount)} đã ghi nhận cho hồ sơ này — kiểm tra "
+                    "trước khi thu lại (re-import?)"
                 )
 
         # FIFO allocate
@@ -1021,6 +1074,54 @@ async def _load_profile_with_lead(
             .where(models.AdmissionProfile.id == profile_id)
         )
     ).scalar_one_or_none()
+
+
+async def _lead_has_other_settled_hk1(
+    db: AsyncSession, profile_id: int, exclude_fee_ids: "set[int]"
+) -> bool:
+    """LEAD này (qua MỌI hồ sơ) còn HK1 tuition fee đã SETTLED nào KHÁC không
+    (loại trừ các fee đang void trong lô)?
+
+    Void 1 fee HK1 chỉ nên lùi lead khỏi sts10 khi lead KHÔNG còn HK1 settled ở
+    bất kỳ hồ sơ/năm nào khác — nếu không sẽ tụt nhãn oan (lead multi-profile/
+    multi-year, forward sync chỉ fire 1 lần). Settled = mirror ``is_hk1_settled``
+    (paid/waived HOẶC remaining<=0), trừ cancelled.
+    """
+    lead_id = (
+        await db.execute(
+            select(models.AdmissionProfile.lead_id).where(
+                models.AdmissionProfile.id == profile_id
+            )
+        )
+    ).scalar_one_or_none()
+    if lead_id is None:
+        return False
+
+    conditions = [
+        models.AdmissionProfile.lead_id == lead_id,
+        Fee.fee_type == "tuition",
+        Fee.semester_no == 1,
+        Fee.status != FeeStatusEnum.cancelled.value,
+        or_(
+            Fee.status.in_(
+                [FeeStatusEnum.paid.value, FeeStatusEnum.waived.value]
+            ),
+            (Fee.final_amount - Fee.paid_amount - Fee.waived_amount) <= 0,
+        ),
+    ]
+    if exclude_fee_ids:
+        conditions.append(~Fee.id.in_(exclude_fee_ids))
+
+    stmt = (
+        select(Fee.id)
+        .join(
+            models.AdmissionProfile,
+            models.AdmissionProfile.id == Fee.admission_profile_id,
+        )
+        .where(*conditions)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).first() is not None
 
 
 @dataclass
@@ -1556,11 +1657,18 @@ async def void_batch(
     from app.services.lead_admission_sync import revert_lead_tuition_paid
 
     reverted_leads = 0
+    _voided_fee_ids = set(fee_by_id.keys())
     for fee in fee_by_id.values():
         if fee.fee_type != "tuition" or fee.semester_no != 1:
             continue  # chỉ HK1 đụng pipeline lead
         if is_hk1_settled_fee(fee):
-            continue  # HK1 vẫn settled (nguồn thu khác) → giữ lead ở sts10
+            continue  # HK1 fee NÀY vẫn settled (nguồn thu khác) → giữ lead sts10
+        # (#4) Lead-level: lead còn HK1 settled ở hồ-sơ/năm KHÁC (ngoài lô đang
+        # void) → KHÔNG lùi nhãn (tránh tụt sts10 oan khi multi-profile/year).
+        if await _lead_has_other_settled_hk1(
+            db, fee.admission_profile_id, _voided_fee_ids
+        ):
+            continue
         try:
             async with db.begin_nested():
                 profile = await _load_profile_with_lead(db, fee.admission_profile_id)

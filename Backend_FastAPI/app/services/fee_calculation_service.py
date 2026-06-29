@@ -378,6 +378,26 @@ async def resnapshot_fee_academic_info_for_profile(
         return 0
 
     for fee in fees:
+        # E2 hardening (audit 29-06): fee đã gắn ngành (resolved_ai cũ) mà nay
+        # resolve ra ngành KHÁC → cấu hình AdmissionPath/academic_info có thể đã bị
+        # sửa SAU khi tính phí; ``final_amount`` (đóng băng theo ngành cũ) có thể
+        # KHÔNG còn khớp ngành mới. Snapshot vẫn cập nhật để display khớp ngành
+        # hiện tại, nhưng phát log.warning để kế-toán/admin soát tiền (biến vi phạm
+        # invariant thành tín hiệu quan sát được thay vì ghi đè im lặng).
+        prior_ai = fee.resolved_academic_info_id
+        if (
+            resolved_ai_id is not None
+            and prior_ai is not None
+            and prior_ai != resolved_ai_id
+        ):
+            log.warning(
+                "fee_resolved_major_drift",
+                fee_id=fee.id,
+                profile_id=profile_id,
+                prior_academic_info_id=prior_ai,
+                new_academic_info_id=resolved_ai_id,
+                fee_final_amount=str(fee.final_amount),
+            )
         fee.resolved_academic_info_id = resolved_ai_id
         fee.resolved_major_id = resolved_major_id
         fee.resolved_degree_level = resolved_degree_level
@@ -765,6 +785,32 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
+        # Block when any non-cancelled invoice is beyond draft. Recalc đổi
+        # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
+        # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
+        # ngược lại tăng giá ⇒ thu thiếu. Đối xứng
+        # ``recalculate_fees_for_semester_tuition_change`` (chỉ recalc khi mọi HĐ
+        # còn draft). Muốn đổi phí đã phát hành: hủy hóa đơn rồi tính lại.
+        # Query invoices TƯƠI (không dựa ``fee.invoices`` relationship — có thể
+        # stale dưới session tái dùng; prod mỗi request session mới nhưng đây là
+        # tiền lõi nên load tường minh).
+        fee_invoices = list(
+            (
+                await self.db.execute(
+                    select(Invoice).where(Invoice.fee_id == fee_id)
+                )
+            ).scalars().all()
+        )
+        active_invoices = [
+            inv for inv in fee_invoices if inv.status != "cancelled"
+        ]
+        if any(inv.status != "draft" for inv in active_invoices):
+            raise BusinessRuleViolation(
+                "Không thể tính lại phí khi đã phát hành hóa đơn "
+                "(issued/partial/paid). Hãy hủy hóa đơn liên quan trước rồi "
+                "tính lại."
+            )
+
         # Get existing discount policy IDs
         existing_policy_ids = [
             ad.policy_id for ad in fee.applied_discounts if ad.policy_id
@@ -786,6 +832,51 @@ class FeeCalculationService:
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Recalculated by user {user_id}: {old_base} → {new_base_amount}. " \
                     f"Reason: {reason}"
+
+        # Đồng bộ hóa đơn DRAFT (nếu có) theo final mới để fee↔invoice không lệch
+        # — chỉ tới đây khi mọi HĐ còn draft (guard non-draft ở trên). Mirror
+        # recalculate_fees_for_semester_tuition_change.
+        draft_invoices = [
+            inv for inv in fee_invoices if inv.status == "draft"
+        ]
+        if len(draft_invoices) == 1:
+            # 1 đợt draft (FULL plan, hoặc multi-plan còn đúng 1 đợt sau khi hủy) →
+            # toàn bộ final vào đó, giữ sum(invoice)==final.
+            await self.db.execute(
+                sa.update(Invoice)
+                .where(Invoice.id == draft_invoices[0].id)
+                .values(amount=fee.final_amount)
+            )
+        elif len(draft_invoices) >= 2:
+            # ≥2 HĐ draft: chỉ rewrite AN TOÀN khi có installment_plan VÀ số HĐ
+            # draft KHỚP số đợt kế hoạch. Lệch vì: (a) 1 đợt giữa kế hoạch đã hủy
+            # (cancelled không bị block ở trên), HOẶC (b) fee KHÔNG có plan nhưng bị
+            # tạo thêm HĐ draft qua POST /api/invoices (create_single_invoice). Cả 2
+            # trường hợp: zip theo vị trí sẽ gán lệch số tiền → fee↔invoice lệch
+            # (thu thiếu/dư) — đúng kiểu sai tiền #2 định chặn. KHÔNG rewrite mù →
+            # chặn, yêu cầu hủy & phát hành lại.
+            new_schedule = (
+                fee.installment_plan.get_installment_schedule(fee.final_amount)
+                if fee.installment_plan
+                else None
+            )
+            if new_schedule is None or len(draft_invoices) != len(new_schedule):
+                raise BusinessRuleViolation(
+                    "Bộ hóa đơn không khớp kế hoạch trả góp (đợt đã hủy hoặc không "
+                    "có kế hoạch trả góp) — hãy hủy các hóa đơn còn lại rồi phát "
+                    "hành lại để tính lại phí."
+                )
+            # Sort CẢ HAI theo installment_no để ghép ĐÚNG đợt (schedule JSONB có
+            # thể lưu lệch thứ tự, remainder rơi vào phần tử cuối list).
+            for inv, sched in zip(
+                sorted(draft_invoices, key=lambda x: x.installment_no),
+                sorted(new_schedule, key=lambda s: s["installment_no"]),
+            ):
+                await self.db.execute(
+                    sa.update(Invoice)
+                    .where(Invoice.id == inv.id)
+                    .values(amount=sched["amount"])
+                )
 
         await self.db.flush()
 
@@ -1508,6 +1599,23 @@ async def recalculate_fees_for_semester_tuition_change(
                 )
                 continue
 
+        # ≥2 HĐ draft KHÔNG khớp kế hoạch trả góp (không có plan, hoặc số HĐ ≠ số
+        # đợt) → KHÔNG rewrite an toàn bằng zip vị trí được → SKIP fee này TRƯỚC khi
+        # đổi base (tránh fee↔invoice lệch im lặng — cùng invariant recalculate_fee
+        # #1). Tới đây mọi HĐ đều draft (non-draft đã skip ở trên).
+        draft_count = sum(1 for inv in fee.invoices if inv.status == "draft")
+        if draft_count >= 2 and (
+            fee.installment_plan is None
+            or draft_count != fee.installment_plan.installment_count
+        ):
+            log.info(
+                "fee_recalc_skipped_unmappable_invoices",
+                fee_id=fee.id,
+                semester_no=fee.semester_no,
+                draft_count=draft_count,
+            )
+            continue
+
         # Look up new semester tuition amount
         sem_result = await db.execute(
             select(models.OfferingSemesterTuition.amount).where(
@@ -1547,9 +1655,11 @@ async def recalculate_fees_for_semester_tuition_change(
             new_schedule = fee.installment_plan.get_installment_schedule(
                 fee.final_amount
             )
+            # Sort CẢ HAI theo installment_no để ghép ĐÚNG đợt (schedule JSONB có
+            # thể lưu lệch thứ tự, remainder rơi vào phần tử cuối list).
             for inv, sched in zip(
                 sorted(fee.invoices, key=lambda x: x.installment_no),
-                new_schedule,
+                sorted(new_schedule, key=lambda s: s["installment_no"]),
             ):
                 await db.execute(
                     sa.update(Invoice)

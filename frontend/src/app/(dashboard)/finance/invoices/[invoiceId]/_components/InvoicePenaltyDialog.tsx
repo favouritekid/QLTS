@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form"
 import { Button } from "@/components/ui/button"
 import { CurrencyInput } from "@/components/ui/currency-input"
+import { Textarea } from "@/components/ui/textarea"
 import { AlertTriangle, Loader2 } from "lucide-react"
 import { useApplyPenalty } from "@/hooks/finance/useInvoices"
 import { toast } from "sonner"
@@ -32,6 +33,14 @@ const penaltyFormSchema = z.object({
   penalty_amount: z
     .number({ message: "Vui lòng nhập số tiền phạt" })
     .positive("Số tiền phải lớn hơn 0"),
+  // Backend route apply-penalty yêu cầu reason (1..500). Không gửi → 422.
+  // .trim() trước min(1): chuỗi toàn khoảng trắng → invalid ngay ở FE (tránh gửi
+  // reason='' sau trim → backend 422 với toast lỗi chung).
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Vui lòng nhập lý do áp phạt")
+    .max(500, "Lý do không được quá 500 ký tự"),
 })
 
 type PenaltyFormValues = z.infer<typeof penaltyFormSchema>
@@ -59,6 +68,7 @@ export function InvoicePenaltyDialog({
     resolver: zodResolver(penaltyFormSchema),
     defaultValues: {
       penalty_amount: undefined,
+      reason: "",
     },
   })
 
@@ -69,6 +79,7 @@ export function InvoicePenaltyDialog({
         feeId,
         data: {
           penalty_amount: values.penalty_amount.toString(),
+          reason: values.reason.trim(),
         },
       })
       toast.success("Đã áp dụng phí trễ hạn thành công")
@@ -119,7 +130,29 @@ export function InvoicePenaltyDialog({
                       className="h-11"
                     />
                   </FormControl>
-                  <FormDescription>Số tiền phạt sẽ được cộng vào tổng tiền hóa đơn</FormDescription>
+                  <FormDescription>Số tiền phạt sẽ được cộng vào tổng tiền hóa đơn (không vượt số tiền hóa đơn)</FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="reason"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Lý do <span className="text-destructive">*</span>
+                  </FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      placeholder="Ví dụ: Phạt trễ hạn theo quy định..."
+                      rows={2}
+                      maxLength={500}
+                      className="resize-none"
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

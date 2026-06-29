@@ -161,7 +161,7 @@ export async function cancelInvoice(invoiceId: number, reason: string): Promise<
  */
 export async function applyPenalty(invoiceId: number, data: InvoicePenaltyRequest): Promise<Invoice> {
   const response = await api.post<Invoice>(API_ENDPOINTS.FINANCE.INVOICES.PENALTY(invoiceId), undefined, {
-    params: { penalty_amount: data.penalty_amount },
+    params: { penalty_amount: data.penalty_amount, reason: data.reason },
   })
   return response.data
 }
