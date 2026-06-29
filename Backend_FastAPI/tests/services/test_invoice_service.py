@@ -956,6 +956,38 @@ class TestRecalculateInvoiceSync:
         assert fee2.final_amount == Decimal("700000")
         assert invs[0].amount == Decimal("700000"), "HĐ draft phải đồng bộ final mới"
 
+    async def test_recalculate_blocked_when_multiple_drafts_no_plan(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Review #1: fee KHÔNG có installment_plan nhưng có ≥2 HĐ draft (vd HĐ bổ
+        sung qua POST /api/invoices) → recalc CHẶN (không rewrite mù → tránh
+        fee↔invoice lệch im lặng)."""
+        inv_service = InvoiceService(db)
+        fee = invoice_fixtures["fee"]  # application 900k, KHÔNG có installment_plan
+        unit_id = invoice_fixtures["unit_id"]
+        invs, _ = await inv_service.generate_invoices_for_fee(
+            fee_id=fee.id, due_date_base=date.today() + timedelta(days=30),
+            user_id=admin_user.id, unit_id=unit_id, auto_issue=False,
+        )
+        await db.commit()
+        # Thêm 1 HĐ draft thứ 2 trực tiếp (mô phỏng create_single_invoice no-plan).
+        db.add(Invoice(
+            fee_id=fee.id, invoice_number=f"INV-T-EXTRA-{fee.id}", installment_no=2,
+            amount=Decimal("100000"), paid_amount=Decimal("0"),
+            penalty_amount=Decimal("0"), status="draft",
+            due_date=date.today() + timedelta(days=30),
+        ))
+        await db.commit()
+        assert fee.installment_plan_id is None
+
+        fee_service = FeeCalculationService(db)
+        with pytest.raises(BusinessRuleViolation):
+            await fee_service.recalculate_fee(
+                fee_id=fee.id, new_base_amount=Decimal("1200000"),
+                reason="Điều chỉnh fee không có kế hoạch, nhiều HĐ",
+                user_id=admin_user.id, unit_id=unit_id,
+            )
+
     async def test_recalculate_blocked_when_draft_count_mismatches_plan(
         self, db, invoice_fixtures, admin_user
     ):
@@ -1047,6 +1079,28 @@ class TestApplyPenaltyGuards:
             await service.apply_penalty(
                 invoice_id=inv.id, penalty_amount=Decimal("50000"), reason="phạt sớm",
                 user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            )
+
+    async def test_penalty_blocked_on_draft_invoice(
+        self, db, invoice_fixtures, admin_user
+    ):
+        """Review #2: HĐ DRAFT (chưa phát hành) DÙ quá due_date → KHÔNG áp phạt —
+        service gate status ∈ OVERDUE_DERIVED_STATUSES, khớp ĐÚNG cờ FE
+        can_apply_penalty (trước đây is_overdue 1 mình cho áp phạt cả draft)."""
+        inv_service = InvoiceService(db)
+        invs, _ = await inv_service.generate_invoices_for_fee(
+            fee_id=invoice_fixtures["fee"].id,
+            due_date_base=date.today() - timedelta(days=5),  # quá hạn
+            user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
+            auto_issue=False,  # draft (chưa phát hành)
+        )
+        await db.commit()
+        assert invs[0].status == InvoiceStatusEnum.draft.value
+        with pytest.raises(BusinessRuleViolation):
+            await inv_service.apply_penalty(
+                invoice_id=invs[0].id, penalty_amount=Decimal("50000"),
+                reason="phạt HĐ draft", user_id=admin_user.id,
+                unit_id=invoice_fixtures["unit_id"],
             )
 
 

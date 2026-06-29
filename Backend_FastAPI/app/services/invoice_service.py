@@ -37,6 +37,7 @@ from app.models.finance import (
     Fee, Invoice, InstallmentPlan,
     FeeStatusEnum, InvoiceStatusEnum,
 )
+from app.models.finance.invoice import OVERDUE_DERIVED_STATUSES
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -687,15 +688,17 @@ class InvoiceService:
                 f"Cannot apply penalty to {invoice.status} invoice"
             )
 
-        # (3) CHỈ áp phạt khi ĐÃ QUÁ HẠN (phí TRỄ hạn): quá ngày đến hạn + chưa thu
-        # đủ. Dùng ``is_overdue`` (derived: today > due_date) nên bắt cả HĐ quá hạn
-        # mà beat job chưa kịp lật status='overdue'; đồng thời CHẶN áp phạt HĐ chưa
-        # tới hạn (issued, due tương lai). Cờ FE ``can_apply_penalty`` cũng tính
-        # theo derived-overdue (``_invoice_is_overdue``) nên nút chỉ hiện đúng khi
-        # service chấp nhận (không lệch enum 'overdue' lag theo beat job).
-        if not invoice.is_overdue:
+        # (3) CHỈ áp phạt HĐ ĐÃ PHÁT HÀNH và ĐÃ QUÁ HẠN. Khớp ĐÚNG cờ FE
+        # ``can_apply_penalty`` = ``_invoice_is_overdue`` (status ∈ issued/partial/
+        # overdue ∧ quá due_date). LƯU Ý: ``invoice.is_overdue`` (model) KHÔNG check
+        # status nên một mình nó cho áp phạt cả HĐ **draft** quá hạn (FE đã ẩn nút)
+        # → phải kèm gate status ``OVERDUE_DERIVED_STATUSES`` để chặn HĐ chưa phát
+        # hành + giữ service KHÔNG rộng hơn cờ FE. ``is_overdue`` bổ sung điều kiện
+        # quá-hạn (bắt cả HĐ issued quá hạn mà beat job chưa lật status='overdue').
+        if invoice.status not in OVERDUE_DERIVED_STATUSES or not invoice.is_overdue:
             raise BusinessRuleViolation(
-                "Chỉ áp phạt cho hóa đơn ĐÃ QUÁ HẠN (quá ngày đến hạn, chưa thu đủ)."
+                "Chỉ áp phạt cho hóa đơn ĐÃ PHÁT HÀNH và ĐÃ QUÁ HẠN "
+                "(quá ngày đến hạn, chưa thu đủ)."
             )
 
         # (4) Trần: tổng phạt cộng dồn không vượt số tiền hóa đơn (chống áp phạt lặp

@@ -847,22 +847,30 @@ class FeeCalculationService:
                 .where(Invoice.id == draft_invoices[0].id)
                 .values(amount=fee.final_amount)
             )
-        elif draft_invoices and fee.installment_plan:
-            new_schedule = fee.installment_plan.get_installment_schedule(
-                fee.final_amount
+        elif len(draft_invoices) >= 2:
+            # ≥2 HĐ draft: chỉ rewrite AN TOÀN khi có installment_plan VÀ số HĐ
+            # draft KHỚP số đợt kế hoạch. Lệch vì: (a) 1 đợt giữa kế hoạch đã hủy
+            # (cancelled không bị block ở trên), HOẶC (b) fee KHÔNG có plan nhưng bị
+            # tạo thêm HĐ draft qua POST /api/invoices (create_single_invoice). Cả 2
+            # trường hợp: zip theo vị trí sẽ gán lệch số tiền → fee↔invoice lệch
+            # (thu thiếu/dư) — đúng kiểu sai tiền #2 định chặn. KHÔNG rewrite mù →
+            # chặn, yêu cầu hủy & phát hành lại.
+            new_schedule = (
+                fee.installment_plan.get_installment_schedule(fee.final_amount)
+                if fee.installment_plan
+                else None
             )
-            # zip theo VỊ TRÍ → chỉ đúng khi số HĐ draft KHỚP số đợt kế hoạch. Nếu
-            # lệch (vd 1 đợt giữa chừng đã hủy, cancelled không bị block ở trên) →
-            # gán lệch số tiền → fee↔invoice lệch (undercharge). Chặn an toàn thay
-            # vì rewrite mù.
-            if len(draft_invoices) != len(new_schedule):
+            if new_schedule is None or len(draft_invoices) != len(new_schedule):
                 raise BusinessRuleViolation(
-                    "Bộ hóa đơn không khớp kế hoạch trả góp (có đợt đã hủy) — hãy "
-                    "hủy các hóa đơn còn lại rồi phát hành lại để tính lại phí."
+                    "Bộ hóa đơn không khớp kế hoạch trả góp (đợt đã hủy hoặc không "
+                    "có kế hoạch trả góp) — hãy hủy các hóa đơn còn lại rồi phát "
+                    "hành lại để tính lại phí."
                 )
+            # Sort CẢ HAI theo installment_no để ghép ĐÚNG đợt (schedule JSONB có
+            # thể lưu lệch thứ tự, remainder rơi vào phần tử cuối list).
             for inv, sched in zip(
                 sorted(draft_invoices, key=lambda x: x.installment_no),
-                new_schedule,
+                sorted(new_schedule, key=lambda s: s["installment_no"]),
             ):
                 await self.db.execute(
                     sa.update(Invoice)
@@ -1591,6 +1599,23 @@ async def recalculate_fees_for_semester_tuition_change(
                 )
                 continue
 
+        # ≥2 HĐ draft KHÔNG khớp kế hoạch trả góp (không có plan, hoặc số HĐ ≠ số
+        # đợt) → KHÔNG rewrite an toàn bằng zip vị trí được → SKIP fee này TRƯỚC khi
+        # đổi base (tránh fee↔invoice lệch im lặng — cùng invariant recalculate_fee
+        # #1). Tới đây mọi HĐ đều draft (non-draft đã skip ở trên).
+        draft_count = sum(1 for inv in fee.invoices if inv.status == "draft")
+        if draft_count >= 2 and (
+            fee.installment_plan is None
+            or draft_count != fee.installment_plan.installment_count
+        ):
+            log.info(
+                "fee_recalc_skipped_unmappable_invoices",
+                fee_id=fee.id,
+                semester_no=fee.semester_no,
+                draft_count=draft_count,
+            )
+            continue
+
         # Look up new semester tuition amount
         sem_result = await db.execute(
             select(models.OfferingSemesterTuition.amount).where(
@@ -1630,9 +1655,11 @@ async def recalculate_fees_for_semester_tuition_change(
             new_schedule = fee.installment_plan.get_installment_schedule(
                 fee.final_amount
             )
+            # Sort CẢ HAI theo installment_no để ghép ĐÚNG đợt (schedule JSONB có
+            # thể lưu lệch thứ tự, remainder rơi vào phần tử cuối list).
             for inv, sched in zip(
                 sorted(fee.invoices, key=lambda x: x.installment_no),
-                new_schedule,
+                sorted(new_schedule, key=lambda s: s["installment_no"]),
             ):
                 await db.execute(
                     sa.update(Invoice)
