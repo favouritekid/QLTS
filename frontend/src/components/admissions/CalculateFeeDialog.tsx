@@ -92,7 +92,7 @@ const MANUAL_REASON_MAX = 500
 // thỏa ràng buộc reason) set vào ô lý do.
 const REASON_CHIPS: { label: string; value: string }[] = [
   { label: "Học bổng", value: "Học bổng theo quyết định của nhà trường" },
-  { label: "Chuyển trường", value: "Điều chỉnh học phí do chuyển trường" },
+  { label: "Tạm thu", value: "Tạm thu học phí nhập học" },
   { label: "Theo quyết định", value: "Áp dụng học phí theo quyết định riêng" },
   { label: "Điều chỉnh khác", value: "Điều chỉnh học phí trường hợp đặc biệt" },
 ]
