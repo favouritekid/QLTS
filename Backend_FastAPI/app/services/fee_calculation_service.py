@@ -879,7 +879,22 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
-        # Block when any non-cancelled invoice is beyond draft. Recalc đổi
+        # Pha 2: chặn tính lại phí có MIỄN/GIẢM THỦ CÔNG (message cụ thể; cũng bắt
+        # cả khi HĐ đã bị HỦY HẾT — lúc đó issued-block dưới không fire). recalc
+        # chỉ tính lại discount theo policy (existing_policy_ids loại policy_id=NULL)
+        # → sẽ BỎ RƠI dòng giảm tay khỏi final (final nhảy lên) + để lại dòng
+        # orphan. Giảm tay là quyết định riêng (học bổng…), không tự suy lại theo
+        # base mới → bắt hủy & tạo lại thay vì âm thầm mất.
+        if any(
+            (ad.calculation_snapshot or {}).get("source") == "manual_discount"
+            for ad in fee.applied_discounts
+        ):
+            raise BusinessRuleViolation(
+                "Không thể tính lại phí có miễn/giảm học phí thủ công — hãy hủy "
+                "phí rồi tạo lại với mức áp dụng mới."
+            )
+
+        # Block when any non-cancelled invoice is beyond draft (#445). Recalc đổi
         # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
         # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
         # ngược lại tăng giá ⇒ thu thiếu. Đối xứng

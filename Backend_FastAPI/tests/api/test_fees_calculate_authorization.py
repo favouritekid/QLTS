@@ -1607,3 +1607,50 @@ async def test_manual_discount_target_not_below_net_400(
         headers=ah,
     )
     assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_recalculate_blocked_on_manual_discount_fee(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Fee có miễn/giảm thủ công → recalculate CHẶN (BusinessRuleViolation → 400):
+    recalc chỉ tính lại policy discount (existing_policy_ids loại policy_id=NULL),
+    nên sẽ BỎ RƠI giảm tay khỏi final + để lại dòng orphan. Bắt hủy & tạo lại."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ManualDiscount Recalc", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    created = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Học bổng đặc biệt theo quyết định nhà trường",
+        },
+        headers=ah,
+    )
+    assert created.status_code == 201, created.text
+    fee_id = created.json()["id"]
+
+    # Gọi recalculate_fee TẦNG SERVICE (paid=0 nên KHÔNG dính M10) → guard
+    # miễn/giảm thủ công raise BusinessRuleViolation (route map → 400).
+    from app.services.fee_calculation_service import FeeCalculationService
+    from app.utils.exceptions import BusinessRuleViolation
+    async with AsyncSessionLocal() as s:
+        svc = FeeCalculationService(s)
+        with pytest.raises(BusinessRuleViolation):
+            await svc.recalculate_fee(
+                fee_id=fee_id,
+                new_base_amount=Decimal("6000000"),
+                reason="Điều chỉnh base test",
+                user_id=1,
+            )
