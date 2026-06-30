@@ -63,7 +63,6 @@ export interface SmsClickReportParams {
   granularity: SmsGranularity
   campaign_id?: number
   carrier?: string
-  group_id?: number
   /** ISO datetime (kèm offset) — khoảng clicked_at. */
   date_from?: string
   date_to?: string
