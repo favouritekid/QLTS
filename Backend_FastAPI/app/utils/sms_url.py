@@ -11,13 +11,17 @@ from urllib.parse import urlparse
 from app.config import settings
 
 _IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+# Host hợp lệ chỉ gồm chữ/số/'.'/'-'. CHẶN backslash, '@', '/', '%', space…
+# (urlparse('https://evil.com\\.allowed.com') giữ '\\.' trong host → endswith
+# '.allowed.com' lọt allowlist; trình duyệt đổi '\\'→'/' → tới evil.com).
+_HOST_RE = re.compile(r"^[a-z0-9.-]+$")
 
 
 def host_in_allowlist(url: str) -> bool:
-    """https + host ∈ allowlist (exact/subdomain); chặn `@`, IP literal,
-    scheme ≠ https, userinfo. URL rỗng/sai → False (fail-closed)."""
+    """https + host ∈ allowlist (exact/subdomain); chặn `@`/`\\`, IP literal,
+    scheme ≠ https, userinfo, host ký tự lạ. URL rỗng/sai → False (fail-closed)."""
     raw = (url or "").strip()
-    if not raw or "@" in raw:
+    if not raw or "@" in raw or "\\" in raw:
         return False
     try:
         parsed = urlparse(raw)
@@ -26,7 +30,8 @@ def host_in_allowlist(url: str) -> bool:
     if parsed.scheme != "https" or parsed.username or parsed.password:
         return False
     host = (parsed.hostname or "").lower()
-    if not host or _IP_RE.match(host):
+    # Charset host nghiêm ngặt: chặn parser-differential (backslash, IDN raw…).
+    if not host or _IP_RE.match(host) or not _HOST_RE.match(host):
         return False
     allowed = [
         d.strip().lower()

@@ -24,12 +24,21 @@ from starlette.requests import Request
 
 
 def get_client_ip(request: Request) -> str:
-    """Return the first hop in ``X-Forwarded-For`` (real client) or fall back
-    to ``request.client.host`` when the header is absent.
+    """Return the real client IP for per-IP rate limits / hashing.
 
-    Used as ``key_func`` for slowapi per-IP limits; correctness matters because
-    ``request.client.host`` is the nginx container IP in production.
+    Prefer ``X-Real-IP`` (nginx sets it to ``$remote_addr`` and OVERWRITES any
+    client-supplied value — see default.conf.template:82), so it is NOT
+    spoofable. Fall back to the first ``X-Forwarded-For`` hop (note: nginx uses
+    ``$proxy_add_x_forwarded_for`` which APPENDS, so the first hop is
+    client-controlled and spoofable — only used when X-Real-IP is absent, e.g.
+    no nginx in front), then ``request.client.host``.
+
+    Single trusted nginx hop only. A multi-proxy topology (CDN→nginx→backend)
+    would make X-Real-IP the CDN IP — revisit then.
     """
+    real = request.headers.get("x-real-ip", "").strip()
+    if real:
+        return real
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         first = xff.split(",", 1)[0].strip()

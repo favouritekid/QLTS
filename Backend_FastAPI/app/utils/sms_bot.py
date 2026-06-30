@@ -45,8 +45,9 @@ def detect_bot(
             if tok in ua:
                 return True, "known_scanner_ua"
     if not ua:
-        # Không có UA hầu như chỉ gặp ở script/preview, không phải trình duyệt.
-        return True, "known_scanner_ua"
+        # Trình duyệt di động LUÔN gửi UA → thiếu UA hầu như chỉ script/preview.
+        # Flag bot nhưng nhãn TRUNG THỰC (≠ known_scanner_ua) cho audit/báo cáo.
+        return True, "no_user_agent"
 
     if headers:
         purpose = (

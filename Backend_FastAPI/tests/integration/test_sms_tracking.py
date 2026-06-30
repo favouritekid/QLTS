@@ -289,3 +289,132 @@ async def test_admin_manual_optout_and_list(
     assert any(
         it["phone_normalized"] == "0987654321" for it in lst.json()["items"]
     )
+
+
+# ---------------------------------------------------------------------
+# Bảo mật / compliance (vá /code-review max)
+# ---------------------------------------------------------------------
+async def test_optout_works_after_link_expired(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid, code, phone = await _built_campaign(client, h)
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE sms_campaign SET link_expires_at = now() - "
+                "interval '1 day' WHERE id=:c"
+            ),
+            {"c": cid},
+        )
+        await s.commit()
+    # landing GET → 404 (hết hạn) NHƯNG opt-out VẪN phải work (NĐ91)
+    assert (await client.get(f"{PUB}/landing/{code}")).status_code == 404
+    o = await client.post(f"{PUB}/opt-out", json={"code": code})
+    assert o.status_code == 200, o.text
+    assert o.json()["success"] is True
+    async with AsyncSessionLocal() as s:
+        src = (
+            await s.execute(
+                text(
+                    "SELECT source FROM sms_opt_out WHERE phone_normalized=:p"
+                ),
+                {"p": phone},
+            )
+        ).scalar()
+    assert src == "landing_optout"
+
+
+async def test_admin_endpoints_require_auth(client: AsyncClient):
+    assert (await client.get(f"{API}/reports/clicks")).status_code == 401
+    assert (
+        await client.get(f"{API}/campaigns/1/dashboard")
+    ).status_code == 401
+    assert (await client.get(f"{API}/opt-out")).status_code == 401
+    assert (
+        await client.post(f"{API}/opt-out/manual", json={"phone": "0987654321"})
+    ).status_code == 401
+
+
+async def test_external_redirect_and_open_redirect_blocked(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    # open-redirect: backslash trong landing_url → 400 lúc tạo (host charset)
+    bad = await client.post(
+        f"{API}/campaigns",
+        json={
+            "name": "Ext bad", "code": "extbad",
+            "sms_template": "Xem {link}",
+            "landing_type": "external",
+            "landing_url": "https://evil.com\\.tnpc.edu.vn/x",
+        },
+        headers=h,
+    )
+    assert bad.status_code == 400, bad.text
+    # external hợp lệ → /r/ 302 THẲNG landing_url (không /lp/)
+    gid = await _mk_group(client, h, name="Ext nhom")
+    await _mk_contact(client, h, "PH ext", "0978000111")
+    await client.post(
+        f"{API}/contacts/1/groups", json={"group_id": gid}, headers=h
+    )
+    r = await client.post(
+        f"{API}/campaigns",
+        json={
+            "name": "Ext ok", "code": "extok",
+            "sms_template": "Xem {link}",
+            "landing_type": "external",
+            "landing_url": "https://tnpc.edu.vn/tuyensinh",
+        },
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    cid = r.json()["id"]
+    await client.post(
+        f"{API}/campaigns/{cid}/groups", json={"group_id": gid}, headers=h
+    )
+    assert (
+        await client.post(f"{API}/campaigns/{cid}/build", headers=h)
+    ).status_code == 200
+    async with AsyncSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT token_ciphertext, token_key_version FROM "
+                    "sms_campaign_recipient WHERE campaign_id=:c LIMIT 1"
+                ),
+                {"c": cid},
+            )
+        ).first()
+    code = decrypt_code(row[0], row[1])
+    res = await client.get(
+        f"/r/{code}", headers={"User-Agent": _UA_HUMAN}, follow_redirects=False
+    )
+    assert res.status_code == 302
+    assert res.headers["location"] == "https://tnpc.edu.vn/tuyensinh"
+
+
+async def test_optout_does_not_block_click(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid, code, _phone = await _built_campaign(client, h)
+    assert (
+        await client.post(f"{PUB}/opt-out", json={"code": code})
+    ).status_code == 200
+    # opt-out = suppression-at-SEND, KHÔNG chặn /r/ click (vẫn 302 + ghi click)
+    res = await client.get(
+        f"/r/{code}", headers={"User-Agent": _UA_HUMAN}, follow_redirects=False
+    )
+    assert res.status_code == 302
+    async with AsyncSessionLocal() as s:
+        raw = (
+            await s.execute(
+                text(
+                    "SELECT raw_click_count FROM sms_campaign_recipient "
+                    "WHERE campaign_id=:c"
+                ),
+                {"c": cid},
+            )
+        ).scalar()
+    assert raw == 1

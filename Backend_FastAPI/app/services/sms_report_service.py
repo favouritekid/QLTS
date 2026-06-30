@@ -10,6 +10,7 @@ Xem SMS_MARKETING_MODULE_DESIGN.md §9 / §19.3.
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.sms_campaign_repository import SmsCampaignRepository
@@ -35,7 +36,10 @@ def _fmt_period(dt: datetime, granularity: str) -> str:
 
 
 def _ctr(distinct_human: int, handed_off: int) -> float:
-    return round(distinct_human / handed_off * 100, 2) if handed_off else 0.0
+    # clamp ≤100% (an toàn; distinct ⊆ handed sau khi cùng population).
+    if not handed_off:
+        return 0.0
+    return round(min(distinct_human, handed_off) / handed_off * 100, 2)
 
 
 class SmsReportService:
@@ -59,20 +63,18 @@ class SmsReportService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> sms_schemas.SmsClickReport:
-        filters = dict(
-            campaign_id=campaign_id,
-            carrier=carrier,
-            group_id=group_id,
+        scope = dict(campaign_id=campaign_id, carrier=carrier, group_id=group_id)
+        # buckets = chuỗi thời gian (windowed theo date_from/date_to); totals +
+        # CTR + handed = cấp campaign TOÀN THỜI → 3 con số reconcile, date CHỈ
+        # ảnh hưởng buckets (#R3-3/#R3-5: bỏ query distinct lần 2).
+        buckets = await self.repo.click_buckets(
+            granularity=granularity,
             date_from=date_from,
             date_to=date_to,
+            **scope,
         )
-        buckets = await self.repo.click_buckets(
-            granularity=granularity, **filters
-        )
-        total, human, distinct = await self.repo.click_totals(**filters)
-        handed = await self.repo.count_handed_off(
-            campaign_id=campaign_id, carrier=carrier, group_id=group_id
-        )
+        total, human, distinct = await self.repo.click_totals(**scope)
+        handed = await self.repo.count_handed_off(**scope)
         return sms_schemas.SmsClickReport(
             granularity=granularity,
             buckets=[
@@ -148,16 +150,26 @@ class SmsReportService:
             raise DuplicateResourceError(
                 detail="Số này đã nằm trong danh sách từ chối."
             )
-        row = await self.repo.create_opt_out(
-            {
-                "phone_normalized": normalized,
-                "source": data.source,
-                "source_reference": data.source_reference,
-                "reason": data.reason,
-                "revoked_by_id": getattr(user, "id", None),
-                "observed_at": datetime.now(timezone.utc),
-            }
-        )
+        try:
+            # SAVEPOINT: race 2 request // cùng số (admin double-submit hoặc đua
+            # public landing opt-out) vượt check trên → UNIQUE phone vi phạm →
+            # 409 sạch thay vì 500 + abort transaction ngoài (đối xứng
+            # public_opt_out).
+            async with self.db.begin_nested():
+                row = await self.repo.create_opt_out(
+                    {
+                        "phone_normalized": normalized,
+                        "source": data.source,
+                        "source_reference": data.source_reference,
+                        "reason": data.reason,
+                        "revoked_by_id": getattr(user, "id", None),
+                        "observed_at": datetime.now(timezone.utc),
+                    }
+                )
+        except IntegrityError:
+            raise DuplicateResourceError(
+                detail="Số này đã nằm trong danh sách từ chối."
+            )
         return sms_schemas.SmsOptOutOut.model_validate(row)
 
     async def list_opt_outs(

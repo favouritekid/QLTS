@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
+from app.core.client_ip import get_client_ip
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas import sms as sms_schemas
 from app.services.sms_landing_service import SmsLandingService
@@ -22,7 +23,7 @@ def _set_public_headers(response: Response) -> None:
 
 
 @router.get("/landing/{code}", response_model=sms_schemas.SmsLandingResponse)
-@limiter.limit(RateLimits.PUBLIC_READ)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def get_landing(
     request: Request,  # required by slowapi rate limiter
     response: Response,
@@ -37,7 +38,7 @@ async def get_landing(
 
 
 @router.post("/opt-out", response_model=sms_schemas.SmsPublicOptOutResponse)
-@limiter.limit(RateLimits.PUBLIC_READ)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def public_opt_out(
     request: Request,  # required by slowapi rate limiter
     response: Response,

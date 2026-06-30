@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.sms import (
     SmsCampaign,
     SmsCampaignRecipient,
@@ -66,7 +67,9 @@ class SmsTrackingRepository:
             SmsClickEvent(
                 recipient_id=recipient_id,
                 ip_hash=ip_hash,
-                user_agent=(user_agent or None),
+                # Cắt ≤512 khớp cột String(512) — UA dài (bot/client gửi >512)
+                # sẽ StringDataRightTruncation → /r/ 500 thay vì 302.
+                user_agent=(user_agent[:512] if user_agent else None),
                 is_suspected_bot=is_bot,
                 bot_reason=bot_reason,
             )
@@ -157,7 +160,9 @@ class SmsTrackingRepository:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ):
-        conds = []
+        # Tử số click chỉ tính trên recipient handed-off (cùng quần thể mẫu số
+        # CTR) → ctr ≤ 100%, không đếm click trước-handoff/revision cũ (#6).
+        conds = list(self._handed_off_population())
         if campaign_id is not None:
             conds.append(SmsCampaignRecipient.campaign_id == campaign_id)
         if carrier:
@@ -173,19 +178,36 @@ class SmsTrackingRepository:
             conds.append(SmsClickEvent.clicked_at <= date_to)
         return conds
 
+    def _handed_off_population(self):
+        """Quần thể CTR (mẫu số): recipient ĐÃ bàn giao + exportable + chưa
+        invalidated → dùng CHUNG cho tử (click) lẫn mẫu (handed_off) để CTR ≤
+        100% và không đếm trùng qua revision."""
+        return (
+            SmsCampaignRecipient.handed_off_at.is_not(None),
+            SmsCampaignRecipient.excluded_reason.is_(None),
+            SmsCampaignRecipient.invalidated_at.is_(None),
+        )
+
     async def click_buckets(
         self, *, granularity: str, **filters
     ) -> List[Tuple[datetime, int, int, int]]:
         """(period, total, human, distinct_human_recipients) theo bucket."""
         conds = self._click_filters(**filters)
-        bucket = func.date_trunc(granularity, SmsClickEvent.clicked_at)
+        # Bucket theo GIỜ VN (AT TIME ZONE settings.TIMEZONE) — không UTC: click
+        # 00:00–07:00 giờ VN không bị rớt sang ngày hôm trước (#R3-4).
+        bucket = func.date_trunc(
+            granularity,
+            func.timezone(settings.TIMEZONE, SmsClickEvent.clicked_at),
+        )
         human = case((SmsClickEvent.is_suspected_bot.is_(False), 1), else_=0)
+        # distinct theo PHONE (không recipient_id): 1 người ở nhiều campaign/
+        # revision không bị đếm nhiều lần ở report cross-campaign (#10).
         distinct_human = func.count(
             func.distinct(
                 case(
                     (
                         SmsClickEvent.is_suspected_bot.is_(False),
-                        SmsClickEvent.recipient_id,
+                        SmsCampaignRecipient.phone_normalized_snapshot,
                     ),
                     else_=None,
                 )
@@ -213,12 +235,14 @@ class SmsTrackingRepository:
         """(total_clicks, human_clicks, distinct_human_recipients) toàn dải."""
         conds = self._click_filters(**filters)
         human = case((SmsClickEvent.is_suspected_bot.is_(False), 1), else_=0)
+        # distinct theo PHONE (không recipient_id): 1 người ở nhiều campaign/
+        # revision không bị đếm nhiều lần ở report cross-campaign (#10).
         distinct_human = func.count(
             func.distinct(
                 case(
                     (
                         SmsClickEvent.is_suspected_bot.is_(False),
-                        SmsClickEvent.recipient_id,
+                        SmsCampaignRecipient.phone_normalized_snapshot,
                     ),
                     else_=None,
                 )
@@ -247,12 +271,10 @@ class SmsTrackingRepository:
         carrier: Optional[str] = None,
         group_id: Optional[int] = None,
     ) -> int:
-        """Mẫu số CTR: số recipient ĐÃ bàn giao (handed_off_at NOT NULL),
-        exportable (excluded_reason NULL), khớp filter campaign/carrier/group."""
-        conds = [
-            SmsCampaignRecipient.handed_off_at.is_not(None),
-            SmsCampaignRecipient.excluded_reason.is_(None),
-        ]
+        """Mẫu số CTR: số NGƯỜI (distinct phone) đã bàn giao + exportable +
+        chưa invalidated. distinct phone (không recipient-row) để KHỚP đơn vị
+        tử số (distinct phone clicked) → CTR cross-campaign không lệch (#R3-1)."""
+        conds = list(self._handed_off_population())
         if campaign_id is not None:
             conds.append(SmsCampaignRecipient.campaign_id == campaign_id)
         if carrier:
@@ -262,7 +284,11 @@ class SmsTrackingRepository:
                 SmsCampaignRecipient.group_ids_snapshot.contains([group_id])
             )
         res = await self.db.scalar(
-            select(func.count())
+            select(
+                func.count(
+                    func.distinct(SmsCampaignRecipient.phone_normalized_snapshot)
+                )
+            )
             .select_from(SmsCampaignRecipient)
             .where(*conds)
         )
@@ -278,8 +304,7 @@ class SmsTrackingRepository:
             select(SmsCampaignRecipient.carrier_bucket, func.count())
             .where(
                 SmsCampaignRecipient.campaign_id == campaign_id,
-                SmsCampaignRecipient.handed_off_at.is_not(None),
-                SmsCampaignRecipient.excluded_reason.is_(None),
+                *self._handed_off_population(),
             )
             .group_by(SmsCampaignRecipient.carrier_bucket)
         )
@@ -289,12 +314,14 @@ class SmsTrackingRepository:
         self, campaign_id: int, limit: int = 100
     ) -> List[SmsCampaignRecipient]:
         """Recipient đã click (non-bot) của campaign — sắp theo lượt click giảm
-        dần (denorm human_click_count > 0)."""
+        dần. Lọc cùng population handed-off (#R3-2) → khớp totals/CTR ở dashboard
+        (không liệt kê clicker của recipient chưa-handoff/đã-invalidated)."""
         res = await self.db.execute(
             select(SmsCampaignRecipient)
             .where(
                 SmsCampaignRecipient.campaign_id == campaign_id,
                 SmsCampaignRecipient.human_click_count > 0,
+                *self._handed_off_population(),
             )
             .order_by(
                 SmsCampaignRecipient.human_click_count.desc(),

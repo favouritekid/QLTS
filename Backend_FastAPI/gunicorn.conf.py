@@ -38,5 +38,15 @@ accesslog = "-"
 errorlog = "-"
 loglevel = os.getenv("LOG_LEVEL", "info").lower()
 
+
+def post_worker_init(worker):
+    """Redact raw SMS bearer code khỏi gunicorn.access (§11.3) — gắn SAU khi
+    gunicorn dựng access logger per-worker (access_log='-' vẫn log request line
+    `GET /r/<code>` mỗi hit thành công)."""
+    from app.core.log_redaction import install_sms_log_redaction
+
+    install_sms_log_redaction()
+
+
 # --- Keep-Alive ---
 keepalive = 5

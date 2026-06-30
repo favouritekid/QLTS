@@ -36,14 +36,17 @@ class SmsLandingService:
         self.db = db
         self.repo = SmsTrackingRepository(db)
 
-    async def _resolve(self, code: str):
+    async def _resolve(self, code: str, *, enforce_expiry: bool = True):
         if not is_valid_code(code):
             raise ResourceNotFoundError(detail=_GENERIC_404)
         found = await self.repo.lookup_by_token_hash(compute_token_hash(code))
         if found is None:
             raise ResourceNotFoundError(detail=_GENERIC_404)
         recipient, campaign = found
-        if campaign.link_expires_at and _aware(
+        # Opt-out KHÔNG gate hết hạn (enforce_expiry=False): nghĩa vụ cho phép
+        # từ chối nhận tin phải LUÔN thực hiện được kể cả khi link đã hết hạn
+        # (NĐ91). Landing GET vẫn gate (hiện trang hết-hạn thân thiện).
+        if enforce_expiry and campaign.link_expires_at and _aware(
             campaign.link_expires_at
         ) <= datetime.now(timezone.utc):
             raise ResourceNotFoundError(detail=_GENERIC_404)
@@ -75,7 +78,7 @@ class SmsLandingService:
     async def public_opt_out(
         self, code: str
     ) -> sms_schemas.SmsPublicOptOutResponse:
-        recipient, campaign = await self._resolve(code)
+        recipient, campaign = await self._resolve(code, enforce_expiry=False)
         phone = recipient.phone_normalized_snapshot
         if await self.repo.get_opt_out(phone) is not None:
             return sms_schemas.SmsPublicOptOutResponse(
