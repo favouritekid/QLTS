@@ -177,6 +177,39 @@ server {
         root /var/www/certbot;
     }
 
+    # --- SMS short-link resolver (PR-5: về backend, KHÔNG về frontend) ---
+    # access_log off vì $request chứa raw bearer code; +security headers. Prefix
+    # dài hơn nên thắng /api/ và catch-all (nginx longest-prefix match).
+    location /r/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://backend;
+        proxy_read_timeout 30s;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
+    # --- SMS landing API (code trong path) → backend ---
+    location /api/public/sms/landing/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://backend;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
+    # --- SMS landing page (code trong path) → frontend ---
+    location /lp/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://frontend;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
     # --- Catch-all: Next.js pages ---
     location / {
         limit_req zone=general burst=30 nodelay;

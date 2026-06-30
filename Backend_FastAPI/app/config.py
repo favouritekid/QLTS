@@ -281,6 +281,18 @@ class Settings(BaseSettings):
         default=14, ge=1, le=365,
         validation_alias="SMS_EXPORT_RETENTION_DAYS",
     )  # re-download tới expires_at; cleanup job xoá file + set purged_at
+    # -- Landing page công khai /lp/{code} (PR-5) --
+    SMS_LANDING_SCHOOL_NAME: str = Field(
+        default="Nhà trường",
+        validation_alias="SMS_LANDING_SCHOOL_NAME",
+    )  # tên trường hiển thị header landing (nhận diện, chống nghi lừa đảo)
+    SMS_LANDING_CONSENT_NOTICE: str = Field(
+        default=(
+            "Bạn nhận tin này vì đã đăng ký/quan tâm tuyển sinh. "
+            "Không muốn nhận nữa? Bấm \"Hủy nhận tin\"."
+        ),
+        validation_alias="SMS_LANDING_CONSENT_NOTICE",
+    )  # câu thông báo cơ sở xử lý dữ liệu trên landing (§19.2)
 
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.
