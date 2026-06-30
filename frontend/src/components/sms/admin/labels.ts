@@ -9,10 +9,12 @@
 import { format, parseISO } from "date-fns"
 import { vi } from "date-fns/locale"
 
-import type {
-  SmsCarrierBucket,
-  SmsGranularity,
-  SmsManualOptOutSource,
+import {
+  SMS_CARRIER_BUCKETS,
+  SMS_MANUAL_OPT_OUT_SOURCES,
+  type SmsCarrierBucket,
+  type SmsGranularity,
+  type SmsManualOptOutSource,
 } from "@/lib/zod/sms"
 
 export const CARRIER_LABELS: Record<string, string> = {
@@ -44,16 +46,17 @@ export function optOutSourceLabel(value: string): string {
   return OPT_OUT_SOURCE_LABELS[value] ?? value
 }
 
-/** Nguồn cho FORM thêm thủ công (khớp SmsManualOptOutSource ở BE). */
+/**
+ * Nguồn cho FORM thêm thủ công (khớp SmsManualOptOutSource ở BE). Derive từ
+ * enum + label map để nhãn không lệch giữa form và danh sách.
+ */
 export const MANUAL_OPT_OUT_SOURCE_OPTIONS: {
   value: SmsManualOptOutSource
   label: string
-}[] = [
-  { value: "manual", label: "Thủ công" },
-  { value: "sms_reply", label: "Trả lời SMS" },
-  { value: "phone_call", label: "Điện thoại" },
-  { value: "external_suppression", label: "Chặn ngoài hệ thống" },
-]
+}[] = SMS_MANUAL_OPT_OUT_SOURCES.map((value) => ({
+  value,
+  label: OPT_OUT_SOURCE_LABELS[value],
+}))
 
 export const CAMPAIGN_STATUS_LABELS: Record<string, string> = {
   draft: "Nháp",
@@ -73,15 +76,14 @@ export const GRANULARITY_OPTIONS: { value: SmsGranularity; label: string }[] = [
   { value: "year", label: "Theo năm" },
 ]
 
-export const CARRIER_FILTER_OPTIONS: { value: SmsCarrierBucket; label: string }[] =
-  [
-    { value: "viettel", label: "Viettel" },
-    { value: "vinaphone", label: "VinaPhone" },
-    { value: "mobifone", label: "MobiFone" },
-    { value: "vietnamobile", label: "Vietnamobile" },
-    { value: "gmobile", label: "Gmobile" },
-    { value: "unknown", label: "Không xác định" },
-  ]
+/** Tùy chọn filter nhà mạng — derive từ enum + CARRIER_LABELS (DRY). */
+export const CARRIER_FILTER_OPTIONS: {
+  value: SmsCarrierBucket
+  label: string
+}[] = SMS_CARRIER_BUCKETS.map((value) => ({
+  value,
+  label: CARRIER_LABELS[value],
+}))
 
 /** Định dạng số nguyên kiểu Việt (1.234.567). */
 export function formatInt(n: number): string {

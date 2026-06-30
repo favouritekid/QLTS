@@ -38,6 +38,7 @@ import {
   formatInt,
   formatPercent,
 } from "./labels"
+import { SmsSummaryCard } from "./SmsSummaryCard"
 
 const ALL = "all"
 
@@ -51,17 +52,6 @@ function toIsoEnd(d: string): string | undefined {
   if (!d) return undefined
   const parsed = new Date(`${d}T23:59:59.999`)
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString()
-}
-
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-muted-foreground text-xs">{label}</p>
-        <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
-      </CardContent>
-    </Card>
-  )
 }
 
 /**
@@ -91,6 +81,9 @@ export function SmsClickReportPanel() {
 
   const { data, isLoading, isError, refetch, isFetching } =
     useSmsClickReport(params)
+
+  // So sánh chuỗi YYYY-MM-DD đủ để phát hiện khoảng đảo ngược (cùng định dạng).
+  const invalidRange = dateFrom !== "" && dateTo !== "" && dateFrom > dateTo
 
   const resetFilters = () => {
     setCampaignId(ALL)
@@ -193,6 +186,13 @@ export function SmsClickReportPanel() {
               </Button>
             </div>
           </div>
+
+          {invalidRange && (
+            <p className="text-destructive mt-3 text-xs">
+              Mốc bắt đầu đang muộn hơn mốc kết thúc — vui lòng chọn lại khoảng
+              ngày hợp lệ.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -220,78 +220,84 @@ export function SmsClickReportPanel() {
         </div>
       ) : data ? (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-          <SummaryCard
+          <SmsSummaryCard
             label="Tổng lượt click"
             value={formatInt(data.total_clicks)}
           />
-          <SummaryCard
+          <SmsSummaryCard
             label="Click thật (đã lọc bot)"
             value={formatInt(data.human_clicks)}
           />
-          <SummaryCard
+          <SmsSummaryCard
             label="Số người click"
             value={formatInt(data.distinct_contacts_clicked)}
           />
-          <SummaryCard
+          <SmsSummaryCard
             label="Đã bàn giao gửi"
             value={formatInt(data.recipients_handed_off)}
           />
-          <SummaryCard label="CTR" value={formatPercent(data.ctr_percent)} />
+          <SmsSummaryCard label="CTR" value={formatPercent(data.ctr_percent)} />
         </div>
       ) : null}
 
-      {/* Bảng theo mốc thời gian */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Diễn tiến theo mốc thời gian
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : !data || data.buckets.length === 0 ? (
-            <p className="text-muted-foreground py-8 text-center text-sm">
-              {isFetching
-                ? "Đang tải…"
-                : "Chưa có lượt click nào trong phạm vi đã chọn."}
-            </p>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Mốc</TableHead>
-                    <TableHead className="text-right">Tổng click</TableHead>
-                    <TableHead className="text-right">Click thật</TableHead>
-                    <TableHead className="text-right">Số người click</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.buckets.map((b) => (
-                    <TableRow key={b.period}>
-                      <TableCell className="font-medium">{b.period}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatInt(b.total_clicks)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatInt(b.human_clicks)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatInt(b.distinct_contacts_clicked)}
-                      </TableCell>
+      {/* Bảng theo mốc thời gian — ẩn khi lỗi (đã có thẻ lỗi riêng ở trên) */}
+      {!isError && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">
+              Diễn tiến theo mốc thời gian
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-10 w-full" />
+                ))}
+              </div>
+            ) : !data || data.buckets.length === 0 ? (
+              <p className="text-muted-foreground py-8 text-center text-sm">
+                {isFetching
+                  ? "Đang tải…"
+                  : "Chưa có lượt click nào trong phạm vi đã chọn."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Mốc</TableHead>
+                      <TableHead className="text-right">Tổng click</TableHead>
+                      <TableHead className="text-right">Click thật</TableHead>
+                      <TableHead className="text-right">
+                        Số người click
+                      </TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {data.buckets.map((b) => (
+                      <TableRow key={b.period}>
+                        <TableCell className="font-medium">
+                          {b.period}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatInt(b.total_clicks)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatInt(b.human_clicks)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatInt(b.distinct_contacts_clicked)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }

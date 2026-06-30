@@ -161,6 +161,7 @@ export function SmsManualOptOutDialog({ open, onOpenChange }: Props) {
                   <FormControl>
                     <Input
                       placeholder="VD: mã ticket, ID cuộc gọi…"
+                      maxLength={512}
                       disabled={mutation.isPending}
                       {...field}
                       value={field.value ?? ""}
@@ -180,6 +181,7 @@ export function SmsManualOptOutDialog({ open, onOpenChange }: Props) {
                   <FormControl>
                     <Textarea
                       rows={3}
+                      maxLength={2000}
                       placeholder="Ghi chú lý do từ chối (không bắt buộc)."
                       disabled={mutation.isPending}
                       {...field}

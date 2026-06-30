@@ -25,6 +25,7 @@ import {
   type SmsClickReportParams,
   type SmsOptOutListParams,
 } from "@/lib/api/sms"
+import { parseApiError } from "@/lib/utils/api-errors"
 import type { ApiErrorResponse } from "@/types/api.types"
 
 // ---------------------------------------------------------------------
@@ -40,20 +41,6 @@ export const smsAdminKeys = {
     [...smsAdminKeys.all, "campaigns", params] as const,
   optOuts: (params: SmsOptOutListParams) =>
     [...smsAdminKeys.all, "opt-outs", params] as const,
-}
-
-/** Trích thông điệp lỗi từ response BE (detail string | mảng | message). */
-function extractErrorMessage(
-  err: AxiosError<ApiErrorResponse>,
-  fallback: string,
-): string {
-  const detail = err.response?.data?.detail
-  if (typeof detail === "string") return detail
-  if (Array.isArray(detail) && detail.length > 0 && detail[0]?.msg) {
-    return detail[0].msg
-  }
-  if (err.response?.data?.message) return err.response.data.message
-  return fallback
 }
 
 // ---------------------------------------------------------------------
@@ -112,7 +99,7 @@ export function useCreateManualOptOut() {
     },
     onError: (err) => {
       toast.error(
-        extractErrorMessage(err, "Không thể ghi nhận số từ chối nhận tin."),
+        parseApiError(err, "Không thể ghi nhận số từ chối nhận tin."),
       )
     },
   })

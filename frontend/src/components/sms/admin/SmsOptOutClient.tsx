@@ -163,11 +163,25 @@ export function SmsOptOutClient() {
               ))}
             </div>
           ) : items.length === 0 ? (
-            <p className="text-muted-foreground py-10 text-center text-sm">
-              {search || source !== ALL
-                ? "Không có số nào khớp bộ lọc."
-                : "Chưa có số từ chối nhận tin nào."}
-            </p>
+            <div className="space-y-3 py-10 text-center">
+              <p className="text-muted-foreground text-sm">
+                {page > 0
+                  ? "Trang này không còn dữ liệu."
+                  : search || source !== ALL
+                    ? "Không có số nào khớp bộ lọc."
+                    : "Chưa có số từ chối nhận tin nào."}
+              </p>
+              {/* page>0 mà rỗng (tổng co lại) → lối thoát về trang đầu */}
+              {page > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(0)}
+                >
+                  Về trang đầu
+                </Button>
+              )}
+            </div>
           ) : (
             <>
               <div className="overflow-x-auto">

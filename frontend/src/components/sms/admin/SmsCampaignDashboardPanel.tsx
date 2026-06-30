@@ -36,17 +36,7 @@ import {
   formatInt,
   formatPercent,
 } from "./labels"
-
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <Card>
-      <CardContent className="pt-6">
-        <p className="text-muted-foreground text-xs">{label}</p>
-        <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
-      </CardContent>
-    </Card>
-  )
-}
+import { SmsSummaryCard } from "./SmsSummaryCard"
 
 /**
  * Dashboard 1 chiến dịch: chọn campaign → CTR + phân bố nhà mạng + danh sách
@@ -169,23 +159,23 @@ export function SmsCampaignDashboardPanel() {
           )}
 
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-            <SummaryCard
+            <SmsSummaryCard
               label="Đã bàn giao gửi"
               value={formatInt(data.recipients_handed_off)}
             />
-            <SummaryCard
+            <SmsSummaryCard
               label="Tổng lượt click"
               value={formatInt(data.total_clicks)}
             />
-            <SummaryCard
+            <SmsSummaryCard
               label="Click thật (đã lọc bot)"
               value={formatInt(data.human_clicks)}
             />
-            <SummaryCard
+            <SmsSummaryCard
               label="Số người click"
               value={formatInt(data.distinct_contacts_clicked)}
             />
-            <SummaryCard label="CTR" value={formatPercent(data.ctr_percent)} />
+            <SmsSummaryCard label="CTR" value={formatPercent(data.ctr_percent)} />
           </div>
 
           {/* Phân bố nhà mạng */}

@@ -156,17 +156,17 @@ export const smsManualOptOutSchema = z.object({
     .min(8, "Số điện thoại tối thiểu 8 ký tự")
     .max(32, "Số điện thoại tối đa 32 ký tự"),
   source: z.enum(SMS_MANUAL_OPT_OUT_SOURCES),
+  // "" hợp lệ (length 0 ≤ max) nên `.optional()` đủ — không cần `.or("")`;
+  // giữ message max cụ thể khi vượt giới hạn.
   source_reference: z
     .string()
     .trim()
     .max(512, "Tham chiếu nguồn tối đa 512 ký tự")
-    .optional()
-    .or(z.literal("")),
+    .optional(),
   reason: z
     .string()
     .trim()
     .max(2000, "Lý do tối đa 2000 ký tự")
-    .optional()
-    .or(z.literal("")),
+    .optional(),
 })
 export type SmsManualOptOutInput = z.infer<typeof smsManualOptOutSchema>
