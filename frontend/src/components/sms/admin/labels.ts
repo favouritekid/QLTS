@@ -11,10 +11,16 @@ import { vi } from "date-fns/locale"
 
 import {
   SMS_CARRIER_BUCKETS,
+  SMS_CONSENT_BASES,
+  SMS_GROUP_TYPES,
   SMS_MANUAL_OPT_OUT_SOURCES,
+  SMS_REVOKE_SOURCES,
   type SmsCarrierBucket,
+  type SmsConsentBasis,
   type SmsGranularity,
+  type SmsGroupType,
   type SmsManualOptOutSource,
+  type SmsRevokeSource,
 } from "@/lib/zod/sms"
 
 export const CARRIER_LABELS: Record<string, string> = {
@@ -107,4 +113,67 @@ export function formatDateTimeVN(iso: string | null | undefined): string {
   } catch {
     return iso
   }
+}
+
+// =====================================================================
+// Contact / Group / Consent (PR-6b)
+// =====================================================================
+export const GROUP_TYPE_LABELS: Record<string, string> = {
+  parent: "Phụ huynh",
+  student: "Học sinh",
+  teacher: "Giáo viên",
+  lead: "Lead",
+  custom: "Tùy chỉnh",
+}
+export function groupTypeLabel(v: string): string {
+  return GROUP_TYPE_LABELS[v] ?? v
+}
+export const GROUP_TYPE_OPTIONS: { value: SmsGroupType; label: string }[] =
+  SMS_GROUP_TYPES.map((value) => ({ value, label: GROUP_TYPE_LABELS[value] }))
+
+export const CONSENT_STATUS_LABELS: Record<string, string> = {
+  unknown: "Chưa rõ",
+  granted: "Đã đồng ý",
+  revoked: "Đã từ chối",
+}
+export function consentStatusLabel(v: string): string {
+  return CONSENT_STATUS_LABELS[v] ?? v
+}
+/** Badge variant cho trạng thái consent (shadcn Badge). */
+export function consentStatusVariant(
+  v: string,
+): "default" | "secondary" | "destructive" | "outline" {
+  if (v === "granted") return "default"
+  if (v === "revoked") return "destructive"
+  return "secondary"
+}
+
+export const CONSENT_BASIS_LABELS: Record<string, string> = {
+  explicit_form: "Form điền rõ ràng",
+  signed_form: "Phiếu có chữ ký",
+  recorded_call: "Cuộc gọi ghi âm",
+  imported_proof: "Bằng chứng nhập sẵn",
+}
+export function consentBasisLabel(v: string): string {
+  return CONSENT_BASIS_LABELS[v] ?? v
+}
+export const CONSENT_BASIS_OPTIONS: { value: SmsConsentBasis; label: string }[] =
+  SMS_CONSENT_BASES.map((value) => ({
+    value,
+    label: CONSENT_BASIS_LABELS[value],
+  }))
+
+/** Nguồn REVOKE — tái dùng nhãn opt-out source (cùng tập + landing_optout). */
+export const REVOKE_SOURCE_OPTIONS: { value: SmsRevokeSource; label: string }[] =
+  SMS_REVOKE_SOURCES.map((value) => ({
+    value,
+    label: optOutSourceLabel(value),
+  }))
+
+export const CONSENT_EVENT_TYPE_LABELS: Record<string, string> = {
+  granted: "Đồng ý",
+  revoked: "Từ chối",
+}
+export function consentEventTypeLabel(v: string): string {
+  return CONSENT_EVENT_TYPE_LABELS[v] ?? v
 }
