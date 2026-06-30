@@ -74,6 +74,8 @@ virtualenv/
 # Uploaded files
 **/static/uploads/**
 **/uploads/**
+# SMS export files (PII — private, ngoài webroot; PR-4)
+**/private_exports/**
 
 # Celery
 celerybeat-schedule

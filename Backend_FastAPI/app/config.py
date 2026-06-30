@@ -271,6 +271,16 @@ class Settings(BaseSettings):
         default=SMS_OPTOUT_INSTRUCTION_DEFAULT,
         validation_alias="SMS_OPTOUT_INSTRUCTION",
     )  # hướng dẫn từ chối SMS/điện thoại — org BẮT BUỘC đặt nội dung thật
+    # -- Export file Excel per nhà mạng (PR-4) --
+    SMS_EXPORT_STORAGE_DIR: str = Field(
+        default="/app/private_exports/sms",
+        validation_alias="SMS_EXPORT_STORAGE_DIR",
+    )  # NGOÀI webroot (§11.7) — file chứa phone + raw short code; chỉ tải qua
+    # endpoint admin có auth, KHÔNG khai báo nginx location public
+    SMS_EXPORT_RETENTION_DAYS: int = Field(
+        default=14, ge=1, le=365,
+        validation_alias="SMS_EXPORT_RETENTION_DAYS",
+    )  # re-download tới expires_at; cleanup job xoá file + set purged_at
 
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.

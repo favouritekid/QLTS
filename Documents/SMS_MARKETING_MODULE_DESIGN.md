@@ -660,7 +660,9 @@ Mỗi PR: type-check + test local trước push (`test-before-push`); FE PR Chro
 
 ## 14. Trạng thái quyết định thiết kế
 
-> **Verdict: GO (user/chủ dự án authorize 2026-06-11)** — override BLOCK hard-review trước; user xác nhận đủ evidence L1–L4 + lịch sử vận hành không vấn đề PL. PR-1 schema đã code + qua 3 vòng Codex review (R1–R3) trên `sms/pr1-schema` (CHƯA push). Reference L1–L4 trỏ vào `proof_reference`/`source_reference`/attestation khi build campaign thật.
+> **Verdict: GO (user/chủ dự án authorize 2026-06-11)** — override BLOCK hard-review trước; user xác nhận đủ evidence L1–L4 + lịch sử vận hành không vấn đề PL. Reference L1–L4 trỏ vào `proof_reference`/`source_reference`/attestation khi build campaign thật.
+>
+> **Trạng thái build (audit code-verified 2026-06-29):** BE core XONG, đã merge `main` — **PR-1 Schema #401** (12 model + 2 migration, DB dev có 12 bảng `sms_*` + 34 carrier rule seed), **PR-2 Contact #403** (CRUD groups/contacts + import + consent ledger), **PR-3 Build #406** (+int32 #405; snapshot revision + token HMAC/Fernet + preflight + attestations). 78 test SMS. **CHƯA bắt đầu: PR-4 Export · PR-5 Tracking/Landing/Reports · PR-6 Frontend (0 file) · PR-7 Segment+Conversion** — router stub rỗng cho PR-4/5. Module **chưa chạy end-to-end** (thiếu export-handoff + toàn bộ FE). Lộ trình PR §13; trạng thái phối hợp chi tiết: `Documents/SMS_BUILD_COORDINATION.md` §9.
 
 ### Launch gate bắt buộc
 - **L1 — Consent source contract**: mẫu disclosure, loại proof chấp nhận, retention và chủ sở hữu nghiệp vụ; không chấp nhận `implied_lead`.

@@ -3,7 +3,7 @@
 > **Nguồn sự thật chung cho 2 AI agent (Claude Code + Codex CLI) cùng build trên 1 repo local D:\QLTS.**
 > Cả 2 agent **đọc file này TRƯỚC mỗi phiên** và **cập nhật §9 status sau mỗi PR**.
 > Plan thiết kế gốc: **`Documents/SMS_MARKETING_MODULE_DESIGN.md`** (§1–§19). File này KHÔNG lặp lại thiết kế — nó trả lời: *agent nào làm gì, ở đâu, theo thứ tự nào, tránh giẫm chân ra sao, và luật repo bắt buộc.*
-> Cập nhật: 2026-06-11. Trạng thái: **GO (user authorize) — PR-1 schema CODE XONG + qua nhiều vòng Codex review (R1–R5), commit branch `sms/pr1-schema` (clean sau rebase) CHƯA push.** Workflow: **Claude code TOÀN BỘ, Codex review TOÀN BỘ** (đổi từ chia owner cũ).
+> Cập nhật: 2026-06-29 (audit code-verified). Trạng thái: **PR-1/2/3 ĐÃ MERGE main (#401/#403/#406) — BE core xong (schema + contact + campaign build). PR-4/5/6/7 CHƯA bắt đầu.** Module **chưa chạy end-to-end** (thiếu export-handoff + toàn bộ FE). Workflow: **Claude code TOÀN BỘ, Codex review TOÀN BỘ** (đổi từ chia owner cũ).
 > Contract v4 trong `SMS_MARKETING_MODULE_DESIGN.md` supersede mọi chi tiết v3 còn sót: 12 model core, token HMAC+Fernet base62×9, consent ledger, revisioned attestations, `handed_off` thay `sent`, landing opt-out chỉ là kênh bổ sung.
 
 ---
@@ -191,15 +191,15 @@ SMS marketing là export quảng cáo, không dùng `dispatch()`/`SystemEvents`/
 
 **Trạng thái PR** (🔲 chưa bắt đầu · 🔨 đang code · 👀 chờ review · ✅ chờ user push · 🟢 merged):
 
-| PR | Owner | Status | Branch | Ghi chú |
+| PR | Owner | Status | Branch | Ghi chú (audit code-verified 2026-06-29) |
 |---|---|---|---|---|
-| PR-1 Schema | Claude | ✅ review R1–R5 xong, chờ user push | `sms/pr1-schema` | branch clean sau rebase (hash xem `git log`); 8/8 pytest + alembic check + flake8 sạch |
-| PR-2 Contact | Codex | 🔲 | `sms/pr2-contact` | chờ PR-1 merge |
-| PR-3 Build | Claude | 🔲 | `sms/pr3-build` | chờ PR-2 merge |
-| PR-4 Export | Codex | 🔲 | `sms/pr4-export` | chờ PR-3 merge |
-| PR-5 Tracking/Landing | Codex | 🔲 | `sms/pr5-tracking` | public-surface // PR-2/3 sau PR-1 |
-| PR-6 FE | Claude | 🔲 | `sms/pr6-fe` | scaffolding theo §5 sớm |
-| PR-7 Segment+Conv | Claude | 🔲 | `sms/pr7-segment` | sau PR-5 |
+| PR-1 Schema | Claude | 🟢 merged | `#401` | 12 model + `__all__`; 2 migration create+seed; **DB dev: 12 bảng `sms_*` + 34 carrier rule seed**; schema đủ class |
+| PR-2 Contact | Claude | 🟢 merged | `#403` | `sms_contacts.py` 13 endpoint (6 group + 7 contact: CRUD + upload + consent-events ledger + membership); 23 test |
+| PR-3 Build | Claude | 🟢 merged | `#406` (+#405 int32) | `sms_campaigns.py` 9 endpoint (CRUD + groups + build + preflight + attestations); render+token HMAC/Fernet; 47+8 test; 0 stub ẩn |
+| PR-4 Export | Claude | ✅ code+test xong (local, chờ review/push) | `sms/pr4-export` | 4 endpoint (export/exports/download/mark-handed-off) + `sms_export_service`/`sms_export_repository`/`utils/sms_export` + cleanup Celery task + beat + config 2 setting + docker volume `sms_private_exports`. Gate fail-closed (3 attestation đúng rev + over_limit + drift consent/suppression); file Excel mẫu nhà mạng (decrypt Fernet→URL thật); atomic write+sha256; idempotent per carrier. **8 test PR-4 + 90 regression PASS, flake8 sạch. KHÔNG migration** (bảng PR-1) |
+| PR-5 Tracking/Landing | Claude | 🔲 chưa bắt đầu | `sms/pr5-tracking` | **STUB rỗng** shortlink/public/reports. Thiếu 7 endpoint (/r, landing, public opt-out, dashboard, reports/clicks, opt-out manual/list) + 4 service + nginx `location /r/` |
+| PR-6 FE | Claude | 🔲 chưa bắt đầu | `sms/pr6-fe` | **0 file** `frontend/src/**/sms`. Toàn bộ UI chưa khởi động |
+| PR-7 Segment+Conv | Claude | 🔲 chưa bắt đầu | `sms/pr7-segment` | Phase 1.5/2 — sau PR-5 |
 
 **Mục "cần phối hợp"** (ghi vào đây khi cần đụng shared file / đổi contract / phát hiện schema thiếu):
 - L1 consent source/proof/disclosure owner.
@@ -214,6 +214,8 @@ SMS marketing là export quảng cáo, không dùng `dispatch()`/`SystemEvents`/
 - 2026-06-11 — PR-1 schema code xong (12 model + migration + regression test) + Codex review **R1** (consent CASCADE→SET NULL, seed bỏ MVNO 055/087), **R2** (5 CHECK/FK invariant: granted-proof, token-triplet, import group SET NULL, count invariant, comment parity), **R3** (empty-string `coalesce`/`btrim`, ledger `revoke_source`, click_event bỏ denorm campaign/contact, regression test 7/7, fix 3 lỗ three-valued-logic). Branch `sms/pr1-schema`, CHƯA push.
 - 2026-06-11 — ✅ Commit lạ `81c3d5b0 fix(officer)` ĐÃ được rebase bỏ khỏi branch (clean SMS-only); hash R3+ đổi mới.
 - 2026-06-11 — Codex review R4 (token hash-len→hex regex, `_raises` rigor 23xxx, revoke no-grant-data) + R5 (range CHECK revision/counter/export non-âm + human≤raw, hex regex `^[0-9a-f]{64}$`, mask phone trong `__repr__`). 8/8 pytest.
+- 2026-06-29 — **Audit code-verified tiến độ** (đối chiếu git log + file thật + DB dev). PR-1 merged #401, PR-2 merged #403, PR-3 merged #406 (+int32 #405) → BE core (schema/contact/build) XONG. PR-4/5/6/7 chưa bắt đầu (router stub rỗng + 0 file FE). 22/32 endpoint §10 đã code; 78 test SMS (8+47+23). DB dev: 12 bảng `sms_*` + 34 carrier rule. §9 trước đó stale (ghi PR-2..7=🔲) → cập nhật. Lưu ý: design doc §14 cũng còn stale ("PR-1 chưa push" — trạng thái 06-11).
+- 2026-06-30 — **PR-4 Export code+test xong (local, chưa push)** nhánh `sms/pr4-export` off main `b9cf233c`. Endpoint: `POST/GET .../export`, `GET .../exports/{id}/download`, `POST .../mark-handed-off`. Gate fail-closed §8.4 (3 attestation khớp build_revision + reference; chặn over_limit; re-check drift consent/suppression). File Excel mẫu nhà mạng (Sheet1, row1 trống, A=84xxx text, B=[QC]+tin+link THẬT giải mã từ Fernet ciphertext). Sinh file ở post-commit (AsyncSessionLocal mới, atomic staging→os.replace+fsync, sha256). Idempotent per (campaign,revision,carrier). mark-handed-off neo recipient.handed_off_at + contact.last_handed_off_at (freq-cap) + campaign→handed_off/closed + chặn rebuild. Cleanup Celery `cleanup_sms_export_files_task` (beat 03:45) + config `SMS_EXPORT_STORAGE_DIR`/`SMS_EXPORT_RETENTION_DAYS` + docker volume `sms_private_exports` + `.gitignore`. **KHÔNG migration** (bảng `sms_campaign_export_batch` tạo ở PR-1). Verify: 8 test PR-4 + 90 regression (schema/contacts/build) PASS, flake8 sạch, Celery task+beat đăng ký OK, import app.main OK.
 
 ---
 
