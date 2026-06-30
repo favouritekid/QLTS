@@ -96,8 +96,9 @@ export function formatPercent(n: number): string {
 }
 
 /**
- * Định dạng ISO datetime → "dd/MM/yyyy HH:mm" (giờ trình duyệt). An toàn:
- * giá trị null/parse lỗi → "—" (không crash render).
+ * Định dạng ISO datetime → "dd/MM/yyyy HH:mm" (giờ trình duyệt). An toàn,
+ * không crash render: giá trị rỗng (null/undefined/"") → "—"; chuỗi không
+ * parse được → trả lại chính chuỗi gốc (hiển thị raw).
  */
 export function formatDateTimeVN(iso: string | null | undefined): string {
   if (!iso) return "—"
