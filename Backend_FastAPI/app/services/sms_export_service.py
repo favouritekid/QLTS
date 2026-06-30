@@ -199,7 +199,9 @@ class SmsExportService:
         now = datetime.now(timezone.utc)
         to_generate: List[int] = []
 
-        for carrier_bucket, count in carriers.items():
+        # sorted(): khoá batch theo carrier ĐỊNH TÍNH → tránh deadlock thứ tự
+        # khoá ngẫu nhiên (dict order) với job khác khoá theo id.
+        for carrier_bucket, count in sorted(carriers.items()):
             file_name = sanitize_export_filename(
                 group_label, campaign.name, _carrier_label(carrier_bucket)
             )
@@ -225,6 +227,11 @@ class SmsExportService:
                 )
                 to_generate.append(batch.id)
                 continue
+            # Stat file ngoài event loop (to_thread) — không chặn loop khi đang
+            # giữ lock campaign; chỉ chạy cho batch đã có storage_path.
+            file_present = bool(
+                batch.storage_path
+            ) and await asyncio.to_thread(os.path.isfile, batch.storage_path)
             # Regenerate khi chưa-có-file (pending/failed/purged/invalidated)
             # HOẶC 'generated' nhưng đã hết hạn / file biến mất trên đĩa (#9 —
             # tránh admin re-export mà vẫn không có file dùng được).
@@ -235,10 +242,7 @@ class SmsExportService:
                         batch.expires_at is not None
                         and _aware(batch.expires_at) <= now
                     )
-                    or not (
-                        batch.storage_path
-                        and os.path.isfile(batch.storage_path)
-                    )
+                    or not file_present
                 )
             )
             if needs_regen:

@@ -48,11 +48,15 @@ class SmsExportRepository:
     # Recipient EXPORTABLE (revision hiện tại, chưa invalidated, không bị loại)
     # ---------------------------------------------------------------
     def _exportable_filter(self, campaign_id: int, revision: int):
+        # handed_off_at IS NULL: chỉ recipient CHƯA bàn giao → drift gate +
+        # sinh file chỉ xét/ghi người chưa gửi. Tránh wedge: drift trên nhà
+        # mạng ĐÃ bàn giao không chặn re-export nhà mạng khác đang failed.
         return (
             SmsCampaignRecipient.campaign_id == campaign_id,
             SmsCampaignRecipient.build_revision == revision,
             SmsCampaignRecipient.invalidated_at.is_(None),
             SmsCampaignRecipient.excluded_reason.is_(None),
+            SmsCampaignRecipient.handed_off_at.is_(None),
         )
 
     async def get_exportable_recipients(
@@ -237,6 +241,10 @@ class SmsExportRepository:
             )
             .order_by(SmsCampaignExportBatch.id)
             .limit(limit)
+            # FOR UPDATE SKIP LOCKED: giữ khoá khi cleanup ghi purged → không
+            # lost-update với prepare_export đang re-export reset CÙNG batch;
+            # batch đang bị re-export (đã khoá) thì cleanup BỎ QUA (skip).
+            .with_for_update(skip_locked=True)
         )
         return list(res.scalars().all())
 

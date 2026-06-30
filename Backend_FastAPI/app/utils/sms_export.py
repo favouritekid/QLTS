@@ -43,7 +43,10 @@ def _slug_label(text: str) -> str:
     s = s.encode("ascii", "ignore").decode("ascii")
     s = _BAD_FILENAME_CHARS.sub("-", s)
     s = re.sub(r"\s+", "-", s.strip())
-    s = re.sub(r"-{2,}", "-", s).strip("-")
+    # strip cả '.' đầu/cuối: filename KHÔNG bao giờ mở đầu bằng '.' → tránh
+    # đụng tiền tố STAGING_PREFIX ('.staging.') khiến orphan-sweep xoá nhầm
+    # file final; cũng tránh tạo file ẩn.
+    s = re.sub(r"-{2,}", "-", s).strip(".-")
     return s
 
 
@@ -145,6 +148,16 @@ def write_export_atomic(
             except OSError:
                 pass
         raise
+    # Best-effort fsync thư mục cha → bền vững entry rename qua crash/mất điện
+    # (Linux/prod; Windows không fsync directory được → bỏ qua sạch).
+    try:
+        dir_fd = os.open(os.path.dirname(final_path), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except (OSError, AttributeError):
+        pass
     return sha, len(content)
 
 
