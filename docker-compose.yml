@@ -94,6 +94,7 @@ services:
     volumes:
       - backend_uploads:/app/uploads
       - backend_static_uploads:/app/app/static/uploads
+      - sms_private_exports:/app/private_exports
       - geoip_data:/app/geoip
       - backend_logs:/app/logs
     depends_on:
@@ -140,6 +141,7 @@ services:
     volumes:
       - backend_static_uploads:/app/app/static/uploads
       - backend_uploads:/app/uploads
+      - sms_private_exports:/app/private_exports
       - backend_logs:/app/logs
     depends_on:
       backend:
@@ -179,6 +181,7 @@ services:
     volumes:
       - backend_static_uploads:/app/app/static/uploads
       - backend_uploads:/app/uploads
+      - sms_private_exports:/app/private_exports
       - backend_logs:/app/logs
     depends_on:
       backend:
@@ -277,6 +280,7 @@ volumes:
   redis_data:
   backend_uploads:
   backend_static_uploads:
+  sms_private_exports:  # PR-4: file Excel export SMS (PII) — private, ngoài webroot
   geoip_data:
   backend_logs:
   certbot_certs:

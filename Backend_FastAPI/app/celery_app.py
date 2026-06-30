@@ -155,6 +155,12 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=30),  # Shifted to 02:30 (was 02:00, now taken by plan sync)
         "options": {"queue": "default"},
     },
+    # --- SMS Marketing export retention (PR-4) ---
+    "cleanup-sms-export-files-daily": {
+        "task": "cleanup_sms_export_files_task",
+        "schedule": crontab(hour=3, minute=45),  # 03:45 — dọn export hết hạn
+        "options": {"queue": "default"},
+    },
 
     # --- KPI Plan Daily Actuals Sync (P4) ---
     "sync-kpi-plan-actuals-daily": {

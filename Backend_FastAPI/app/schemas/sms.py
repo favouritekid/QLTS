@@ -480,3 +480,61 @@ class SmsAttestationCreate(BaseModel):
     @classmethod
     def _v_reference(cls, v):
         return _strip_required_text(v)
+
+
+# =====================================================================
+# Export batch (PR-4) — 1 file Excel / nhà mạng / build_revision
+# =====================================================================
+# Mirror CHECK chk_sms_export_batch_status.
+SmsExportStatus = Literal[
+    "pending", "generated", "handed_off", "failed", "purged", "invalidated"
+]
+
+
+class SmsExportBatchOut(BaseModel):
+    """Metadata + vòng đời 1 file export per nhà mạng. KHÔNG lộ
+    `storage_path`/`file_sha256` (nội bộ); FE thin-client đọc cờ `can_*`
+    thay vì tự suy trạng thái."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    campaign_id: int
+    build_revision: int
+    group_id: Optional[int] = None
+    group_name_snapshot: Optional[str] = None
+    carrier_bucket: str
+    recipient_count: int
+    file_name: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    status: str
+    failure_reason: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    generated_at: Optional[datetime] = None
+    generated_by_id: Optional[int] = None
+    marked_handed_off_at: Optional[datetime] = None
+    invalidated_at: Optional[datetime] = None
+    # Computed (service điền) — thin-client đọc cờ, không suy luận role/status.
+    can_download: bool = False
+    can_mark_handed_off: bool = False
+    is_expired: bool = False
+
+
+class SmsExportResult(BaseModel):
+    """Kết quả POST export: danh sách batch per nhà mạng + tổng quan. File
+    sinh ở post-commit (status có thể 'pending'→'generated' khi callback xong)."""
+
+    campaign_id: int
+    build_revision: int
+    total_exportable: int
+    batches: List[SmsExportBatchOut] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class SmsExportBatchList(BaseModel):
+    """GET danh sách batch của campaign (revision hiện tại) — FE hiển thị lại
+    sau reload."""
+
+    campaign_id: int
+    build_revision: int
+    batches: List[SmsExportBatchOut] = Field(default_factory=list)
