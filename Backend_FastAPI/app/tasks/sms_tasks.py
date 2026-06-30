@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import settings
+from ..utils.sms_export import STAGING_PREFIX
 from .utils import run_async_task, task_db_session
 
 log = logging.getLogger(__name__)
 
-_STAGING_PREFIX = ".staging."
 _STAGING_MAX_AGE_SECONDS = 3600  # staging > 1h = orphan (sinh file thất bại)
 
 
@@ -28,7 +28,7 @@ def _sweep_staging_orphans(base_dir: str) -> int:
     cutoff = time.time() - _STAGING_MAX_AGE_SECONDS
     for root, _dirs, files in os.walk(base_dir):
         for fn in files:
-            if not fn.startswith(_STAGING_PREFIX):
+            if not fn.startswith(STAGING_PREFIX):
                 continue
             path = os.path.join(root, fn)
             try:

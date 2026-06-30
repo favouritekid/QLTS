@@ -391,6 +391,14 @@ class SmsCampaignService:
 
         new_revision = campaign.build_revision + 1
         await self.repo.invalidate_recipients_before(campaign_id, new_revision)
+        # Rebuild → vô hiệu export batch revision CŨ (PR-4): file revision cũ
+        # KHÔNG còn tải được (PII/consent lỗi thời) + status='invalidated' để
+        # cleanup dọn. Import cục bộ tránh phụ thuộc vòng tại module-load.
+        from app.repositories.sms_export_repository import SmsExportRepository
+
+        await SmsExportRepository(self.db).invalidate_export_batches_before(
+            campaign_id, new_revision
+        )
 
         # Gom member → dedupe theo phone, gom group_ids đóng góp.
         members = await self.repo.get_members_of_groups(group_ids)

@@ -9,9 +9,9 @@ Standalone repository (giống sms_campaign_repository). Service flush, router
 commit. Xem SMS_MARKETING_MODULE_DESIGN.md §8 / §11.7.
 """
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.sms import (
@@ -58,28 +58,29 @@ class SmsExportRepository:
     async def get_exportable_recipients(
         self, campaign_id: int, revision: int, carrier_bucket: str
     ) -> List[SmsCampaignRecipient]:
-        """Recipient sẽ ghi vào file của 1 nhà mạng — order id ổn định."""
+        """Recipient sẽ ghi vào file của 1 nhà mạng — order id ổn định.
+
+        Fail-closed TẠI THỜI ĐIỂM SINH FILE (đóng khe TOCTOU giữa gate
+        pre-commit và sinh file post-commit sau khi nhả lock): chỉ lấy
+        recipient mà contact VẪN consent 'granted' VÀ số CHƯA vào sms_opt_out.
+        Recipient mất contact (contact_id NULL → INNER JOIN loại) cũng bị loại."""
+        suppressed = select(SmsOptOut.phone_normalized)
         res = await self.db.execute(
             select(SmsCampaignRecipient)
+            .join(
+                SmsContact, SmsContact.id == SmsCampaignRecipient.contact_id
+            )
             .where(
                 *self._exportable_filter(campaign_id, revision),
                 SmsCampaignRecipient.carrier_bucket == carrier_bucket,
+                SmsContact.marketing_consent_status == "granted",
+                SmsCampaignRecipient.phone_normalized_snapshot.notin_(
+                    suppressed
+                ),
             )
             .order_by(SmsCampaignRecipient.id)
         )
         return list(res.scalars().all())
-
-    async def counts_by_carrier_exportable(
-        self, campaign_id: int, revision: int
-    ) -> List[Tuple[str, int]]:
-        """(carrier_bucket, count) cho recipient exportable — mỗi carrier 1 file."""
-        res = await self.db.execute(
-            select(SmsCampaignRecipient.carrier_bucket, func.count())
-            .where(*self._exportable_filter(campaign_id, revision))
-            .group_by(SmsCampaignRecipient.carrier_bucket)
-            .order_by(SmsCampaignRecipient.carrier_bucket)
-        )
-        return [(r[0], int(r[1])) for r in res.all()]
 
     async def count_over_limit(self, campaign_id: int, revision: int) -> int:
         """Số recipient bị loại VÌ over_limit (gate export chặn nếu >0, §8.4)."""
@@ -188,20 +189,51 @@ class SmsExportRepository:
         )
         return list(res.scalars().all())
 
+    async def invalidate_export_batches_before(
+        self, campaign_id: int, before_revision: int
+    ) -> None:
+        """Rebuild (revision mới) → vô hiệu MỌI export batch revision CŨ
+        (pending/generated/failed) → status='invalidated' + invalidated_at.
+        download check invalidated_at nên KHÔNG còn phục vụ file revision cũ
+        (PII lỗi thời/consent đã đổi). KHÔNG đụng batch đã 'handed_off' (giữ
+        audit; rebuild vốn đã bị chặn nếu có recipient handed_off)."""
+        await self.db.execute(
+            update(SmsCampaignExportBatch)
+            .where(
+                SmsCampaignExportBatch.campaign_id == campaign_id,
+                SmsCampaignExportBatch.build_revision < before_revision,
+                SmsCampaignExportBatch.status.in_(
+                    ("pending", "generated", "failed")
+                ),
+                SmsCampaignExportBatch.invalidated_at.is_(None),
+            )
+            .values(status="invalidated", invalidated_at=func.now())
+        )
+
     async def list_purgeable_batches(
         self, now: datetime, limit: int = 500
     ) -> List[SmsCampaignExportBatch]:
-        """Batch còn file (generated/handed_off/failed) đã quá expires_at →
-        cleanup job xoá file + set purged. failed cũng dọn temp nếu sót."""
+        """Batch cần dọn file (purged_at NULL):
+        (a) generated/handed_off đã quá `expires_at` (hết retention); HOẶC
+        (b) failed/invalidated → dọn NGAY không phụ thuộc expires_at (file rác/
+        ghi-dở hoặc revision cũ; batch failed luôn có expires_at=NULL nên KHÔNG
+        thể gộp vào nhánh (a) — nếu không sẽ rò rỉ PII vĩnh viễn)."""
         res = await self.db.execute(
             select(SmsCampaignExportBatch)
             .where(
-                SmsCampaignExportBatch.status.in_(
-                    ("generated", "handed_off", "failed")
-                ),
                 SmsCampaignExportBatch.purged_at.is_(None),
-                SmsCampaignExportBatch.expires_at.is_not(None),
-                SmsCampaignExportBatch.expires_at < now,
+                or_(
+                    SmsCampaignExportBatch.status.in_(
+                        ("failed", "invalidated")
+                    ),
+                    and_(
+                        SmsCampaignExportBatch.status.in_(
+                            ("generated", "handed_off")
+                        ),
+                        SmsCampaignExportBatch.expires_at.is_not(None),
+                        SmsCampaignExportBatch.expires_at < now,
+                    ),
+                ),
             )
             .order_by(SmsCampaignExportBatch.id)
             .limit(limit)

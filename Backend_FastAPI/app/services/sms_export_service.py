@@ -10,10 +10,9 @@ chỉ `flush` (router commit). File sinh trong callback dùng `AsyncSessionLocal
 MỚI vì db gốc đã commit/đóng transaction — §8.3.
 Xem SMS_MARKETING_MODULE_DESIGN.md §8 / §11.7.
 """
-import hashlib
+import asyncio
 import logging
 import os
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, Tuple
 
@@ -28,9 +27,10 @@ from app.schemas import sms as sms_schemas
 from app.utils.exceptions import BusinessRuleViolation, ResourceNotFoundError
 from app.utils.sms_export import (
     XLSX_MEDIA,
-    build_carrier_workbook,
     render_export_message,
     sanitize_export_filename,
+    sha256_file,
+    write_export_atomic,
 )
 from app.utils.sms_render import has_link
 
@@ -38,7 +38,11 @@ log = logging.getLogger(__name__)
 
 # Campaign đã build, được phép export (lần đầu 'ready'; re-export idempotent
 # khi 'exported'). 'draft' = chưa build/stale; 'handed_off'/'closed' = khoá.
-_EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported"}
+# Campaign được phép export: 'ready' (lần đầu), 'exported' (re-export), và
+# 'handed_off' (re-export để RETRY batch failed của nhà mạng khác mà không
+# kẹt — xem mark_handed_off). 'draft' = chưa build/stale; 'closed' = đã bàn
+# giao hết → khoá.
+_EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported", "handed_off"}
 # Batch ở các trạng thái này = CHƯA có file dùng được → (re)generate.
 _REGENERATE_BATCH_STATUS = {"pending", "failed", "purged", "invalidated"}
 
@@ -48,7 +52,9 @@ def _aware(dt: datetime) -> datetime:
 
 
 def _carrier_label(carrier_bucket: str) -> str:
-    return (carrier_bucket or "unknown").replace("_", " ").strip().title()
+    # carrier_bucket NOT NULL + classify_carrier luôn trả chuỗi ('unknown' nếu
+    # đầu số không khớp) → không cần guard rỗng.
+    return carrier_bucket.replace("_", " ").strip().title()
 
 
 def _build_group_label(
@@ -60,11 +66,15 @@ def _build_group_label(
         return None, None
     ordered = sorted(group_ids)
     labels = [names.get(g) or f"Nhom{g}" for g in ordered]
+    # group_name_snapshot là VARCHAR(200) → cắt [:200] tránh tràn cột → 500
+    # khi export campaign đa-nhóm (nhãn ghép có thể >200 ký tự).
     if len(ordered) == 1:
-        return ordered[0], labels[0]
+        return ordered[0], labels[0][:200]
     if len(ordered) == 2:
-        return None, f"{labels[0]}+{labels[1]}"
-    return None, f"{labels[0]}+{labels[1]}+{len(ordered) - 2}"
+        label = f"{labels[0]}+{labels[1]}"
+    else:
+        label = f"{labels[0]}+{labels[1]}+{len(ordered) - 2}"
+    return None, label[:200]
 
 
 class SmsExportService:
@@ -172,7 +182,10 @@ class SmsExportService:
                 f"consent, {supp} người mới opt-out/DNC — Build lại để cập nhật "
                 "snapshot trước khi export (fail-closed)."
             )
-        carriers = await self.repo.counts_by_carrier_exportable(
+        # Dùng đếm carrier của PR-3 (cùng predicate _rev_filter + excluded NULL)
+        # → 1 nguồn sự thật cho "carrier exportable"; số dòng THẬT (sau live
+        # re-check consent/opt-out) tự khớp lại ở _generate_one.
+        carriers = await self.campaign_repo.counts_by_carrier_exportable(
             campaign_id, rev
         )
         if not carriers:
@@ -183,9 +196,10 @@ class SmsExportService:
 
         group_id, group_label = await self._resolve_group_label(campaign_id)
         base_dir = settings.SMS_EXPORT_STORAGE_DIR
+        now = datetime.now(timezone.utc)
         to_generate: List[int] = []
 
-        for carrier_bucket, count in carriers:
+        for carrier_bucket, count in carriers.items():
             file_name = sanitize_export_filename(
                 group_label, campaign.name, _carrier_label(carrier_bucket)
             )
@@ -210,8 +224,24 @@ class SmsExportService:
                     }
                 )
                 to_generate.append(batch.id)
-            elif batch.status in _REGENERATE_BATCH_STATUS:
-                # Re-export cùng revision sau lỗi/purge/invalidate → reset.
+                continue
+            # Regenerate khi chưa-có-file (pending/failed/purged/invalidated)
+            # HOẶC 'generated' nhưng đã hết hạn / file biến mất trên đĩa (#9 —
+            # tránh admin re-export mà vẫn không có file dùng được).
+            needs_regen = batch.status in _REGENERATE_BATCH_STATUS or (
+                batch.status == "generated"
+                and (
+                    (
+                        batch.expires_at is not None
+                        and _aware(batch.expires_at) <= now
+                    )
+                    or not (
+                        batch.storage_path
+                        and os.path.isfile(batch.storage_path)
+                    )
+                )
+            )
+            if needs_regen:
                 batch.group_id = group_id
                 batch.group_name_snapshot = group_label
                 batch.recipient_count = count
@@ -237,7 +267,7 @@ class SmsExportService:
         meta = {
             "campaign_id": campaign_id,
             "build_revision": rev,
-            "total_exportable": sum(c for _, c in carriers),
+            "total_exportable": sum(carriers.values()),
         }
         if not to_generate:
             return None, meta
@@ -311,35 +341,17 @@ class SmsExportService:
             )
             return
 
-        content = build_carrier_workbook(rows)
-        sha = hashlib.sha256(content).hexdigest()
-        final_path = batch.storage_path
-        os.makedirs(os.path.dirname(final_path), exist_ok=True)
-        # Atomic: ghi staging cùng thư mục → fsync → os.replace (atomic kể cả
-        # khi đích đã tồn tại; cùng filesystem nên rename nguyên tử).
-        staging = os.path.join(
-            os.path.dirname(final_path), f".staging.{uuid.uuid4().hex[:12]}.xlsx"
+        # Dựng workbook + ghi atomic (staging->fsync->os.replace) + sha256
+        # trong THREAD riêng → KHÔNG chặn event loop (openpyxl.save/fsync là
+        # blocking; campaign lớn sẽ treo worker nếu chạy thẳng trên loop).
+        sha, size = await asyncio.to_thread(
+            write_export_atomic, rows, batch.storage_path
         )
-        try:
-            with open(staging, "wb") as f:
-                f.write(content)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(staging, final_path)
-        except Exception:
-            # Dọn staging dở rồi để caller đánh dấu failed.
-            if os.path.exists(staging):
-                try:
-                    os.remove(staging)
-                except OSError:
-                    pass
-            raise
-
         now = datetime.now(timezone.utc)
         batch.status = "generated"
         batch.recipient_count = len(rows)
         batch.file_sha256 = sha
-        batch.file_size_bytes = len(content)
+        batch.file_size_bytes = size
         batch.generated_by_id = generated_by
         batch.generated_at = now
         batch.expires_at = now + timedelta(days=retention)
@@ -404,10 +416,22 @@ class SmsExportService:
     # ===============================================================
     async def get_export_file(
         self, campaign_id: int, batch_id: int
-    ) -> Tuple[bytes, str, str]:
+    ) -> Tuple[str, str, str]:
+        """Trả (storage_path, file_name, media_type) sau verify trạng thái +
+        sha256 (chunked). Router stream bằng FileResponse (KHÔNG nạp cả file
+        PII vào RAM)."""
         batch = await self.repo.get_batch(batch_id)
         if batch is None or batch.campaign_id != campaign_id:
             raise ResourceNotFoundError(detail="Không tìm thấy file export")
+        campaign = await self.campaign_repo.get_campaign(campaign_id)
+        if campaign is None:
+            raise ResourceNotFoundError(detail="Không tìm thấy campaign")
+        # Chặn tải file bản build CŨ (sau rebuild) dù chưa kịp invalidate (#3).
+        if batch.build_revision != campaign.build_revision:
+            raise BusinessRuleViolation(
+                detail="File thuộc bản build cũ đã bị thay thế — export lại "
+                "bản hiện tại."
+            )
         now = datetime.now(timezone.utc)
         if batch.status not in ("generated", "handed_off"):
             raise BusinessRuleViolation(
@@ -431,16 +455,20 @@ class SmsExportService:
             raise BusinessRuleViolation(
                 detail="File export không còn trên hệ thống — export lại."
             )
-        with open(batch.storage_path, "rb") as f:
-            content = f.read()
-        if (
-            batch.file_sha256
-            and hashlib.sha256(content).hexdigest() != batch.file_sha256
-        ):
-            raise BusinessRuleViolation(
-                detail="File export sai checksum (có thể hỏng) — export lại."
-            )
-        return content, batch.file_name or "sms_export.xlsx", XLSX_MEDIA
+        # Verify sha256 đọc theo chunk trong thread → KHÔNG nạp cả file PII vào
+        # RAM / không chặn loop; router stream bằng FileResponse.
+        if batch.file_sha256:
+            actual = await asyncio.to_thread(sha256_file, batch.storage_path)
+            if actual != batch.file_sha256:
+                raise BusinessRuleViolation(
+                    detail="File export sai checksum (có thể hỏng) — export "
+                    "lại."
+                )
+        return (
+            batch.storage_path,
+            batch.file_name or "sms_export.xlsx",
+            XLSX_MEDIA,
+        )
 
     # ===============================================================
     # Mark handed-off — recipient + contact freq-cap + campaign status
@@ -448,6 +476,11 @@ class SmsExportService:
     async def mark_handed_off(
         self, campaign_id: int, batch_id: int, user
     ) -> sms_schemas.SmsExportBatchOut:
+        # Khoá campaign TRƯỚC rồi batch (cùng thứ tự campaign→batch với
+        # prepare_export) → tránh deadlock ABBA giữa export và mark-handed-off.
+        campaign = await self.campaign_repo.get_campaign_for_update(campaign_id)
+        if campaign is None:
+            raise ResourceNotFoundError(detail="Không tìm thấy campaign")
         batch = await self.repo.get_batch_for_update(batch_id)
         if batch is None or batch.campaign_id != campaign_id:
             raise ResourceNotFoundError(detail="Không tìm thấy file export")
@@ -464,10 +497,6 @@ class SmsExportService:
             raise BusinessRuleViolation(
                 detail="File đã bị vô hiệu — không thể bàn giao; export lại."
             )
-        # Lock campaign → serialize đổi status vs build/export.
-        campaign = await self.campaign_repo.get_campaign_for_update(campaign_id)
-        if campaign is None:
-            raise ResourceNotFoundError(detail="Không tìm thấy campaign")
         if batch.build_revision != campaign.build_revision:
             raise BusinessRuleViolation(
                 detail="File thuộc bản build cũ — export lại bản hiện tại "

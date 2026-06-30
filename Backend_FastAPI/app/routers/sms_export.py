@@ -11,7 +11,7 @@ sha256) qua Response no-store.
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
@@ -26,12 +26,12 @@ router = APIRouter(prefix="/api/sms", tags=["SMS Export"])
 _MAX_ID = 2147483647
 
 
-@limiter.limit(RateLimits.DATA_EXPORT)  # build workbook nặng + chứa PII
 @router.post(
     "/campaigns/{campaign_id}/export",
     response_model=sms_schemas.SmsExportResult,
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit(RateLimits.DATA_EXPORT)  # build workbook nặng + chứa PII
 async def export_campaign(
     request: Request,  # required by slowapi rate limiter
     campaign_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
@@ -63,25 +63,26 @@ async def list_exports(
     return await SmsExportService(db).list_export_batches(campaign_id)
 
 
-@limiter.limit(RateLimits.DATA_EXPORT)
 @router.get("/campaigns/{campaign_id}/exports/{batch_id}/download")
+@limiter.limit(RateLimits.DATA_EXPORT)
 async def download_export(
     request: Request,  # required by slowapi rate limiter
     campaign_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     batch_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(require_admin),
-) -> Response:
-    """Tải file export (auth + verify sha256 + chưa hết hạn/vô hiệu). Filename
-    đã sanitize ASCII nên Content-Disposition đơn giản là an toàn."""
-    content, filename, media = await SmsExportService(db).get_export_file(
+) -> FileResponse:
+    """Tải file export (auth + verify sha256 + chưa hết hạn/vô hiệu). Stream từ
+    đĩa bằng FileResponse (KHÔNG nạp cả file PII vào RAM); Starlette tự encode
+    Content-Disposition an toàn cho filename."""
+    storage_path, filename, media = await SmsExportService(db).get_export_file(
         campaign_id, batch_id
     )
-    return Response(
-        content=content,
+    return FileResponse(
+        storage_path,
         media_type=media,
+        filename=filename,
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",
         },

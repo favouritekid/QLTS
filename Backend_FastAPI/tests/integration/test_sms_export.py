@@ -323,3 +323,116 @@ async def test_download_unknown_batch_404(
         f"{API}/campaigns/{cid}/exports/999999/download", headers=h
     )
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------
+# Gate drift suppression + lifecycle guards (vá lỗ test /code-review)
+# ---------------------------------------------------------------------
+async def test_export_blocks_suppression_drift(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid = await _build_ready(client, h)
+    await _attest_all(client, h, cid)
+    # Số vào sms_opt_out SAU build (chưa rebuild) → gate count_new_suppression.
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "INSERT INTO sms_opt_out (phone_normalized, source, "
+                "observed_at) VALUES (:p, 'manual', now())"
+            ),
+            {"p": _PHONE_VIETTEL},
+        )
+        await s.commit()
+    res = await client.post(f"{API}/campaigns/{cid}/export", headers=h)
+    assert res.status_code == 400, res.text
+    assert "opt-out" in res.json()["detail"].lower()
+
+
+async def test_stale_revision_download_blocked_after_rebuild(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid = await _build_ready(client, h, phones=[_PHONE_VIETTEL])
+    await _attest_all(client, h, cid)
+    exp = (await client.post(f"{API}/campaigns/{cid}/export", headers=h)).json()
+    old_batch = exp["batches"][0]["id"]
+    # cùng revision → tải được
+    assert (
+        await client.get(
+            f"{API}/campaigns/{cid}/exports/{old_batch}/download", headers=h
+        )
+    ).status_code == 200
+    # rebuild → revision mới; batch cũ bị vô hiệu + chặn download
+    assert (
+        await client.post(f"{API}/campaigns/{cid}/build", headers=h)
+    ).status_code == 200
+    dl = await client.get(
+        f"{API}/campaigns/{cid}/exports/{old_batch}/download", headers=h
+    )
+    assert dl.status_code == 400, dl.text
+    async with AsyncSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT status, invalidated_at FROM "
+                    "sms_campaign_export_batch WHERE id=:b"
+                ),
+                {"b": old_batch},
+            )
+        ).first()
+    assert row[0] == "invalidated"
+    assert row[1] is not None
+
+
+async def test_download_expired_returns_400(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid = await _build_ready(client, h, phones=[_PHONE_VIETTEL])
+    await _attest_all(client, h, cid)
+    bid = (
+        await client.post(f"{API}/campaigns/{cid}/export", headers=h)
+    ).json()["batches"][0]["id"]
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE sms_campaign_export_batch SET expires_at = now() - "
+                "interval '1 day' WHERE id=:b"
+            ),
+            {"b": bid},
+        )
+        await s.commit()
+    dl = await client.get(
+        f"{API}/campaigns/{cid}/exports/{bid}/download", headers=h
+    )
+    assert dl.status_code == 400, dl.text
+    lst = (
+        await client.get(f"{API}/campaigns/{cid}/exports", headers=h)
+    ).json()
+    b = next(x for x in lst["batches"] if x["id"] == bid)
+    assert b["is_expired"] is True
+    assert b["can_download"] is False
+
+
+async def test_mark_handed_off_guards(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    cid = await _build_ready(client, h, phones=[_PHONE_VIETTEL])
+    await _attest_all(client, h, cid)
+    bid = (
+        await client.post(f"{API}/campaigns/{cid}/export", headers=h)
+    ).json()["batches"][0]["id"]
+    base = f"{API}/campaigns/{cid}/exports"
+    assert (
+        await client.post(f"{base}/{bid}/mark-handed-off", headers=h)
+    ).status_code == 200
+    # lần 2 → 400 (đã bàn giao)
+    assert (
+        await client.post(f"{base}/{bid}/mark-handed-off", headers=h)
+    ).status_code == 400
+    # batch không tồn tại → 404
+    assert (
+        await client.post(f"{base}/999999/mark-handed-off", headers=h)
+    ).status_code == 404
