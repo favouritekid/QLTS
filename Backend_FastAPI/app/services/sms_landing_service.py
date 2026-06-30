@@ -101,6 +101,8 @@ class SmsLandingService:
             return sms_schemas.SmsPublicOptOutResponse(
                 success=True, already_opted_out=True
             )
+        # Opt-out MỚI → vô hiệu export batch chưa bàn giao chứa số này (§8.4).
+        await self.repo.invalidate_unhanded_exports_for_phone(phone)
         return sms_schemas.SmsPublicOptOutResponse(
             success=True, already_opted_out=False
         )

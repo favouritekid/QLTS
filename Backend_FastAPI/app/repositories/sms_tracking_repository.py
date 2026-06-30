@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models.sms import (
     SmsCampaign,
+    SmsCampaignExportBatch,
     SmsCampaignRecipient,
     SmsClickEvent,
     SmsOptOut,
@@ -122,6 +123,41 @@ class SmsTrackingRepository:
         self.db.add(row)
         await self.db.flush()
         return row
+
+    async def invalidate_unhanded_exports_for_phone(
+        self, phone_normalized: str
+    ) -> None:
+        """Khi 1 số opt-out: vô hiệu export batch (pending/generated, chưa bàn
+        giao, chưa invalidated) CÓ CHỨA số này ở revision của batch → file XLSX
+        cũ chứa số đã suppress KHÔNG còn tải/bàn giao được (download +
+        mark-handed-off chặn invalidated_at); admin export lại sẽ re-check
+        suppression và loại số. §8.4 (suppression đổi sau export, trước handoff)."""
+        has_suppressed_recipient = (
+            select(SmsCampaignRecipient.id)
+            .where(
+                SmsCampaignRecipient.campaign_id
+                == SmsCampaignExportBatch.campaign_id,
+                SmsCampaignRecipient.build_revision
+                == SmsCampaignExportBatch.build_revision,
+                SmsCampaignRecipient.carrier_bucket
+                == SmsCampaignExportBatch.carrier_bucket,
+                SmsCampaignRecipient.phone_normalized_snapshot
+                == phone_normalized,
+                SmsCampaignRecipient.excluded_reason.is_(None),
+                SmsCampaignRecipient.invalidated_at.is_(None),
+                SmsCampaignRecipient.handed_off_at.is_(None),
+            )
+            .exists()
+        )
+        await self.db.execute(
+            update(SmsCampaignExportBatch)
+            .where(
+                SmsCampaignExportBatch.status.in_(("pending", "generated")),
+                SmsCampaignExportBatch.invalidated_at.is_(None),
+                has_suppressed_recipient,
+            )
+            .values(status="invalidated", invalidated_at=func.now())
+        )
 
     async def list_opt_outs(
         self,

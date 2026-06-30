@@ -394,6 +394,69 @@ async def test_external_redirect_and_open_redirect_blocked(
     assert res.headers["location"] == "https://tnpc.edu.vn/tuyensinh"
 
 
+async def test_optout_invalidates_pending_export(
+    client: AsyncClient, admin_token_headers: dict
+):
+    h = admin_token_headers
+    gid = await _mk_group(client, h, name="Inv nhom")
+    await _mk_contact(client, h, "PH inv", "0966000111")
+    await client.post(
+        f"{API}/contacts/1/groups", json={"group_id": gid}, headers=h
+    )
+    r = await client.post(
+        f"{API}/campaigns",
+        json={"name": "Inv camp", "sms_template": "Chao {full_name} {link}"},
+        headers=h,
+    )
+    cid = r.json()["id"]
+    await client.post(
+        f"{API}/campaigns/{cid}/groups", json={"group_id": gid}, headers=h
+    )
+    assert (
+        await client.post(f"{API}/campaigns/{cid}/build", headers=h)
+    ).status_code == 200
+    # Chèn 1 export batch 'generated' (mô phỏng đã export, CHƯA bàn giao).
+    async with AsyncSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT build_revision, carrier_bucket, "
+                    "phone_normalized_snapshot FROM sms_campaign_recipient "
+                    "WHERE campaign_id=:c LIMIT 1"
+                ),
+                {"c": cid},
+            )
+        ).first()
+        rev, carrier, phone = row[0], row[1], row[2]
+        await s.execute(
+            text(
+                "INSERT INTO sms_campaign_export_batch (campaign_id, "
+                "build_revision, carrier_bucket, recipient_count, status) "
+                "VALUES (:c, :r, :ca, 1, 'generated')"
+            ),
+            {"c": cid, "r": rev, "ca": carrier},
+        )
+        await s.commit()
+    # opt-out số đó → export batch chưa-bàn-giao phải invalidated (§8.4)
+    assert (
+        await client.post(
+            f"{API}/opt-out/manual", json={"phone": phone}, headers=h
+        )
+    ).status_code == 201
+    async with AsyncSessionLocal() as s:
+        st = (
+            await s.execute(
+                text(
+                    "SELECT status, invalidated_at FROM "
+                    "sms_campaign_export_batch WHERE campaign_id=:c"
+                ),
+                {"c": cid},
+            )
+        ).first()
+    assert st[0] == "invalidated"
+    assert st[1] is not None
+
+
 async def test_optout_does_not_block_click(
     client: AsyncClient, admin_token_headers: dict
 ):

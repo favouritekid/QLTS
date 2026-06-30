@@ -170,6 +170,8 @@ class SmsReportService:
             raise DuplicateResourceError(
                 detail="Số này đã nằm trong danh sách từ chối."
             )
+        # Opt-out MỚI → vô hiệu export batch chưa bàn giao chứa số này (§8.4).
+        await self.repo.invalidate_unhanded_exports_for_phone(normalized)
         return sms_schemas.SmsOptOutOut.model_validate(row)
 
     async def list_opt_outs(
