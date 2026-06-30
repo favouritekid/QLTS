@@ -74,7 +74,12 @@ export function SmsConsentEventDialog({
   function onSubmit(values: SmsConsentEventCreateInput) {
     // occurred_at từ datetime-local (naive) → ISO tz-aware (Z). Chỉ gửi field
     // hợp lệ theo event_type để khớp ràng buộc BE (no grant-data khi revoke).
-    const occurredIso = new Date(values.occurred_at).toISOString()
+    const parsed = new Date(values.occurred_at)
+    if (Number.isNaN(parsed.getTime())) {
+      form.setError("occurred_at", { message: "Thời điểm không hợp lệ" })
+      return
+    }
+    const occurredIso = parsed.toISOString()
     const data: SmsConsentEventCreateInput =
       values.event_type === "granted"
         ? {

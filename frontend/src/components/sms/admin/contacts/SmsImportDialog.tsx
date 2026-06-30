@@ -3,6 +3,7 @@
 
 import { useState } from "react"
 import { AlertTriangle, CheckCircle2, Loader2, Upload } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -84,6 +85,15 @@ export function SmsImportDialog({
 
   function onSubmit() {
     if (!file) return
+    let consentObtainedAt: string | undefined
+    if (consentComplete) {
+      const parsed = new Date(obtainedAt)
+      if (Number.isNaN(parsed.getTime())) {
+        toast.error("Thời điểm đồng ý không hợp lệ.")
+        return
+      }
+      consentObtainedAt = parsed.toISOString()
+    }
     mutation.mutate(
       {
         groupId,
@@ -95,9 +105,7 @@ export function SmsImportDialog({
             ? disclosure.trim()
             : undefined,
           consent_proof_ref: consentComplete ? proofRef.trim() : undefined,
-          consent_obtained_at: consentComplete
-            ? new Date(obtainedAt).toISOString()
-            : undefined,
+          consent_obtained_at: consentObtainedAt,
         },
       },
       { onSuccess: (res) => setResult(res) },

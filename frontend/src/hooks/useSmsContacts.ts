@@ -65,10 +65,14 @@ function invalidateContacts(qc: ReturnType<typeof useQueryClient>) {
 // ---------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------
-export function useSmsContactGroups(params: SmsContactGroupListParams = {}) {
+export function useSmsContactGroups(
+  params: SmsContactGroupListParams = {},
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: smsContactKeys.groups(params),
     queryFn: () => listSmsContactGroups(params),
+    enabled: options.enabled ?? true,
     staleTime: 30 * 1000,
   })
 }

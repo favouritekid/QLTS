@@ -45,9 +45,12 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
   const [importOpen, setImportOpen] = useState(false)
   const search = useDebouncedValue(searchInput.trim())
 
-  // Reset ô tìm khi ĐÓNG (event handler → tránh setState-trong-effect).
+  // Reset khi ĐÓNG (event handler → tránh setState-trong-effect).
   const handleOpenChange = (o: boolean) => {
-    if (!o) setSearchInput("")
+    if (!o) {
+      setSearchInput("")
+      setImportOpen(false)
+    }
     onOpenChange(o)
   }
 

@@ -237,7 +237,9 @@ export function SmsContactsPanel() {
       <SmsContactDetailDialog
         open={detail != null}
         onOpenChange={(o) => !o && setDetail(null)}
-        contact={detail}
+        // Ưu tiên bản tươi từ list (cập nhật sau mutation invalidate); fallback
+        // snapshot nếu rớt khỏi trang/bộ lọc hiện tại.
+        contact={items.find((c) => c.id === detail?.id) ?? detail}
       />
     </div>
   )

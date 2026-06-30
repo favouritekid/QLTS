@@ -68,12 +68,19 @@ export function SmsContactDetailDialog({ open, onOpenChange, contact }: Props) {
 
   const contactId = open && contact ? contact.id : null
   const { data: events, isLoading: eventsLoading } = useConsentEvents(contactId)
-  const { data: groupsData } = useSmsContactGroups({ limit: 200 })
+  // Chỉ tải danh sách nhóm cho picker khi dialog mở (tránh fetch thừa lúc tab
+  // liên hệ render mà chưa mở chi tiết).
+  const { data: groupsData } = useSmsContactGroups({ limit: 200 }, { enabled: open })
   const addToGroup = useAddContactToGroup()
 
-  // Reset picker khi ĐÓNG (event handler → tránh setState-trong-effect).
+  // Reset state khi ĐÓNG (event handler → tránh setState-trong-effect) để
+  // mở lại liên hệ khác không kẹt picker/sub-dialog cũ.
   const handleOpenChange = (o: boolean) => {
-    if (!o) setGroupToAdd("")
+    if (!o) {
+      setGroupToAdd("")
+      setEditOpen(false)
+      setConsentOpen(false)
+    }
     onOpenChange(o)
   }
 

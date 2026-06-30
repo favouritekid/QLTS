@@ -308,14 +308,6 @@ export const smsContactUpdateSchema = z.object({
 })
 export type SmsContactUpdateInput = z.infer<typeof smsContactUpdateSchema>
 
-export const smsGroupMembershipAddSchema = z.object({
-  group_id: z.number().int().min(1),
-  note: z.string().trim().max(2000).optional().or(z.literal("")),
-})
-export type SmsGroupMembershipAddInput = z.infer<
-  typeof smsGroupMembershipAddSchema
->
-
 // --- Consent event (append-only ledger) ---
 export const smsConsentEventSchema = z.object({
   id: z.number(),
