@@ -38,6 +38,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import {
   Select,
@@ -47,11 +48,19 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+import { useAuth } from "@/hooks/useAuth"
 import { useCalculateFee, useTuitionPreview, feesKeys } from "@/hooks/finance/useFees"
 import { useInstallmentPlans } from "@/hooks/finance/useInstallmentPlans"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard"
 import { formatVND } from "@/lib/zod/finance"
+
+const DISCOUNT_REASON_MIN = 10
+const DISCOUNT_REASON_MAX = 500
+// Vai trò được miễn/giảm học phí (giảm NGHĨA VỤ tiền). UX-gating; backend enforce
+// 403 ở route (field-level authz). Cùng tinh thần AdvancedTab (user.role + server
+// enforce) — dialog Tính phí chưa có resource để gắn cờ permission API.
+const FINANCE_ADJUST_ROLES = ["admin", "manager", "accountant"]
 
 type FeeType = "tuition" | "application" | "dormitory" | "other"
 
@@ -71,8 +80,12 @@ const SEMESTER_OPTIONS = [
 
 export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }: Props) {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const calculateFee = useCalculateFee()
   const plansQuery = useInstallmentPlans({ enabled: open })
+
+  // Quyền miễn/giảm học phí (UX-gating — backend enforce 403). Chỉ tài chính.
+  const canManualDiscount = !!user && FINANCE_ADJUST_ROLES.includes(user.role)
 
   // Local state — simpler than RHF for a few controlled inputs.
   const [feeType, setFeeType] = useState<FeeType>("tuition")
@@ -84,6 +97,12 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
   const [downPayment, setDownPayment] = useState<number | null>(null)
   const [downPaymentDue, setDownPaymentDue] = useState<string>("")
   const [remainderDue, setRemainderDue] = useState<string>("")
+
+  // Miễn/giảm học phí THẬT — GIẢM nghĩa vụ (final). Loại trừ lẫn nhau với
+  // "đóng trước" (mỗi lần chỉ 1; có thể kết hợp ở thao tác sau).
+  const [discountMode, setDiscountMode] = useState<boolean>(false)
+  const [targetFinal, setTargetFinal] = useState<number | null>(null)
+  const [discountReason, setDiscountReason] = useState<string>("")
 
   const activePlans = useMemo(
     () => (plansQuery.data ?? []).filter((p) => p.is_active !== false),
@@ -99,23 +118,22 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
 
   const isTuition = feeType === "tuition"
   const isDownPayment = isTuition && downPaymentMode
+  const isDiscount = isTuition && canManualDiscount && discountMode
   const isPending = calculateFee.isPending
 
-  // Giá chuẩn — chỉ fetch khi bật "đóng trước" để hiển tổng phải thu + chia đợt.
+  // Giá chuẩn — fetch khi bật "đóng trước" HOẶC "miễn/giảm" để hiển mức phải thu.
   const preview = useTuitionPreview(profileId, semesterNo, {
-    enabled: open && isDownPayment && !!profileId,
+    enabled: open && (isDownPayment || isDiscount) && !!profileId,
   })
 
-  // Tổng PHẢI THU (final) — lịch thu chia con số này (Σ hóa đơn = final − waived;
-  // waived=0 lúc tạo). NULL khi preview chưa tải / lỗi (ngành chưa xác định).
+  // Mức PHẢI THU hiện hành (final = base − giảm policy) — "đóng trước" chia con số
+  // này; "miễn/giảm" yêu cầu target NHỎ HƠN nó. NULL khi preview chưa tải / lỗi.
   const finalAmount = preview.data ? Number(preview.data.final_amount) : null
   const remainder =
     finalAmount != null && downPayment != null ? finalAmount - downPayment : null
 
-  // Hợp lệ khi: có số đóng trước > 0, có cả 2 hạn, hạn đợt 2 >= đợt 1, VÀ đã biết
-  // tổng phải thu (preview.data) với số đóng trước < tổng. Bắt buộc có giá chuẩn:
-  // chia "đóng trước" cần biết tổng để tính phần còn lại — nếu preview đang tải /
-  // lỗi (ngành chưa xác định), chặn submit thay vì để backend từ chối (400).
+  // Đóng trước hợp lệ: có số > 0, đủ 2 hạn, hạn đợt 2 >= đợt 1, và đã biết mức phải
+  // thu (preview) với số đóng trước < mức đó. Chặn submit nếu preview chưa có.
   const downPaymentValid =
     downPayment != null &&
     downPayment > 0 &&
@@ -125,11 +143,26 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
     finalAmount != null &&
     downPayment < finalAmount
 
-  const canSubmit =
-    !isPending &&
-    (isDownPayment
-      ? downPaymentValid
-      : effectivePlanCode !== "" && activePlans.length > 0)
+  // Mức giảm tay (hiển thị) = mức-sau-giảm-policy − học-phí-áp-dụng.
+  const manualReduction =
+    finalAmount != null && targetFinal != null ? finalAmount - targetFinal : null
+
+  // Miễn/giảm hợp lệ: target >= 0, biết mức phải thu (preview), target < mức đó
+  // (phải thực sự giảm), lý do >= min. Bắt buộc có preview để biết mức nền.
+  const discountReasonLen = discountReason.trim().length
+  const discountValid =
+    targetFinal != null &&
+    targetFinal >= 0 &&
+    finalAmount != null &&
+    targetFinal < finalAmount &&
+    discountReasonLen >= DISCOUNT_REASON_MIN &&
+    discountReasonLen <= DISCOUNT_REASON_MAX
+
+  const scheduleValid = isDownPayment
+    ? downPaymentValid
+    : effectivePlanCode !== "" && activePlans.length > 0
+
+  const canSubmit = !isPending && scheduleValid && (!isDiscount || discountValid)
 
   const reset = () => {
     setFeeType("tuition")
@@ -139,6 +172,9 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
     setDownPayment(null)
     setDownPaymentDue("")
     setRemainderDue("")
+    setDiscountMode(false)
+    setTargetFinal(null)
+    setDiscountReason("")
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -160,6 +196,14 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
             remainder_due: remainderDue,
           }
         : { installment_plan_code: effectivePlanCode }),
+      // Miễn/giảm học phí THẬT (GIẢM nghĩa vụ) — "Học phí áp dụng" = final sau MỌI
+      // giảm. Chỉ gửi khi bật + có quyền (backend cũng enforce 403).
+      ...(isDiscount && targetFinal != null
+        ? {
+            target_final_amount: String(targetFinal),
+            manual_discount_reason: discountReason.trim(),
+          }
+        : {}),
     })
 
     // useCalculateFee already invalidates finance caches + toasts on success.
@@ -199,13 +243,16 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
               onValueChange={(v) => {
                 const next = v as FeeType
                 setFeeType(next)
-                // Lịch "đóng trước" chỉ cho tuition → đổi sang loại phí khác thì
-                // tắt + xóa luôn để toggle không kẹt "bật" khi quay lại tuition.
+                // Đóng trước / miễn-giảm chỉ cho tuition → đổi sang loại phí khác
+                // thì tắt + xóa để toggle không kẹt "bật" khi quay lại tuition.
                 if (next !== "tuition") {
                   setDownPaymentMode(false)
                   setDownPayment(null)
                   setDownPaymentDue("")
                   setRemainderDue("")
+                  setDiscountMode(false)
+                  setTargetFinal(null)
+                  setDiscountReason("")
                 }
               }}
               disabled={isPending}
@@ -244,8 +291,9 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
             </div>
           )}
 
-          {/* Toggle "đóng trước theo đợt" — chỉ cho học phí. */}
-          {isTuition && (
+          {/* Toggle "đóng trước theo đợt" — chỉ cho học phí; ẩn khi đang miễn/giảm
+              (loại trừ lẫn nhau để tránh nhập nhằng mức nền). */}
+          {isTuition && !discountMode && (
             <div className="rounded-lg border p-3 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
@@ -346,6 +394,106 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
                         Hạn phần còn lại phải sau hoặc bằng hạn đợt đầu.
                       </p>
                     )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Miễn/giảm học phí THẬT — GIẢM nghĩa vụ. Chỉ admin/manager/accountant
+              (UX-gating; backend enforce 403). Ẩn khi đang "đóng trước". */}
+          {isTuition && canManualDiscount && !downPaymentMode && (
+            <div className="rounded-lg border p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="discount_mode" className="cursor-pointer">
+                    Miễn/giảm học phí
+                  </Label>
+                  <p className="text-muted-foreground text-xs">
+                    Đặt mức học phí áp dụng thấp hơn (học bổng / chuyển trường / theo
+                    quyết định). GIẢM tổng nghĩa vụ — khác với đóng trước.
+                  </p>
+                </div>
+                <Switch
+                  id="discount_mode"
+                  checked={discountMode}
+                  onCheckedChange={setDiscountMode}
+                  disabled={isPending}
+                />
+              </div>
+
+              {isDiscount && (
+                <div className="space-y-3 pt-1">
+                  <div className="text-xs">
+                    {preview.isLoading && (
+                      <p className="text-muted-foreground">Đang tải mức phải thu…</p>
+                    )}
+                    {preview.isError && (
+                      <p className="text-destructive">
+                        Không tải được giá chuẩn (hồ sơ có thể chưa xác định ngành).
+                      </p>
+                    )}
+                    {preview.data && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">
+                          Mức phải thu hiện hành:
+                        </span>
+                        <span className="font-medium">
+                          {formatVND(preview.data.final_amount)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="target_final_amount">
+                      Học phí áp dụng <span className="text-destructive">*</span>
+                    </Label>
+                    <CurrencyInput
+                      id="target_final_amount"
+                      value={targetFinal}
+                      onChange={setTargetFinal}
+                      placeholder="Mức học phí sau miễn/giảm…"
+                      disabled={isPending}
+                    />
+                    {manualReduction != null && (
+                      <p
+                        className={
+                          manualReduction <= 0
+                            ? "text-destructive text-xs"
+                            : "text-muted-foreground text-xs"
+                        }
+                      >
+                        {manualReduction > 0
+                          ? `Mức giảm: ${formatVND(manualReduction)}`
+                          : "Học phí áp dụng phải nhỏ hơn mức phải thu hiện hành."}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="discount_reason">
+                      Lý do <span className="text-destructive">*</span>
+                    </Label>
+                    <Textarea
+                      id="discount_reason"
+                      value={discountReason}
+                      onChange={(e) => setDiscountReason(e.target.value)}
+                      placeholder="Ví dụ: Học bổng theo quyết định số…"
+                      rows={2}
+                      maxLength={DISCOUNT_REASON_MAX}
+                      disabled={isPending}
+                      className="resize-none"
+                    />
+                    <p
+                      className={
+                        discountReasonLen > 0 && discountReasonLen < DISCOUNT_REASON_MIN
+                          ? "text-destructive text-xs"
+                          : "text-muted-foreground text-xs"
+                      }
+                    >
+                      Tối thiểu {DISCOUNT_REASON_MIN} ký tự, tối đa {DISCOUNT_REASON_MAX} ({discountReasonLen}).
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

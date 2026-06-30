@@ -579,6 +579,11 @@ export interface FeeCalculateRequest {
   down_payment?: string | null // Decimal as string
   down_payment_due?: string | null // YYYY-MM-DD
   remainder_due?: string | null // YYYY-MM-DD
+  // Miễn/giảm học phí THẬT (Pha 2) — GIẢM nghĩa vụ. "Học phí áp dụng" = final sau
+  // MỌI giảm (Decimal as string). CHỈ tuition + reason ≥10 + quyền
+  // admin/manager/accountant (backend enforce 403). Bỏ khi không miễn/giảm.
+  target_final_amount?: string | null
+  manual_discount_reason?: string | null
 }
 
 /** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */

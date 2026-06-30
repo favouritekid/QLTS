@@ -485,6 +485,8 @@ class FeeCalculationService:
         user_id: Optional[int] = None,
         unit_id: Optional[int] = None,
         semester_no: Optional[int] = None,
+        target_final_amount: Optional[Decimal] = None,
+        manual_discount_reason: Optional[str] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
         Calculate fee for an admission profile.
@@ -523,6 +525,25 @@ class FeeCalculationService:
             ResourceNotFoundError: If profile not found
             BadRequest: If fee already exists or semester tuition not configured
         """
+        # 🔴 GUARD SERVICE-SIDE (miễn/giảm học phí THẬT — Pha 2) — đặt TRƯỚC mọi
+        # resolve giá / DB. ``calculate_fee`` là business boundary có direct/test
+        # caller KHÔNG đi qua schema model_validator → tự bảo vệ invariant tiền
+        # nghĩa vụ: giảm tay chỉ cho tuition + lý do ≥10 + target >= 0. KIỂM tra
+        # AUTHZ field-level (chỉ admin/manager/accountant) nằm ở ROUTER (deps có
+        # role); service đảm bảo bất biến SỐ. Ràng buộc target < net-after-policy
+        # đo SAU khi resolve discount (manual_discount > 0 bên dưới).
+        if target_final_amount is not None:
+            if fee_type != FeeTypeEnum.tuition:
+                raise BadRequest(
+                    "Miễn/giảm học phí thủ công chỉ áp dụng cho học phí (tuition)."
+                )
+            if target_final_amount < 0:
+                raise BadRequest("Học phí áp dụng không được âm.")
+            if not manual_discount_reason or len(manual_discount_reason.strip()) < 10:
+                raise BadRequest("Cần lý do miễn/giảm học phí (tối thiểu 10 ký tự).")
+        elif manual_discount_reason:
+            raise BadRequest("Có lý do miễn/giảm nhưng thiếu mức học phí áp dụng.")
+
         # Normalize semester_no: tuition defaults to HK1, non-tuition
         # MUST be None (the DB CHECK chk_fee_nontuition_semester_no_null
         # rejects non-tuition rows with a non-NULL semester_no). Lives in
@@ -627,12 +648,50 @@ class FeeCalculationService:
                 f"academic year {academic_year}"
             )
 
-        # Calculate discounts
+        # Calculate discounts (policy-derived)
         total_discount, applied_discounts = await self._calculate_discounts(
             base_amount, discount_policy_ids or []
         )
 
-        # Calculate final amount
+        # Miễn/giảm học phí THẬT (Pha 2) — giảm NGHĨA VỤ (final) qua 1 dòng
+        # FeeAppliedDiscount ad-hoc (policy_id=NULL), GIỮ base_amount=canonical.
+        # "Học phí áp dụng" (target_final_amount) là final SAU MỌI giảm → manual
+        # discount = canonical − giảm-policy-sẵn-có − target (KHÔNG phải
+        # canonical − target, tránh giảm quá tay khi đã có policy discount). Sau
+        # đó final == target. Đánh dấu source="manual_discount" trong snapshot
+        # (KHÔNG dựa policy_id IS NULL — policy bị xoá cũng NULL).
+        if target_final_amount is not None:
+            existing_policy_discount = total_discount
+            manual_discount_amount = (
+                base_amount - existing_policy_discount - target_final_amount
+            )
+            if manual_discount_amount <= 0:
+                raise BadRequest(
+                    f"Học phí áp dụng ({target_final_amount}) phải NHỎ HƠN mức sau "
+                    f"giảm hiện hành ({base_amount - existing_policy_discount}). "
+                    "Nếu không cần giảm thêm thì bỏ miễn/giảm thủ công."
+                )
+            manual_snapshot = {
+                # source = dấu hiệu MÁY ĐỌC ĐƯỢC để soát giảm-tay (KHÔNG dựa
+                # policy_id IS NULL — policy bị xoá cũng NULL).
+                "source": "manual_discount",
+                "reason": manual_discount_reason,
+                "approved_by": user_id,
+                "canonical_amount": str(base_amount),
+                "existing_policy_discount": str(existing_policy_discount),
+                "target_final_amount": str(target_final_amount),
+                "discount_amount": str(manual_discount_amount),
+                "calculated_at": datetime.now(timezone.utc).isoformat(),
+                # policy_name/discount_type/discount_value để builder response
+                # (_build_fee_detail_response) hiển nhãn thay vì "Unknown".
+                "policy_name": "Miễn/giảm học phí (thủ công)",
+                "discount_type": "manual_amount",
+                "discount_value": str(manual_discount_amount),
+            }
+            applied_discounts.append((None, manual_discount_amount, manual_snapshot))
+            total_discount = existing_policy_discount + manual_discount_amount
+
+        # Calculate final amount (== target_final_amount khi có miễn/giảm tay)
         final_amount = max(Decimal("0"), base_amount - total_discount)
 
         # Get installment plan
@@ -820,7 +879,22 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
-        # Block when any non-cancelled invoice is beyond draft. Recalc đổi
+        # Pha 2: chặn tính lại phí có MIỄN/GIẢM THỦ CÔNG (message cụ thể; cũng bắt
+        # cả khi HĐ đã bị HỦY HẾT — lúc đó issued-block dưới không fire). recalc
+        # chỉ tính lại discount theo policy (existing_policy_ids loại policy_id=NULL)
+        # → sẽ BỎ RƠI dòng giảm tay khỏi final (final nhảy lên) + để lại dòng
+        # orphan. Giảm tay là quyết định riêng (học bổng…), không tự suy lại theo
+        # base mới → bắt hủy & tạo lại thay vì âm thầm mất.
+        if any(
+            (ad.calculation_snapshot or {}).get("source") == "manual_discount"
+            for ad in fee.applied_discounts
+        ):
+            raise BusinessRuleViolation(
+                "Không thể tính lại phí có miễn/giảm học phí thủ công — hãy hủy "
+                "phí rồi tạo lại với mức áp dụng mới."
+            )
+
+        # Block when any non-cancelled invoice is beyond draft (#445). Recalc đổi
         # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
         # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
         # ngược lại tăng giá ⇒ thu thiếu. Đối xứng

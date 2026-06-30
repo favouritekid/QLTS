@@ -15,6 +15,13 @@ import { CalculateFeeDialog } from "./CalculateFeeDialog";
 
 const mutateAsync = vi.fn();
 
+// useAuth điều khiển role để test vùng "Miễn/giảm" (chỉ admin/manager/accountant).
+// Mặc định officer → vùng giảm ẩn (các test cũ không đổi). Đổi .role trong test.
+const { mockAuth } = vi.hoisted(() => ({ mockAuth: { role: "officer" } }));
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ user: mockAuth }),
+}));
+
 vi.mock("@/hooks/finance/useFees", async () => {
   const actual = await vi.importActual<typeof import("@/hooks/finance/useFees")>(
     "@/hooks/finance/useFees"
@@ -54,6 +61,7 @@ describe("CalculateFeeDialog", () => {
   beforeEach(() => {
     mutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ id: 1, admission_profile_id: 42 });
+    mockAuth.role = "officer"; // mặc định: vùng miễn/giảm ẩn
   });
 
   it("renders semester dropdown only for tuition fee_type", () => {
@@ -163,5 +171,68 @@ describe("CalculateFeeDialog", () => {
         installment_plan_code: "FULL",
       });
     });
+  });
+
+  // ---- Miễn/giảm học phí (Pha 2, 2026-06-29) ----
+
+  it("discount section hidden for officer, visible for finance staff", () => {
+    const { unmount } = render(
+      <CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />
+    );
+    // Officer (mặc định) → không thấy toggle miễn/giảm.
+    expect(
+      screen.queryByRole("switch", { name: /miễn\/giảm học phí/i })
+    ).not.toBeInTheDocument();
+    unmount();
+
+    mockAuth.role = "accountant";
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    expect(
+      screen.getByRole("switch", { name: /miễn\/giảm học phí/i })
+    ).toBeInTheDocument();
+  });
+
+  it("manual discount submit posts target_final_amount + reason", async () => {
+    mockAuth.role = "accountant";
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("switch", { name: /miễn\/giảm học phí/i }));
+    fireEvent.change(screen.getByLabelText(/học phí áp dụng/i), {
+      target: { value: "1000000" },
+    });
+    fireEvent.change(screen.getByLabelText(/^lý do/i), {
+      target: { value: "Hoc bong dac biet theo quyet dinh" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        installment_plan_code: "FULL",
+        target_final_amount: "1000000",
+        manual_discount_reason: "Hoc bong dac biet theo quyet dinh",
+      });
+    });
+  });
+
+  it("manual discount blocked until target < final + reason >=10", () => {
+    mockAuth.role = "manager";
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("switch", { name: /miễn\/giảm học phí/i }));
+
+    const submit = screen.getByRole("button", { name: /^tính học phí$/i });
+    expect(submit).toBeDisabled();
+
+    // target hợp lệ (< 5,000,000 mock) nhưng chưa có lý do → vẫn chặn.
+    fireEvent.change(screen.getByLabelText(/học phí áp dụng/i), {
+      target: { value: "1000000" },
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^lý do/i), {
+      target: { value: "Hoc bong dac biet theo quyet dinh" },
+    });
+    expect(submit).toBeEnabled();
   });
 });

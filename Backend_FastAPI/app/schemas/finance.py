@@ -279,6 +279,14 @@ class FeeCalculateRequest(BaseModel):
     remainder_due: Optional[date] = Field(
         None, description="Hạn đóng đợt 2 (phần còn lại)."
     )
+    # Miễn/giảm học phí THẬT (Pha 2) — GIẢM nghĩa vụ (final). "Học phí áp dụng"
+    # là final SAU MỌI giảm (gồm cả policy discount sẵn có). CHỈ tuition; quyền
+    # admin/manager/accountant (gate field-level ở router). None = không giảm tay.
+    target_final_amount: Optional[Decimal] = Field(
+        None, ge=0, le=MAX_AMOUNT,
+        description="Học phí áp dụng (final sau MỌI giảm) khi miễn/giảm thủ công.",
+    )
+    manual_discount_reason: Optional[str] = Field(None, max_length=500)
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
@@ -318,6 +326,34 @@ class FeeCalculateRequest(BaseModel):
             # liệu lạc bị bỏ thầm).
             raise ValueError(
                 "Chỉ truyền down_payment khi collection_schedule_mode='down_payment'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_manual_discount(self):
+        """Miễn/giảm học phí thủ công (HTTP layer → 422). Đo độ dài lý do trên
+        chuỗi RAW (đã strip) TRƯỚC ``html.escape`` (escape làm dài thêm → reason
+        rác vài ký tự đặc biệt sẽ lọt cửa ≥10). Ràng buộc ``target < net sau
+        policy`` đo ở service (chỉ biết sau khi resolve discount). AUTHZ vai trò
+        gate ở router (deps có role); schema chỉ lo bất biến dữ liệu.
+        """
+        if self.target_final_amount is not None:
+            if self.fee_type != FeeTypeEnum.tuition:
+                raise ValueError(
+                    "Miễn/giảm học phí thủ công chỉ áp dụng cho học phí (tuition)."
+                )
+            if (
+                not self.manual_discount_reason
+                or len(self.manual_discount_reason.strip()) < 10
+            ):
+                raise ValueError(
+                    "Cần lý do miễn/giảm học phí (tối thiểu 10 ký tự)."
+                )
+            # Độ dài đã đo trên RAW → giờ escape để lưu snapshot/audit an toàn.
+            self.manual_discount_reason = html.escape(self.manual_discount_reason.strip())
+        elif self.manual_discount_reason:
+            raise ValueError(
+                "Có lý do miễn/giảm nhưng thiếu mức học phí áp dụng."
             )
         return self
 

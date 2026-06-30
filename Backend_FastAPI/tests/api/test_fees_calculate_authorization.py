@@ -1431,3 +1431,226 @@ async def test_down_payment_remainder_due_before_first_422(
         headers=oh,
     )
     assert resp.status_code == 422, resp.text
+
+
+# ==============================================================================
+# Miễn/giảm học phí THẬT (Pha 2, 2026-06-29) — discount-line, GIẢM nghĩa vụ
+# ==============================================================================
+#
+# "Học phí áp dụng" (target_final_amount) = final SAU MỌI giảm. Backend tính
+# manual_discount = canonical − giảm-policy-sẵn-có − target → final == target;
+# base_amount GIỮ canonical; ghi 1 FeeAppliedDiscount(policy_id=NULL) + snapshot
+# source="manual_discount". Quyền admin/manager/accountant (field-level ở router);
+# officer gửi → 403. Canonical HK1 trong fee_calc_config = 5,000,000.
+
+
+async def _manual_discount_rows(pid: int):
+    """Đọc các FeeAppliedDiscount của hồ sơ (để soát dòng giảm tay + snapshot)."""
+    from app.models.finance import FeeAppliedDiscount, Fee
+    from sqlalchemy import select as _select
+    async with AsyncSessionLocal() as s:
+        return (await s.execute(
+            _select(FeeAppliedDiscount)
+            .join(Fee, Fee.id == FeeAppliedDiscount.fee_id)
+            .where(Fee.admission_profile_id == pid)
+        )).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_manual_discount_reduces_final_keeps_base(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Accountant miễn/giảm (không policy): target 1,000,000 (canonical
+    5,000,000) → base GIỮ 5,000,000, total_discount 4,000,000, final = target;
+    invoice khớp final; 1 dòng giảm tay policy_id=NULL + snapshot
+    source='manual_discount'."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ManualDiscount Base", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Học bổng đặc biệt theo quyết định khen thưởng",
+        },
+        headers=ah,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert Decimal(str(body["base_amount"])) == Decimal("5000000"), body
+    assert Decimal(str(body["total_discount"])) == Decimal("4000000"), body
+    assert Decimal(str(body["final_amount"])) == Decimal("1000000"), body
+    invoices = body.get("invoices") or []
+    assert sum(Decimal(str(i["amount"])) for i in invoices) == Decimal("1000000"), invoices
+
+    rows = await _manual_discount_rows(pid)
+    manual = [r for r in rows if (r.calculation_snapshot or {}).get("source") == "manual_discount"]
+    assert len(manual) == 1, [r.calculation_snapshot for r in rows]
+    assert manual[0].policy_id is None
+    assert Decimal(str(manual[0].discount_amount)) == Decimal("4000000")
+    snap = manual[0].calculation_snapshot
+    assert snap.get("approved_by") is not None, snap
+    assert Decimal(snap["canonical_amount"]) == Decimal("5000000"), snap
+    assert Decimal(snap["target_final_amount"]) == Decimal("1000000"), snap
+
+
+@pytest.mark.asyncio
+async def test_manual_discount_after_existing_policy(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Có policy discount 500,000 + target 1,000,000 → manual = 5tr − 500k − 1tr
+    = 3,500,000 (KHÔNG double-giảm); total_discount = 4,000,000; final = 1,000,000.
+    'Học phí áp dụng' là final SAU MỌI giảm."""
+    await _link_fixed_discount(fee_calc_config, amount="500000")
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ManualDiscount Policy", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Giảm học phí theo quyết định nhà trường",
+        },
+        headers=ah,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert Decimal(str(body["base_amount"])) == Decimal("5000000"), body
+    assert Decimal(str(body["total_discount"])) == Decimal("4000000"), body
+    assert Decimal(str(body["final_amount"])) == Decimal("1000000"), body
+    rows = await _manual_discount_rows(pid)
+    manual = [r for r in rows if (r.calculation_snapshot or {}).get("source") == "manual_discount"]
+    assert len(manual) == 1, [r.calculation_snapshot for r in rows]
+    # manual = canonical − policy(500k) − target(1tr) = 3,500,000 (không phải 4tr).
+    assert Decimal(str(manual[0].discount_amount)) == Decimal("3500000"), manual[0].calculation_snapshot
+    assert Decimal(manual[0].calculation_snapshot["existing_policy_discount"]) == Decimal("500000")
+
+
+@pytest.mark.asyncio
+async def test_officer_cannot_manual_discount_403(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Officer gửi target_final_amount → 403 (field-level authz ở router). Officer
+    vẫn calculate thường được (test khác)."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Officer NoDiscount",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Officer thử tự miễn giảm học phí",
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 403, resp.text
+
+
+@pytest.mark.asyncio
+async def test_manual_discount_target_not_below_net_400(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """target >= mức sau giảm hiện hành (no policy → canonical 5tr) → manual <= 0
+    → 400 (không 'giảm' lên bằng/cao hơn)."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ManualDiscount TooHigh", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "5000000",
+            "manual_discount_reason": "Đặt bằng giá chuẩn - không hợp lệ",
+        },
+        headers=ah,
+    )
+    assert resp.status_code == 400, resp.text
+
+
+@pytest.mark.asyncio
+async def test_recalculate_blocked_on_manual_discount_fee(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Fee có miễn/giảm thủ công → recalculate CHẶN (BusinessRuleViolation → 400):
+    recalc chỉ tính lại policy discount (existing_policy_ids loại policy_id=NULL),
+    nên sẽ BỎ RƠI giảm tay khỏi final + để lại dòng orphan. Bắt hủy & tạo lại."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ManualDiscount Recalc", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    created = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Học bổng đặc biệt theo quyết định nhà trường",
+        },
+        headers=ah,
+    )
+    assert created.status_code == 201, created.text
+    fee_id = created.json()["id"]
+
+    # Gọi recalculate_fee TẦNG SERVICE (paid=0 nên KHÔNG dính M10) → guard
+    # miễn/giảm thủ công raise BusinessRuleViolation (route map → 400).
+    from app.services.fee_calculation_service import FeeCalculationService
+    from app.utils.exceptions import BusinessRuleViolation
+    async with AsyncSessionLocal() as s:
+        svc = FeeCalculationService(s)
+        with pytest.raises(BusinessRuleViolation):
+            await svc.recalculate_fee(
+                fee_id=fee_id,
+                new_base_amount=Decimal("6000000"),
+                reason="Điều chỉnh base test",
+                user_id=1,
+            )

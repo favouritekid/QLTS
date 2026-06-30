@@ -51,6 +51,7 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
     ConflictError,
+    PermissionDeniedError,
 )
 
 log = structlog.get_logger(__name__)
@@ -243,7 +244,20 @@ async def calculate_fee(
     **Security:**
     - IDOR protection: Only accessible for user's unit
     - Requires 'fees:create' permission
+    - Miễn/giảm học phí thủ công (``target_final_amount``): FIELD-LEVEL AUTHZ —
+      chỉ admin/manager/accountant (officer vẫn calculate thường + down-payment).
     """
+    # Field-level authz (Pha 2): officer được calculate + down-payment, nhưng
+    # KHÔNG được tự miễn/giảm học phí (đổi nghĩa vụ tiền). Gate Ở ROUTER (deps có
+    # role) TRƯỚC service; cùng role-set với require_finance_staff. PermissionDenied
+    # → 403 qua global handler (KHÔNG nằm trong except BadRequest dưới).
+    if data.target_final_amount is not None and current_user.role not in (
+        UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT,
+    ):
+        raise PermissionDeniedError(
+            detail="Chỉ kế toán/quản lý/admin được miễn/giảm học phí thủ công."
+        )
+
     fee_service = FeeCalculationService(db)
     invoice_service = InvoiceService(db)
 
@@ -307,6 +321,8 @@ async def calculate_fee(
             user_id=current_user.id,
             unit_id=unit_id,
             semester_no=data.semester_no,
+            target_final_amount=data.target_final_amount,
+            manual_discount_reason=data.manual_discount_reason,
         )
 
         # Generate invoices based on installment plan.
