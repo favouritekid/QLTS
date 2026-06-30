@@ -44,6 +44,27 @@ def compute_token_hash(code: str) -> str:
     return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
 
 
+def compute_ip_hash(ip: Optional[str]) -> Optional[str]:
+    """HMAC-SHA256(ip, SMS_IP_HASH_SECRET) → hex 64 (click event PR-5). Secret
+    TÁCH BIỆT token-hash (§2.2) → không suy ngược token↔IP. KHÔNG lưu IP thô.
+    None nếu ip rỗng."""
+    raw = (ip or "").strip()
+    if not raw:
+        return None
+    secret = settings.SMS_IP_HASH_SECRET.encode()
+    return hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest()
+
+
+def is_valid_code(code: str) -> bool:
+    """Validate charset/length TRƯỚC khi chạm DB (§6.1) — base62 × 9 đúng
+    `CODE_LENGTH`. Chặn path lạ/inject trước lookup."""
+    return (
+        isinstance(code, str)
+        and len(code) == CODE_LENGTH
+        and all(c in _BASE62 for c in code)
+    )
+
+
 def _load_keyring() -> Tuple[Dict[str, str], str]:
     """Trả (keyring {version: fernet_key}, active_version).
 

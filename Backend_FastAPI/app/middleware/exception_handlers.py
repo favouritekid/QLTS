@@ -19,7 +19,6 @@ Usage:
 """
 
 import logging
-from typing import Union
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -56,6 +55,25 @@ from app.utils.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+# SMS bearer-code routes (PR-5): path chứa raw short-code → KHÔNG được log
+# nguyên (design §11.3). Redact phần code khi ghi log lỗi.
+_SMS_BEARER_PREFIXES = ("/r/", "/lp/", "/api/public/sms/landing/")
+
+
+def _redact_path(path: str) -> str:
+    """Che raw bearer code trong path SMS trước khi log (tránh lộ code↔PII).
+    Giữ prefix để vẫn nhận diện route; thay phần code bằng '<redacted>'."""
+    for prefix in _SMS_BEARER_PREFIXES:
+        if path.startswith(prefix):
+            return prefix + "<redacted>"
+    return path
+
+
+def _is_sms_bearer_route(path: str) -> bool:
+    """Route mang bearer code (path HOẶC body opt-out) → error 'input' lúc 422
+    có thể chứa raw code → KHÔNG log input (§11.3)."""
+    return path.startswith(_SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
+
 
 # ============================================================================
 # CUSTOM EXCEPTION HANDLERS
@@ -87,7 +105,7 @@ async def base_app_exception_handler(
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
             "method": request.method,
         },
     )
@@ -125,7 +143,7 @@ async def resource_not_found_handler(
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
         },
     )
 
@@ -151,7 +169,7 @@ async def validation_error_handler(
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
         },
     )
 
@@ -182,7 +200,7 @@ async def authentication_error_handler(
         f"Authentication error: {exc.detail}",
         extra={
             "error_code": exc.error_code,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
         },
     )
 
@@ -209,7 +227,7 @@ async def service_error_handler(
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
             "method": request.method,
         },
         exc_info=True,  # Include stack trace
@@ -255,11 +273,20 @@ async def pydantic_validation_error_handler(
 
     safe_errors = [serialize_error(e) for e in exc.errors()]
 
+    # Route bearer (/r/, /lp/, landing, body opt-out): error 'input' có thể là
+    # raw bearer code → loại 'input' khỏi LOG (vẫn giữ trong response cho chính
+    # người gửi). §11.3.
+    log_errors = safe_errors
+    if _is_sms_bearer_route(request.url.path):
+        log_errors = [
+            {k: v for k, v in e.items() if k != "input"} for e in safe_errors
+        ]
+
     logger.info(
         f"Request validation error: {len(safe_errors)} errors",
         extra={
-            "path": request.url.path,
-            "errors": safe_errors,
+            "path": _redact_path(request.url.path),
+            "errors": log_errors,
         },
     )
 
@@ -290,7 +317,7 @@ async def http_exception_handler(
         f"HTTP {exc.status_code}: {exc.detail}",
         extra={
             "status_code": exc.status_code,
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
         },
     )
 
@@ -319,7 +346,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     logger.error(
         f"Unhandled exception: {type(exc).__name__}: {str(exc)}",
         extra={
-            "path": request.url.path,
+            "path": _redact_path(request.url.path),
             "method": request.method,
         },
         exc_info=True,

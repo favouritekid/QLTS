@@ -538,3 +538,115 @@ class SmsExportBatchList(BaseModel):
     campaign_id: int
     build_revision: int
     batches: List[SmsExportBatchOut] = Field(default_factory=list)
+
+
+# =====================================================================
+# Tracking / Landing / Reports / Opt-out (PR-5)
+# =====================================================================
+SmsGranularity = Literal["day", "month", "year"]
+# Nguồn opt-out admin ghi tay (mirror CHECK chk_sms_opt_out_source; landing
+# dùng riêng 'landing_optout').
+SmsManualOptOutSource = Literal[
+    "manual", "sms_reply", "phone_call", "external_suppression"
+]
+
+
+class SmsLandingResponse(BaseModel):
+    """Nội dung landing `/lp/{code}` — read-only, KHÔNG lộ PII recipient
+    (phòng code bị chia sẻ). §19.4."""
+
+    school_name: str
+    headline: Optional[str] = None
+    body: Optional[str] = None
+    cta_label: Optional[str] = None
+    cta_url: Optional[str] = None
+    consent_notice: str
+    already_opted_out: bool = False
+
+
+class SmsPublicOptOutRequest(BaseModel):
+    """Body opt-out công khai từ landing — chỉ mang bearer code (§19.3)."""
+
+    code: str = Field(..., min_length=1, max_length=64)
+
+
+class SmsPublicOptOutResponse(BaseModel):
+    """Idempotent: lần 2 vẫn success=True."""
+
+    success: bool = True
+    already_opted_out: bool = False
+
+
+class SmsOptOutManualCreate(BaseModel):
+    """Admin ghi opt-out thủ công (đối tác/điện thoại/SMS reply)."""
+
+    phone: str = Field(..., min_length=8, max_length=32)
+    source: SmsManualOptOutSource = "manual"
+    source_reference: Optional[str] = Field(None, max_length=512)
+    reason: Optional[str] = Field(None, max_length=2000)
+
+
+class SmsOptOutOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    phone_normalized: str
+    source: str
+    source_reference: Optional[str] = None
+    reason: Optional[str] = None
+    observed_at: datetime
+    created_at: datetime
+
+
+class SmsOptOutList(BaseModel):
+    total: int
+    items: List[SmsOptOutOut]
+
+
+class SmsClickBucket(BaseModel):
+    """1 mốc thời gian (day/month/year) — số liệu click."""
+
+    period: str
+    total_clicks: int
+    human_clicks: int
+    distinct_contacts_clicked: int
+
+
+class SmsClickReport(BaseModel):
+    """Report click theo granularity + tổng + CTR (mẫu số = handed_off). §9."""
+
+    granularity: str
+    buckets: List[SmsClickBucket] = Field(default_factory=list)
+    total_clicks: int = 0
+    human_clicks: int = 0
+    distinct_contacts_clicked: int = 0
+    recipients_handed_off: int = 0
+    ctr_percent: float = 0.0
+
+
+class SmsClickerOut(BaseModel):
+    """1 liên hệ đã click (non-bot) cho dashboard — admin xem (PII masked)."""
+
+    recipient_id: int
+    contact_id: Optional[int] = None
+    full_name: str
+    phone_masked: str
+    carrier_bucket: str
+    human_click_count: int
+    first_human_clicked_at: Optional[datetime] = None
+    last_human_clicked_at: Optional[datetime] = None
+
+
+class SmsCampaignDashboard(BaseModel):
+    """Dashboard CTR + phân bố nhà mạng + danh sách số đã click của campaign."""
+
+    campaign_id: int
+    build_revision: int
+    has_link: bool
+    recipients_handed_off: int = 0
+    total_clicks: int = 0
+    human_clicks: int = 0
+    distinct_contacts_clicked: int = 0
+    ctr_percent: float = 0.0
+    carrier_distribution: Dict[str, int] = Field(default_factory=dict)
+    clickers: List[SmsClickerOut] = Field(default_factory=list)

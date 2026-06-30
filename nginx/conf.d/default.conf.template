@@ -177,6 +177,60 @@ server {
         root /var/www/certbot;
     }
 
+    # --- SMS short-link resolver (PR-5: về backend, KHÔNG về frontend) ---
+    # access_log off vì $request chứa raw bearer code; +security headers. Prefix
+    # dài hơn nên thắng /api/ và catch-all (nginx longest-prefix match).
+    location /r/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://backend;
+        proxy_read_timeout 30s;
+        # add_header KHÔNG kế thừa khi location tự khai → lặp lại header
+        # server-level (HSTS/X-Frame-Options/nosniff/cross-domain) kẻo /lp/
+        # (frontend, không có middleware bù) mất chống clickjacking/MIME-sniff.
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Permitted-Cross-Domain-Policies "none" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
+    # --- SMS landing API (code trong path) → backend ---
+    location /api/public/sms/landing/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://backend;
+        # add_header KHÔNG kế thừa khi location tự khai → lặp lại header
+        # server-level (HSTS/X-Frame-Options/nosniff/cross-domain) kẻo /lp/
+        # (frontend, không có middleware bù) mất chống clickjacking/MIME-sniff.
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Permitted-Cross-Domain-Policies "none" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
+    # --- SMS landing page (code trong path) → frontend ---
+    location /lp/ {
+        access_log off;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://frontend;
+        # add_header KHÔNG kế thừa khi location tự khai → lặp lại header
+        # server-level (HSTS/X-Frame-Options/nosniff/cross-domain) kẻo /lp/
+        # (frontend, không có middleware bù) mất chống clickjacking/MIME-sniff.
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Permitted-Cross-Domain-Policies "none" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Cache-Control "no-store" always;
+        add_header X-Robots-Tag "noindex" always;
+    }
+
     # --- Catch-all: Next.js pages ---
     location / {
         limit_req zone=general burst=30 nodelay;

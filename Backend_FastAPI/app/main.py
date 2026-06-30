@@ -222,6 +222,12 @@ logging.getLogger("uvicorn.access").addHandler(log_handler)
 logging.getLogger("uvicorn.error").handlers.clear()
 logging.getLogger("uvicorn.error").addHandler(log_handler)
 
+# Redact raw SMS bearer code khỏi access log (§11.3) — uvicorn.access (dev) +
+# gunicorn.access (prod, qua post_worker_init).
+from app.core.log_redaction import install_sms_log_redaction  # noqa: E402
+
+install_sms_log_redaction()
+
 # Logger chính của app (giờ là đồng bộ)
 log = structlog.get_logger("app.main")
 

@@ -43,6 +43,9 @@ const PUBLIC_ROUTE_PREFIXES = [
   // Backend exempts /api/v2/admissions/magic-link/* from CSRF; the
   // page itself is candidate-driven and must NOT bounce to /login.
   "/magic-link",
+  // SMS Marketing landing (PR-5): /lp/{code} — người nhận tới từ link SMS,
+  // KHÔNG đăng nhập. Backend /api/public/sms/* CSRF-exempt; trang phải render.
+  "/lp",
 ];
 
 /**

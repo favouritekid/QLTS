@@ -13,7 +13,6 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
-from urllib.parse import urlparse
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,10 +45,10 @@ from app.utils.sms_token import (
     ensure_token_secrets_configured,
     generate_short_code,
 )
+from app.utils.sms_url import host_in_allowlist
 
 # Status cho phép build lại (chưa bàn giao/đóng).
 _REBUILDABLE = {"draft", "ready", "exported"}
-_IP_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 _TOKEN_RETRY = 5  # số lần auto-retry khi token_hash collision (§6.1)
 
 
@@ -77,26 +76,10 @@ class SmsCampaignService:
     # Content validation (cross-field — cần config + candidate state)
     # ===============================================================
     def _host_allowed(self, url: str) -> bool:
-        """https + host ∈ SMS_ALLOWED_REDIRECT_DOMAINS (exact/subdomain);
-        chặn @, IP literal, scheme ≠ https (§6.2)."""
-        raw = (url or "").strip()
-        if "@" in raw:
-            return False
-        try:
-            parsed = urlparse(raw)
-        except ValueError:
-            return False
-        if parsed.scheme != "https":
-            return False
-        host = (parsed.hostname or "").lower()
-        if not host or _IP_RE.match(host):
-            return False
-        allowed = [
-            d.strip().lower()
-            for d in settings.SMS_ALLOWED_REDIRECT_DOMAINS.split(",")
-            if d.strip()
-        ]
-        return any(host == d or host.endswith("." + d) for d in allowed)
+        """Delegate sang util chung `host_in_allowlist` (PR-5) → 1 nguồn sự
+        thật cho allowlist redirect (gồm vá backslash/charset host §6.2),
+        tránh lệch giữa create-time và /r/-resolve."""
+        return host_in_allowlist(url)
 
     def _validate_content(
         self,
