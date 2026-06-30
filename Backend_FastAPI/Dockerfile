@@ -40,15 +40,23 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY . .
 
-# Create required directories and make entrypoint executable
+# Create required directories and make entrypoint executable.
+# /app/private_exports is the mount point cho named volume `sms_private_exports`
+# (PR-4 SMS export XLSX chứa PII, để ngoài webroot). PHẢI tạo + chown appuser
+# TRONG image: khi named volume rỗng mount lần đầu, Docker seed nội dung + quyền
+# từ image tại mount path → volume root thuộc appuser → app (chạy appuser) tạo
+# được subdir `sms`. Nếu không, mount point sinh ra root-owned → makedirs ném
+# PermissionError, batch export thành `failed`.
 RUN mkdir -p /app/uploads \
     /app/app/static/uploads/avatars \
     /app/geoip \
     /app/logs \
+    /app/private_exports/sms \
     && chown -R appuser:appuser /app/uploads \
     /app/app/static/uploads \
     /app/geoip \
     /app/logs \
+    /app/private_exports \
     && chmod +x /app/docker-entrypoint.sh
 
 USER appuser
