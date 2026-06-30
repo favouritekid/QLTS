@@ -11,6 +11,7 @@ import {
   Activity,
   BarChart3,
   Bell,
+  BellOff,
   Building2,
   Calculator,
   ClipboardCheck,
@@ -24,6 +25,7 @@ import {
   History,
   LayoutDashboard,
   MapPin,
+  MessageSquareText,
   Percent,
   School,
   Receipt,
@@ -248,6 +250,27 @@ export const navigationConfig: NavigationConfig = {
           href: "/admin/notification-consents",
           icon: UserCheck,
           roles: ["admin"], // Admin-only consent management
+        },
+      ],
+    },
+
+    // =========================================================================
+    // 4b. SMS MARKETING - Admin-only (BE require_admin trên mọi endpoint)
+    // =========================================================================
+    {
+      title: "SMS Marketing",
+      items: [
+        {
+          label: "Báo cáo SMS",
+          href: "/admin/sms/reports",
+          icon: MessageSquareText,
+          roles: ["admin"], // BE require_admin → manager loại khỏi sidebar
+        },
+        {
+          label: "Từ chối nhận tin",
+          href: "/admin/sms/opt-out",
+          icon: BellOff,
+          roles: ["admin"], // BE require_admin
         },
       ],
     },
