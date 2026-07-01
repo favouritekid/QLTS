@@ -136,7 +136,7 @@ export function SmsImportDialog({
               <Input
                 id="import-file"
                 type="file"
-                accept=".csv,.xlsx,.xls"
+                accept=".csv,.xlsx"
                 disabled={mutation.isPending}
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
