@@ -524,3 +524,77 @@ export const smsPreflightReportSchema = z.object({
   preview: z.array(z.string()),
 })
 export type SmsPreflightReport = z.infer<typeof smsPreflightReportSchema>
+
+// =====================================================================
+// Admin — Attestation + Export lifecycle (PR-6e; mirror SmsAttestationCreate,
+// SmsExportBatchOut/Result/List ở app/schemas/sms.py).
+// =====================================================================
+
+/** Loại attestation gate export (mirror SmsAttestationKind). */
+export const SMS_ATTESTATION_KINDS = [
+  "consent",
+  "dnc",
+  "optout_channel",
+] as const
+export type SmsAttestationKind = (typeof SMS_ATTESTATION_KINDS)[number]
+
+/** Form ghi attestation cho build_revision hiện tại. */
+export const smsAttestationCreateSchema = z.object({
+  kind: z.enum(SMS_ATTESTATION_KINDS),
+  reference: z.string().trim().min(1, "Bắt buộc nhập tham chiếu").max(512),
+})
+export type SmsAttestationCreateInput = z.infer<
+  typeof smsAttestationCreateSchema
+>
+
+/** Trạng thái vòng đời batch export (mirror SmsExportStatus / CHECK). */
+export const SMS_EXPORT_STATUSES = [
+  "pending",
+  "generated",
+  "handed_off",
+  "failed",
+  "purged",
+  "invalidated",
+] as const
+export type SmsExportStatus = (typeof SMS_EXPORT_STATUSES)[number]
+
+/** 1 file Excel / nhà mạng / build_revision (mirror SmsExportBatchOut). */
+export const smsExportBatchSchema = z.object({
+  id: z.number(),
+  campaign_id: z.number(),
+  build_revision: z.number(),
+  group_id: z.number().nullable().optional(),
+  group_name_snapshot: z.string().nullable().optional(),
+  carrier_bucket: z.string(),
+  recipient_count: z.number(),
+  file_name: z.string().nullable().optional(),
+  file_size_bytes: z.number().nullable().optional(),
+  status: z.string(),
+  failure_reason: z.string().nullable().optional(),
+  expires_at: z.string().nullable().optional(),
+  generated_at: z.string().nullable().optional(),
+  generated_by_id: z.number().nullable().optional(),
+  marked_handed_off_at: z.string().nullable().optional(),
+  invalidated_at: z.string().nullable().optional(),
+  // Cờ do BE điền — thin-client đọc cờ, KHÔNG tự suy trạng thái.
+  can_download: z.boolean(),
+  can_mark_handed_off: z.boolean(),
+  is_expired: z.boolean(),
+})
+export type SmsExportBatch = z.infer<typeof smsExportBatchSchema>
+
+export const smsExportResultSchema = z.object({
+  campaign_id: z.number(),
+  build_revision: z.number(),
+  total_exportable: z.number(),
+  batches: z.array(smsExportBatchSchema),
+  message: z.string().nullable().optional(),
+})
+export type SmsExportResult = z.infer<typeof smsExportResultSchema>
+
+export const smsExportBatchListSchema = z.object({
+  campaign_id: z.number(),
+  build_revision: z.number(),
+  batches: z.array(smsExportBatchSchema),
+})
+export type SmsExportBatchList = z.infer<typeof smsExportBatchListSchema>

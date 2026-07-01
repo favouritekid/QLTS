@@ -16,6 +16,8 @@ import {
   SMS_LANDING_TYPES,
   SMS_MANUAL_OPT_OUT_SOURCES,
   SMS_REVOKE_SOURCES,
+  type SmsAttestationKind,
+  type SmsCampaign,
   type SmsCarrierBucket,
   type SmsConsentBasis,
   type SmsGranularity,
@@ -167,6 +169,48 @@ export const EXCLUDED_REASON_LABELS: Record<string, string> = {
 }
 export function excludedReasonLabel(v: string): string {
   return EXCLUDED_REASON_LABELS[v] ?? v
+}
+
+// --- Attestation + Export (PR-6e) ---
+export const ATTESTATION_KIND_LABELS: Record<string, string> = {
+  consent: "Xác nhận đã có đồng ý (consent)",
+  dnc: "Xác nhận đã lọc danh sách chặn (DNC)",
+  optout_channel: "Xác nhận kênh từ chối hoạt động",
+}
+export function attestationKindLabel(v: string): string {
+  return ATTESTATION_KIND_LABELS[v] ?? v
+}
+
+export const EXPORT_STATUS_LABELS: Record<string, string> = {
+  pending: "Đang tạo",
+  generated: "Đã tạo",
+  handed_off: "Đã bàn giao",
+  failed: "Thất bại",
+  purged: "Đã xoá file",
+  invalidated: "Vô hiệu (đã build lại)",
+}
+export function exportStatusLabel(v: string): string {
+  return EXPORT_STATUS_LABELS[v] ?? v
+}
+export function exportStatusVariant(
+  v: string,
+): "default" | "secondary" | "destructive" | "outline" {
+  if (v === "handed_off") return "default"
+  if (v === "failed") return "destructive"
+  if (v === "purged" || v === "invalidated") return "secondary"
+  return "outline"
+}
+
+/**
+ * Attestation của `kind` hợp lệ khi khớp bản dựng hiện tại (build lại → vô
+ * hiệu). Index typed theo `${kind}_checked_build_revision` (không cast unknown).
+ */
+export function isAttestationValid(
+  c: SmsCampaign,
+  kind: SmsAttestationKind,
+): boolean {
+  const rev = c[`${kind}_checked_build_revision`]
+  return rev != null && rev === c.build_revision
 }
 
 // =====================================================================
