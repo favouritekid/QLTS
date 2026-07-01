@@ -393,7 +393,7 @@ export async function detachCampaignGroup(
   await api.delete(`/api/sms/campaigns/${campaignId}/groups/${groupId}`)
 }
 
-/** Build snapshot + preflight (chỉ khi draft/ready). */
+/** Build snapshot + preflight (chỉ khi draft/ready/exported — chưa bàn giao). */
 export async function buildSmsCampaign(
   campaignId: number,
 ): Promise<SmsPreflightReport> {

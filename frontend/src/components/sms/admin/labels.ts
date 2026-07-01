@@ -129,6 +129,20 @@ export function nowDatetimeLocal(): string {
     .slice(0, 16)
 }
 
+/**
+ * ISO tz-aware (UTC) → value cho <input type="datetime-local"> theo GIỜ ĐỊA
+ * PHƯƠNG. Dùng khi nạp lại form sửa: BE trả UTC, input hiểu giờ local → phải
+ * đổi UTC→local trước khi slice, nếu không sẽ lệch offset (bug link_expires_at).
+ */
+export function isoToDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return ""
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16)
+}
+
 // =====================================================================
 // Campaign / Preflight (PR-6d)
 // =====================================================================

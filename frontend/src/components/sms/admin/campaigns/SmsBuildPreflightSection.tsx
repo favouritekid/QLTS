@@ -1,7 +1,7 @@
 // src/components/sms/admin/campaigns/SmsBuildPreflightSection.tsx
 "use client"
 
-import { AlertTriangle, Hammer, Loader2 } from "lucide-react"
+import { AlertCircle, AlertTriangle, Hammer, Loader2 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,7 +30,7 @@ import {
 interface Props {
   campaignId: number
   hasBuild: boolean
-  /** Build được khi draft/ready. */
+  /** Build được khi draft/ready/exported (chưa bàn giao/đóng). */
   canBuild: boolean
 }
 
@@ -49,10 +49,12 @@ export function SmsBuildPreflightSection({
   canBuild,
 }: Props) {
   const buildMut = useBuildSmsCampaign()
-  const { data: preflightData, isLoading } = useSmsCampaignPreflight(
-    campaignId,
-    { enabled: hasBuild },
-  )
+  const {
+    data: preflightData,
+    isLoading,
+    isError,
+    refetch,
+  } = useSmsCampaignPreflight(campaignId, { enabled: hasBuild })
   // Ưu tiên kết quả build vừa chạy (tức thời), fallback query (reload).
   const preflight: SmsPreflightReport | undefined =
     buildMut.data ?? preflightData
@@ -89,6 +91,16 @@ export function SmsBuildPreflightSection({
             Chưa build. Gắn nhóm rồi bấm “Build” để chốt danh sách gửi + kiểm tra
             độ dài tin.
           </p>
+        ) : isError && !preflight ? (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <AlertCircle className="text-destructive h-7 w-7" />
+            <p className="text-muted-foreground text-sm">
+              Không tải được kết quả preflight.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Thử lại
+            </Button>
+          </div>
         ) : isLoading && !preflight ? (
           <div className="space-y-3">
             <Skeleton className="h-20 w-full" />

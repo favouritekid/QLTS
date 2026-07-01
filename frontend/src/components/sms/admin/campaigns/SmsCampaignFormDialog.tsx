@@ -44,7 +44,7 @@ import {
   type SmsCampaignCreateInput,
 } from "@/lib/zod/sms"
 
-import { LANDING_TYPE_OPTIONS } from "../labels"
+import { LANDING_TYPE_OPTIONS, isoToDatetimeLocal } from "../labels"
 
 interface Props {
   open: boolean
@@ -103,9 +103,8 @@ export function SmsCampaignFormDialog({
         landing_cta_label: campaign.landing_cta_label ?? "",
         landing_cta_url: campaign.landing_cta_url ?? "",
         frequency_cap_days: campaign.frequency_cap_days ?? undefined,
-        link_expires_at: campaign.link_expires_at
-          ? campaign.link_expires_at.slice(0, 16)
-          : "",
+        // BE trả UTC → đổi sang giờ local cho datetime-local (tránh lệch offset).
+        link_expires_at: isoToDatetimeLocal(campaign.link_expires_at),
       })
     } else {
       form.reset(DEFAULTS)
@@ -114,29 +113,54 @@ export function SmsCampaignFormDialog({
   }, [open, campaign?.id])
 
   function onSubmit(values: FormData) {
-    // "" → undefined cho optional; datetime-local → ISO tz-aware.
-    const shared = {
-      name: values.name,
-      sms_template: values.sms_template,
-      landing_type: values.landing_type,
-      landing_url: values.landing_url?.trim() || undefined,
-      landing_headline: values.landing_headline?.trim() || undefined,
-      landing_body: values.landing_body?.trim() || undefined,
-      landing_cta_label: values.landing_cta_label?.trim() || undefined,
-      landing_cta_url: values.landing_cta_url?.trim() || undefined,
-      frequency_cap_days: values.frequency_cap_days ?? undefined,
-      link_expires_at: values.link_expires_at
-        ? new Date(values.link_expires_at).toISOString()
-        : undefined,
+    const isExternal = values.landing_type === "external"
+    // Chỉ giữ field landing đúng loại (external→url; hosted→headline/body/cta);
+    // field không thuộc loại → "" để không lưu dữ liệu chéo cũ (finding #3).
+    const t = (v?: string | null) => (v ?? "").trim()
+    const landing = {
+      landing_url: isExternal ? t(values.landing_url) : "",
+      landing_headline: isExternal ? "" : t(values.landing_headline),
+      landing_body: isExternal ? "" : t(values.landing_body),
+      landing_cta_label: isExternal ? "" : t(values.landing_cta_label),
+      landing_cta_url: isExternal ? "" : t(values.landing_cta_url),
     }
+    const linkIso = values.link_expires_at
+      ? new Date(values.link_expires_at).toISOString()
+      : null
+
     if (isEdit && campaign) {
+      // Update: gửi "" / null (KHÔNG undefined) để CHO PHÉP xoá field — BE
+      // exclude_unset bỏ qua undefined = không xoá được (finding #2).
       updateMut.mutate(
-        { id: campaign.id, data: shared },
+        {
+          id: campaign.id,
+          data: {
+            name: values.name,
+            sms_template: values.sms_template,
+            landing_type: values.landing_type,
+            ...landing,
+            frequency_cap_days: values.frequency_cap_days ?? null,
+            link_expires_at: linkIso,
+          },
+        },
         { onSuccess: () => onOpenChange(false) },
       )
     } else {
+      // Create: field trống → undefined (BE default None); code tự sinh.
       createMut.mutate(
-        { ...shared, code: values.code?.trim() || undefined },
+        {
+          name: values.name,
+          code: values.code?.trim() || undefined,
+          sms_template: values.sms_template,
+          landing_type: values.landing_type,
+          landing_url: landing.landing_url || undefined,
+          landing_headline: landing.landing_headline || undefined,
+          landing_body: landing.landing_body || undefined,
+          landing_cta_label: landing.landing_cta_label || undefined,
+          landing_cta_url: landing.landing_cta_url || undefined,
+          frequency_cap_days: values.frequency_cap_days ?? undefined,
+          link_expires_at: linkIso ?? undefined,
+        },
         {
           onSuccess: (c) => {
             onOpenChange(false)

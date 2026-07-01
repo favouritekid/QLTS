@@ -490,7 +490,7 @@ export const smsCampaignCreateSchema = z.object({
   landing_cta_label: z.string().trim().max(100).optional().or(z.literal("")),
   landing_cta_url: z.string().trim().max(2000).optional().or(z.literal("")),
   frequency_cap_days: z.number().int().min(0).max(3650).nullable().optional(),
-  link_expires_at: z.string().optional().or(z.literal("")),
+  link_expires_at: z.string().nullable().optional(),
 })
 export type SmsCampaignCreateInput = z.infer<typeof smsCampaignCreateSchema>
 

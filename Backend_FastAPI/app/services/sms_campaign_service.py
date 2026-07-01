@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import SMS_OPTOUT_INSTRUCTION_DEFAULT, settings
-from app.models.sms import SmsCampaign
+from app.models.sms import SmsCampaign, SmsContactGroup
 from app.repositories.sms_campaign_repository import SmsCampaignRepository
 from app.repositories.sms_contact_repository import SmsContactRepository
 from app.schemas import sms as sms_schemas
@@ -203,7 +203,7 @@ class SmsCampaignService:
 
     async def list_campaign_groups(
         self, campaign_id: int
-    ) -> Tuple[int, List]:
+    ) -> Tuple[int, List[SmsContactGroup]]:
         """Danh sách nhóm ĐÃ GẮN vào campaign (kèm member_count) — cho FE
         liệt kê + bỏ nhóm. 404 nếu campaign không tồn tại."""
         campaign = await self.repo.get_campaign(campaign_id)
