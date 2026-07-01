@@ -61,11 +61,21 @@ def _get_test_ip(request) -> str:
 # Tight limits for test endpoints (override production "1000/minute")
 _LOGIN_LIMIT = "3/minute"
 _REGISTER_LIMIT = "2/minute"
+_PUBLIC_READ_LIMIT = "3/minute"
 
 _OVERRIDDEN_ENDPOINTS = {
     "app.routers.auth.login_for_access_token": _LOGIN_LIMIT,
     "app.routers.auth.verify_mfa": _LOGIN_LIMIT,
     "app.routers.auth.register_user": _REGISTER_LIMIT,
+    # Public admissions catalog (unauthenticated). 2026-07 regression: decorator
+    # order was `@limiter.limit` ABOVE `@router.get`, so slowapi never wrapped the
+    # registered endpoint and PUBLIC_READ was silently unenforced. The behavioural
+    # test below proves real 429 emission — which ALSO fails if the wrong order
+    # ever returns (the wrapper is not invoked, so no 429).
+    "app.routers.public_admissions.get_public_programs_catalog": _PUBLIC_READ_LIMIT,
+    "app.routers.public_admissions.get_public_methods_catalog": _PUBLIC_READ_LIMIT,
+    "app.routers.public_admissions.get_public_documents_catalog": _PUBLIC_READ_LIMIT,
+    "app.routers.public_admissions.get_public_tuition_catalog": _PUBLIC_READ_LIMIT,
 }
 
 
@@ -335,6 +345,12 @@ class TestRateLimitConfiguration:
             "app.routers.auth.perform_password_reset",
             "app.routers.auth.perform_change_password",
             "app.routers.auth.refresh_access_token",
+            # Public admissions catalog (unauthenticated) — exact-key registration
+            # check (order enforcement is covered by the behavioural test below).
+            "app.routers.public_admissions.get_public_programs_catalog",
+            "app.routers.public_admissions.get_public_methods_catalog",
+            "app.routers.public_admissions.get_public_documents_catalog",
+            "app.routers.public_admissions.get_public_tuition_catalog",
         ],
     )
     def test_endpoint_has_rate_limit(self, endpoint_key: str):
@@ -398,4 +414,55 @@ class TestRateLimitConfiguration:
 
         assert limiter._key_func is get_remote_address, (
             "Default key_func should be get_remote_address for IP-based limiting"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: IP rate limiting on public admissions catalog (unauthenticated)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestPublicAdmissionsRateLimit:
+    """IP rate limiting on the PUBLIC (unauthenticated) admissions catalog.
+
+    Regression guard for the 2026-07 decorator-order fix: these 4 endpoints had
+    ``@limiter.limit`` ABOVE ``@router.get`` so slowapi never wrapped the
+    endpoint the router registered and the limit was SILENTLY unenforced (no
+    ``SlowAPIMiddleware`` to compensate). A real 429 here proves BOTH correct
+    order (wrapper actually invoked) AND runtime enforcement — stronger than a
+    structural ``__wrapped__`` inspection, which cannot see either regression.
+    """
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/public/admissions/programs",
+            "/api/public/admissions/methods",
+            "/api/public/admissions/documents",
+            "/api/public/admissions/tuition",
+        ],
+    )
+    async def test_blocks_after_threshold(
+        self, rate_limited_client: AsyncClient, path: str
+    ):
+        """4th GET from the same IP must be 429 (fixture sets 3/minute).
+
+        The limiter runs BEFORE the endpoint body, so the 4th request is 429
+        regardless of what the catalog query returns; the first 3 only need to
+        be non-429 (200 on an empty test DB, or any non-429 status)."""
+        global _test_ip
+        _test_ip = "203.0.113.7"
+
+        for i in range(3):
+            res = await rate_limited_client.get(path)
+            assert res.status_code != 429, (
+                f"{path}: request {i + 1}/3 should pass, got {res.status_code}"
+            )
+
+        res = await rate_limited_client.get(path)
+        assert res.status_code == 429, (
+            f"{path}: 4th request should be rate-limited (429), got "
+            f"{res.status_code} — decorator order likely wrong (limit unenforced)."
         )
