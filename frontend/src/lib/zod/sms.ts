@@ -170,3 +170,235 @@ export const smsManualOptOutSchema = z.object({
     .optional(),
 })
 export type SmsManualOptOutInput = z.infer<typeof smsManualOptOutSchema>
+
+// =====================================================================
+// Admin — Contact / Group / Consent (PR-6b; mirror app/schemas/sms.py
+// SmsContactGroup*, SmsContact*, SmsConsentEvent*, SmsImportResult).
+// =====================================================================
+
+/** Loại nhóm liên hệ (mirror GroupType). */
+export const SMS_GROUP_TYPES = [
+  "parent",
+  "student",
+  "teacher",
+  "lead",
+  "custom",
+] as const
+export type SmsGroupType = (typeof SMS_GROUP_TYPES)[number]
+
+/** Trạng thái consent marketing (CHECK chk_sms_contact_consent_status). */
+export const SMS_CONSENT_STATUSES = ["unknown", "granted", "revoked"] as const
+
+/** Căn cứ consent GRANT (mirror ConsentBasis). */
+export const SMS_CONSENT_BASES = [
+  "explicit_form",
+  "signed_form",
+  "recorded_call",
+  "imported_proof",
+] as const
+export type SmsConsentBasis = (typeof SMS_CONSENT_BASES)[number]
+
+/** Nguồn REVOKE (mirror RevokeSource). */
+export const SMS_REVOKE_SOURCES = [
+  "sms_reply",
+  "landing_optout",
+  "manual",
+  "phone_call",
+  "external_suppression",
+] as const
+export type SmsRevokeSource = (typeof SMS_REVOKE_SOURCES)[number]
+
+export const SMS_CONSENT_EVENT_TYPES = ["granted", "revoked"] as const
+
+// --- Contact group ---
+export const smsContactGroupSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  code: z.string(),
+  group_type: z.string(),
+  description: z.string().nullable().optional(),
+  is_active: z.boolean(),
+  created_by_id: z.number().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  member_count: z.number().nullable().optional(),
+})
+export type SmsContactGroup = z.infer<typeof smsContactGroupSchema>
+
+export const smsContactGroupListSchema = z.object({
+  total: z.number(),
+  items: z.array(smsContactGroupSchema),
+})
+export type SmsContactGroupList = z.infer<typeof smsContactGroupListSchema>
+
+/** Form tạo nhóm. `code` để trống → BE tự slugify từ name. */
+export const smsContactGroupCreateSchema = z.object({
+  name: z.string().trim().min(1, "Bắt buộc nhập tên").max(200),
+  code: z
+    .string()
+    .trim()
+    .max(50)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, "Chỉ a-z, 0-9, dấu gạch; bắt đầu bằng chữ/số")
+    .optional()
+    .or(z.literal("")),
+  group_type: z.enum(SMS_GROUP_TYPES),
+  description: z.string().trim().max(2000).optional().or(z.literal("")),
+})
+export type SmsContactGroupCreateInput = z.infer<
+  typeof smsContactGroupCreateSchema
+>
+
+/** Form sửa nhóm — không đổi `code`. */
+export const smsContactGroupUpdateSchema = z.object({
+  name: z.string().trim().min(1, "Bắt buộc nhập tên").max(200),
+  group_type: z.enum(SMS_GROUP_TYPES),
+  description: z.string().trim().max(2000).optional().or(z.literal("")),
+  is_active: z.boolean(),
+})
+export type SmsContactGroupUpdateInput = z.infer<
+  typeof smsContactGroupUpdateSchema
+>
+
+// --- Contact ---
+export const smsContactSchema = z.object({
+  id: z.number(),
+  full_name: z.string(),
+  phone_raw: z.string().nullable().optional(),
+  phone_normalized: z.string(),
+  phone_international: z.string(),
+  note: z.string().nullable().optional(),
+  source_label: z.string().nullable().optional(),
+  marketing_consent_status: z.string(),
+  marketing_consented_at: z.string().nullable().optional(),
+  marketing_consent_basis: z.string().nullable().optional(),
+  marketing_consent_proof_ref: z.string().nullable().optional(),
+  consent_disclosure_version: z.string().nullable().optional(),
+  last_handed_off_at: z.string().nullable().optional(),
+  created_by_id: z.number().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+})
+export type SmsContact = z.infer<typeof smsContactSchema>
+
+export const smsContactListSchema = z.object({
+  total: z.number(),
+  items: z.array(smsContactSchema),
+})
+export type SmsContactList = z.infer<typeof smsContactListSchema>
+
+export const smsContactCreateSchema = z.object({
+  full_name: z.string().trim().min(1, "Bắt buộc nhập họ tên").max(255),
+  phone: z
+    .string()
+    .trim()
+    .min(1, "Bắt buộc nhập số điện thoại")
+    .max(32),
+  note: z.string().trim().max(2000).optional().or(z.literal("")),
+  source_label: z.string().trim().max(255).optional().or(z.literal("")),
+})
+export type SmsContactCreateInput = z.infer<typeof smsContactCreateSchema>
+
+/** Sửa identity/note — KHÔNG đổi phone (identity), KHÔNG đụng consent. */
+export const smsContactUpdateSchema = z.object({
+  full_name: z.string().trim().min(1, "Bắt buộc nhập họ tên").max(255),
+  note: z.string().trim().max(2000).optional().or(z.literal("")),
+  source_label: z.string().trim().max(255).optional().or(z.literal("")),
+})
+export type SmsContactUpdateInput = z.infer<typeof smsContactUpdateSchema>
+
+// --- Consent event (append-only ledger) ---
+export const smsConsentEventSchema = z.object({
+  id: z.number(),
+  contact_id: z.number().nullable().optional(),
+  phone_normalized_snapshot: z.string(),
+  event_type: z.string(),
+  basis: z.string().nullable().optional(),
+  revoke_source: z.string().nullable().optional(),
+  disclosure_version: z.string().nullable().optional(),
+  proof_reference: z.string().nullable().optional(),
+  occurred_at: z.string(),
+  recorded_by_id: z.number().nullable().optional(),
+  import_batch_id: z.number().nullable().optional(),
+  metadata_json: z.record(z.string(), z.unknown()).nullable().optional(),
+  created_at: z.string(),
+})
+export type SmsConsentEvent = z.infer<typeof smsConsentEventSchema>
+
+export const smsConsentEventListSchema = z.object({
+  total: z.number(),
+  items: z.array(smsConsentEventSchema),
+})
+export type SmsConsentEventList = z.infer<typeof smsConsentEventListSchema>
+
+/**
+ * Form ghi consent. Mirror cross-field của BE model_validator:
+ * GRANT → cần basis + disclosure_version + proof_reference (không rỗng), cấm
+ * revoke_source. REVOKE → cần revoke_source, cấm grant-data.
+ * `occurred_at` = ISO tz-aware (form gửi datetime-local + offset).
+ */
+export const smsConsentEventCreateSchema = z
+  .object({
+    event_type: z.enum(SMS_CONSENT_EVENT_TYPES),
+    occurred_at: z.string().min(1, "Bắt buộc chọn thời điểm"),
+    basis: z.enum(SMS_CONSENT_BASES).optional(),
+    disclosure_version: z.string().trim().max(50).optional().or(z.literal("")),
+    proof_reference: z.string().trim().max(512).optional().or(z.literal("")),
+    revoke_source: z.enum(SMS_REVOKE_SOURCES).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.event_type === "granted") {
+      if (!v.basis)
+        ctx.addIssue({
+          code: "custom",
+          path: ["basis"],
+          message: "GRANT cần căn cứ consent",
+        })
+      if (!v.disclosure_version?.trim())
+        ctx.addIssue({
+          code: "custom",
+          path: ["disclosure_version"],
+          message: "GRANT cần phiên bản công bố",
+        })
+      if (!v.proof_reference?.trim())
+        ctx.addIssue({
+          code: "custom",
+          path: ["proof_reference"],
+          message: "GRANT cần tham chiếu bằng chứng",
+        })
+    } else {
+      if (!v.revoke_source)
+        ctx.addIssue({
+          code: "custom",
+          path: ["revoke_source"],
+          message: "REVOKE cần nguồn từ chối",
+        })
+    }
+  })
+export type SmsConsentEventCreateInput = z.infer<
+  typeof smsConsentEventCreateSchema
+>
+
+// --- Import result (upload contacts vào nhóm) ---
+export const smsImportRowErrorSchema = z.object({
+  row_number: z.number(),
+  phone_raw: z.string().nullable().optional(),
+  reason: z.string(),
+})
+export type SmsImportRowError = z.infer<typeof smsImportRowErrorSchema>
+
+export const smsImportResultSchema = z.object({
+  batch_id: z.number(),
+  group_id: z.number().nullable().optional(),
+  file_name: z.string().nullable().optional(),
+  row_count: z.number(),
+  valid_count: z.number(),
+  invalid_count: z.number(),
+  duplicate_contact_count: z.number(),
+  existing_member_count: z.number(),
+  inserted_contact_count: z.number(),
+  added_member_count: z.number(),
+  skipped_count: z.number(),
+  consent_applied: z.boolean(),
+  errors: z.array(smsImportRowErrorSchema),
+})
+export type SmsImportResult = z.infer<typeof smsImportResultSchema>

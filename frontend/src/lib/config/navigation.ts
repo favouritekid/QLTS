@@ -261,6 +261,12 @@ export const navigationConfig: NavigationConfig = {
       title: "SMS Marketing",
       items: [
         {
+          label: "Liên hệ SMS",
+          href: "/admin/sms/contacts",
+          icon: Users,
+          roles: ["admin"], // BE require_admin trên contact/group/consent
+        },
+        {
           label: "Báo cáo SMS",
           href: "/admin/sms/reports",
           icon: MessageSquareText,
