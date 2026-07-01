@@ -13,7 +13,7 @@
 
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { format } from "date-fns"
 import { vi } from "date-fns/locale"
 import { ArrowUpDown, Check, ChevronDown, Search, SlidersHorizontal, X } from "lucide-react"
@@ -89,6 +89,9 @@ function toggleId(arr: string[], value: string): string[] {
 
 const NATIVE_SELECT_CLASS =
   "h-10 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9"
+
+// Stable no-op subscribe for the hydration flag below (useSyncExternalStore).
+const emptySubscribe = () => () => {}
 
 function parseDate(str: string): Date | undefined {
   if (!str) return undefined
@@ -178,8 +181,11 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
   //    LeadFilterPanel so chip labels resolve here. UX-only role gates; backend
   //    enforces real scope via _resolve_coordination_filters.
   const { user } = useAuth()
-  const [isMounted, setIsMounted] = useState(false)
-  useEffect(() => setIsMounted(true), [])
+  // Hydration-safe client flag: false on SSR + first client render, true after
+  // hydration. useSyncExternalStore instead of a `useEffect(() => setState(true))`
+  // that trips react-hooks/set-state-in-effect (LeadFilterPanel uses the older
+  // React.useEffect form which the rule doesn't detect).
+  const isMounted = useSyncExternalStore(emptySubscribe, () => true, () => false)
   const isAdminFlag = isMounted && checkIsAdmin(user)
   const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user)
   const showAssignmentGroup = canFilterByOfficerFlag || isAdminFlag
