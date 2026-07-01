@@ -15,6 +15,9 @@ import {
   smsCampaignListSchema,
   smsCampaignSchema,
   smsClickReportSchema,
+  smsExportBatchListSchema,
+  smsExportBatchSchema,
+  smsExportResultSchema,
   smsPreflightReportSchema,
   smsConsentEventListSchema,
   smsConsentEventSchema,
@@ -33,7 +36,11 @@ import {
   type SmsCampaignFullList,
   type SmsCampaignList,
   type SmsCampaignUpdateInput,
+  type SmsAttestationCreateInput,
   type SmsClickReport,
+  type SmsExportBatch,
+  type SmsExportBatchList,
+  type SmsExportResult,
   type SmsPreflightReport,
   type SmsConsentEvent,
   type SmsConsentEventCreateInput,
@@ -411,4 +418,79 @@ export async function getSmsCampaignPreflight(
     `/api/sms/campaigns/${campaignId}/preflight`,
   )
   return smsPreflightReportSchema.parse(res.data)
+}
+
+// =====================================================================
+// Admin — Attestation + Export lifecycle (PR-6e, require_admin)
+// =====================================================================
+
+/** Ghi attestation (consent/dnc/optout_channel) cho build hiện tại. */
+export async function addCampaignAttestation(
+  campaignId: number,
+  payload: SmsAttestationCreateInput,
+): Promise<SmsCampaign> {
+  const res = await api.post<SmsCampaign>(
+    `/api/sms/campaigns/${campaignId}/attestations`,
+    payload,
+  )
+  return smsCampaignSchema.parse(res.data)
+}
+
+/** Sinh file Excel per nhà mạng (gate fail-closed ở BE → 400 nếu chưa đủ). */
+export async function exportSmsCampaign(
+  campaignId: number,
+): Promise<SmsExportResult> {
+  const res = await api.post<SmsExportResult>(
+    `/api/sms/campaigns/${campaignId}/export`,
+  )
+  return smsExportResultSchema.parse(res.data)
+}
+
+/** Danh sách batch export của bản build hiện tại (hiển thị lại sau reload). */
+export async function listSmsCampaignExports(
+  campaignId: number,
+): Promise<SmsExportBatchList> {
+  const res = await api.get<SmsExportBatchList>(
+    `/api/sms/campaigns/${campaignId}/exports`,
+  )
+  return smsExportBatchListSchema.parse(res.data)
+}
+
+export async function markSmsExportHandedOff(
+  campaignId: number,
+  batchId: number,
+): Promise<SmsExportBatch> {
+  const res = await api.post<SmsExportBatch>(
+    `/api/sms/campaigns/${campaignId}/exports/${batchId}/mark-handed-off`,
+  )
+  return smsExportBatchSchema.parse(res.data)
+}
+
+/**
+ * Tải file export. Endpoint trả FileResponse (binary) + YÊU CẦU auth (JWT) →
+ * phải fetch blob qua axios (giữ Authorization header), KHÔNG mở URL trần.
+ * Kích hoạt tải trong trình duyệt qua <a download> tạm rồi thu hồi objectURL.
+ */
+export async function downloadSmsExport(
+  campaignId: number,
+  batchId: number,
+  fallbackName: string,
+): Promise<void> {
+  const res = await api.get<Blob>(
+    `/api/sms/campaigns/${campaignId}/exports/${batchId}/download`,
+    { responseType: "blob" },
+  )
+  // Lấy tên file từ Content-Disposition nếu có, else fallback (batch.file_name).
+  const cd = res.headers["content-disposition"] as string | undefined
+  const match = cd?.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i)
+  const filename = match ? decodeURIComponent(match[1]) : fallbackName
+
+  const url = URL.createObjectURL(res.data)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }

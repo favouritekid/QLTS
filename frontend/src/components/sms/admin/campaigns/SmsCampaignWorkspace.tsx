@@ -12,9 +12,11 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useSmsCampaign } from "@/hooks/useSmsCampaigns"
 
 import { campaignStatusLabel } from "../labels"
+import { SmsAttestationSection } from "./SmsAttestationSection"
 import { SmsBuildPreflightSection } from "./SmsBuildPreflightSection"
 import { SmsCampaignFormDialog } from "./SmsCampaignFormDialog"
 import { SmsCampaignGroupsSection } from "./SmsCampaignGroupsSection"
+import { SmsExportSection } from "./SmsExportSection"
 
 const CLOSED_STATUSES = ["handed_off", "closed"]
 
@@ -98,6 +100,20 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
         canBuild={audienceEditable}
         staleBuild={staleBuild}
       />
+
+      {hasBuild && (
+        <>
+          <SmsAttestationSection
+            campaign={campaign}
+            editable={audienceEditable}
+          />
+          <SmsExportSection
+            campaign={campaign}
+            hasBuild={hasBuild}
+            editable={audienceEditable}
+          />
+        </>
+      )}
 
       <SmsCampaignFormDialog
         open={editOpen}
