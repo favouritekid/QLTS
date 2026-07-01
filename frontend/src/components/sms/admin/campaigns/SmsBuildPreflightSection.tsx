@@ -32,6 +32,8 @@ interface Props {
   hasBuild: boolean
   /** Build được khi draft/ready/exported (chưa bàn giao/đóng). */
   canBuild: boolean
+  /** Đã build nhưng đổi nhóm sau đó → preflight hiển thị là của bản dựng CŨ. */
+  staleBuild: boolean
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
@@ -47,6 +49,7 @@ export function SmsBuildPreflightSection({
   campaignId,
   hasBuild,
   canBuild,
+  staleBuild,
 }: Props) {
   const buildMut = useBuildSmsCampaign()
   const {
@@ -108,6 +111,15 @@ export function SmsBuildPreflightSection({
           </div>
         ) : preflight ? (
           <>
+            {staleBuild && (
+              <div className="rounded border border-amber-400 bg-amber-50 p-3">
+                <p className="flex items-center gap-1.5 text-sm font-medium text-amber-900">
+                  <AlertTriangle className="h-4 w-4" />
+                  Danh sách nhóm đã đổi sau khi build — số liệu dưới đây là của
+                  bản dựng CŨ. Bấm “Build lại” để cập nhật trước khi export.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatCard
                 label="Tổng người nhận"
@@ -233,9 +245,12 @@ export function SmsBuildPreflightSection({
             )}
 
             <Badge variant="secondary">
-              {preflight.exportable > 0 && preflight.over_limit.length === 0
-                ? "Sẵn sàng cho bước attestation + export (PR-6e)"
-                : "Chưa đủ điều kiện export — xem cảnh báo ở trên"}
+              {staleBuild
+                ? "Cần build lại — danh sách nhóm đã thay đổi"
+                : preflight.exportable > 0 &&
+                    preflight.over_limit.length === 0
+                  ? "Sẵn sàng cho bước attestation + export (PR-6e)"
+                  : "Chưa đủ điều kiện export — xem cảnh báo ở trên"}
             </Badge>
           </>
         ) : null}

@@ -52,6 +52,9 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
   const canEdit = campaign.status === "draft"
   const audienceEditable = !CLOSED_STATUSES.includes(campaign.status)
   const hasBuild = campaign.build_revision > 0
+  // Đã build rồi nhưng status quay lại draft = đổi nhóm sau build → snapshot +
+  // preflight cũ đã stale, buộc build lại (BE _mark_audience_changed).
+  const staleBuild = campaign.status === "draft" && hasBuild
 
   return (
     <div className="space-y-4">
@@ -93,6 +96,7 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
         campaignId={campaignId}
         hasBuild={hasBuild}
         canBuild={audienceEditable}
+        staleBuild={staleBuild}
       />
 
       <SmsCampaignFormDialog
