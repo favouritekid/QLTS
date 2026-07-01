@@ -11,8 +11,11 @@
 import { api } from "@/lib/api/client"
 import {
   smsCampaignDashboardSchema,
+  smsCampaignFullListSchema,
   smsCampaignListSchema,
+  smsCampaignSchema,
   smsClickReportSchema,
+  smsPreflightReportSchema,
   smsConsentEventListSchema,
   smsConsentEventSchema,
   smsContactGroupListSchema,
@@ -24,9 +27,14 @@ import {
   smsOptOutListSchema,
   smsOptOutSchema,
   smsPublicOptOutResponseSchema,
+  type SmsCampaign,
+  type SmsCampaignCreateInput,
   type SmsCampaignDashboard,
+  type SmsCampaignFullList,
   type SmsCampaignList,
+  type SmsCampaignUpdateInput,
   type SmsClickReport,
+  type SmsPreflightReport,
   type SmsConsentEvent,
   type SmsConsentEventCreateInput,
   type SmsConsentEventList,
@@ -317,4 +325,90 @@ export async function removeContactFromGroup(
   groupId: number,
 ): Promise<void> {
   await api.delete(`/api/sms/contacts/${contactId}/groups/${groupId}`)
+}
+
+// =====================================================================
+// Admin — Campaign CRUD + groups + Build/Preflight (PR-6d, require_admin)
+// =====================================================================
+
+/** Danh sách campaign đầy đủ (PR-6d list). */
+export async function listSmsCampaignsFull(
+  params: SmsCampaignListParams = {},
+): Promise<SmsCampaignFullList> {
+  const res = await api.get<SmsCampaignFullList>(`/api/sms/campaigns`, {
+    params,
+  })
+  return smsCampaignFullListSchema.parse(res.data)
+}
+
+export async function getSmsCampaign(campaignId: number): Promise<SmsCampaign> {
+  const res = await api.get<SmsCampaign>(`/api/sms/campaigns/${campaignId}`)
+  return smsCampaignSchema.parse(res.data)
+}
+
+export async function createSmsCampaign(
+  payload: SmsCampaignCreateInput,
+): Promise<SmsCampaign> {
+  const res = await api.post<SmsCampaign>(`/api/sms/campaigns`, payload)
+  return smsCampaignSchema.parse(res.data)
+}
+
+export async function updateSmsCampaign(
+  campaignId: number,
+  payload: SmsCampaignUpdateInput,
+): Promise<SmsCampaign> {
+  const res = await api.patch<SmsCampaign>(
+    `/api/sms/campaigns/${campaignId}`,
+    payload,
+  )
+  return smsCampaignSchema.parse(res.data)
+}
+
+/** Danh sách nhóm đã gắn vào campaign (kèm member_count). */
+export async function listCampaignGroups(
+  campaignId: number,
+): Promise<SmsContactGroupList> {
+  const res = await api.get<SmsContactGroupList>(
+    `/api/sms/campaigns/${campaignId}/groups`,
+  )
+  return smsContactGroupListSchema.parse(res.data)
+}
+
+/** Gắn nhóm vào campaign; BE trả campaign (cập nhật group_count). */
+export async function attachCampaignGroup(
+  campaignId: number,
+  groupId: number,
+): Promise<SmsCampaign> {
+  const res = await api.post<SmsCampaign>(
+    `/api/sms/campaigns/${campaignId}/groups`,
+    { group_id: groupId },
+  )
+  return smsCampaignSchema.parse(res.data)
+}
+
+export async function detachCampaignGroup(
+  campaignId: number,
+  groupId: number,
+): Promise<void> {
+  await api.delete(`/api/sms/campaigns/${campaignId}/groups/${groupId}`)
+}
+
+/** Build snapshot + preflight (chỉ khi draft/ready). */
+export async function buildSmsCampaign(
+  campaignId: number,
+): Promise<SmsPreflightReport> {
+  const res = await api.post<SmsPreflightReport>(
+    `/api/sms/campaigns/${campaignId}/build`,
+  )
+  return smsPreflightReportSchema.parse(res.data)
+}
+
+/** Xem lại preflight của bản build hiện tại (read-only). */
+export async function getSmsCampaignPreflight(
+  campaignId: number,
+): Promise<SmsPreflightReport> {
+  const res = await api.get<SmsPreflightReport>(
+    `/api/sms/campaigns/${campaignId}/preflight`,
+  )
+  return smsPreflightReportSchema.parse(res.data)
 }

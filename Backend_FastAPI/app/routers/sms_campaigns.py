@@ -85,6 +85,20 @@ async def update_campaign(
 # =====================================================================
 # Campaign ↔ group
 # =====================================================================
+@router.get(
+    "/campaigns/{campaign_id}/groups",
+    response_model=sms_schemas.SmsContactGroupList,
+)
+async def list_campaign_groups(
+    campaign_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Danh sách nhóm đã gắn vào campaign (kèm member_count) — FE liệt kê + bỏ."""
+    total, items = await SmsCampaignService(db).list_campaign_groups(campaign_id)
+    return {"total": total, "items": items}
+
+
 @router.post(
     "/campaigns/{campaign_id}/groups",
     response_model=sms_schemas.SmsCampaignOut,

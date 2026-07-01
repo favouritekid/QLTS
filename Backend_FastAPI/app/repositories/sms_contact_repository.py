@@ -51,6 +51,20 @@ class SmsContactRepository:
         )
         return res.scalars().first()
 
+    async def get_groups_by_ids(
+        self, group_ids: Sequence[int]
+    ) -> List[SmsContactGroup]:
+        """Lấy các nhóm theo danh sách id (giữ thứ tự tên) — cho endpoint
+        list nhóm đã gắn của campaign. Tránh N+1 (1 query IN)."""
+        if not group_ids:
+            return []
+        res = await self.db.execute(
+            select(SmsContactGroup)
+            .where(SmsContactGroup.id.in_(set(group_ids)))
+            .order_by(SmsContactGroup.name)
+        )
+        return list(res.scalars().all())
+
     async def list_groups(
         self,
         skip: int = 0,

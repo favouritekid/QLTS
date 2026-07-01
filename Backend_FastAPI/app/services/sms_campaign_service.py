@@ -201,6 +201,23 @@ class SmsCampaignService:
             self._with_computed(c, group_count=counts.get(c.id, 0))
         return total, items
 
+    async def list_campaign_groups(
+        self, campaign_id: int
+    ) -> Tuple[int, List]:
+        """Danh sách nhóm ĐÃ GẮN vào campaign (kèm member_count) — cho FE
+        liệt kê + bỏ nhóm. 404 nếu campaign không tồn tại."""
+        campaign = await self.repo.get_campaign(campaign_id)
+        if campaign is None:
+            raise ResourceNotFoundError(detail="Không tìm thấy campaign")
+        gids = await self.repo.get_campaign_group_ids(campaign_id)
+        if not gids:
+            return 0, []
+        groups = await self.contact_repo.get_groups_by_ids(gids)
+        counts = await self.contact_repo.count_members_by_group(gids)
+        for g in groups:
+            g.member_count = counts.get(g.id, 0)
+        return len(groups), groups
+
     async def update_campaign(
         self, campaign_id: int, data: sms_schemas.SmsCampaignUpdate
     ) -> SmsCampaign:
