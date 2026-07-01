@@ -2,8 +2,18 @@
 "use client"
 
 import { useState } from "react"
-import { Search, Upload } from "lucide-react"
+import { Search, Upload, X } from "lucide-react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,10 +35,11 @@ import {
 } from "@/components/ui/table"
 import {
   useGroupContacts,
+  useRemoveContactFromGroup,
   useSmsContactGroup,
 } from "@/hooks/useSmsContacts"
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
-import type { SmsContactGroup } from "@/lib/zod/sms"
+import type { SmsContact, SmsContactGroup } from "@/lib/zod/sms"
 
 import {
   consentStatusLabel,
@@ -46,13 +57,16 @@ interface Props {
 export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
   const [searchInput, setSearchInput] = useState("")
   const [importOpen, setImportOpen] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState<SmsContact | null>(null)
   const search = useDebouncedValue(searchInput.trim())
+  const removeMut = useRemoveContactFromGroup()
 
   // Reset khi ĐÓNG (event handler → tránh setState-trong-effect).
   const handleOpenChange = (o: boolean) => {
     if (!o) {
       setSearchInput("")
       setImportOpen(false)
+      setRemoveTarget(null)
     }
     onOpenChange(o)
   }
@@ -66,6 +80,14 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
   // luôn tươi sau import, kể cả khi group rớt khỏi bộ lọc list ngoài.
   const { data: freshGroup } = useSmsContactGroup(groupId)
   const g = freshGroup ?? group
+
+  const confirmRemove = () => {
+    if (!group || !removeTarget) return
+    removeMut.mutate(
+      { contactId: removeTarget.id, groupId: group.id },
+      { onSuccess: () => setRemoveTarget(null) },
+    )
+  }
 
   return (
     <>
@@ -116,6 +138,7 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
                     <TableHead>Họ tên</TableHead>
                     <TableHead>Số điện thoại</TableHead>
                     <TableHead>Consent</TableHead>
+                    <TableHead className="text-right">Thao tác</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -135,6 +158,16 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
                         >
                           {consentStatusLabel(c.marketing_consent_status)}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label="Gỡ khỏi nhóm"
+                          onClick={() => setRemoveTarget(c)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -159,6 +192,35 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
           groupName={group.name}
         />
       )}
+
+      <AlertDialog
+        open={removeTarget != null}
+        onOpenChange={(o) => !o && setRemoveTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Gỡ liên hệ khỏi nhóm?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Gỡ «{removeTarget?.full_name}» khỏi nhóm «{group?.name}». Liên hệ
+              vẫn còn trong hệ thống, chỉ rời khỏi nhóm này.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removeMut.isPending}>
+              Hủy
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                confirmRemove()
+              }}
+              disabled={removeMut.isPending}
+            >
+              Gỡ
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

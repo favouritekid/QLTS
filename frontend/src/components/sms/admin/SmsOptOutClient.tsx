@@ -1,7 +1,7 @@
 // src/components/sms/admin/SmsOptOutClient.tsx
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import {
   AlertCircle,
   ChevronLeft,
@@ -32,6 +32,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useSmsOptOuts } from "@/hooks/useSmsAdmin"
+import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
 
 import {
   OPT_OUT_SOURCE_LABELS,
@@ -43,16 +44,6 @@ import { SmsManualOptOutDialog } from "./SmsManualOptOutDialog"
 
 const ALL = "all"
 const PAGE_SIZE = 50
-
-/** Debounce cục bộ — tránh gọi API mỗi lần gõ. */
-function useDebouncedValue<T>(value: T, delay = 400): T {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay)
-    return () => clearTimeout(t)
-  }, [value, delay])
-  return debounced
-}
 
 const SOURCE_FILTER_OPTIONS = Object.keys(OPT_OUT_SOURCE_LABELS)
 
