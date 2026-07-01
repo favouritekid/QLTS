@@ -13,12 +13,14 @@ import {
   SMS_CARRIER_BUCKETS,
   SMS_CONSENT_BASES,
   SMS_GROUP_TYPES,
+  SMS_LANDING_TYPES,
   SMS_MANUAL_OPT_OUT_SOURCES,
   SMS_REVOKE_SOURCES,
   type SmsCarrierBucket,
   type SmsConsentBasis,
   type SmsGranularity,
   type SmsGroupType,
+  type SmsLandingType,
   type SmsManualOptOutSource,
   type SmsRevokeSource,
 } from "@/lib/zod/sms"
@@ -125,6 +127,46 @@ export function nowDatetimeLocal(): string {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60000)
     .toISOString()
     .slice(0, 16)
+}
+
+/**
+ * ISO tz-aware (UTC) → value cho <input type="datetime-local"> theo GIỜ ĐỊA
+ * PHƯƠNG. Dùng khi nạp lại form sửa: BE trả UTC, input hiểu giờ local → phải
+ * đổi UTC→local trước khi slice, nếu không sẽ lệch offset (bug link_expires_at).
+ */
+export function isoToDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return ""
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ""
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16)
+}
+
+// =====================================================================
+// Campaign / Preflight (PR-6d)
+// =====================================================================
+export const LANDING_TYPE_LABELS: Record<string, string> = {
+  qlts_hosted: "Trang đích QLTS",
+  external: "Liên kết ngoài",
+}
+export function landingTypeLabel(v: string): string {
+  return LANDING_TYPE_LABELS[v] ?? v
+}
+export const LANDING_TYPE_OPTIONS: { value: SmsLandingType; label: string }[] =
+  SMS_LANDING_TYPES.map((value) => ({ value, label: LANDING_TYPE_LABELS[value] }))
+
+/** Lý do recipient bị loại ở build/preflight (excluded_by_reason keys). */
+export const EXCLUDED_REASON_LABELS: Record<string, string> = {
+  no_consent: "Chưa đồng ý",
+  opted_out: "Đã từ chối nhận tin",
+  dnc_suppressed: "Trong danh sách chặn (DNC)",
+  frequency_capped: "Vượt tần suất gửi",
+  over_limit: "Tin vượt 1 đoạn",
+  missing_data: "Thiếu dữ liệu",
+}
+export function excludedReasonLabel(v: string): string {
+  return EXCLUDED_REASON_LABELS[v] ?? v
 }
 
 // =====================================================================

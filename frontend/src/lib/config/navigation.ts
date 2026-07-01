@@ -267,6 +267,12 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"], // BE require_admin trên contact/group/consent
         },
         {
+          label: "Chiến dịch SMS",
+          href: "/admin/sms/campaigns",
+          icon: Send,
+          roles: ["admin"], // BE require_admin
+        },
+        {
           label: "Báo cáo SMS",
           href: "/admin/sms/reports",
           icon: MessageSquareText,

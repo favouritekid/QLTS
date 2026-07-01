@@ -402,3 +402,125 @@ export const smsImportResultSchema = z.object({
   errors: z.array(smsImportRowErrorSchema),
 })
 export type SmsImportResult = z.infer<typeof smsImportResultSchema>
+
+// =====================================================================
+// Admin — Campaign (full) + Build/Preflight (PR-6d; mirror SmsCampaignOut/
+// Create/Update, SmsPreflightReport, SmsOverLimitRow ở app/schemas/sms.py).
+// =====================================================================
+
+/** Loại landing (mirror SmsLandingType). */
+export const SMS_LANDING_TYPES = ["qlts_hosted", "external"] as const
+export type SmsLandingType = (typeof SMS_LANDING_TYPES)[number]
+
+/** Lý do recipient bị loại (mirror SmsExcludedReason / CHECK). */
+export const SMS_EXCLUDED_REASONS = [
+  "no_consent",
+  "opted_out",
+  "dnc_suppressed",
+  "frequency_capped",
+  "over_limit",
+  "missing_data",
+] as const
+export type SmsExcludedReason = (typeof SMS_EXCLUDED_REASONS)[number]
+
+/** Campaign đầy đủ (mirror SmsCampaignOut). Datetime = ISO string. */
+export const smsCampaignSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  code: z.string(),
+  status: z.string(),
+  sms_template: z.string(),
+  frequency_cap_days: z.number().nullable().optional(),
+  landing_type: z.string(),
+  landing_url: z.string().nullable().optional(),
+  landing_headline: z.string().nullable().optional(),
+  landing_body: z.string().nullable().optional(),
+  landing_cta_label: z.string().nullable().optional(),
+  landing_cta_url: z.string().nullable().optional(),
+  build_revision: z.number(),
+  link_expires_at: z.string().nullable().optional(),
+  optout_instruction_snapshot: z.string().nullable().optional(),
+  // Attestation (dùng ở PR-6e; hợp lệ khi *_checked_build_revision === build_revision)
+  consent_checked_at: z.string().nullable().optional(),
+  consent_checked_by_id: z.number().nullable().optional(),
+  consent_reference: z.string().nullable().optional(),
+  consent_checked_build_revision: z.number().nullable().optional(),
+  dnc_checked_at: z.string().nullable().optional(),
+  dnc_checked_by_id: z.number().nullable().optional(),
+  dnc_reference: z.string().nullable().optional(),
+  dnc_checked_build_revision: z.number().nullable().optional(),
+  optout_channel_checked_at: z.string().nullable().optional(),
+  optout_channel_checked_by_id: z.number().nullable().optional(),
+  optout_channel_reference: z.string().nullable().optional(),
+  optout_channel_checked_build_revision: z.number().nullable().optional(),
+  created_by_id: z.number().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  handed_off_marked_at: z.string().nullable().optional(),
+  has_link: z.boolean().nullable().optional(),
+  group_count: z.number().nullable().optional(),
+})
+export type SmsCampaign = z.infer<typeof smsCampaignSchema>
+
+export const smsCampaignFullListSchema = z.object({
+  total: z.number(),
+  items: z.array(smsCampaignSchema),
+})
+export type SmsCampaignFullList = z.infer<typeof smsCampaignFullListSchema>
+
+/** Form tạo campaign. Cross-field (biến template, external+{link}) do BE gate. */
+export const smsCampaignCreateSchema = z.object({
+  name: z.string().trim().min(1, "Bắt buộc nhập tên").max(200),
+  code: z
+    .string()
+    .trim()
+    .max(50)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, "Chỉ a-z, 0-9, dấu gạch; bắt đầu bằng chữ/số")
+    .optional()
+    .or(z.literal("")),
+  sms_template: z
+    .string()
+    .trim()
+    .min(1, "Bắt buộc nhập nội dung tin")
+    .max(2000),
+  landing_type: z.enum(SMS_LANDING_TYPES),
+  landing_url: z.string().trim().max(2000).optional().or(z.literal("")),
+  landing_headline: z.string().trim().max(200).optional().or(z.literal("")),
+  landing_body: z.string().trim().max(10000).optional().or(z.literal("")),
+  landing_cta_label: z.string().trim().max(100).optional().or(z.literal("")),
+  landing_cta_url: z.string().trim().max(2000).optional().or(z.literal("")),
+  frequency_cap_days: z.number().int().min(0).max(3650).nullable().optional(),
+  link_expires_at: z.string().nullable().optional(),
+})
+export type SmsCampaignCreateInput = z.infer<typeof smsCampaignCreateSchema>
+
+/** Form sửa campaign (chỉ khi draft; không đổi code). */
+export const smsCampaignUpdateSchema = smsCampaignCreateSchema.omit({
+  code: true,
+})
+export type SmsCampaignUpdateInput = z.infer<typeof smsCampaignUpdateSchema>
+
+// --- Build / Preflight ---
+export const smsOverLimitRowSchema = z.object({
+  phone_normalized: z.string(),
+  full_name: z.string(),
+  encoding: z.string().nullable().optional(),
+  length: z.number().nullable().optional(),
+  segments: z.number().nullable().optional(),
+})
+export type SmsOverLimitRow = z.infer<typeof smsOverLimitRowSchema>
+
+export const smsPreflightReportSchema = z.object({
+  campaign_id: z.number(),
+  build_revision: z.number(),
+  status: z.string(),
+  has_link: z.boolean(),
+  total: z.number(),
+  exportable: z.number(),
+  excluded_by_reason: z.record(z.string(), z.number()),
+  carrier_distribution: z.record(z.string(), z.number()),
+  over_limit: z.array(smsOverLimitRowSchema),
+  warnings: z.array(z.string()),
+  preview: z.array(z.string()),
+})
+export type SmsPreflightReport = z.infer<typeof smsPreflightReportSchema>

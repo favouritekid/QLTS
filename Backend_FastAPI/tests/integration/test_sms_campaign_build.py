@@ -179,6 +179,46 @@ async def test_campaign_group_attach_detach(
     assert res.status_code == 404
 
 
+async def test_campaign_list_groups(
+    client: AsyncClient, admin_token_headers: dict
+):
+    """GET /campaigns/{id}/groups liệt kê nhóm đã gắn + member_count (PR-6d)."""
+    h = admin_token_headers
+    g1 = await _mk_group(client, h, "LG Nhom 1")
+    g2 = await _mk_group(client, h, "LG Nhom 2")
+    c1 = await _mk_contact(client, h, "LG A", "0987000201")
+    await _add_to_group(client, h, c1, g1)  # g1 có 1 thành viên
+    cid = (await _mk_campaign(client, h, "Hi {name}", name="CLG")).json()["id"]
+
+    # chưa gắn → rỗng
+    res = await client.get(f"{API}/campaigns/{cid}/groups", headers=h)
+    assert res.status_code == 200, res.text
+    assert res.json()["total"] == 0
+
+    for g in (g1, g2):
+        await client.post(
+            f"{API}/campaigns/{cid}/groups", json={"group_id": g}, headers=h
+        )
+
+    res = await client.get(f"{API}/campaigns/{cid}/groups", headers=h)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["total"] == 2
+    by_id = {g["id"]: g for g in body["items"]}
+    assert set(by_id) == {g1, g2}
+    assert by_id[g1]["member_count"] == 1
+    assert by_id[g2]["member_count"] == 0
+
+    # detach g2 → còn 1
+    await client.delete(f"{API}/campaigns/{cid}/groups/{g2}", headers=h)
+    res = await client.get(f"{API}/campaigns/{cid}/groups", headers=h)
+    assert res.json()["total"] == 1
+
+    # campaign không tồn tại → 404
+    res = await client.get(f"{API}/campaigns/999999999/groups", headers=h)
+    assert res.status_code == 404
+
+
 # ---------------------------------------------------------------------
 # BUILD — dedupe + snapshot + fail-closed + token + skeleton
 # ---------------------------------------------------------------------
