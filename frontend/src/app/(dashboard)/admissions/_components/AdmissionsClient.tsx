@@ -345,6 +345,9 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   )
 
   const handleExport = useCallback(() => {
+    // Guard unit_id like apiFilters/countFilters — a crafted ?unit_id=abc must not
+    // send unit_id=NaN (→ BE 422) from the export path.
+    const parsedUnitId = state.unitId ? parseInt(state.unitId, 10) : NaN
     exportCsv.mutate({
       status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
       search: state.search || undefined,
@@ -361,7 +364,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
           ? state.officerFilters.join(",")
           : undefined,
       unassigned: state.unassigned || undefined,
-      unit_id: state.unitId ? parseInt(state.unitId, 10) : undefined,
+      unit_id: Number.isFinite(parsedUnitId) ? parsedUnitId : undefined,
       assigned_reviewer_id:
         state.reviewerFilters.length > 0 ? state.reviewerFilters.join(",") : undefined,
     })

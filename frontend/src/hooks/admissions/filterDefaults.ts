@@ -54,6 +54,12 @@ const ADMISSIONS_LIST_PARAM_KEYS = [
   "date_to",
   "sort_by",
   "order",
+  // Coordination filters (Admission List v2) — MUST be here so the SSR/initialData
+  // equality check detects them; else a ?officer=5 deep-link reuses unfiltered SSR.
+  "assigned_officer_id",
+  "unit_id",
+  "assigned_reviewer_id",
+  "unassigned",
 ] as const satisfies readonly (keyof AdmissionListParams)[]
 
 function getFirstParam(
@@ -114,6 +120,23 @@ export function parseAdmissionsSearchParamsToApiParams(
 
   const to = getFirstParam(searchParams, "to")
   if (to) params.date_to = to
+
+  // Coordination filters (Admission List v2) — URL keys mirror useAdmissionsFilter's
+  // URL-write (officer / unit_id / reviewer / unassigned). Must match the client
+  // apiFilters shape (assigned_officer_id / unit_id / assigned_reviewer_id /
+  // unassigned) so areAdmissionsListParamsEqual sees the SSR + client as equal.
+  // officer XOR unassigned (the hook never writes both), so no conflict here.
+  const officer = getFirstParam(searchParams, "officer")
+  if (officer) params.assigned_officer_id = officer
+
+  const unitId = parseIntegerParam(getFirstParam(searchParams, "unit_id"))
+  if (unitId !== undefined) params.unit_id = unitId
+
+  const reviewer = getFirstParam(searchParams, "reviewer")
+  if (reviewer) params.assigned_reviewer_id = reviewer
+
+  const unassigned = getFirstParam(searchParams, "unassigned")
+  if (unassigned === "1" || unassigned === "true") params.unassigned = true
 
   return params
 }
