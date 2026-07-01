@@ -2394,7 +2394,7 @@ async def finalize_enrollment(
     - Attempts remaining
     """,
 )
-@limiter.limit(RateLimits.PUBLIC_READ)  # 100/hour - prevent token enumeration
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)  # 100/hour/IP - prevent token enumeration
 async def get_confirm_token_info(
     request: Request,
     token: str,

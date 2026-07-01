@@ -31,8 +31,11 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from slowapi.wrappers import LimitGroup
 from starlette.responses import JSONResponse
+
+from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -63,19 +66,19 @@ _LOGIN_LIMIT = "3/minute"
 _REGISTER_LIMIT = "2/minute"
 _PUBLIC_READ_LIMIT = "3/minute"
 
+# name -> (tight_limit, key_func). Auth uses the synthetic _get_test_ip (drive
+# the _test_ip global). Public uses the REAL production key_func get_client_ip so
+# the behavioural test exercises the actual X-Real-IP path (not a synthetic key
+# that would MASK a wrong/missing key_func — the exact gap that let the 4 public
+# endpoints ship keyed on the collapsing nginx IP).
 _OVERRIDDEN_ENDPOINTS = {
-    "app.routers.auth.login_for_access_token": _LOGIN_LIMIT,
-    "app.routers.auth.verify_mfa": _LOGIN_LIMIT,
-    "app.routers.auth.register_user": _REGISTER_LIMIT,
-    # Public admissions catalog (unauthenticated). 2026-07 regression: decorator
-    # order was `@limiter.limit` ABOVE `@router.get`, so slowapi never wrapped the
-    # registered endpoint and PUBLIC_READ was silently unenforced. The behavioural
-    # test below proves real 429 emission — which ALSO fails if the wrong order
-    # ever returns (the wrapper is not invoked, so no 429).
-    "app.routers.public_admissions.get_public_programs_catalog": _PUBLIC_READ_LIMIT,
-    "app.routers.public_admissions.get_public_methods_catalog": _PUBLIC_READ_LIMIT,
-    "app.routers.public_admissions.get_public_documents_catalog": _PUBLIC_READ_LIMIT,
-    "app.routers.public_admissions.get_public_tuition_catalog": _PUBLIC_READ_LIMIT,
+    "app.routers.auth.login_for_access_token": (_LOGIN_LIMIT, _get_test_ip),
+    "app.routers.auth.verify_mfa": (_LOGIN_LIMIT, _get_test_ip),
+    "app.routers.auth.register_user": (_REGISTER_LIMIT, _get_test_ip),
+    "app.routers.public_admissions.get_public_programs_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_methods_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_documents_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_tuition_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
 }
 
 
@@ -114,16 +117,17 @@ async def rate_limited_client(setup_test_database):
 
     # -- 2. Override route limits with tight test values --------------------
     saved_limits: dict[str, list] = {}
-    for endpoint_name, limit_str in _OVERRIDDEN_ENDPOINTS.items():
+    for endpoint_name, (limit_str, key_func) in _OVERRIDDEN_ENDPOINTS.items():
         # Save original (copy the list, not a reference)
         saved_limits[endpoint_name] = limiter._route_limits.get(
             endpoint_name, []
         )[:]
-        # Replace with tight limit using our controllable key function
+        # Replace with tight limit, preserving the endpoint's REAL key_func where
+        # it matters (public → get_client_ip so X-Real-IP is honoured).
         limiter._route_limits[endpoint_name] = list(
             LimitGroup(
                 limit_str,       # e.g. "3/minute"
-                _get_test_ip,    # custom key function for IP simulation
+                key_func,        # per-endpoint key function
                 None,            # scope (None = per-route)
                 False,           # per_method
                 None,            # methods
@@ -427,13 +431,18 @@ class TestRateLimitConfiguration:
 class TestPublicAdmissionsRateLimit:
     """IP rate limiting on the PUBLIC (unauthenticated) admissions catalog.
 
-    Regression guard for the 2026-07 decorator-order fix: these 4 endpoints had
-    ``@limiter.limit`` ABOVE ``@router.get`` so slowapi never wrapped the
-    endpoint the router registered and the limit was SILENTLY unenforced (no
-    ``SlowAPIMiddleware`` to compensate). A real 429 here proves BOTH correct
-    order (wrapper actually invoked) AND runtime enforcement — stronger than a
-    structural ``__wrapped__`` inspection, which cannot see either regression.
+    Everything here uses the endpoint's REAL production key_func
+    (``get_client_ip``, keyed on X-Real-IP) — NOT a synthetic test key — so the
+    tests can catch a wrong/missing key_func (the exact gap that let these 4
+    endpoints ship keyed on the single collapsing nginx IP). Proven:
+      1. correct decorator order + runtime enforcement (a real 429 fires),
+      2. the limit is PER real client IP (one visitor can't 429 everyone).
+    ``test_default_get_remote_address_collapses_x_real_ip`` is the negative proof
+    that the DEFAULT key does NOT honour X-Real-IP, i.e. why get_client_ip is
+    required.
     """
+
+    _PROGRAMS = "/api/public/admissions/programs"
 
     @pytest.mark.parametrize(
         "path",
@@ -447,22 +456,71 @@ class TestPublicAdmissionsRateLimit:
     async def test_blocks_after_threshold(
         self, rate_limited_client: AsyncClient, path: str
     ):
-        """4th GET from the same IP must be 429 (fixture sets 3/minute).
-
-        The limiter runs BEFORE the endpoint body, so the 4th request is 429
-        regardless of what the catalog query returns; the first 3 only need to
-        be non-429 (200 on an empty test DB, or any non-429 status)."""
-        global _test_ip
-        _test_ip = "203.0.113.7"
-
+        """4th GET from one X-Real-IP must be 429 (fixture sets 3/minute). The
+        limiter runs before the endpoint body, so the 4th is 429 regardless of
+        what the catalog query returns; the first 3 only need to be non-429."""
+        headers = {"X-Real-IP": "203.0.113.7"}
         for i in range(3):
-            res = await rate_limited_client.get(path)
+            res = await rate_limited_client.get(path, headers=headers)
             assert res.status_code != 429, (
                 f"{path}: request {i + 1}/3 should pass, got {res.status_code}"
             )
-
-        res = await rate_limited_client.get(path)
+        res = await rate_limited_client.get(path, headers=headers)
         assert res.status_code == 429, (
-            f"{path}: 4th request should be rate-limited (429), got "
-            f"{res.status_code} — decorator order likely wrong (limit unenforced)."
+            f"{path}: 4th request should be 429, got {res.status_code} — decorator "
+            f"order wrong (unenforced) or key_func not honouring X-Real-IP."
         )
+
+    async def test_limit_is_per_x_real_ip(self, rate_limited_client: AsyncClient):
+        """One client's exhaustion must NOT 429 a DIFFERENT X-Real-IP — proves the
+        endpoint keys per real client IP (get_client_ip), not one global bucket."""
+        for _ in range(4):  # client A burns the 3/minute budget
+            await rate_limited_client.get(
+                self._PROGRAMS, headers={"X-Real-IP": "203.0.113.1"}
+            )
+        blocked = await rate_limited_client.get(
+            self._PROGRAMS, headers={"X-Real-IP": "203.0.113.1"}
+        )
+        assert blocked.status_code == 429, "Client A should be blocked after budget"
+        other = await rate_limited_client.get(
+            self._PROGRAMS, headers={"X-Real-IP": "203.0.113.2"}
+        )
+        assert other.status_code != 429, (
+            f"A different X-Real-IP must NOT share A's bucket, got "
+            f"{other.status_code} — endpoint is globally bucketed (key_func missing)."
+        )
+
+    async def test_default_get_remote_address_collapses_x_real_ip(
+        self, rate_limited_client: AsyncClient
+    ):
+        """NEGATIVE proof: the DEFAULT key (get_remote_address) ignores X-Real-IP,
+        so distinct clients COLLAPSE into one bucket — the prod bug get_client_ip
+        prevents. Re-key /methods with the default and show 4 requests from 4
+        DIFFERENT X-Real-IPs still hit 429."""
+        from app.core.rate_limits import limiter
+
+        ep = "app.routers.public_admissions.get_public_methods_catalog"
+        saved = limiter._route_limits.get(ep, [])[:]
+        limiter._route_limits[ep] = list(
+            LimitGroup("3/minute", get_remote_address, None, False,
+                       None, None, None, 1, True)
+        )
+        limiter.reset()
+        try:
+            codes = [
+                (
+                    await rate_limited_client.get(
+                        "/api/public/admissions/methods",
+                        headers={"X-Real-IP": f"198.51.100.{i}"},
+                    )
+                ).status_code
+                for i in range(4)
+            ]
+            assert 429 in codes, (
+                "get_remote_address IGNORES X-Real-IP, so 4 distinct client IPs "
+                f"share ONE bucket → the 4th must 429; got {codes}. No 429 would "
+                f"mean the default key wrongly isolated per X-Real-IP (it does not)."
+            )
+        finally:
+            limiter._route_limits[ep] = saved
+            limiter.reset()

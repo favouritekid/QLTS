@@ -28,7 +28,7 @@
  * - Handles 401/403 gracefully
  */
 
-import { cookies } from 'next/headers';
+import { cookies, headers as nextHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type {
   Lead,
@@ -151,6 +151,25 @@ async function serverFetch<T>(
   // Forward authentication cookies
   if (cookieHeader) {
     headers['Cookie'] = cookieHeader;
+  }
+
+  // Forward the REAL client IP so backend per-IP rate limits key on the actual
+  // visitor. SSR fetches hit the backend directly (bypassing nginx, which is the
+  // layer that sets X-Real-IP), so without this every server-rendered call keys
+  // on THIS frontend container's single IP → one shared bucket for all users →
+  // prod-wide 429 once the tier limit is crossed. Read the real IP from the
+  // INBOUND request (nginx set it there) and pass it through unchanged.
+  if (!headers['X-Real-IP']) {
+    try {
+      const inbound = await nextHeaders();
+      const realIp =
+        inbound.get('x-real-ip') ??
+        inbound.get('x-forwarded-for')?.split(',')[0]?.trim();
+      if (realIp) headers['X-Real-IP'] = realIp;
+    } catch {
+      // headers() unavailable (e.g. inside "use cache") — leave unset; backend
+      // then falls back to its own client IP. Only affects rate-limited paths.
+    }
   }
 
   // Execute fetch
