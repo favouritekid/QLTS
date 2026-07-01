@@ -4,6 +4,7 @@
  * Tiêu thụ router PR-2 (sms_contacts.py). Tất cả `require_admin` ở BE.
  */
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -73,6 +74,7 @@ export function useSmsContactGroups(
     queryKey: smsContactKeys.groups(params),
     queryFn: () => listSmsContactGroups(params),
     enabled: options.enabled ?? true,
+    placeholderData: keepPreviousData,
     staleTime: 30 * 1000,
   })
 }
@@ -94,6 +96,7 @@ export function useGroupContacts(
     queryKey: smsContactKeys.groupContacts(groupId ?? 0, params),
     queryFn: () => listGroupContacts(groupId as number, params),
     enabled: groupId != null,
+    placeholderData: keepPreviousData,
     staleTime: 30 * 1000,
   })
 }
@@ -102,6 +105,7 @@ export function useSmsContacts(params: SmsContactListParams = {}) {
   return useQuery({
     queryKey: smsContactKeys.contacts(params),
     queryFn: () => listSmsContacts(params),
+    placeholderData: keepPreviousData,
     staleTime: 30 * 1000,
   })
 }

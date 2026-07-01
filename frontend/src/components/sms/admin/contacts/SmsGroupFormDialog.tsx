@@ -99,10 +99,12 @@ export function SmsGroupFormDialog({ open, onOpenChange, group }: Props) {
   function onSubmit(values: FormData) {
     const onDone = () => onOpenChange(false)
     if (isEdit && group) {
+      // Update: gửi "" (không phải undefined) để CHO PHÉP xoá mô tả (BE
+      // exclude_unset bỏ qua undefined = không xoá được).
       const data: SmsContactGroupUpdateInput = {
         name: values.name,
         group_type: values.group_type,
-        description: values.description?.trim() || undefined,
+        description: (values.description ?? "").trim(),
         is_active: values.is_active ?? true,
       }
       updateMut.mutate({ id: group.id, data }, { onSuccess: onDone })

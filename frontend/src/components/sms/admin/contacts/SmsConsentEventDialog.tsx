@@ -37,7 +37,11 @@ import {
   type SmsConsentEventCreateInput,
 } from "@/lib/zod/sms"
 
-import { CONSENT_BASIS_OPTIONS, REVOKE_SOURCE_OPTIONS } from "../labels"
+import {
+  CONSENT_BASIS_OPTIONS,
+  REVOKE_SOURCE_OPTIONS,
+  nowDatetimeLocal,
+} from "../labels"
 
 interface Props {
   open: boolean
@@ -148,6 +152,7 @@ export function SmsConsentEventDialog({
                   <FormControl>
                     <Input
                       type="datetime-local"
+                      max={nowDatetimeLocal()}
                       disabled={mutation.isPending}
                       {...field}
                     />

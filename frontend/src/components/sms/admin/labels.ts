@@ -115,6 +115,18 @@ export function formatDateTimeVN(iso: string | null | undefined): string {
   }
 }
 
+/**
+ * "Bây giờ" ở dạng value của <input type="datetime-local"> (YYYY-MM-DDTHH:mm,
+ * giờ địa phương). Dùng cho `max` để chặn chọn thời điểm consent ở tương lai
+ * (BE `validate_consent_datetime` từ chối tương lai → tránh 422 bất ngờ).
+ */
+export function nowDatetimeLocal(): string {
+  const now = new Date()
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16)
+}
+
 // =====================================================================
 // Contact / Group / Consent (PR-6b)
 // =====================================================================

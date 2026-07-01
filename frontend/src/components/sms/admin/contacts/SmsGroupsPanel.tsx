@@ -291,8 +291,8 @@ export function SmsGroupsPanel() {
       <SmsGroupContactsDialog
         open={detailGroup != null}
         onOpenChange={(o) => !o && setDetailGroup(null)}
-        // Bản tươi từ list để member_count cập nhật sau import; fallback snapshot.
-        group={items.find((g) => g.id === detailGroup?.id) ?? detailGroup}
+        // Dialog tự refetch single group (useSmsContactGroup) → member_count tươi.
+        group={detailGroup}
       />
     </div>
   )

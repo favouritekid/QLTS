@@ -73,10 +73,12 @@ export function SmsContactFormDialog({ open, onOpenChange, contact }: Props) {
   function onSubmit(values: FormData) {
     const onDone = () => onOpenChange(false)
     if (isEdit && contact) {
+      // Update: gửi "" (không phải undefined) để CHO PHÉP xoá field — BE dùng
+      // exclude_unset nên undefined bị bỏ qua = không xoá được.
       const data: SmsContactUpdateInput = {
         full_name: values.full_name,
-        note: values.note?.trim() || undefined,
-        source_label: values.source_label?.trim() || undefined,
+        note: (values.note ?? "").trim(),
+        source_label: (values.source_label ?? "").trim(),
       }
       updateMut.mutate({ id: contact.id, data }, { onSuccess: onDone })
     } else {

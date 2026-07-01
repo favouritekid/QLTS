@@ -26,7 +26,11 @@ import {
 import { useUploadContacts } from "@/hooks/useSmsContacts"
 import type { SmsImportResult } from "@/lib/zod/sms"
 
-import { CONSENT_BASIS_OPTIONS, formatInt } from "../labels"
+import {
+  CONSENT_BASIS_OPTIONS,
+  formatInt,
+  nowDatetimeLocal,
+} from "../labels"
 
 const NONE = "none"
 
@@ -197,6 +201,7 @@ export function SmsImportDialog({
                   <Input
                     id="import-obtained"
                     type="datetime-local"
+                    max={nowDatetimeLocal()}
                     value={obtainedAt}
                     disabled={mutation.isPending}
                     onChange={(e) => setObtainedAt(e.target.value)}

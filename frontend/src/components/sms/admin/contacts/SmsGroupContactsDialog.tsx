@@ -23,7 +23,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useGroupContacts } from "@/hooks/useSmsContacts"
+import {
+  useGroupContacts,
+  useSmsContactGroup,
+} from "@/hooks/useSmsContacts"
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
 import type { SmsContactGroup } from "@/lib/zod/sms"
 
@@ -59,17 +62,21 @@ export function SmsGroupContactsDialog({ open, onOpenChange, group }: Props) {
     search: search || undefined,
     limit: 100,
   })
+  // Refetch single group (BE có GET /contact-groups/{id}) → member_count/name
+  // luôn tươi sau import, kể cả khi group rớt khỏi bộ lọc list ngoài.
+  const { data: freshGroup } = useSmsContactGroup(groupId)
+  const g = freshGroup ?? group
 
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[640px]">
           <DialogHeader>
-            <DialogTitle>{group?.name ?? "Nhóm"}</DialogTitle>
+            <DialogTitle>{g?.name ?? "Nhóm"}</DialogTitle>
             <DialogDescription>
               Liên hệ trong nhóm{" "}
-              {group?.member_count != null
-                ? `(${formatInt(group.member_count)} thành viên)`
+              {g?.member_count != null
+                ? `(${formatInt(g.member_count)} thành viên)`
                 : ""}
               .
             </DialogDescription>

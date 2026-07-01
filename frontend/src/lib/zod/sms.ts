@@ -188,7 +188,6 @@ export type SmsGroupType = (typeof SMS_GROUP_TYPES)[number]
 
 /** Trạng thái consent marketing (CHECK chk_sms_contact_consent_status). */
 export const SMS_CONSENT_STATUSES = ["unknown", "granted", "revoked"] as const
-export type SmsConsentStatus = (typeof SMS_CONSENT_STATUSES)[number]
 
 /** Căn cứ consent GRANT (mirror ConsentBasis). */
 export const SMS_CONSENT_BASES = [
@@ -210,7 +209,6 @@ export const SMS_REVOKE_SOURCES = [
 export type SmsRevokeSource = (typeof SMS_REVOKE_SOURCES)[number]
 
 export const SMS_CONSENT_EVENT_TYPES = ["granted", "revoked"] as const
-export type SmsConsentEventType = (typeof SMS_CONSENT_EVENT_TYPES)[number]
 
 // --- Contact group ---
 export const smsContactGroupSchema = z.object({
