@@ -16,6 +16,7 @@ import {
   markSmsExportHandedOff,
 } from "@/lib/api/sms"
 import { parseApiError } from "@/lib/utils/api-errors"
+import { blobErrorMessage } from "@/lib/utils/download-blob"
 import type { SmsAttestationCreateInput } from "@/lib/zod/sms"
 import type { ApiErrorResponse } from "@/types/api.types"
 
@@ -99,6 +100,8 @@ export function useDownloadExport(campaignId: number) {
   >({
     mutationFn: ({ batchId, fallbackName }) =>
       downloadSmsExport(campaignId, batchId, fallbackName),
-    onError: (e) => toast.error(parseApiError(e, "Không thể tải file.")),
+    // responseType:'blob' → body lỗi là Blob; blobErrorMessage đọc .text() ra detail.
+    onError: async (e) =>
+      toast.error(await blobErrorMessage(e, "Không thể tải file.")),
   })
 }

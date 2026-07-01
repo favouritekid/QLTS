@@ -15,7 +15,13 @@ import {
   type SmsCampaign,
 } from "@/lib/zod/sms"
 
-import { attestationKindLabel, formatDateTimeVN } from "../labels"
+import {
+  attestationKindLabel,
+  formatDateTimeVN,
+  isAttestationValid,
+} from "../labels"
+
+const REQUIRED = SMS_ATTESTATION_KINDS.length
 
 interface Props {
   campaign: SmsCampaign
@@ -30,19 +36,13 @@ interface KindState {
   revision: number | null | undefined
 }
 
-/** Đọc trạng thái attestation của 1 kind từ campaign (field theo tiền tố kind). */
+/** Đọc field hiển thị của 1 kind từ campaign (index typed theo tiền tố kind). */
 function readKind(c: SmsCampaign, kind: SmsAttestationKind): KindState {
-  const g = (suffix: string) =>
-    (c as unknown as Record<string, unknown>)[`${kind}_${suffix}`] as
-      | string
-      | number
-      | null
-      | undefined
   return {
-    at: g("checked_at") as string | null | undefined,
-    byId: g("checked_by_id") as number | null | undefined,
-    reference: g("reference") as string | null | undefined,
-    revision: g("checked_build_revision") as number | null | undefined,
+    at: c[`${kind}_checked_at`],
+    byId: c[`${kind}_checked_by_id`],
+    reference: c[`${kind}_reference`],
+    revision: c[`${kind}_checked_build_revision`],
   }
 }
 
@@ -59,17 +59,16 @@ export function SmsAttestationSection({ campaign, editable }: Props) {
     )
   }
 
-  const validCount = SMS_ATTESTATION_KINDS.filter((k) => {
-    const s = readKind(campaign, k)
-    return s.revision != null && s.revision === campaign.build_revision
-  }).length
+  const validCount = SMS_ATTESTATION_KINDS.filter((k) =>
+    isAttestationValid(campaign, k),
+  ).length
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Xác nhận trước export</CardTitle>
-        <Badge variant={validCount === 3 ? "default" : "outline"}>
-          {validCount}/3 đã xác nhận
+        <Badge variant={validCount === REQUIRED ? "default" : "outline"}>
+          {validCount}/{REQUIRED} đã xác nhận
         </Badge>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -79,8 +78,7 @@ export function SmsAttestationSection({ campaign, editable }: Props) {
         </p>
         {SMS_ATTESTATION_KINDS.map((kind) => {
           const s = readKind(campaign, kind)
-          const valid =
-            s.revision != null && s.revision === campaign.build_revision
+          const valid = isAttestationValid(campaign, kind)
           const staleAttested = s.revision != null && !valid
           return (
             <div key={kind} className="rounded border p-3">

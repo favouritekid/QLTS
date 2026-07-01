@@ -107,11 +107,7 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
             campaign={campaign}
             editable={audienceEditable}
           />
-          <SmsExportSection
-            campaign={campaign}
-            hasBuild={hasBuild}
-            editable={audienceEditable}
-          />
+          <SmsExportSection campaign={campaign} editable={audienceEditable} />
         </>
       )}
 

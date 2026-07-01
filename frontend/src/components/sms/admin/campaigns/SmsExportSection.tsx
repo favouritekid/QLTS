@@ -33,12 +33,14 @@ import {
   exportStatusVariant,
   formatDateTimeVN,
   formatInt,
+  isAttestationValid,
 } from "../labels"
+
+const REQUIRED = SMS_ATTESTATION_KINDS.length
 
 interface Props {
   campaign: SmsCampaign
-  hasBuild: boolean
-  /** Export/handoff được khi chưa bàn giao/đóng. */
+  /** Export/handoff được khi chưa bàn giao/đóng. Chỉ mount khi đã build. */
   editable: boolean
 }
 
@@ -49,39 +51,32 @@ function formatBytes(n: number | null | undefined): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function attestValid(c: SmsCampaign, kind: string): boolean {
-  const rev = (c as unknown as Record<string, unknown>)[
-    `${kind}_checked_build_revision`
-  ] as number | null | undefined
-  return rev != null && rev === c.build_revision
-}
-
-export function SmsExportSection({ campaign, hasBuild, editable }: Props) {
+export function SmsExportSection({ campaign, editable }: Props) {
   const [handoffTarget, setHandoffTarget] = useState<{
     id: number
     carrier: string
   } | null>(null)
 
-  const { data: preflight } = useSmsCampaignPreflight(campaign.id, {
-    enabled: hasBuild,
-  })
-  const { data: exports, isLoading } = useCampaignExports(campaign.id, hasBuild)
+  const { data: preflight } = useSmsCampaignPreflight(campaign.id)
+  const { data: exports, isLoading } = useCampaignExports(campaign.id)
   const exportMut = useExportCampaign(campaign.id)
   const handoffMut = useMarkExportHandedOff(campaign.id)
   const downloadMut = useDownloadExport(campaign.id)
 
   const validCount = SMS_ATTESTATION_KINDS.filter((k) =>
-    attestValid(campaign, k),
+    isAttestationValid(campaign, k),
   ).length
 
   // Lý do CHƯA export được (BE là gate cuối 400; đây chỉ là gợi ý hiển thị).
   const reasons: string[] = []
-  if (validCount < 3) reasons.push(`Còn thiếu ${3 - validCount}/3 xác nhận`)
+  if (validCount < REQUIRED)
+    reasons.push(`Còn thiếu ${REQUIRED - validCount}/${REQUIRED} xác nhận`)
   if (preflight && preflight.exportable <= 0)
     reasons.push("Không có người nhận hợp lệ")
   if (preflight && preflight.over_limit.length > 0)
     reasons.push(`Còn ${preflight.over_limit.length} tin vượt 1 đoạn`)
-  const ready = reasons.length === 0
+  // Chưa có preflight (đang tải/lỗi) → coi như chưa sẵn sàng (không bật sớm).
+  const ready = reasons.length === 0 && preflight != null
 
   const batches = exports?.batches ?? []
 
@@ -113,96 +108,90 @@ export function SmsExportSection({ campaign, hasBuild, editable }: Props) {
         )}
       </CardHeader>
       <CardContent className="space-y-3">
-        {!hasBuild ? (
-          <p className="text-muted-foreground py-4 text-center text-sm">
-            Cần build trước khi export.
+        {editable && !ready && (
+          <div className="rounded border border-amber-300 bg-amber-50 p-2.5">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Chưa export được: {reasons.join(" · ")}.
+            </p>
+          </div>
+        )}
+
+        {isLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : batches.length === 0 ? (
+          <p className="text-muted-foreground py-3 text-center text-sm">
+            Chưa có file export. Bấm “Export Excel” để sinh 1 file / nhà mạng.
           </p>
         ) : (
-          <>
-            {editable && !ready && (
-              <div className="rounded border border-amber-300 bg-amber-50 p-2.5">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Chưa export được: {reasons.join(" · ")}.
-                </p>
-              </div>
-            )}
-
-            {isLoading ? (
-              <Skeleton className="h-16 w-full" />
-            ) : batches.length === 0 ? (
-              <p className="text-muted-foreground py-3 text-center text-sm">
-                Chưa có file export. Bấm “Export Excel” để sinh 1 file / nhà mạng.
-              </p>
-            ) : (
-              <div className="divide-y">
-                {batches.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex flex-wrap items-center justify-between gap-2 py-2.5"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">
-                          {carrierLabel(b.carrier_bucket)}
-                        </span>
-                        <Badge variant={exportStatusVariant(b.status)}>
-                          {exportStatusLabel(b.status)}
-                        </Badge>
-                        {b.is_expired && (
-                          <Badge variant="secondary">Hết hạn</Badge>
-                        )}
-                      </div>
-                      <p className="text-muted-foreground text-xs">
-                        {formatInt(b.recipient_count)} người ·{" "}
-                        {formatBytes(b.file_size_bytes)}
-                        {b.expires_at
-                          ? ` · hết hạn ${formatDateTimeVN(b.expires_at)}`
-                          : ""}
-                      </p>
-                      {b.failure_reason && (
-                        <p className="text-destructive text-xs">
-                          {b.failure_reason}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {b.can_download && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={downloadMut.isPending}
-                          onClick={() =>
-                            downloadMut.mutate({
-                              batchId: b.id,
-                              fallbackName:
-                                b.file_name ??
-                                `${b.carrier_bucket}-export.xlsx`,
-                            })
-                          }
-                        >
-                          <Download className="mr-1.5 h-3.5 w-3.5" /> Tải
-                        </Button>
-                      )}
-                      {editable && b.can_mark_handed_off && (
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            setHandoffTarget({
-                              id: b.id,
-                              carrier: carrierLabel(b.carrier_bucket),
-                            })
-                          }
-                        >
-                          Đã bàn giao
-                        </Button>
-                      )}
-                    </div>
+          <div className="divide-y">
+            {batches.map((b) => (
+              <div
+                key={b.id}
+                className="flex flex-wrap items-center justify-between gap-2 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">
+                      {carrierLabel(b.carrier_bucket)}
+                    </span>
+                    <Badge variant={exportStatusVariant(b.status)}>
+                      {exportStatusLabel(b.status)}
+                    </Badge>
+                    {b.is_expired && (
+                      <Badge variant="secondary">Hết hạn</Badge>
+                    )}
                   </div>
-                ))}
+                  <p className="text-muted-foreground text-xs">
+                    {formatInt(b.recipient_count)} người ·{" "}
+                    {formatBytes(b.file_size_bytes)}
+                    {b.expires_at
+                      ? ` · hết hạn ${formatDateTimeVN(b.expires_at)}`
+                      : ""}
+                  </p>
+                  {b.failure_reason && (
+                    <p className="text-destructive text-xs">
+                      {b.failure_reason}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {b.can_download && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        downloadMut.isPending &&
+                        downloadMut.variables?.batchId === b.id
+                      }
+                      onClick={() =>
+                        downloadMut.mutate({
+                          batchId: b.id,
+                          fallbackName:
+                            b.file_name ?? `${b.carrier_bucket}-export.xlsx`,
+                        })
+                      }
+                    >
+                      <Download className="mr-1.5 h-3.5 w-3.5" /> Tải
+                    </Button>
+                  )}
+                  {editable && b.can_mark_handed_off && (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        setHandoffTarget({
+                          id: b.id,
+                          carrier: carrierLabel(b.carrier_bucket),
+                        })
+                      }
+                    >
+                      Đã bàn giao
+                    </Button>
+                  )}
+                </div>
               </div>
-            )}
-          </>
+            ))}
+          </div>
         )}
       </CardContent>
 

@@ -16,6 +16,8 @@ import {
   SMS_LANDING_TYPES,
   SMS_MANUAL_OPT_OUT_SOURCES,
   SMS_REVOKE_SOURCES,
+  type SmsAttestationKind,
+  type SmsCampaign,
   type SmsCarrierBucket,
   type SmsConsentBasis,
   type SmsGranularity,
@@ -197,6 +199,18 @@ export function exportStatusVariant(
   if (v === "failed") return "destructive"
   if (v === "purged" || v === "invalidated") return "secondary"
   return "outline"
+}
+
+/**
+ * Attestation của `kind` hợp lệ khi khớp bản dựng hiện tại (build lại → vô
+ * hiệu). Index typed theo `${kind}_checked_build_revision` (không cast unknown).
+ */
+export function isAttestationValid(
+  c: SmsCampaign,
+  kind: SmsAttestationKind,
+): boolean {
+  const rev = c[`${kind}_checked_build_revision`]
+  return rev != null && rev === c.build_revision
 }
 
 // =====================================================================

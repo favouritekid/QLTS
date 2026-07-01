@@ -10,6 +10,10 @@
  */
 import { api } from "@/lib/api/client"
 import {
+  downloadBlob,
+  filenameFromDisposition,
+} from "@/lib/utils/download-blob"
+import {
   smsCampaignDashboardSchema,
   smsCampaignFullListSchema,
   smsCampaignListSchema,
@@ -469,7 +473,7 @@ export async function markSmsExportHandedOff(
 /**
  * Tải file export. Endpoint trả FileResponse (binary) + YÊU CẦU auth (JWT) →
  * phải fetch blob qua axios (giữ Authorization header), KHÔNG mở URL trần.
- * Kích hoạt tải trong trình duyệt qua <a download> tạm rồi thu hồi objectURL.
+ * Dùng util chung download-blob (tránh lặp regex/createObjectURL).
  */
 export async function downloadSmsExport(
   campaignId: number,
@@ -480,17 +484,9 @@ export async function downloadSmsExport(
     `/api/sms/campaigns/${campaignId}/exports/${batchId}/download`,
     { responseType: "blob" },
   )
-  // Lấy tên file từ Content-Disposition nếu có, else fallback (batch.file_name).
-  const cd = res.headers["content-disposition"] as string | undefined
-  const match = cd?.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)/i)
-  const filename = match ? decodeURIComponent(match[1]) : fallbackName
-
-  const url = URL.createObjectURL(res.data)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+  const filename = filenameFromDisposition(
+    res.headers["content-disposition"] as string | undefined,
+    fallbackName,
+  )
+  downloadBlob(res.data, filename)
 }
