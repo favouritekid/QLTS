@@ -308,6 +308,31 @@ class TestQueryValidation:
         )
         assert resp.status_code == 400, resp.text
 
+    @pytest.mark.parametrize("path", [
+        "/api/admissions",
+        "/api/admissions/status-counts",
+        "/api/admissions/export",
+    ])
+    async def test_out_of_int4_unit_id_rejected_not_500(
+        self, client: AsyncClient, admin_token_headers: dict, path: str
+    ):
+        # unit_id is compared against Lead.unit_id (int4); an out-of-int4 value
+        # would make asyncpg raise "integer out of range" → 500 (the #437 class).
+        # The Query(ge=1, le=2147483647) guard must reject it as 422, on ALL three
+        # endpoints that accept the coordination filter.
+        resp = await client.get(
+            f"{path}?unit_id=99999999999", headers=admin_token_headers
+        )
+        assert resp.status_code == 422, resp.text
+
+    async def test_valid_unit_id_accepted(
+        self, client: AsyncClient, admin_token_headers: dict
+    ):
+        resp = await client.get(
+            "/api/admissions?unit_id=3", headers=admin_token_headers
+        )
+        assert resp.status_code == 200, resp.text
+
     @pytest.mark.parametrize("payment_status", ["paid", "unpaid", "partial", "no_fee", "overdue"])
     async def test_payment_status_accepted(
         self, client: AsyncClient, admin_token_headers: dict, payment_status: str

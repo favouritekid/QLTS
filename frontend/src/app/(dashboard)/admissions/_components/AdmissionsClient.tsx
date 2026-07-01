@@ -53,6 +53,7 @@ import {
 } from "@/hooks/admissions"
 import {
   areAdmissionsListParamsEqual,
+  buildCoordinationParams,
   CURRENT_ADMISSIONS_YEAR,
   ADMISSION_STATUS_TABS as STATUS_TABS,
 } from "@/hooks/admissions/filterDefaults"
@@ -345,9 +346,6 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   )
 
   const handleExport = useCallback(() => {
-    // Guard unit_id like apiFilters/countFilters — a crafted ?unit_id=abc must not
-    // send unit_id=NaN (→ BE 422) from the export path.
-    const parsedUnitId = state.unitId ? parseInt(state.unitId, 10) : NaN
     exportCsv.mutate({
       status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
       search: state.search || undefined,
@@ -357,16 +355,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
       payment_status: state.paymentStatusFilter || undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
-      // Coordination filters — keep the CSV in sync with the on-screen list
-      // (same XOR officer/unassigned as apiFilters).
-      assigned_officer_id:
-        state.officerFilters.length > 0 && !state.unassigned
-          ? state.officerFilters.join(",")
-          : undefined,
-      unassigned: state.unassigned || undefined,
-      unit_id: Number.isFinite(parsedUnitId) ? parsedUnitId : undefined,
-      assigned_reviewer_id:
-        state.reviewerFilters.length > 0 ? state.reviewerFilters.join(",") : undefined,
+      // Coordination filters — same helper as apiFilters/countFilters (officer XOR
+      // unassigned, unit_id int4-guard) so the CSV matches the on-screen list.
+      ...buildCoordinationParams({
+        officerFilters: state.officerFilters,
+        unitId: state.unitId,
+        reviewerFilters: state.reviewerFilters,
+        unassigned: state.unassigned,
+      }),
     })
   }, [exportCsv, state])
 

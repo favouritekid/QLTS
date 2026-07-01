@@ -144,7 +144,10 @@ async def list_admission_profiles(
         description="Coordination filter (admin/manager): officer IDs (comma-separated). Intersected with IDOR scope server-side.",
     ),
     unit_id: int | None = Query(
-        None, description="Coordination filter (admin): unit ID. Managers are forced to own unit."
+        None,
+        ge=1,
+        le=2147483647,
+        description="Coordination filter (admin): unit ID. Managers are forced to own unit.",
     ),
     assigned_reviewer_id: str | None = Query(
         None, description="Coordination filter (admin/manager): reviewer IDs (comma-separated)."
@@ -243,7 +246,7 @@ async def get_status_counts(
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
     assigned_officer_id: str | None = Query(None),
-    unit_id: int | None = Query(None),
+    unit_id: int | None = Query(None, ge=1, le=2147483647),
     assigned_reviewer_id: str | None = Query(None),
     unassigned: bool = Query(False),
     db: AsyncSession = Depends(database.get_db),
@@ -598,7 +601,7 @@ async def export_admissions_csv(
     date_from: datetime | None = Query(None, description="Filter from date"),
     date_to: datetime | None = Query(None, description="Filter to date"),
     assigned_officer_id: str | None = Query(None, description="comma-separated officer IDs"),
-    unit_id: int | None = Query(None),
+    unit_id: int | None = Query(None, ge=1, le=2147483647),
     assigned_reviewer_id: str | None = Query(None, description="comma-separated reviewer IDs"),
     unassigned: bool = Query(False),
     db: AsyncSession = Depends(database.get_db),

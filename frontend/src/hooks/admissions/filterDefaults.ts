@@ -41,6 +41,15 @@ export const ADMISSIONS_DEFAULT_SORT_BY: NonNullable<AdmissionListParams["sort_b
 export const ADMISSIONS_DEFAULT_SORT_ORDER: NonNullable<AdmissionListParams["order"]> = "desc"
 export const CURRENT_ADMISSIONS_YEAR = new Date().getFullYear()
 
+/**
+ * Postgres int4 upper bound. `unit_id` / officer / reviewer ids are compared
+ * against int4 columns; SQLAlchemy binds the value with the COLUMN's type, so a
+ * value beyond int4 makes asyncpg raise "integer out of range" → 500 (the #437
+ * incident class the backend `_parse_id_csv` guards). A plain `Number.isFinite`
+ * check passes 99999999999, so any int forwarded to the wire must clamp here.
+ */
+export const ADMISSIONS_INT4_MAX = 2147483647
+
 const ADMISSIONS_LIST_PARAM_KEYS = [
   "page",
   "page_size",
@@ -74,6 +83,57 @@ function parseIntegerParam(value: string | undefined): number | undefined {
   if (!value) return undefined
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * Parse a `unit_id` (URL/state string) → number, dropping anything outside the
+ * int4 range. Unlike {@link parseIntegerParam}, an out-of-int4 value (e.g.
+ * `?unit_id=99999999999`) is DROPPED rather than forwarded, so it never reaches
+ * `Lead.unit_id == <huge>` and 500s the backend. Mirrors `_parse_id_csv`.
+ */
+export function parseUnitId(value: string | undefined): number | undefined {
+  const parsed = parseIntegerParam(value)
+  if (parsed === undefined) return undefined
+  if (parsed < 1 || parsed > ADMISSIONS_INT4_MAX) return undefined
+  return parsed
+}
+
+/** Coordination-filter state (officer / unit / reviewer / unassigned). */
+export interface AdmissionsCoordinationState {
+  officerFilters: string[]
+  unitId: string
+  reviewerFilters: string[]
+  unassigned: boolean
+}
+
+export type AdmissionsCoordinationParams = Pick<
+  AdmissionListParams,
+  "assigned_officer_id" | "unit_id" | "assigned_reviewer_id" | "unassigned"
+>
+
+/**
+ * Map coordination-filter state → wire params. SINGLE source shared by
+ * `useAdmissionsFilter` (apiFilters + countFilters) and the CSV export, so the
+ * three never drift — the exact class of SSR/list/count divergence this list
+ * already had to patch. Encodes the two invariants once:
+ *  - officer XOR unassigned: an active "unassigned" DROPS the officer-IN list
+ *    (else `IS NULL AND IN(...)` = ∅, an always-empty result).
+ *  - `unit_id` int4-guarded (see {@link parseUnitId}) so a huge value never 500s.
+ */
+export function buildCoordinationParams(
+  state: AdmissionsCoordinationState,
+): AdmissionsCoordinationParams {
+  const params: AdmissionsCoordinationParams = {}
+  if (state.officerFilters.length > 0 && !state.unassigned) {
+    params.assigned_officer_id = state.officerFilters.join(",")
+  }
+  if (state.unassigned) params.unassigned = true
+  const unitId = parseUnitId(state.unitId)
+  if (unitId !== undefined) params.unit_id = unitId
+  if (state.reviewerFilters.length > 0) {
+    params.assigned_reviewer_id = state.reviewerFilters.join(",")
+  }
+  return params
 }
 
 export function getDefaultAdmissionsListParams(
@@ -129,7 +189,9 @@ export function parseAdmissionsSearchParamsToApiParams(
   const officer = getFirstParam(searchParams, "officer")
   if (officer) params.assigned_officer_id = officer
 
-  const unitId = parseIntegerParam(getFirstParam(searchParams, "unit_id"))
+  // int4-guard: a deep-link ?unit_id=99999999999 must not reach the SSR list
+  // fetch (→ Lead.unit_id == <huge> → asyncpg int4 overflow → SSR 500).
+  const unitId = parseUnitId(getFirstParam(searchParams, "unit_id"))
   if (unitId !== undefined) params.unit_id = unitId
 
   const reviewer = getFirstParam(searchParams, "reviewer")

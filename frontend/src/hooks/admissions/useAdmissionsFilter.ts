@@ -21,6 +21,7 @@ import {
   ADMISSIONS_DEFAULT_PAGE_SIZE,
   CURRENT_ADMISSIONS_YEAR,
   ADMISSION_STATUS_TABS as STATUS_TABS,
+  buildCoordinationParams,
 } from "./filterDefaults"
 
 // =============================================================================
@@ -550,14 +551,9 @@ export function useAdmissionsFilter(
     if (paymentStatusFilter) params.payment_status = paymentStatusFilter
     if (dateFrom) params.date_from = dateFrom
     if (dateTo) params.date_to = dateTo
-    // Coordination filters — XOR: drop officer list when "unassigned" is on.
-    if (officerFilters.length > 0 && !unassigned) params.assigned_officer_id = officerFilters.join(",")
-    if (unassigned) params.unassigned = true
-    if (unitId) {
-      const parsedUnitId = parseInt(unitId, 10)
-      if (Number.isFinite(parsedUnitId)) params.unit_id = parsedUnitId
-    }
-    if (reviewerFilters.length > 0) params.assigned_reviewer_id = reviewerFilters.join(",")
+    // Coordination filters (officer XOR unassigned, unit_id int4-guard, reviewer)
+    // — one helper shared with countFilters + export so all three stay in lockstep.
+    Object.assign(params, buildCoordinationParams({ officerFilters, unitId, reviewerFilters, unassigned }))
 
     return params
   }, [
@@ -578,13 +574,7 @@ export function useAdmissionsFilter(
     if (dateFrom) params.date_from = dateFrom
     if (dateTo) params.date_to = dateTo
     // Coordination filters (parity with apiFilters → tab counts match rows).
-    if (officerFilters.length > 0 && !unassigned) params.assigned_officer_id = officerFilters.join(",")
-    if (unassigned) params.unassigned = true
-    if (unitId) {
-      const parsedUnitId = parseInt(unitId, 10)
-      if (Number.isFinite(parsedUnitId)) params.unit_id = parsedUnitId
-    }
-    if (reviewerFilters.length > 0) params.assigned_reviewer_id = reviewerFilters.join(",")
+    Object.assign(params, buildCoordinationParams({ officerFilters, unitId, reviewerFilters, unassigned }))
 
     return params
   }, [
