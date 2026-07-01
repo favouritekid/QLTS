@@ -53,6 +53,7 @@ import {
 } from "@/hooks/admissions"
 import {
   areAdmissionsListParamsEqual,
+  buildCoordinationParams,
   CURRENT_ADMISSIONS_YEAR,
   ADMISSION_STATUS_TABS as STATUS_TABS,
 } from "@/hooks/admissions/filterDefaults"
@@ -67,7 +68,7 @@ import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 import { AdmissionsMetricRail, type MetricItem } from "./AdmissionsMetricRail"
 import { AdmissionsFilterBar } from "./AdmissionsFilterBar"
 import { AdmissionsStatusTabs } from "./AdmissionsStatusTabs"
-import { Monogram, StatusDot, ProgressBar, EligibilityToken, RowActionsMenu } from "./roster-parts"
+import { Monogram, StatusDot, ProgressBar, EligibilityToken, RowActionsMenu, TuitionHk1 } from "./roster-parts"
 
 const CURRENT_YEAR = CURRENT_ADMISSIONS_YEAR
 const DENSITY_STORAGE_KEY = "admissions:density"
@@ -354,6 +355,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
       payment_status: state.paymentStatusFilter || undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
+      // Coordination filters — same helper as apiFilters/countFilters (officer XOR
+      // unassigned, unit_id int4-guard) so the CSV matches the on-screen list.
+      ...buildCoordinationParams({
+        officerFilters: state.officerFilters,
+        unitId: state.unitId,
+        reviewerFilters: state.reviewerFilters,
+        unassigned: state.unassigned,
+      }),
     })
   }, [exportCsv, state])
 
@@ -432,6 +441,14 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
           sortBy={state.sortBy}
           sortOrder={state.sortOrder}
           onSortChange={handlers.handleSortChange}
+          officerFilters={state.officerFilters}
+          onOfficerChange={handlers.handleOfficerChange}
+          unitId={state.unitId}
+          onUnitIdChange={handlers.handleUnitIdChange}
+          reviewerFilters={state.reviewerFilters}
+          onReviewerChange={handlers.handleReviewerChange}
+          unassigned={state.unassigned}
+          onUnassignedChange={handlers.handleUnassignedChange}
           onReset={handlers.resetFilters}
         />
 
@@ -716,6 +733,17 @@ function AdmissionCard({ profile, isSelected, onSelect, onClaim, onApprove, onRe
               {formatDate(profile.created_at)}
             </span>
           </div>
+
+          {/* Học phí HK1 — chỉ hiện khi có (none → ẩn hàng cho card gọn) */}
+          {profile.tuition_hk1_status && profile.tuition_hk1_status !== "none" && (
+            <div className="mt-2">
+              <TuitionHk1
+                paid={profile.tuition_paid_hk1}
+                remaining={profile.tuition_remaining_hk1}
+                status={profile.tuition_hk1_status}
+              />
+            </div>
+          )}
         </div>
       </div>
     </article>

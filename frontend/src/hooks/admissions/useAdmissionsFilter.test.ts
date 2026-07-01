@@ -76,7 +76,7 @@ describe("useAdmissionsFilter", () => {
     it("restores localStorage filters after hydration", async () => {
       vi.spyOn(Storage.prototype, "getItem").mockReturnValue(
         JSON.stringify({
-          version: 1,
+          version: 2,
           data: {
             page: 2,
             search: "Nguyen",
@@ -195,6 +195,70 @@ describe("useAdmissionsFilter", () => {
         result.current.handlers.handleTabClick("pending")
       })
       expect(result.current.state.page).toBe(1)
+    })
+  })
+
+  describe("Coordination filters (Admission List v2)", () => {
+    it("officer ↔ unassigned are mutually exclusive (XOR)", () => {
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      act(() => result.current.handlers.handleUnassignedChange(true))
+      expect(result.current.state.unassigned).toBe(true)
+
+      // Selecting officers clears "unassigned"
+      act(() => result.current.handlers.handleOfficerChange(["5", "7"]))
+      expect(result.current.state.officerFilters).toEqual(["5", "7"])
+      expect(result.current.state.unassigned).toBe(false)
+
+      // Turning "unassigned" back on clears the officer list
+      act(() => result.current.handlers.handleUnassignedChange(true))
+      expect(result.current.state.unassigned).toBe(true)
+      expect(result.current.state.officerFilters).toEqual([])
+    })
+
+    it("apiFilters maps officer (comma-join), unit_id (int), reviewer", () => {
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      act(() => {
+        result.current.handlers.handleOfficerChange(["5", "7"])
+        result.current.handlers.handleUnitIdChange("3")
+        result.current.handlers.handleReviewerChange(["9"])
+      })
+
+      expect(result.current.apiFilters.assigned_officer_id).toBe("5,7")
+      expect(result.current.apiFilters.unit_id).toBe(3)
+      expect(result.current.apiFilters.assigned_reviewer_id).toBe("9")
+      expect(result.current.apiFilters.unassigned).toBeUndefined()
+    })
+
+    it("apiFilters drops officer list and sets unassigned when unassigned is on", () => {
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      act(() => result.current.handlers.handleOfficerChange(["5"]))
+      act(() => result.current.handlers.handleUnassignedChange(true))
+
+      expect(result.current.apiFilters.unassigned).toBe(true)
+      expect(result.current.apiFilters.assigned_officer_id).toBeUndefined()
+    })
+  })
+
+  describe("STORAGE_VERSION bump", () => {
+    it("discards stale v1 localStorage (no restore)", async () => {
+      vi.spyOn(Storage.prototype, "getItem").mockReturnValue(
+        JSON.stringify({
+          version: 1,
+          data: { page: 9, search: "STALE", statusFilters: ["draft"], activeTab: "draft" },
+        }),
+      )
+
+      const { result } = renderHook(() => useAdmissionsFilter())
+
+      // Give the post-hydration restore effect a chance to (not) run.
+      await waitFor(() => {
+        expect(result.current.state.page).toBe(1)
+      })
+      expect(result.current.state.search).toBe("")
+      expect(result.current.state.activeTab).toBe("all")
     })
   })
 })

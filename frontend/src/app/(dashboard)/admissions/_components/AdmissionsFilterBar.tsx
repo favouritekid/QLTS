@@ -13,6 +13,7 @@
 
 "use client"
 
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { format } from "date-fns"
 import { vi } from "date-fns/locale"
 import { ArrowUpDown, Check, ChevronDown, Search, SlidersHorizontal, X } from "lucide-react"
@@ -31,6 +32,13 @@ import {
 import { cn } from "@/lib/utils"
 import { ADMISSION_STATUS_CONFIG, getStatusDotColor } from "@/lib/status-config"
 import { CURRENT_ADMISSIONS_YEAR } from "@/hooks/admissions/filterDefaults"
+import { useAuth } from "@/hooks/useAuth"
+import { useAdminUsersList } from "@/hooks/useAdminUsers"
+import { useOrganizationUnits } from "@/hooks/useOrganization"
+import {
+  isAdmin as checkIsAdmin,
+  canFilterByOfficer as checkCanFilterByOfficer,
+} from "@/lib/utils/permissions"
 
 // Workflow order; LABELS đến từ ADMISSION_STATUS_CONFIG (single source) nên nhãn
 // checkbox không bao giờ lệch nhãn chip lọc (statusLabel cũng đọc cùng config).
@@ -62,6 +70,7 @@ const PAYMENT_OPTIONS: readonly { value: string; label: string }[] = [
   { value: "unpaid", label: "Chưa thanh toán" },
   { value: "partial", label: "Thanh toán một phần" },
   { value: "no_fee", label: "Chưa có học phí" },
+  { value: "overdue", label: "Quá hạn" },
 ]
 
 const SORT_OPTIONS: readonly { by: string; order: "asc" | "desc"; label: string }[] = [
@@ -69,10 +78,20 @@ const SORT_OPTIONS: readonly { by: string; order: "asc" | "desc"; label: string 
   { by: "created_at", order: "asc", label: "Cũ nhất" },
   { by: "full_name", order: "asc", label: "Tên A → Z" },
   { by: "full_name", order: "desc", label: "Tên Z → A" },
+  { by: "remaining_hk1", order: "desc", label: "Còn lại nhiều nhất" },
+  { by: "remaining_hk1", order: "asc", label: "Còn lại ít nhất" },
 ]
+
+/** Toggle a value in a string[] (copy of LeadFilterPanel helper). */
+function toggleId(arr: string[], value: string): string[] {
+  return arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value]
+}
 
 const NATIVE_SELECT_CLASS =
   "h-10 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-9"
+
+// Stable no-op subscribe for the hydration flag below (useSyncExternalStore).
+const emptySubscribe = () => () => {}
 
 function parseDate(str: string): Date | undefined {
   if (!str) return undefined
@@ -111,6 +130,15 @@ export interface AdmissionsFilterBarProps {
   sortBy: string
   sortOrder: "asc" | "desc"
   onSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void
+  // Coordination filters (admin/manager) — Admission List v2
+  officerFilters: string[]
+  onOfficerChange: (officerIds: string[]) => void
+  unitId: string
+  onUnitIdChange: (unitId: string) => void
+  reviewerFilters: string[]
+  onReviewerChange: (reviewerIds: string[]) => void
+  unassigned: boolean
+  onUnassignedChange: (unassigned: boolean) => void
   onReset: () => void
 }
 
@@ -138,8 +166,87 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
     sortBy,
     sortOrder,
     onSortChange,
+    officerFilters,
+    onOfficerChange,
+    unitId,
+    onUnitIdChange,
+    reviewerFilters,
+    onReviewerChange,
+    unassigned,
+    onUnassignedChange,
     onReset,
   } = props
+
+  // ── Coordination filter data (admin/manager) — fetched internally like
+  //    LeadFilterPanel so chip labels resolve here. UX-only role gates; backend
+  //    enforces real scope via _resolve_coordination_filters.
+  const { user } = useAuth()
+  // Hydration-safe client flag: false on SSR + first client render, true after
+  // hydration. useSyncExternalStore instead of a `useEffect(() => setState(true))`
+  // that trips react-hooks/set-state-in-effect (LeadFilterPanel uses the older
+  // React.useEffect form which the rule doesn't detect).
+  const isMounted = useSyncExternalStore(emptySubscribe, () => true, () => false)
+  const isAdminFlag = isMounted && checkIsAdmin(user)
+  const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user)
+  const showAssignmentGroup = canFilterByOfficerFlag || isAdminFlag
+
+  const [officerSearch, setOfficerSearch] = useState("")
+  const [debouncedOfficerSearch, setDebouncedOfficerSearch] = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedOfficerSearch(officerSearch), 300)
+    return () => clearTimeout(t)
+  }, [officerSearch])
+  const { data: officersData } = useAdminUsersList(
+    {
+      page: 1,
+      page_size: 100,
+      status: "active",
+      role: "officer",
+      // Manager chỉ lọc trong đơn vị mình (BE cũng AND own-unit) → chỉ liệt kê
+      // officer cùng đơn vị, tránh chọn officer khác unit ra 0 dòng khó hiểu.
+      // Admin (không unit) thấy toàn bộ.
+      ...(!isAdminFlag && user?.unit_id ? { unit_id: user.unit_id } : {}),
+      ...(debouncedOfficerSearch && { search: debouncedOfficerSearch }),
+    },
+    { enabled: canFilterByOfficerFlag },
+  )
+  const officers = officersData?.users || []
+  const officersTotalCount = officersData?.total_count ?? 0
+  const officersTruncated = officersTotalCount > officers.length
+
+  const [reviewerSearch, setReviewerSearch] = useState("")
+  const [debouncedReviewerSearch, setDebouncedReviewerSearch] = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedReviewerSearch(reviewerSearch), 300)
+    return () => clearTimeout(t)
+  }, [reviewerSearch])
+  // Reviewers = manager + admin (admin can also be assigned_reviewer_id).
+  const { data: reviewersData } = useAdminUsersList(
+    {
+      page: 1,
+      page_size: 100,
+      status: "active",
+      role: "manager,admin",
+      ...(debouncedReviewerSearch && { search: debouncedReviewerSearch }),
+    },
+    { enabled: canFilterByOfficerFlag },
+  )
+  const reviewers = reviewersData?.users || []
+  const reviewersTotalCount = reviewersData?.total_count ?? 0
+  const reviewersTruncated = reviewersTotalCount > reviewers.length
+
+  const { data: organizationUnits = [] } = useOrganizationUnits()
+  const flatUnits = useMemo(() => {
+    const result: { id: number; name: string; depth: number }[] = []
+    function walk(units: typeof organizationUnits, depth: number) {
+      for (const unit of units) {
+        result.push({ id: unit.id, name: unit.name, depth })
+        if (unit.children?.length) walk(unit.children, depth + 1)
+      }
+    }
+    walk(organizationUnits, 0)
+    return result
+  }, [organizationUnits])
 
   const toggleStatus = (value: string) =>
     onStatusChange(
@@ -147,14 +254,25 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
     )
 
   // Đếm theo NHÓM lọc đang bật (Trạng thái = 1 nhóm, không phải số status).
+  const assignmentActive =
+    (officerFilters.length > 0 ? 1 : 0) +
+    (reviewerFilters.length > 0 ? 1 : 0) +
+    (unitId ? 1 : 0) +
+    (unassigned ? 1 : 0)
   const filterCount =
     (statusFilters.length > 0 ? 1 : 0) +
     (majorFilter ? 1 : 0) +
     (degreeLevelFilter ? 1 : 0) +
     (paymentStatusFilter ? 1 : 0) +
-    (dateFrom || dateTo ? 1 : 0)
+    (dateFrom || dateTo ? 1 : 0) +
+    assignmentActive
 
   const majorName = majorPrograms?.find((p) => String(p.id) === majorFilter)?.name ?? majorFilter
+  const officerNameOf = (id: string) =>
+    officers.find((o) => o.id.toString() === id)?.full_name ?? `#${id}`
+  const reviewerNameOf = (id: string) =>
+    reviewers.find((o) => o.id.toString() === id)?.full_name ?? `#${id}`
+  const unitName = flatUnits.find((u) => u.id.toString() === unitId)?.name ?? unitId
 
   // Active chips: gồm cả Năm (khi ≠ năm mặc định) + các lọc trong popover.
   type Chip = { key: string; label: string; dot?: string; onRemove: () => void }
@@ -183,6 +301,24 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
         onDateToChange("")
       },
     })
+  officerFilters.forEach((id) =>
+    chips.push({
+      key: `officer-${id}`,
+      label: `Cán bộ: ${officerNameOf(id)}`,
+      onRemove: () => onOfficerChange(officerFilters.filter((o) => o !== id)),
+    }),
+  )
+  if (unassigned)
+    chips.push({ key: "unassigned", label: "Chưa giao", onRemove: () => onUnassignedChange(false) })
+  if (unitId)
+    chips.push({ key: "unit", label: `Đơn vị: ${unitName}`, onRemove: () => onUnitIdChange("") })
+  reviewerFilters.forEach((id) =>
+    chips.push({
+      key: `reviewer-${id}`,
+      label: `Người duyệt: ${reviewerNameOf(id)}`,
+      onRemove: () => onReviewerChange(reviewerFilters.filter((r) => r !== id)),
+    }),
+  )
 
   return (
     <div className="space-y-3">
@@ -320,6 +456,107 @@ export function AdmissionsFilterBar(props: AdmissionsFilterBarProps) {
                     </select>
                   </div>
                 </div>
+
+                {/* Phân công (admin/manager) — fetch nội bộ; backend enforce scope */}
+                {showAssignmentGroup && (
+                  <div className="space-y-3 border-b border-border p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Phân công</p>
+
+                    {canFilterByOfficerFlag && (
+                      <div className="space-y-2">
+                        <label className="block text-xs font-medium text-muted-foreground">Cán bộ phụ trách</label>
+                        <Input
+                          placeholder="Tìm cán bộ…"
+                          value={officerSearch}
+                          onChange={(e) => setOfficerSearch(e.target.value)}
+                          className="h-9"
+                        />
+                        <div className="max-h-40 space-y-1.5 overflow-y-auto">
+                          {officers.map((officer) => (
+                            <label key={officer.id} className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={officerFilters.includes(officer.id.toString())}
+                                onCheckedChange={() => onOfficerChange(toggleId(officerFilters, officer.id.toString()))}
+                                aria-label={officer.full_name ?? undefined}
+                              />
+                              <span className="truncate">{officer.full_name}</span>
+                            </label>
+                          ))}
+                          {officers.length === 0 && (
+                            <p className="text-muted-foreground text-xs">Không có cán bộ phù hợp.</p>
+                          )}
+                        </div>
+                        {officersTruncated && (
+                          <p className="text-muted-foreground text-xs">
+                            Hiển thị {officers.length}/{officersTotalCount} — nhập tên để tìm thêm
+                          </p>
+                        )}
+                        <label className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
+                          <Checkbox
+                            checked={unassigned}
+                            onCheckedChange={(v) => onUnassignedChange(!!v)}
+                            aria-label="Chưa giao"
+                          />
+                          <span>Chưa giao (không có cán bộ)</span>
+                        </label>
+                      </div>
+                    )}
+
+                    {canFilterByOfficerFlag && (
+                      <div className="space-y-2">
+                        <label className="block text-xs font-medium text-muted-foreground">Người duyệt</label>
+                        <Input
+                          placeholder="Tìm người duyệt…"
+                          value={reviewerSearch}
+                          onChange={(e) => setReviewerSearch(e.target.value)}
+                          className="h-9"
+                        />
+                        <div className="max-h-40 space-y-1.5 overflow-y-auto">
+                          {reviewers.map((r) => (
+                            <label key={r.id} className="flex min-h-9 cursor-pointer items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={reviewerFilters.includes(r.id.toString())}
+                                onCheckedChange={() => onReviewerChange(toggleId(reviewerFilters, r.id.toString()))}
+                                aria-label={r.full_name ?? undefined}
+                              />
+                              <span className="truncate">{r.full_name}</span>
+                            </label>
+                          ))}
+                          {reviewers.length === 0 && (
+                            <p className="text-muted-foreground text-xs">Không có người duyệt phù hợp.</p>
+                          )}
+                        </div>
+                        {reviewersTruncated && (
+                          <p className="text-muted-foreground text-xs">
+                            Hiển thị {reviewers.length}/{reviewersTotalCount} — nhập tên để tìm thêm
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {isAdminFlag && (
+                      <div className="space-y-2">
+                        <label className="block text-xs font-medium text-muted-foreground">Đơn vị</label>
+                        <div className="max-h-40 space-y-0.5 overflow-y-auto">
+                          {flatUnits.map((unit) => (
+                            <button
+                              key={unit.id}
+                              type="button"
+                              className={cn(
+                                "w-full rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted",
+                                unitId === unit.id.toString() && "bg-muted font-medium",
+                              )}
+                              style={unit.depth > 0 ? { paddingLeft: `${8 + unit.depth * 12}px` } : undefined}
+                              onClick={() => onUnitIdChange(unitId === unit.id.toString() ? "" : unit.id.toString())}
+                            >
+                              {unit.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Khoảng ngày tạo — giữ CalendarComponent */}
                 <div className="p-3">

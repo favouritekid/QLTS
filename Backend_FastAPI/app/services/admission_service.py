@@ -395,6 +395,55 @@ def _resolve_idor_filters(current_user: models.User) -> tuple[Optional[int], Opt
         )
 
 
+def _resolve_coordination_filters(
+    current_user: models.User,
+    officer_ids: Optional[List[int]] = None,
+    unit_id_param: Optional[int] = None,
+    reviewer_ids: Optional[List[int]] = None,
+    unassigned: bool = False,
+) -> dict:
+    """Layer user-supplied coordination filters ON TOP of the role IDOR scope.
+
+    Admission List v2 — lets admin/manager filter by officer/đơn vị/người
+    duyệt/chưa-giao. NEVER widens beyond ``_resolve_idor_filters``:
+
+    - OFFICER: hard-locked to self (idor_officer). ALL coordination inputs are
+      DROPPED — a crafted ``?assigned_officer_id=99&unassigned=true`` is ignored.
+    - MANAGER: always scoped to own unit (``unit_id_param`` IGNORED); may narrow
+      by officer/reviewer/unassigned WITHIN that unit (AND-ed → a cross-unit
+      officer yields 0 rows, never a leak / 500).
+    - ADMIN: free ``unit_id_param`` + officer/reviewer/unassigned.
+
+    Returns repo kwargs: {unit_id, assigned_officer_id, assigned_officer_ids,
+    assigned_reviewer_ids, unassigned}.
+    """
+    idor_unit, idor_officer = _resolve_idor_filters(current_user)  # fail-closed inside
+
+    # OFFICER: self-lock, ignore every coordination input (no widening).
+    if idor_officer is not None:
+        return {
+            "unit_id": idor_unit,
+            "assigned_officer_id": idor_officer,
+            "assigned_officer_ids": None,
+            "assigned_reviewer_ids": None,
+            "unassigned": False,
+        }
+
+    # ADMIN or MANAGER
+    is_admin = current_user.role == UserRole.ADMIN
+    eff_unit = unit_id_param if is_admin else idor_unit  # manager forced to own unit
+    # XOR: "unassigned" drops the officer-IN list (else IS NULL AND IN(...) = empty).
+    eff_officer_ids = None if unassigned else (officer_ids or None)
+
+    return {
+        "unit_id": eff_unit,
+        "assigned_officer_id": None,
+        "assigned_officer_ids": eff_officer_ids,
+        "assigned_reviewer_ids": (reviewer_ids or None),
+        "unassigned": bool(unassigned),
+    }
+
+
 def _check_idor_access(
     profile: models.AdmissionProfile,
     current_user: Optional[models.User],
@@ -4377,25 +4426,49 @@ async def get_profiles(
     date_to: Optional[datetime] = None,
     sort_by: str = "created_at",
     order: str = "desc",
+    officer_ids: Optional[List[int]] = None,
+    reviewer_ids: Optional[List[int]] = None,
+    unassigned: bool = False,
 ) -> Tuple[List[models.AdmissionProfile], int]:
     """
     Get filtered list of admission profiles with total count.
 
     Security:
     - IDOR: Automatically filters by unit_id for non-admin users.
+    - Coordination filters (officer_ids/unit_id/reviewer_ids/unassigned) are
+      layered ON TOP of the IDOR scope via _resolve_coordination_filters and can
+      only narrow, never widen (officer self-locked, manager forced to own unit).
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    # IDOR: 3-tier filtering (Admin=all, Manager=unit, Officer=assigned+unit)
-    unit_filter, officer_filter = _resolve_idor_filters(current_user) if current_user else (unit_id, None)
+    # Per-request "today" so the HK1 overdue column / filter / sort never straddle
+    # midnight (passed explicitly to the repo — mirror routers/invoices.py).
+    today = date.today()
+
+    # IDOR + coordination (Admin=all, Manager=unit, Officer=assigned+unit).
+    if current_user:
+        coord = _resolve_coordination_filters(
+            current_user,
+            officer_ids=officer_ids,
+            unit_id_param=unit_id,
+            reviewer_ids=reviewer_ids,
+            unassigned=unassigned,
+        )
+    else:
+        # System/internal caller (no auth context) — legacy fallback, no coordination.
+        coord = {
+            "unit_id": unit_id,
+            "assigned_officer_id": None,
+            "assigned_officer_ids": None,
+            "assigned_reviewer_ids": None,
+            "unassigned": False,
+        }
 
     # Get profiles using repository with count
     profiles, total_count = await admission_repo.get_filtered_with_count(
         skip=skip,
         limit=min(limit, 100),
-        unit_id=unit_filter,
-        assigned_officer_id=officer_filter,
         search=search,
         statuses=statuses,
         major_ids=major_ids,
@@ -4406,6 +4479,9 @@ async def get_profiles(
         date_to=date_to,
         sort_by=sort_by,
         order=order,
+        today=today,
+        with_hk1=True,  # list path needs HK1 money columns + remaining_hk1 sort
+        **coord,
     )
 
     # ADM-031 round 10: pre-resolve verifier names ACROSS all profiles in
@@ -4463,23 +4539,37 @@ async def get_profiles_for_export(
     payment_status: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    officer_ids: Optional[List[int]] = None,
+    unit_id: Optional[int] = None,
+    reviewer_ids: Optional[List[int]] = None,
+    unassigned: bool = False,
 ) -> List[models.AdmissionProfile]:
     """
     Get profiles for CSV export — no page cap, lightweight hydration.
 
     Only computes completion_percent (needed by CSV) via _calculate_and_update_totals.
     Skips full _compute_frontend_fields (permissions, actions, step_status, etc.).
+
+    Honors the SAME coordination filters as the list (officer/unit/reviewer/
+    unassigned) so the exported set matches the on-screen filtered rows.
+    with_hk1=False (default): export doesn't render HK1 money columns, so skip the
+    aggregate subqueries.
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    unit_filter, officer_filter = _resolve_idor_filters(current_user)
+    today = date.today()
+    coord = _resolve_coordination_filters(
+        current_user,
+        officer_ids=officer_ids,
+        unit_id_param=unit_id,
+        reviewer_ids=reviewer_ids,
+        unassigned=unassigned,
+    )
 
     profiles, _ = await admission_repo.get_filtered_with_count(
         skip=0,
         limit=10_000,  # export cap
-        unit_id=unit_filter,
-        assigned_officer_id=officer_filter,
         search=search,
         statuses=statuses,
         major_ids=major_ids,
@@ -4490,6 +4580,8 @@ async def get_profiles_for_export(
         date_to=date_to,
         sort_by="created_at",
         order="desc",
+        today=today,
+        **coord,
     )
 
     # Lightweight hydration: totals/GPA + completion_percent, no permissions/actions
@@ -4511,16 +4603,29 @@ async def get_status_counts(
     payment_status: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
+    officer_ids: Optional[List[int]] = None,
+    unit_id: Optional[int] = None,
+    reviewer_ids: Optional[List[int]] = None,
+    unassigned: bool = False,
 ) -> dict:
-    """Get status counts for admission profiles (all filters except status)."""
+    """Get status counts for admission profiles (all filters except status).
+
+    Coordination filters mirror get_profiles (same _resolve_coordination_filters)
+    so tab badge counts stay in lockstep with the filtered rows.
+    """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
 
-    unit_filter, officer_filter = _resolve_idor_filters(current_user)
+    today = date.today()
+    coord = _resolve_coordination_filters(
+        current_user,
+        officer_ids=officer_ids,
+        unit_id_param=unit_id,
+        reviewer_ids=reviewer_ids,
+        unassigned=unassigned,
+    )
 
     return await admission_repo.get_status_counts(
-        unit_id=unit_filter,
-        assigned_officer_id=officer_filter,
         search=search,
         major_ids=major_ids,
         academic_year=academic_year,
@@ -4528,6 +4633,8 @@ async def get_status_counts(
         payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
+        today=today,
+        **coord,
     )
 
 
