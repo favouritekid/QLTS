@@ -38,6 +38,11 @@ export interface StoredFilters {
   dateFrom: string
   dateTo: string
   activeTab: string
+  // Coordination filters (admin/manager) — Admission List v2
+  officerFilters: string[]   // multi-select officer IDs (as strings)
+  unitId: string             // single unit ID (as string)
+  reviewerFilters: string[]  // multi-select reviewer IDs (as strings)
+  unassigned: boolean        // only profiles with no assigned officer
 }
 
 export interface AdmissionsFilterState extends StoredFilters {
@@ -58,6 +63,10 @@ export interface AdmissionsFilterHandlers {
   handleDateToChange: (date: string) => void
   handleSortChange: (sortBy: string, sortOrder: "asc" | "desc") => void
   handleTabClick: (tabKey: string) => void
+  handleOfficerChange: (officerIds: string[]) => void
+  handleUnitIdChange: (unitId: string) => void
+  handleReviewerChange: (reviewerIds: string[]) => void
+  handleUnassignedChange: (unassigned: boolean) => void
   resetFilters: () => void
 }
 
@@ -74,7 +83,9 @@ export interface UseAdmissionsFilterReturn {
 // =============================================================================
 
 const STORAGE_KEY = "admissions_filters"
-const STORAGE_VERSION = 1
+// v2 (Admission List v2): added officer/unit/reviewer/unassigned coordination
+// filters → bump so stale v1 localStorage (without these keys) is discarded.
+const STORAGE_VERSION = 2
 
 interface VersionedStorage {
   version: number
@@ -97,6 +108,10 @@ const DEFAULT_FILTERS: StoredFilters = {
   dateFrom: "",
   dateTo: "",
   activeTab: "all",
+  officerFilters: [],
+  unitId: "",
+  reviewerFilters: [],
+  unassigned: false,
 }
 
 // =============================================================================
@@ -149,6 +164,8 @@ function normalizeStoredFilters(filters: StoredFilters): StoredFilters {
     ...DEFAULT_FILTERS,
     ...filters,
     statusFilters: Array.isArray(filters.statusFilters) ? filters.statusFilters : [],
+    officerFilters: Array.isArray(filters.officerFilters) ? filters.officerFilters : [],
+    reviewerFilters: Array.isArray(filters.reviewerFilters) ? filters.reviewerFilters : [],
   }
 }
 
@@ -167,7 +184,11 @@ function hasUrlFilterParams(sp: URLSearchParams): boolean {
     sp.get("payment") ||
     sp.get("from") ||
     sp.get("to") ||
-    sp.get("tab")
+    sp.get("tab") ||
+    sp.get("officer") ||
+    sp.get("unit_id") ||
+    sp.get("reviewer") ||
+    sp.get("unassigned")
   )
 }
 
@@ -184,6 +205,10 @@ function parseSearchParams(sp: URLSearchParams): StoredFilters {
     dateFrom: sp.get("from") || "",
     dateTo: sp.get("to") || "",
     activeTab: sp.get("tab") || "all",
+    officerFilters: sp.get("officer")?.split(",").filter(Boolean) || [],
+    unitId: sp.get("unit_id") || "",
+    reviewerFilters: sp.get("reviewer")?.split(",").filter(Boolean) || [],
+    unassigned: sp.get("unassigned") === "1" || sp.get("unassigned") === "true",
   }
 }
 
@@ -223,6 +248,10 @@ export function useAdmissionsFilter(
   const [dateFrom, setDateFrom] = useState(initialValues.dateFrom)
   const [dateTo, setDateTo] = useState(initialValues.dateTo)
   const [activeTab, setActiveTab] = useState(initialValues.activeTab)
+  const [officerFilters, setOfficerFilters] = useState<string[]>(initialValues.officerFilters)
+  const [unitId, setUnitId] = useState(initialValues.unitId)
+  const [reviewerFilters, setReviewerFilters] = useState<string[]>(initialValues.reviewerFilters)
+  const [unassigned, setUnassigned] = useState(initialValues.unassigned)
   const [sortBy, setSortBy] = useState("created_at")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
 
@@ -254,6 +283,14 @@ export function useAdmissionsFilter(
     setDateFrom((current) => (current === restored.dateFrom ? current : restored.dateFrom))
     setDateTo((current) => (current === restored.dateTo ? current : restored.dateTo))
     setActiveTab((current) => (current === restored.activeTab ? current : restored.activeTab))
+    setOfficerFilters((current) =>
+      arraysEqual(current, restored.officerFilters) ? current : [...restored.officerFilters],
+    )
+    setUnitId((current) => (current === restored.unitId ? current : restored.unitId))
+    setReviewerFilters((current) =>
+      arraysEqual(current, restored.reviewerFilters) ? current : [...restored.reviewerFilters],
+    )
+    setUnassigned((current) => (current === restored.unassigned ? current : restored.unassigned))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -282,6 +319,10 @@ export function useAdmissionsFilter(
     if (url.dateFrom !== dateFrom) setDateFrom(url.dateFrom)
     if (url.dateTo !== dateTo) setDateTo(url.dateTo)
     if (url.activeTab !== activeTab) setActiveTab(url.activeTab)
+    if (JSON.stringify(url.officerFilters) !== JSON.stringify(officerFilters)) setOfficerFilters(url.officerFilters)
+    if (url.unitId !== unitId) setUnitId(url.unitId)
+    if (JSON.stringify(url.reviewerFilters) !== JSON.stringify(reviewerFilters)) setReviewerFilters(url.reviewerFilters)
+    if (url.unassigned !== unassigned) setUnassigned(url.unassigned)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
@@ -309,6 +350,10 @@ export function useAdmissionsFilter(
       if (dateFrom) params.set("from", dateFrom)
       if (dateTo) params.set("to", dateTo)
       if (activeTab !== "all") params.set("tab", activeTab)
+      if (officerFilters.length > 0) params.set("officer", officerFilters.join(","))
+      if (unitId) params.set("unit_id", unitId)
+      if (reviewerFilters.length > 0) params.set("reviewer", reviewerFilters.join(","))
+      if (unassigned) params.set("unassigned", "1")
 
       const qs = params.toString()
       const newUrl = qs ? `${pathname}?${qs}` : pathname
@@ -323,6 +368,7 @@ export function useAdmissionsFilter(
   }, [
     page, search, statusFilters, majorFilter, academicYear,
     degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, activeTab,
+    officerFilters, unitId, reviewerFilters, unassigned,
     pathname,
   ])
 
@@ -331,6 +377,7 @@ export function useAdmissionsFilter(
     const data: StoredFilters = {
       page, search, statusFilters, majorFilter, academicYear,
       degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, activeTab,
+      officerFilters, unitId, reviewerFilters, unassigned,
     }
 
     const shouldSave =
@@ -343,7 +390,11 @@ export function useAdmissionsFilter(
       paymentStatusFilter ||
       dateFrom ||
       dateTo ||
-      activeTab !== "all"
+      activeTab !== "all" ||
+      officerFilters.length > 0 ||
+      unitId ||
+      reviewerFilters.length > 0 ||
+      unassigned
 
     if (isStorageSyncInitialMount.current) {
       isStorageSyncInitialMount.current = false
@@ -358,6 +409,7 @@ export function useAdmissionsFilter(
   }, [
     page, search, statusFilters, majorFilter, academicYear,
     degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, activeTab,
+    officerFilters, unitId, reviewerFilters, unassigned,
   ])
 
   // ── HANDLERS (all reset page to 1) ────────────────────────────────────
@@ -415,6 +467,30 @@ export function useAdmissionsFilter(
     setPage(1)
   }, [])
 
+  const handleOfficerChange = useCallback((officerIds: string[]) => {
+    setOfficerFilters(officerIds)
+    // XOR: selecting officers clears "unassigned" (else IS NULL AND IN = empty).
+    if (officerIds.length > 0) setUnassigned(false)
+    setPage(1)
+  }, [])
+
+  const handleUnitIdChange = useCallback((nextUnitId: string) => {
+    setUnitId(nextUnitId)
+    setPage(1)
+  }, [])
+
+  const handleReviewerChange = useCallback((reviewerIds: string[]) => {
+    setReviewerFilters(reviewerIds)
+    setPage(1)
+  }, [])
+
+  const handleUnassignedChange = useCallback((next: boolean) => {
+    setUnassigned(next)
+    // XOR: "unassigned" clears the officer selection.
+    if (next) setOfficerFilters([])
+    setPage(1)
+  }, [])
+
   const resetFilters = useCallback(() => {
     setSearch("")
     setStatusFilters([])
@@ -425,6 +501,10 @@ export function useAdmissionsFilter(
     setDateFrom("")
     setDateTo("")
     setActiveTab("all")
+    setOfficerFilters([])
+    setUnitId("")
+    setReviewerFilters([])
+    setUnassigned(false)
     setSortBy("created_at")
     setSortOrder("desc")
     setPage(1)
@@ -441,11 +521,16 @@ export function useAdmissionsFilter(
       paymentStatusFilter ||
       dateFrom ||
       dateTo ||
-      (academicYear !== undefined && academicYear !== CURRENT_ADMISSIONS_YEAR)
+      (academicYear !== undefined && academicYear !== CURRENT_ADMISSIONS_YEAR) ||
+      officerFilters.length > 0 ||
+      unitId ||
+      reviewerFilters.length > 0 ||
+      unassigned
     )
   }, [
     search, statusFilters, majorFilter, degreeLevelFilter,
     paymentStatusFilter, dateFrom, dateTo, academicYear,
+    officerFilters, unitId, reviewerFilters, unassigned,
   ])
 
   /** Params sent to useListAdmissions */
@@ -465,11 +550,20 @@ export function useAdmissionsFilter(
     if (paymentStatusFilter) params.payment_status = paymentStatusFilter
     if (dateFrom) params.date_from = dateFrom
     if (dateTo) params.date_to = dateTo
+    // Coordination filters — XOR: drop officer list when "unassigned" is on.
+    if (officerFilters.length > 0 && !unassigned) params.assigned_officer_id = officerFilters.join(",")
+    if (unassigned) params.unassigned = true
+    if (unitId) {
+      const parsedUnitId = parseInt(unitId, 10)
+      if (Number.isFinite(parsedUnitId)) params.unit_id = parsedUnitId
+    }
+    if (reviewerFilters.length > 0) params.assigned_reviewer_id = reviewerFilters.join(",")
 
     return params
   }, [
     page, pageSize, search, statusFilters, majorFilter, academicYear,
     degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, sortBy, sortOrder,
+    officerFilters, unitId, reviewerFilters, unassigned,
   ])
 
   /** Params for useAdmissionStatusCounts (excludes page/status/sort) */
@@ -483,15 +577,27 @@ export function useAdmissionsFilter(
     if (paymentStatusFilter) params.payment_status = paymentStatusFilter
     if (dateFrom) params.date_from = dateFrom
     if (dateTo) params.date_to = dateTo
+    // Coordination filters (parity with apiFilters → tab counts match rows).
+    if (officerFilters.length > 0 && !unassigned) params.assigned_officer_id = officerFilters.join(",")
+    if (unassigned) params.unassigned = true
+    if (unitId) {
+      const parsedUnitId = parseInt(unitId, 10)
+      if (Number.isFinite(parsedUnitId)) params.unit_id = parsedUnitId
+    }
+    if (reviewerFilters.length > 0) params.assigned_reviewer_id = reviewerFilters.join(",")
 
     return params
-  }, [search, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo])
+  }, [
+    search, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter,
+    dateFrom, dateTo, officerFilters, unitId, reviewerFilters, unassigned,
+  ])
 
   // ── RETURN ────────────────────────────────────────────────────────────
   return {
     state: {
       page, pageSize, search, statusFilters, majorFilter, academicYear,
       degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, activeTab,
+      officerFilters, unitId, reviewerFilters, unassigned,
       sortBy, sortOrder,
     },
     handlers: {
@@ -506,6 +612,10 @@ export function useAdmissionsFilter(
       handleDateToChange,
       handleSortChange,
       handleTabClick,
+      handleOfficerChange,
+      handleUnitIdChange,
+      handleReviewerChange,
+      handleUnassignedChange,
       resetFilters,
     },
     hasActiveFilters,

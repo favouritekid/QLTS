@@ -1195,6 +1195,26 @@ class AdmissionProfileResponse(BaseModel):
     )
 
     # =========================================================================
+    # Học phí HK1 (Admission List v2) — denormalized aggregate cho cột danh sách.
+    # Set transient ở admission_repository.get_filtered_with_count (scalar
+    # subquery, coalesce→0). Decimal → Pydantic v2 serialize JSON string; FE
+    # normalize string→number ở API client listAdmissions (list không .parse()).
+    # `tuition_hk1_status` do BE tính (_hk1_status) — FE chỉ map màu (thin-client).
+    # =========================================================================
+    tuition_paid_hk1: Optional[Decimal] = Field(
+        None, description="Σ học phí HK1 đã đóng (fee tuition semester_no=1 non-cancelled)"
+    )
+    tuition_remaining_hk1: Optional[Decimal] = Field(
+        None, description="Σ học phí HK1 còn lại (final − paid − waived)"
+    )
+    tuition_overdue_hk1: bool = Field(
+        default=False, description="Có hóa đơn HK1 quá hạn chưa thanh toán đủ"
+    )
+    tuition_hk1_status: Optional[str] = Field(
+        None, description="Trạng thái HK1: paid|partial|unpaid|overdue|none (BE emit, FE map màu)"
+    )
+
+    # =========================================================================
     # Phase 7: Frontend Thin Client Compliance Fields
     # =========================================================================
     

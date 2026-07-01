@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils"
 import { ADMISSION_STATUS_CONFIG, getStatusDotColor } from "@/lib/status-config"
 import { hasAction } from "@/lib/admission/permissions"
+import { formatVND } from "@/lib/zod/finance"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 export function getInitials(name: string): string {
@@ -68,6 +69,42 @@ export function EligibilityToken({ status }: { status: string }) {
       <span className={cn("size-1.5 shrink-0 rounded-full", m.dot)} />
       {m.label}
     </span>
+  )
+}
+
+// Học phí HK1 (Admission List v2). Chấm màu map TĨNH từ `tuition_hk1_status`
+// (BE emit — thin client, FE chỉ map màu). status "none"/undefined = hồ sơ chưa
+// có học phí HK1 → "—".
+const HK1_DOT: Record<string, string> = {
+  paid: "bg-success-500",
+  partial: "bg-amber-500",
+  unpaid: "bg-gray-400",
+  overdue: "bg-error-500",
+}
+
+export function TuitionHk1({
+  paid,
+  remaining,
+  status,
+}: {
+  paid: number | null | undefined
+  remaining: number | null | undefined
+  status: string | null | undefined
+}) {
+  if (!status || status === "none") {
+    return <span className="text-sm text-muted-foreground">—</span>
+  }
+  const dot = HK1_DOT[status] ?? "bg-gray-400"
+  return (
+    <div className="flex items-center gap-2 whitespace-nowrap">
+      <span className={cn("size-1.5 shrink-0 rounded-full", dot)} aria-hidden="true" />
+      <div className="text-xs leading-tight tabular-nums">
+        <div className="text-foreground">Đã đóng {formatVND(paid ?? 0)}</div>
+        <div className={cn(status === "overdue" ? "text-error-700" : "text-muted-foreground")}>
+          Còn lại {formatVND(remaining ?? 0)}
+        </div>
+      </div>
+    </div>
   )
 }
 

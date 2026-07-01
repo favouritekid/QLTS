@@ -67,6 +67,12 @@ export function useListAdmissions(
       date_to: filters?.date_to,
       sort_by: filters?.sort_by,
       order: filters?.order,
+      // Coordination filters (Admission List v2) — forwarded EXPLICITLY (this hook
+      // does not spread `filters`), else they never reach the wire.
+      assigned_officer_id: filters?.assigned_officer_id,
+      unit_id: filters?.unit_id,
+      assigned_reviewer_id: filters?.assigned_reviewer_id,
+      unassigned: filters?.unassigned,
     }),
     staleTime: 15000, // 15 seconds
     gcTime: 5 * 60 * 1000, // 5 min — keep cached pages for back-navigation

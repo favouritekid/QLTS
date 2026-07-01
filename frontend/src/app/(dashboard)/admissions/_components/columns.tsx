@@ -24,6 +24,7 @@ import {
   ProgressBar,
   RowActionsMenu,
   StatusDot,
+  TuitionHk1,
 } from "./roster-parts"
 
 type Density = "comfortable" | "compact"
@@ -143,6 +144,22 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       cell: ({ getValue }) => <EligibilityToken status={getValue()} />,
       enableSorting: false,
       size: 120,
+    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+
+    // Học phí HK1 (Admission List v2) — sortable theo "Còn lại". id="remaining_hk1"
+    // khớp state.sortBy → BE sort end-to-end; accessor là number (normalize ở
+    // listAdmissions) nên client getSortedRowModel cũng đúng số.
+    columnHelper.accessor((row) => Number(row.tuition_remaining_hk1 ?? 0), {
+      id: "remaining_hk1",
+      header: ({ column }) => <SortableHeader column={column} label="Học phí HK1" />,
+      cell: ({ row }) => (
+        <TuitionHk1
+          paid={row.original.tuition_paid_hk1}
+          remaining={row.original.tuition_remaining_hk1}
+          status={row.original.tuition_hk1_status}
+        />
+      ),
+      size: 170,
     }) as ColumnDef<AdmissionProfileResponse, unknown>,
 
     // Assignees (officer + reviewer — luôn hiện cả hai, mọi density)

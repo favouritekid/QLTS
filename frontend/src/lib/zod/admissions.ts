@@ -943,7 +943,17 @@ export const admissionProfileResponseSchema = z.object({
 
   // Denormalized fields for list display
   program_name: z.string().optional().nullable(),
-  
+
+  // Học phí HK1 (Admission List v2). NOTE: listAdmissions does NOT .parse() the
+  // response — these z.number() declarations are TYPE-ONLY (no runtime coercion).
+  // BE sends Decimal as JSON string; the string→number conversion happens in the
+  // listAdmissions API client (normalize step). tuition_hk1_status is BE-computed
+  // (FE only maps status→dot color — thin client).
+  tuition_paid_hk1: z.number().optional().nullable(),
+  tuition_remaining_hk1: z.number().optional().nullable(),
+  tuition_overdue_hk1: z.boolean().optional().default(false),
+  tuition_hk1_status: z.string().optional().nullable(),
+
   // =========================================================================
   // Phase 7: Frontend Thin Client Fields (computed by backend)
   // =========================================================================
@@ -1606,11 +1616,16 @@ export interface AdmissionListParams {
   major_id?: string     // comma-separated
   academic_year?: number
   degree_level?: string
-  payment_status?: string  // paid | unpaid | partial | no_fee
+  payment_status?: string  // paid | unpaid | partial | no_fee | overdue
   date_from?: string    // ISO date string
   date_to?: string      // ISO date string
-  sort_by?: 'created_at' | 'updated_at' | 'full_name' | 'status'
+  sort_by?: 'created_at' | 'updated_at' | 'full_name' | 'status' | 'remaining_hk1'
   order?: 'asc' | 'desc'
+  // Coordination filters (admin/manager) — Admission List v2
+  assigned_officer_id?: string   // comma-separated officer IDs
+  unit_id?: number
+  assigned_reviewer_id?: string  // comma-separated reviewer IDs
+  unassigned?: boolean
 }
 
 /**

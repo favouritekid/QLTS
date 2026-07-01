@@ -25,14 +25,32 @@ import type {
 // ADMISSION CRUD OPERATIONS
 // ============================================
 
+/** Coerce a money field (BE Decimal → JSON string) to number for display + sort. */
+function toNum(v: unknown): number | null {
+  return v == null ? null : Number(v)
+}
+
 /**
- * Get list of admissions with pagination and filters
+ * Get list of admissions with pagination and filters.
+ *
+ * NOTE (Admission List v2): the response is NOT zod-parsed, so the HK1 money
+ * fields arrive as Decimal JSON strings. Normalize them to numbers HERE — the
+ * single boundary every consumer reads — so `formatVND` + the TanStack column
+ * sort (getSortedRowModel) operate on numbers, not lexicographic strings.
  */
 export async function listAdmissions(
   params?: AdmissionListParams
 ): Promise<AdmissionsPage> {
   const response = await api.get<AdmissionsPage>('/api/admissions', { params })
-  return response.data
+  const page = response.data
+  return {
+    ...page,
+    profiles: page.profiles.map((p) => ({
+      ...p,
+      tuition_paid_hk1: toNum(p.tuition_paid_hk1),
+      tuition_remaining_hk1: toNum(p.tuition_remaining_hk1),
+    })),
+  }
 }
 
 /**

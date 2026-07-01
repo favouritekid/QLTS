@@ -14,6 +14,7 @@ Benefits:
 
 import logging
 from datetime import date, datetime
+from decimal import Decimal
 from typing import List, Optional, Tuple
 import unicodedata
 
@@ -85,6 +86,102 @@ def _choices_eager_load_options() -> tuple:
             AdmissionProfileChoice.scores
         ).selectinload(ProfileChoiceScore.subject),
     )
+
+
+# =============================================================================
+# Học phí HK1 aggregate (Admission List v2)
+# =============================================================================
+# Dùng chung cho: cột tiền "Đã đóng / Còn lại" + filter "Quá hạn" + sort "Còn lại".
+# HK1-predicate mirror ``fee_calculation_service.is_hk1_settled_fee``:
+#   tuition + semester_no == 1 + status != cancelled.
+# Correlate tới AdmissionProfile (outer) để chạy như scalar subquery / EXISTS
+# trong query list — KHÔNG N+1 (aggregate, không phải relationship eager-load).
+def _hk1_fee_predicate():
+    """Correlated predicate: fee HK1 của AdmissionProfile (outer)."""
+    from app.models.finance import Fee, FeeStatusEnum
+    return and_(
+        Fee.admission_profile_id == models.AdmissionProfile.id,
+        Fee.fee_type == "tuition",
+        Fee.semester_no == 1,
+        Fee.status != FeeStatusEnum.cancelled,
+    )
+
+
+def _hk1_paid_subquery():
+    """Σ paid_amount fee HK1. coalesce→0 BẮT BUỘC (chưa có HK1 → SUM NULL)."""
+    from app.models.finance import Fee
+    return (
+        select(func.coalesce(func.sum(Fee.paid_amount), 0))
+        .where(_hk1_fee_predicate())
+        .correlate(models.AdmissionProfile)
+        .scalar_subquery()
+    )
+
+
+def _hk1_remaining_subquery():
+    """Σ (final − paid − waived) fee HK1. coalesce→0 (cùng lý do)."""
+    from app.models.finance import Fee
+    return (
+        select(
+            func.coalesce(
+                func.sum(Fee.final_amount - Fee.paid_amount - Fee.waived_amount), 0
+            )
+        )
+        .where(_hk1_fee_predicate())
+        .correlate(models.AdmissionProfile)
+        .scalar_subquery()
+    )
+
+
+def _hk1_final_subquery():
+    """Σ final_amount fee HK1. coalesce→0. Dùng để phân biệt 'có fee HK1' (final>0,
+    kể cả miễn 100%) với 'chưa có HK1' (final=0) trong _hk1_status."""
+    from app.models.finance import Fee
+    return (
+        select(func.coalesce(func.sum(Fee.final_amount), 0))
+        .where(_hk1_fee_predicate())
+        .correlate(models.AdmissionProfile)
+        .scalar_subquery()
+    )
+
+
+def _hk1_overdue_exists(today: date):
+    """EXISTS hóa đơn HK1 quá hạn — mirror ``routers/invoices._invoice_is_overdue``
+    (status IN OVERDUE_DERIVED_STATUSES AND due_date < today)."""
+    from app.models.finance import Fee, Invoice, OVERDUE_DERIVED_STATUSES
+    return (
+        select(Invoice.id)
+        .join(Fee, Invoice.fee_id == Fee.id)
+        .where(
+            _hk1_fee_predicate(),
+            Invoice.status.in_(OVERDUE_DERIVED_STATUSES),
+            Invoice.due_date < today,
+        )
+        .correlate(models.AdmissionProfile)
+        .exists()
+    )
+
+
+def _hk1_status(paid, remaining, overdue, final) -> str:
+    """(paid, remaining, overdue, final) → trạng thái hiển thị. BE emit, FE chỉ map
+    màu (thin-client). Normalize None→0 phòng hồ sơ chưa có HK1 (tránh None>0 → 500).
+
+    ``final`` = Σ final_amount HK1: phân biệt 'có fee HK1' (final>0, KỂ CẢ miễn
+    100% với paid=0/remaining=0) khỏi 'chưa có HK1' (final=0 → "none"). Nếu chỉ
+    xét paid/remaining thì fee miễn-toàn-phần (paid=0, remaining=0) bị gán nhầm
+    "none" thay vì đã tất toán."""
+    paid = paid or Decimal("0")
+    remaining = remaining or Decimal("0")
+    final = final or Decimal("0")
+    if final <= 0:
+        return "none"            # chưa có fee HK1 (hoặc chỉ có fee đã hủy)
+    if overdue:
+        return "overdue"
+    if remaining <= 0:
+        return "paid"            # tất toán: đóng đủ HOẶC miễn 100%
+    if paid > 0:
+        return "partial"
+    return "unpaid"              # remaining > 0, chưa đóng đồng nào
 
 
 class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
@@ -219,6 +316,11 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         date_to: Optional[datetime] = None,
         sort_by: str = "created_at",
         order: str = "desc",
+        assigned_officer_ids: Optional[List[int]] = None,
+        assigned_reviewer_ids: Optional[List[int]] = None,
+        unassigned: bool = False,
+        today: Optional[date] = None,
+        with_hk1: bool = False,
         **filters
     ) -> Tuple[List[models.AdmissionProfile], int]:
         """
@@ -244,6 +346,11 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         Returns:
             Tuple of (List of AdmissionProfile instances, total_count)
         """
+        # Resolve "today" ONCE per request (passed from service). Default here is a
+        # fallback only — service computes per-request so HK1 overdue predicate /
+        # sort / column never straddle midnight (mirror routers/invoices.py:139).
+        today = today or date.today()
+
         # Base query for filtering
         base_conditions = []
 
@@ -256,6 +363,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             base_conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             base_conditions.append(models.Lead.unit_id == unit_id)
+
+        # Coordination filters (admin/manager) — narrowing ONLY, layered on top of
+        # the IDOR scope above (service intersects via _resolve_coordination_filters).
+        if assigned_officer_ids:
+            base_conditions.append(
+                models.Lead.assigned_officer_id.in_(assigned_officer_ids)
+            )
+        if unassigned:
+            base_conditions.append(models.Lead.assigned_officer_id.is_(None))
+        if assigned_reviewer_ids:
+            base_conditions.append(
+                models.AdmissionProfile.assigned_reviewer_id.in_(assigned_reviewer_ids)
+            )
 
         # Multi-status filter (new)
         if statuses and len(statuses) > 0:
@@ -288,7 +408,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         # Payment status filter (subquery EXISTS pattern - no JOIN needed)
         if payment_status:
-            self._apply_payment_status_filter(base_conditions, payment_status)
+            self._apply_payment_status_filter(base_conditions, payment_status, today)
 
         # Date range filter
         if date_from:
@@ -313,6 +433,20 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         count_result = await self.db.execute(count_query)
         total_count = count_result.scalar() or 0
 
+        # Học phí HK1 aggregate columns (Admission List v2) — labeled scalar
+        # subqueries reused both as SELECT columns (cột tiền) AND as the sort key
+        # (single source, no drift). coalesce→0 inside the helpers.
+        # Chỉ build khi with_hk1=True (list path): tránh 4 correlated subquery/row
+        # trên /export (10k) + /stats (toàn bộ hồ sơ) vốn KHÔNG dùng cột HK1.
+        hk1_cols: list = []
+        remaining_col = None
+        if with_hk1:
+            paid_col = _hk1_paid_subquery().label("tuition_paid_hk1")
+            remaining_col = _hk1_remaining_subquery().label("tuition_remaining_hk1")
+            overdue_col = _hk1_overdue_exists(today).label("tuition_overdue_hk1")
+            final_col = _hk1_final_subquery().label("tuition_final_hk1")
+            hk1_cols = [paid_col, remaining_col, overdue_col, final_col]
+
         # Determine sort column and order
         sort_column = models.AdmissionProfile.created_at  # default
         if sort_by == "updated_at":
@@ -321,12 +455,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             sort_column = models.Lead.full_name
         elif sort_by == "status":
             sort_column = models.AdmissionProfile.status
+        elif sort_by == "remaining_hk1" and remaining_col is not None:
+            sort_column = remaining_col
 
         order_func = desc if order == "desc" else asc
 
         # Data query with pagination
         data_query = (
-            select(models.AdmissionProfile)
+            select(models.AdmissionProfile, *hk1_cols)
             .join(models.Lead)
         )
         if needs_program_join:
@@ -335,7 +471,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             ).join(
                 models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
             )
-        data_query = data_query.options(
+        data_query = (
+            data_query.options(
                 selectinload(models.AdmissionProfile.assigned_reviewer),
                 selectinload(models.AdmissionProfile.lead).options(
                     selectinload(models.Lead.assigned_officer),
@@ -354,28 +491,71 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 # for multi-NV eligibility/completion. Without this the per-row
                 # sync access lazy-loads → MissingGreenlet (N-row 500).
                 *_choices_eager_load_options(),
-            ).order_by(order_func(sort_column)).offset(skip).limit(limit)
+            )
+            # Stable secondary key: ties on the primary sort (esp. remaining_hk1 where
+            # many profiles share a value, or no-HK1 rows all = 0) would otherwise
+            # duplicate/skip across LIMIT/OFFSET pages (mirror Invoice.id tiebreaker
+            # in fee_repository).
+            .order_by(order_func(sort_column), asc(models.AdmissionProfile.id))
+            .offset(skip).limit(limit)
+        )
         if base_conditions:
             data_query = data_query.where(and_(*base_conditions))
 
-        result = await self.db.execute(data_query)
-        profiles = list(result.scalars().all())
-
-        # Extract program_name while in async context (avoids MissingGreenlet during serialization)
-        for profile in profiles:
+        def _set_program_name(profile):
+            # Extract program_name while in async context (avoids MissingGreenlet
+            # during serialization).
             program_name = None
             if profile.lead and profile.lead.offering and profile.lead.offering.program:
                 program_name = profile.lead.offering.program.name
-            # Set as transient attribute for Pydantic serialization
-            object.__setattr__(profile, 'program_name', program_name)
+            object.__setattr__(profile, "program_name", program_name)
+
+        result = await self.db.execute(data_query)
+        profiles = []
+        if with_hk1:
+            # Rows are tuples (AdmissionProfile, paid, remaining, overdue, final)
+            # because of the HK1 columns — unpack instead of .scalars().
+            for profile, paid_hk1, remaining_hk1, overdue_hk1, final_hk1 in result.all():
+                overdue_hk1 = bool(overdue_hk1)
+                object.__setattr__(profile, "tuition_paid_hk1", paid_hk1)
+                object.__setattr__(profile, "tuition_remaining_hk1", remaining_hk1)
+                object.__setattr__(profile, "tuition_overdue_hk1", overdue_hk1)
+                object.__setattr__(
+                    profile, "tuition_hk1_status",
+                    _hk1_status(paid_hk1, remaining_hk1, overdue_hk1, final_hk1),
+                )
+                _set_program_name(profile)
+                profiles.append(profile)
+        else:
+            # No HK1 columns (export / stats) — plain entity rows.
+            for profile in result.scalars().all():
+                _set_program_name(profile)
+                profiles.append(profile)
 
         return profiles, total_count
 
     @staticmethod
-    def _apply_payment_status_filter(base_conditions: list, payment_status: str) -> None:
-        """Apply payment status subquery filter to base_conditions."""
+    def _apply_payment_status_filter(
+        base_conditions: list,
+        payment_status: str,
+        today: Optional[date] = None,
+    ) -> None:
+        """Apply payment status subquery filter to base_conditions.
+
+        ``overdue`` (Admission List v2) = có hóa đơn HK1 quá hạn chưa thanh toán
+        (mirror cột ``tuition_overdue_hk1``). ``today`` truyền từ caller (per-request)
+        để không lệch qua nửa đêm; fallback ``date.today()`` nếu None.
+        """
         from app.models import Fee, FeeStatusEnum
 
+        today = today or date.today()
+
+        if payment_status == "overdue":
+            # CỐ Ý chỉ xét HK1 (khớp cột "Học phí HK1"/sort của Admission List v2),
+            # KHÁC các nhánh paid/unpaid/partial/no_fee bên dưới (xét MỌI fee). Đừng
+            # "đồng bộ" nhánh này sang all-fees — sẽ phá parity với cột HK1.
+            base_conditions.append(_hk1_overdue_exists(today))
+            return
         if payment_status == "paid":
             # All fees are paid/waived (no unpaid fees exist) AND has at least one fee
             unpaid_exists = select(Fee.id).where(
@@ -441,12 +621,20 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         payment_status: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        assigned_officer_ids: Optional[List[int]] = None,
+        assigned_reviewer_ids: Optional[List[int]] = None,
+        unassigned: bool = False,
+        today: Optional[date] = None,
     ) -> Tuple[list, bool]:
         """Build shared filter conditions for aggregate queries.
+
+        Keeps status-counts in lockstep with the list query (same coordination
+        filters + payment_status incl. "overdue").
 
         Returns:
             Tuple of (conditions list, needs_program_join bool)
         """
+        today = today or date.today()
         conditions = []
         # Exclude soft-deleted leads' profiles (parity with list + aggregate).
         conditions.append(models.Lead.deleted_at.is_(None))
@@ -454,6 +642,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             conditions.append(models.Lead.assigned_officer_id == assigned_officer_id)
         if unit_id is not None:
             conditions.append(models.Lead.unit_id == unit_id)
+        # Coordination filters (parity with get_filtered_with_count).
+        if assigned_officer_ids:
+            conditions.append(models.Lead.assigned_officer_id.in_(assigned_officer_ids))
+        if unassigned:
+            conditions.append(models.Lead.assigned_officer_id.is_(None))
+        if assigned_reviewer_ids:
+            conditions.append(
+                models.AdmissionProfile.assigned_reviewer_id.in_(assigned_reviewer_ids)
+            )
         if search:
             # Same diacritic-insensitive search as the list query (parity).
             conditions.append(self._name_search_condition(search))
@@ -465,7 +662,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if degree_level:
             conditions.append(models.MajorProgram.degree_level == degree_level)
         if payment_status:
-            self._apply_payment_status_filter(conditions, payment_status)
+            self._apply_payment_status_filter(conditions, payment_status, today)
         if date_from:
             conditions.append(models.AdmissionProfile.created_at >= date_from)
         if date_to:
@@ -483,6 +680,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         payment_status: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        assigned_officer_ids: Optional[List[int]] = None,
+        assigned_reviewer_ids: Optional[List[int]] = None,
+        unassigned: bool = False,
+        today: Optional[date] = None,
     ) -> dict:
         """
         Get count of profiles grouped by status.
@@ -496,6 +697,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             search=search, major_ids=major_ids,
             academic_year=academic_year, degree_level=degree_level,
             payment_status=payment_status, date_from=date_from, date_to=date_to,
+            assigned_officer_ids=assigned_officer_ids,
+            assigned_reviewer_ids=assigned_reviewer_ids,
+            unassigned=unassigned, today=today,
         )
 
         query = (

@@ -68,7 +68,7 @@ router = APIRouter(prefix="/admissions", tags=["Admissions"])
 # list, status-counts, and export endpoints. Repository helper silently
 # drops anything outside this set, so router-level validation is required
 # to keep the contract honest.
-ALLOWED_PAYMENT_STATUSES = ("paid", "unpaid", "partial", "no_fee")
+ALLOWED_PAYMENT_STATUSES = ("paid", "unpaid", "partial", "no_fee", "overdue")
 
 
 def _validate_payment_status(value: Optional[str]) -> None:
@@ -81,6 +81,27 @@ def _validate_payment_status(value: Optional[str]) -> None:
                 + ", ".join(ALLOWED_PAYMENT_STATUSES)
             ),
         )
+
+
+def _parse_id_csv(value: Optional[str], field: str) -> Optional[List[int]]:
+    """Parse a comma-separated id list → list[int]; raise 400 on non-integer or
+    out-of-int4-range value. Returns None when ``value`` is empty.
+
+    Range-guard [1, 2147483647]: these ids are compared against int4 columns
+    (Lead.assigned_officer_id / AdmissionProfile.assigned_reviewer_id /
+    ProgramOffering.program_id). A value beyond int4 makes Postgres raise
+    "integer out of range" → 500 — the same class as the prod incident fixed in
+    ``_build_invoice_list_conditions`` (#437). Reject as 400 instead.
+    """
+    if not value:
+        return None
+    try:
+        ids = [int(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {field} format")
+    if any(not (1 <= i <= 2147483647) for i in ids):
+        raise HTTPException(status_code=400, detail=f"Invalid {field} format")
+    return ids
 
 
 # Hotfix R8: import the X-Forwarded-For aware helper so the
@@ -107,16 +128,29 @@ async def list_admission_profiles(
     major_id: str | None = Query(None, description="Filter by major/program ID (comma-separated)"),
     academic_year: int | None = Query(None, description="Filter by academic year"),
     degree_level: str | None = Query(None, description="Filter by degree level"),
-    payment_status: str | None = Query(None, description="Filter by payment status (paid/unpaid/partial/no_fee)"),
+    payment_status: str | None = Query(None, description="Filter by payment status (paid/unpaid/partial/no_fee/overdue)"),
     date_from: datetime | None = Query(None, description="Filter from date (created_at)"),
     date_to: datetime | None = Query(None, description="Filter to date (created_at)"),
-    sort_by: Literal["created_at", "updated_at", "full_name", "status"] = Query(
+    sort_by: Literal["created_at", "updated_at", "full_name", "status", "remaining_hk1"] = Query(
         "created_at",
         description="Sort field — repo silently fell back to created_at for invalid values until 2026-05-16 (Q-INFO-1 fix). Mirror FE Zod `AdmissionListParams.sort_by`.",
     ),
     order: Literal["asc", "desc"] = Query(
         "desc",
         description="Sort order — repo defaulted to asc for any non-`desc` value until 2026-05-16. Mirror FE Zod `AdmissionListParams.order`.",
+    ),
+    assigned_officer_id: str | None = Query(
+        None,
+        description="Coordination filter (admin/manager): officer IDs (comma-separated). Intersected with IDOR scope server-side.",
+    ),
+    unit_id: int | None = Query(
+        None, description="Coordination filter (admin): unit ID. Managers are forced to own unit."
+    ),
+    assigned_reviewer_id: str | None = Query(
+        None, description="Coordination filter (admin/manager): reviewer IDs (comma-separated)."
+    ),
+    unassigned: bool = Query(
+        False, description="Coordination filter (admin/manager): only profiles with no assigned officer."
     ),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
@@ -142,12 +176,10 @@ async def list_admission_profiles(
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
 
-    major_ids: Optional[List[int]] = None
-    if major_id:
-        try:
-            major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip()]
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid major_id format")
+    major_ids = _parse_id_csv(major_id, "major_id")
+
+    officer_ids = _parse_id_csv(assigned_officer_id, "assigned_officer_id")
+    reviewer_ids = _parse_id_csv(assigned_reviewer_id, "assigned_reviewer_id")
 
     # Validate payment_status (ADM-010: shared helper)
     _validate_payment_status(payment_status)
@@ -167,6 +199,10 @@ async def list_admission_profiles(
         date_to=date_to,
         sort_by=sort_by,
         order=order,
+        officer_ids=officer_ids,
+        unit_id=unit_id,
+        reviewer_ids=reviewer_ids,
+        unassigned=unassigned,
     )
 
     return schemas.AdmissionsPage(
@@ -206,19 +242,22 @@ async def get_status_counts(
     payment_status: str | None = Query(None),
     date_from: datetime | None = Query(None),
     date_to: datetime | None = Query(None),
+    assigned_officer_id: str | None = Query(None),
+    unit_id: int | None = Query(None),
+    assigned_reviewer_id: str | None = Query(None),
+    unassigned: bool = Query(False),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
     Get admission profile counts grouped by status.
     Applies all filters EXCEPT status (to populate tab badges).
+    Coordination filters mirror the list endpoint so tab counts match rows.
     """
-    major_ids: Optional[List[int]] = None
-    if major_id:
-        try:
-            major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip()]
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid major_id format")
+    major_ids = _parse_id_csv(major_id, "major_id")
+
+    officer_ids = _parse_id_csv(assigned_officer_id, "assigned_officer_id")
+    reviewer_ids = _parse_id_csv(assigned_reviewer_id, "assigned_reviewer_id")
 
     # Validate payment_status (ADM-010: keep parity with list/export)
     _validate_payment_status(payment_status)
@@ -233,6 +272,10 @@ async def get_status_counts(
         payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
+        officer_ids=officer_ids,
+        unit_id=unit_id,
+        reviewer_ids=reviewer_ids,
+        unassigned=unassigned,
     )
 
 
@@ -554,6 +597,10 @@ async def export_admissions_csv(
     payment_status: str | None = Query(None, description="Filter by payment status"),
     date_from: datetime | None = Query(None, description="Filter from date"),
     date_to: datetime | None = Query(None, description="Filter to date"),
+    assigned_officer_id: str | None = Query(None, description="comma-separated officer IDs"),
+    unit_id: int | None = Query(None),
+    assigned_reviewer_id: str | None = Query(None, description="comma-separated reviewer IDs"),
+    unassigned: bool = Query(False),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -564,12 +611,15 @@ async def export_admissions_csv(
 
     # Parse filters
     statuses = [s.strip() for s in status.split(",")] if status else None
-    major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
+    major_ids = _parse_id_csv(major_id, "major_id")
+    officer_ids = _parse_id_csv(assigned_officer_id, "assigned_officer_id")
+    reviewer_ids = _parse_id_csv(assigned_reviewer_id, "assigned_reviewer_id")
 
     # Validate payment_status (ADM-010: keep parity with list/status-counts)
     _validate_payment_status(payment_status)
 
-    # Export path: no page cap, lightweight hydration (only completion_percent)
+    # Export path: no page cap, lightweight hydration (only completion_percent).
+    # Same coordination filters as list so the CSV matches the on-screen rows.
     profiles = await admission_service.get_profiles_for_export(
         db=db,
         current_user=current_user,
@@ -581,6 +631,10 @@ async def export_admissions_csv(
         payment_status=payment_status,
         date_from=date_from,
         date_to=date_to,
+        officer_ids=officer_ids,
+        unit_id=unit_id,
+        reviewer_ids=reviewer_ids,
+        unassigned=unassigned,
     )
 
     # Create CSV in memory
