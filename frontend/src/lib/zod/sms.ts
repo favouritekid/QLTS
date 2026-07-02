@@ -5,6 +5,15 @@
 // Public landing /lp/{code} — KHÔNG lộ PII recipient.
 import { z } from "zod"
 
+/** 1 ngành trong danh mục landing 2 tầng (Phase 2 §16.1). */
+export const smsLandingProgramSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  code: z.string(),
+  degree_level: z.string(),
+})
+export type SmsLandingProgram = z.infer<typeof smsLandingProgramSchema>
+
 export const smsLandingResponseSchema = z.object({
   school_name: z.string(),
   headline: z.string().nullable().optional(),
@@ -13,6 +22,8 @@ export const smsLandingResponseSchema = z.object({
   cta_url: z.string().nullable().optional(),
   consent_notice: z.string(),
   already_opted_out: z.boolean(),
+  // Phase 2: danh mục ngành (rỗng nếu chưa có ngành active).
+  programs: z.array(smsLandingProgramSchema).default([]),
 })
 export type SmsLandingResponse = z.infer<typeof smsLandingResponseSchema>
 
@@ -22,6 +33,77 @@ export const smsPublicOptOutResponseSchema = z.object({
 })
 export type SmsPublicOptOutResponse = z.infer<
   typeof smsPublicOptOutResponseSchema
+>
+
+// =====================================================================
+// Phase 2 (§16) — deep engagement tracking (session / view / heartbeat)
+// Public: /api/public/sms/landing/{code}/{session,program-view,heartbeat}
+// =====================================================================
+export const smsSessionStartResponseSchema = z.object({
+  session_token: z.string(),
+  session_id: z.number().int(),
+})
+export type SmsSessionStartResponse = z.infer<
+  typeof smsSessionStartResponseSchema
+>
+
+export const smsProgramViewResponseSchema = z.object({
+  program_view_id: z.number().int(),
+  sequence_no: z.number().int(),
+})
+export type SmsProgramViewResponse = z.infer<
+  typeof smsProgramViewResponseSchema
+>
+
+export const smsHeartbeatResponseSchema = z.object({
+  ok: z.boolean(),
+  dwell_seconds: z.number().int(),
+  active_seconds: z.number().int(),
+})
+export type SmsHeartbeatResponse = z.infer<typeof smsHeartbeatResponseSchema>
+
+// Admin — report ngành nóng + hồ sơ sở thích 1 contact (§16.7).
+export const smsProgramInterestRowSchema = z.object({
+  major_program_id: z.number().int().nullable(),
+  program_name: z.string(),
+  distinct_contacts: z.number().int(),
+  view_count: z.number().int(),
+  total_dwell_seconds: z.number().int(),
+  avg_dwell_seconds: z.number(),
+})
+export type SmsProgramInterestRow = z.infer<
+  typeof smsProgramInterestRowSchema
+>
+
+export const smsProgramInterestReportSchema = z.object({
+  items: z.array(smsProgramInterestRowSchema).default([]),
+  distinct_contacts_total: z.number().int(),
+  view_count_total: z.number().int(),
+  total_dwell_seconds: z.number().int(),
+})
+export type SmsProgramInterestReport = z.infer<
+  typeof smsProgramInterestReportSchema
+>
+
+export const smsContactInterestRowSchema = z.object({
+  major_program_id: z.number().int(),
+  program_name: z.string(),
+  view_count: z.number().int(),
+  total_dwell_seconds: z.number().int(),
+  interest_score: z.number(),
+  first_interest_at: z.string().nullable().optional(),
+  last_interest_at: z.string().nullable().optional(),
+})
+export type SmsContactInterestRow = z.infer<
+  typeof smsContactInterestRowSchema
+>
+
+export const smsContactInterestListSchema = z.object({
+  contact_id: z.number().int(),
+  items: z.array(smsContactInterestRowSchema).default([]),
+})
+export type SmsContactInterestList = z.infer<
+  typeof smsContactInterestListSchema
 >
 
 // =====================================================================

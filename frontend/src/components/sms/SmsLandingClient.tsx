@@ -2,9 +2,17 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { BellOff, CheckCircle2, Loader2 } from "lucide-react"
+import {
+  BellOff,
+  CheckCircle2,
+  ChevronRight,
+  GraduationCap,
+  Loader2,
+} from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -94,6 +102,33 @@ export function SmsLandingClient({ code }: { code: string }) {
         <a href={data.cta_url} rel="noreferrer" target="_blank">
           <Button className="w-full">{data.cta_label}</Button>
         </a>
+      )}
+
+      {data.programs.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-sm font-semibold">Chọn ngành bạn quan tâm</h2>
+          <ul className="space-y-2">
+            {data.programs.map((p) => (
+              <li key={p.id}>
+                <Link
+                  href={`/lp/${encodeURIComponent(code)}/nganh/${p.id}`}
+                  className="hover:bg-accent focus-visible:ring-ring flex items-center gap-3 rounded border p-3 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <GraduationCap className="text-primary h-5 w-5 shrink-0" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {p.name}
+                    </span>
+                    <Badge variant="secondary" className="mt-1">
+                      {p.degree_level}
+                    </Badge>
+                  </span>
+                  <ChevronRight className="text-muted-foreground h-4 w-4 shrink-0" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       <hr className="border-border" />

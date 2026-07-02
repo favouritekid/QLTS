@@ -33,6 +33,11 @@ import {
   smsLandingResponseSchema,
   smsOptOutListSchema,
   smsOptOutSchema,
+  smsProgramInterestReportSchema,
+  smsContactInterestListSchema,
+  smsSessionStartResponseSchema,
+  smsProgramViewResponseSchema,
+  smsHeartbeatResponseSchema,
   smsPublicOptOutResponseSchema,
   type SmsCampaign,
   type SmsCampaignCreateInput,
@@ -63,6 +68,11 @@ import {
   type SmsManualOptOutSource,
   type SmsOptOut,
   type SmsOptOutList,
+  type SmsProgramInterestReport,
+  type SmsContactInterestList,
+  type SmsSessionStartResponse,
+  type SmsProgramViewResponse,
+  type SmsHeartbeatResponse,
   type SmsPublicOptOutResponse,
 } from "@/lib/zod/sms"
 
@@ -91,6 +101,54 @@ export async function postSmsOptOut(
     { code },
   )
   return smsPublicOptOutResponseSchema.parse(res.data)
+}
+
+// =====================================================================
+// Public — deep engagement tracking (Phase 2 §16.7): session/view/heartbeat.
+// Không auth; token bearer trả 1 lần từ /session, giữ ở client (sessionStorage).
+// =====================================================================
+
+/** Mở phiên xem landing → trả session_token raw (1 lần). @throws 404 code sai. */
+export async function postSmsSession(
+  code: string,
+): Promise<SmsSessionStartResponse> {
+  const res = await api.post<SmsSessionStartResponse>(
+    `/api/public/sms/landing/${encodeURIComponent(code)}/session`,
+    {},
+  )
+  return smsSessionStartResponseSchema.parse(res.data)
+}
+
+/** Ghi 1 lượt xem trang ngành → trả program_view_id (đính vào heartbeat). */
+export async function postSmsProgramView(
+  code: string,
+  payload: {
+    session_token: string
+    major_program_id: number
+    program_offering_id?: number
+  },
+): Promise<SmsProgramViewResponse> {
+  const res = await api.post<SmsProgramViewResponse>(
+    `/api/public/sms/landing/${encodeURIComponent(code)}/program-view`,
+    payload,
+  )
+  return smsProgramViewResponseSchema.parse(res.data)
+}
+
+/** Cộng dwell (giây, tích luỹ) cho trang ngành đang xem. */
+export async function postSmsHeartbeat(
+  code: string,
+  payload: {
+    session_token: string
+    program_view_id: number
+    dwell_seconds: number
+  },
+): Promise<SmsHeartbeatResponse> {
+  const res = await api.post<SmsHeartbeatResponse>(
+    `/api/public/sms/landing/${encodeURIComponent(code)}/heartbeat`,
+    payload,
+  )
+  return smsHeartbeatResponseSchema.parse(res.data)
 }
 
 // =====================================================================
@@ -124,6 +182,36 @@ export async function getSmsCampaignDashboard(
     `/api/sms/campaigns/${campaignId}/dashboard`,
   )
   return smsCampaignDashboardSchema.parse(res.data)
+}
+
+export interface SmsProgramInterestParams {
+  campaign_id?: number
+  group_id?: number
+  major_program_id?: number
+  /** ISO datetime (kèm offset) — khoảng viewed_at. */
+  date_from?: string
+  date_to?: string
+}
+
+/** Báo cáo "ngành nóng" theo campaign/nhóm/thời gian (§16.7, rank dwell desc). */
+export async function getSmsProgramInterestReport(
+  params: SmsProgramInterestParams,
+): Promise<SmsProgramInterestReport> {
+  const res = await api.get<SmsProgramInterestReport>(
+    `/api/sms/reports/program-interest`,
+    { params },
+  )
+  return smsProgramInterestReportSchema.parse(res.data)
+}
+
+/** Hồ sơ "quan tâm ngành" của 1 contact (rank dwell desc). */
+export async function getSmsContactInterests(
+  contactId: number,
+): Promise<SmsContactInterestList> {
+  const res = await api.get<SmsContactInterestList>(
+    `/api/sms/contacts/${contactId}/interests`,
+  )
+  return smsContactInterestListSchema.parse(res.data)
 }
 
 export interface SmsCampaignListParams {
