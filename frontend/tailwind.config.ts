@@ -89,6 +89,41 @@ const config: Config = {
         background: "var(--background)",
         foreground: "var(--foreground)",
 
+        // ── SMS public landing brand palette (§19 / Phase 2 §16.1) ──
+        // Tự chứa bằng HEX cứng, KHÔNG dùng CSS var của theme dashboard: trang
+        // marketing công khai phải giữ nhận diện dù theme app đổi. "sms" = xanh
+        // tin cậy (primary), "sms-gold" = accent CTA (chữ slate-900 trên nền này).
+        // slate/emerald/red giữ Tailwind default (khớp hex thiết kế).
+        sms: {
+          50: "#EFF4FF",
+          100: "#DBE6FE",
+          500: "#3B70F6",
+          600: "#2159EA",
+          700: "#1A46C7",
+          800: "#1B3C9E",
+          900: "#1C377D",
+          ink: "#0041C3", // M3 primary — accent icon/heading/link
+          pill: "#DCE1FF", // M3 primary-fixed — nền pill trình độ
+          "pill-ink": "#003AB1", // M3 on-primary-fixed-variant — chữ pill
+          green: "#005A3D", // M3 tertiary — dấu ✓ phương thức
+          bg: "#FAF8FF", // M3 background trang
+          card: "#FFFFFF", // surface-container-lowest
+          "surface-low": "#F2F3FF", // surface-container-low
+          "surface-high": "#E2E7FF", // surface-container-high
+          line: "#C3C5D8", // outline-variant
+          "ink-strong": "#131B2E", // on-surface
+          "ink-soft": "#434655", // on-surface-variant
+        },
+        "sms-gold": {
+          50: "#FFF8EB",
+          100: "#FEEFC7",
+          200: "#FDE9C2",
+          500: "#F59E0B",
+          600: "#D97F06",
+          m3: "#FEA619", // M3 secondary-container — CTA/badge fill
+          "m3-ink": "#684000", // on-secondary-container — chữ trên CTA
+        },
+
         primary: {
           DEFAULT: "var(--primary)",
           foreground: "var(--primary-foreground)",

@@ -27,20 +27,8 @@ export default async function SmsProgramPage({
   }
 
   return (
-    <div className="bg-muted/40 flex min-h-screen items-start justify-center p-4">
-      <Suspense
-        fallback={
-          <div
-            role="status"
-            aria-live="polite"
-            className="text-muted-foreground mt-16"
-          >
-            Đang tải…
-          </div>
-        }
-      >
-        <SmsProgramClient code={code} majorProgramId={majorProgramId} />
-      </Suspense>
-    </div>
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <SmsProgramClient code={code} majorProgramId={majorProgramId} />
+    </Suspense>
   )
 }
