@@ -44,6 +44,21 @@ def compute_token_hash(code: str) -> str:
     return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
 
 
+def generate_session_token() -> str:
+    """Sinh session bearer token (Phase 2 §16.7) — 32 byte CSPRNG → base64url
+    (~43 ký tự). Trả về client 1 LẦN; server chỉ lưu HMAC hash (chống giả lập
+    engagement nếu DB/log lộ). Khác short code (base62×9): session token dài hơn,
+    entropy cao (256-bit) vì là bearer đo dwell, không nhúng vào SMS."""
+    return secrets.token_urlsafe(32)
+
+
+def compute_session_token_hash(token: str) -> str:
+    """HMAC-SHA256(session_token, SMS_SESSION_TOKEN_HASH_SECRET) → hex 64 ký tự.
+    Secret TÁCH BIỆT short-link token-hash (§16.4) → lookup session độc lập."""
+    secret = settings.SMS_SESSION_TOKEN_HASH_SECRET.encode()
+    return hmac.new(secret, token.encode(), hashlib.sha256).hexdigest()
+
+
 def compute_ip_hash(ip: Optional[str]) -> Optional[str]:
     """HMAC-SHA256(ip, SMS_IP_HASH_SECRET) → hex 64 (click event PR-5). Secret
     TÁCH BIỆT token-hash (§2.2) → không suy ngược token↔IP. KHÔNG lưu IP thô.

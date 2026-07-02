@@ -551,9 +551,19 @@ SmsManualOptOutSource = Literal[
 ]
 
 
+class SmsLandingProgram(BaseModel):
+    """1 ngành trong danh mục landing 2 tầng (Phase 2 §16.1). Public — chỉ
+    trường hiển thị (id/tên/mã/trình độ), KHÔNG PII."""
+
+    id: int
+    name: str
+    code: str
+    degree_level: str
+
+
 class SmsLandingResponse(BaseModel):
     """Nội dung landing `/lp/{code}` — read-only, KHÔNG lộ PII recipient
-    (phòng code bị chia sẻ). §19.4."""
+    (phòng code bị chia sẻ). §19.4. Phase 2: +danh mục ngành (no session)."""
 
     school_name: str
     headline: Optional[str] = None
@@ -562,6 +572,93 @@ class SmsLandingResponse(BaseModel):
     cta_url: Optional[str] = None
     consent_notice: str
     already_opted_out: bool = False
+    # Phase 2 (§16.1) — danh mục ngành để render landing 2 tầng; rỗng nếu
+    # chưa có ngành active (FE ẩn khối "chọn ngành").
+    programs: List[SmsLandingProgram] = Field(default_factory=list)
+
+
+# =====================================================================
+# Phase 2 (§16) — deep engagement tracking (session / view / heartbeat)
+# =====================================================================
+class SmsSessionStartResponse(BaseModel):
+    """Trả sau `POST /landing/{code}/session` — session_token raw TRẢ 1 LẦN
+    (server chỉ lưu hash). Client giữ token để gửi program-view/heartbeat."""
+
+    session_token: str
+    session_id: int
+
+
+class SmsProgramViewRequest(BaseModel):
+    """Body `POST /landing/{code}/program-view` — mở 1 lượt xem trang ngành."""
+
+    session_token: str = Field(..., min_length=16, max_length=128)
+    major_program_id: int = Field(..., ge=1, le=2147483647)
+    program_offering_id: Optional[int] = Field(None, ge=1, le=2147483647)
+
+
+class SmsProgramViewResponse(BaseModel):
+    """Trả program_view_id để client đính vào heartbeat của trang ngành đó."""
+
+    program_view_id: int
+    sequence_no: int
+
+
+class SmsHeartbeatRequest(BaseModel):
+    """Body `POST /landing/{code}/heartbeat` — báo dwell tích luỹ (giây) trên
+    trang ngành đang xem. Server clamp theo wall-clock chống thổi phồng."""
+
+    session_token: str = Field(..., min_length=16, max_length=128)
+    program_view_id: int = Field(..., ge=1, le=2147483647)
+    # dwell tích luỹ client đo (không delta) — server tự clamp trần theo thời
+    # gian thực đã trôi kể từ khi mở view. le lớn = 24h an toàn (server vẫn cap).
+    dwell_seconds: int = Field(..., ge=0, le=86400)
+
+
+class SmsHeartbeatResponse(BaseModel):
+    """Xác nhận dwell đã ghi (đã clamp) + tổng active của phiên."""
+
+    ok: bool = True
+    dwell_seconds: int = 0
+    active_seconds: int = 0
+
+
+class SmsProgramInterestRow(BaseModel):
+    """1 ngành trong report 'ngành nóng' (admin) — aggregate qua program_view."""
+
+    major_program_id: Optional[int] = None
+    program_name: str
+    distinct_contacts: int = 0
+    view_count: int = 0
+    total_dwell_seconds: int = 0
+    avg_dwell_seconds: float = 0.0
+
+
+class SmsProgramInterestReport(BaseModel):
+    """Report ngành nóng theo campaign/nhóm/thời gian (§16.7). Rank dwell desc."""
+
+    items: List[SmsProgramInterestRow] = Field(default_factory=list)
+    distinct_contacts_total: int = 0
+    view_count_total: int = 0
+    total_dwell_seconds: int = 0
+
+
+class SmsContactInterestRow(BaseModel):
+    """1 ngành trong hồ sơ sở thích 1 contact (rank total_dwell_seconds desc)."""
+
+    major_program_id: int
+    program_name: str
+    view_count: int = 0
+    total_dwell_seconds: int = 0
+    interest_score: float = 0.0
+    first_interest_at: Optional[datetime] = None
+    last_interest_at: Optional[datetime] = None
+
+
+class SmsContactInterestList(BaseModel):
+    """Hồ sơ 'quan tâm ngành' của 1 contact (§16.7 admin / P2-4b lead tab)."""
+
+    contact_id: int
+    items: List[SmsContactInterestRow] = Field(default_factory=list)
 
 
 class SmsPublicOptOutRequest(BaseModel):
