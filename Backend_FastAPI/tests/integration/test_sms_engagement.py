@@ -440,6 +440,168 @@ async def test_program_view_invalid_token_and_program_404(
     assert nope.status_code == 404
 
 
+async def test_report_deleted_programs_not_merged(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """/review #1: 2 ngành ĐÃ XOÁ (major_program_id NULL) KHÔNG bị gộp về 1
+    hàng — group theo snapshot khi id NULL, giữ số liệu tách biệt."""
+    h = admin_token_headers
+    cid, code, _contact = await _setup(client, h)
+    major2 = await _seed_second_major()
+    token = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    ids = []
+    for mid, dwell in ((1, 30), (major2, 90)):
+        vid = (
+            await client.post(
+                f"{PUB}/landing/{code}/program-view",
+                json={"session_token": token, "major_program_id": mid},
+                headers=_H,
+            )
+        ).json()["program_view_id"]
+        async with AsyncSessionLocal() as s:
+            await s.execute(
+                text(
+                    "UPDATE sms_program_view SET viewed_at = now() - "
+                    "interval '1 hour' WHERE id=:i"
+                ),
+                {"i": vid},
+            )
+            await s.commit()
+        await client.post(
+            f"{PUB}/landing/{code}/heartbeat",
+            json={"session_token": token, "program_view_id": vid,
+                  "dwell_seconds": dwell},
+            headers=_H,
+        )
+        ids.append(vid)
+    # Mô phỏng CẢ 2 ngành bị xoá cứng → major_program_id SET NULL (giữ snapshot).
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE sms_program_view SET major_program_id = NULL "
+                "WHERE id = ANY(:ids)"
+            ),
+            {"ids": ids},
+        )
+        await s.commit()
+    rep = await client.get(f"{API}/reports/program-interest", headers=h)
+    assert rep.status_code == 200, rep.text
+    items = rep.json()["items"]
+    # KHÔNG gộp: vẫn 2 hàng (tách theo snapshot), tổng dwell không đổi
+    assert len(items) == 2
+    assert all(it["major_program_id"] is None for it in items)
+    names = {it["program_name"] for it in items}
+    assert "Test Major 1" in names and "Test Major 2" in names
+    assert rep.json()["total_dwell_seconds"] == 120
+
+
+async def test_heartbeat_rejects_cross_session_view(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """/review #2a: heartbeat với view_id của PHIÊN KHÁC → 404 (guard
+    get_program_view scope theo session, chống đẩy dwell vào view phiên khác)."""
+    h = admin_token_headers
+    _cid, code, _contact = await _setup(client, h)
+    t1 = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    t2 = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    v1 = (
+        await client.post(
+            f"{PUB}/landing/{code}/program-view",
+            json={"session_token": t1, "major_program_id": 1},
+            headers=_H,
+        )
+    ).json()["program_view_id"]
+    # phiên 2 gửi heartbeat cho view của phiên 1 → 404
+    bad = await client.post(
+        f"{PUB}/landing/{code}/heartbeat",
+        json={"session_token": t2, "program_view_id": v1, "dwell_seconds": 10},
+        headers=_H,
+    )
+    assert bad.status_code == 404
+
+
+async def test_heartbeat_dwell_monotonic_non_decrease(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """/review #2b: heartbeat thấp hơn sau đó KHÔNG làm tụt dwell (max clamp)."""
+    h = admin_token_headers
+    _cid, code, _contact = await _setup(client, h)
+    token = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    vid = (
+        await client.post(
+            f"{PUB}/landing/{code}/program-view",
+            json={"session_token": token, "major_program_id": 1},
+            headers=_H,
+        )
+    ).json()["program_view_id"]
+    r1 = await client.post(
+        f"{PUB}/landing/{code}/heartbeat",
+        json={"session_token": token, "program_view_id": vid,
+              "dwell_seconds": 25},
+        headers=_H,
+    )
+    assert r1.json()["dwell_seconds"] == 25
+    # heartbeat trễ/trùng báo dwell THẤP hơn → giữ 25 (không tụt về 5)
+    r2 = await client.post(
+        f"{PUB}/landing/{code}/heartbeat",
+        json={"session_token": token, "program_view_id": vid,
+              "dwell_seconds": 5},
+        headers=_H,
+    )
+    assert r2.json()["dwell_seconds"] == 25
+
+
+async def test_session_bearer_records_after_link_expiry(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """/review #3 (codify design): phiên tạo khi link CÒN hạn vẫn ghi dwell kể
+    cả sau khi link hết hạn giữa chừng — session là bearer sống-hết-phiên (cắt
+    giữa chừng sẽ hỏng số liệu người thật đang đọc). Expiry chỉ gate TẠO phiên."""
+    h = admin_token_headers
+    cid, code, contact_id = await _setup(client, h)
+    token = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    # link hết hạn SAU khi phiên đã mở
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE sms_campaign SET link_expires_at = now() - "
+                "interval '1 day' WHERE id=:c"
+            ),
+            {"c": cid},
+        )
+        await s.commit()
+    # TẠO phiên mới giờ phải 404 (expiry gate lúc tạo)
+    assert (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).status_code == 404
+    # nhưng phiên CŨ vẫn ghi được program-view + heartbeat (bearer)
+    vid = (
+        await client.post(
+            f"{PUB}/landing/{code}/program-view",
+            json={"session_token": token, "major_program_id": 1},
+            headers=_H,
+        )
+    ).json()["program_view_id"]
+    hb = await client.post(
+        f"{PUB}/landing/{code}/heartbeat",
+        json={"session_token": token, "program_view_id": vid,
+              "dwell_seconds": 10},
+        headers=_H,
+    )
+    assert hb.status_code == 200
+    assert hb.json()["dwell_seconds"] == 10
+
+
 async def test_engagement_admin_endpoints_require_auth(client: AsyncClient):
     assert (
         await client.get(f"{API}/reports/program-interest")

@@ -201,6 +201,11 @@ class SmsReportService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> sms_schemas.SmsProgramInterestReport:
+        # LƯU Ý ĐO LƯỜNG (/review #4): total_dwell/view_count là tín hiệu THÔ do
+        # client báo (đã lọc bot + clamp wall-clock/lượt + rate-limit per-IP);
+        # 1 người có thể tự bơm dwell CHÍNH ngành mình quan tâm. Chấp nhận: chỉ
+        # tự-ảnh-hưởng contact của họ, và tín hiệu xếp hạng cốt lõi per-contact
+        # là interest_score (CÓ TRẦN normalize), không phải dwell thô của report.
         scope = dict(
             campaign_id=campaign_id,
             group_id=group_id,

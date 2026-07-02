@@ -14,7 +14,7 @@ Standalone repository. Service flush, router commit. Xem SMS §16.
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -238,8 +238,12 @@ class SmsEngagementRepository:
     ) -> List[Tuple[Optional[int], str, int, int, int]]:
         """(major_program_id, program_name, distinct_contacts, view_count,
         total_dwell) theo ngành, rank total_dwell desc. Tên = tên HIỆN TẠI của
-        ngành (LEFT JOIN major_program) — ngành đổi tên hiện tên mới; ngành đã
-        xoá (major_program_id NULL) → fallback snapshot."""
+        ngành (LEFT JOIN major_program) — ngành đổi tên hiện tên mới.
+
+        Ngành đã xoá cứng → major_program_id NULL: KHÔNG gộp mọi ngành-xoá vào
+        1 hàng NULL (sẽ trộn số liệu 2 ngành khác nhau); group theo KEY =
+        coalesce(id, snapshot) → ngành sống gộp theo id (bất kể đổi tên), ngành
+        xoá tách theo tên snapshot. program_id trả NULL cho nhóm ngành-xoá."""
         conds = self._report_conds(
             campaign_id=campaign_id,
             group_id=group_id,
@@ -247,11 +251,17 @@ class SmsEngagementRepository:
             date_from=date_from,
             date_to=date_to,
         )
-        # LEFT JOIN major_program lấy tên hiện tại (max() vì group theo id →
+        # LEFT JOIN major_program lấy tên hiện tại (max() vì group theo key →
         # 1 tên/nhóm; coalesce fallback snapshot khi ngành đã xoá = NULL name).
         from_clause = self._report_from(group_id=group_id).outerjoin(
             MajorProgram.__table__,
             MajorProgram.id == SmsProgramView.major_program_id,
+        )
+        # Key nhóm: id (ngành sống, ổn định qua đổi tên) HOẶC snapshot có tiền tố
+        # (ngành đã xoá — tách từng ngành, không dồn chung NULL).
+        group_key = func.coalesce(
+            func.cast(SmsProgramView.major_program_id, String),
+            func.concat("name::", SmsProgramView.program_name_snapshot),
         )
         name_expr = func.coalesce(
             func.max(MajorProgram.name),
@@ -260,7 +270,7 @@ class SmsEngagementRepository:
         total_dwell = func.coalesce(func.sum(SmsProgramView.dwell_seconds), 0)
         res = await self.db.execute(
             select(
-                SmsProgramView.major_program_id.label("program_id"),
+                func.max(SmsProgramView.major_program_id).label("program_id"),
                 name_expr,
                 func.count(func.distinct(SmsProgramView.contact_id)).label(
                     "distinct_contacts"
@@ -270,7 +280,7 @@ class SmsEngagementRepository:
             )
             .select_from(from_clause)
             .where(and_(*conds))
-            .group_by(SmsProgramView.major_program_id)
+            .group_by(group_key)
             .order_by(total_dwell.desc())
             .limit(limit)
         )

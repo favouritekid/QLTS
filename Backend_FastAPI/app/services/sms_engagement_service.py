@@ -72,7 +72,15 @@ class SmsEngagementService:
         return recipient, campaign
 
     async def _resolve_session(self, session_token: str):
-        """Session theo token hash (bearer). None → 404 generic."""
+        """Session theo token hash (bearer). None → 404 generic.
+
+        BEARER SỐNG-HẾT-PHIÊN (có chủ đích, /review #3): expiry của campaign
+        link CHỈ gate lúc TẠO phiên (start_session→_resolve_recipient), /r/ và
+        landing GET. Program-view/heartbeat KHÔNG re-check expiry: người dùng
+        thật vào bằng link còn hạn rồi ĐANG đọc, nếu link hết hạn giữa chừng mà
+        cắt đo dwell = làm HỎNG số liệu của chính người thật đó. Token 256-bit
+        bất khả đoán + rate-limit theo IP + interest_score có trần → không cần
+        chặn theo expiry ở đây. `code` path chỉ validate format (routing)."""
         token = (session_token or "").strip()
         if not token:
             raise ResourceNotFoundError(detail=_GENERIC_404)
