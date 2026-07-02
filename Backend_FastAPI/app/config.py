@@ -293,6 +293,23 @@ class Settings(BaseSettings):
         ),
         validation_alias="SMS_LANDING_CONSENT_NOTICE",
     )  # câu thông báo cơ sở xử lý dữ liệu trên landing (§19.2)
+    # -- Phase 2 (§16) deep engagement / đo quan tâm ngành --
+    SMS_SESSION_TOKEN_HASH_SECRET: str = Field(
+        default="dev-sms-session-token-hash-secret-change-in-prod",
+        validation_alias="SMS_SESSION_TOKEN_HASH_SECRET",
+    )  # HMAC session token landing (bearer) — secret riêng, prod đặt thật ≥32
+    SMS_INTEREST_DWELL_CAP: int = Field(
+        default=180, ge=1, le=86400,
+        validation_alias="SMS_INTEREST_DWELL_CAP",
+    )  # trần dwell/lượt (giây) cho dwell_factor=min(s/CAP,1) — chống gian lận
+    SMS_INTEREST_HALF_LIFE: int = Field(
+        default=14, ge=1, le=3650,
+        validation_alias="SMS_INTEREST_HALF_LIFE",
+    )  # bán rã (ngày) cho recency_weight=exp(-Δdays/HALF_LIFE)
+    SMS_INTEREST_K: float = Field(
+        default=3.0, gt=0,
+        validation_alias="SMS_INTEREST_K",
+    )  # hệ số normalize(x)=x/(x+K); cosmetic (không đổi thứ hạng)
 
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.
