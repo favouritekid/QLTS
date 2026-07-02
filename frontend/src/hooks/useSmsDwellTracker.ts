@@ -40,10 +40,19 @@ async function ensureSessionToken(code: string): Promise<string> {
   return res.session_token
 }
 
-type DwellStatus = "starting" | "tracking" | "error"
+type DwellStatus = "idle" | "starting" | "tracking" | "error"
 
-export function useSmsDwellTracker(code: string, majorProgramId: number) {
-  const [status, setStatus] = useState<DwellStatus>("starting")
+/**
+ * @param enabled chỉ đo khi ngành ĐÃ resolve hợp lệ. Cold/deep-load có
+ * data=undefined → enabled=false → KHÔNG tạo session/program-view rác (tránh
+ * POST major_program_id=0 → 422 + phiên rác). Khi data về, effect chạy lại.
+ */
+export function useSmsDwellTracker(
+  code: string,
+  majorProgramId: number,
+  enabled: boolean,
+) {
+  const [status, setStatus] = useState<DwellStatus>("idle")
 
   // Refs: tránh re-render mỗi heartbeat + giữ giá trị mới nhất trong cleanup.
   const tokenRef = useRef<string | null>(null)
@@ -52,6 +61,10 @@ export function useSmsDwellTracker(code: string, majorProgramId: number) {
   const resumeAtRef = useRef<number | null>(null) // mốc bắt đầu khoảng hiển thị
 
   useEffect(() => {
+    // Chưa resolve ngành hợp lệ → no-op (không tạo session/view rác). Giữ
+    // status mặc định "idle" (không setState đồng bộ trong effect); enabled chỉ
+    // đi false→true (ngành resolve xong) nên không cần reset.
+    if (!enabled || majorProgramId < 1) return
     let cancelled = false
     let intervalId: ReturnType<typeof setInterval> | null = null
 
@@ -118,7 +131,10 @@ export function useSmsDwellTracker(code: string, majorProgramId: number) {
         })
         if (cancelled) return
         viewIdRef.current = view.program_view_id
-        resumeAtRef.current = Date.now()
+        // Chỉ bắt đầu đếm nếu tab ĐANG hiển thị; mở ở tab nền/hidden → chờ
+        // visibilitychange→visible mới set resumeAt (không tính thời gian ẩn).
+        resumeAtRef.current =
+          document.visibilityState === "visible" ? Date.now() : null
         setStatus("tracking")
         intervalId = setInterval(sendHeartbeat, HEARTBEAT_MS)
         document.addEventListener("visibilitychange", onVisibility)
@@ -140,7 +156,7 @@ export function useSmsDwellTracker(code: string, majorProgramId: number) {
       }
       sendBeacon()
     }
-  }, [code, majorProgramId])
+  }, [code, majorProgramId, enabled])
 
   return { status }
 }

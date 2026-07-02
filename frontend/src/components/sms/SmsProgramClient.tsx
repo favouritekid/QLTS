@@ -39,8 +39,9 @@ export function SmsProgramClient({
 
   const program = data?.programs.find((p) => p.id === majorProgramId)
 
-  // Chỉ bắt đầu đo khi ngành hợp lệ (có trong danh mục landing).
-  useSmsDwellTracker(code, program ? majorProgramId : 0)
+  // Chỉ đo khi ngành ĐÃ resolve hợp lệ (enabled) — cold/deep-load data chưa
+  // về → no-op, tránh session/program-view rác (major_program_id=0 → 422).
+  useSmsDwellTracker(code, majorProgramId, Boolean(program))
 
   if (isLoading) {
     return (
