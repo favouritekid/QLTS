@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
+from app.core.client_ip import get_client_ip
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas.public_admissions import (
     PublicAdmissionsAudience,
@@ -55,8 +56,8 @@ _AUDIENCE_QUERY = Query(
 )
 
 
-@limiter.limit(RateLimits.PUBLIC_READ)
 @router.get("/programs", response_model=PublicAdmissionsProgramsResponse)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def get_public_programs_catalog(
     request: Request,
     response: Response,
@@ -81,8 +82,8 @@ async def get_public_programs_catalog(
     )
 
 
-@limiter.limit(RateLimits.PUBLIC_READ)
 @router.get("/methods", response_model=PublicAdmissionsMethodsResponse)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def get_public_methods_catalog(
     request: Request,
     response: Response,
@@ -106,8 +107,8 @@ async def get_public_methods_catalog(
     )
 
 
-@limiter.limit(RateLimits.PUBLIC_READ)
 @router.get("/documents", response_model=PublicAdmissionsDocumentsResponse)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def get_public_documents_catalog(
     request: Request,
     response: Response,
@@ -134,8 +135,8 @@ async def get_public_documents_catalog(
     )
 
 
-@limiter.limit(RateLimits.PUBLIC_READ)
 @router.get("/tuition", response_model=PublicAdmissionsTuitionResponse)
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
 async def get_public_tuition_catalog(
     request: Request,
     response: Response,

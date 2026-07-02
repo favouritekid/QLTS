@@ -2394,7 +2394,7 @@ async def finalize_enrollment(
     - Attempts remaining
     """,
 )
-@limiter.limit(RateLimits.PUBLIC_READ)  # 100/hour - prevent token enumeration
+@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)  # 100/hour/IP - prevent token enumeration
 async def get_confirm_token_info(
     request: Request,
     token: str,
@@ -2434,11 +2434,11 @@ async def get_confirm_token_info(
     - Token is 256-bit random (impossible to guess)
     - CCCD verification prevents unauthorized confirmation
     - Max 5 attempts before token is locked
-    - Rate limited: 200/hour globally + 100/day per IP (brute-force protection)
+    - Rate limited: 200/hour + 100/day, both per real client IP (brute-force protection)
     """,
 )
-@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour global limit
-@limiter.limit(  # ✅ FIX #6: IP-based rate limit (brute-force protection)
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour — default key = get_client_ip (per real IP)
+@limiter.limit(  # ✅ FIX #6: explicit per-IP brute-force cap (same key, tighter window)
     "100/day",
     key_func=get_client_ip
 )

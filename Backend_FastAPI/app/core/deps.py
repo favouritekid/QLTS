@@ -318,6 +318,16 @@ async def get_current_user(
         #   1. Create g-rule when user is created/role changed
         #   2. OR keep DB as source of truth (current approach)
 
+        # Expose the authenticated user on request.state so a PER-USER rate-limit
+        # key (``get_user_id_key``) resolves to ``user_{id}`` instead of the client
+        # IP. Prerequisite for flipping authenticated routes to per-user limiting:
+        # the default per-IP key (get_client_ip = real client X-Real-IP) is correct
+        # and non-spoofable, but it groups ALL staff behind one office NAT / VPN
+        # egress IP into a single bucket — per-user keying avoids that collision.
+        # The limiter decorator runs INSIDE the endpoint call (AFTER this
+        # dependency), so the value is set in time.
+        request.state.user = user
+
         return user
 
     except (JWTError, InvalidToken):

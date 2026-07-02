@@ -28,7 +28,7 @@
  * - Handles 401/403 gracefully
  */
 
-import { cookies } from 'next/headers';
+import { cookies, headers as nextHeaders } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type {
   Lead,
@@ -151,6 +151,35 @@ async function serverFetch<T>(
   // Forward authentication cookies
   if (cookieHeader) {
     headers['Cookie'] = cookieHeader;
+  }
+
+  // Forward the REAL client IP so backend per-IP rate limits key on the actual
+  // visitor. SSR fetches hit the backend directly (bypassing nginx, which is the
+  // layer that sets X-Real-IP), so without this every server-rendered call keys
+  // on THIS frontend container's single IP → one shared bucket for all users →
+  // prod-wide 429 once the tier limit is crossed. Read the real IP from the
+  // INBOUND request (nginx set it there) and pass it through unchanged.
+  if (!headers['X-Real-IP']) {
+    try {
+      const inbound = await nextHeaders();
+      // ONLY X-Real-IP: nginx sets it to $remote_addr and overwrites any client
+      // value → non-spoofable. Deliberately do NOT fall back to X-Forwarded-For
+      // (its first hop is client-appendable → forwarding it as a trusted X-Real-IP
+      // would let a client forge the backend rate-limit key). In prod nginx always
+      // sets X-Real-IP, so a fallback would only ever fire off-nginx anyway.
+      const realIp = inbound.get('x-real-ip');
+      if (realIp) headers['X-Real-IP'] = realIp;
+    } catch {
+      // headers() unavailable (e.g. inside a "use cache" scope, ISR, or
+      // generateMetadata) — leave X-Real-IP unset; the backend then keys on this
+      // container's IP. ⚠️ INVARIANT: any get_client_ip-keyed (ENFORCED) endpoint
+      // reached via SSR MUST force dynamic render (call `await connection()` first,
+      // as the /tuyen-sinh public catalog pages do) so headers() is available here;
+      // otherwise all its cached renders collapse into one bucket. Today the only
+      // `use cache` callers target UNENFORCED (allowlisted) endpoints, so this is
+      // latent — do not wrap an enforced endpoint in `use cache` without threading
+      // the client IP through the cache boundary (mirror how cookieHeader is passed).
+    }
   }
 
   // Execute fetch

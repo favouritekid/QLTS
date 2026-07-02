@@ -31,8 +31,11 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from slowapi.wrappers import LimitGroup
 from starlette.responses import JSONResponse
+
+from app.core.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +64,21 @@ def _get_test_ip(request) -> str:
 # Tight limits for test endpoints (override production "1000/minute")
 _LOGIN_LIMIT = "3/minute"
 _REGISTER_LIMIT = "2/minute"
+_PUBLIC_READ_LIMIT = "3/minute"
 
+# name -> (tight_limit, key_func). Auth uses the synthetic _get_test_ip (drive
+# the _test_ip global). Public uses the REAL production key_func get_client_ip so
+# the behavioural test exercises the actual X-Real-IP path (not a synthetic key
+# that would MASK a wrong/missing key_func — the exact gap that let the 4 public
+# endpoints ship keyed on the collapsing nginx IP).
 _OVERRIDDEN_ENDPOINTS = {
-    "app.routers.auth.login_for_access_token": _LOGIN_LIMIT,
-    "app.routers.auth.verify_mfa": _LOGIN_LIMIT,
-    "app.routers.auth.register_user": _REGISTER_LIMIT,
+    "app.routers.auth.login_for_access_token": (_LOGIN_LIMIT, _get_test_ip),
+    "app.routers.auth.verify_mfa": (_LOGIN_LIMIT, _get_test_ip),
+    "app.routers.auth.register_user": (_REGISTER_LIMIT, _get_test_ip),
+    "app.routers.public_admissions.get_public_programs_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_methods_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_documents_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
+    "app.routers.public_admissions.get_public_tuition_catalog": (_PUBLIC_READ_LIMIT, get_client_ip),
 }
 
 
@@ -104,16 +117,17 @@ async def rate_limited_client(setup_test_database):
 
     # -- 2. Override route limits with tight test values --------------------
     saved_limits: dict[str, list] = {}
-    for endpoint_name, limit_str in _OVERRIDDEN_ENDPOINTS.items():
+    for endpoint_name, (limit_str, key_func) in _OVERRIDDEN_ENDPOINTS.items():
         # Save original (copy the list, not a reference)
         saved_limits[endpoint_name] = limiter._route_limits.get(
             endpoint_name, []
         )[:]
-        # Replace with tight limit using our controllable key function
+        # Replace with tight limit, preserving the endpoint's REAL key_func where
+        # it matters (public → get_client_ip so X-Real-IP is honoured).
         limiter._route_limits[endpoint_name] = list(
             LimitGroup(
                 limit_str,       # e.g. "3/minute"
-                _get_test_ip,    # custom key function for IP simulation
+                key_func,        # per-endpoint key function
                 None,            # scope (None = per-route)
                 False,           # per_method
                 None,            # methods
@@ -335,6 +349,12 @@ class TestRateLimitConfiguration:
             "app.routers.auth.perform_password_reset",
             "app.routers.auth.perform_change_password",
             "app.routers.auth.refresh_access_token",
+            # Public admissions catalog (unauthenticated) — exact-key registration
+            # check (order enforcement is covered by the behavioural test below).
+            "app.routers.public_admissions.get_public_programs_catalog",
+            "app.routers.public_admissions.get_public_methods_catalog",
+            "app.routers.public_admissions.get_public_documents_catalog",
+            "app.routers.public_admissions.get_public_tuition_catalog",
         ],
     )
     def test_endpoint_has_rate_limit(self, endpoint_key: str):
@@ -390,12 +410,123 @@ class TestRateLimitConfiguration:
             f"Expected memory:// storage in test mode, got {STORAGE_URI}"
         )
 
-    def test_limiter_key_func_is_ip_based(self):
-        """Default limiter key function must be get_remote_address (IP-based)."""
-        from slowapi.util import get_remote_address
-
+    def test_limiter_key_func_is_non_spoofable_client_ip(self):
+        """Default limiter key MUST be get_client_ip (X-Real-IP, non-spoofable),
+        NOT get_remote_address (leftmost X-Forwarded-For hop = client-spoofable
+        under gunicorn forwarded_allow_ips="*" + uvicorn always_trust)."""
+        from app.core.client_ip import get_client_ip
         from app.core.rate_limits import limiter
 
-        assert limiter._key_func is get_remote_address, (
-            "Default key_func should be get_remote_address for IP-based limiting"
+        assert limiter._key_func is get_client_ip, (
+            "Default key_func must be get_client_ip (non-spoofable X-Real-IP); "
+            "get_remote_address keys on the client-controllable XFF first hop."
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: IP rate limiting on public admissions catalog (unauthenticated)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestPublicAdmissionsRateLimit:
+    """IP rate limiting on the PUBLIC (unauthenticated) admissions catalog.
+
+    Everything here uses the endpoint's REAL production key_func
+    (``get_client_ip``, keyed on X-Real-IP) — NOT a synthetic test key — so the
+    tests can catch a wrong/missing key_func (the exact gap that let these 4
+    endpoints ship keyed on the single collapsing nginx IP). Proven:
+      1. correct decorator order + runtime enforcement (a real 429 fires),
+      2. the limit is PER real client IP (one visitor can't 429 everyone).
+    ``test_default_get_remote_address_collapses_x_real_ip`` is the negative proof
+    that the DEFAULT key does NOT honour X-Real-IP, i.e. why get_client_ip is
+    required.
+    """
+
+    _PROGRAMS = "/api/public/admissions/programs"
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/public/admissions/programs",
+            "/api/public/admissions/methods",
+            "/api/public/admissions/documents",
+            "/api/public/admissions/tuition",
+        ],
+    )
+    async def test_blocks_after_threshold(
+        self, rate_limited_client: AsyncClient, path: str
+    ):
+        """4th GET from one X-Real-IP must be 429 (fixture sets 3/minute). The
+        limiter runs before the endpoint body, so the 4th is 429 regardless of
+        what the catalog query returns; the first 3 only need to be non-429."""
+        headers = {"X-Real-IP": "203.0.113.7"}
+        for i in range(3):
+            res = await rate_limited_client.get(path, headers=headers)
+            assert res.status_code != 429, (
+                f"{path}: request {i + 1}/3 should pass, got {res.status_code}"
+            )
+        res = await rate_limited_client.get(path, headers=headers)
+        assert res.status_code == 429, (
+            f"{path}: 4th request should be 429, got {res.status_code} — decorator "
+            f"order wrong (limit unenforced). (Per-IP keying is proven separately "
+            f"by test_limit_is_per_x_real_ip.)"
+        )
+
+    async def test_limit_is_per_x_real_ip(self, rate_limited_client: AsyncClient):
+        """One client's exhaustion must NOT 429 a DIFFERENT X-Real-IP — proves the
+        endpoint keys per real client IP (get_client_ip), not one global bucket."""
+        for _ in range(4):  # client A burns the 3/minute budget
+            await rate_limited_client.get(
+                self._PROGRAMS, headers={"X-Real-IP": "203.0.113.1"}
+            )
+        blocked = await rate_limited_client.get(
+            self._PROGRAMS, headers={"X-Real-IP": "203.0.113.1"}
+        )
+        assert blocked.status_code == 429, "Client A should be blocked after budget"
+        other = await rate_limited_client.get(
+            self._PROGRAMS, headers={"X-Real-IP": "203.0.113.2"}
+        )
+        assert other.status_code != 429, (
+            f"A different X-Real-IP must NOT share A's bucket, got "
+            f"{other.status_code} — endpoint is globally bucketed (key_func missing)."
+        )
+
+    async def test_default_get_remote_address_collapses_x_real_ip(
+        self, rate_limited_client: AsyncClient
+    ):
+        """Demonstrates WHY the default key is get_client_ip, not get_remote_address:
+        get_remote_address NEVER reads X-Real-IP (only the socket peer / XFF), so a
+        client whose identity is carried in X-Real-IP is invisible to it. That is
+        exactly the SSR case (serverFetch forwards X-Real-IP but no XFF) and the
+        anti-spoof case (nginx overwrites X-Real-IP). Re-key /methods with
+        get_remote_address and show 4 requests from 4 DIFFERENT X-Real-IPs collapse
+        into ONE bucket (4th = 429); get_client_ip would isolate them."""
+        from app.core.rate_limits import limiter
+
+        ep = "app.routers.public_admissions.get_public_methods_catalog"
+        saved = limiter._route_limits.get(ep, [])[:]
+        limiter._route_limits[ep] = list(
+            LimitGroup("3/minute", get_remote_address, None, False,
+                       None, None, None, 1, True)
+        )
+        limiter.reset()
+        try:
+            codes = [
+                (
+                    await rate_limited_client.get(
+                        "/api/public/admissions/methods",
+                        headers={"X-Real-IP": f"198.51.100.{i}"},
+                    )
+                ).status_code
+                for i in range(4)
+            ]
+            assert 429 in codes, (
+                "get_remote_address IGNORES X-Real-IP, so 4 distinct client IPs "
+                f"share ONE bucket → the 4th must 429; got {codes}. No 429 would "
+                f"mean the default key wrongly isolated per X-Real-IP (it does not)."
+            )
+        finally:
+            limiter._route_limits[ep] = saved
+            limiter.reset()

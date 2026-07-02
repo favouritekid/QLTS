@@ -208,6 +208,9 @@ jobs:
           tests/integration/test_casbin_lead_static_route_collision.py
           tests/api/test_fees_calculate_authorization.py
           tests/api/test_finance_api.py::TestDiamondInheritance
+          tests/security/test_ratelimit_order_guard.py
+          tests/security/test_ip_rate_limit.py
+          tests/security/test_ratelimit_per_user_key.py
           -q --tb=short --timeout=60
 
       # =====================================================================
