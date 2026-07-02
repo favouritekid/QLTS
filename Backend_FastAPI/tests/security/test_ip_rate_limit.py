@@ -410,14 +410,16 @@ class TestRateLimitConfiguration:
             f"Expected memory:// storage in test mode, got {STORAGE_URI}"
         )
 
-    def test_limiter_key_func_is_ip_based(self):
-        """Default limiter key function must be get_remote_address (IP-based)."""
-        from slowapi.util import get_remote_address
-
+    def test_limiter_key_func_is_non_spoofable_client_ip(self):
+        """Default limiter key MUST be get_client_ip (X-Real-IP, non-spoofable),
+        NOT get_remote_address (leftmost X-Forwarded-For hop = client-spoofable
+        under gunicorn forwarded_allow_ips="*" + uvicorn always_trust)."""
+        from app.core.client_ip import get_client_ip
         from app.core.rate_limits import limiter
 
-        assert limiter._key_func is get_remote_address, (
-            "Default key_func should be get_remote_address for IP-based limiting"
+        assert limiter._key_func is get_client_ip, (
+            "Default key_func must be get_client_ip (non-spoofable X-Real-IP); "
+            "get_remote_address keys on the client-controllable XFF first hop."
         )
 
 
@@ -468,7 +470,8 @@ class TestPublicAdmissionsRateLimit:
         res = await rate_limited_client.get(path, headers=headers)
         assert res.status_code == 429, (
             f"{path}: 4th request should be 429, got {res.status_code} — decorator "
-            f"order wrong (unenforced) or key_func not honouring X-Real-IP."
+            f"order wrong (limit unenforced). (Per-IP keying is proven separately "
+            f"by test_limit_is_per_x_real_ip.)"
         )
 
     async def test_limit_is_per_x_real_ip(self, rate_limited_client: AsyncClient):
@@ -493,10 +496,13 @@ class TestPublicAdmissionsRateLimit:
     async def test_default_get_remote_address_collapses_x_real_ip(
         self, rate_limited_client: AsyncClient
     ):
-        """NEGATIVE proof: the DEFAULT key (get_remote_address) ignores X-Real-IP,
-        so distinct clients COLLAPSE into one bucket — the prod bug get_client_ip
-        prevents. Re-key /methods with the default and show 4 requests from 4
-        DIFFERENT X-Real-IPs still hit 429."""
+        """Demonstrates WHY the default key is get_client_ip, not get_remote_address:
+        get_remote_address NEVER reads X-Real-IP (only the socket peer / XFF), so a
+        client whose identity is carried in X-Real-IP is invisible to it. That is
+        exactly the SSR case (serverFetch forwards X-Real-IP but no XFF) and the
+        anti-spoof case (nginx overwrites X-Real-IP). Re-key /methods with
+        get_remote_address and show 4 requests from 4 DIFFERENT X-Real-IPs collapse
+        into ONE bucket (4th = 429); get_client_ip would isolate them."""
         from app.core.rate_limits import limiter
 
         ep = "app.routers.public_admissions.get_public_methods_catalog"

@@ -13,10 +13,10 @@ Usage:
         pass
 """
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from starlette.requests import Request
 
 from ..config import settings
+from .client_ip import get_client_ip
 
 
 # ============================================================================
@@ -36,9 +36,16 @@ else:
 # LIMITER INITIALIZATION
 # ============================================================================
 
-# Initialize limiter with remote address as key (default)
-# This rate limits based on client IP address
-limiter = Limiter(key_func=get_remote_address, storage_uri=STORAGE_URI)
+# Default key = REAL client IP via get_client_ip. It prefers X-Real-IP, which
+# nginx sets to $remote_addr and OVERWRITES any client value → non-spoofable.
+# NOT get_remote_address: under the prod topology (gunicorn forwarded_allow_ips="*"
+# → uvicorn ProxyHeaders always_trust) it returns the LEFTMOST X-Forwarded-For hop,
+# which nginx APPENDS ($proxy_add_x_forwarded_for) so a client can prepend a forged
+# value → mint a fresh per-IP bucket per request and bypass brute-force / per-IP caps.
+# get_client_ip also fixes SSR (server-rendered fetches bypass nginx but carry the
+# X-Real-IP forwarded by serverFetch; get_remote_address would key on the frontend
+# container IP). Every @limiter.limit inherits this default unless it passes key_func.
+limiter = Limiter(key_func=get_client_ip, storage_uri=STORAGE_URI)
 
 
 # ============================================================================
@@ -71,11 +78,13 @@ def get_user_id_key(request: Request) -> str:
             user_id = request.state.user.id
             return f"user_{user_id}"
 
-        # Fallback to IP if no user (shouldn't happen for authenticated endpoints)
-        return get_remote_address(request)
+        # Fallback to the REAL client IP (non-spoofable X-Real-IP) — NOT
+        # get_remote_address, whose leftmost-XFF value is client-spoofable. Should
+        # not happen on authenticated routes (get_current_user sets request.state.user).
+        return get_client_ip(request)
     except Exception:
-        # If anything fails, fallback to IP-based rate limiting
-        return get_remote_address(request)
+        # If anything fails, fall back to the non-spoofable client IP.
+        return get_client_ip(request)
 
 
 # ============================================================================

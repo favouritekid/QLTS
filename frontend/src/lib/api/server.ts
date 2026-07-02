@@ -162,9 +162,12 @@ async function serverFetch<T>(
   if (!headers['X-Real-IP']) {
     try {
       const inbound = await nextHeaders();
-      const realIp =
-        inbound.get('x-real-ip') ??
-        inbound.get('x-forwarded-for')?.split(',')[0]?.trim();
+      // ONLY X-Real-IP: nginx sets it to $remote_addr and overwrites any client
+      // value → non-spoofable. Deliberately do NOT fall back to X-Forwarded-For
+      // (its first hop is client-appendable → forwarding it as a trusted X-Real-IP
+      // would let a client forge the backend rate-limit key). In prod nginx always
+      // sets X-Real-IP, so a fallback would only ever fire off-nginx anyway.
+      const realIp = inbound.get('x-real-ip');
       if (realIp) headers['X-Real-IP'] = realIp;
     } catch {
       // headers() unavailable (e.g. inside "use cache") — leave unset; backend
