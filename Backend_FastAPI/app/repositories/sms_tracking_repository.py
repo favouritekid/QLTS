@@ -21,6 +21,7 @@ from app.models.sms import (
     SmsCampaignRecipient,
     SmsClickEvent,
     SmsConsultLink,
+    SmsContact,
     SmsOptOut,
 )
 
@@ -153,7 +154,6 @@ class SmsTrackingRepository:
     async def get_contact_phone(self, contact_id: int) -> Optional[str]:
         """phone_normalized của 1 contact (consult resolve — recipient dùng
         snapshot; consult phải tra contact). None nếu contact đã xoá."""
-        from app.models.sms import SmsContact
         return await self.db.scalar(
             select(SmsContact.phone_normalized).where(
                 SmsContact.id == contact_id

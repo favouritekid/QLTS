@@ -82,16 +82,26 @@ class SmsConsultService:
                 if contact is None:
                     raise
 
-        code = generate_short_code()
-        consult = await self.engagement_repo.create_consult_link(
-            {
-                "lead_id": lead.id,
-                "contact_id": contact.id,
-                "created_by_id": getattr(current_user, "id", None),
-                "token_hash": compute_token_hash(code),
-                "landing_type": "qlts_hosted",
-            }
-        )
+        # Retry sinh code nếu token_hash trùng (collision base62×9 ~2^54 cực
+        # hiếm; đối xứng retry của campaign build) → tránh IntegrityError→500.
+        consult = None
+        for attempt in range(5):
+            code = generate_short_code()
+            try:
+                async with self.db.begin_nested():
+                    consult = await self.engagement_repo.create_consult_link(
+                        {
+                            "lead_id": lead.id,
+                            "contact_id": contact.id,
+                            "created_by_id": getattr(current_user, "id", None),
+                            "token_hash": compute_token_hash(code),
+                            "landing_type": "qlts_hosted",
+                        }
+                    )
+                break
+            except IntegrityError:
+                if attempt == 4:
+                    raise
         return sms_schemas.SmsConsultLinkResponse(
             code=code,
             url=build_link(code),

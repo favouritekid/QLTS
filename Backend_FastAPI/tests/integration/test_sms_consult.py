@@ -148,12 +148,19 @@ async def test_consult_full_flow(
     )
     assert hb.status_code == 200
 
-    # 5) lead interests (qua contact match phone) — thấy ngành 1
+    # 5) lead interests (qua contact match phone) — thấy ngành 1 + GIÁ TRỊ đúng
     li = await client.get(f"{API}/leads/{lead_id}/interests", headers=h)
     assert li.status_code == 200, li.text
     lij = li.json()
     assert lij["lead_id"] == lead_id and lij["contact_id"] == contact_id
-    assert len(lij["items"]) == 1 and lij["items"][0]["major_program_id"] == 1
+    assert len(lij["items"]) == 1
+    it0 = lij["items"][0]
+    assert it0["major_program_id"] == 1
+    # Assert TÍN HIỆU cốt lõi (không chỉ tồn tại row): dwell=20 (heartbeat, <grace
+    # nên không clamp), view_count=1, score dương → bắt regression đo về 0.
+    assert it0["view_count"] == 1
+    assert it0["total_dwell_seconds"] == 20
+    assert it0["interest_score"] > 0.0
 
 
 async def test_consult_reuses_existing_contact(
@@ -213,6 +220,45 @@ async def test_consult_officer_idor(
 
     idor = await client.post(f"{API}/leads/{other}/consult-link", headers=oh)
     assert idor.status_code == 404  # ngoài phạm vi officer → 404 (không lộ)
+
+
+async def test_consult_click_bot_not_counted_human(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """/r/ consult click bằng UA bot → raw tăng nhưng human KHÔNG (đối xứng
+    recipient; record_consult_click tách bot)."""
+    h = admin_token_headers
+    lead_id = await _mk_lead("0987755666")
+    body = (
+        await client.post(f"{API}/leads/{lead_id}/consult-link", headers=h)
+    ).json()
+    res = await client.get(
+        f"/r/{body['code']}",
+        headers={"User-Agent": "facebookexternalhit/1.1"},
+        follow_redirects=False,
+    )
+    assert res.status_code == 302
+    async with AsyncSessionLocal() as s:
+        cc = (
+            await s.execute(
+                text(
+                    "SELECT raw_click_count, human_click_count, "
+                    "first_human_clicked_at FROM sms_consult_link WHERE id=:i"
+                ),
+                {"i": body["consult_link_id"]},
+            )
+        ).first()
+    assert cc[0] == 1 and cc[1] == 0 and cc[2] is None  # raw tăng, human KHÔNG
+
+
+async def test_consult_link_rejects_non_mobile_phone(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """Lead số cố định (không di động) → 400 (không tạo consult link/contact rác)."""
+    h = admin_token_headers
+    lead_id = await _mk_lead("0243825123")  # số bàn Hà Nội (không di động)
+    r = await client.post(f"{API}/leads/{lead_id}/consult-link", headers=h)
+    assert r.status_code == 400, r.text
 
 
 async def test_consult_requires_auth(client: AsyncClient):
