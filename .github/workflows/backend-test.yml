@@ -3,11 +3,13 @@ name: Backend Test (PR Gate)
 # Touched 2026-05-14 alongside PR #288 (.gitignore cleanup) AND PR #289
 # (Documents/scripts inventory batch) only to trigger this gate —
 # branch protection ruleset 16381130 requires ``pytest`` on every PR,
-# but root-level / Documents/ / scripts/ only PRs do not match any
-# path filter below and would otherwise sit at "expected, not run"
-# forever. Future Documents/scripts/root PRs: bundle a no-op workflow
-# touch like this OR expand the path filter below explicitly (trade-off:
-# gate runs on every doc change, ~17 phút CI per).
+# but root-level / Documents/ only PRs do not match any path filter
+# below and would otherwise sit at "expected, not run" forever.
+# ``scripts/**`` WAS ADDED to the path filter (2026-07-02, PR #459) so
+# deploy/ops-script PRs trigger the gate (surfaced when a deploy.sh-only
+# fix stuck at "expected, not run"). Future Documents/root-only PRs:
+# bundle a no-op workflow touch like this OR expand the path filter
+# below explicitly (trade-off: gate runs on every such change).
 #
 # Sprint S2 hardening (memory `auto-merge-requires-full-ci-not-just-green`):
 # Closes the systemic gap surfaced by PR #283 orphan-merge. The existing
@@ -92,6 +94,7 @@ on:
       - 'Backend_FastAPI/**'
       - 'frontend/**'
       - '.github/workflows/**'
+      - 'scripts/**'
 
 concurrency:
   group: be-pr-${{ github.ref }}
