@@ -20,6 +20,7 @@ from app.models.sms import (
     SmsCampaignExportBatch,
     SmsCampaignRecipient,
     SmsClickEvent,
+    SmsConsultLink,
     SmsOptOut,
 )
 
@@ -50,6 +51,53 @@ class SmsTrackingRepository:
         )
         row = res.first()
         return (row[0], row[1]) if row else None
+
+    # ---------------------------------------------------------------
+    # Consult link resolve + click (P2-3 — nhánh 2 của /r/{code})
+    # ---------------------------------------------------------------
+    async def lookup_consult_by_token_hash(
+        self, token_hash: str
+    ) -> Optional[SmsConsultLink]:
+        """SmsConsultLink nếu token_hash khớp; None nếu không. Dùng khi
+        recipient lookup KHÔNG thấy (resolve mở rộng §16.7)."""
+        res = await self.db.execute(
+            select(SmsConsultLink)
+            .where(SmsConsultLink.token_hash == token_hash)
+            .limit(1)
+        )
+        return res.scalars().first()
+
+    async def record_consult_click(
+        self,
+        *,
+        consult_link_id: int,
+        ip_hash: Optional[str],
+        user_agent: Optional[str],
+        is_bot: bool,
+        bot_reason: Optional[str],
+        now: datetime,
+    ) -> None:
+        """Ghi click cho consult link — đối xứng record_click recipient. Không
+        có sms_click_event cho consult (event gắn recipient_id) → chỉ counter
+        denorm atomic trên consult_link."""
+        inc_human = 0 if is_bot else 1
+        values = {
+            "raw_click_count": SmsConsultLink.raw_click_count + 1,
+            "human_click_count": (
+                SmsConsultLink.human_click_count + inc_human
+            ),
+        }
+        if not is_bot:
+            values["last_human_clicked_at"] = now
+            values["first_human_clicked_at"] = case(
+                (SmsConsultLink.first_human_clicked_at.is_(None), now),
+                else_=SmsConsultLink.first_human_clicked_at,
+            )
+        await self.db.execute(
+            update(SmsConsultLink)
+            .where(SmsConsultLink.id == consult_link_id)
+            .values(**values)
+        )
 
     # ---------------------------------------------------------------
     # Click event + denorm counter (atomic — chống lost update khi click //)
@@ -102,6 +150,16 @@ class SmsTrackingRepository:
     # ---------------------------------------------------------------
     # Opt-out
     # ---------------------------------------------------------------
+    async def get_contact_phone(self, contact_id: int) -> Optional[str]:
+        """phone_normalized của 1 contact (consult resolve — recipient dùng
+        snapshot; consult phải tra contact). None nếu contact đã xoá."""
+        from app.models.sms import SmsContact
+        return await self.db.scalar(
+            select(SmsContact.phone_normalized).where(
+                SmsContact.id == contact_id
+            )
+        )
+
     async def is_phone_opted_out(self, phone_normalized: str) -> bool:
         res = await self.db.scalar(
             select(SmsOptOut.id)

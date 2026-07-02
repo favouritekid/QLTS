@@ -21,13 +21,13 @@ from app.config import settings
 from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.schemas import sms as sms_schemas
+from app.services.sms_resolve import resolve_code
 from app.utils.exceptions import ResourceNotFoundError
 from app.utils.sms_bot import detect_bot
 from app.utils.sms_interest import compute_interest_score
 from app.utils.sms_token import (
     compute_ip_hash,
     compute_session_token_hash,
-    compute_token_hash,
     generate_session_token,
     is_valid_code,
 )
@@ -52,24 +52,6 @@ class SmsEngagementService:
         self.db = db
         self.repo = SmsEngagementRepository(db)
         self.tracking_repo = SmsTrackingRepository(db)
-
-    # ---------------------------------------------------------------
-    # Resolve code → recipient + campaign (mirror landing/tracking)
-    # ---------------------------------------------------------------
-    async def _resolve_recipient(self, code: str):
-        if not is_valid_code(code):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        found = await self.tracking_repo.lookup_by_token_hash(
-            compute_token_hash(code)
-        )
-        if found is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        recipient, campaign = found
-        if campaign.link_expires_at and _aware(
-            campaign.link_expires_at
-        ) <= datetime.now(timezone.utc):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        return recipient, campaign
 
     async def _resolve_session(self, session_token: str):
         """Session theo token hash (bearer). None → 404 generic.
@@ -102,10 +84,13 @@ class SmsEngagementService:
         user_agent: Optional[str],
         headers: Optional[Mapping[str, str]] = None,
     ) -> sms_schemas.SmsSessionStartResponse:
-        recipient, campaign = await self._resolve_recipient(code)
-        # contact_id = khóa thống nhất gắn interest; NULL (contact đã xoá) →
-        # không quy được sở thích → 404 generic (measurement bỏ qua ca hiếm này).
-        if recipient.contact_id is None:
+        # Resolve mở rộng: recipient (campaign) HOẶC consult link (§16.7).
+        resolved = await resolve_code(
+            self.tracking_repo, code, enforce_expiry=True
+        )
+        # contact_id = khóa thống nhất gắn interest; NULL (recipient mất contact
+        # do xoá) → không quy được sở thích → 404 (ca hiếm; consult luôn có).
+        if resolved.contact_id is None:
             raise ResourceNotFoundError(detail=_GENERIC_404)
         now = datetime.now(timezone.utc)
         is_bot, _reason = detect_bot(
@@ -114,10 +99,20 @@ class SmsEngagementService:
         raw_token = generate_session_token()
         session = await self.repo.create_session(
             {
-                "contact_id": recipient.contact_id,
-                "source_type": "campaign",
-                "recipient_id": recipient.id,
-                "campaign_id": campaign.id,
+                "contact_id": resolved.contact_id,
+                "source_type": resolved.kind,  # "campaign" | "consult"
+                "recipient_id": (
+                    resolved.recipient.id
+                    if resolved.kind == "campaign" else None
+                ),
+                "campaign_id": (
+                    resolved.campaign.id
+                    if resolved.kind == "campaign" else None
+                ),
+                "consult_link_id": (
+                    resolved.consult.id
+                    if resolved.kind == "consult" else None
+                ),
                 "session_token_hash": compute_session_token_hash(raw_token),
                 "started_at": now,
                 "last_heartbeat_at": now,

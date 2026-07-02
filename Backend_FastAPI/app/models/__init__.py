@@ -169,6 +169,7 @@ from .sms import (
     SmsLandingSession,
     SmsProgramView,
     SmsContactProgramInterest,
+    SmsConsultLink,
 )
 
 # Import tất cả các model để chúng được đăng ký với Base
@@ -310,4 +311,5 @@ __all__ = [
     "SmsLandingSession",
     "SmsProgramView",
     "SmsContactProgramInterest",
+    "SmsConsultLink",
 ]
