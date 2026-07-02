@@ -61,11 +61,11 @@ export function SmsProgramClient({
         <h1 className="text-lg font-semibold">
           Không tìm thấy ngành hoặc liên kết đã hết hạn
         </h1>
-        <Link href={`/lp/${encodeURIComponent(code)}`}>
-          <Button variant="outline" className="w-full">
+        <Button asChild variant="outline" className="w-full">
+          <Link href={`/lp/${encodeURIComponent(code)}`}>
             <ArrowLeft className="mr-2 h-4 w-4" /> Về danh mục ngành
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </Shell>
     )
   }
@@ -97,11 +97,11 @@ export function SmsProgramClient({
 
       <hr className="border-border" />
 
-      <Link href={`/lp/${encodeURIComponent(code)}`}>
-        <Button variant="outline" className="w-full">
+      <Button asChild variant="outline" className="w-full">
+        <Link href={`/lp/${encodeURIComponent(code)}`}>
           <ArrowLeft className="mr-2 h-4 w-4" /> Xem ngành khác
-        </Button>
-      </Link>
+        </Link>
+      </Button>
 
       <p className="text-muted-foreground text-center text-xs">
         {data.consent_notice}
