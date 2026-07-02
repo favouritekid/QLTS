@@ -95,24 +95,9 @@ export const CARRIER_FILTER_OPTIONS: {
   label: CARRIER_LABELS[value],
 }))
 
-/** Định dạng số nguyên kiểu Việt (1.234.567). */
-export function formatInt(n: number): string {
-  return n.toLocaleString("vi-VN")
-}
-
-/** Định dạng phần trăm CTR (BE trả sẵn dạng %; tối đa 1 chữ số thập phân). */
-export function formatPercent(n: number): string {
-  return `${n.toLocaleString("vi-VN", { maximumFractionDigits: 1 })}%`
-}
-
-/** Định dạng dwell (giây) → "M phút S giây" / "S giây" (Phase 2 report). */
-export function formatDwell(seconds: number): string {
-  const s = Math.max(0, Math.round(seconds))
-  if (s < 60) return `${s} giây`
-  const m = Math.floor(s / 60)
-  const rem = s % 60
-  return rem === 0 ? `${m} phút` : `${m} phút ${rem} giây`
-}
+// Formatter số/thời lượng thuần đã chuyển sang @/lib/format (dùng chung, hết
+// coupling leads→sms/admin); re-export để callers cũ ở admin không phải đổi.
+export { formatDwell, formatInt, formatPercent } from "@/lib/format"
 
 /**
  * Định dạng ISO datetime → "dd/MM/yyyy HH:mm" (giờ trình duyệt). An toàn,
