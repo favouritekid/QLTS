@@ -300,6 +300,30 @@ while [ $timeout -gt 0 ]; do
 done
 
 # =============================================================================
+# Step 8b: Reload nginx to APPLY the re-rendered config
+# =============================================================================
+# ``up -d nginx`` above does NOT recreate/reload an already-running nginx when
+# only the bind-mounted config file (rendered by the ``envsubst`` step above)
+# changed — the container keeps serving whatever config it loaded at its last
+# (re)start. Without this explicit reload, nginx changes (new ``location``
+# blocks, security headers) SILENTLY never take effect. Observed 2026-07-02:
+# nginx ran 6 weeks on a stale config → the SMS ``/r/`` short-link fell through
+# to the frontend (307 → /login) because its ``location /r/`` was never loaded.
+# Validate first (bad config → keep last-good, don't reload) then gracefully
+# reload (SIGHUP, zero-downtime). Non-fatal so a fresh-start deploy (nginx just
+# loaded the config) is unaffected.
+log "Step 8b: Reloading nginx (apply re-rendered config)..."
+if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -t >/dev/null 2>&1; then
+    if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -s reload; then
+        log "  nginx reloaded — config applied"
+    else
+        log "  WARNING: nginx reload failed — check 'docker compose logs nginx'"
+    fi
+else
+    log "  WARNING: nginx config test FAILED — NOT reloading (keeps last-good config). Fix nginx/conf.d/default.conf"
+fi
+
+# =============================================================================
 # Done
 # =============================================================================
 log "========================================="
