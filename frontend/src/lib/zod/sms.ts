@@ -106,6 +106,26 @@ export type SmsContactInterestList = z.infer<
   typeof smsContactInterestListSchema
 >
 
+// --- P2-3/P2-4b consult officer (§16.7) ---
+export const smsConsultLinkResponseSchema = z.object({
+  code: z.string(),
+  url: z.string(),
+  consult_link_id: z.number().int(),
+  contact_id: z.number().int(),
+})
+export type SmsConsultLinkResponse = z.infer<
+  typeof smsConsultLinkResponseSchema
+>
+
+export const smsLeadInterestResponseSchema = z.object({
+  lead_id: z.number().int(),
+  contact_id: z.number().int().nullable().optional(),
+  items: z.array(smsContactInterestRowSchema).default([]),
+})
+export type SmsLeadInterestResponse = z.infer<
+  typeof smsLeadInterestResponseSchema
+>
+
 // =====================================================================
 // Admin — enum literal (mirror CHECK constraint / Literal ở Backend)
 // =====================================================================

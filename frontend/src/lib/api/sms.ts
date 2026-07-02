@@ -35,6 +35,8 @@ import {
   smsOptOutSchema,
   smsProgramInterestReportSchema,
   smsContactInterestListSchema,
+  smsConsultLinkResponseSchema,
+  smsLeadInterestResponseSchema,
   smsSessionStartResponseSchema,
   smsProgramViewResponseSchema,
   smsHeartbeatResponseSchema,
@@ -70,6 +72,8 @@ import {
   type SmsOptOutList,
   type SmsProgramInterestReport,
   type SmsContactInterestList,
+  type SmsConsultLinkResponse,
+  type SmsLeadInterestResponse,
   type SmsSessionStartResponse,
   type SmsProgramViewResponse,
   type SmsHeartbeatResponse,
@@ -212,6 +216,31 @@ export async function getSmsContactInterests(
     `/api/sms/contacts/${contactId}/interests`,
   )
   return smsContactInterestListSchema.parse(res.data)
+}
+
+// =====================================================================
+// P2-3/P2-4b — consult officer (officer/manager/admin; IDOR scope BE)
+// =====================================================================
+
+/** Interest ngành của 1 LEAD (qua contact match phone). Rỗng nếu chưa có. */
+export async function getSmsLeadInterests(
+  leadId: number,
+): Promise<SmsLeadInterestResponse> {
+  const res = await api.get<SmsLeadInterestResponse>(
+    `/api/sms/leads/${leadId}/interests`,
+  )
+  return smsLeadInterestResponseSchema.parse(res.data)
+}
+
+/** Tạo link tư vấn cho lead → trả code/url raw 1 LẦN (copy gửi Zalo/tay). */
+export async function createSmsConsultLink(
+  leadId: number,
+): Promise<SmsConsultLinkResponse> {
+  const res = await api.post<SmsConsultLinkResponse>(
+    `/api/sms/leads/${leadId}/consult-link`,
+    {},
+  )
+  return smsConsultLinkResponseSchema.parse(res.data)
 }
 
 export interface SmsCampaignListParams {

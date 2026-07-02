@@ -67,6 +67,7 @@ import { ActionBanner } from "@/components/leads/ActionBanner";
 import { LeadScoringCollapsible } from "@/components/leads/LeadScoringCollapsible";
 import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadinessChecklist";
 import { LeadInfoTabs } from "./LeadInfoTabs";
+import { LeadConsultSection } from "@/components/leads/LeadConsultSection";
 import { WorkflowBreadcrumb } from "@/components/common";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { getLeadScoreLabel, getLeadScoreTextColor } from "@/constants";
@@ -455,6 +456,9 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
                 currentProfile && router.push(`/admissions/${currentProfile.id}`)
               }
             />
+
+            {/* P2-4b: Tư vấn SMS — link tư vấn + quan tâm ngành (officer/mgr/admin) */}
+            <LeadConsultSection leadId={leadId} />
           </div>
 
           {/* ===== RIGHT PANEL (8 cols): Quick Actions ===== */}
