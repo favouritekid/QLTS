@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.schemas import sms as sms_schemas
 from app.utils.exceptions import ResourceNotFoundError
@@ -35,6 +36,7 @@ class SmsLandingService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = SmsTrackingRepository(db)
+        self.engagement_repo = SmsEngagementRepository(db)
 
     async def _resolve(self, code: str, *, enforce_expiry: bool = True):
         if not is_valid_code(code):
@@ -65,6 +67,9 @@ class SmsLandingService:
                 "SMS landing: CTA url ngoài allowlist campaign_id=%s", campaign.id
             )
             cta_label = cta_url = None
+        # Phase 2 (§16.1): danh mục ngành cho landing 2 tầng (read-only, no
+        # session — session chỉ tạo qua POST để tránh crawler tạo phiên rác).
+        programs = await self.engagement_repo.list_active_programs()
         return sms_schemas.SmsLandingResponse(
             school_name=settings.SMS_LANDING_SCHOOL_NAME,
             headline=campaign.landing_headline,
@@ -73,6 +78,13 @@ class SmsLandingService:
             cta_url=cta_url,
             consent_notice=settings.SMS_LANDING_CONSENT_NOTICE,
             already_opted_out=already,
+            programs=[
+                sms_schemas.SmsLandingProgram(
+                    id=p.id, name=p.name, code=p.code,
+                    degree_level=p.degree_level,
+                )
+                for p in programs
+            ],
         )
 
     async def public_opt_out(

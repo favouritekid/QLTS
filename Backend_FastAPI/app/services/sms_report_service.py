@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.sms_campaign_repository import SmsCampaignRepository
+from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.schemas import sms as sms_schemas
 from app.utils.exceptions import (
@@ -49,6 +50,7 @@ class SmsReportService:
         self.db = db
         self.repo = SmsTrackingRepository(db)
         self.campaign_repo = SmsCampaignRepository(db)
+        self.engagement_repo = SmsEngagementRepository(db)
 
     # ---------------------------------------------------------------
     # Report click theo granularity
@@ -186,3 +188,70 @@ class SmsReportService:
             skip=skip, limit=limit, search=search, source=source
         )
         return sms_schemas.SmsOptOutList(total=total, items=items)
+
+    # ---------------------------------------------------------------
+    # Phase 2 (§16.7) — report ngành nóng + hồ sơ sở thích 1 contact
+    # ---------------------------------------------------------------
+    async def program_interest_report(
+        self,
+        *,
+        campaign_id: Optional[int] = None,
+        group_id: Optional[int] = None,
+        major_program_id: Optional[int] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> sms_schemas.SmsProgramInterestReport:
+        # LƯU Ý ĐO LƯỜNG (/review #4): total_dwell/view_count là tín hiệu THÔ do
+        # client báo (đã lọc bot + clamp wall-clock/lượt + rate-limit per-IP);
+        # 1 người có thể tự bơm dwell CHÍNH ngành mình quan tâm. Chấp nhận: chỉ
+        # tự-ảnh-hưởng contact của họ, và tín hiệu xếp hạng cốt lõi per-contact
+        # là interest_score (CÓ TRẦN normalize), không phải dwell thô của report.
+        scope = dict(
+            campaign_id=campaign_id,
+            group_id=group_id,
+            major_program_id=major_program_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        rows = await self.engagement_repo.program_interest_report(**scope)
+        distinct_total, view_total, dwell_total = (
+            await self.engagement_repo.program_interest_totals(**scope)
+        )
+        return sms_schemas.SmsProgramInterestReport(
+            items=[
+                sms_schemas.SmsProgramInterestRow(
+                    major_program_id=pid,
+                    program_name=name or "(ngành đã xoá)",
+                    distinct_contacts=distinct,
+                    view_count=views,
+                    total_dwell_seconds=dwell,
+                    avg_dwell_seconds=(
+                        round(dwell / views, 1) if views else 0.0
+                    ),
+                )
+                for pid, name, distinct, views, dwell in rows
+            ],
+            distinct_contacts_total=distinct_total,
+            view_count_total=view_total,
+            total_dwell_seconds=dwell_total,
+        )
+
+    async def contact_interests(
+        self, contact_id: int
+    ) -> sms_schemas.SmsContactInterestList:
+        rows = await self.engagement_repo.contact_interests(contact_id)
+        return sms_schemas.SmsContactInterestList(
+            contact_id=contact_id,
+            items=[
+                sms_schemas.SmsContactInterestRow(
+                    major_program_id=r.major_program_id,
+                    program_name=name or "(ngành đã xoá)",
+                    view_count=r.view_count,
+                    total_dwell_seconds=r.total_dwell_seconds,
+                    interest_score=r.interest_score,
+                    first_interest_at=r.first_interest_at,
+                    last_interest_at=r.last_interest_at,
+                )
+                for r, name in rows
+            ],
+        )

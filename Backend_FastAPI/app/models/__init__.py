@@ -165,6 +165,10 @@ from .sms import (
     SmsClickEvent,
     SmsOptOut,
     SmsMarketingConsentEvent,
+    # Phase 2 (§16) — deep engagement / đo quan tâm ngành
+    SmsLandingSession,
+    SmsProgramView,
+    SmsContactProgramInterest,
 )
 
 # Import tất cả các model để chúng được đăng ký với Base
@@ -302,4 +306,8 @@ __all__ = [
     "SmsClickEvent",
     "SmsOptOut",
     "SmsMarketingConsentEvent",
+    # SMS Marketing Module (Phase 2 §16: deep engagement)
+    "SmsLandingSession",
+    "SmsProgramView",
+    "SmsContactProgramInterest",
 ]

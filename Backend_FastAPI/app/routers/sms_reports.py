@@ -84,3 +84,43 @@ async def manual_opt_out(
     result = await SmsReportService(db).manual_opt_out(payload, current_user)
     await db.commit()
     return result
+
+
+# ---------------------------------------------------------------------
+# Phase 2 (§16.7) — report ngành nóng + hồ sơ sở thích 1 contact
+# ---------------------------------------------------------------------
+@router.get(
+    "/reports/program-interest",
+    response_model=sms_schemas.SmsProgramInterestReport,
+)
+async def report_program_interest(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+    campaign_id: Optional[int] = Query(None, ge=1, le=_MAX_ID),
+    group_id: Optional[int] = Query(None, ge=1, le=_MAX_ID),
+    major_program_id: Optional[int] = Query(None, ge=1, le=_MAX_ID),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+):
+    """Ngành 'nóng' theo campaign/nhóm/thời gian (rank tổng dwell desc; loại
+    phiên bot). Tín hiệu quan tâm chính = tổng dwell/ngành (§16.2)."""
+    return await SmsReportService(db).program_interest_report(
+        campaign_id=campaign_id,
+        group_id=group_id,
+        major_program_id=major_program_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+
+@router.get(
+    "/contacts/{contact_id}/interests",
+    response_model=sms_schemas.SmsContactInterestList,
+)
+async def contact_interests(
+    contact_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Hồ sơ 'quan tâm ngành' của 1 contact (rank tổng dwell desc)."""
+    return await SmsReportService(db).contact_interests(contact_id)
