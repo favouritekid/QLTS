@@ -279,7 +279,7 @@ async def test_bot_session_excluded_from_interest(
         headers=bot_ua,
     )
     assert hb.status_code == 200
-    # dwell VẪN ghi (audit) nhưng interest KHÔNG được tạo cho bot
+    # dwell bot VẪN ghi (audit) nhưng interest KHÔNG được tạo cho bot
     async with AsyncSessionLocal() as s:
         is_bot = (
             await s.execute(
@@ -301,6 +301,41 @@ async def test_bot_session_excluded_from_interest(
     rep = await client.get(f"{API}/reports/program-interest", headers=h)
     assert rep.status_code == 200
     assert rep.json()["view_count_total"] == 0
+
+    # ⭐ CHỐNG NHIỄM BOT (finding /review #1): giờ 1 phiên NGƯỜI THẬT của CÙNG
+    # contact xem CÙNG ngành 1 → recompute interest KHÔNG được cộng dwell bot.
+    htoken = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    hview = (
+        await client.post(
+            f"{PUB}/landing/{code}/program-view",
+            json={"session_token": htoken, "major_program_id": 1},
+            headers=_H,
+        )
+    ).json()["program_view_id"]
+    assert (
+        await client.post(
+            f"{PUB}/landing/{code}/heartbeat",
+            json={"session_token": htoken, "program_view_id": hview,
+                  "dwell_seconds": 15},
+            headers=_H,
+        )
+    ).status_code == 200
+    async with AsyncSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT view_count, total_dwell_seconds FROM "
+                    "sms_contact_program_interest WHERE contact_id=:c "
+                    "AND major_program_id=1"
+                ),
+                {"c": contact_id},
+            )
+        ).first()
+    # CHỈ view người thật (15s) — KHÔNG có 20s của bot (nếu nhiễm sẽ =2 view/35s)
+    assert row is not None
+    assert row[0] == 1 and row[1] == 15
 
 
 # ---------------------------------------------------------------------

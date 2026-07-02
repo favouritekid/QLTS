@@ -172,11 +172,13 @@ class SmsEngagementService:
         elapsed = int((now - _aware(view.viewed_at)).total_seconds())
         wall_cap = max(elapsed, 0) + _HEARTBEAT_GRACE_SECONDS
         new_dwell = max(view.dwell_seconds, min(payload.dwell_seconds, wall_cap))
-        delta = new_dwell - view.dwell_seconds
         view.dwell_seconds = new_dwell
-        session.active_seconds = session.active_seconds + delta
         session.last_heartbeat_at = now
         await self.db.flush()
+        # active_seconds = Σ dwell mọi view của phiên (DERIVE sau flush, nguồn
+        # sự thật) → chống lost-update khi 2 tab heartbeat // (không cộng delta).
+        active_seconds = await self.repo.session_total_dwell(session.id)
+        session.active_seconds = active_seconds
         # Cập nhật aggregate interest — chỉ session người thật + ngành còn sống.
         if not session.is_suspected_bot and view.major_program_id is not None:
             await self._recompute_interest(
@@ -184,11 +186,11 @@ class SmsEngagementService:
                 major_program_id=view.major_program_id,
                 now=now,
             )
-            await self.db.flush()
+        await self.db.flush()
         return sms_schemas.SmsHeartbeatResponse(
             ok=True,
             dwell_seconds=new_dwell,
-            active_seconds=session.active_seconds,
+            active_seconds=active_seconds,
         )
 
     async def _recompute_interest(
@@ -199,10 +201,11 @@ class SmsEngagementService:
         views = await self.repo.views_for_interest(contact_id, major_program_id)
         if not views:
             return
-        total_dwell = sum(d for d, _ in views)
-        viewed_ats = [_aware(v) for _, v in views]
+        # Build 1 lần (normalize tz), rồi derive total_dwell/first/last từ đó.
+        aware_views = [(d, _aware(v)) for d, v in views]
+        viewed_ats = [v for _, v in aware_views]
         score = compute_interest_score(
-            [(d, _aware(v)) for d, v in views],
+            aware_views,
             now,
             dwell_cap=settings.SMS_INTEREST_DWELL_CAP,
             half_life_days=settings.SMS_INTEREST_HALF_LIFE,
@@ -211,8 +214,8 @@ class SmsEngagementService:
         await self.repo.upsert_interest(
             contact_id=contact_id,
             major_program_id=major_program_id,
-            view_count=len(views),
-            total_dwell_seconds=total_dwell,
+            view_count=len(aware_views),
+            total_dwell_seconds=sum(d for d, _ in aware_views),
             first_interest_at=min(viewed_ats),
             last_interest_at=max(viewed_ats),
             interest_score=score,

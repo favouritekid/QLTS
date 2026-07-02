@@ -107,15 +107,33 @@ class SmsEngagementRepository:
     async def views_for_interest(
         self, contact_id: int, major_program_id: int
     ) -> List[Tuple[int, datetime]]:
-        """(dwell_seconds, viewed_at) MỌI view của cặp (contact, ngành) — để
-        tính lại interest_score (Σ dwell_factor×recency)."""
+        """(dwell_seconds, viewed_at) view NGƯỜI-THẬT của cặp (contact, ngành)
+        — để tính lại interest_score (Σ dwell_factor×recency). JOIN session +
+        LOẠI phiên bot: bot vẫn ghi program_view (audit) nhưng KHÔNG được lẫn
+        vào interest aggregate (khớp report program-interest cũng lọc bot)."""
         res = await self.db.execute(
-            select(SmsProgramView.dwell_seconds, SmsProgramView.viewed_at).where(
+            select(SmsProgramView.dwell_seconds, SmsProgramView.viewed_at)
+            .join(
+                SmsLandingSession,
+                SmsLandingSession.id == SmsProgramView.session_id,
+            )
+            .where(
                 SmsProgramView.contact_id == contact_id,
                 SmsProgramView.major_program_id == major_program_id,
+                SmsLandingSession.is_suspected_bot.is_(False),
             )
         )
         return [(int(d), v) for d, v in res.all()]
+
+    async def session_total_dwell(self, session_id: int) -> int:
+        """Σ dwell mọi program_view của phiên — DERIVE active_seconds (nguồn sự
+        thật) thay vì cộng dồn delta (chống lost-update khi heartbeat // 2 tab)."""
+        total = await self.db.scalar(
+            select(func.coalesce(func.sum(SmsProgramView.dwell_seconds), 0)).where(
+                SmsProgramView.session_id == session_id
+            )
+        )
+        return int(total or 0)
 
     # ---------------------------------------------------------------
     # Aggregate interest (upsert atomic)
@@ -180,6 +198,12 @@ class SmsEngagementRepository:
         conds = [SmsLandingSession.is_suspected_bot.is_(False)]
         if campaign_id is not None:
             conds.append(SmsLandingSession.campaign_id == campaign_id)
+        if group_id is not None:
+            # group_ids_snapshot ở recipient → caller phải JOIN recipient
+            # (_report_from cùng group_id) để cột này có mặt trong FROM.
+            conds.append(
+                SmsCampaignRecipient.group_ids_snapshot.contains([group_id])
+            )
         if major_program_id is not None:
             conds.append(SmsProgramView.major_program_id == major_program_id)
         if date_from is not None:
@@ -213,8 +237,9 @@ class SmsEngagementRepository:
         limit: int = 200,
     ) -> List[Tuple[Optional[int], str, int, int, int]]:
         """(major_program_id, program_name, distinct_contacts, view_count,
-        total_dwell) theo ngành, rank total_dwell desc. Ngành bị xoá →
-        major_program_id NULL, name = snapshot gần nhất."""
+        total_dwell) theo ngành, rank total_dwell desc. Tên = tên HIỆN TẠI của
+        ngành (LEFT JOIN major_program) — ngành đổi tên hiện tên mới; ngành đã
+        xoá (major_program_id NULL) → fallback snapshot."""
         conds = self._report_conds(
             campaign_id=campaign_id,
             group_id=group_id,
@@ -222,22 +247,28 @@ class SmsEngagementRepository:
             date_from=date_from,
             date_to=date_to,
         )
-        if group_id is not None:
-            conds.append(
-                SmsCampaignRecipient.group_ids_snapshot.contains([group_id])
-            )
+        # LEFT JOIN major_program lấy tên hiện tại (max() vì group theo id →
+        # 1 tên/nhóm; coalesce fallback snapshot khi ngành đã xoá = NULL name).
+        from_clause = self._report_from(group_id=group_id).outerjoin(
+            MajorProgram.__table__,
+            MajorProgram.id == SmsProgramView.major_program_id,
+        )
+        name_expr = func.coalesce(
+            func.max(MajorProgram.name),
+            func.max(SmsProgramView.program_name_snapshot),
+        ).label("name")
         total_dwell = func.coalesce(func.sum(SmsProgramView.dwell_seconds), 0)
         res = await self.db.execute(
             select(
                 SmsProgramView.major_program_id.label("program_id"),
-                func.max(SmsProgramView.program_name_snapshot).label("name"),
+                name_expr,
                 func.count(func.distinct(SmsProgramView.contact_id)).label(
                     "distinct_contacts"
                 ),
                 func.count().label("view_count"),
                 total_dwell.label("total_dwell"),
             )
-            .select_from(self._report_from(group_id=group_id))
+            .select_from(from_clause)
             .where(and_(*conds))
             .group_by(SmsProgramView.major_program_id)
             .order_by(total_dwell.desc())
@@ -267,10 +298,6 @@ class SmsEngagementRepository:
             date_from=date_from,
             date_to=date_to,
         )
-        if group_id is not None:
-            conds.append(
-                SmsCampaignRecipient.group_ids_snapshot.contains([group_id])
-            )
         res = await self.db.execute(
             select(
                 func.count(func.distinct(SmsProgramView.contact_id)),

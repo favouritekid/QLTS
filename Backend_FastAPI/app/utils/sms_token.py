@@ -37,11 +37,16 @@ def generate_short_code() -> str:
     return "".join(secrets.choice(_BASE62) for _ in range(CODE_LENGTH))
 
 
+def _hmac_sha256_hex(secret: str, value: str) -> str:
+    """HMAC-SHA256(value, secret) → hex 64 ký tự [0-9a-f]. Primitive dùng chung
+    cho mọi hash SMS (token/session/ip) — đổi thuật toán/encoding 1 chỗ."""
+    return hmac.new(secret.encode(), value.encode(), hashlib.sha256).hexdigest()
+
+
 def compute_token_hash(code: str) -> str:
     """HMAC-SHA256(code, SMS_TOKEN_HASH_SECRET) → hex 64 ký tự [0-9a-f]
     (khớp CHECK `chk_sms_recipient_token_triplet`). Dùng để lookup /r/{code}."""
-    secret = settings.SMS_TOKEN_HASH_SECRET.encode()
-    return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
+    return _hmac_sha256_hex(settings.SMS_TOKEN_HASH_SECRET, code)
 
 
 def generate_session_token() -> str:
@@ -55,8 +60,7 @@ def generate_session_token() -> str:
 def compute_session_token_hash(token: str) -> str:
     """HMAC-SHA256(session_token, SMS_SESSION_TOKEN_HASH_SECRET) → hex 64 ký tự.
     Secret TÁCH BIỆT short-link token-hash (§16.4) → lookup session độc lập."""
-    secret = settings.SMS_SESSION_TOKEN_HASH_SECRET.encode()
-    return hmac.new(secret, token.encode(), hashlib.sha256).hexdigest()
+    return _hmac_sha256_hex(settings.SMS_SESSION_TOKEN_HASH_SECRET, token)
 
 
 def compute_ip_hash(ip: Optional[str]) -> Optional[str]:
@@ -66,8 +70,7 @@ def compute_ip_hash(ip: Optional[str]) -> Optional[str]:
     raw = (ip or "").strip()
     if not raw:
         return None
-    secret = settings.SMS_IP_HASH_SECRET.encode()
-    return hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest()
+    return _hmac_sha256_hex(settings.SMS_IP_HASH_SECRET, raw)
 
 
 def is_valid_code(code: str) -> bool:
