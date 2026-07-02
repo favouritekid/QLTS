@@ -18,11 +18,13 @@ import {
   createManualOptOut,
   getSmsCampaignDashboard,
   getSmsClickReport,
+  getSmsProgramInterestReport,
   listSmsCampaigns,
   listSmsOptOuts,
   type ManualOptOutPayload,
   type SmsCampaignListParams,
   type SmsClickReportParams,
+  type SmsProgramInterestParams,
   type SmsOptOutListParams,
 } from "@/lib/api/sms"
 import { parseApiError } from "@/lib/utils/api-errors"
@@ -41,6 +43,8 @@ export const smsAdminKeys = {
     [...smsAdminKeys.all, "campaigns", params] as const,
   optOuts: (params: SmsOptOutListParams) =>
     [...smsAdminKeys.all, "opt-outs", params] as const,
+  programInterest: (params: SmsProgramInterestParams) =>
+    [...smsAdminKeys.all, "program-interest", params] as const,
 }
 
 // ---------------------------------------------------------------------
@@ -67,6 +71,14 @@ export function useSmsCampaignList(params: SmsCampaignListParams = {}) {
   return useQuery({
     queryKey: smsAdminKeys.campaigns(params),
     queryFn: () => listSmsCampaigns(params),
+    staleTime: 60 * 1000,
+  })
+}
+
+export function useSmsProgramInterest(params: SmsProgramInterestParams) {
+  return useQuery({
+    queryKey: smsAdminKeys.programInterest(params),
+    queryFn: () => getSmsProgramInterestReport(params),
     staleTime: 60 * 1000,
   })
 }

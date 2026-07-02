@@ -105,6 +105,15 @@ export function formatPercent(n: number): string {
   return `${n.toLocaleString("vi-VN", { maximumFractionDigits: 1 })}%`
 }
 
+/** Định dạng dwell (giây) → "M phút S giây" / "S giây" (Phase 2 report). */
+export function formatDwell(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 60) return `${s} giây`
+  const m = Math.floor(s / 60)
+  const rem = s % 60
+  return rem === 0 ? `${m} phút` : `${m} phút ${rem} giây`
+}
+
 /**
  * Định dạng ISO datetime → "dd/MM/yyyy HH:mm" (giờ trình duyệt). An toàn,
  * không crash render: giá trị rỗng (null/undefined/"") → "—"; chuỗi không
