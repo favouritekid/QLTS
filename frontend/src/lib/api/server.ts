@@ -170,8 +170,15 @@ async function serverFetch<T>(
       const realIp = inbound.get('x-real-ip');
       if (realIp) headers['X-Real-IP'] = realIp;
     } catch {
-      // headers() unavailable (e.g. inside "use cache") — leave unset; backend
-      // then falls back to its own client IP. Only affects rate-limited paths.
+      // headers() unavailable (e.g. inside a "use cache" scope, ISR, or
+      // generateMetadata) — leave X-Real-IP unset; the backend then keys on this
+      // container's IP. ⚠️ INVARIANT: any get_client_ip-keyed (ENFORCED) endpoint
+      // reached via SSR MUST force dynamic render (call `await connection()` first,
+      // as the /tuyen-sinh public catalog pages do) so headers() is available here;
+      // otherwise all its cached renders collapse into one bucket. Today the only
+      // `use cache` callers target UNENFORCED (allowlisted) endpoints, so this is
+      // latent — do not wrap an enforced endpoint in `use cache` without threading
+      // the client IP through the cache boundary (mirror how cookieHeader is passed).
     }
   }
 
