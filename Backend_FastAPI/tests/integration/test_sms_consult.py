@@ -261,6 +261,52 @@ async def test_consult_link_rejects_non_mobile_phone(
     assert r.status_code == 400, r.text
 
 
+async def test_consult_optout_via_consult_code(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """Opt-out công khai qua consult code (§NĐ91): resolve nhánh consult →
+    suppress SĐT lead (source landing_optout, campaign_id NULL) + idempotent."""
+    h = admin_token_headers
+    phone = "0987755777"
+    lead_id = await _mk_lead(phone)
+    code = (
+        await client.post(f"{API}/leads/{lead_id}/consult-link", headers=h)
+    ).json()["code"]
+
+    # 1) opt-out lần đầu qua consult code → success, chưa từng opt-out
+    r1 = await client.post(f"{PUB}/opt-out", json={"code": code})
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["success"] is True
+    assert r1.json()["already_opted_out"] is False
+
+    # DB: sms_opt_out ghi đúng phone lead, source landing_optout, campaign NULL
+    async with AsyncSessionLocal() as s:
+        row = (
+            await s.execute(
+                text(
+                    "SELECT source, campaign_id FROM sms_opt_out "
+                    "WHERE phone_normalized=:p"
+                ),
+                {"p": phone},
+            )
+        ).first()
+    assert row is not None, "opt-out qua consult code KHÔNG suppress SĐT (NĐ91)"
+    assert row[0] == "landing_optout" and row[1] is None
+
+    # 2) opt-out lại (idempotent) → already_opted_out=True, KHÔNG tạo bản trùng
+    r2 = await client.post(f"{PUB}/opt-out", json={"code": code})
+    assert r2.status_code == 200
+    assert r2.json()["already_opted_out"] is True
+    async with AsyncSessionLocal() as s:
+        cnt = (
+            await s.execute(
+                text("SELECT count(*) FROM sms_opt_out WHERE phone_normalized=:p"),
+                {"p": phone},
+            )
+        ).scalar()
+    assert cnt == 1
+
+
 async def test_consult_requires_auth(client: AsyncClient):
     assert (
         await client.post(f"{API}/leads/1/consult-link")

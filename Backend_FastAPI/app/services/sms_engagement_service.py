@@ -101,18 +101,11 @@ class SmsEngagementService:
             {
                 "contact_id": resolved.contact_id,
                 "source_type": resolved.kind,  # "campaign" | "consult"
-                "recipient_id": (
-                    resolved.recipient.id
-                    if resolved.kind == "campaign" else None
-                ),
-                "campaign_id": (
-                    resolved.campaign.id
-                    if resolved.kind == "campaign" else None
-                ),
-                "consult_link_id": (
-                    resolved.consult.id
-                    if resolved.kind == "consult" else None
-                ),
+                # ResolvedCode để None sẵn nhánh không khớp → truthiness object là
+                # đủ (không cần so chuỗi kind).
+                "recipient_id": resolved.recipient.id if resolved.recipient else None,
+                "campaign_id": resolved.campaign.id if resolved.campaign else None,
+                "consult_link_id": resolved.consult.id if resolved.consult else None,
                 "session_token_hash": compute_session_token_hash(raw_token),
                 "started_at": now,
                 "last_heartbeat_at": now,

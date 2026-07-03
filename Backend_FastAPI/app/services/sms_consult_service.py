@@ -19,7 +19,7 @@ from app import models
 from app.repositories.sms_contact_repository import SmsContactRepository
 from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.schemas import sms as sms_schemas
-from app.utils.exceptions import ValidationError
+from app.utils.exceptions import ConflictError, ValidationError
 from app.utils.phone_helpers import (
     is_vietnam_mobile,
     normalize_and_validate_vietnam_phone,
@@ -32,6 +32,10 @@ from app.utils.sms_token import (
     generate_short_code,
 )
 
+# Số lần sinh lại short code khi trúng UNIQUE token_hash (collision base62×9
+# ~2^54 cực hiếm). Đối xứng _TOKEN_RETRY của sms_campaign_service.
+_TOKEN_RETRY = 5
+
 
 class SmsConsultService:
     """Officer consult link + lead interests (Phase 2 §16)."""
@@ -42,25 +46,26 @@ class SmsConsultService:
         self.engagement_repo = SmsEngagementRepository(db)
 
     @staticmethod
-    def _normalize_lead_phone(phone: Optional[str]) -> str:
-        """(normalized) cho số di động lead — raise ValidationError nếu không
-        phải di động VN hợp lệ (không tạo consult link cho số rác)."""
+    def _normalize_lead_phone(phone: Optional[str]) -> tuple[str, str]:
+        """(normalized, international) cho số di động lead — raise ValidationError
+        nếu không phải di động VN hợp lệ (không tạo consult link cho số rác)."""
         normalized, valid = normalize_and_validate_vietnam_phone(phone)
         if not valid or not normalized or not is_vietnam_mobile(normalized):
             raise ValidationError(
                 detail="Lead chưa có số di động hợp lệ để tạo link tư vấn."
             )
-        return normalized
+        return normalized, to_zalo_phone(normalized)
 
     async def create_consult_link(
         self, lead: models.Lead, current_user: models.User
     ) -> sms_schemas.SmsConsultLinkResponse:
         # Prod bắt buộc secret hash mạnh + base URL hợp lệ (link công khai).
         ensure_token_secrets_configured()
-        normalized = self._normalize_lead_phone(lead.phone)
+        normalized, international = self._normalize_lead_phone(lead.phone)
 
         # Match contact theo phone (khóa thống nhất); chưa có → tạo (consent
-        # unknown — consult không tự cấp consent marketing §16.5).
+        # unknown — consult không tự cấp consent marketing §16.5). phone_raw giữ
+        # số gốc lead để đồng nhất với contact tạo qua endpoint thường.
         contact = await self.contact_repo.get_contact_by_phone(normalized)
         if contact is None:
             try:
@@ -68,8 +73,9 @@ class SmsConsultService:
                     contact = await self.contact_repo.create_contact(
                         {
                             "full_name": (lead.full_name or "Lead")[:255],
+                            "phone_raw": (lead.phone or "").strip()[:32] or None,
                             "phone_normalized": normalized,
-                            "phone_international": to_zalo_phone(normalized),
+                            "phone_international": international,
                             "source_label": "lead_consult",
                             "created_by_id": getattr(current_user, "id", None),
                         }
@@ -82,10 +88,10 @@ class SmsConsultService:
                 if contact is None:
                     raise
 
-        # Retry sinh code nếu token_hash trùng (collision base62×9 ~2^54 cực
-        # hiếm; đối xứng retry của campaign build) → tránh IntegrityError→500.
-        consult = None
-        for attempt in range(5):
+        # Sinh short code, retry CHỈ khi trúng UNIQUE token_hash (collision
+        # base62×9 ~2^54 cực hiếm); lỗi Integrity khác → re-raise ngay. Đối xứng
+        # sms_campaign_service (for…else + hằng + check tên constraint).
+        for _attempt in range(_TOKEN_RETRY):
             code = generate_short_code()
             try:
                 async with self.db.begin_nested():
@@ -99,9 +105,13 @@ class SmsConsultService:
                         }
                     )
                 break
-            except IntegrityError:
-                if attempt == 4:
+            except IntegrityError as exc:
+                if "uq_sms_consult_link_token_hash" not in str(exc.orig):
                     raise
+        else:
+            raise ConflictError(
+                detail="Không sinh được mã tư vấn (trùng token), vui lòng thử lại."
+            )
         return sms_schemas.SmsConsultLinkResponse(
             code=code,
             url=build_link(code),

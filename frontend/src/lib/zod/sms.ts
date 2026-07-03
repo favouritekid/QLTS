@@ -119,7 +119,7 @@ export type SmsConsultLinkResponse = z.infer<
 
 export const smsLeadInterestResponseSchema = z.object({
   lead_id: z.number().int(),
-  contact_id: z.number().int().nullable().optional(),
+  contact_id: z.number().int().nullable(),
   items: z.array(smsContactInterestRowSchema).default([]),
 })
 export type SmsLeadInterestResponse = z.infer<

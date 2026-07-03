@@ -4,7 +4,7 @@
  * Endpoint gate `CasbinAuth` + `get_lead_for_user` IDOR ở BE (officer chỉ lead
  * được giao). FE thin-client: hiển thị, để BE gác quyền (403/404 → ẩn/lỗi).
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { AxiosError } from "axios"
 import { toast } from "sonner"
 
@@ -36,19 +36,17 @@ export function useLeadSmsInterests(leadId: number, enabled = true) {
 
 /** Tạo link tư vấn — trả code/url (component hiển thị + copy). */
 export function useCreateConsultLink() {
-  const queryClient = useQueryClient()
   return useMutation<
     SmsConsultLinkResponse,
     AxiosError<ApiErrorResponse>,
     number
   >({
     mutationFn: (leadId: number) => createSmsConsultLink(leadId),
-    onSuccess: (_data, leadId) => {
+    onSuccess: () => {
       toast.success("Đã tạo link tư vấn. Sao chép để gửi cho khách.")
-      // Interest có thể phát sinh sau khi khách bấm link — làm mới khi quay lại.
-      queryClient.invalidateQueries({
-        queryKey: smsConsultKeys.leadInterests(leadId),
-      })
+      // KHÔNG invalidate interest: interest chỉ phát sinh SAU khi khách bấm link
+      // (sự kiện tương lai) → refetch ngay không thể có dữ liệu mới; staleTime +
+      // refetch-on-mount lo khi officer quay lại lead.
     },
     onError: (err) => {
       toast.error(parseApiError(err, "Không thể tạo link tư vấn."))

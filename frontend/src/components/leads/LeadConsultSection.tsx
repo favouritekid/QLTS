@@ -1,7 +1,7 @@
 // src/components/leads/LeadConsultSection.tsx
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { toast } from "sonner"
 import {
   AlertCircle,
@@ -36,20 +36,15 @@ import {
  */
 export function LeadConsultSection({ leadId }: { leadId: number }) {
   const [expanded, setExpanded] = useState(false)
-  const { copied, copy, reset: resetCopied } = useCopyToClipboard()
+  const { copied, copy } = useCopyToClipboard()
 
   const { data, isLoading, isError, refetch, isFetching } =
     useLeadSmsInterests(leadId, expanded)
   const createLink = useCreateConsultLink()
   const link = createLink.data
 
-  // Đổi lead → reset link vừa tạo (tránh hiện link lead cũ trên lead mới) +
-  // copied. createLink.data là mutation-state không tự re-key theo leadId.
-  useEffect(() => {
-    createLink.reset()
-    resetCopied()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadId])
+  // Reset link/copied/expanded khi đổi lead do <LeadConsultSection key={leadId}>
+  // remount ở LeadDetailClient — không cần useEffect reset thủ công.
 
   const onCopy = async () => {
     if (!link) return
