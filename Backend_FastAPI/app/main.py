@@ -91,6 +91,7 @@ from .routers import (
     sms_reports,  # ✅ SMS MARKETING: reports/dashboard (routes PR-5)
     sms_public,  # ✅ SMS MARKETING: public landing + opt-out (routes PR-5)
     sms_shortlink,  # ✅ SMS MARKETING: /r/{code} resolver (routes PR-5)
+    sms_consult,  # ✅ SMS MARKETING: consult officer (routes P2-3)
     users,
     zalo_webhooks,  # ✅ PHASE C1: Zalo webhook receiver
     zalo_bot_link,  # ✅ v5 Step 19: staff Zalo Bot link API
@@ -923,6 +924,7 @@ fastapi_app.include_router(sms_export.router)
 fastapi_app.include_router(sms_reports.router)
 fastapi_app.include_router(sms_public.router)
 fastapi_app.include_router(sms_shortlink.router)
+fastapi_app.include_router(sms_consult.router)
 fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api")
 # ✅ FINANCE MODULE: Phase 4 - API Layer

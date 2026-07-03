@@ -14,6 +14,8 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+
+from app.utils.tz import ensure_aware
 from typing import Callable, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,8 +49,7 @@ _EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported", "handed_off"}
 _REGENERATE_BATCH_STATUS = {"pending", "failed", "purged", "invalidated"}
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 def _carrier_label(carrier_bucket: str) -> str:

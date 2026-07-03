@@ -17,6 +17,7 @@ from .marketing_consent_event import SmsMarketingConsentEvent
 from .landing_session import SmsLandingSession
 from .program_view import SmsProgramView
 from .contact_program_interest import SmsContactProgramInterest
+from .consult_link import SmsConsultLink  # P2-3 consult officer
 
 __all__ = [
     "SmsContactGroup",
@@ -35,4 +36,5 @@ __all__ = [
     "SmsLandingSession",
     "SmsProgramView",
     "SmsContactProgramInterest",
+    "SmsConsultLink",
 ]

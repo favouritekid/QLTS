@@ -38,6 +38,7 @@ from app.utils.exceptions import (
 from app.utils.phone_helpers import (
     is_vietnam_mobile,
     normalize_vietnam_phone,
+    normalize_vn_mobile,
     to_zalo_phone,
 )
 
@@ -179,13 +180,12 @@ class SmsContactService:
     def _normalize_mobile(self, phone_raw: str) -> Tuple[str, str]:
         """Normalize + ép mobile-only. Trả (normalized, international).
         Raise ValidationError nếu không phải di động VN hợp lệ."""
-        normalized = normalize_vietnam_phone(phone_raw)
-        if not normalized or not is_vietnam_mobile(normalized):
+        result = normalize_vn_mobile(phone_raw)
+        if result is None:
             raise ValidationError(
                 detail="Số điện thoại không hợp lệ (chỉ nhận di động VN)"
             )
-        international = to_zalo_phone(normalized)
-        return normalized, international
+        return result
 
     async def create_contact(
         self, data: sms_schemas.SmsContactCreate, user

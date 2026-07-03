@@ -13,6 +13,8 @@ interest + report. Xem SMS_MARKETING_MODULE_DESIGN.md §16.
 """
 import logging
 from datetime import datetime, timezone
+
+from app.utils.tz import ensure_aware
 from typing import Mapping, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,28 +23,26 @@ from app.config import settings
 from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.schemas import sms as sms_schemas
+from app.services.sms_resolve import GENERIC_404, resolve_code
 from app.utils.exceptions import ResourceNotFoundError
 from app.utils.sms_bot import detect_bot
 from app.utils.sms_interest import compute_interest_score
 from app.utils.sms_token import (
     compute_ip_hash,
     compute_session_token_hash,
-    compute_token_hash,
     generate_session_token,
     is_valid_code,
 )
 
 log = logging.getLogger(__name__)
 
-_GENERIC_404 = "Liên kết không hợp lệ hoặc đã hết hạn"
 # Dung sai clamp dwell: cho phép dwell client báo vượt thời gian thực đã trôi
 # tối đa ngần này (bù lệch đồng hồ + độ trễ heartbeat cuối). Chống client gửi
 # dwell_seconds khổng lồ (thổi phồng interest).
 _HEARTBEAT_GRACE_SECONDS = 30
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 class SmsEngagementService:
@@ -52,24 +52,6 @@ class SmsEngagementService:
         self.db = db
         self.repo = SmsEngagementRepository(db)
         self.tracking_repo = SmsTrackingRepository(db)
-
-    # ---------------------------------------------------------------
-    # Resolve code → recipient + campaign (mirror landing/tracking)
-    # ---------------------------------------------------------------
-    async def _resolve_recipient(self, code: str):
-        if not is_valid_code(code):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        found = await self.tracking_repo.lookup_by_token_hash(
-            compute_token_hash(code)
-        )
-        if found is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        recipient, campaign = found
-        if campaign.link_expires_at and _aware(
-            campaign.link_expires_at
-        ) <= datetime.now(timezone.utc):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
-        return recipient, campaign
 
     async def _resolve_session(self, session_token: str):
         """Session theo token hash (bearer). None → 404 generic.
@@ -83,12 +65,12 @@ class SmsEngagementService:
         chặn theo expiry ở đây. `code` path chỉ validate format (routing)."""
         token = (session_token or "").strip()
         if not token:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         session = await self.repo.get_session_by_token_hash(
             compute_session_token_hash(token)
         )
         if session is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         return session
 
     # ---------------------------------------------------------------
@@ -102,11 +84,14 @@ class SmsEngagementService:
         user_agent: Optional[str],
         headers: Optional[Mapping[str, str]] = None,
     ) -> sms_schemas.SmsSessionStartResponse:
-        recipient, campaign = await self._resolve_recipient(code)
-        # contact_id = khóa thống nhất gắn interest; NULL (contact đã xoá) →
-        # không quy được sở thích → 404 generic (measurement bỏ qua ca hiếm này).
-        if recipient.contact_id is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+        # Resolve mở rộng: recipient (campaign) HOẶC consult link (§16.7).
+        resolved = await resolve_code(
+            self.tracking_repo, code, enforce_expiry=True
+        )
+        # contact_id = khóa thống nhất gắn interest; NULL (recipient mất contact
+        # do xoá) → không quy được sở thích → 404 (ca hiếm; consult luôn có).
+        if resolved.contact_id is None:
+            raise ResourceNotFoundError(detail=GENERIC_404)
         now = datetime.now(timezone.utc)
         is_bot, _reason = detect_bot(
             user_agent=user_agent, headers=headers, now=now
@@ -114,10 +99,13 @@ class SmsEngagementService:
         raw_token = generate_session_token()
         session = await self.repo.create_session(
             {
-                "contact_id": recipient.contact_id,
-                "source_type": "campaign",
-                "recipient_id": recipient.id,
-                "campaign_id": campaign.id,
+                "contact_id": resolved.contact_id,
+                "source_type": resolved.kind,  # "campaign" | "consult"
+                # ResolvedCode để None sẵn nhánh không khớp → truthiness object là
+                # đủ (không cần so chuỗi kind).
+                "recipient_id": resolved.recipient.id if resolved.recipient else None,
+                "campaign_id": resolved.campaign.id if resolved.campaign else None,
+                "consult_link_id": resolved.consult.id if resolved.consult else None,
                 "session_token_hash": compute_session_token_hash(raw_token),
                 "started_at": now,
                 "last_heartbeat_at": now,
@@ -137,12 +125,12 @@ class SmsEngagementService:
         self, code: str, payload: sms_schemas.SmsProgramViewRequest
     ) -> sms_schemas.SmsProgramViewResponse:
         if not is_valid_code(code):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         session = await self._resolve_session(payload.session_token)
         program = await self.repo.get_active_program(payload.major_program_id)
         if program is None:
             # Ngành không tồn tại/không active → không đo (404 generic).
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         seq = await self.repo.next_sequence_no(session.id)
         view = await self.repo.create_program_view(
             {
@@ -167,13 +155,13 @@ class SmsEngagementService:
         self, code: str, payload: sms_schemas.SmsHeartbeatRequest
     ) -> sms_schemas.SmsHeartbeatResponse:
         if not is_valid_code(code):
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         session = await self._resolve_session(payload.session_token)
         view = await self.repo.get_program_view(
             payload.program_view_id, session.id
         )
         if view is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         now = datetime.now(timezone.utc)
         # Clamp: dwell ≤ thời gian thực đã trôi kể từ khi mở view + grace, và
         # đơn điệu tăng (heartbeat trễ/trùng không làm tụt). Chống thổi phồng.

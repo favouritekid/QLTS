@@ -193,3 +193,17 @@ def is_vietnam_mobile(phone_normalized: Optional[str]) -> bool:
     if not phone_normalized:
         return False
     return bool(VIETNAM_MOBILE_REGEX.match(phone_normalized))
+
+
+def normalize_vn_mobile(phone: Optional[str]) -> Optional[tuple[str, str]]:
+    """(normalized, international=84xxx) nếu là DI ĐỘNG VN hợp lệ; None nếu không.
+
+    Gộp normalize + ép mobile-only + dựng dạng quốc tế — dùng chung cho tạo
+    contact (``SmsContactService``) và consult-link (khoá thống nhất theo phone).
+    KHÔNG raise (giữ util thuần); caller tự raise domain exception với thông điệp
+    phù hợp ngữ cảnh.
+    """
+    normalized = normalize_vietnam_phone(phone)
+    if not normalized or not is_vietnam_mobile(normalized):
+        return None
+    return normalized, to_zalo_phone(normalized)

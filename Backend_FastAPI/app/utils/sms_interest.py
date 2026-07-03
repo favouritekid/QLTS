@@ -15,12 +15,13 @@ Nguồn: Dynamic Yield affinity + Dotdigital weighting curve. KHÔNG ML.
 Xem `Documents/SMS_MARKETING_MODULE_DESIGN.md` §18.F.
 """
 import math
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.utils.tz import ensure_aware
 from typing import Iterable, Tuple
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 def dwell_factor(dwell_seconds: int, cap: int) -> float:

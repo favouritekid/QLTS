@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.major_program import MajorProgram
 from app.models.sms import (
     SmsCampaignRecipient,
+    SmsConsultLink,
     SmsContactProgramInterest,
     SmsLandingSession,
     SmsProgramView,
@@ -32,6 +33,15 @@ class SmsEngagementRepository:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    # ---------------------------------------------------------------
+    # Consult link (P2-3 officer)
+    # ---------------------------------------------------------------
+    async def create_consult_link(self, fields: dict) -> SmsConsultLink:
+        row = SmsConsultLink(**fields)
+        self.db.add(row)
+        await self.db.flush()
+        return row
 
     # ---------------------------------------------------------------
     # Danh mục ngành (landing 2 tầng — tái dùng major_program active)

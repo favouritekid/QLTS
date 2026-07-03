@@ -661,6 +661,26 @@ class SmsContactInterestList(BaseModel):
     items: List[SmsContactInterestRow] = Field(default_factory=list)
 
 
+# --- P2-3 consult officer (§16.7) ---
+class SmsConsultLinkResponse(BaseModel):
+    """Trả sau `POST /leads/{id}/consult-link` — `code`/`url` raw TRẢ 1 LẦN để
+    officer copy gửi Zalo/tay. Server chỉ lưu token_hash."""
+
+    code: str
+    url: str
+    consult_link_id: int
+    contact_id: int
+
+
+class SmsLeadInterestResponse(BaseModel):
+    """Hồ sơ 'quan tâm ngành' của 1 LEAD (match qua phone → contact). Rỗng nếu
+    lead chưa có contact / chưa có tương tác landing."""
+
+    lead_id: int
+    contact_id: Optional[int] = None
+    items: List[SmsContactInterestRow] = Field(default_factory=list)
+
+
 class SmsPublicOptOutRequest(BaseModel):
     """Body opt-out công khai từ landing — chỉ mang bearer code (§19.3)."""
 

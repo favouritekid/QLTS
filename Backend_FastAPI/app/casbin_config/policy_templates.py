@@ -131,6 +131,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
+        # SMS consult officer (P2-3 §16.7) — tạo link tư vấn + xem interest ngành của lead.
+        # IDOR scope qua get_lead_for_user (officer chỉ lead được giao); manager kế thừa.
+        {"subject": "{role}", "object": "/api/sms/leads/{id}/consult-link", "action": "POST"},  # Tạo consult link
+        {"subject": "{role}", "object": "/api/sms/leads/{id}/interests", "action": "GET"},  # Interest ngành của lead
         # Admin users (read-only) — needed for officer filter bar and lead assignment dialog
         {"subject": "{role}", "object": "/api/admin/users", "action": "GET"},
         # Collaborators — GET for referrer dropdown, POST to propose new CTV (pending), GET detail

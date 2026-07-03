@@ -40,11 +40,16 @@ class SmsLandingSession(Base):
         Integer,
         ForeignKey("sms_campaign_recipient.id", ondelete="SET NULL"),
         nullable=True, index=True,
-        comment="nguồn campaign (NULL nếu consult — Phase 2 sau)",
+        comment="nguồn campaign (NULL nếu consult)",
     )
     campaign_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("sms_campaign.id", ondelete="SET NULL"),
         nullable=True, index=True,
+    )
+    consult_link_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("sms_consult_link.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="nguồn consult officer (NULL nếu campaign) — P2-3",
     )
     session_token_hash: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True,

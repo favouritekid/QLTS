@@ -29,7 +29,7 @@
  */
 
 import { cookies, headers as nextHeaders } from 'next/headers';
-import { redirect } from 'next/navigation';
+import { redirect, unstable_rethrow } from 'next/navigation';
 import type {
   Lead,
   LeadDetail,
@@ -136,9 +136,17 @@ async function serverFetch<T>(
     try {
       const cookieStore = await cookies();
       cookieHeader = cookieStore.toString();
-    } catch {
-      // Ignore if cookies() fails (e.g., inside "use cache" without explicit header)
-      // The request will likely fail with 401 later, which is expected behavior
+    } catch (err) {
+      // A thrown cookies() under cacheComponents is Next's dynamic-render BAILOUT
+      // signal, not a real error — rethrow it so the segment renders dynamically
+      // and the auth cookie IS forwarded. Swallowing it sends the request WITHOUT
+      // auth → 401, which callers then turn into a 404/broken render (the class of
+      // bug that made every SSR detail page — leads/[id], admissions/[id],
+      // admin/users/[id] — 404 on direct load). unstable_rethrow only re-throws
+      // framework control-flow (bailout/redirect/notFound); genuine cookies()
+      // failures (e.g. inside "use cache" without an explicit header) fall through
+      // and the request fails with 401 downstream as before.
+      unstable_rethrow(err);
     }
   }
 
@@ -169,7 +177,10 @@ async function serverFetch<T>(
       // sets X-Real-IP, so a fallback would only ever fire off-nginx anyway.
       const realIp = inbound.get('x-real-ip');
       if (realIp) headers['X-Real-IP'] = realIp;
-    } catch {
+    } catch (err) {
+      // Rethrow Next's dynamic-render bailout (see the cookies() catch above);
+      // only a genuine headers()-unavailable case should be swallowed.
+      unstable_rethrow(err);
       // headers() unavailable (e.g. inside a "use cache" scope, ISR, or
       // generateMetadata) — leave X-Real-IP unset; the backend then keys on this
       // container's IP. ⚠️ INVARIANT: any get_client_ip-keyed (ENFORCED) endpoint
