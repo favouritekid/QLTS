@@ -36,8 +36,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 
 import { useVerifyPayment, useRejectPayment } from "@/hooks/finance/usePayments"
-import { useInvoiceVietQR } from "@/hooks/finance/useInvoices"
-import { AmountDisplay, VietQRDisplay } from "@/components/finance"
+import { AmountDisplay, InvoiceVietQR } from "@/components/finance"
 
 import { PaymentRecordDialog } from "../[invoiceId]/_components/PaymentRecordDialog"
 import { InvoiceIssueDialog } from "../[invoiceId]/_components/InvoiceIssueDialog"
@@ -335,8 +334,6 @@ function InvoiceQRDialog({
   invoiceNumber: string
   onClose: () => void
 }) {
-  const { data, isLoading, error, refetch } = useInvoiceVietQR(invoiceId)
-
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-sm">
@@ -346,12 +343,7 @@ function InvoiceQRDialog({
             Quét mã hoặc sao chép thông tin để chuyển khoản học phí.
           </DialogDescription>
         </DialogHeader>
-        <VietQRDisplay
-          data={data}
-          isLoading={isLoading}
-          error={error}
-          onRetry={() => refetch()}
-        />
+        <InvoiceVietQR invoiceId={invoiceId} />
       </DialogContent>
     </Dialog>
   )

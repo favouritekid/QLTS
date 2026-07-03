@@ -821,6 +821,28 @@ export const INVOICE_STATUS_VARIANTS: Record<InvoiceStatus, "default" | "seconda
   overdue: "destructive",
 }
 
+/**
+ * Trạng thái hóa đơn "còn thu được" (đã phát hành, chưa tất toán/hủy) — mirror
+ * backend PAYABLE_INVOICE_STATUSES. Chỉ các trạng thái này mới ghi nhận thanh
+ * toán / sinh được VietQR. Nguồn DUY NHẤT cho mọi nơi FE lọc hóa đơn payable
+ * (thay vì mỗi chỗ khai báo lại một literal set).
+ */
+export const PAYABLE_INVOICE_STATUSES: readonly InvoiceStatus[] = [
+  "issued",
+  "partial",
+  "overdue",
+]
+
+/** Hóa đơn còn phải thu: đã phát hành (issued/partial/overdue) VÀ còn dư nợ > 0. */
+export function isInvoicePayable(
+  invoice: Pick<Invoice, "status" | "remaining_amount">,
+): boolean {
+  return (
+    PAYABLE_INVOICE_STATUSES.includes(invoice.status) &&
+    parseFloat(invoice.remaining_amount) > 0
+  )
+}
+
 export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
   pending: "Chờ xác minh",
   verified: "Đã xác minh",

@@ -6,6 +6,8 @@ import { FeeQRTransferDialog } from "./FeeQRTransferDialog"
 const useInvoicesByFee = vi.fn()
 const useInvoiceVietQR = vi.fn()
 
+// FeeQRTransferDialog resolve hóa đơn qua useInvoicesByFee; khối hiển thị QR
+// (InvoiceVietQR) gọi useInvoiceVietQR(invoiceId). Mock chung 1 module.
 vi.mock("@/hooks/finance/useInvoices", () => ({
   useInvoicesByFee: (...args: unknown[]) => useInvoicesByFee(...args),
   useInvoiceVietQR: (...args: unknown[]) => useInvoiceVietQR(...args),
@@ -54,6 +56,9 @@ describe("FeeQRTransferDialog", () => {
   beforeEach(() => {
     useInvoicesByFee.mockReset()
     useInvoiceVietQR.mockReset()
+    // Defaults so a test that only cares about one hook doesn't crash on the
+    // other's destructure (both return the loaded/empty shape unless overridden).
+    useInvoicesByFee.mockReturnValue({ data: [], isLoading: false, error: null })
     useInvoiceVietQR.mockReturnValue({
       data: fakeVietQR,
       isLoading: false,
@@ -76,10 +81,8 @@ describe("FeeQRTransferDialog", () => {
     expect(await screen.findByAltText("VietQR")).toBeInTheDocument()
     // Single installment → no picker.
     expect(screen.queryByText(/chọn đợt thanh toán/i)).not.toBeInTheDocument()
-    // Auto-selected the payable invoice id for the QR query.
-    await waitFor(() =>
-      expect(useInvoiceVietQR).toHaveBeenCalledWith(701, expect.objectContaining({ enabled: true }))
-    )
+    // The QR block is queried for the single payable invoice (id 701).
+    await waitFor(() => expect(useInvoiceVietQR).toHaveBeenCalledWith(701))
   })
 
   it("filters out draft / paid / cancelled invoices (no payable → empty notice)", () => {
@@ -101,9 +104,11 @@ describe("FeeQRTransferDialog", () => {
 
     expect(screen.getByText(/chưa có hóa đơn cần thanh toán/i)).toBeInTheDocument()
     expect(screen.queryByAltText("VietQR")).not.toBeInTheDocument()
+    // No payable → QR block never renders → its query is never fired.
+    expect(useInvoiceVietQR).not.toHaveBeenCalledWith(expect.any(Number))
   })
 
-  it("renders an installment picker when there are multiple payable invoices", () => {
+  it("renders the installment picker and defaults to the first payable installment", async () => {
     useInvoicesByFee.mockReturnValue({
       data: [
         makeInvoice({ id: 701, installment_no: 1, status: "partial", remaining_amount: "4000000" }),
@@ -117,6 +122,43 @@ describe("FeeQRTransferDialog", () => {
       <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
     )
 
+    // Picker present. Radix Select options render in a portal (unreliable in
+    // JSDOM), so per project convention we assert the trigger + the default
+    // selection instead of opening the dropdown and clicking an option.
     expect(screen.getByText(/chọn đợt thanh toán/i)).toBeInTheDocument()
+    expect(screen.getByRole("combobox")).toBeInTheDocument()
+    // Defaults to the FIRST payable installment (701) for the QR, not 702.
+    await waitFor(() => expect(useInvoiceVietQR).toHaveBeenCalledWith(701))
+    expect(useInvoiceVietQR).not.toHaveBeenCalledWith(702)
+  })
+
+  it("shows a distinct error notice (not the empty state) when the by-fee request fails", () => {
+    useInvoicesByFee.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("boom"),
+    })
+
+    render(
+      <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
+    )
+
+    expect(screen.getByText(/không thể tải hóa đơn/i)).toBeInTheDocument()
+    // Must NOT collapse into the "settled/not issued" empty message.
+    expect(screen.queryByText(/chưa có hóa đơn cần thanh toán/i)).not.toBeInTheDocument()
+    expect(screen.queryByAltText("VietQR")).not.toBeInTheDocument()
+  })
+
+  it("shows the loading skeleton while invoices are being fetched", () => {
+    useInvoicesByFee.mockReturnValue({ data: undefined, isLoading: true, error: null })
+
+    render(
+      <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
+    )
+
+    // Neither terminal state renders during load.
+    expect(screen.queryByText(/chưa có hóa đơn cần thanh toán/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/không thể tải hóa đơn/i)).not.toBeInTheDocument()
+    expect(screen.queryByAltText("VietQR")).not.toBeInTheDocument()
   })
 })

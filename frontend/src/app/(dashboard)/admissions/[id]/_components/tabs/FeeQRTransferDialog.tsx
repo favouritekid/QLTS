@@ -8,7 +8,7 @@
  * (nav + proxy chặn), nhưng vẫn cần đưa mã QR cho phụ huynh chuyển khoản học
  * phí. Backend đã cấp officer quyền đọc `GET /api/invoices/by-fee/{fee_id}` và
  * `GET /api/invoices/{id}/vietqr`, nên dialog này thuần FE: từ `feeId` resolve
- * hóa đơn còn phải trả rồi tái dùng `VietQRDisplay`.
+ * hóa đơn còn phải trả rồi tái dùng `InvoiceVietQR`.
  *
  * QR chỉ là thông tin chuyển khoản read-only (KHÔNG phải thao tác ghi nhận
  * thanh toán) nên không gate theo role — mọi ai xem được tab đều dùng được.
@@ -31,21 +31,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { VietQRDisplay } from "@/components/finance"
-import { useInvoicesByFee, useInvoiceVietQR } from "@/hooks/finance/useInvoices"
+import { InvoiceVietQR } from "@/components/finance"
+import { useInvoicesByFee } from "@/hooks/finance/useInvoices"
 import { formatVND } from "@/lib/zod/finance"
-import type { Invoice } from "@/types/finance.types"
-
-// Mirror backend PAYABLE_INVOICE_STATUSES — chỉ hóa đơn đã phát hành và còn nợ
-// mới sinh được VietQR (BE cũng chặn draft/cancelled/paid ở endpoint /vietqr).
-const PAYABLE_STATUSES: ReadonlyArray<Invoice["status"]> = ["issued", "partial", "overdue"]
-
-function isPayable(invoice: Invoice): boolean {
-  return (
-    PAYABLE_STATUSES.includes(invoice.status) &&
-    parseFloat(invoice.remaining_amount) > 0
-  )
-}
+import { isInvoicePayable } from "@/types/finance.types"
 
 interface FeeQRTransferDialogProps {
   feeId: number
@@ -68,29 +57,19 @@ export function FeeQRTransferDialog({
   } = useInvoicesByFee(feeId, { enabled: open })
 
   const payable = React.useMemo(
-    () => (invoices ?? []).filter(isPayable),
+    () => (invoices ?? []).filter(isInvoicePayable),
     [invoices],
   )
 
-  // Đợt đang chọn. Mặc định đợt payable đầu tiên; reset khi đóng dialog hoặc khi
-  // tập hóa đơn đổi (mở lại cho khoản phí khác).
-  const [selectedId, setSelectedId] = React.useState<number | null>(null)
-  React.useEffect(() => {
-    if (!open) {
-      setSelectedId(null)
-      return
-    }
-    if (selectedId === null || !payable.some((inv) => inv.id === selectedId)) {
-      setSelectedId(payable[0]?.id ?? null)
-    }
-  }, [open, payable, selectedId])
-
-  const {
-    data: vietqr,
-    isLoading: vietqrLoading,
-    error: vietqrError,
-    refetch: refetchVietQR,
-  } = useInvoiceVietQR(selectedId ?? 0, { enabled: open && !!selectedId })
+  // Đợt người dùng chọn thủ công (null = chưa chọn). Giá trị hiệu lực suy ra
+  // THẲNG khi render (đợt đã chọn nếu còn hợp lệ, ngược lại đợt payable đầu) —
+  // không auto-select bằng useEffect nên tránh 1-frame trống / uncontrolled-flip
+  // và không có state-write-in-effect. State tự mất khi dialog unmount lúc đóng.
+  const [manualSelectedId, setManualSelectedId] = React.useState<number | null>(null)
+  const selectedId =
+    manualSelectedId !== null && payable.some((inv) => inv.id === manualSelectedId)
+      ? manualSelectedId
+      : (payable[0]?.id ?? null)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -110,18 +89,20 @@ export function FeeQRTransferDialog({
           </div>
         ) : invoicesError ? (
           <EmptyNotice text="Không thể tải hóa đơn của khoản phí này. Vui lòng thử lại." />
-        ) : payable.length === 0 ? (
+        ) : selectedId === null ? (
           <EmptyNotice text="Chưa có hóa đơn cần thanh toán. Hóa đơn có thể chưa được phát hành hoặc khoản phí đã thu đủ." />
         ) : (
           <div className="space-y-3">
             {payable.length > 1 && (
               <div className="space-y-1.5">
-                <span className="text-sm text-muted-foreground">Chọn đợt thanh toán</span>
+                <span id="fee-qr-installment-label" className="text-sm text-muted-foreground">
+                  Chọn đợt thanh toán
+                </span>
                 <Select
-                  value={selectedId ? String(selectedId) : undefined}
-                  onValueChange={(v) => setSelectedId(Number(v))}
+                  value={String(selectedId)}
+                  onValueChange={(v) => setManualSelectedId(Number(v))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-labelledby="fee-qr-installment-label">
                     <SelectValue placeholder="Chọn đợt..." />
                   </SelectTrigger>
                   <SelectContent>
@@ -134,12 +115,7 @@ export function FeeQRTransferDialog({
                 </Select>
               </div>
             )}
-            <VietQRDisplay
-              data={vietqr}
-              isLoading={vietqrLoading}
-              error={vietqrError}
-              onRetry={() => refetchVietQR()}
-            />
+            <InvoiceVietQR invoiceId={selectedId} />
           </div>
         )}
       </DialogContent>

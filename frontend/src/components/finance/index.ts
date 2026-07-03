@@ -44,6 +44,7 @@ export {
 // Cross-reference components
 export { FeeStatusLink, type FeeStatusLinkProps } from "./FeeStatusLink"
 export { VietQRDisplay } from "./VietQRDisplay"
+export { InvoiceVietQR } from "./InvoiceVietQR"
 
 // Invoice components
 export { InvoiceTable, type InvoiceTableProps } from "./InvoiceTable"
