@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen, waitFor } from "@/test/utils/test-utils"
+import { fireEvent, render, screen, waitFor } from "@/test/utils/test-utils"
 
 import { FeeQRTransferDialog } from "./FeeQRTransferDialog"
 
@@ -87,6 +87,38 @@ describe("FeeQRTransferDialog", () => {
     expect(screen.queryByText(/chọn đợt thanh toán/i)).not.toBeInTheDocument()
     // The QR block is queried for the single payable invoice (id 701).
     await waitFor(() => expect(useInvoiceVietQR).toHaveBeenCalledWith(701))
+    // Officer can share the QR to the student.
+    expect(
+      screen.getByRole("button", { name: /chia sẻ mã qr/i })
+    ).toBeInTheDocument()
+  })
+
+  it("falls back to downloading the QR image when Web Share is unavailable", async () => {
+    useInvoicesByFee.mockReturnValue({
+      data: [makeInvoice()],
+      isLoading: false,
+      error: null,
+    })
+    // jsdom has no Web Share (navigator.canShare), so ShareQRButton hits the
+    // download fallback: it must create (and revoke) a blob URL for the PNG.
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:mock")
+    const revokeObjectURL = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {})
+
+    render(
+      <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
+    )
+
+    fireEvent.click(await screen.findByRole("button", { name: /chia sẻ mã qr/i }))
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
+    expect(revokeObjectURL).toHaveBeenCalled()
+
+    createObjectURL.mockRestore()
+    revokeObjectURL.mockRestore()
   })
 
   it("filters out draft / paid / cancelled invoices (no payable → empty notice)", () => {
