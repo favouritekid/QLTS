@@ -417,6 +417,7 @@ export interface VietQRBankAccount {
   bank_bin: string
   account_number: string
   account_name: string
+  bank_name: string
 }
 
 export interface VietQRResponse {

@@ -1162,6 +1162,9 @@ class VietQRBankAccount(BaseModel):
     bank_bin: str
     account_number: str
     account_name: str
+    # Tên ngân hàng đầy đủ (BE resolve từ bank_bin) — nguồn duy nhất; FE chỉ
+    # render, không tự map BIN→tên.
+    bank_name: str
 
 
 class VietQRResponse(BaseModel):

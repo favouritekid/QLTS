@@ -17,11 +17,17 @@ vi.mock("@/hooks/finance/useInvoices", () => ({
   useInvoiceVietQR,
 }))
 
-// Thẻ QR vẽ bằng canvas (không chạy trong jsdom) → mock trả blob giả để test
-// luồng chia sẻ / tải ảnh mà không phụ thuộc canvas thật.
-vi.mock("@/lib/finance/qr-card", () => ({
-  renderVietQRCard: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+// Thẻ QR vẽ bằng canvas (không chạy jsdom); downloadBlob + sonner cũng mock để
+// test luồng chia sẻ/tải mà không đụng canvas / URL / toast thật. Dùng vi.hoisted
+// và RE-ESTABLISH trong beforeEach (vitest.config mockReset:true wipe impl mỗi test).
+const { renderVietQRCard, downloadBlob, toast } = vi.hoisted(() => ({
+  renderVietQRCard: vi.fn(),
+  downloadBlob: vi.fn(),
+  toast: { success: vi.fn(), error: vi.fn() },
 }))
+vi.mock("@/lib/finance/qr-card", () => ({ renderVietQRCard }))
+vi.mock("@/lib/utils/download-blob", () => ({ downloadBlob }))
+vi.mock("sonner", () => ({ toast }))
 
 const fakeVietQR = {
   qr_payload: "00020101...",
@@ -30,6 +36,7 @@ const fakeVietQR = {
     bank_bin: "970436",
     account_number: "123456789",
     account_name: "TRUONG ABC",
+    bank_name: "Ngân hàng TMCP Ngoại thương Việt Nam (Vietcombank)",
   },
   amount: "10000000",
   content: "HS-000178 thanh toan hoc phi",
@@ -66,6 +73,10 @@ describe("FeeQRTransferDialog", () => {
   beforeEach(() => {
     useInvoicesByFee.mockReset()
     useInvoiceVietQR.mockReset()
+    renderVietQRCard.mockReset()
+    downloadBlob.mockReset()
+    toast.success.mockReset()
+    toast.error.mockReset()
     // Defaults so a test that only cares about one hook doesn't crash on the
     // other's destructure (both return the loaded/empty shape unless overridden).
     useInvoicesByFee.mockReturnValue({ data: [], isLoading: false, error: null })
@@ -75,6 +86,8 @@ describe("FeeQRTransferDialog", () => {
       error: null,
       refetch: vi.fn(),
     })
+    // Re-establish (mockReset wiped the hoisted impl): render a valid blob.
+    renderVietQRCard.mockResolvedValue(new Blob(["png"], { type: "image/png" }))
   })
 
   it("shows the VietQR image for a single payable invoice and selects it", async () => {
@@ -99,20 +112,12 @@ describe("FeeQRTransferDialog", () => {
     ).toBeInTheDocument()
   })
 
-  it("falls back to downloading the QR image when Web Share is unavailable", async () => {
+  it("downloads the QR card with the right filename when Web Share is unavailable", async () => {
     useInvoicesByFee.mockReturnValue({
       data: [makeInvoice()],
       isLoading: false,
       error: null,
     })
-    // jsdom has no Web Share (navigator.canShare), so ShareQRButton hits the
-    // download fallback: it must create (and revoke) a blob URL for the PNG.
-    const createObjectURL = vi
-      .spyOn(URL, "createObjectURL")
-      .mockReturnValue("blob:mock")
-    const revokeObjectURL = vi
-      .spyOn(URL, "revokeObjectURL")
-      .mockImplementation(() => {})
 
     render(
       <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
@@ -120,11 +125,63 @@ describe("FeeQRTransferDialog", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /chia sẻ mã qr/i }))
 
-    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
-    expect(revokeObjectURL).toHaveBeenCalled()
+    // jsdom has no navigator.canShare → fallback tải file qua helper chung, tên
+    // theo số TK.
+    await waitFor(() =>
+      expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "vietqr-123456789.png")
+    )
+    expect(toast.success).toHaveBeenCalled()
+  })
 
-    createObjectURL.mockRestore()
-    revokeObjectURL.mockRestore()
+  it("shows an error toast and does NOT download when card rendering fails", async () => {
+    useInvoicesByFee.mockReturnValue({
+      data: [makeInvoice()],
+      isLoading: false,
+      error: null,
+    })
+    renderVietQRCard.mockRejectedValueOnce(new Error("canvas fail"))
+
+    render(
+      <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
+    )
+
+    fireEvent.click(await screen.findByRole("button", { name: /chia sẻ mã qr/i }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(downloadBlob).not.toHaveBeenCalled()
+  })
+
+  it("uses Web Share when available; user-cancel is silent (no download, no error)", async () => {
+    useInvoicesByFee.mockReturnValue({
+      data: [makeInvoice()],
+      isLoading: false,
+      error: null,
+    })
+    const share = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("cancelled"), { name: "AbortError" }))
+    const canShare = vi.fn().mockReturnValue(true)
+    const origNavigator = globalThis.navigator
+    Object.defineProperty(globalThis, "navigator", {
+      value: Object.assign(Object.create(origNavigator), { canShare, share }),
+      configurable: true,
+    })
+    try {
+      render(
+        <FeeQRTransferDialog feeId={501} feeLabel="Học phí — HK1" open onOpenChange={vi.fn()} />
+      )
+      fireEvent.click(await screen.findByRole("button", { name: /chia sẻ mã qr/i }))
+
+      await waitFor(() => expect(share).toHaveBeenCalled())
+      // User huỷ share sheet (AbortError) → KHÔNG rơi xuống tải + KHÔNG toast lỗi.
+      expect(downloadBlob).not.toHaveBeenCalled()
+      expect(toast.error).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(globalThis, "navigator", {
+        value: origNavigator,
+        configurable: true,
+      })
+    }
   })
 
   it("filters out draft / paid / cancelled invoices (no payable → empty notice)", () => {

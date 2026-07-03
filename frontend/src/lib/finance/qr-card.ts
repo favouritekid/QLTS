@@ -7,50 +7,12 @@
  * / nội dung CK (chứa tên học viên = PII) ra bên thứ ba. Mã QR "trần" do backend
  * render (`VietQRResponse.qr_image_base64`) chỉ có ô QR — thiếu số tiền / tên
  * chủ TK / ngân hàng nên học viên ít tin tưởng khi quét. Thẻ này bổ sung các
- * thông tin đó quanh mã QR.
+ * thông tin đó quanh mã QR. Tên ngân hàng lấy từ `bank_account.bank_name` do BE
+ * trả (nguồn duy nhất) — FE không tự map BIN→tên.
  */
 
 import { formatVND } from "@/lib/zod/finance"
 import type { VietQRResponse } from "@/types/finance.types"
-
-// BIN (Napas) → tên ngân hàng đầy đủ. Trường thường dùng 1 ngân hàng cố định
-// nên chỉ cần phủ các ngân hàng phổ biến; BIN lạ rơi về nhãn "BIN xxxxxx".
-const BANK_NAMES: Record<string, string> = {
-  "970436": "Ngân hàng TMCP Ngoại thương Việt Nam (Vietcombank)",
-  "970418": "Ngân hàng TMCP Đầu tư và Phát triển Việt Nam (BIDV)",
-  "970405": "Ngân hàng Nông nghiệp và PTNT Việt Nam (Agribank)",
-  "970415": "Ngân hàng TMCP Công thương Việt Nam (VietinBank)",
-  "970422": "Ngân hàng TMCP Quân đội (MB)",
-  "970407": "Ngân hàng TMCP Kỹ thương Việt Nam (Techcombank)",
-  "970416": "Ngân hàng TMCP Á Châu (ACB)",
-  "970432": "Ngân hàng TMCP Việt Nam Thịnh Vượng (VPBank)",
-  "970423": "Ngân hàng TMCP Tiên Phong (TPBank)",
-  "970403": "Ngân hàng TMCP Sài Gòn Thương Tín (Sacombank)",
-  "970443": "Ngân hàng TMCP Sài Gòn - Hà Nội (SHB)",
-  "970431": "Ngân hàng TMCP Xuất Nhập khẩu Việt Nam (Eximbank)",
-  "970426": "Ngân hàng TMCP Hàng Hải Việt Nam (MSB)",
-  "970441": "Ngân hàng TMCP Quốc tế Việt Nam (VIB)",
-  "970448": "Ngân hàng TMCP Phương Đông (OCB)",
-  "970437": "Ngân hàng TMCP Phát triển TP.HCM (HDBank)",
-  "970429": "Ngân hàng TMCP Sài Gòn (SCB)",
-  "970409": "Ngân hàng TMCP Bắc Á (BacABank)",
-  "970425": "Ngân hàng TMCP An Bình (ABBANK)",
-  "970412": "Ngân hàng TMCP Đại Chúng Việt Nam (PVcomBank)",
-  "970440": "Ngân hàng TMCP Đông Nam Á (SeABank)",
-  "970419": "Ngân hàng TMCP Quốc Dân (NCB)",
-  "970433": "Ngân hàng TMCP Việt Nam Thương Tín (VietBank)",
-  "970438": "Ngân hàng TMCP Bảo Việt (BaoVietBank)",
-  "970406": "Ngân hàng TMCP Đông Á (DongABank)",
-  "970424": "Ngân hàng Shinhan Việt Nam (Shinhan Bank)",
-  "970430": "Ngân hàng TMCP Xăng dầu Petrolimex (PGBank)",
-  "970452": "Ngân hàng TMCP Kiên Long (KienLongBank)",
-  "970457": "Ngân hàng Woori Việt Nam (Woori Bank)",
-  "970454": "Ngân hàng TMCP Bản Việt (BVBank)",
-}
-
-export function bankNameFromBin(bin: string): string {
-  return BANK_NAMES[bin] ?? `Ngân hàng (BIN ${bin})`
-}
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -111,7 +73,7 @@ export async function renderVietQRCard(data: VietQRResponse): Promise<Blob> {
     { text: `Nội dung CK: ${data.content}` },
     { text: `Tên chủ TK: ${data.bank_account.account_name}` },
     { text: `Số TK: ${data.bank_account.account_number}`, strong: true },
-    { text: bankNameFromBin(data.bank_account.bank_bin) },
+    { text: data.bank_account.bank_name },
   ]
 
   // Đo trước để tính chiều cao chính xác (nội dung CK có thể dài, xuống dòng).

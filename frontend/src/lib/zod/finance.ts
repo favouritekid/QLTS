@@ -408,6 +408,7 @@ export const vietQRResponseSchema = z.object({
     bank_bin: z.string(),
     account_number: z.string(),
     account_name: z.string(),
+    bank_name: z.string(),
   }),
   amount: z.string(),
   content: z.string(),

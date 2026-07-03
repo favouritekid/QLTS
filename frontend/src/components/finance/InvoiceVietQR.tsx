@@ -12,11 +12,12 @@
  */
 
 import * as React from "react"
-import { Share2 } from "lucide-react"
+import { Loader2, Share2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { useInvoiceVietQR } from "@/hooks/finance/useInvoices"
 import { renderVietQRCard } from "@/lib/finance/qr-card"
+import { downloadBlob } from "@/lib/utils/download-blob"
 import { formatVND } from "@/lib/zod/finance"
 import type { VietQRResponse } from "@/types/finance.types"
 import { VietQRDisplay } from "./VietQRDisplay"
@@ -46,6 +47,7 @@ function buildCaption(data: VietQRResponse): string {
     "Chuyển khoản học phí",
     `Số tiền: ${formatVND(data.amount)}`,
     `STK: ${data.bank_account.account_number} — ${data.bank_account.account_name}`,
+    `Ngân hàng: ${data.bank_account.bank_name}`,
     `Nội dung: ${data.content}`,
   ].join("\n")
 }
@@ -59,45 +61,43 @@ function ShareQRButton({ data }: { data: VietQRResponse }) {
       // Thẻ QR đầy đủ (QR + số tiền/nội dung/tên TK/số TK/ngân hàng) để học
       // viên tin tưởng khi quét — thay vì ảnh QR "trần".
       const blob = await renderVietQRCard(data)
-      const file = new File(
-        [blob],
-        `vietqr-${data.bank_account.account_number}.png`,
-        { type: "image/png" },
-      )
-      const caption = buildCaption(data)
+      const fileName = `vietqr-${data.bank_account.account_number}.png`
 
-      // Web Share Level 2 (chia sẻ file): mobile/tablet mở share sheet để gửi
-      // thẳng qua Zalo / Messenger / email…
+      // Web Share Level 2 (chia sẻ file) — mobile/tablet mở share sheet gửi
+      // thẳng qua Zalo / Messenger / email. File dựng trong nhánh này để môi
+      // trường thiếu File constructor không làm chết luôn nhánh tải PNG.
+      const file =
+        typeof File !== "undefined"
+          ? new File([blob], fileName, { type: "image/png" })
+          : null
       const canShareFile =
+        file != null &&
         typeof navigator !== "undefined" &&
         typeof navigator.canShare === "function" &&
+        typeof navigator.share === "function" &&
         navigator.canShare({ files: [file] })
 
       if (canShareFile) {
-        await navigator.share({
-          files: [file],
-          title: "Mã QR chuyển khoản học phí",
-          text: caption,
-        })
-        return
+        try {
+          await navigator.share({
+            files: [file],
+            title: "Mã QR chuyển khoản học phí",
+            text: buildCaption(data),
+          })
+          return
+        } catch (shareErr) {
+          // Người dùng bấm huỷ share sheet → dừng im lặng.
+          if ((shareErr as Error)?.name === "AbortError") return
+          // Chia sẻ lỗi lý do khác (mất user-activation / permission) → không
+          // để officer kẹt: rơi xuống nhánh tải PNG bên dưới.
+        }
       }
 
-      // Fallback (đa số desktop không hỗ trợ chia sẻ file): tải ảnh PNG về máy
-      // để officer gửi cho học viên qua Zalo / email.
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = file.name
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      // Fallback (desktop / share fail): tải ảnh về máy để gửi qua Zalo / email.
+      downloadBlob(blob, fileName)
       toast.success("Đã tải ảnh mã QR — gửi cho học viên qua Zalo/email")
-    } catch (err) {
-      // Người dùng bấm huỷ trên share sheet → im lặng, không báo lỗi.
-      if ((err as Error)?.name !== "AbortError") {
-        toast.error("Không thể chia sẻ mã QR. Vui lòng thử lại.")
-      }
+    } catch {
+      toast.error("Không thể tạo/chia sẻ mã QR. Vui lòng thử lại.")
     } finally {
       setBusy(false)
     }
@@ -109,9 +109,14 @@ function ShareQRButton({ data }: { data: VietQRResponse }) {
       className="w-full"
       onClick={handleShare}
       disabled={busy}
+      aria-busy={busy}
     >
-      <Share2 className="mr-2 h-4 w-4" aria-hidden="true" />
-      Chia sẻ mã QR cho học viên
+      {busy ? (
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+      ) : (
+        <Share2 className="mr-2 h-4 w-4" aria-hidden="true" />
+      )}
+      {busy ? "Đang tạo mã QR…" : "Chia sẻ mã QR"}
     </Button>
   )
 }
