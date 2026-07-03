@@ -32,6 +32,9 @@ from app.utils.exceptions import (
     PermissionDeniedError,
     BadRequest,
 )
+# Shared mock harness: `mock_db_session` fixture auto-discovered from conftest;
+# MockWorkloadRow imported explicitly (plain class).
+from tests.services.conftest import MockWorkloadRow
 
 # Import test constants
 try:
@@ -48,30 +51,6 @@ except ImportError:
 # =============================================================================
 # FIXTURES
 # =============================================================================
-
-@pytest.fixture
-def mock_db_session():
-    """Create a mock AsyncSession with all required methods."""
-    session = AsyncMock(spec=AsyncSession)
-    session.add = MagicMock()
-    session.add_all = MagicMock()
-    session.commit = AsyncMock()
-    session.refresh = AsyncMock(return_value=None)
-    session.execute = AsyncMock()
-    session.delete = AsyncMock()
-    session.get = AsyncMock()
-    session.scalar = AsyncMock()
-    session.rollback = AsyncMock()
-    session.flush = AsyncMock()
-
-    # Mock nested transaction
-    mock_nested = AsyncMock()
-    mock_nested.__aenter__ = AsyncMock(return_value=None)
-    mock_nested.__aexit__ = AsyncMock(return_value=None)
-    session.begin_nested = MagicMock(return_value=mock_nested)
-
-    return session
-
 
 @pytest.fixture
 def lead_unassigned():
@@ -221,11 +200,7 @@ def admin_user():
     )
 
 
-# Helper class for workload mock
-class MockWorkloadRow:
-    def __init__(self, assigned_officer_id: int, workload: int):
-        self.assigned_officer_id = assigned_officer_id
-        self.workload = workload
+# MockWorkloadRow now imported from tests.services.conftest (shared harness).
 
 
 # =============================================================================

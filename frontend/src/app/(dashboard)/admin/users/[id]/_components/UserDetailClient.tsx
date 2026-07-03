@@ -275,10 +275,13 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
                       <p className="text-sm font-medium text-muted-foreground">Trạng thái sẵn sàng</p>
                       <p className="text-sm">{user.availability_status || "Không có"}</p>
                     </div>
+                    {/* Thuộc tính riêng của officer (chỉ đọc); role-gate hiển thị là
+                        deviation có chủ đích với "no role checks" cho tab thông tin. */}
                     {user.role === "officer" && (
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">Trọng số phân công lead</p>
-                        <p className="text-sm">{user.assignment_weight ?? 1}</p>
+                        {/* "—" khi thiếu (KHÔNG bịa giá trị nghiệp vụ "1") */}
+                        <p className="text-sm">{user.assignment_weight ?? "—"}</p>
                       </div>
                     )}
                   </div>

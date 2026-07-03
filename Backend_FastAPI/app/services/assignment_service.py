@@ -43,25 +43,33 @@ def _non_final_status_filter():
     )
 
 
+def _safe_positive_int(value: int | None, default: int) -> int:
+    """Coerce to a usable positive int: None → ``default``, any value <= 0 → 1.
+    Single backbone for _safe_capacity / _safe_weight."""
+    if value is None:
+        return default
+    return value if value > 0 else 1
+
+
 def _safe_capacity(officer: models.User) -> int:
     """Officer capacity with a safe fallback (default 100, never <= 0).
     Shared by the referral threshold check and the assignment loop (BƯỚC 4)."""
-    capacity = officer.max_capacity if officer.max_capacity is not None else 100
-    return capacity if capacity > 0 else 1
+    return _safe_positive_int(officer.max_capacity, 100)
 
 
 def _safe_weight(officer: models.User) -> int:
     """Officer member-assignment weight with a safe fallback (default 1, never <= 0).
 
-    Mirrors ``_safe_capacity``. A higher weight makes the officer look emptier in
-    ``eff_util = workload / (capacity * weight)`` so they receive more leads. None
-    is coerced to 1 — an unflushed / mock ``User`` (tests) has ``assignment_weight``
-    still unset (the column ``default=1`` only fires at INSERT), so weight 1 keeps
-    ``eff_util == real_util`` and the balancer stays regression-safe."""
-    weight = getattr(officer, "assignment_weight", None)
-    if weight is None:
-        return 1
-    return weight if weight > 0 else 1
+    A higher weight lowers ``eff_util = workload / (capacity * weight)`` so the
+    officer is treated as emptier and receives more leads. Weight 1 makes
+    ``eff_util == real_util`` — but note that with ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
+    ON this is NOT identical to legacy round-robin: member mode orders by eff_util
+    (workload-proportional), whereas legacy ignores workload magnitude in its
+    tie-break. Direct attribute access (not getattr) so an attribute-name typo
+    surfaces instead of silently returning 1. The None fallback only matters for an
+    unflushed/mock ``User`` in tests (the prod column is NOT NULL + server_default
+    '1' + CHECK 1..100)."""
+    return _safe_positive_int(officer.assignment_weight, 1)
 
 
 async def is_officer_at_threshold(
@@ -298,28 +306,29 @@ async def automatically_assign_lead(
                     capacity = _safe_capacity(officer)
 
                     if workload < capacity:
-                        utilization = workload / capacity
-                        # real_util = tải THẬT (workload/capacity), không bao giờ
-                        # nhân weight — cổng an toàn (BƯỚC 5 `overloaded`) luôn đọc
-                        # con số này. eff_util = tải hiệu dụng có nhân weight: weight
-                        # cao ⇒ eff_util thấp ⇒ officer "được coi là vơi hơn" ⇒ nhận
-                        # nhiều lead hơn (chỉ dùng khi member flag bật).
+                        # real_util = tải THẬT (workload/capacity), KHÔNG nhân weight —
+                        # cổng an toàn `overloaded` LUÔN đọc con số này. eff_util = tải
+                        # hiệu dụng có nhân weight: weight cao ⇒ eff_util thấp ⇒ officer
+                        # "được coi là vơi hơn" ⇒ nhận nhiều lead hơn (khi member ON).
+                        real_util = workload / capacity
                         weight = _safe_weight(officer)
                         eff_util = workload / (capacity * weight)
                         officer_loads.append(
                             {
                                 "officer": officer,
                                 "workload": workload,
-                                # Giữ "utilization" (== real_util) để không đổi các
-                                # nhánh legacy/fairness cũ đang đọc key này.
-                                "utilization": utilization,
-                                "real_util": utilization,
+                                "real_util": real_util,
                                 "eff_util": eff_util,
                                 "weight": weight,
-                                # Giá trị sort thực (BƯỚC 5 ghi đè theo matrix);
-                                # mặc định real_util cho nhánh legacy để snapshot
-                                # phản ánh đúng tải thật đã dùng.
-                                "score": utilization,
+                                # Cổng an toàn theo tải THẬT — đặt sẵn ở đây, khỏi cần
+                                # vòng lặp phụ ở BƯỚC 5 (weight không bao giờ phá trần).
+                                "overloaded": real_util >= SAFETY_THRESHOLD,
+                                # score = giá trị dùng để SẮP XẾP; mặc định real_util,
+                                # các nhánh weighted ở BƯỚC 5 ghi đè. Ở nhánh legacy/
+                                # fallback score GIỮ real_util nhưng KHÔNG quyết định thứ
+                                # tự (sort chỉ theo overloaded+last_assigned) — chỉ mang
+                                # tính thông tin cho snapshot.
+                                "score": real_util,
                                 # Xử lý last_assigned_at là None (coalesce)
                                 "last_assigned": officer.last_assigned_at
                                 or datetime.min.replace(tzinfo=timezone.utc),
@@ -381,10 +390,9 @@ async def automatically_assign_lead(
                 member_on = settings.ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
                 fairness_on = settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
 
-                # SAFETY_THRESHOLD is a module-level constant (shared with the
-                # referral fast-path via is_officer_at_threshold). Cổng đọc tải THẬT.
-                for entry in officer_loads:
-                    entry["overloaded"] = entry["real_util"] >= SAFETY_THRESHOLD
+                # `overloaded` (cổng an toàn theo tải THẬT) đã đặt sẵn ở BƯỚC 4 —
+                # SAFETY_THRESHOLD là hằng module (chia sẻ với referral fast-path qua
+                # is_officer_at_threshold). weight KHÔNG BAO GIỜ phá cổng này.
 
                 # Lịch sử phân công của đơn vị — chỉ truy vấn khi fairness bật.
                 hist_counts: dict = {}
@@ -406,73 +414,64 @@ async def automatically_assign_lead(
                     except Exception as e:
                         log.warning(f"[Lead ID: {lead_id}] Fairness history query failed, falling back: {e}")
 
-                if fairness_on and member_on:
-                    # --- FAIRNESS + MEMBER: áp lực lệch so với TARGET weighted share ---
-                    # Target & actual PHẢI cùng pool = officer đang cạnh tranh ở quyết
-                    # định này (officer_loads = pool sau lọc capacity BƯỚC 4). KHÔNG
-                    # dùng total_hist toàn unit: history của officer offline/đầy tải sẽ
-                    # loãng mẫu số, khiến officer đã vượt share trong pool vẫn bị coi là
-                    # dưới target. Pool đồng đều weight ⇒ pressure = actual − 1/N.
-                    pool_ids = [e["officer"].id for e in officer_loads]
-                    eligible_hist_total = sum(hist_counts.get(oid, 0) for oid in pool_ids)
-                    total_weight = sum(e["weight"] for e in officer_loads)  # mỗi weight >= 1 ⇒ > 0
-                    has_history = eligible_hist_total >= 10  # ngưỡng cho nhánh fairness+member
-                    if has_history:
-                        for e in officer_loads:
-                            oid = e["officer"].id
-                            target_share = e["weight"] / total_weight if total_weight > 0 else 0
-                            actual_share = (
-                                hist_counts.get(oid, 0) / eligible_hist_total
-                                if eligible_hist_total > 0 else 0
-                            )
-                            pressure = actual_share - target_share  # <0 ⇒ đẩy lên, >0 ⇒ phạt
-                            e["score"] = 0.6 * e["eff_util"] + 0.4 * pressure
-                        assign_reason = "member_fairness_weighted"
-                        log.info(f"[Lead ID: {lead_id}] Member+fairness weighted (pool_hist={eligible_hist_total})")
-                    else:
-                        # Chưa đủ history trong pool ⇒ member-weighted (KHÔNG legacy):
-                        # nếu không weight vô tác dụng giai đoạn đầu rollout.
-                        for e in officer_loads:
-                            e["score"] = e["eff_util"]
-                        assign_reason = "member_weighted"
-                        log.info(f"[Lead ID: {lead_id}] Member+fairness ON but pool_hist={eligible_hist_total}<10 → member-weighted fallback")
-                    officer_loads.sort(key=lambda x: (x["overloaded"], x["score"], x["last_assigned"]))
+                # --- Quyết định CHẾ ĐỘ chấm điểm theo 2 flag độc lập + đủ history ---
+                #   member_fairness: fairness ON + member ON + đủ pool-history (>=10)
+                #   fairness:        fairness ON + member OFF + đủ unit-history (>=10) — Y HỆT P2-2 cũ
+                #   member:          member ON (gồm cả fallback fairness+member thiếu history)
+                #   legacy:          cả 2 OFF, HOẶC fairness ON + member OFF + thiếu history — Y HỆT hôm nay
+                # (member scoring viết ở MỘT nơi duy nhất bên dưới, tránh trùng lặp.)
+                if member_on and fairness_on:
+                    # Target & actual PHẢI cùng pool = officer_loads (sau lọc capacity).
+                    # KHÔNG dùng total_hist toàn unit: history officer offline/đầy tải sẽ
+                    # loãng mẫu số ⇒ officer đã vượt share trong pool vẫn bị coi là dưới
+                    # target. Pool đồng đều weight ⇒ pressure = actual − 1/N.
+                    eligible_hist_total = sum(hist_counts.get(e["officer"].id, 0) for e in officer_loads)
+                    scoring = "member_fairness" if eligible_hist_total >= 10 else "member"
                 elif fairness_on:
-                    # --- FAIRNESS ONLY (member OFF): giữ NGUYÊN VẸN hành vi P2-2 ---
-                    # raw_share = hist / total_hist TOÀN UNIT (như cũ, không đổi).
-                    total_hist = sum(hist_counts.values()) if hist_counts else 0
-                    has_history = total_hist >= 10  # minimum threshold (như cũ)
-                    if has_history:
-                        for entry in officer_loads:
-                            oid = entry["officer"].id
-                            share = hist_counts.get(oid, 0) / total_hist if total_hist > 0 else 0
-                            # 60% utilization THẬT + 40% historical share (như cũ)
-                            entry["score"] = 0.6 * entry["real_util"] + 0.4 * share
-                        officer_loads.sort(key=lambda x: (x["overloaded"], x["score"], x["last_assigned"]))
-                        assign_reason = "fairness_weighted"
-                        log.info(f"[Lead ID: {lead_id}] Using fairness-weighted scoring (history={total_hist})")
-                    else:
-                        # Insufficient history — fall back to legacy (như cũ). score giữ
-                        # mặc định real_util (BƯỚC 4) cho snapshot; sort KHÔNG dùng score.
-                        officer_loads.sort(key=lambda x: (x["overloaded"], x["last_assigned"]))
-                        assign_reason = "lowest_workload"
-                        log.info(f"[Lead ID: {lead_id}] Fairness ON but insufficient data ({total_hist}), using legacy")
+                    total_hist = sum(hist_counts.values())
+                    scoring = "fairness" if total_hist >= 10 else "legacy"
                 elif member_on:
-                    # --- MEMBER ONLY: hybrid threshold round robin theo eff_util ---
-                    # Cùng cấu trúc legacy nhưng tie-break đầu là eff_util (weight cao
-                    # ⇒ eff_util thấp ⇒ ưu tiên), rồi last_assigned (Round Robin).
+                    scoring = "member"
+                else:
+                    scoring = "legacy"
+
+                # --- Áp chế độ: đặt score + reason. Mỗi weight >= 1 và các ngưỡng
+                # history >= 10 đã đảm bảo mọi mẫu số dưới đây đều > 0 (không div-0). ---
+                if scoring == "member_fairness":
+                    total_weight = sum(e["weight"] for e in officer_loads)
+                    for e in officer_loads:
+                        target_share = e["weight"] / total_weight
+                        actual_share = hist_counts.get(e["officer"].id, 0) / eligible_hist_total
+                        # pressure = actual − target (<0 ⇒ dưới target ⇒ đẩy lên; >0 ⇒ phạt)
+                        e["score"] = 0.6 * e["eff_util"] + 0.4 * (actual_share - target_share)
+                    assign_reason = "member_fairness_weighted"
+                    log.info(f"[Lead ID: {lead_id}] Member+fairness weighted (pool_hist={eligible_hist_total})")
+                elif scoring == "fairness":
+                    for e in officer_loads:
+                        share = hist_counts.get(e["officer"].id, 0) / total_hist
+                        e["score"] = 0.6 * e["real_util"] + 0.4 * share  # Y HỆT P2-2 cũ
+                    assign_reason = "fairness_weighted"
+                    log.info(f"[Lead ID: {lead_id}] Using fairness-weighted scoring (history={total_hist})")
+                elif scoring == "member":
+                    # Tie-break đầu là eff_util (weight cao ⇒ eff_util thấp ⇒ ưu tiên),
+                    # rồi last_assigned. ⚠️ Weight ĐỒNG ĐỀU (đều =1) ⇒ eff_util == real_util
+                    # ⇒ order theo TẢI THẬT (workload-proportional), KHÔNG phải round-robin
+                    # thuần như legacy — đây là chủ đích của member mode, KHÁC legacy dù
+                    # chưa phân hoá weight (xem test_matrix_member_on_uniform_weight...).
                     for e in officer_loads:
                         e["score"] = e["eff_util"]
-                    officer_loads.sort(key=lambda x: (x["overloaded"], x["score"], x["last_assigned"]))
                     assign_reason = "member_weighted"
                     log.info(f"[Lead ID: {lead_id}] Using member-weighted scoring")
-                else:
-                    # --- LEGACY: HYBRID THRESHOLD ROUND ROBIN (cả 2 flag OFF) ---
-                    # 1. Nhóm chưa quá tải (real_util < 0.8) trước nhóm sắp quá tải (>= 0.8)
-                    # 2. Trong cùng nhóm, ưu tiên người được gán lâu nhất (Round Robin công bằng)
-                    # === Hành vi Y HỆT hôm nay (score giữ mặc định real_util cho snapshot).
-                    officer_loads.sort(key=lambda x: (x["overloaded"], x["last_assigned"]))
+                else:  # legacy — Y HỆT hôm nay
                     assign_reason = "lowest_workload"
+                    log.info(f"[Lead ID: {lead_id}] Using legacy round-robin")
+
+                # Legacy sắp xếp KHÔNG dùng score (round-robin thuần theo last_assigned);
+                # các chế độ weighted chèn score làm tie-break thứ 2 (sau cổng overloaded).
+                if scoring == "legacy":
+                    officer_loads.sort(key=lambda x: (x["overloaded"], x["last_assigned"]))
+                else:
+                    officer_loads.sort(key=lambda x: (x["overloaded"], x["score"], x["last_assigned"]))
 
                 chosen_officer_data = officer_loads[0]
                 chosen_one = chosen_officer_data["officer"]
@@ -480,7 +479,7 @@ async def automatically_assign_lead(
                 log.info(
                     f"[Lead ID: {lead_id}] Selected officer {chosen_one.id} ({chosen_one.username}). "
                     f"Current Workload: {chosen_workload}, Max Capacity: {chosen_one.max_capacity}, "
-                    f"Utilization: {chosen_officer_data['utilization']:.2f}, "
+                    f"Utilization: {chosen_officer_data['real_util']:.2f}, "
                     f"Last Assigned: {chosen_officer_data['last_assigned']}"
                 )
 
@@ -510,8 +509,11 @@ async def automatically_assign_lead(
                 # được BƯỚC 5 set theo decision matrix (lowest_workload /
                 # fairness_weighted / member_weighted / member_fairness_weighted).
                 # scores_snapshot enrich sang dict {real_util, eff_util, weight, score}
-                # — KHÔNG consumer nào đọc float phẳng (fairness_service chỉ đọc
-                # capacity_snapshot), score = giá trị đã sort thực tế.
+                # — KHÔNG consumer runtime nào đọc (fairness_service chỉ đọc
+                # capacity_snapshot); thuần audit. LƯU Ý: `score` là thành phần chấm
+                # điểm để SẮP XẾP ở các chế độ weighted; ở chế độ legacy/fallback nó
+                # GIỮ real_util nhưng KHÔNG quyết định thứ tự (sort chỉ theo
+                # overloaded + last_assigned) — đọc kèm `reason` để hiểu đúng.
                 await _log_assignment_decision(
                     db, lead_id=lead_id, assigned_officer_id=chosen_one.id,
                     eligible_officer_ids=officer_ids, unit_id=lead_unit_id,

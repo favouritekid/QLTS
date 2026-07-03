@@ -16,17 +16,20 @@ independent flags on ``settings``:
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT  → add historical-share fairness term
 """
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import settings
 from app.services import assignment_service
 from app.services.status_helper import AssignmentStatus
+
+# Shared mock harness: `mock_db_session` fixture is auto-discovered from conftest;
+# MockWorkloadRow is a plain class so it is imported explicitly.
+from tests.services.conftest import MockWorkloadRow
 
 try:
     from tests.fixtures.constants import NON_EXISTENT_ID
@@ -37,14 +40,6 @@ except ImportError:
 # =====================================================================
 # Mock helpers
 # =====================================================================
-class MockWorkloadRow:
-    """Row shape returned by the BƯỚC 3 workload GROUP BY query."""
-
-    def __init__(self, assigned_officer_id, workload):
-        self.assigned_officer_id = assigned_officer_id
-        self.workload = workload
-
-
 class MockHistRow:
     """Row shape returned by the BƯỚC 5 fairness history GROUP BY query."""
 
@@ -88,39 +83,6 @@ def _decision_log(mock_db):
 # =====================================================================
 # Fixtures
 # =====================================================================
-@pytest.fixture
-def mock_db_session():
-    """A mock AsyncSession wired for automatically_assign_lead."""
-    session = AsyncMock(spec=AsyncSession)
-    session.add = MagicMock()
-    session.add_all = MagicMock()
-    session.commit = AsyncMock()
-    session.refresh = AsyncMock(return_value=None)
-    session.execute = AsyncMock()
-    session.delete = AsyncMock()
-    session.get = AsyncMock()
-    session.scalar = AsyncMock()
-    session.rollback = AsyncMock()
-
-    # async with db.begin_nested(): ... (savepoint) — does not suppress exc.
-    mock_nested = AsyncMock()
-    mock_nested.__aenter__ = AsyncMock(return_value=None)
-    mock_nested.__aexit__ = AsyncMock(return_value=None)
-    session.begin_nested.return_value = mock_nested
-
-    async def _flush(objects=None):
-        return None
-
-    session.flush = AsyncMock(side_effect=_flush)
-
-    # Default empty result (overridden per-test via execute.side_effect).
-    empty = MagicMock()
-    empty.scalars.return_value.all.return_value = []
-    empty.scalar_one_or_none.return_value = None
-    session.execute.return_value = empty
-    return session
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def _silence_logger(mocker):
     """Silence the module logger. The service resolves ``log = logger or
@@ -205,10 +167,12 @@ async def test_assign_success_roundrobin_oldest_wins(
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
         _officers_result([officer_1, officer_2]),
-        _workload_result([
-            MockWorkloadRow(101, 5),  # officer_1 tải cao hơn...
-            MockWorkloadRow(102, 2),  # ...nhưng vừa được gán gần đây
-        ]),
+        _workload_result(
+            [
+                MockWorkloadRow(101, 5),  # officer_1 tải cao hơn...
+                MockWorkloadRow(102, 2),  # ...nhưng vừa được gán gần đây
+            ]
+        ),
     ]
 
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
@@ -246,10 +210,12 @@ async def test_assign_fail_all_officers_full_capacity(
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
         _officers_result([officer_1, officer_2]),
-        _workload_result([
-            MockWorkloadRow(101, 10),
-            MockWorkloadRow(102, 10),
-        ]),
+        _workload_result(
+            [
+                MockWorkloadRow(101, 10),
+                MockWorkloadRow(102, 10),
+            ]
+        ),
     ]
 
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
@@ -325,13 +291,43 @@ async def test_matrix_both_off_is_legacy(
 
 
 @pytest.mark.asyncio
+async def test_matrix_member_on_uniform_weight_orders_by_workload(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member ON nhưng weight ĐỒNG ĐỀU (đều =1): member mode order theo
+    eff_util == real_util ⇒ ưu tiên TẢI THẤP hơn — KHÁC legacy round-robin (chọn
+    theo last_assigned bất kể tải). Chốt tường minh finding /code-review: 'weight-1
+    KHÔNG regression-safe một khi flag ON'. Setup officer_1 tải 5 + last_assigned cũ
+    nhất (None) vs officer_2 tải 2 + mới hơn: member chọn officer_2 (tải thấp); legacy
+    sẽ chọn officer_1 (xem test_matrix_both_off_is_legacy dùng cùng cấu trúc)."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1  # ĐỒNG ĐỀU
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 5), MockWorkloadRow(102, 2)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    # eff_util officer_2 (0.2) < officer_1 (0.5) ⇒ member chọn officer_2 (tải thấp),
+    # NGƯỢC với legacy (chọn officer_1 vì last_assigned cũ nhất bất kể tải).
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "member_weighted"
+
+
+@pytest.mark.asyncio
 async def test_matrix_member_on_weight_gets_more(
     monkeypatch, mock_db_session, lead_new, officer_1, officer_2
 ):
     """member ON, fairness OFF. Hai officer CÙNG workload dương bằng nhau (4/10 —
     không dùng 0 vì eff_util đều 0 thì weight vô nghĩa). officer_2 weight=2 ⇒
     eff_util = 4/(10*2)=0.2 < officer_1 eff_util 0.4 ⇒ officer_2 được chọn.
-    Cũng kiểm audit contract: scores_snapshot là dict {real_util,eff_util,weight,score}."""
+    Cũng kiểm audit contract: scores_snapshot là dict {real_util,eff_util,weight,score}.
+    """
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
     officer_1.assignment_weight = 1
@@ -368,8 +364,8 @@ async def test_matrix_member_on_safety_gate_not_bent(
     overloaded). Weight KHÔNG phá trần an toàn."""
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
-    officer_1.assignment_weight = 5   # eff_util = 9/(10*5) = 0.18 (thấp!)
-    officer_2.assignment_weight = 1   # eff_util = 4/(10*1) = 0.40
+    officer_1.assignment_weight = 5  # eff_util = 9/(10*5) = 0.18 (thấp!)
+    officer_2.assignment_weight = 1  # eff_util = 4/(10*1) = 0.40
 
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
@@ -418,8 +414,8 @@ async def test_matrix_fairness_and_member_pressure(
     mới nhận 0.5 thực tế ⇒ pressure âm ⇒ được đẩy lên ⇒ được chọn."""
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", True)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
-    officer_1.assignment_weight = 1   # target 1/4 = 0.25
-    officer_2.assignment_weight = 3   # target 3/4 = 0.75
+    officer_1.assignment_weight = 1  # target 1/4 = 0.25
+    officer_2.assignment_weight = 3  # target 3/4 = 0.75
 
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
@@ -430,7 +426,8 @@ async def test_matrix_fairness_and_member_pressure(
 
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # officer_1: 0.6*0.2 + 0.4*(0.5-0.25) = 0.22 ; officer_2: 0.6*0.0667 + 0.4*(0.5-0.75) = -0.06
+    # score officer_1 = 0.6*0.2 + 0.4*(0.5-0.25) = 0.22
+    # score officer_2 = 0.6*0.0667 + 0.4*(0.5-0.75) = -0.06  ⇒ officer_2 thắng
     assert lead_new.assigned_officer_id == officer_2.id
     assert _decision_log(mock_db_session).reason == "member_fairness_weighted"
 

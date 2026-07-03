@@ -91,9 +91,18 @@ const editUserSchema = z.object({
     .or(z.literal("")),
   role: z.string().min(1, "Vai trò là bắt buộc"),
   status: z.enum(["active", "pending", "banned"]),
-  // Trọng số phân công lead cho officer (1-100). coerce vì <input type="number">
-  // trả string; default(1) đảm bảo luôn có giá trị hợp lệ kể cả khi field ẩn.
-  assignment_weight: z.coerce.number().int().min(1, "Tối thiểu 1").max(100, "Tối đa 100").default(1),
+  // Trọng số phân công lead cho officer (1-100). Mirror backend Optional[int]=None:
+  // ô trống (xoá / role≠officer) → undefined ⇒ KHÔNG gửi, BE giữ giá trị cũ — thay vì
+  // coerce "" về 0 (từng gây .min(1) fail âm thầm chặn Lưu khi field bị ẩn).
+  assignment_weight: z.preprocess(
+    (v) => (v === "" || v === null ? undefined : v),
+    z.coerce
+      .number()
+      .int("Trọng số phải là số nguyên")
+      .min(1, "Tối thiểu 1")
+      .max(100, "Tối đa 100")
+      .optional()
+  ),
   avatar: z.instanceof(File).optional(),
 });
 
@@ -255,7 +264,15 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         // onError is already handled in the hook (toast notification)
       });
     } else if (user) {
-      updateUserMutation.mutate(values as EditUserFormValues, {
+      // assignment_weight chỉ áp dụng cho officer — bỏ khỏi payload cho vai trò khác
+      // (mirror BE Optional[int]: không gửi ⇒ giữ nguyên), tránh ghi weight vô nghĩa
+      // lên non-officer mỗi lần lưu.
+      const editValues = values as EditUserFormValues;
+      const payload =
+        editValues.role === "officer"
+          ? editValues
+          : { ...editValues, assignment_weight: undefined };
+      updateUserMutation.mutate(payload, {
         onSuccess: onSuccessCallback,
         // onError is already handled in the hook (toast notification)
       });
@@ -477,8 +494,10 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
             />
 
             {/* Assignment Weight — chỉ khi edit + role đang chọn là officer.
-                Dùng form.watch("role") (KHÔNG user.role) để đổi role→officer là
-                nhập được weight ngay. Field vẫn trong form state khi ẩn (default 1). */}
+                DEVIATION có chủ đích với quy tắc thin-client "no role checks":
+                đây là form GÁN vai trò, phải phản ứng theo role ĐANG CHỌN (chưa lưu),
+                nên dùng form.watch("role") — không có cờ BE nào phản ánh lựa chọn
+                chưa lưu. weight là thuộc tính riêng của officer. */}
             {isEdit && form.watch("role") === "officer" && (
               <FormField
                 control={form.control}
@@ -487,14 +506,16 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <FormItem>
                     <FormLabel>Trọng số phân công lead</FormLabel>
                     <FormControl>
+                      {/* onChange do {...field} cung cấp (RHF tự trích e.target.value —
+                          cùng pattern các field text khác). value ?? "" để ô trống hiện
+                          rỗng thay vì "0"; schema preprocess "" → undefined. */}
                       <Input
                         type="number"
                         min={1}
                         max={100}
                         disabled={isPending}
                         {...field}
-                        value={field.value ?? 1}
-                        onChange={(e) => field.onChange(e.target.value)}
+                        value={field.value ?? ""}
                       />
                     </FormControl>
                     <FormDescription>

@@ -7,6 +7,7 @@ without going through the API layer.
 """
 import logging
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -604,3 +605,45 @@ async def deleted_lead_with_phone(
     await db.flush()
     await db.refresh(lead)
     return lead
+
+
+# =============================================================================
+# MOCK HARNESS FOR assignment_service UNIT TESTS
+# =============================================================================
+# Shared by test_assignment.py and test_lead_assignment_edge_cases.py so the
+# mock of automatically_assign_lead's session lives in ONE place — a change to
+# how the service uses the session is updated once. Pure mocks (no DB), distinct
+# from the real-DB fixtures above.
+
+
+class MockWorkloadRow:
+    """Row shape returned by the BƯỚC 3 workload GROUP BY query."""
+
+    def __init__(self, assigned_officer_id, workload):
+        self.assigned_officer_id = assigned_officer_id
+        self.workload = workload
+
+
+@pytest.fixture
+def mock_db_session():
+    """Mock AsyncSession wired for automatically_assign_lead. Each test stubs
+    ``session.execute`` per scenario (side_effect list of pre-canned results)."""
+    session = AsyncMock(spec=AsyncSession)
+    session.add = MagicMock()
+    session.add_all = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock(return_value=None)
+    session.execute = AsyncMock()
+    session.delete = AsyncMock()
+    session.get = AsyncMock()
+    session.scalar = AsyncMock()
+    session.rollback = AsyncMock()
+    session.flush = AsyncMock()
+
+    # async with db.begin_nested(): ... (savepoint) — does not suppress exceptions.
+    mock_nested = AsyncMock()
+    mock_nested.__aenter__ = AsyncMock(return_value=None)
+    mock_nested.__aexit__ = AsyncMock(return_value=None)
+    session.begin_nested = MagicMock(return_value=mock_nested)
+
+    return session
