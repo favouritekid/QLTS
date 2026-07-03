@@ -11,7 +11,7 @@
  */
 
 import { Suspense } from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, unstable_rethrow } from 'next/navigation';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { serverApi } from '@/lib/api/server';
@@ -58,6 +58,11 @@ async function LeadDetailPageContent({ leadId }: { leadId: number }) {
   try {
     initialData = await serverApi.leads.getLead(leadId);
   } catch (err) {
+    // Rethrow framework control-flow FIRST: serverFetch calls redirect('/login')
+    // on a 401 (throws NEXT_REDIRECT) and cookies() throws the dynamic-render
+    // bailout — neither is a fetch error. Swallowing them renders a broken/empty
+    // page instead of redirecting to login (or bailing to a dynamic render).
+    unstable_rethrow(err);
     // ✅ T9 FIX: Only notFound() for actual 404s; other errors (500, network) go to error boundary
     // serverFetch throws: "API Error (STATUS): message" — match the exact prefix pattern
     const message = err instanceof Error ? err.message : "";
@@ -70,8 +75,8 @@ async function LeadDetailPageContent({ leadId }: { leadId: number }) {
 
   // ✅ Parallel fetch: timeline and insights (non-critical, catch gracefully)
   const [initialTimeline, initialInsights] = await Promise.all([
-    serverApi.leads.getLeadTimeline(leadId).catch(() => undefined),
-    serverApi.leads.getLeadInsights(leadId).catch(() => undefined),
+    serverApi.leads.getLeadTimeline(leadId).catch((e) => { unstable_rethrow(e); return undefined; }),
+    serverApi.leads.getLeadInsights(leadId).catch((e) => { unstable_rethrow(e); return undefined; }),
   ]);
 
   return (
