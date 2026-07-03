@@ -58,15 +58,19 @@ class SmsTrackingRepository:
     # ---------------------------------------------------------------
     async def lookup_consult_by_token_hash(
         self, token_hash: str
-    ) -> Optional[SmsConsultLink]:
-        """SmsConsultLink nếu token_hash khớp; None nếu không. Dùng khi
-        recipient lookup KHÔNG thấy (resolve mở rộng §16.7)."""
+    ) -> Optional[Tuple[SmsConsultLink, Optional[str]]]:
+        """(consult_link, phone_normalized) nếu token_hash khớp; None nếu không.
+        LEFT JOIN contact để lấy phone luôn (khỏi query get_contact_phone thêm ở
+        landing/opt-out); phone=None nếu contact đã xoá (link vẫn resolve cho /r/).
+        Dùng khi recipient lookup KHÔNG thấy (resolve mở rộng §16.7)."""
         res = await self.db.execute(
-            select(SmsConsultLink)
+            select(SmsConsultLink, SmsContact.phone_normalized)
+            .outerjoin(SmsContact, SmsContact.id == SmsConsultLink.contact_id)
             .where(SmsConsultLink.token_hash == token_hash)
             .limit(1)
         )
-        return res.scalars().first()
+        row = res.first()
+        return (row[0], row[1]) if row else None
 
     async def record_consult_click(
         self,
@@ -151,15 +155,6 @@ class SmsTrackingRepository:
     # ---------------------------------------------------------------
     # Opt-out
     # ---------------------------------------------------------------
-    async def get_contact_phone(self, contact_id: int) -> Optional[str]:
-        """phone_normalized của 1 contact (consult resolve — recipient dùng
-        snapshot; consult phải tra contact). None nếu contact đã xoá."""
-        return await self.db.scalar(
-            select(SmsContact.phone_normalized).where(
-                SmsContact.id == contact_id
-            )
-        )
-
     async def is_phone_opted_out(self, phone_normalized: str) -> bool:
         res = await self.db.scalar(
             select(SmsOptOut.id)

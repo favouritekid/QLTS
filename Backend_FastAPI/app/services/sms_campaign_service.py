@@ -12,6 +12,8 @@ SMS_MARKETING_MODULE_DESIGN.md §3/§6/§7/§8.
 import re
 import unicodedata
 from datetime import datetime, timezone
+
+from app.utils.tz import ensure_aware
 from typing import List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
@@ -60,8 +62,7 @@ def _slugify(name: str) -> str:
     return s[:50] or "campaign"
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 class SmsCampaignService:

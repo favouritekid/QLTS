@@ -10,6 +10,8 @@ code.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+from app.utils.tz import ensure_aware
 from typing import Optional
 
 from app.models.sms import SmsCampaign, SmsCampaignRecipient, SmsConsultLink
@@ -17,11 +19,10 @@ from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.utils.exceptions import ResourceNotFoundError
 from app.utils.sms_token import compute_token_hash, is_valid_code
 
-_GENERIC_404 = "Liên kết không hợp lệ hoặc đã hết hạn"
+GENERIC_404 = "Liên kết không hợp lệ hoặc đã hết hạn"
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 @dataclass
@@ -31,6 +32,9 @@ class ResolvedCode:
     kind: str  # "campaign" | "consult"
     contact_id: Optional[int]
     expires_at: Optional[datetime]
+    # phone_normalized của nguồn (recipient snapshot / consult JOIN contact) —
+    # tránh query get_contact_phone thêm ở opt-out/landing.
+    phone_normalized: Optional[str] = None
     recipient: Optional[SmsCampaignRecipient] = None
     campaign: Optional[SmsCampaign] = None
     consult: Optional[SmsConsultLink] = None
@@ -50,7 +54,7 @@ async def resolve_code(
     ResourceNotFoundError (404 generic) nếu sai/không thấy; nếu hết hạn và
     enforce_expiry → 404 (opt-out gọi với enforce_expiry=False, §NĐ91)."""
     if not is_valid_code(code):
-        raise ResourceNotFoundError(detail=_GENERIC_404)
+        raise ResourceNotFoundError(detail=GENERIC_404)
     token_hash = compute_token_hash(code)
 
     found = await repo.lookup_by_token_hash(token_hash)
@@ -60,20 +64,23 @@ async def resolve_code(
             kind="campaign",
             contact_id=recipient.contact_id,
             expires_at=campaign.link_expires_at,
+            phone_normalized=recipient.phone_normalized_snapshot,
             recipient=recipient,
             campaign=campaign,
         )
     else:
-        consult = await repo.lookup_consult_by_token_hash(token_hash)
-        if consult is None:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+        found_consult = await repo.lookup_consult_by_token_hash(token_hash)
+        if found_consult is None:
+            raise ResourceNotFoundError(detail=GENERIC_404)
+        consult, phone_normalized = found_consult
         resolved = ResolvedCode(
             kind="consult",
             contact_id=consult.contact_id,
             expires_at=consult.expires_at,
+            phone_normalized=phone_normalized,
             consult=consult,
         )
 
     if enforce_expiry and resolved.is_expired:
-        raise ResourceNotFoundError(detail=_GENERIC_404)
+        raise ResourceNotFoundError(detail=GENERIC_404)
     return resolved

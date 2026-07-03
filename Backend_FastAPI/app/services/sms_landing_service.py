@@ -17,13 +17,11 @@ from app.config import settings
 from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.schemas import sms as sms_schemas
-from app.services.sms_resolve import ResolvedCode, resolve_code
+from app.services.sms_resolve import GENERIC_404, ResolvedCode, resolve_code
 from app.utils.exceptions import ResourceNotFoundError
 from app.utils.sms_url import host_in_allowlist
 
 log = logging.getLogger(__name__)
-
-_GENERIC_404 = "Liên kết không hợp lệ hoặc đã hết hạn"
 
 
 class SmsLandingService:
@@ -35,13 +33,12 @@ class SmsLandingService:
         self.engagement_repo = SmsEngagementRepository(db)
 
     async def _phone_for(self, resolved: ResolvedCode) -> str:
-        """phone_normalized của nguồn: recipient dùng snapshot; consult tra
-        contact. Raise 404 nếu consult contact đã xoá (không opt-out được)."""
-        if resolved.kind == "campaign":
-            return resolved.recipient.phone_normalized_snapshot
-        phone = await self.repo.get_contact_phone(resolved.contact_id)
+        """phone_normalized của nguồn (recipient snapshot / consult JOIN contact,
+        resolve_code đã nạp sẵn). Raise 404 nếu consult contact đã xoá (không
+        opt-out/landing được)."""
+        phone = resolved.phone_normalized
         if not phone:
-            raise ResourceNotFoundError(detail=_GENERIC_404)
+            raise ResourceNotFoundError(detail=GENERIC_404)
         return phone
 
     async def get_landing(self, code: str) -> sms_schemas.SmsLandingResponse:
@@ -104,8 +101,7 @@ class SmsLandingService:
                         "phone_normalized": phone,
                         "source": "landing_optout",
                         "campaign_id": (
-                            resolved.campaign.id
-                            if resolved.kind == "campaign" else None
+                            resolved.campaign.id if resolved.campaign else None
                         ),
                         "contact_id": resolved.contact_id,
                         "observed_at": datetime.now(timezone.utc),

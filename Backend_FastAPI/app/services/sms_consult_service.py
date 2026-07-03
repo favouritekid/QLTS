@@ -21,9 +21,8 @@ from app.repositories.sms_engagement_repository import SmsEngagementRepository
 from app.schemas import sms as sms_schemas
 from app.utils.exceptions import ConflictError, ValidationError
 from app.utils.phone_helpers import (
-    is_vietnam_mobile,
     normalize_and_validate_vietnam_phone,
-    to_zalo_phone,
+    normalize_vn_mobile,
 )
 from app.utils.sms_token import (
     build_link,
@@ -49,12 +48,12 @@ class SmsConsultService:
     def _normalize_lead_phone(phone: Optional[str]) -> tuple[str, str]:
         """(normalized, international) cho số di động lead — raise ValidationError
         nếu không phải di động VN hợp lệ (không tạo consult link cho số rác)."""
-        normalized, valid = normalize_and_validate_vietnam_phone(phone)
-        if not valid or not normalized or not is_vietnam_mobile(normalized):
+        result = normalize_vn_mobile(phone)
+        if result is None:
             raise ValidationError(
                 detail="Lead chưa có số di động hợp lệ để tạo link tư vấn."
             )
-        return normalized, to_zalo_phone(normalized)
+        return result
 
     async def create_consult_link(
         self, lead: models.Lead, current_user: models.User

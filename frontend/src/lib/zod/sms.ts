@@ -120,7 +120,9 @@ export type SmsConsultLinkResponse = z.infer<
 export const smsLeadInterestResponseSchema = z.object({
   lead_id: z.number().int(),
   contact_id: z.number().int().nullable(),
-  items: z.array(smsContactInterestRowSchema).default([]),
+  // BE (Pydantic default_factory=list, không exclude_none) LUÔN phát items dạng
+  // mảng → mirror strict, không cần .default([]).
+  items: z.array(smsContactInterestRowSchema),
 })
 export type SmsLeadInterestResponse = z.infer<
   typeof smsLeadInterestResponseSchema

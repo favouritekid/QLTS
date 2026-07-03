@@ -15,15 +15,13 @@ from typing import Mapping, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
-from app.services.sms_resolve import resolve_code
+from app.services.sms_resolve import GENERIC_404, resolve_code
 from app.utils.exceptions import ResourceNotFoundError
 from app.utils.sms_bot import detect_bot
 from app.utils.sms_token import compute_ip_hash
 from app.utils.sms_url import host_in_allowlist
 
 log = logging.getLogger(__name__)
-
-_GENERIC_404 = "Liên kết không hợp lệ hoặc đã hết hạn"
 
 
 class SmsTrackingService:
@@ -57,7 +55,7 @@ class SmsTrackingService:
                         "SMS /r: external landing_url ngoài allowlist "
                         "campaign_id=%s", campaign.id,
                     )
-                    raise ResourceNotFoundError(detail=_GENERIC_404)
+                    raise ResourceNotFoundError(detail=GENERIC_404)
             else:
                 target = f"/lp/{code}"
             is_bot, reason = detect_bot(

@@ -13,6 +13,8 @@ phía người (chỉ flag khi có dấu hiệu rõ) — CTR thà thiếu hơn t
   fetch tức thì khi tin vừa gửi) — đo `now - recipient.handed_off_at`.
 """
 from datetime import datetime, timedelta, timezone
+
+from app.utils.tz import ensure_aware
 from typing import Mapping, Optional, Tuple
 
 # Token UA hay gặp ở crawler/link-preview/HTTP client (so khớp lower-case).
@@ -27,8 +29,7 @@ _SCANNER_UA_TOKENS = (
 _INSTANT_SECONDS = 8  # click ≤8s sau handoff → nghi preview server
 
 
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+_aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
 
 
 def detect_bot(
