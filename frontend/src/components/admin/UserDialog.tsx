@@ -91,6 +91,9 @@ const editUserSchema = z.object({
     .or(z.literal("")),
   role: z.string().min(1, "Vai trò là bắt buộc"),
   status: z.enum(["active", "pending", "banned"]),
+  // Trọng số phân công lead cho officer (1-100). coerce vì <input type="number">
+  // trả string; default(1) đảm bảo luôn có giá trị hợp lệ kể cả khi field ẩn.
+  assignment_weight: z.coerce.number().int().min(1, "Tối thiểu 1").max(100, "Tối đa 100").default(1),
   avatar: z.instanceof(File).optional(),
 });
 
@@ -105,6 +108,7 @@ type UserFormValues = {
   phone_number?: string;
   role: string;
   status: "active" | "pending" | "banned";
+  assignment_weight?: number;
   avatar?: File;
 };
 
@@ -146,6 +150,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
           phone_number: user.phone_number || "",
           role: user.role, // architecture-allow serialization
           status: user.status,
+          assignment_weight: user.assignment_weight ?? 1,
         }
       : {
           username: "",
@@ -173,6 +178,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         phone_number: user.phone_number || "",
         role: user.role, // architecture-allow serialization
         status: user.status,
+        assignment_weight: user.assignment_weight ?? 1,
       });
       // Clear preview to show current user's avatar from server
       setAvatarPreview(null);
@@ -469,6 +475,37 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 </FormItem>
               )}
             />
+
+            {/* Assignment Weight — chỉ khi edit + role đang chọn là officer.
+                Dùng form.watch("role") (KHÔNG user.role) để đổi role→officer là
+                nhập được weight ngay. Field vẫn trong form state khi ẩn (default 1). */}
+            {isEdit && form.watch("role") === "officer" && (
+              <FormField
+                control={form.control}
+                name="assignment_weight"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Trọng số phân công lead</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        disabled={isPending}
+                        {...field}
+                        value={field.value ?? 1}
+                        onChange={(e) => field.onChange(e.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Officer trọng số cao nhận nhiều lead hơn theo tỉ lệ (1–100, mặc
+                      định 1). Không phá trần tải an toàn — chỉ ưu tiên khi còn chỗ.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* Status */}
             <FormField

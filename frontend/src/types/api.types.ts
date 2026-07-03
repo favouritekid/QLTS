@@ -15,6 +15,7 @@ export interface User {
   skills?: string[] | null; // User skills
   availability_status?: string | null; // Availability status
   max_capacity?: number | null; // Max capacity
+  assignment_weight?: number | null; // Officer lead-assignment weight (1-100). Higher = more leads.
   password_reset_required?: boolean; // Security: Set true after "Secure Account" action
   mfa_enabled?: boolean; // MFA: Whether TOTP MFA is enabled
 }
@@ -157,6 +158,7 @@ export interface AdminUserUpdate {
   avatar?: File;
   skills?: string[];
   max_capacity?: number;
+  assignment_weight?: number; // Officer lead-assignment weight (1-100)
   unit_id?: number | null; // Organizational unit assignment
 }
 

@@ -204,6 +204,7 @@ async def test_admin_users_endpoint_strips_pii_for_officer(
         "mfa_enabled",
         "password_reset_required",
         "max_capacity",
+        "assignment_weight",  # admin-internal lead-routing weight — not on picker
     }
     sample_user = body["users"][0]
     leaked_keys = forbidden_keys & set(sample_user.keys())
@@ -257,6 +258,7 @@ async def test_admin_users_endpoint_strips_pii_for_accountant(
         "mfa_enabled",
         "password_reset_required",
         "max_capacity",
+        "assignment_weight",  # admin-internal lead-routing weight — not on picker
     }
     sample_user = body["users"][0]
     leaked_keys = forbidden_keys & set(sample_user.keys())
@@ -300,6 +302,7 @@ async def test_admin_users_endpoint_returns_full_shape_for_admin(
         "phone_number",  # admin needs for contact
         "mfa_enabled",  # admin needs for security review
         "max_capacity",  # admin needs for lead-routing
+        "assignment_weight",  # admin needs for member-weighted lead-routing
     }
     missing = expected_admin_keys - set(sample_user.keys())
     assert not missing, (
