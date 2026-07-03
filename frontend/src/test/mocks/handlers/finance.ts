@@ -142,6 +142,7 @@ export const financeHandlers = [
           paid_amount: fee.paid_amount,
           remaining_amount: fee.remaining_amount,
           status: fee.status,
+          has_payable_invoice: ["issued", "partial", "overdue"].includes(fee.status),
         }],
         pending_invoices: 1,
         overdue_invoices: fee.status === "overdue" ? 1 : 0,

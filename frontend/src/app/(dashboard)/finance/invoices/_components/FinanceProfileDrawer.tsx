@@ -76,7 +76,7 @@ import {
 
 import { useProfileCollection } from "@/hooks/finance/useFees"
 import { calculateOverdueDays } from "@/hooks/finance/useInvoiceViewModel"
-import { FEE_TYPE_LABELS } from "@/types/finance.types"
+import { FEE_TYPE_LABELS, PAYABLE_INVOICE_STATUSES } from "@/types/finance.types"
 import type {
   ProfileCollection,
   InvoiceListItem,
@@ -96,7 +96,7 @@ import type { WorkspaceDialog } from "./WorkspaceActionDialogs"
 // enum issued→overdue once past due, so an only-overdue invoice must still count
 // toward "Hạn gần nhất"; otherwise the header shows "Quá hạn" with no due date
 // (the BE-owned `is_overdue` already lit hasOverdue). Mirrors PAYABLE_INVOICE_STATUSES.
-const OPEN_INVOICE_STATUSES = new Set(["issued", "partial", "overdue"])
+const OPEN_INVOICE_STATUSES = new Set(PAYABLE_INVOICE_STATUSES)
 
 /** Earliest due date among OPEN (issued/partial/overdue) invoices — drawer "Hạn". */
 function nextDue(invoices: InvoiceListItem[]): InvoiceListItem | null {

@@ -21,6 +21,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { ApplicationFeeCollectionPanel } from "./ApplicationFeeCollectionPanel"
+import { FeeQRTransferDialog } from "./FeeQRTransferDialog"
 import { CalculateFeeDialog } from "@/components/admissions/CalculateFeeDialog"
 import {
   CreditCard,
@@ -31,6 +32,7 @@ import {
   Clock,
   Calculator,
   FileText,
+  QrCode,
 } from "lucide-react"
 import { useProfileFinanceSummary } from "@/hooks/finance/useFees"
 import {
@@ -53,6 +55,9 @@ export function TuitionTab({ profile }: TuitionTabProps) {
   // PR #7 — inline calculation. Button visibility is driven entirely by
   // backend `available_actions`; no role-checking in the FE.
   const [calcDialogOpen, setCalcDialogOpen] = useState(false)
+  // Mã QR chuyển khoản cho một khoản phí (officer đưa cho phụ huynh). QR là
+  // thông tin read-only → không gate theo role; dialog tự resolve hóa đơn.
+  const [qrDialogFee, setQrDialogFee] = useState<{ id: number; label: string } | null>(null)
   // PR-3D-A Sub-1: hasAction() helper checks `available_actions_v2` typed
   // (preferred) then legacy `available_actions` list (Wave B+90 soft cutoff).
   const canCalculateFee = hasAction(profile, "calculate_fee")
@@ -284,11 +289,17 @@ export function TuitionTab({ profile }: TuitionTabProps) {
         <CardContent>
           <div className="space-y-3">
             {summary.fees.map((fee) => {
+              const feeLabel =
+                (FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type) +
+                (fee.semester_no ? ` — HK${fee.semester_no}` : "")
+              // Cờ BE-owned invoice-level (gồm penalty) — nguồn duy nhất; KHÔNG
+              // suy luận payability từ fee.status/remaining ở FE (thin-client).
+              const showQr = fee.has_payable_invoice
               // Officers can't open the finance detail page (proxy gate),
               // so render a non-link card for them. Manager / accountant /
               // admin keep the navigation affordance.
               const rowClass =
-                "flex items-center justify-between p-3 border rounded-lg" +
+                "flex items-center justify-between p-3" +
                 (canAccessFinanceModule ? " hover:bg-muted/50 transition-colors" : "")
               const rowBody = (
                 <>
@@ -297,10 +308,7 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                       <FileText className="h-4 w-4 text-primary" aria-hidden="true" />
                     </div>
                     <div>
-                      <p className="font-medium">
-                        {FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type}
-                        {fee.semester_no ? ` — HK${fee.semester_no}` : ""}
-                      </p>
+                      <p className="font-medium">{feeLabel}</p>
                       <p className="text-xs text-muted-foreground">
                         Năm học: {fee.academic_year}
                         {fee.semester_no ? ` | HK${fee.semester_no}` : ""}
@@ -318,13 +326,29 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   </div>
                 </>
               )
-              return canAccessFinanceModule ? (
-                <Link key={fee.id} href={`/finance/fees/${fee.id}`} className={rowClass}>
-                  {rowBody}
-                </Link>
-              ) : (
-                <div key={fee.id} className={rowClass}>
-                  {rowBody}
+              // Nút QR nằm NGOÀI Link (không lồng button trong anchor). Wrapper
+              // giữ border/bo góc cho cả phần thông tin lẫn hàng thao tác.
+              return (
+                <div key={fee.id} className="overflow-hidden rounded-lg border">
+                  {canAccessFinanceModule ? (
+                    <Link href={`/finance/fees/${fee.id}`} className={rowClass}>
+                      {rowBody}
+                    </Link>
+                  ) : (
+                    <div className={rowClass}>{rowBody}</div>
+                  )}
+                  {showQr && (
+                    <div className="flex justify-end border-t bg-muted/20 px-3 py-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setQrDialogFee({ id: fee.id, label: feeLabel })}
+                      >
+                        <QrCode className="h-4 w-4 mr-2" aria-hidden="true" />
+                        Mã QR chuyển khoản
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -377,6 +401,15 @@ export function TuitionTab({ profile }: TuitionTabProps) {
           open={calcDialogOpen}
           onOpenChange={setCalcDialogOpen}
           profileId={profile.id}
+        />
+      )}
+
+      {qrDialogFee && (
+        <FeeQRTransferDialog
+          feeId={qrDialogFee.id}
+          feeLabel={qrDialogFee.label}
+          open={!!qrDialogFee}
+          onOpenChange={(o) => !o && setQrDialogFee(null)}
         />
       )}
     </div>

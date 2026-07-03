@@ -46,6 +46,7 @@ from app.repositories.fee_repository import InvoiceRepository
 from app.utils.id_helpers import format_profile_code
 from app.utils.text_helpers import to_bank_transfer_note
 from app.utils.vietqr import build_vietqr_payload, render_qr_png
+from app.utils.bank_names import bank_name_from_bin
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -314,7 +315,12 @@ async def get_invoices_by_fee(
             installment_no=inv.installment_no,
             amount=inv.amount,
             paid_amount=inv.paid_amount,
-            remaining_amount=inv.amount - inv.paid_amount,
+            # Dùng property remaining_amount (= amount + penalty − paid, GỒM
+            # penalty) — KHÔNG phải amount−paid. Khớp cờ has_payable_invoice
+            # (_invoice_is_payable cũng dùng property): ca penalty-only (principal
+            # đã trả, còn dư nợ phạt) vẫn ra remaining > 0 nên FeeQRTransferDialog
+            # không lọc nhầm → tránh "nút hiện nhưng dialog rỗng".
+            remaining_amount=inv.remaining_amount,
             due_date=inv.due_date,
             status=inv.status,
         )
@@ -399,6 +405,7 @@ async def get_invoice_vietqr(
                 bank_bin=bank_bin,
                 account_number=account_number,
                 account_name=account_name,
+                bank_name=bank_name_from_bin(bank_bin),
             ),
             amount=amount,
             content=content,
