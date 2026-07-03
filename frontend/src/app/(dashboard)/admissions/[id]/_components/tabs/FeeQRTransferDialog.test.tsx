@@ -17,6 +17,12 @@ vi.mock("@/hooks/finance/useInvoices", () => ({
   useInvoiceVietQR,
 }))
 
+// Thẻ QR vẽ bằng canvas (không chạy trong jsdom) → mock trả blob giả để test
+// luồng chia sẻ / tải ảnh mà không phụ thuộc canvas thật.
+vi.mock("@/lib/finance/qr-card", () => ({
+  renderVietQRCard: vi.fn(async () => new Blob(["png"], { type: "image/png" })),
+}))
+
 const fakeVietQR = {
   qr_payload: "00020101...",
   qr_image_base64: "iVBORw0KGgoAAAANSUhEUg==",

@@ -16,6 +16,7 @@ import { Share2 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { useInvoiceVietQR } from "@/hooks/finance/useInvoices"
+import { renderVietQRCard } from "@/lib/finance/qr-card"
 import { formatVND } from "@/lib/zod/finance"
 import type { VietQRResponse } from "@/types/finance.types"
 import { VietQRDisplay } from "./VietQRDisplay"
@@ -39,14 +40,6 @@ export function InvoiceVietQR({ invoiceId }: InvoiceVietQRProps) {
   )
 }
 
-/** Base64 (PNG do BE render) → Blob để chia sẻ / tải về. */
-function base64ToBlob(base64: string, type: string): Blob {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return new Blob([bytes], { type })
-}
-
 /** Caption kèm ảnh QR để học viên có đủ thông tin ngay cả khi không quét được. */
 function buildCaption(data: VietQRResponse): string {
   return [
@@ -63,7 +56,9 @@ function ShareQRButton({ data }: { data: VietQRResponse }) {
   const handleShare = React.useCallback(async () => {
     setBusy(true)
     try {
-      const blob = base64ToBlob(data.qr_image_base64, "image/png")
+      // Thẻ QR đầy đủ (QR + số tiền/nội dung/tên TK/số TK/ngân hàng) để học
+      // viên tin tưởng khi quét — thay vì ảnh QR "trần".
+      const blob = await renderVietQRCard(data)
       const file = new File(
         [blob],
         `vietqr-${data.bank_account.account_number}.png`,
