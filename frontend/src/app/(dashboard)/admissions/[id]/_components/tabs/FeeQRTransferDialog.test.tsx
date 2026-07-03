@@ -3,14 +3,18 @@ import { render, screen, waitFor } from "@/test/utils/test-utils"
 
 import { FeeQRTransferDialog } from "./FeeQRTransferDialog"
 
-const useInvoicesByFee = vi.fn()
-const useInvoiceVietQR = vi.fn()
+// vi.hoisted khởi tạo 2 mock fn TRƯỚC khi vi.mock factory (bị hoist lên trên các
+// static import) chạy → khử mọi rủi ro TDZ, không phụ thuộc thứ tự khai báo.
+const { useInvoicesByFee, useInvoiceVietQR } = vi.hoisted(() => ({
+  useInvoicesByFee: vi.fn(),
+  useInvoiceVietQR: vi.fn(),
+}))
 
 // FeeQRTransferDialog resolve hóa đơn qua useInvoicesByFee; khối hiển thị QR
 // (InvoiceVietQR) gọi useInvoiceVietQR(invoiceId). Mock chung 1 module.
 vi.mock("@/hooks/finance/useInvoices", () => ({
-  useInvoicesByFee: (...args: unknown[]) => useInvoicesByFee(...args),
-  useInvoiceVietQR: (...args: unknown[]) => useInvoiceVietQR(...args),
+  useInvoicesByFee,
+  useInvoiceVietQR,
 }))
 
 const fakeVietQR = {
