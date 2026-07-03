@@ -611,6 +611,9 @@ async def get_profile_finance_summary(
                 paid_amount=f.paid_amount,
                 remaining_amount=f.remaining_amount,
                 status=f.status,
+                has_payable_invoice=any(
+                    _invoice_is_payable(inv) for inv in (f.invoices or [])
+                ),
             )
             for f in summary["fees"]
         ],
@@ -726,6 +729,9 @@ async def get_profile_collection(
                 paid_amount=f.paid_amount,
                 remaining_amount=f.remaining_amount,
                 status=f.status,
+                has_payable_invoice=any(
+                    _invoice_is_payable(inv) for inv in (f.invoices or [])
+                ),
                 # Role-aware (route gate): drawer shows each fee action only when
                 # the matching route would accept it. Same single-source helpers as
                 # the detail FeeResponse. CAVEAT: can_cancel mirrors only the
@@ -957,6 +963,17 @@ async def recalculate_fee(
 def _inv_status_value(inv):
     """Normalize an invoice status to its string value (Enum or str)."""
     return inv.status.value if hasattr(inv.status, "value") else inv.status
+
+
+def _invoice_is_payable(inv) -> bool:
+    """Hóa đơn còn THU ĐƯỢC: đã phát hành (issued/partial/overdue) và còn dư nợ
+    (inv.remaining_amount = amount + penalty - paid > 0, GỒM penalty). Khớp
+    ``isInvoicePayable`` phía FE — nguồn cho FeeSummaryResponse.has_payable_invoice
+    (draft/cancelled/paid đều loại: draft chưa phát hành, paid/cancelled dư nợ=0)."""
+    return (
+        _inv_status_value(inv) in ("issued", "partial", "overdue")
+        and inv.remaining_amount > 0
+    )
 
 
 def _count_pending_overdue(invoices, today):

@@ -60,6 +60,7 @@ const summary = {
       paid_amount: "0",
       remaining_amount: "10000000",
       status: "calculated",
+      has_payable_invoice: false,
     },
   ],
   pending_invoices: 1,
@@ -107,6 +108,50 @@ describe("TuitionTab finance module links", () => {
       "/finance/fees?profile_id=178"
     )
     expect(document.querySelector('a[href="/finance/fees/501"]')).toBeInTheDocument()
+  })
+
+  it("shows the QR button when the fee has a payable invoice (BE flag)", () => {
+    useAuthStore.setState({
+      user: { id: 1, role: "officer", username: "officer" } as any,
+      isAuthenticated: true,
+    })
+    useProfileFinanceSummary.mockReturnValue({
+      data: {
+        ...summary,
+        fees: [{ ...summary.fees[0], status: "partial", has_payable_invoice: true }],
+      },
+      isLoading: false,
+      error: null,
+    })
+
+    render(<TuitionTab profile={profile as any} />)
+
+    expect(
+      screen.getByRole("button", { name: /mã qr chuyển khoản/i })
+    ).toBeInTheDocument()
+  })
+
+  it("hides the QR button when has_payable_invoice is false, even if status looks payable", () => {
+    // status 'partial' would have shown the button under the old status-derive
+    // logic; the BE flag is now the single source (penalty-only / draft-next cases).
+    useAuthStore.setState({
+      user: { id: 1, role: "officer", username: "officer" } as any,
+      isAuthenticated: true,
+    })
+    useProfileFinanceSummary.mockReturnValue({
+      data: {
+        ...summary,
+        fees: [{ ...summary.fees[0], status: "partial", has_payable_invoice: false }],
+      },
+      isLoading: false,
+      error: null,
+    })
+
+    render(<TuitionTab profile={profile as any} />)
+
+    expect(
+      screen.queryByRole("button", { name: /mã qr chuyển khoản/i })
+    ).not.toBeInTheDocument()
   })
 })
 

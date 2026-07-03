@@ -135,6 +135,11 @@ export interface FeeSummary {
   paid_amount: string
   remaining_amount: string
   status: FeeStatus
+  // Backend-owned: có ≥1 hóa đơn của khoản phí này còn THU ĐƯỢC (invoice-level,
+  // remaining GỒM penalty). Nguồn DUY NHẤT để quyết hiện nút "Mã QR chuyển khoản"
+  // — KHÔNG suy luận từ fee.status/remaining ở FE (bỏ sót penalty-only + lệch
+  // hóa đơn đợt draft). Mọi builder FeeSummaryResponse serialize (default false).
+  has_payable_invoice: boolean
   // Role-aware capability flags (backend-owned, each mirrors its route gate).
   // Optional: only the collection drawer populates them; other FeeSummary
   // sources leave them falsy → no action button (safe default).

@@ -213,6 +213,8 @@ export const feeSummarySchema = z.object({
   paid_amount: z.string(),
   remaining_amount: z.string(),
   status: feeStatusSchema,
+  // BE-owned: khoản phí có hóa đơn còn thu được (invoice-level, gồm penalty).
+  has_payable_invoice: z.boolean(),
 })
 
 export type FeeSummary = z.infer<typeof feeSummarySchema>

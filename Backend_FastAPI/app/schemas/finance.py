@@ -411,6 +411,13 @@ class FeeSummaryResponse(BaseModel):
     paid_amount: Decimal
     remaining_amount: Decimal
     status: FeeStatusEnum
+    # Invoice-level: có ≥1 hóa đơn của khoản phí này còn THU ĐƯỢC
+    # (issued/partial/overdue AND invoice.remaining_amount > 0; remaining GỒM
+    # penalty). Nguồn DUY NHẤT để FE quyết hiện nút "Mã QR chuyển khoản" — thay
+    # cho suy luận fee.status/fee.remaining ở FE, vốn (a) bỏ sót ca penalty-only
+    # (fee remaining=0 nhưng hóa đơn còn phạt) và (b) lệch khi hóa đơn đợt kế còn
+    # draft (fee partial nhưng không có hóa đơn payable). Default False.
+    has_payable_invoice: bool = False
     # Role-aware capability flags (same rules as FeeResponse: each mirrors its
     # route gate so the thin client never shows a button the route would 403).
     #   can_waive       — not terminal AND remaining > 0 AND role in [admin, manager]

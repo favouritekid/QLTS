@@ -292,13 +292,9 @@ export function TuitionTab({ profile }: TuitionTabProps) {
               const feeLabel =
                 (FEE_TYPE_LABELS[fee.fee_type] ?? fee.fee_type) +
                 (fee.semester_no ? ` — HK${fee.semester_no}` : "")
-              // QR chỉ có nghĩa khi khoản phí đã có hóa đơn phát hành và còn nợ
-              // (invoiced/partial/overdue). Dialog tự resolve đúng hóa đơn payable.
-              const showQr =
-                (fee.status === "invoiced" ||
-                  fee.status === "partial" ||
-                  fee.status === "overdue") &&
-                parseFloat(fee.remaining_amount) > 0
+              // Cờ BE-owned invoice-level (gồm penalty) — nguồn duy nhất; KHÔNG
+              // suy luận payability từ fee.status/remaining ở FE (thin-client).
+              const showQr = fee.has_payable_invoice
               // Officers can't open the finance detail page (proxy gate),
               // so render a non-link card for them. Manager / accountant /
               // admin keep the navigation affordance.
