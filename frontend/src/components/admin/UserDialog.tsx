@@ -91,6 +91,18 @@ const editUserSchema = z.object({
     .or(z.literal("")),
   role: z.string().min(1, "Vai trò là bắt buộc"),
   status: z.enum(["active", "pending", "banned"]),
+  // Trọng số phân công lead cho officer (1-100). Mirror backend Optional[int]=None:
+  // ô trống (xoá / role≠officer) → undefined ⇒ KHÔNG gửi, BE giữ giá trị cũ — thay vì
+  // coerce "" về 0 (từng gây .min(1) fail âm thầm chặn Lưu khi field bị ẩn).
+  assignment_weight: z.preprocess(
+    (v) => (v === "" || v === null ? undefined : v),
+    z.coerce
+      .number()
+      .int("Trọng số phải là số nguyên")
+      .min(1, "Tối thiểu 1")
+      .max(100, "Tối đa 100")
+      .optional()
+  ),
   avatar: z.instanceof(File).optional(),
 });
 
@@ -105,6 +117,7 @@ type UserFormValues = {
   phone_number?: string;
   role: string;
   status: "active" | "pending" | "banned";
+  assignment_weight?: number;
   avatar?: File;
 };
 
@@ -136,6 +149,10 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       .sort(); // Sort alphabetically
   }, [rolesData]);
 
+  // Officer weight mặc định — dùng chung cho defaultValues + reset() để 2 chỗ
+  // init form không lệch nhau nếu sau này đổi default.
+  const editWeightDefault = user?.assignment_weight ?? 1;
+
   // Form setup - use unified types to avoid union type issues with react-hook-form
   const form = useForm<UserFormValues>({
     resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as Resolver<UserFormValues>,
@@ -146,6 +163,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
           phone_number: user.phone_number || "",
           role: user.role, // architecture-allow serialization
           status: user.status,
+          assignment_weight: editWeightDefault,
         }
       : {
           username: "",
@@ -173,6 +191,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         phone_number: user.phone_number || "",
         role: user.role, // architecture-allow serialization
         status: user.status,
+        assignment_weight: editWeightDefault,
       });
       // Clear preview to show current user's avatar from server
       setAvatarPreview(null);
@@ -249,7 +268,15 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         // onError is already handled in the hook (toast notification)
       });
     } else if (user) {
-      updateUserMutation.mutate(values as EditUserFormValues, {
+      // assignment_weight chỉ áp dụng cho officer — bỏ khỏi payload cho vai trò khác
+      // (mirror BE Optional[int]: không gửi ⇒ giữ nguyên), tránh ghi weight vô nghĩa
+      // lên non-officer mỗi lần lưu.
+      const editValues = values as EditUserFormValues;
+      const payload =
+        editValues.role === "officer"
+          ? editValues
+          : { ...editValues, assignment_weight: undefined };
+      updateUserMutation.mutate(payload, {
         onSuccess: onSuccessCallback,
         // onError is already handled in the hook (toast notification)
       });
@@ -469,6 +496,41 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 </FormItem>
               )}
             />
+
+            {/* Assignment Weight — chỉ khi edit + role đang chọn là officer.
+                DEVIATION có chủ đích với quy tắc thin-client "no role checks":
+                đây là form GÁN vai trò, phải phản ứng theo role ĐANG CHỌN (chưa lưu),
+                nên dùng form.watch("role") — không có cờ BE nào phản ánh lựa chọn
+                chưa lưu. weight là thuộc tính riêng của officer. */}
+            {isEdit && form.watch("role") === "officer" && (
+              <FormField
+                control={form.control}
+                name="assignment_weight"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Trọng số phân công lead</FormLabel>
+                    <FormControl>
+                      {/* onChange do {...field} cung cấp (RHF tự trích e.target.value —
+                          cùng pattern các field text khác). value ?? "" để ô trống hiện
+                          rỗng thay vì "0"; schema preprocess "" → undefined. */}
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        disabled={isPending}
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Officer trọng số cao nhận nhiều lead hơn theo tỉ lệ (1–100, mặc
+                      định 1). Không phá trần tải an toàn — chỉ ưu tiên khi còn chỗ.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* Status */}
             <FormField

@@ -412,6 +412,64 @@ async def test_admin_update_user_success(
 
 
 @pytest.mark.asyncio
+async def test_admin_update_user_assignment_weight_valid(
+    client: AsyncClient, admin_token_headers: dict, regular_user_in_db: dict
+):
+    """PUT /api/admin/users/{id} - assignment_weight hợp lệ (5) → 200, persist DB,
+    và XUẤT HIỆN trong UserAdminResponse (admin surface expose lead-routing weight)."""
+    log.info("--- Running: test_admin_update_user_assignment_weight_valid ---")
+    user_id = regular_user_in_db["id"]
+    update_url = AdminURLs.USER_DETAIL(user_id)
+    response = await client.put(
+        update_url, data={"assignment_weight": "5"}, headers=admin_token_headers
+    )
+
+    assert response.status_code == 200, f"Resp: {response.text}"
+    body = response.json()
+    # Contract: admin response phải lộ assignment_weight (mirror max_capacity).
+    assert "assignment_weight" in body, (
+        f"UserAdminResponse must expose assignment_weight. Keys: {list(body.keys())}"
+    )
+    assert body["assignment_weight"] == 5
+
+    async with AsyncSessionLocal() as session:
+        db_user = await session.get(User, user_id)
+        assert db_user is not None
+        assert db_user.assignment_weight == 5  # DB persisted as int
+    log.info("assignment_weight=5 persisted and surfaced in response.")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", ["0", "101", "-1", "abc"])
+async def test_admin_update_user_assignment_weight_invalid(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    regular_user_in_db: dict,
+    bad_value: str,
+):
+    """PUT assignment_weight ngoài [1,100] hoặc non-int → 422 (Form ge/le validate ở
+    REQUEST layer, khác pattern silent-drop của max_capacity). DB không đổi (giữ 1)."""
+    log.info(f"--- Running: test_admin_update_user_assignment_weight_invalid[{bad_value}] ---")
+    user_id = regular_user_in_db["id"]
+    update_url = AdminURLs.USER_DETAIL(user_id)
+    response = await client.put(
+        update_url, data={"assignment_weight": bad_value}, headers=admin_token_headers
+    )
+
+    assert response.status_code == 422, (
+        f"assignment_weight={bad_value!r} must be rejected 422; got "
+        f"{response.status_code}: {response.text[:200]}"
+    )
+
+    async with AsyncSessionLocal() as session:
+        db_user = await session.get(User, user_id)
+        assert db_user is not None
+        # server_default '1' — invalid request rejected before any write.
+        assert db_user.assignment_weight == 1
+    log.info(f"Invalid assignment_weight={bad_value!r} correctly blocked (422).")
+
+
+@pytest.mark.asyncio
 async def test_admin_update_user_duplicate_email(
     client: AsyncClient,
     admin_token_headers: dict,

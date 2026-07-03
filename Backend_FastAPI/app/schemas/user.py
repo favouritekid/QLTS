@@ -153,6 +153,11 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
     max_capacity: Optional[int] = None
+    # Officer member-weighted assignment (1-100). Defense-in-depth: the router
+    # already validates via Form(ge=1, le=100), but pinning it here guards the
+    # UserUpdate(**update_dict) build so an out-of-range value can never reach
+    # setattr on the model.
+    assignment_weight: Optional[int] = Field(None, ge=1, le=100)
     skills: Optional[List[str]] = None
     unit_id: Optional[int] = None  # Organizational unit assignment
 
@@ -261,6 +266,10 @@ class UserAdminResponse(UserBase):
     skills: Optional[List[str]] = None
     availability_status: Optional[str] = None
     max_capacity: Optional[int] = None
+    # Admin-internal lead-routing weight — surfaced alongside max_capacity so the
+    # admin UI can display/edit it. Deliberately NOT on UserPickerSchema (officer/
+    # accountant picker) — same treatment as max_capacity.
+    assignment_weight: Optional[int] = None
     password_reset_required: Optional[bool] = False
     mfa_enabled: bool = False
 

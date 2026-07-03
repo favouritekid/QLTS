@@ -562,6 +562,13 @@ class Settings(BaseSettings):
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT: bool = Field(
         default=False, validation_alias="ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT"
     )  # Phase P2-2: Use fairness-weighted scoring instead of pure round-robin
+    ENABLE_MEMBER_WEIGHTED_ASSIGNMENT: bool = Field(
+        default=False, validation_alias="ENABLE_MEMBER_WEIGHTED_ASSIGNMENT"
+    )  # Member-weighted assignment: eff_util = workload/(capacity*assignment_weight).
+    # Officers with a higher assignment_weight are treated as "emptier" and receive
+    # proportionally more leads. INDEPENDENT of ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
+    # (either, both, or neither may be on). Default False ⇒ no behavior change until
+    # flipped. The safety gate (real_util >= SAFETY_THRESHOLD) is never bent by weight.
 
     # -- Lead Lifecycle SLA: auto-close stale rejected consultations --
     # A lead in sts04 (CONSULT_REJECTED, is_final=false for re-engagement) that

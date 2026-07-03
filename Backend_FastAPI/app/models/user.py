@@ -1,5 +1,15 @@
 # app/models/user.py
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
@@ -8,6 +18,16 @@ from .base import Base
 
 class User(Base):
     __tablename__ = "user"
+
+    # DB backstop for the officer lead-assignment weight range (1–100).
+    # FastAPI/Pydantic validate at the request layer; this constraint is
+    # the last line of defense against an out-of-range write.
+    __table_args__ = (
+        CheckConstraint(
+            "assignment_weight BETWEEN 1 AND 100",
+            name="ck_user_assignment_weight_range",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(64), index=True, unique=True, nullable=False)
@@ -77,6 +97,18 @@ class User(Base):
     # Lead assignment fields
     skills = Column(JSON, nullable=True)
     max_capacity = Column(Integer, default=100)
+    # Member-weighted auto-assignment (opt-in via ENABLE_MEMBER_WEIGHTED_ASSIGNMENT).
+    # eff_util = workload / (capacity * assignment_weight): a higher weight makes an
+    # officer look "emptier" so they receive proportionally more leads. The safety
+    # gate (real_util >= SAFETY_THRESHOLD) is never bent by weight. Range 1–100,
+    # default 1 (weight 1 ⇒ eff_util == real_util ⇒ no behavior change).
+    assignment_weight = Column(
+        Integer,
+        nullable=False,
+        server_default="1",
+        default=1,
+        comment="Officer lead-assignment weight (1-100). Higher = more leads.",
+    )
     availability_status = Column(String(50), default="available")
     total_lead_score = Column(Integer, default=0, nullable=False)
     last_assigned_at = Column(DateTime(timezone=True), nullable=True)

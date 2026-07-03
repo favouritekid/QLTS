@@ -142,6 +142,8 @@ export function useAdminUpdateUser(userId: number) {
       if (data.skills) formData.append("skills", JSON.stringify(data.skills));
       if (data.max_capacity !== undefined)
         formData.append("max_capacity", data.max_capacity.toString());
+      if (data.assignment_weight !== undefined)
+        formData.append("assignment_weight", data.assignment_weight.toString());
       if (data.unit_id !== undefined)
         formData.append("unit_id", (data.unit_id ?? 0).toString());
 

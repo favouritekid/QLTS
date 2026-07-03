@@ -898,6 +898,9 @@ async def update_existing_user(
     avatar: Optional[UploadFile] = File(None),
     skills: Optional[str] = Form(None),  # Nhận JSON string từ form-data
     max_capacity: Optional[int] = Form(None),
+    # Officer lead-assignment weight. ge/le validate ở REQUEST layer ⇒ 0/101/
+    # non-int trả 422 chuẩn (khác pattern silent-drop của max_capacity >= 0 bên dưới).
+    assignment_weight: Optional[int] = Form(None, ge=1, le=100),
     unit_id: Optional[int] = Form(None),  # Organizational unit assignment
 ):
     """
@@ -938,6 +941,10 @@ async def update_existing_user(
         update_dict["status"] = status.strip()
     if max_capacity is not None and max_capacity >= 0:
         update_dict["max_capacity"] = max_capacity
+    # Range đã được FastAPI/Form validate (ge=1, le=100) — chỉ cần kiểm None để
+    # phân biệt "không gửi" (giữ nguyên) với "gửi giá trị" (cập nhật).
+    if assignment_weight is not None:
+        update_dict["assignment_weight"] = assignment_weight
 
     # Handle unit_id assignment - validate unit exists
     # ✅ PHASE 8: Use OrganizationRepository instead of db.get()

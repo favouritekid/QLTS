@@ -1,112 +1,94 @@
-# tests/services/test_assignment_service.py
+# tests/services/test_assignment.py
 # -*- coding: utf-8 -*-
-import asyncio
+"""Unit tests for assignment_service.automatically_assign_lead.
+
+Mock-based (no real DB): a MagicMock/AsyncMock ``AsyncSession`` feeds the
+service pre-canned query results and captures ``db.add`` / ``db.add_all``.
+
+Assertions target BEHAVIOUR — which officer wins (``lead.assigned_officer_id``),
+the ``lead.assignment_status`` set via ``StatusHelper``, and the
+``AssignmentDecisionLog`` (``reason`` + enriched ``scores_snapshot``) — rather
+than log message strings, so they stay stable across logging refactors.
+
+Member-weighted matrix (BƯỚC 5) is exercised by monkeypatching the two
+independent flags on ``settings``:
+    ENABLE_MEMBER_WEIGHTED_ASSIGNMENT    → order by eff_util (weight-adjusted)
+    ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT  → add historical-share fairness term
+"""
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import pytest
-import pytest_asyncio  # <-- Sử dụng pytest_asyncio
+import pytest_asyncio
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import models, schemas
-from tests._lead_status_test_ids import (
-    ASSIGNED_LEAD_STATUS,
-    UNASSIGNED_LEAD_STATUS,
-)
-
-# Import các thành phần cần test
+from app import models
+from app.config import settings
 from app.services import assignment_service
-from app.utils.exceptions import (
-    ResourceNotFoundError,  # Mặc dù service không ném, nhưng để đó
-)
+from app.services.status_helper import AssignmentStatus
 
-# Import constants
+# Shared mock harness: `mock_db_session` fixture is auto-discovered from conftest;
+# MockWorkloadRow is a plain class so it is imported explicitly.
+from tests.services.conftest import MockWorkloadRow
+
 try:
-    from tests.fixtures.constants import (
-        NON_EXISTENT_ID,
-        TestLeadData,
-        TestOrgData,
-        TestUsers,
-    )
+    from tests.fixtures.constants import NON_EXISTENT_ID
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 
 
-# === Fixture cho session mock (Giữ nguyên) ===
-@pytest.fixture
-def mock_db_session():
-    """Tạo một mock AsyncSession."""
-    session = AsyncMock(spec=AsyncSession)
-    session.add = MagicMock()
-    session.commit = AsyncMock()
-    session.refresh = AsyncMock(return_value=None)
-    session.execute = AsyncMock()
-    session.delete = AsyncMock()
-    session.get = AsyncMock()
-    session.scalar = AsyncMock()
-    session.rollback = AsyncMock()
+# =====================================================================
+# Mock helpers
+# =====================================================================
+class MockHistRow:
+    """Row shape returned by the BƯỚC 5 fairness history GROUP BY query."""
 
-    # Mock cho async with db.begin_nested():
-    mock_nested_transaction = AsyncMock()
-    mock_nested_transaction.__aenter__ = AsyncMock(return_value=None)
-    mock_nested_transaction.__aexit__ = AsyncMock(return_value=None)
-    session.begin_nested.return_value = mock_nested_transaction
-
-    # Mock cho db.flush() để gán ID
-    async def mock_flush(objects=None):
-        if objects:
-            for obj in objects:
-                if (
-                    isinstance(obj, (models.Lead, models.AssignmentLog))
-                    and obj.id is None
-                ):
-                    obj.id = 1  # Gán ID giả
-        return None
-
-    session.flush = AsyncMock(side_effect=mock_flush)
-
-    # Cấu hình mặc định (sẽ bị ghi đè trong tests)
-    mock_execute_result = MagicMock()
-    mock_scalars_result = MagicMock()
-    mock_scalars_result.all.return_value = []
-    mock_scalars_result.first.return_value = None
-    mock_scalars_result.scalar_one_or_none.return_value = None
-    mock_execute_result.scalars.return_value = mock_scalars_result
-    mock_execute_result.scalar_one_or_none.return_value = None
-    session.execute.return_value = mock_execute_result
-    session.scalar.return_value = None
-    session.get.return_value = None
-    return session
+    def __init__(self, assigned_officer_id, cnt):
+        self.assigned_officer_id = assigned_officer_id
+        self.cnt = cnt
 
 
-# === Fixture cho Mock Logger ===
-@pytest_asyncio.fixture(autouse=True)  # <-- ĐỔI THÀNH pytest_asyncio.fixture
-async def mock_log(mocker):  # <-- ĐỔI THÀNH async def
-    """Mock logger trong service."""
-    log_path = "app.services.assignment_service.log"
-
-    # Tạo mock bên trong fixture (đã có event loop)
-    mock_log_obj = MagicMock()
-    mock_log_obj.info = AsyncMock(return_value=None)
-    mock_log_obj.error = AsyncMock(return_value=None)
-    mock_log_obj.warning = AsyncMock(return_value=None)
-    mock_log_obj.debug = AsyncMock(return_value=None)
-
-    # Patch vẫn dùng mocker (đồng bộ)
-    try:
-        mocker.patch(f"{log_path}.info", new=mock_log_obj.info)
-        mocker.patch(f"{log_path}.error", new=mock_log_obj.error)
-        mocker.patch(f"{log_path}.warning", new=mock_log_obj.warning)
-        mocker.patch(f"{log_path}.debug", new=mock_log_obj.debug)
-    except Exception as e:
-        # Cảnh báo này có thể vẫn xuất hiện nếu patch thất bại, nhưng mock nên hoạt động
-        print(f"WARNING: Structlog patching in test_assignment_service failed: {e}")
-
-    return mock_log_obj  # Trả về mock
+def _lead_result(lead):
+    r = MagicMock()
+    r.scalar_one_or_none.return_value = lead
+    return r
 
 
-# === Dữ liệu mẫu cho Tests ===
+def _officers_result(officers):
+    r = MagicMock()
+    r.scalars.return_value.all.return_value = officers
+    return r
+
+
+def _workload_result(rows):
+    # BƯỚC 3 iterates the result directly (`for row in workload_results`),
+    # so a plain list of rows is the correct shape.
+    return list(rows)
+
+
+def _hist_result(rows):
+    r = MagicMock()
+    r.all.return_value = list(rows)
+    return r
+
+
+def _decision_log(mock_db):
+    """Return the AssignmentDecisionLog instance passed to db.add (success path)."""
+    for c in mock_db.add.call_args_list:
+        if c.args and isinstance(c.args[0], models.AssignmentDecisionLog):
+            return c.args[0]
+    return None
+
+
+# =====================================================================
+# Fixtures
+# =====================================================================
+@pytest_asyncio.fixture(autouse=True)
+async def _silence_logger(mocker):
+    """Silence the module logger. The service resolves ``log = logger or
+    default_log`` and tests never pass a logger, so patching the module-level
+    ``default_log`` captures every log call without touching behaviour."""
+    mocker.patch.object(assignment_service, "default_log", new=MagicMock())
 
 
 @pytest.fixture
@@ -119,7 +101,7 @@ def lead_new():
         phone="123456",
         source="website",
         unit_id=1,
-        status="new",  # Trạng thái ban đầu
+        status="new",
         assigned_officer_id=None,
         assigned_at=None,
     )
@@ -127,7 +109,9 @@ def lead_new():
 
 @pytest.fixture
 def officer_1():
-    """Officer 1, unit 1, capacity 10, rảnh."""
+    """Officer 1, unit 1, capacity 10, chưa được gán bao giờ (last_assigned=None
+    ⇒ coalesce về datetime.min ⇒ 'cũ nhất' trong round-robin). Weight mặc định
+    (assignment_weight chưa set ⇒ _safe_weight = 1)."""
     return models.User(
         id=101,
         username="officer1",
@@ -136,13 +120,13 @@ def officer_1():
         availability_status="available",
         unit_id=1,
         max_capacity=10,
-        last_assigned_at=None,  # Chưa được gán bao giờ
+        last_assigned_at=None,
     )
 
 
 @pytest.fixture
 def officer_2():
-    """Officer 2, unit 1, capacity 10, vừa được gán."""
+    """Officer 2, unit 1, capacity 10, vừa được gán 1 giờ trước."""
     return models.User(
         id=102,
         username="officer2",
@@ -151,290 +135,323 @@ def officer_2():
         availability_status="available",
         unit_id=1,
         max_capacity=10,
-        last_assigned_at=datetime.now(timezone.utc) - timedelta(hours=1),  # Mới
+        last_assigned_at=datetime.now(timezone.utc) - timedelta(hours=1),
     )
 
 
 @pytest.fixture
 def officer_3_other_unit():
-    """Officer 3, unit 2, không liên quan."""
+    """Officer 3, unit 2, không liên quan (không lọt vào pool unit 1)."""
     return models.User(
         id=103,
         username="officer3",
         role="officer",
         status="active",
         availability_status="available",
-        unit_id=2,  # Unit khác
+        unit_id=2,
         max_capacity=10,
         last_assigned_at=None,
     )
 
 
-# === Bắt đầu Tests ===
+# =====================================================================
+# Core / legacy behaviour (repaired from the stale suite)
+# =====================================================================
 @pytest.mark.asyncio
-async def test_assign_success_picks_lower_workload(
-    mock_db_session, mock_log, lead_new, officer_1, officer_2
+async def test_assign_success_roundrobin_oldest_wins(
+    mock_db_session, lead_new, officer_1, officer_2
 ):
-    """
-    Test Kịch bản thành công:
-    - Lead 1 (unit 1)
-    - Officer 1 (unit 1, capacity 10, workload 2)
-    - Officer 2 (unit 1, capacity 10, workload 5)
-    - Service phải chọn Officer 1.
-    """
-
-    # 1. Setup Mocks
-    class MockWorkloadRow:
-        def __init__(self, assigned_officer_id, workload):
-            self.assigned_officer_id = assigned_officer_id
-            self.workload = workload
-
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-
-    mock_officers_result = MagicMock()
-    mock_officers_result.scalars.return_value.all.return_value = [officer_1, officer_2]
-
-    mock_workload_result = [
-        MockWorkloadRow(assigned_officer_id=101, workload=2),
-        MockWorkloadRow(assigned_officer_id=102, workload=5),
-    ]
-
+    """Both flags OFF (default) ⇒ legacy hybrid threshold round-robin: cùng nhóm
+    dưới trần, ưu tiên người được gán LÂU NHẤT (officer_1 last_assigned=None)
+    bất kể workload. Đây là hành vi 'hôm nay'."""
     mock_db_session.execute.side_effect = [
-        mock_lead_result,
-        mock_officers_result,
-        mock_workload_result,
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result(
+            [
+                MockWorkloadRow(101, 5),  # officer_1 tải cao hơn...
+                MockWorkloadRow(102, 2),  # ...nhưng vừa được gán gần đây
+            ]
+        ),
     ]
 
-    # 2. Action
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # 3. Assert (Giữ nguyên assertions về model)
+    # Round-robin: officer_1 (last_assigned cũ nhất) thắng dù workload cao hơn.
     assert lead_new.assigned_officer_id == officer_1.id
-    assert lead_new.status == ASSIGNED_LEAD_STATUS
+    assert lead_new.assignment_status == AssignmentStatus.ASSIGNED
     assert lead_new.assigned_at is not None
     assert officer_1.last_assigned_at is not None
-    assert mock_db_session.add.call_count == 3
-    # ... (Giữ nguyên assertions về add) ...
 
-    # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
-    mock_log.info.assert_any_await(
-        "Selected officer for assignment",
-        officer_id=officer_1.id,
-        current_workload=2,
-        max_capacity=officer_1.max_capacity,  # Thêm max_capacity
-        lead_id=lead_new.id,  # Thêm lead_id
-    )
-    mock_log.info.assert_any_await(
-        "Auto-assign task: Lead assigned successfully",
-        lead_id=lead_new.id,
-        officer_id=officer_1.id,
-    )
+    decision = _decision_log(mock_db_session)
+    assert decision is not None
+    assert decision.reason == "lowest_workload"
 
 
 @pytest.mark.asyncio
-async def test_assign_success_fairness_tiebreaker(
-    mock_db_session, mock_log, lead_new, officer_1, officer_2
-):
-    """
-    Test Kịch bản thành công (Fairness):
-    - Officer 1 (workload 2, last_assigned = 1 ngày trước)
-    - Officer 2 (workload 2, last_assigned = 1 giờ trước)
-    - Service phải chọn Officer 1.
-    """
-
-    officer_1.last_assigned_at = datetime.now(timezone.utc) - timedelta(days=1)
-
-    # 1. Setup Mocks
-    class MockWorkloadRow:
-        def __init__(self, assigned_officer_id, workload):
-            self.assigned_officer_id = assigned_officer_id
-            self.workload = workload
-
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-
-    mock_officers_result = MagicMock()
-    mock_officers_result.scalars.return_value.all.return_value = [officer_1, officer_2]
-
-    mock_workload_result = [
-        MockWorkloadRow(assigned_officer_id=101, workload=2),
-        MockWorkloadRow(assigned_officer_id=102, workload=2),
-    ]
-
+async def test_assign_fail_no_officers_available(mock_db_session, lead_new):
+    """Không có officer nào ⇒ assignment_status = failed, không gán."""
     mock_db_session.execute.side_effect = [
-        mock_lead_result,
-        mock_officers_result,
-        mock_workload_result,
+        _lead_result(lead_new),
+        _officers_result([]),
     ]
 
-    # 2. Action
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # 3. Assert (Giữ nguyên assertions về model)
-    assert lead_new.assigned_officer_id == officer_1.id
-    assert lead_new.status == ASSIGNED_LEAD_STATUS
-    # ... (Giữ nguyên assertions về add) ...
-
-    # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
-    mock_log.info.assert_any_await(
-        "Selected officer for assignment",
-        officer_id=officer_1.id,
-        current_workload=2,
-        max_capacity=officer_1.max_capacity,  # Thêm max_capacity
-        lead_id=lead_new.id,  # Thêm lead_id
-    )
-
-
-@pytest.mark.asyncio
-async def test_assign_fail_no_officers_available(mock_db_session, mock_log, lead_new):
-    """Test Kịch bản lỗi: Không tìm thấy officer nào (danh sách rỗng)."""
-
-    # 1. Setup Mocks
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-
-    mock_officers_result = MagicMock()
-    mock_officers_result.scalars.return_value.all.return_value = []  # Không có officer
-
-    mock_db_session.execute.side_effect = [mock_lead_result, mock_officers_result]
-
-    # 2. Action
-    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
-
-    # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id is None
-    assert lead_new.status == UNASSIGNED_LEAD_STATUS
-    assert mock_db_session.add.call_count == 1
-
-    # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
-    mock_log.warning.assert_any_await(
-        "Auto-assign task: No available officers found",
-        lead_id=lead_new.id,
-        unit_id=lead_new.unit_id,  # Giữ nguyên
-    )
+    assert lead_new.assignment_status == AssignmentStatus.FAILED
 
 
 @pytest.mark.asyncio
 async def test_assign_fail_all_officers_full_capacity(
-    mock_db_session, mock_log, lead_new, officer_1, officer_2
+    mock_db_session, lead_new, officer_1, officer_2
 ):
-    """Test Kịch bản lỗi: Các officer đều đã đầy workload."""
-
-    # 1. Setup Mocks
-    class MockWorkloadRow:
-        def __init__(self, assigned_officer_id, workload):
-            self.assigned_officer_id = assigned_officer_id
-            self.workload = workload
-
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-
-    mock_officers_result = MagicMock()
-    mock_officers_result.scalars.return_value.all.return_value = [officer_1, officer_2]
-
-    mock_workload_result = [
-        MockWorkloadRow(assigned_officer_id=101, workload=10),
-        MockWorkloadRow(assigned_officer_id=102, workload=10),
-    ]
-
+    """Tất cả officer đầy tải (workload >= capacity) ⇒ failed."""
     mock_db_session.execute.side_effect = [
-        mock_lead_result,
-        mock_officers_result,
-        mock_workload_result,
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result(
+            [
+                MockWorkloadRow(101, 10),
+                MockWorkloadRow(102, 10),
+            ]
+        ),
     ]
 
-    # 2. Action
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # 3. Assert (Giữ nguyên assertions về model)
     assert lead_new.assigned_officer_id is None
-    assert lead_new.status == UNASSIGNED_LEAD_STATUS
-    assert mock_db_session.add.call_count == 1
-
-    # SỬA LỖI 2: Cập nhật assertion log (kwargs phải khớp)
-    mock_log.warning.assert_any_await(
-        "Auto-assign task: All available officers are at full capacity",
-        lead_id=lead_new.id,
-        unit_id=lead_new.unit_id,  # Service log có unit_id
-    )
+    assert lead_new.assignment_status == AssignmentStatus.FAILED
 
 
 @pytest.mark.asyncio
-async def test_assign_skip_lead_not_found(mock_db_session, mock_log):
-    """Test Kịch bản bỏ qua: Lead ID không tồn tại."""
+async def test_assign_skip_lead_not_found(mock_db_session):
+    """Lead không tồn tại ⇒ bỏ qua, không add gì."""
+    mock_db_session.execute.side_effect = [_lead_result(None)]
 
-    # 1. Setup Mocks
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = None  # Không tìm thấy lead
-    mock_db_session.execute.return_value = mock_lead_result
-
-    # 2. Action
     await assignment_service.automatically_assign_lead(NON_EXISTENT_ID, mock_db_session)
 
-    # 3. Assert
-    mock_db_session.execute.assert_awaited_once()
     assert mock_db_session.add.call_count == 0
-    # SỬA LỖI 2: Cập nhật assertion log
-    mock_log.warning.assert_any_await(
-        "Auto-assign task: Lead not found", lead_id=NON_EXISTENT_ID
-    )
+    assert mock_db_session.add_all.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_assign_skip_lead_already_assigned(mock_db_session, mock_log, lead_new):
-    """Test Kịch bản bỏ qua: Lead đã được gán (race condition)."""
-
-    # 1. Setup Mocks
+async def test_assign_skip_lead_already_assigned(mock_db_session, lead_new):
+    """Lead đã có officer (race) ⇒ bỏ qua, giữ nguyên officer cũ."""
     lead_new.assigned_officer_id = 999
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-    mock_db_session.execute.return_value = mock_lead_result
+    mock_db_session.execute.side_effect = [_lead_result(lead_new)]
 
-    # 2. Action
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # 3. Assert
-    mock_db_session.execute.assert_awaited_once()
+    assert lead_new.assigned_officer_id == 999
     assert mock_db_session.add.call_count == 0
-    # SỬA LỖI 2: Cập nhật assertion log
-    mock_log.info.assert_any_await(
-        "Auto-assign task: Lead already assigned", lead_id=lead_new.id
-    )
+    assert mock_db_session.add_all.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_assign_db_error_rollback(mock_db_session, mock_log, lead_new, officer_1):
-    """Test Kịch bản lỗi: DB Error xảy ra (ví dụ khi add)."""
-
-    # 1. Setup Mocks
-    mock_lead_result = MagicMock()
-    mock_lead_result.scalar_one_or_none.return_value = lead_new
-
-    mock_officers_result = MagicMock()
-    mock_officers_result.scalars.return_value.all.return_value = [officer_1]
-
-    mock_workload_result = []
-
+async def test_assign_db_error_propagates(mock_db_session, lead_new, officer_1):
+    """DB error khi ghi (db.add_all) ⇒ exception ném ra để Celery retry."""
     mock_db_session.execute.side_effect = [
-        mock_lead_result,
-        mock_officers_result,
-        mock_workload_result,
+        _lead_result(lead_new),
+        _officers_result([officer_1]),
+        _workload_result([MockWorkloadRow(101, 0)]),
     ]
-
     db_error = SQLAlchemyError("Simulated DB Error")
-    mock_db_session.add.side_effect = db_error
+    mock_db_session.add_all.side_effect = db_error
 
-    # 2. Action & Assert Exception
     with pytest.raises(SQLAlchemyError) as exc_info:
         await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
-    # 3. Assert
-    assert exc_info.value == db_error
-    # SỬA LỖI 2: Cập nhật assertion log (thêm exc_info=True)
-    mock_log.error.assert_any_await(
-        "Auto-assign task: Failed and rolled back",
-        lead_id=lead_new.id,
-        error=str(db_error),
-        exc_info=True,  # Service đang log với exc_info=True
-    )
+    assert exc_info.value is db_error
+
+
+# =====================================================================
+# Member-weighted decision matrix (BƯỚC 5)
+# =====================================================================
+@pytest.mark.asyncio
+async def test_matrix_both_off_is_legacy(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """fairness OFF + member OFF ⇒ legacy y hệt. Weight officer_2 dù cao vẫn KHÔNG
+    được xét (flag tắt) ⇒ round-robin theo last_assigned ⇒ officer_1."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", False)
+    officer_2.assignment_weight = 100  # bị bỏ qua vì member flag OFF
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 2), MockWorkloadRow(102, 2)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_1.id
+    assert _decision_log(mock_db_session).reason == "lowest_workload"
+
+
+@pytest.mark.asyncio
+async def test_matrix_member_on_uniform_weight_orders_by_workload(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member ON nhưng weight ĐỒNG ĐỀU (đều =1): member mode order theo
+    eff_util == real_util ⇒ ưu tiên TẢI THẤP hơn — KHÁC legacy round-robin (chọn
+    theo last_assigned bất kể tải). Chốt tường minh finding /code-review: 'weight-1
+    KHÔNG regression-safe một khi flag ON'. Setup officer_1 tải 5 + last_assigned cũ
+    nhất (None) vs officer_2 tải 2 + mới hơn: member chọn officer_2 (tải thấp); legacy
+    sẽ chọn officer_1 (xem test_matrix_both_off_is_legacy dùng cùng cấu trúc)."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1  # ĐỒNG ĐỀU
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 5), MockWorkloadRow(102, 2)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    # eff_util officer_2 (0.2) < officer_1 (0.5) ⇒ member chọn officer_2 (tải thấp),
+    # NGƯỢC với legacy (chọn officer_1 vì last_assigned cũ nhất bất kể tải).
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "member_weighted"
+
+
+@pytest.mark.asyncio
+async def test_matrix_member_on_weight_gets_more(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member ON, fairness OFF. Hai officer CÙNG workload dương bằng nhau (4/10 —
+    không dùng 0 vì eff_util đều 0 thì weight vô nghĩa). officer_2 weight=2 ⇒
+    eff_util = 4/(10*2)=0.2 < officer_1 eff_util 0.4 ⇒ officer_2 được chọn.
+    Cũng kiểm audit contract: scores_snapshot là dict {real_util,eff_util,weight,score}.
+    """
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 2
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 4), MockWorkloadRow(102, 4)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+
+    decision = _decision_log(mock_db_session)
+    assert decision.reason == "member_weighted"
+    snap = decision.scores_snapshot
+    assert set(snap.keys()) == {"101", "102"}
+    for v in snap.values():
+        assert set(v.keys()) == {"real_util", "eff_util", "weight", "score"}
+    # real_util KHÔNG nhân weight (bằng nhau); eff_util có nhân weight.
+    assert snap["101"]["real_util"] == snap["102"]["real_util"] == 0.4
+    assert snap["102"]["eff_util"] < snap["101"]["eff_util"]
+    assert snap["102"]["weight"] == 2
+
+
+@pytest.mark.asyncio
+async def test_matrix_member_on_safety_gate_not_bent(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member ON. officer_1 weight rất cao (eff_util thấp) NHƯNG tải THẬT >= 0.8
+    (9/10) ⇒ overloaded=True ⇒ bị đẩy xuống sau officer_2 (tải thật 0.4, không
+    overloaded). Weight KHÔNG phá trần an toàn."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 5  # eff_util = 9/(10*5) = 0.18 (thấp!)
+    officer_2.assignment_weight = 1  # eff_util = 4/(10*1) = 0.40
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 9), MockWorkloadRow(102, 4)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    # officer_1 tải thật 0.9 ⇒ overloaded ⇒ officer_2 thắng dù eff_util cao hơn.
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "member_weighted"
+
+
+@pytest.mark.asyncio
+async def test_matrix_fairness_on_member_off_raw_share(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """fairness ON, member OFF, đủ history (>=10 toàn unit) ⇒ hành vi P2-2 cũ:
+    score = 0.6*real_util + 0.4*raw_share. officer_1 đã nhận 8/10 lịch sử ⇒ share
+    cao ⇒ bị phạt ⇒ officer_2 (share 2/10) được chọn. Weight KHÔNG được xét."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", False)
+    officer_2.assignment_weight = 100  # bị bỏ qua vì member OFF
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 2), MockWorkloadRow(102, 2)]),
+        _hist_result([MockHistRow(101, 8), MockHistRow(102, 2)]),  # total=10
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "fairness_weighted"
+
+
+@pytest.mark.asyncio
+async def test_matrix_fairness_and_member_pressure(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """fairness ON + member ON, đủ pool history (>=10) ⇒ member_fairness_weighted:
+    score = 0.6*eff_util + 0.4*pressure, pressure = actual_share - target_share
+    (target = weight/Σweight trong pool). officer_2 weight=3 (target 0.75) nhưng
+    mới nhận 0.5 thực tế ⇒ pressure âm ⇒ được đẩy lên ⇒ được chọn."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1  # target 1/4 = 0.25
+    officer_2.assignment_weight = 3  # target 3/4 = 0.75
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 2), MockWorkloadRow(102, 2)]),
+        _hist_result([MockHistRow(101, 6), MockHistRow(102, 6)]),  # pool=12
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    # score officer_1 = 0.6*0.2 + 0.4*(0.5-0.25) = 0.22
+    # score officer_2 = 0.6*0.0667 + 0.4*(0.5-0.75) = -0.06  ⇒ officer_2 thắng
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "member_fairness_weighted"
+
+
+@pytest.mark.asyncio
+async def test_matrix_fairness_and_member_insufficient_history_falls_back(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """fairness ON + member ON nhưng pool history < 10 ⇒ fallback là MEMBER-WEIGHTED
+    (KHÔNG legacy): weight phải có tác dụng ngay đầu rollout. officer_2 weight=2 ⇒
+    eff_util thấp hơn ⇒ được chọn."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 2
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 4), MockWorkloadRow(102, 4)]),
+        _hist_result([MockHistRow(101, 3), MockHistRow(102, 2)]),  # pool=5 < 10
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+    assert _decision_log(mock_db_session).reason == "member_weighted"
