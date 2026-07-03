@@ -149,6 +149,10 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       .sort(); // Sort alphabetically
   }, [rolesData]);
 
+  // Officer weight mặc định — dùng chung cho defaultValues + reset() để 2 chỗ
+  // init form không lệch nhau nếu sau này đổi default.
+  const editWeightDefault = user?.assignment_weight ?? 1;
+
   // Form setup - use unified types to avoid union type issues with react-hook-form
   const form = useForm<UserFormValues>({
     resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as Resolver<UserFormValues>,
@@ -159,7 +163,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
           phone_number: user.phone_number || "",
           role: user.role, // architecture-allow serialization
           status: user.status,
-          assignment_weight: user.assignment_weight ?? 1,
+          assignment_weight: editWeightDefault,
         }
       : {
           username: "",
@@ -187,7 +191,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         phone_number: user.phone_number || "",
         role: user.role, // architecture-allow serialization
         status: user.status,
-        assignment_weight: user.assignment_weight ?? 1,
+        assignment_weight: editWeightDefault,
       });
       // Clear preview to show current user's avatar from server
       setAvatarPreview(null);

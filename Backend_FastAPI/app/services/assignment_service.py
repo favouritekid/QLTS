@@ -508,25 +508,33 @@ async def automatically_assign_lead(
                 # A8/P2-2: Log decision — successful assignment. `assign_reason` đã
                 # được BƯỚC 5 set theo decision matrix (lowest_workload /
                 # fairness_weighted / member_weighted / member_fairness_weighted).
-                # scores_snapshot enrich sang dict {real_util, eff_util, weight, score}
-                # — KHÔNG consumer runtime nào đọc (fairness_service chỉ đọc
-                # capacity_snapshot); thuần audit. LƯU Ý: `score` là thành phần chấm
-                # điểm để SẮP XẾP ở các chế độ weighted; ở chế độ legacy/fallback nó
-                # GIỮ real_util nhưng KHÔNG quyết định thứ tự (sort chỉ theo
-                # overloaded + last_assigned) — đọc kèm `reason` để hiểu đúng.
+                # scores_snapshot (thuần audit — KHÔNG consumer runtime nào đọc;
+                # fairness_service chỉ đọc capacity_snapshot):
+                #  - Chế độ weighted → dict {real_util, eff_util, weight, score}
+                #    (`score` là thành phần SẮP XẾP; đọc kèm `reason`).
+                #  - Legacy/round-robin → gọn: chỉ real_util (eff_util==real_util,
+                #    weight==1, score==real_util nên 3 field kia thừa; sort chỉ theo
+                #    overloaded + last_assigned).
                 await _log_assignment_decision(
                     db, lead_id=lead_id, assigned_officer_id=chosen_one.id,
                     eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
                     channel="auto", reason=assign_reason,
-                    scores_snapshot={
-                        str(ol["officer"].id): {
-                            "real_util": round(ol["real_util"], 4),
-                            "eff_util": round(ol["eff_util"], 4),
-                            "weight": ol["weight"],
-                            "score": round(ol["score"], 4),
+                    scores_snapshot=(
+                        {
+                            str(ol["officer"].id): round(ol["real_util"], 4)
+                            for ol in officer_loads
                         }
-                        for ol in officer_loads
-                    },
+                        if scoring == "legacy"
+                        else {
+                            str(ol["officer"].id): {
+                                "real_util": round(ol["real_util"], 4),
+                                "eff_util": round(ol["eff_util"], 4),
+                                "weight": ol["weight"],
+                                "score": round(ol["score"], 4),
+                            }
+                            for ol in officer_loads
+                        }
+                    ),
                     capacity_snapshot={
                         str(ol["officer"].id): {
                             "current": ol["workload"],
