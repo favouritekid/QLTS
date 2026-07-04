@@ -25,6 +25,7 @@ interface PipelineSidebarProps {
     personal_info?: { category: string; errors: string[]; count: number }
     documents?: { category: string; errors: string[]; count: number }
     scores?: { category: string; errors: string[]; count: number }
+    required_data?: { category: string; errors: string[]; count: number }
   } | null
   completionPercent: number
   /**
@@ -127,6 +128,7 @@ export function PipelineSidebar({
                         "w-8 h-8 rounded-full flex items-center justify-center border",
                         isActive ? "border-primary text-primary" : "border-muted bg-background",
                         status === "success" && !isActive && "bg-success-50 border-success-200 text-success-600",
+                        status === "warning" && !isActive && "bg-warning-50 border-warning-200 text-warning-600",
                         status === "error" && !isActive && "bg-error-50 border-error-200 text-error-600"
                     )}>
                         <span className="text-xs">{step.id}</span>

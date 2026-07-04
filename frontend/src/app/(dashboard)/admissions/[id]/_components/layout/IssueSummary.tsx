@@ -10,6 +10,7 @@ interface GroupedValidationErrors {
   personal_info?: { category: string; errors: string[]; count: number }
   documents?: { category: string; errors: string[]; count: number }
   scores?: { category: string; errors: string[]; count: number }
+  required_data?: { category: string; errors: string[]; count: number }
 }
 
 interface IssueSummaryProps {
@@ -28,7 +29,11 @@ export function IssueSummary({
   const [isOpen, setIsOpen] = useState(defaultOpen)
 
   const priorityIssues = derivePriorityIssues(profile)
-  const totalCount = validationErrors.length + priorityIssues.length
+  // Required-data (family/academic) don't appear in validationErrors, so add
+  // their count explicitly — otherwise a draft missing ONLY these renders
+  // totalCount 0 and the whole panel hides (the exact "kẹt" case).
+  const requiredDataCount = groupedValidationErrors?.required_data?.count ?? 0
+  const totalCount = validationErrors.length + priorityIssues.length + requiredDataCount
 
   if (totalCount === 0) return null
 
@@ -63,6 +68,13 @@ export function IssueSummary({
                   title={groupedValidationErrors.personal_info.category}
                   count={groupedValidationErrors.personal_info.count}
                   errors={groupedValidationErrors.personal_info.errors}
+                />
+              )}
+              {groupedValidationErrors.required_data && groupedValidationErrors.required_data.count > 0 && (
+                <IssueGroup
+                  title={groupedValidationErrors.required_data.category}
+                  count={groupedValidationErrors.required_data.count}
+                  errors={groupedValidationErrors.required_data.errors}
                 />
               )}
               {groupedValidationErrors.documents && groupedValidationErrors.documents.count > 0 && (

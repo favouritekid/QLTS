@@ -1109,8 +1109,19 @@ export const admissionProfileResponseSchema = z.object({
       category: z.string(),
       errors: z.array(z.string()),
       count: z.number().int()
+    }).optional(),
+    // Required-data bucket (family + academic history) — surfaced so the draft
+    // view can warn about groups that block submit but aren't in validation_errors.
+    required_data: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
     }).optional()
   }).optional().nullable(),
+
+  // Draft blocked from submit by missing required data (family/academic).
+  // Backend-computed (bypass-aware) — FE gates the submit button on this.
+  submit_blocked_by_data: z.boolean().optional().nullable(),
 
   /**
    * Step status for sidebar navigation.

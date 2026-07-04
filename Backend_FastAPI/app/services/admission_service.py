@@ -2545,6 +2545,37 @@ def _compute_frontend_fields(
     
     # Academic
     has_academic = profile.academic_history and len(profile.academic_history) > 0
+
+    # --- Required-data visibility (family + academic history) -------------------
+    # These two groups HARD-block submit (submit_and_evaluate: "Chưa nhập thông
+    # tin gia đình" / "Chưa nhập quá trình học tập") but were historically absent
+    # from validation_errors/grouped_validation_errors → the draft view showed no
+    # error while submit rejected them (draft↔submit mismatch → user bỏ trống →
+    # kẹt). Surface them as a dedicated grouped bucket + a submit-gate flag so the
+    # FE can warn up-front and disable the submit button with a clear reason.
+    # NOTE: deliberately NOT added to validation_errors/eligibility_status (that
+    # would flip step-8 lock, bypass_warning, and approve gating — out of scope).
+    _missing_required_data: List[str] = []
+    if not has_academic:
+        _missing_required_data.append("Chưa nhập quá trình học tập")
+    if not has_family:
+        _missing_required_data.append("Chưa nhập thông tin gia đình")
+    profile.grouped_validation_errors["required_data"] = {
+        "category": "Thông tin bắt buộc",
+        "errors": _missing_required_data,
+        "count": len(_missing_required_data),
+    }
+    # Mirror the ACTUAL submit gate: submit_and_evaluate rejects missing
+    # family_info / academic_history UNCONDITIONALLY. allow_unverified_submission
+    # only relaxes DOCUMENT verification (strict vs lax uploaded-doc handling) —
+    # it NEVER makes these two data groups optional. So the flag must NOT honour
+    # that bypass; otherwise a doc-lax draft missing family/academic would show an
+    # enabled submit (or nợ-giấy-tờ) button and then bounce back from the backend,
+    # reintroducing the exact draft↔submit mismatch this surfacing fix removes.
+    profile.submit_blocked_by_data = bool(
+        status == "draft"
+        and _missing_required_data
+    )
     
     # P0 hotfix multi-NV — Step 5 (Scores) "has any" must read per-choice
     # ProfileChoiceScore for multi-NV (profile.subject_scores is always empty

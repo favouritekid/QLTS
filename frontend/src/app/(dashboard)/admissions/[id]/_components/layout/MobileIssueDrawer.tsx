@@ -11,6 +11,7 @@ interface GroupedValidationErrors {
   personal_info?: { category: string; errors: string[]; count: number }
   documents?: { category: string; errors: string[]; count: number }
   scores?: { category: string; errors: string[]; count: number }
+  required_data?: { category: string; errors: string[]; count: number }
 }
 
 interface MobileIssueDrawerProps {
@@ -25,7 +26,8 @@ export function MobileIssueDrawer({
   groupedValidationErrors,
 }: MobileIssueDrawerProps) {
   const priorityIssues = derivePriorityIssues(profile)
-  const totalCount = validationErrors.length + priorityIssues.length
+  const requiredDataCount = groupedValidationErrors?.required_data?.count ?? 0
+  const totalCount = validationErrors.length + priorityIssues.length + requiredDataCount
 
   if (totalCount === 0) return null
 

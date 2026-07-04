@@ -141,12 +141,18 @@ export function DecisionActionsPanel({
   isEnrolling = false,
   canEnroll,
 }: DecisionActionsPanelProps) {
+  // Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / gia đình) — BE chặn
+  // submit nhưng không nằm trong eligibility, nên gate nút + hiện lý do rõ ràng
+  // ở đây (bypass-aware: cờ đã tính allow_unverified_submission ở backend).
+  const submitBlockedByData = profile.submit_blocked_by_data ?? false
+  const requiredDataErrors = profile.grouped_validation_errors?.required_data?.errors ?? []
+
   // ----- per-action renderers (closures) -------------------------------------
   const submitButton = () => (
     <Button
       key="submit"
       size="lg"
-      disabled={!isEligible || isSubmitting}
+      disabled={!isEligible || submitBlockedByData || isSubmitting}
       onClick={onSubmit}
       className={PRIMARY_CLASS}
     >
@@ -352,9 +358,14 @@ export function DecisionActionsPanel({
     // mandatory docs, the backend grants `can_submit_with_document_debt`. Offer
     // "Nộp kèm nợ giấy tờ" alongside the (disabled) normal submit. The reason
     // line then points at the debt option instead of a dead "chưa đủ điều kiện".
-    const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt
+    // When required data (family/academic) is still missing, submit is blocked
+    // regardless of docs — hide the doc-debt CTA (it would also be rejected) and
+    // point the user at the missing data instead.
+    const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt && !submitBlockedByData
     const reasonNode = showDebt ? (
       <Reason>Còn thiếu giấy tờ — có thể nộp kèm nợ giấy tờ.</Reason>
+    ) : submitBlockedByData ? (
+      <Reason>Còn thiếu: {requiredDataErrors.join(" · ")}</Reason>
     ) : !isEligible ? (
       <Reason>Chưa đủ điều kiện để nộp.</Reason>
     ) : undefined

@@ -1296,7 +1296,15 @@ class AdmissionProfileResponse(BaseModel):
     # Grouped validation errors (categorized display)
     grouped_validation_errors: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Validation errors grouped by category: {personal_info: {category, errors, count}, documents: {...}, scores: {...}}"
+        description="Validation errors grouped by category: {personal_info: {category, errors, count}, documents: {...}, scores: {...}, required_data: {...}}"
+    )
+
+    # Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / thông tin gia đình)
+    # vốn chặn submit nhưng không nằm trong validation_errors → FE dùng cờ này để
+    # disable nút Nộp + hiện lý do rõ ràng. False khi allow_unverified_submission.
+    submit_blocked_by_data: Optional[bool] = Field(
+        default=False,
+        description="Draft blocked from submit by missing required data (family/academic); False if allow_unverified_submission bypass."
     )
 
     # Executive summary for dashboard overview
