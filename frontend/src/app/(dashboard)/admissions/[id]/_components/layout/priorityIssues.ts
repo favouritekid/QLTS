@@ -26,6 +26,12 @@ export function missingRequiredDataSteps(
   profile: AdmissionProfileResponse | null,
 ): number[] {
   if (!profile) return []
+  // Match the backend: `_missing_submit_required_data` only runs for drafts, so
+  // required_data.count / submit_blocked_by_data are 0 on non-draft statuses.
+  // A submitted/approved profile with legacy-empty family/academic is NOT
+  // submit-blocked by them, so must NOT outrank a real priority issue and send
+  // the CTA to a read-only step 2/3 dead end.
+  if (profile.status !== "draft") return []
   const steps: number[] = []
   if (!profile.family_info?.length) steps.push(2)
   if (!profile.academic_history?.length) steps.push(3)
@@ -53,17 +59,17 @@ export function firstAttentionStep(
   opts: { requiredDataSteps: number[]; priorityIssuesCount: number },
 ): number | null {
   const ALL_STEPS = [1, 2, 3, 4, 5, 6, 7, 8]
-  const firstWith = (status: StepStatus, steps: number[]) =>
-    steps.find((s) => stepsStatus[s] === status) ?? null
+  const firstWith = (status: StepStatus) =>
+    ALL_STEPS.find((s) => stepsStatus[s] === status) ?? null
 
-  const errorStep = firstWith("error", ALL_STEPS)
+  const errorStep = firstWith("error")
   if (errorStep !== null) return errorStep
 
   if (opts.requiredDataSteps.length > 0) return Math.min(...opts.requiredDataSteps)
 
   if (opts.priorityIssuesCount > 0) return 4
 
-  return firstWith("warning", ALL_STEPS)
+  return firstWith("warning")
 }
 
 /**

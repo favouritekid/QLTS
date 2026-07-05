@@ -1,7 +1,7 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { canDecide } from "@/lib/utils/admission-permissions"
+import { canDecide, isStepNavLocked } from "@/lib/utils/admission-permissions"
 import { ADMISSION_STEPS } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -26,8 +26,8 @@ export function MobileStepStrip({
   onStepChange,
   stepsStatus,
 }: MobileStepStripProps) {
-  // Step 8 unlock override for decision-capable users — mirrors PipelineSidebar
-  // and AdmissionActions so the strip agrees with the other navigation surfaces.
+  // Step-8 unlock for decision-capable users, via the shared isStepNavLocked so
+  // the strip agrees with PipelineSidebar on which steps are reachable.
   const decide = canDecide(profile?.permissions)
 
   return (
@@ -38,8 +38,7 @@ export function MobileStepStrip({
       {ADMISSION_STEPS.map((step) => {
         const status = stepsStatus[step.id] || "locked"
         const isActive = currentStep === step.id
-        const isStep8Override = step.id === 8 && decide
-        const isLocked = !isStep8Override && status === "locked"
+        const isLocked = isStepNavLocked(step.id, status, decide)
 
         return (
           <button

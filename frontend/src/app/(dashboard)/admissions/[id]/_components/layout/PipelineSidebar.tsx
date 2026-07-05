@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useMemo } from "react"
 import { IssueSummary } from "./IssueSummary"
 import { derivePriorityIssues } from "./priorityIssues"
-import { canDecide } from "@/lib/utils/admission-permissions"
+import { canDecide, isStepNavLocked } from "@/lib/utils/admission-permissions"
 import { ADMISSION_STEPS } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -100,9 +100,9 @@ export function PipelineSidebar({
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)
           // Trust BE-aggregated `permissions.has_decision`, fallback OR-7.
+          // Step-8 unlock lives in the shared isStepNavLocked (see MobileStepStrip).
           const decide = canDecide(profile?.permissions)
-          const isStep8Override = step.id === 8 && decide
-          const isLocked = !isStep8Override && status === "locked"
+          const isLocked = isStepNavLocked(step.id, status, decide)
 
           const stepButton = (
             <button

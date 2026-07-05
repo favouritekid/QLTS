@@ -7,6 +7,7 @@ import { FeeStatusLink } from "@/components/finance"
 import { GraduationCap, MapPin, Award, ArrowRight } from "lucide-react"
 import { ProfileActionMenu } from "./ProfileActionMenu"
 import { derivePriorityIssues, issueTotalCount } from "./priorityIssues"
+import { getInitials } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import { cn } from "@/lib/utils"
 
 interface AdmissionHeaderProps {
@@ -19,16 +20,6 @@ interface AdmissionHeaderProps {
   isUnclaiming?: boolean
   onDelete?: () => void
   isDeleting?: boolean
-}
-
-/** First + last word initials, e.g. "Ksor Ho Hơn" → "KH". */
-function ownerInitials(name?: string | null): string {
-  if (!name) return "—"
-  const parts = name.trim().split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return "—"
-  const first = parts[0][0] ?? ""
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : ""
-  return (first + last).toUpperCase()
 }
 
 function LedgerItem({ k, className, children }: { k: string; className?: string; children: ReactNode }) {
@@ -185,7 +176,7 @@ export function AdmissionHeader({
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/60 pt-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700">
-              {ownerInitials(owner)}
+              {owner ? getInitials(owner) : "—"}
             </span>
             <span className="truncate text-xs text-foreground md:text-sm">
               <span className="font-semibold">{owner ?? "Chưa phân công"}</span>
@@ -251,8 +242,11 @@ export function AdmissionHeader({
             </LedgerItem>
           )}
 
+          {/* KV + Đối tượng UT stay visible on every breakpoint — a manager
+              reviewing a case on mobile/tablet must not lose these priority
+              cockpit signals (the ledger row wraps rather than hiding them). */}
           {kv && (
-            <LedgerItem k="KV" className="hidden md:flex">
+            <LedgerItem k="KV">
               <span data-testid="header-chip-kv" className="inline-flex items-center gap-1 font-bold text-info-700">
                 <MapPin className="h-3 w-3" /> {kv}
               </span>
@@ -260,7 +254,7 @@ export function AdmissionHeader({
           )}
 
           {utBucket && (
-            <LedgerItem k="Đối tượng UT" className="hidden lg:flex">
+            <LedgerItem k="Đối tượng UT">
               <span data-testid="header-chip-ut" className="inline-flex items-center gap-1 font-bold text-purple-700">
                 <Award className="h-3 w-3" /> UT{utBucket}
               </span>

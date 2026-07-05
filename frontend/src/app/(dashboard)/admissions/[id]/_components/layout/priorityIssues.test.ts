@@ -10,9 +10,9 @@ function steps(overrides: Record<number, StepStatus> = {}): Record<number, StepS
   return { ...base, ...overrides }
 }
 
-/** Minimal profile with both required-data groups present by default. */
+/** Minimal DRAFT profile with both required-data groups present by default. */
 function profile(overrides: Partial<AdmissionProfileResponse> = {}): AdmissionProfileResponse {
-  return { family_info: [{}], academic_history: [{}], ...overrides } as unknown as AdmissionProfileResponse
+  return { status: "draft", family_info: [{}], academic_history: [{}], ...overrides } as unknown as AdmissionProfileResponse
 }
 
 const NONE = { requiredDataSteps: [] as number[], priorityIssuesCount: 0 }
@@ -90,6 +90,16 @@ describe("missingRequiredDataSteps", () => {
   it("returns [] when both present, and [] for null", () => {
     expect(missingRequiredDataSteps(profile())).toEqual([])
     expect(missingRequiredDataSteps(null)).toEqual([])
+  })
+
+  it("returns [] on non-draft status even when family/academic empty (matches BE draft-scoped gate)", () => {
+    // A submitted/approved legacy profile is NOT submit-blocked by family/academic,
+    // so the CTA must not route to step 2/3 — let priority/other issues win.
+    expect(
+      missingRequiredDataSteps(
+        profile({ status: "submitted", family_info: [], academic_history: [] } as Partial<AdmissionProfileResponse>),
+      ),
+    ).toEqual([])
   })
 })
 
