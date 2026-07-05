@@ -48,6 +48,26 @@ function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): Admiss
   } as unknown as AdmissionProfileResponse
 }
 
+/** A choice-engine nguyện vọng row with sane defaults; override per test. */
+function buildChoice(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    admission_profile_id: 42,
+    admission_path_id: 7,
+    path_subject_group_config_id: 3,
+    display_order: 1,
+    decision: "pending",
+    display_path_name: "Điều dưỡng 2026 – Chính quy – Học bạ",
+    display_program_name: "Điều dưỡng",
+    display_degree_level: "Cao đẳng",
+    display_subject_group_name: "B00",
+    scores: [],
+    data_complete: false,
+    threshold_failure_reasons: [],
+    ...overrides,
+  }
+}
+
 describe("AdmissionHeader — dải trạng thái", () => {
   it("renders applicant name + #id", () => {
     render(<AdmissionHeader profile={buildProfile()} />)
@@ -91,14 +111,7 @@ describe("AdmissionHeader — dải trạng thái", () => {
   // ----- nguyện vọng (đăng ký ngành gì) -----
   it("renders the registered major (nguyện vọng) from choices", () => {
     const profile = buildProfile({
-      choices: [
-        {
-          id: 1, admission_profile_id: 42, admission_path_id: 7, path_subject_group_config_id: 3,
-          display_order: 1, decision: "pending", display_path_name: "Điều dưỡng 2026 – Chính quy – Học bạ",
-          display_program_name: "Điều dưỡng", display_degree_level: "Cao đẳng",
-          display_subject_group_name: "B00", scores: [], data_complete: false, threshold_failure_reasons: [],
-        },
-      ],
+      choices: [buildChoice()],
     } as unknown as Partial<AdmissionProfileResponse>)
     render(<AdmissionHeader profile={profile} />)
     expect(screen.getByText("Điều dưỡng")).toBeInTheDocument()
@@ -108,8 +121,11 @@ describe("AdmissionHeader — dải trạng thái", () => {
   it("shows '+N NV' for multi-NV and 'Chưa chọn nguyện vọng' when empty", () => {
     const multi = buildProfile({
       choices: [
-        { id: 1, display_order: 1, display_program_name: "Dược", display_degree_level: "Cao đẳng", display_path_name: "Dược", display_subject_group_name: "B00", decision: "pending", scores: [], data_complete: false, threshold_failure_reasons: [], admission_profile_id: 42, admission_path_id: 7, path_subject_group_config_id: 3 },
-        { id: 2, display_order: 2, display_program_name: "Điều dưỡng", display_degree_level: "Cao đẳng", display_path_name: "Điều dưỡng", display_subject_group_name: "B00", decision: "pending", scores: [], data_complete: false, threshold_failure_reasons: [], admission_profile_id: 42, admission_path_id: 8, path_subject_group_config_id: 4 },
+        buildChoice({ display_program_name: "Dược", display_path_name: "Dược" }),
+        buildChoice({
+          id: 2, display_order: 2, display_program_name: "Điều dưỡng",
+          display_path_name: "Điều dưỡng", admission_path_id: 8, path_subject_group_config_id: 4,
+        }),
       ],
     } as unknown as Partial<AdmissionProfileResponse>)
     render(<AdmissionHeader profile={multi} />)

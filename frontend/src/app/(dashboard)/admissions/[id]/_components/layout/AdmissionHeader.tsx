@@ -10,6 +10,21 @@ import { derivePriorityIssues, issueTotalCount } from "./priorityIssues"
 import { getInitials } from "@/app/(dashboard)/admissions/_components/roster-parts"
 import { cn } from "@/lib/utils"
 
+type Mood = "eligible" | "ineligible" | "neutral"
+
+/** Single source for the eligibility-driven page mood colours (frame + bar). */
+const MOOD_STYLES: Record<Mood, { frame: string; bar: string }> = {
+  eligible: {
+    frame: "border-l-success bg-gradient-to-b from-success-50 to-transparent",
+    bar: "bg-success",
+  },
+  ineligible: {
+    frame: "border-l-warning-600 bg-gradient-to-b from-warning-50 to-transparent",
+    bar: "bg-warning-600",
+  },
+  neutral: { frame: "border-l-border", bar: "bg-primary" },
+}
+
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
   /** Jump to the first blocking step — shared with the Step-8 "Kiểm tra toàn bộ". */
@@ -59,9 +74,12 @@ export function AdmissionHeader({
   }
 
   const statusConfig = getStatusConfig(profile.status, "admission")
+  // Eligibility drives the whole page mood (single tri-state source): green = đủ,
+  // amber = chưa đủ, neutral (pending/unknown) = calm.
   const eligibility = profile.eligibility_status
-  const isEligible = eligibility === "eligible"
-  const verdictKnown = eligibility === "eligible" || eligibility === "ineligible"
+  const mood: Mood =
+    eligibility === "eligible" ? "eligible" : eligibility === "ineligible" ? "ineligible" : "neutral"
+  const isEligible = mood === "eligible"
 
   const choices = [...(profile.choices ?? [])].sort((a, b) => a.display_order - b.display_order)
   const firstChoice = choices[0]
@@ -93,17 +111,8 @@ export function AdmissionHeader({
   const completion = profile.completion_percent ?? 0
   const owner = profile.assigned_officer_name
 
-  const mood = verdictKnown ? (isEligible ? "eligible" : "ineligible") : "neutral"
-
   return (
-    <div
-      className={cn(
-        "relative border-l-4 px-4 py-3",
-        mood === "ineligible" && "border-l-warning-600 bg-gradient-to-b from-warning-50 to-transparent",
-        mood === "eligible" && "border-l-success bg-gradient-to-b from-success-50 to-transparent",
-        mood === "neutral" && "border-l-border",
-      )}
-    >
+    <div className={cn("relative border-l-4 px-4 py-3", MOOD_STYLES[mood].frame)}>
       <div className="space-y-2.5">
         {/* 1 · identity + verdict + overflow menu */}
         <div className="flex items-start justify-between gap-3">
@@ -117,7 +126,7 @@ export function AdmissionHeader({
                 so it agrees with the amber border/gradient on this detail page.
                 Rendered only for a known verdict; a "pending" default stays neutral
                 (no pill) by design. Do NOT swap to the roster token here. */}
-            {verdictKnown && (
+            {mood !== "neutral" && (
               <span
                 data-testid="header-chip-eligibility"
                 className={cn(
@@ -218,10 +227,7 @@ export function AdmissionHeader({
           <div className="flex min-w-[150px] flex-1 items-center gap-3">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
               <div
-                className={cn(
-                  "h-full rounded-full",
-                  mood === "eligible" ? "bg-success" : mood === "ineligible" ? "bg-warning-600" : "bg-primary",
-                )}
+                className={cn("h-full rounded-full", MOOD_STYLES[mood].bar)}
                 style={{ width: `${completion}%` }}
               />
             </div>
