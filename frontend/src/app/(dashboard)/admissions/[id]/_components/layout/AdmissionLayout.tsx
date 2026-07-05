@@ -3,6 +3,7 @@
 import { ReactNode } from "react"
 import { AdmissionHeader } from "./AdmissionHeader"
 import { PipelineSidebar } from "./PipelineSidebar"
+import { MobileStepStrip } from "./MobileStepStrip"
 import { MobileIssueDrawer } from "./MobileIssueDrawer"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -56,6 +57,15 @@ export function AdmissionLayout({
             isUnclaiming={isUnclaiming}
             onDelete={onDelete}
             isDeleting={isDeleting}
+          />
+          {/* Mobile-only step navigator — desktop uses the PipelineSidebar
+              (hidden lg:block); on mobile this keeps step overview + direct
+              jump reachable in the sticky header while content scrolls. */}
+          <MobileStepStrip
+            profile={profile}
+            currentStep={currentStep}
+            onStepChange={onStepChange}
+            stepsStatus={stepsStatus}
           />
        </div>
 
