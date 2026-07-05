@@ -17,14 +17,31 @@ export function issueTotalCount(
 type StepStatus = "success" | "warning" | "error" | "locked"
 
 /**
+ * Steps whose submit-required data is still empty — family info (step 2) and
+ * academic history (step 3). Mirrors the backend submit gate
+ * `_missing_submit_required_data` (admission_service.py) so the CTA can jump to
+ * the EXACT blocking tab rather than the first amber step. Returned in step order.
+ */
+export function missingRequiredDataSteps(
+  profile: AdmissionProfileResponse | null,
+): number[] {
+  if (!profile) return []
+  const steps: number[] = []
+  if (!profile.family_info?.length) steps.push(2)
+  if (!profile.academic_history?.length) steps.push(3)
+  return steps
+}
+
+/**
  * Pick the step the "việc cần xử lý" CTA should jump to. Driven by the SAME issue
  * sources that feed {@link issueTotalCount} so the CTA can never dead-end or land
  * on an unrelated tab. Priority order:
  *   1. First "error" step — always a genuine blocker (personal/scores/docs).
- *   2. Required-data (family/academic): HARD-blocks submit but only surfaces as a
- *      step 2/3 "warning" — prefer it over an earlier NON-blocking warning (e.g.
- *      step 1 amber for blank OPTIONAL personal fields) so the user lands on the
- *      real blocker instead of a tab that leaves submit disabled.
+ *   2. Required-data: the earliest still-empty family(2)/academic(3) step. This
+ *      HARD-blocks submit but usually shows only as a step 2/3 "warning", so jump
+ *      straight to it — skipping an earlier NON-blocking warning (e.g. step 1 amber
+ *      for blank OPTIONAL fields) AND landing on the RIGHT tab when only academic
+ *      is missing while step 2 is amber for an unrelated reason.
  *   3. Priority (step 4) issues (missing UT evidence / manual override): count
  *      toward the badge but never mark step 4 error/warning once KV is resolved,
  *      so route there explicitly instead of falling through to a dead end.
@@ -33,7 +50,7 @@ type StepStatus = "success" | "warning" | "error" | "locked"
  */
 export function firstAttentionStep(
   stepsStatus: Record<number, StepStatus>,
-  opts: { requiredDataCount: number; priorityIssuesCount: number },
+  opts: { requiredDataSteps: number[]; priorityIssuesCount: number },
 ): number | null {
   const ALL_STEPS = [1, 2, 3, 4, 5, 6, 7, 8]
   const firstWith = (status: StepStatus, steps: number[]) =>
@@ -42,10 +59,7 @@ export function firstAttentionStep(
   const errorStep = firstWith("error", ALL_STEPS)
   if (errorStep !== null) return errorStep
 
-  if (opts.requiredDataCount > 0) {
-    const dataStep = firstWith("warning", [2, 3])
-    if (dataStep !== null) return dataStep
-  }
+  if (opts.requiredDataSteps.length > 0) return Math.min(...opts.requiredDataSteps)
 
   if (opts.priorityIssuesCount > 0) return 4
 

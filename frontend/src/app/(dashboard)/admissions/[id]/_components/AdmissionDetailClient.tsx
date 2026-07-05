@@ -58,7 +58,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
-import { derivePriorityIssues, firstAttentionStep } from "./layout/priorityIssues"
+import { derivePriorityIssues, firstAttentionStep, missingRequiredDataSteps } from "./layout/priorityIssues"
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
 
@@ -495,7 +495,7 @@ export function AdmissionDetailClient({
     // required-data) so the CTA can never dead-end or land on an unrelated tab.
     // Decision logic lives in the pure, unit-tested `firstAttentionStep` helper.
     const target = firstAttentionStep(stepsStatusRecord, {
-      requiredDataCount: groupedValidationErrors?.required_data?.count ?? 0,
+      requiredDataSteps: missingRequiredDataSteps(profile),
       priorityIssuesCount: derivePriorityIssues(profile).length,
     })
     if (target !== null) handleStepChange(target)
