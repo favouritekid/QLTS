@@ -14,6 +14,44 @@ export function issueTotalCount(
   return validationErrorsLength + priorityIssuesLength + (grouped?.required_data?.count ?? 0)
 }
 
+type StepStatus = "success" | "warning" | "error" | "locked"
+
+/**
+ * Pick the step the "việc cần xử lý" CTA should jump to. Driven by the SAME issue
+ * sources that feed {@link issueTotalCount} so the CTA can never dead-end or land
+ * on an unrelated tab. Priority order:
+ *   1. First "error" step — always a genuine blocker (personal/scores/docs).
+ *   2. Required-data (family/academic): HARD-blocks submit but only surfaces as a
+ *      step 2/3 "warning" — prefer it over an earlier NON-blocking warning (e.g.
+ *      step 1 amber for blank OPTIONAL personal fields) so the user lands on the
+ *      real blocker instead of a tab that leaves submit disabled.
+ *   3. Priority (step 4) issues (missing UT evidence / manual override): count
+ *      toward the badge but never mark step 4 error/warning once KV is resolved,
+ *      so route there explicitly instead of falling through to a dead end.
+ *   4. First remaining "warning" step.
+ * Returns null when no step needs attention.
+ */
+export function firstAttentionStep(
+  stepsStatus: Record<number, StepStatus>,
+  opts: { requiredDataCount: number; priorityIssuesCount: number },
+): number | null {
+  const ALL_STEPS = [1, 2, 3, 4, 5, 6, 7, 8]
+  const firstWith = (status: StepStatus, steps: number[]) =>
+    steps.find((s) => stepsStatus[s] === status) ?? null
+
+  const errorStep = firstWith("error", ALL_STEPS)
+  if (errorStep !== null) return errorStep
+
+  if (opts.requiredDataCount > 0) {
+    const dataStep = firstWith("warning", [2, 3])
+    if (dataStep !== null) return dataStep
+  }
+
+  if (opts.priorityIssuesCount > 0) return 4
+
+  return firstWith("warning", ALL_STEPS)
+}
+
 /**
  * Derive Priority (Step 4) issues from BE-set flags only.
  *

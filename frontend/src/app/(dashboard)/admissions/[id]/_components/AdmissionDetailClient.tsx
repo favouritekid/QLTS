@@ -58,6 +58,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
+import { derivePriorityIssues, firstAttentionStep } from "./layout/priorityIssues"
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
 
@@ -489,20 +490,15 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-    // Navigate to the first step needing attention using backend-computed status.
-    // Phase E.4 (G0) — 8-step: 1=Personal, 2=Family, 3=Academic,
-    // 4=Priority, 5=Scores, 6=Documents, 7=Tuition, 8=Finalize.
-    // Prefer "error" steps, then fall back to "warning": family/academic
-    // (step 2/3) surface as "warning", so an error-only jump would dead-end for a
-    // draft blocked solely by them (the submit button disables on those too).
-    for (const target of ["error", "warning"] as const) {
-      for (let step = 1; step <= 8; step++) {
-        if (stepsStatusRecord[step] === target) {
-          handleStepChange(step)
-          return
-        }
-      }
-    }
+    // Route to the step that actually needs attention, driven by the SAME issue
+    // sources that feed the header "việc cần xử lý" count (validation + priority +
+    // required-data) so the CTA can never dead-end or land on an unrelated tab.
+    // Decision logic lives in the pure, unit-tested `firstAttentionStep` helper.
+    const target = firstAttentionStep(stepsStatusRecord, {
+      requiredDataCount: groupedValidationErrors?.required_data?.count ?? 0,
+      priorityIssuesCount: derivePriorityIssues(profile).length,
+    })
+    if (target !== null) handleStepChange(target)
   }
 
   if (!profile) return null
