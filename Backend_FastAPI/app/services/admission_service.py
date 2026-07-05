@@ -2432,12 +2432,29 @@ def _compute_frontend_fields(
     # Family/academic are UNCONDITIONAL submit blockers (submit_and_evaluate
     # rejects them regardless of docs) but are NOT in validation_errors, so they
     # never reach _other_errors. Compute the same draft-scoped predicate the
-    # submit_blocked_by_data flag + required_data bucket use (below) and fold it
-    # into the doc-debt flag, so the response can't advertise a submit-with-debt
-    # that the API would still reject on missing family/academic.
+    # submit_blocked_by_data flag + required_data bucket use (below).
     _missing_required_data = (
         _missing_submit_required_data(profile) if status == "draft" else []
     )
+
+    # Single named set of the SYNC-observable non-document submit blockers, so the
+    # doc-debt gate can't advertise a submit-with-debt the API would reject on a
+    # non-doc error. Folds `_other_errors` (validation errors minus missing-docs)
+    # + `_missing_required_data` (family/academic — absent from validation_errors)
+    # into ONE term future gates can reuse without re-remembering both.
+    #
+    # OPTIMISTIC on two axes by design — two submit gates are NOT observable in
+    # this sync, db-less compute:
+    #   * current-era ward (`_is_current_era_ward`, submit_and_evaluate:~6344) —
+    #     an async administrative_nodes lookup.
+    #   * KV resolution (`_kv_unresolved_error_message`) — the priority snapshot is
+    #     FROZEN AT SUBMIT and is null for an un-previewed draft, so sync-gating on
+    #     it would false-negative every valid-but-un-previewed draft.
+    # For those two the flag is a hint: the API stays authoritative and the FE
+    # surfaces any residual bounce. Do NOT add them here (see the test
+    # `test_document_debt_flag_gated_on_required_data`, which asserts on a FULLY
+    # submittable profile so it doesn't cement the optimistic edge as truth).
+    _non_doc_submit_blockers = bool(_other_errors) or bool(_missing_required_data)
 
     # L1 owner-consistency: gate the submit-with-debt button on the SAME actor
     # set as ``permissions["submit"]`` (is_owner or is_manager or is_admin) to
@@ -2447,13 +2464,12 @@ def _compute_frontend_fields(
     # one not assigned to the lead, which submit itself rejects via is_owner.)
     # The server-side submit gate in submit_and_evaluate is role+IDOR based and
     # unchanged — this only aligns the FE flag. The button shows only when the
-    # draft is eligible apart from missing docs (other_errors empty + ≥1 missing
-    # doc), has its required data, and is not a multi-NV profile lacking choices.
+    # draft is eligible apart from missing docs (no non-doc blockers + ≥1 missing
+    # doc) and is not a multi-NV profile lacking choices.
     profile.can_submit_with_document_debt = bool(
         status == "draft"
         and (is_owner or is_manager or is_admin)
-        and not _other_errors
-        and not _missing_required_data
+        and not _non_doc_submit_blockers
         and missing_doc_codes
         and not _multi_nv_no_choice
     )
