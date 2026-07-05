@@ -1454,7 +1454,11 @@ def _compute_completion_percent(
 
     cccd_error = not profile.citizen_id
     personal_required = ["full_name", "phone", "citizen_id"]
-    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    # place_of_birth: keep step-1 status in sync with _validate_personal_info so
+    # completion_percent doesn't count step 1 as done while it's a submit blocker.
+    personal_optional = [
+        "email", "dob", "gender", "nationality", "ethnicity", "place_of_birth",
+    ]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
     permanent_address_complete = all(
@@ -2551,7 +2555,12 @@ def _compute_frontend_fields(
     # =========================================================================
     # Required personal fields for step 1 check
     personal_required = ["full_name", "phone", "citizen_id"]
-    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    # place_of_birth is validated in _validate_personal_info (a blocker); keep it
+    # in step-1 status so a missing value shows amber, not a false "success" that
+    # dead-ends the header work-items CTA (count > 0 but no navigable step).
+    personal_optional = [
+        "email", "dob", "gender", "nationality", "ethnicity", "place_of_birth",
+    ]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
     permanent_address_complete = all(
