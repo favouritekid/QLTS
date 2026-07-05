@@ -317,3 +317,66 @@ async def test_legacy_schema_v1_profile_grandfathered(
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
     resp = await client.post(f"{ADMISSIONS}/{pid}/submit", json={"version": v}, headers=oh)
     assert resp.status_code == 200, f"Legacy profile should still submit, got {resp.status_code}: {resp.text[:300]}"
+
+
+@pytest.mark.asyncio
+async def test_document_debt_flag_gated_on_required_data(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    strict_path_config: dict,
+):
+    """``can_submit_with_document_debt`` must NOT be advertised while family/
+    academic data is still missing.
+
+    Those two groups hard-block submit-with-debt regardless of docs (the debt API
+    rejects them), so the flag, the (disabled) submit button and the API must all
+    agree — otherwise the response offers a debt submission that bounces.
+    """
+    prof = await _create_draft(
+        client, admin_token_headers, officer_user_in_db, strict_path_config
+    )
+    pid = prof["id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+
+    # Personal + address + scores complete, mandatory doc left MISSING (so the
+    # doc-debt path would otherwise be offered) — but family/academic omitted.
+    ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
+    v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
+    await client.put(f"{ADMISSIONS}/{pid}", json={
+        "version": v,
+        "citizen_id": ts_cccd,
+        "gender": "male",
+        "dob": "2001-01-01",
+        "nationality": "Viet Nam",
+        "ethnicity": "Kinh",
+        "place_of_birth": "Test",
+        "permanent_province": "Tỉnh Test KV",
+        "permanent_ward": "Phường Test KV",
+        "admission_scores": {"gpa": 8.0, "subject_scores": {}},
+    }, headers=oh)
+
+    blocked = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert blocked["submit_blocked_by_data"] is True, blocked
+    assert blocked["can_submit_with_document_debt"] is False, blocked
+
+    # Supplying the required data unblocks BOTH — proving the doc-debt path was
+    # otherwise reachable and the missing family/academic was the only suppressor.
+    v = blocked["version"]
+    await client.put(f"{ADMISSIONS}/{pid}", json={
+        "version": v,
+        "family_info": [{
+            "relationship": "Cha", "full_name": "P",
+            "phone": "0901111111", "is_primary_guardian": True,
+        }],
+        "academic_history": [{
+            "school_name": "THPT", "year_from": 2019,
+            "year_to": 2022, "gpa": 8.0, "graduation_type": "THPT",
+        }],
+    }, headers=oh)
+
+    ok = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert ok["submit_blocked_by_data"] is False, ok
+    assert ok["can_submit_with_document_debt"] is True, ok

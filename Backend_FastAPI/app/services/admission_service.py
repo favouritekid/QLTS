@@ -2429,6 +2429,16 @@ def _compute_frontend_fields(
     # in the submit-with-debt dialog (B3).
     profile.missing_doc_codes = list(missing_doc_codes)
 
+    # Family/academic are UNCONDITIONAL submit blockers (submit_and_evaluate
+    # rejects them regardless of docs) but are NOT in validation_errors, so they
+    # never reach _other_errors. Compute the same draft-scoped predicate the
+    # submit_blocked_by_data flag + required_data bucket use (below) and fold it
+    # into the doc-debt flag, so the response can't advertise a submit-with-debt
+    # that the API would still reject on missing family/academic.
+    _missing_required_data = (
+        _missing_submit_required_data(profile) if status == "draft" else []
+    )
+
     # L1 owner-consistency: gate the submit-with-debt button on the SAME actor
     # set as ``permissions["submit"]`` (is_owner or is_manager or is_admin) to
     # prevent drift — submit-with-debt is just submit + a doc-debt snapshot, so
@@ -2438,11 +2448,12 @@ def _compute_frontend_fields(
     # The server-side submit gate in submit_and_evaluate is role+IDOR based and
     # unchanged — this only aligns the FE flag. The button shows only when the
     # draft is eligible apart from missing docs (other_errors empty + ≥1 missing
-    # doc) and is not a multi-NV profile lacking choices.
+    # doc), has its required data, and is not a multi-NV profile lacking choices.
     profile.can_submit_with_document_debt = bool(
         status == "draft"
         and (is_owner or is_manager or is_admin)
         and not _other_errors
+        and not _missing_required_data
         and missing_doc_codes
         and not _multi_nv_no_choice
     )
@@ -2586,9 +2597,8 @@ def _compute_frontend_fields(
     # surface "Thông tin bắt buộc".
     # NOTE: deliberately NOT added to validation_errors/eligibility_status (that
     # would flip step-8 lock, bypass_warning, and approve gating — out of scope).
-    _missing_required_data = (
-        _missing_submit_required_data(profile) if status == "draft" else []
-    )
+    # ``_missing_required_data`` is computed once above (shared with the doc-debt
+    # gate) so the two flags cannot diverge.
     profile.grouped_validation_errors["required_data"] = {
         "category": "Thông tin bắt buộc",
         "errors": _missing_required_data,
