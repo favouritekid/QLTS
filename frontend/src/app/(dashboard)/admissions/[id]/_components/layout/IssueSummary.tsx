@@ -3,15 +3,11 @@
 import { useState } from "react"
 import { AlertCircle, ChevronDown, ChevronUp } from "lucide-react"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { derivePriorityIssues } from "./priorityIssues"
+import { derivePriorityIssues, issueTotalCount } from "./priorityIssues"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
-interface GroupedValidationErrors {
-  personal_info?: { category: string; errors: string[]; count: number }
-  documents?: { category: string; errors: string[]; count: number }
-  scores?: { category: string; errors: string[]; count: number }
-  required_data?: { category: string; errors: string[]; count: number }
-}
+// Derived from the zod contract so all buckets stay in sync automatically.
+type GroupedValidationErrors = NonNullable<AdmissionProfileResponse["grouped_validation_errors"]>
 
 interface IssueSummaryProps {
   profile: AdmissionProfileResponse | null
@@ -29,11 +25,10 @@ export function IssueSummary({
   const [isOpen, setIsOpen] = useState(defaultOpen)
 
   const priorityIssues = derivePriorityIssues(profile)
-  // Required-data (family/academic) don't appear in validationErrors, so add
-  // their count explicitly — otherwise a draft missing ONLY these renders
+  // Required-data (family/academic) aren't in validationErrors; the shared
+  // helper folds their count in — otherwise a draft missing ONLY these renders
   // totalCount 0 and the whole panel hides (the exact "kẹt" case).
-  const requiredDataCount = groupedValidationErrors?.required_data?.count ?? 0
-  const totalCount = validationErrors.length + priorityIssues.length + requiredDataCount
+  const totalCount = issueTotalCount(validationErrors.length, priorityIssues.length, groupedValidationErrors)
 
   if (totalCount === 0) return null
 

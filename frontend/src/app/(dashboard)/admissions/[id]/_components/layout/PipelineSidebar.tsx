@@ -21,12 +21,8 @@ interface PipelineSidebarProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
-  groupedValidationErrors?: {
-    personal_info?: { category: string; errors: string[]; count: number }
-    documents?: { category: string; errors: string[]; count: number }
-    scores?: { category: string; errors: string[]; count: number }
-    required_data?: { category: string; errors: string[]; count: number }
-  } | null
+  // Derived from the zod contract so buckets stay in sync automatically.
+  groupedValidationErrors?: NonNullable<AdmissionProfileResponse["grouped_validation_errors"]> | null
   completionPercent: number
   /**
    * Phase E.4 (PR-1) — prop kept for backward-compat với AdmissionLayout

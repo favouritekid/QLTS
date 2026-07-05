@@ -18,11 +18,8 @@ interface AdmissionLayoutProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
-  groupedValidationErrors?: {
-    personal_info?: { category: string; errors: string[]; count: number }
-    documents?: { category: string; errors: string[]; count: number }
-    scores?: { category: string; errors: string[]; count: number }
-  } | null
+  // Derived from the zod contract (includes required_data) so buckets stay in sync.
+  groupedValidationErrors?: NonNullable<AdmissionProfileResponse["grouped_validation_errors"]> | null
   // Commit 7 — pass-through cho ProfileActionMenu trong header.
   onClaim?: () => void
   onUnclaim?: () => void

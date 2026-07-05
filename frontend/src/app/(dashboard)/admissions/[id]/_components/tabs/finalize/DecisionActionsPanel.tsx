@@ -143,7 +143,8 @@ export function DecisionActionsPanel({
 }: DecisionActionsPanelProps) {
   // Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / gia đình) — BE chặn
   // submit nhưng không nằm trong eligibility, nên gate nút + hiện lý do rõ ràng
-  // ở đây (bypass-aware: cờ đã tính allow_unverified_submission ở backend).
+  // ở đây. Cờ bypass-independent (BE phản ánh submit gate VÔ ĐIỀU KIỆN; không
+  // liên quan allow_unverified_submission — cái đó chỉ nới kiểm tra tài liệu).
   const submitBlockedByData = profile.submit_blocked_by_data ?? false
   const requiredDataErrors = profile.grouped_validation_errors?.required_data?.errors ?? []
 
@@ -362,10 +363,14 @@ export function DecisionActionsPanel({
     // regardless of docs — hide the doc-debt CTA (it would also be rejected) and
     // point the user at the missing data instead.
     const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt && !submitBlockedByData
+    // Guard the data reason on the errors list (not just the flag) so a backend
+    // desync (flag true, list empty) falls through instead of rendering "Còn
+    // thiếu: ". When other blockers also apply (!isEligible), hint at them so the
+    // user isn't bounced again after only supplying the missing data.
     const reasonNode = showDebt ? (
       <Reason>Còn thiếu giấy tờ — có thể nộp kèm nợ giấy tờ.</Reason>
-    ) : submitBlockedByData ? (
-      <Reason>Còn thiếu: {requiredDataErrors.join(" · ")}</Reason>
+    ) : submitBlockedByData && requiredDataErrors.length > 0 ? (
+      <Reason>{`Còn thiếu: ${requiredDataErrors.join(" · ")}${!isEligible ? " · và các điều kiện khác" : ""}`}</Reason>
     ) : !isEligible ? (
       <Reason>Chưa đủ điều kiện để nộp.</Reason>
     ) : undefined

@@ -59,8 +59,13 @@ function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): Admiss
     available_actions: [],
     completion_percent: 100,
     applied_rules: {},
-    family_info: [],
-    academic_history: [],
+    // Default fixture = COMPLETE draft (not data-blocked): faithful to the
+    // backend, which derives submit_blocked_by_data from these two groups. Tests
+    // that exercise the required-data gate override these explicitly below.
+    family_info: [{ relationship: "father", full_name: "Nguyễn Văn A" }],
+    academic_history: [{ school: "THPT X", year: 2025 }],
+    submit_blocked_by_data: false,
+    grouped_validation_errors: null,
     documents_checklist: [],
     missing_priority_evidence_codes: [],
     priority_resolution_snapshot: {},
@@ -331,5 +336,46 @@ describe("DecisionActionsPanel — submit-with-debt (fast-track nợ giấy tờ
       acknowledge_missing_docs: true,
       document_debt_reason: "cấp lại học bạ",
     })
+  })
+})
+
+describe("DecisionActionsPanel — required-data submit gate (family/academic)", () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  // Draft eligible on every other axis but missing family/academic → backend
+  // sets submit_blocked_by_data=true. submit_and_evaluate rejects these two
+  // groups UNCONDITIONALLY, so the button must be disabled up-front (not shown
+  // enabled then bounced).
+  const blockedProfile = () =>
+    buildProfile({
+      status: "draft",
+      family_info: [],
+      academic_history: [],
+      submit_blocked_by_data: true,
+      grouped_validation_errors: {
+        required_data: {
+          category: "Thông tin bắt buộc",
+          errors: ["Chưa nhập quá trình học tập", "Chưa nhập thông tin gia đình"],
+          count: 2,
+        },
+      },
+    })
+
+  it("disables the submit button + shows the missing-data reason when submit_blocked_by_data", () => {
+    renderPanel(blockedProfile(), { primaryAction: "submit", canSubmit: true, isEligible: true })
+    expect(screen.getByText("Nộp hồ sơ chính thức").closest("button")).toBeDisabled()
+    expect(screen.getByText(/Còn thiếu:.*quá trình học tập/)).toBeInTheDocument()
+  })
+
+  it("hides the doc-debt CTA while required data is still missing (it would also bounce)", () => {
+    renderPanel(blockedProfile(), {
+      primaryAction: "submit",
+      canSubmit: true,
+      isEligible: true,
+      canSubmitWithDocumentDebt: true,
+      onSubmitWithDebt: vi.fn(),
+    })
+    expect(screen.queryByText("Nộp kèm nợ giấy tờ")).not.toBeInTheDocument()
+    expect(screen.getByText(/Còn thiếu:/)).toBeInTheDocument()
   })
 })

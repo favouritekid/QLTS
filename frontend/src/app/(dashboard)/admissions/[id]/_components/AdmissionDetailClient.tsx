@@ -489,13 +489,18 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-    // Navigate to first error step using backend-computed status.
+    // Navigate to the first step needing attention using backend-computed status.
     // Phase E.4 (G0) — 8-step: 1=Personal, 2=Family, 3=Academic,
     // 4=Priority, 5=Scores, 6=Documents, 7=Tuition, 8=Finalize.
-    for (let step = 1; step <= 8; step++) {
-      if (stepsStatusRecord[step] === "error") {
-        handleStepChange(step)
-        return
+    // Prefer "error" steps, then fall back to "warning": family/academic
+    // (step 2/3) surface as "warning", so an error-only jump would dead-end for a
+    // draft blocked solely by them (the submit button disables on those too).
+    for (const target of ["error", "warning"] as const) {
+      for (let step = 1; step <= 8; step++) {
+        if (stepsStatusRecord[step] === target) {
+          handleStepChange(step)
+          return
+        }
       }
     }
   }

@@ -1120,7 +1120,9 @@ export const admissionProfileResponseSchema = z.object({
   }).optional().nullable(),
 
   // Draft blocked from submit by missing required data (family/academic).
-  // Backend-computed (bypass-aware) — FE gates the submit button on this.
+  // Backend-computed, bypass-independent (mirrors the unconditional submit gate;
+  // allow_unverified_submission only relaxes document checks). FE gates the
+  // submit button on this.
   submit_blocked_by_data: z.boolean().optional().nullable(),
 
   /**

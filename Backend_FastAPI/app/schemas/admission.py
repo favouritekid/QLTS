@@ -1301,10 +1301,11 @@ class AdmissionProfileResponse(BaseModel):
 
     # Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / thông tin gia đình)
     # vốn chặn submit nhưng không nằm trong validation_errors → FE dùng cờ này để
-    # disable nút Nộp + hiện lý do rõ ràng. False khi allow_unverified_submission.
+    # disable nút Nộp + hiện lý do rõ ràng. Bypass-independent: cờ phản ánh submit
+    # gate VÔ ĐIỀU KIỆN (allow_unverified_submission chỉ nới kiểm tra tài liệu).
     submit_blocked_by_data: Optional[bool] = Field(
         default=False,
-        description="Draft blocked from submit by missing required data (family/academic); False if allow_unverified_submission bypass."
+        description="Draft blocked from submit by missing required data (family/academic). Bypass-independent: mirrors the unconditional submit gate; allow_unverified_submission only relaxes document verification, never these two groups."
     )
 
     # Executive summary for dashboard overview

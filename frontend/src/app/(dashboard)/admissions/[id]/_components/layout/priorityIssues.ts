@@ -1,6 +1,20 @@
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 /**
+ * Total count for the "Vấn đề cần sửa" badge/panel = response validation errors
+ * + derived Step-4 priority issues + required-data (family/academic) count.
+ * Centralized so IssueSummary and MobileIssueDrawer never disagree on which
+ * terms make up the badge count.
+ */
+export function issueTotalCount(
+  validationErrorsLength: number,
+  priorityIssuesLength: number,
+  grouped?: { required_data?: { count: number } } | null,
+): number {
+  return validationErrorsLength + priorityIssuesLength + (grouped?.required_data?.count ?? 0)
+}
+
+/**
  * Derive Priority (Step 4) issues from BE-set flags only.
  *
  * Trả về danh sách thông điệp Việt hóa để hiển thị trong IssueSummary /

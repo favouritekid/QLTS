@@ -2010,6 +2010,25 @@ def _build_executive_summary_items(
     return critical_blockers, warnings
 
 
+def _missing_submit_required_data(profile: models.AdmissionProfile) -> List[str]:
+    """Data groups that ``submit_and_evaluate`` rejects UNCONDITIONALLY
+    (``family_info`` / ``academic_history``) yet which never appear in
+    ``validation_errors``. Single source of truth shared by the real submit gate
+    AND the FE-facing ``submit_blocked_by_data`` flag + ``required_data`` bucket,
+    so the draft-view button gate cannot diverge from the actual gate — adding a
+    third mandatory group here updates both at once.
+
+    Bypass-independent: ``allow_unverified_submission`` only relaxes DOCUMENT
+    verification, never these two data groups.
+    """
+    missing: List[str] = []
+    if not profile.academic_history:
+        missing.append("Chưa nhập quá trình học tập")
+    if not profile.family_info:
+        missing.append("Chưa nhập thông tin gia đình")
+    return missing
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -2547,35 +2566,26 @@ def _compute_frontend_fields(
     has_academic = profile.academic_history and len(profile.academic_history) > 0
 
     # --- Required-data visibility (family + academic history) -------------------
-    # These two groups HARD-block submit (submit_and_evaluate: "Chưa nhập thông
-    # tin gia đình" / "Chưa nhập quá trình học tập") but were historically absent
-    # from validation_errors/grouped_validation_errors → the draft view showed no
-    # error while submit rejected them (draft↔submit mismatch → user bỏ trống →
-    # kẹt). Surface them as a dedicated grouped bucket + a submit-gate flag so the
-    # FE can warn up-front and disable the submit button with a clear reason.
+    # These two groups HARD-block submit (submit_and_evaluate rejects them
+    # UNCONDITIONALLY) but are absent from validation_errors → the draft view
+    # showed no error while submit rejected them (draft↔submit mismatch → user bỏ
+    # trống → kẹt). Surface via the SAME predicate the real submit gate uses
+    # (``_missing_submit_required_data``) so the button gate cannot diverge from
+    # the actual gate. Scoped to draft: submit is the only transition these groups
+    # gate (resubmit/approve don't re-check them), so bucket + flag both stay empty
+    # on non-draft statuses — a submitted profile with legacy-empty data must NOT
+    # surface "Thông tin bắt buộc".
     # NOTE: deliberately NOT added to validation_errors/eligibility_status (that
     # would flip step-8 lock, bypass_warning, and approve gating — out of scope).
-    _missing_required_data: List[str] = []
-    if not has_academic:
-        _missing_required_data.append("Chưa nhập quá trình học tập")
-    if not has_family:
-        _missing_required_data.append("Chưa nhập thông tin gia đình")
+    _missing_required_data = (
+        _missing_submit_required_data(profile) if status == "draft" else []
+    )
     profile.grouped_validation_errors["required_data"] = {
         "category": "Thông tin bắt buộc",
         "errors": _missing_required_data,
         "count": len(_missing_required_data),
     }
-    # Mirror the ACTUAL submit gate: submit_and_evaluate rejects missing
-    # family_info / academic_history UNCONDITIONALLY. allow_unverified_submission
-    # only relaxes DOCUMENT verification (strict vs lax uploaded-doc handling) —
-    # it NEVER makes these two data groups optional. So the flag must NOT honour
-    # that bypass; otherwise a doc-lax draft missing family/academic would show an
-    # enabled submit (or nợ-giấy-tờ) button and then bounce back from the backend,
-    # reintroducing the exact draft↔submit mismatch this surfacing fix removes.
-    profile.submit_blocked_by_data = bool(
-        status == "draft"
-        and _missing_required_data
-    )
+    profile.submit_blocked_by_data = bool(_missing_required_data)
     
     # P0 hotfix multi-NV — Step 5 (Scores) "has any" must read per-choice
     # ProfileChoiceScore for multi-NV (profile.subject_scores is always empty
@@ -6235,13 +6245,11 @@ async def submit_and_evaluate(
                 f"(Mã SV: {existing_student.student_code})"
             )
 
-    # Validation 4: Check Family Info (Fix Finding 1.7)
-    if not profile.family_info:
-        errors.append("Chưa nhập thông tin gia đình (Family Info is empty)")
-
-    # Validation 5: Check Academic History (Fix Finding 1.7)
-    if not profile.academic_history:
-        errors.append("Chưa nhập quá trình học tập (Academic History is empty)")
+    # Validation 4+5: Family Info + Academic History (Fix Finding 1.7). Shared
+    # with the draft-view ``submit_blocked_by_data`` flag + ``required_data``
+    # bucket via one predicate (``_missing_submit_required_data``) so the button
+    # gate and this real submit gate cannot drift apart.
+    errors.extend(_missing_submit_required_data(profile))
 
     # Q9 #07 Phase E.4 reviewer v4 — KV freeze + assert chuyển từ "post if-errors
     # transition prep" lên đây để errors collect cho cả KV failure. Nếu raise
