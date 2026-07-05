@@ -944,6 +944,11 @@ export const admissionProfileResponseSchema = z.object({
   // Denormalized fields for list display
   program_name: z.string().optional().nullable(),
 
+  // BE-resolved display name of the primary nguyện vọng (choice-engine: first
+  // choice's program/path; legacy: program_name; empty choice-engine: null).
+  // Single source so the header doesn't heuristically pick the display value.
+  primary_choice_display: z.string().optional().nullable(),
+
   // Học phí HK1 (Admission List v2). NOTE: listAdmissions does NOT .parse() the
   // response — these z.number() declarations are TYPE-ONLY (no runtime coercion).
   // BE sends Decimal as JSON string; the string→number conversion happens in the
@@ -1109,8 +1114,21 @@ export const admissionProfileResponseSchema = z.object({
       category: z.string(),
       errors: z.array(z.string()),
       count: z.number().int()
+    }).optional(),
+    // Required-data bucket (family + academic history) — surfaced so the draft
+    // view can warn about groups that block submit but aren't in validation_errors.
+    required_data: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
     }).optional()
   }).optional().nullable(),
+
+  // Draft blocked from submit by missing required data (family/academic).
+  // Backend-computed, bypass-independent (mirrors the unconditional submit gate;
+  // allow_unverified_submission only relaxes document checks). FE gates the
+  // submit button on this.
+  submit_blocked_by_data: z.boolean().optional().nullable(),
 
   /**
    * Step status for sidebar navigation.

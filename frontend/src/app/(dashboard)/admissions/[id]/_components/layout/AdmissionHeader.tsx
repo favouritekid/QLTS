@@ -1,14 +1,34 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
+import type { ReactNode } from "react"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
-import { getStatusConfig } from "@/lib/status-config"
+import { getStatusConfig, getStatusDotColor } from "@/lib/status-config"
 import { FeeStatusLink } from "@/components/finance"
-import { AlertCircle, CheckCircle2, MapPin, Award, FileCheck } from "lucide-react"
+import { GraduationCap, MapPin, Award, ArrowRight } from "lucide-react"
 import { ProfileActionMenu } from "./ProfileActionMenu"
+import { derivePriorityIssues, issueTotalCount } from "./priorityIssues"
+import { getInitials } from "@/app/(dashboard)/admissions/_components/roster-parts"
+import { cn } from "@/lib/utils"
+
+type Mood = "eligible" | "ineligible" | "neutral"
+
+/** Single source for the eligibility-driven page mood colours (frame + bar). */
+const MOOD_STYLES: Record<Mood, { frame: string; bar: string }> = {
+  eligible: {
+    frame: "border-l-success bg-gradient-to-b from-success-50 to-transparent",
+    bar: "bg-success",
+  },
+  ineligible: {
+    frame: "border-l-warning-600 bg-gradient-to-b from-warning-50 to-transparent",
+    bar: "bg-warning-600",
+  },
+  neutral: { frame: "border-l-border", bar: "bg-primary" },
+}
 
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
+  /** Jump to the first blocking step — shared with the Step-8 "Kiểm tra toàn bộ". */
+  onCheckCondition?: () => void
   onClaim?: () => void
   onUnclaim?: () => void
   isClaiming?: boolean
@@ -17,15 +37,65 @@ interface AdmissionHeaderProps {
   isDeleting?: boolean
 }
 
+function LedgerItem({ k, className, children }: { k: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={cn("flex items-center gap-2 md:border-l md:border-border/60 md:pl-4", className)}>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">{k}</span>
+      {children}
+    </div>
+  )
+}
+
 /**
- * Header chips — Commit 4 manager/admin cockpit.
+ * Dải trạng thái hồ sơ — the case status header.
  *
- * BE-driven, không tính FE. Mỗi chip thể hiện một signal duyệt nhanh để
- * manager/admin không phải mở từng tab xác minh.
+ * Reads top-to-bottom in the order an officer scans a case file: who · registered
+ * major (nguyện vọng) · assigned officer · workflow status · eligibility verdict ·
+ * what to do next. Eligibility is the page's mood colour (amber = chưa đủ, green =
+ * đủ); the rest stays calm. 100% BE-driven (thin client) — no eligibility/scoring
+ * computed here.
  */
-function HeaderChips({ profile }: { profile: AdmissionProfileResponse }) {
-  const blockerCount = profile.validation_errors?.length ?? 0
-  const eligibility = profile.eligibility_status ?? null
+export function AdmissionHeader({
+  profile,
+  onCheckCondition,
+  onClaim,
+  onUnclaim,
+  isClaiming = false,
+  isUnclaiming = false,
+  onDelete,
+  isDeleting = false,
+}: AdmissionHeaderProps) {
+  if (!profile) {
+    return (
+      <div className="min-h-12 px-4 md:px-6 py-3">
+        <h1 className="text-sm md:text-base font-semibold font-display">Hồ sơ #--- — Đang tải…</h1>
+      </div>
+    )
+  }
+
+  const statusConfig = getStatusConfig(profile.status, "admission")
+  // Eligibility drives the whole page mood (single tri-state source): green = đủ,
+  // amber = chưa đủ, neutral (pending/unknown) = calm.
+  const eligibility = profile.eligibility_status
+  const mood: Mood =
+    eligibility === "eligible" || eligibility === "ineligible" ? eligibility : "neutral"
+  const isEligible = mood === "eligible"
+
+  const choices = [...(profile.choices ?? [])].sort((a, b) => a.display_order - b.display_order)
+  const firstChoice = choices[0]
+  const extraChoices = Math.max(0, choices.length - 1)
+  // BE-resolved primary program name (handles choice-engine vs legacy vs
+  // empty-choice-engine provenance) — single source, no FE heuristic.
+  const primaryProgram = profile.primary_choice_display?.trim() || null
+
+  // "Việc cần xử lý" = the same count the IssueSummary panel shows (validation +
+  // priority + required-data), so the header and the panel never disagree.
+  const workItems = issueTotalCount(
+    profile.validation_errors?.length ?? 0,
+    derivePriorityIssues(profile).length,
+    profile.grouped_validation_errors,
+  )
+
   const snapshot = profile.priority_resolution_snapshot ?? {}
   const kv = typeof snapshot.kv_resolved === "string" ? snapshot.kv_resolved : null
   const utBucket = (() => {
@@ -36,162 +106,171 @@ function HeaderChips({ profile }: { profile: AdmissionProfileResponse }) {
     }
     return null
   })()
-  const verifiedCount = profile.document_stats?.verified_count ?? 0
-  const mandatoryCount = profile.document_stats?.mandatory_count ?? 0
-  const completionPercent = profile.completion_percent ?? 0
+  const verified = profile.document_stats?.verified_count ?? 0
+  const mandatory = profile.document_stats?.mandatory_count ?? 0
+  const completion = profile.completion_percent ?? 0
+  const owner = profile.assigned_officer_name
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 ml-auto">
-      {/* Completion */}
-      <Badge
-        variant="outline"
-        className="text-xs gap-1"
-        data-testid="header-chip-completion"
-        title={`Hoàn thành ${completionPercent}%`}
-      >
-        <CheckCircle2 className="w-3 h-3" />
-        {completionPercent}%
-      </Badge>
+    <div className={cn("relative border-l-4 px-4 py-3", MOOD_STYLES[mood].frame)}>
+      <div className="space-y-2.5">
+        {/* 1 · identity + verdict + overflow menu */}
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="min-w-0 truncate text-base font-semibold font-display leading-tight md:text-lg">
+            {profile.full_name ?? "Chưa có tên"}
+            <span className="ml-1.5 text-sm font-medium text-muted-foreground">#{profile.id}</span>
+          </h1>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {/* Verdict pill uses the page MOOD colour (amber = chưa đủ, green = đủ)
+                — deliberately softer than the roster EligibilityToken's error-red,
+                so it agrees with the amber border/gradient on this detail page.
+                Rendered only for a known verdict; a "pending" default stays neutral
+                (no pill) by design. Do NOT swap to the roster token here. */}
+            {mood !== "neutral" && (
+              <span
+                data-testid="header-chip-eligibility"
+                className={cn(
+                  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold",
+                  isEligible ? "bg-success-100 text-success-800" : "bg-warning-100 text-warning-800",
+                )}
+              >
+                <span className={cn("h-2 w-2 rounded-full", isEligible ? "bg-success-600" : "bg-warning-600")} />
+                <span className="md:hidden">{isEligible ? "Đủ ĐK" : "Chưa đủ ĐK"}</span>
+                <span className="hidden md:inline">{isEligible ? "Đủ điều kiện" : "Chưa đủ điều kiện"}</span>
+              </span>
+            )}
+            <ProfileActionMenu
+              profile={profile}
+              onClaim={onClaim}
+              onUnclaim={onUnclaim}
+              isClaiming={isClaiming}
+              isUnclaiming={isUnclaiming}
+              onDelete={onDelete}
+              isDeleting={isDeleting}
+            />
+          </div>
+        </div>
 
-      {/* Eligibility */}
-      {eligibility && (
-        <Badge
-          variant={eligibility === "eligible" ? "default" : "outline"}
-          className={`text-xs ${
-            eligibility === "eligible"
-              ? "bg-success-100 text-success-800 hover:bg-success-100"
-              : "bg-warning-50 text-warning-700 border-warning-300"
-          }`}
-          data-testid="header-chip-eligibility"
-          title={`Điều kiện: ${eligibility}`}
-        >
-          {eligibility === "eligible" ? "Đủ điều kiện" : "Chưa đủ điều kiện"}
-        </Badge>
-      )}
-
-      {/* KV */}
-      {kv && (
-        <Badge
-          variant="outline"
-          className="text-xs gap-1 bg-info-50 border-info-200 text-info-700"
-          data-testid="header-chip-kv"
-          title="Khu vực ưu tiên"
-        >
-          <MapPin className="w-3 h-3" />
-          {kv}
-        </Badge>
-      )}
-
-      {/* UT bucket */}
-      {utBucket && (
-        <Badge
-          variant="outline"
-          className="text-xs gap-1 bg-purple-50 border-purple-200 text-purple-700"
-          data-testid="header-chip-ut"
-          title="Đối tượng ưu tiên đã duyệt"
-        >
-          <Award className="w-3 h-3" />
-          UT{utBucket}
-        </Badge>
-      )}
-
-      {/* Documents ratio */}
-      {mandatoryCount > 0 && (
-        <Badge
-          variant="outline"
-          className={`text-xs gap-1 ${
-            verifiedCount >= mandatoryCount
-              ? "bg-success-50 border-success-200 text-success-700"
-              : "bg-muted text-muted-foreground"
-          }`}
-          data-testid="header-chip-docs"
-          title="Tài liệu đã duyệt / bắt buộc"
-        >
-          <FileCheck className="w-3 h-3" />
-          {verifiedCount}/{mandatoryCount}
-        </Badge>
-      )}
-
-      {/* Blocker count */}
-      {blockerCount > 0 && (
-        <Badge
-          variant="destructive"
-          className="text-xs gap-1"
-          data-testid="header-chip-blockers"
-          title="Vấn đề cần sửa"
-        >
-          <AlertCircle className="w-3 h-3" />
-          {blockerCount} vấn đề
-        </Badge>
-      )}
-    </div>
-  )
-}
-
-export function AdmissionHeader({
-  profile,
-  onClaim,
-  onUnclaim,
-  isClaiming = false,
-  isUnclaiming = false,
-  onDelete,
-  isDeleting = false,
-}: AdmissionHeaderProps) {
-  const statusConfig = profile?.status ? getStatusConfig(profile.status, "admission") : null
-
-  return (
-    <div className="min-h-12 px-4 md:px-6 py-2 md:py-0 flex flex-wrap items-center gap-2 md:gap-3">
-      {/* E2E #9 fix 2026-05-15 — heading shows profile.id (consistent with
-          URL `/admissions/{id}`) + candidate full_name for UX. */}
-      <h1 className="text-sm md:text-base font-semibold font-display">
-        Hồ sơ #{profile?.id ?? "---"}
-        {profile?.full_name ? ` — ${profile.full_name}` : " — Chưa có tên"}
-      </h1>
-
-      <span className="text-muted-foreground hidden sm:inline">·</span>
-
-      {statusConfig && (
-        <Badge variant={statusConfig.badgeVariant} className="text-xs">
-          {statusConfig.label}
-        </Badge>
-      )}
-
-      <span className="text-muted-foreground hidden md:inline">·</span>
-
-      {profile?.id && <FeeStatusLink profileId={profile.id} variant="badge" />}
-
-      <span className="text-muted-foreground hidden md:inline">·</span>
-
-      <span className="text-xs md:text-sm text-muted-foreground hidden md:inline">
-        Phụ trách: {profile?.assigned_officer_name ?? "Chưa phân công"}
-      </span>
-
-      {profile?.assigned_reviewer_name && (
-        <>
-          <span className="text-muted-foreground hidden md:inline">·</span>
-          <span className="text-xs md:text-sm text-muted-foreground hidden md:inline">
-            Người duyệt: {profile.assigned_reviewer_name}
+        {/* 2 · nguyện vọng — "đăng ký ngành gì" */}
+        <div className="flex min-w-0 items-center gap-2 text-sm">
+          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600">
+            <GraduationCap className="h-3.5 w-3.5" />
           </span>
-        </>
-      )}
+          {firstChoice ? (
+            <>
+              <span className="flex-shrink-0 rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wide text-indigo-700">
+                NV{firstChoice.display_order}
+              </span>
+              <span className="truncate font-semibold text-foreground">
+                {primaryProgram || firstChoice.display_program_name || firstChoice.display_path_name}
+              </span>
+              {firstChoice.display_degree_level && (
+                <span className="hidden flex-shrink-0 text-muted-foreground sm:inline">
+                  · {firstChoice.display_degree_level}
+                </span>
+              )}
+              {extraChoices > 0 && (
+                <span className="flex-shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-600">
+                  +{extraChoices} NV
+                </span>
+              )}
+            </>
+          ) : primaryProgram ? (
+            <span className="truncate font-semibold text-foreground">{primaryProgram}</span>
+          ) : (
+            <span className="text-muted-foreground">Chưa chọn nguyện vọng</span>
+          )}
+        </div>
 
-      {/* Commit 4 — review signal chips for manager/admin cockpit. */}
-      {profile && <HeaderChips profile={profile} />}
+        {/* 3 · phụ trách · trạng thái · hành động */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/60 pt-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-indigo-100 text-[11px] font-bold text-indigo-700">
+              {owner ? getInitials(owner) : "—"}
+            </span>
+            <span className="truncate text-xs text-foreground md:text-sm">
+              <span className="font-semibold">{owner ?? "Chưa phân công"}</span>
+              <span className="text-muted-foreground"> · phụ trách</span>
+            </span>
+          </div>
 
-      {/* Commit 7 — overflow menu cho workflow + utility actions
-          (claim/unclaim/minor correction/delete). Gom các action ít dùng
-          để sticky bar tinh giản. */}
-      {profile && (
-        <ProfileActionMenu
-          profile={profile}
-          onClaim={onClaim}
-          onUnclaim={onUnclaim}
-          isClaiming={isClaiming}
-          isUnclaiming={isUnclaiming}
-          onDelete={onDelete}
-          isDeleting={isDeleting}
-        />
-      )}
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1 text-xs font-semibold text-foreground/80">
+            {/* Status dot colour from the shared status-config (same source as the
+                list StatusDot) instead of a hardcoded grey. */}
+            <span className={cn("h-2 w-2 rounded-full", getStatusDotColor(profile.status))} />
+            {statusConfig?.label ?? profile.status}
+          </span>
+
+          {profile.assigned_reviewer_name && (
+            <span className="hidden text-xs text-muted-foreground lg:inline">
+              Người duyệt: {profile.assigned_reviewer_name}
+            </span>
+          )}
+
+          {workItems > 0 && (
+            <button
+              type="button"
+              data-testid="header-chip-blockers"
+              onClick={onCheckCondition}
+              className="ml-auto inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition hover:brightness-105 active:translate-y-px"
+            >
+              <span className="tabular-nums">{workItems}</span>
+              <span className="hidden sm:inline">việc cần xử lý</span>
+              <span className="sm:hidden">việc</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* 4 · ledger */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-0.5 text-xs">
+          <div className="flex min-w-[150px] flex-1 items-center gap-3">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className={cn("h-full rounded-full", MOOD_STYLES[mood].bar)}
+                style={{ width: `${completion}%` }}
+              />
+            </div>
+            <span data-testid="header-chip-completion" className="font-semibold tabular-nums text-foreground">
+              {completion}%
+            </span>
+          </div>
+
+          <LedgerItem k="Học phí">
+            <FeeStatusLink profileId={profile.id} variant="badge" />
+          </LedgerItem>
+
+          {mandatory > 0 && (
+            <LedgerItem k="Tài liệu">
+              <span
+                data-testid="header-chip-docs"
+                className={cn("font-bold tabular-nums", verified >= mandatory ? "text-success-700" : "text-warning-700")}
+              >
+                {verified}/{mandatory}
+              </span>
+            </LedgerItem>
+          )}
+
+          {/* KV + Đối tượng UT stay visible on every breakpoint — a manager
+              reviewing a case on mobile/tablet must not lose these priority
+              cockpit signals (the ledger row wraps rather than hiding them). */}
+          {kv && (
+            <LedgerItem k="KV">
+              <span data-testid="header-chip-kv" className="inline-flex items-center gap-1 font-bold text-info-700">
+                <MapPin className="h-3 w-3" /> {kv}
+              </span>
+            </LedgerItem>
+          )}
+
+          {utBucket && (
+            <LedgerItem k="Đối tượng UT">
+              <span data-testid="header-chip-ut" className="inline-flex items-center gap-1 font-bold text-purple-700">
+                <Award className="h-3 w-3" /> UT{utBucket}
+              </span>
+            </LedgerItem>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

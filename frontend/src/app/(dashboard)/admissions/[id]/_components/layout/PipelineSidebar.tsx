@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useMemo } from "react"
 import { IssueSummary } from "./IssueSummary"
 import { derivePriorityIssues } from "./priorityIssues"
-import { canDecide } from "@/lib/utils/admission-permissions"
+import { canDecide, isStepNavLocked } from "@/lib/utils/admission-permissions"
 import { ADMISSION_STEPS } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -21,11 +21,8 @@ interface PipelineSidebarProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
-  groupedValidationErrors?: {
-    personal_info?: { category: string; errors: string[]; count: number }
-    documents?: { category: string; errors: string[]; count: number }
-    scores?: { category: string; errors: string[]; count: number }
-  } | null
+  // Derived from the zod contract so buckets stay in sync automatically.
+  groupedValidationErrors?: NonNullable<AdmissionProfileResponse["grouped_validation_errors"]> | null
   completionPercent: number
   /**
    * Phase E.4 (PR-1) — prop kept for backward-compat với AdmissionLayout
@@ -103,9 +100,9 @@ export function PipelineSidebar({
           const isActive = currentStep === step.id
           const isFocused = focusedSteps.includes(step.id)
           // Trust BE-aggregated `permissions.has_decision`, fallback OR-7.
+          // Step-8 unlock lives in the shared isStepNavLocked (see MobileStepStrip).
           const decide = canDecide(profile?.permissions)
-          const isStep8Override = step.id === 8 && decide
-          const isLocked = !isStep8Override && status === "locked"
+          const isLocked = isStepNavLocked(step.id, status, decide)
 
           const stepButton = (
             <button
@@ -127,6 +124,7 @@ export function PipelineSidebar({
                         "w-8 h-8 rounded-full flex items-center justify-center border",
                         isActive ? "border-primary text-primary" : "border-muted bg-background",
                         status === "success" && !isActive && "bg-success-50 border-success-200 text-success-600",
+                        status === "warning" && !isActive && "bg-warning-50 border-warning-200 text-warning-600",
                         status === "error" && !isActive && "bg-error-50 border-error-200 text-error-600"
                     )}>
                         <span className="text-xs">{step.id}</span>

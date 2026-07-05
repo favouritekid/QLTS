@@ -1,13 +1,15 @@
 /**
- * AdmissionHeader chips — Commit 4 cockpit anchor tests.
+ * AdmissionHeader — "Dải trạng thái hồ sơ" case status header.
  *
- * Pin: review signal chips render đúng theo BE field; KHÔNG render
- * khi profile null.
+ * Pin: the header answers who · nguyện vọng · phụ trách · trạng thái · verdict ·
+ * việc cần xử lý, all BE-driven; the CTA jumps to the first blocking step; nothing
+ * renders for a null profile.
  */
 
 import { describe, it, expect, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { AdmissionProfileChoiceResponse } from "@/lib/zod/admission-choices"
 
 // Mock FeeStatusLink (depends on react-query)
 vi.mock("@/components/finance", () => ({
@@ -32,77 +34,153 @@ function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): Admiss
     family_info: [],
     academic_history: [],
     documents_checklist: [],
+    choices: [],
+    // Neutral priority state so derivePriorityIssues() = 0 by default (tests that
+    // want work items set validation_errors / cultural explicitly).
+    cultural_education_level: "THPT",
     missing_priority_evidence_codes: [],
-    priority_resolution_snapshot: {},
+    priority_resolution_snapshot: { kv_resolved: "KV2" },
+    grouped_validation_errors: null,
     document_stats: { verified_count: 5, submitted_count: 6, mandatory_count: 8, missing_count: 2 },
+    assigned_officer_name: "Ksor Ho Hơn",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   } as unknown as AdmissionProfileResponse
 }
 
-describe("AdmissionHeader — Commit 4 review signal chips", () => {
-  it("renders completion chip", () => {
-    render(<AdmissionHeader profile={buildProfile({ completion_percent: 80 })} />)
-    expect(screen.getByTestId("header-chip-completion")).toHaveTextContent("80%")
+/** A choice-engine nguyện vọng row with sane defaults; override per test. */
+function buildChoice(overrides: Partial<AdmissionProfileChoiceResponse> = {}) {
+  return {
+    id: 1,
+    admission_profile_id: 42,
+    admission_path_id: 7,
+    path_subject_group_config_id: 3,
+    display_order: 1,
+    decision: "pending",
+    display_path_name: "Điều dưỡng 2026 – Chính quy – Học bạ",
+    display_program_name: "Điều dưỡng",
+    display_degree_level: "Cao đẳng",
+    display_subject_group_name: "B00",
+    scores: [],
+    data_complete: false,
+    threshold_failure_reasons: [],
+    ...overrides,
+  }
+}
+
+describe("AdmissionHeader — dải trạng thái", () => {
+  it("renders applicant name + #id", () => {
+    render(<AdmissionHeader profile={buildProfile()} />)
+    expect(screen.getByRole("heading")).toHaveTextContent("Nguyễn Văn A")
+    expect(screen.getByRole("heading")).toHaveTextContent("#42")
   })
 
-  it("renders eligibility chip", () => {
+  it("renders the eligibility verdict", () => {
     render(<AdmissionHeader profile={buildProfile({ eligibility_status: "eligible" })} />)
     expect(screen.getByTestId("header-chip-eligibility")).toHaveTextContent("Đủ điều kiện")
   })
 
-  it("renders ineligible eligibility chip with warning style", () => {
+  it("renders ineligible verdict", () => {
     render(<AdmissionHeader profile={buildProfile({ eligibility_status: "ineligible" })} />)
     expect(screen.getByTestId("header-chip-eligibility")).toHaveTextContent("Chưa đủ điều kiện")
   })
 
-  it("renders KV chip when snapshot.kv_resolved set", () => {
-    const profile = buildProfile({
-      priority_resolution_snapshot: { kv_resolved: "KV1" },
-    } as Partial<AdmissionProfileResponse>)
-    render(<AdmissionHeader profile={profile} />)
-    expect(screen.getByTestId("header-chip-kv")).toHaveTextContent("KV1")
+  it("renders completion %", () => {
+    render(<AdmissionHeader profile={buildProfile({ completion_percent: 80 })} />)
+    expect(screen.getByTestId("header-chip-completion")).toHaveTextContent("80%")
   })
 
-  it("renders UT bucket chip when ut_verified_bucket.applied_code set", () => {
-    const profile = buildProfile({
-      priority_resolution_snapshot: {
-        ut_verified_bucket: { applied_code: "07", applied_rate: 1.0 },
-      },
-    } as Partial<AdmissionProfileResponse>)
-    render(<AdmissionHeader profile={profile} />)
-    expect(screen.getByTestId("header-chip-ut")).toHaveTextContent("UT07")
-  })
-
-  it("renders docs ratio chip when mandatory_count > 0", () => {
-    render(<AdmissionHeader profile={buildProfile()} />)
+  it("renders docs ratio when mandatory_count > 0; hides when 0", () => {
+    const { rerender } = render(<AdmissionHeader profile={buildProfile()} />)
     expect(screen.getByTestId("header-chip-docs")).toHaveTextContent("5/8")
-  })
-
-  it("hides docs chip when mandatory_count=0", () => {
-    const profile = buildProfile({
-      document_stats: { verified_count: 0, submitted_count: 0, mandatory_count: 0, missing_count: 0 },
-    } as Partial<AdmissionProfileResponse>)
-    render(<AdmissionHeader profile={profile} />)
+    rerender(
+      <AdmissionHeader
+        profile={buildProfile({
+          document_stats: { verified_count: 0, submitted_count: 0, mandatory_count: 0, missing_count: 0 },
+        } as Partial<AdmissionProfileResponse>)}
+      />,
+    )
     expect(screen.queryByTestId("header-chip-docs")).not.toBeInTheDocument()
   })
 
-  it("renders blocker chip when validation_errors > 0", () => {
-    const profile = buildProfile({ validation_errors: ["Thiếu CCCD", "Thiếu họ tên"] })
-    render(<AdmissionHeader profile={profile} />)
-    expect(screen.getByTestId("header-chip-blockers")).toHaveTextContent("2 vấn đề")
+  it("renders KV ledger item when snapshot.kv_resolved set", () => {
+    render(<AdmissionHeader profile={buildProfile({ priority_resolution_snapshot: { kv_resolved: "KV1" } } as Partial<AdmissionProfileResponse>)} />)
+    expect(screen.getByTestId("header-chip-kv")).toHaveTextContent("KV1")
   })
 
-  it("hides blocker chip when validation_errors empty", () => {
-    render(<AdmissionHeader profile={buildProfile({ validation_errors: [] })} />)
+  // ----- nguyện vọng (đăng ký ngành gì) -----
+  it("renders the registered major (nguyện vọng) from choices", () => {
+    const profile = buildProfile({
+      choices: [buildChoice()],
+    } as unknown as Partial<AdmissionProfileResponse>)
+    render(<AdmissionHeader profile={profile} />)
+    expect(screen.getByText("Điều dưỡng")).toBeInTheDocument()
+    expect(screen.getByText("NV1")).toBeInTheDocument()
+  })
+
+  it("shows '+N NV' for multi-NV and 'Chưa chọn nguyện vọng' when empty", () => {
+    const multi = buildProfile({
+      choices: [
+        buildChoice({ display_program_name: "Dược", display_path_name: "Dược" }),
+        buildChoice({
+          id: 2, display_order: 2, display_program_name: "Điều dưỡng",
+          display_path_name: "Điều dưỡng", admission_path_id: 8, path_subject_group_config_id: 4,
+        }),
+      ],
+    } as unknown as Partial<AdmissionProfileResponse>)
+    render(<AdmissionHeader profile={multi} />)
+    expect(screen.getByText("+1 NV")).toBeInTheDocument()
+
+    render(<AdmissionHeader profile={buildProfile({ choices: [] })} />)
+    expect(screen.getByText("Chưa chọn nguyện vọng")).toBeInTheDocument()
+  })
+
+  it("renders the BE-resolved primary_choice_display when choices empty (legacy single-NV)", () => {
+    // The header reads the SINGLE BE-resolved field (provenance — choice-engine vs
+    // legacy vs empty — is decided by the backend), so a resolved name must NOT
+    // read "Chưa chọn nguyện vọng".
+    render(<AdmissionHeader profile={buildProfile({ choices: [], primary_choice_display: "Điều dưỡng" } as Partial<AdmissionProfileResponse>)} />)
+    expect(screen.getByText("Điều dưỡng")).toBeInTheDocument()
+    expect(screen.queryByText("Chưa chọn nguyện vọng")).not.toBeInTheDocument()
+  })
+
+  it("reads 'Chưa chọn nguyện vọng' when choices empty and primary_choice_display is null", () => {
+    // The backend returns null for an empty choice-engine profile (no stale
+    // program_name leak) — the FE just trusts the field.
+    render(<AdmissionHeader profile={buildProfile({ choices: [], primary_choice_display: null } as Partial<AdmissionProfileResponse>)} />)
+    expect(screen.getByText("Chưa chọn nguyện vọng")).toBeInTheDocument()
+  })
+
+  // ----- phụ trách -----
+  it("renders the assigned officer; 'Chưa phân công' when absent", () => {
+    render(<AdmissionHeader profile={buildProfile({ assigned_officer_name: "Ksor Ho Hơn" })} />)
+    expect(screen.getByText("Ksor Ho Hơn")).toBeInTheDocument()
+    render(<AdmissionHeader profile={buildProfile({ assigned_officer_name: undefined } as Partial<AdmissionProfileResponse>)} />)
+    expect(screen.getByText("Chưa phân công")).toBeInTheDocument()
+  })
+
+  // ----- việc cần xử lý CTA -----
+  it("shows the work-items CTA and jumps to the first blocking step on click", () => {
+    const onCheckCondition = vi.fn()
+    render(<AdmissionHeader profile={buildProfile({ validation_errors: ["Thiếu CCCD", "Thiếu họ tên"] })} onCheckCondition={onCheckCondition} />)
+    const cta = screen.getByTestId("header-chip-blockers")
+    expect(cta).toHaveTextContent("việc")
+    fireEvent.click(cta)
+    expect(onCheckCondition).toHaveBeenCalledTimes(1)
+  })
+
+  it("hides the work-items CTA when nothing is blocking", () => {
+    // Neutral profile: no validation errors, priority resolved (kv set + cultural
+    // set + draft so the post-submit-kv rule doesn't fire), no required-data.
+    render(<AdmissionHeader profile={buildProfile({ status: "draft", validation_errors: [], grouped_validation_errors: null })} />)
     expect(screen.queryByTestId("header-chip-blockers")).not.toBeInTheDocument()
   })
 
-  it("renders no chips when profile=null", () => {
+  it("renders nothing but a placeholder heading when profile=null", () => {
     render(<AdmissionHeader profile={null} />)
-    expect(screen.queryByTestId("header-chip-completion")).not.toBeInTheDocument()
     expect(screen.queryByTestId("header-chip-eligibility")).not.toBeInTheDocument()
-    expect(screen.queryByTestId("header-chip-kv")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("header-chip-completion")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("header-chip-blockers")).not.toBeInTheDocument()
   })
 })

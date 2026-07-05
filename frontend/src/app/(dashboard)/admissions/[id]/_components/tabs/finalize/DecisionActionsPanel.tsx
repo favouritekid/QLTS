@@ -141,12 +141,19 @@ export function DecisionActionsPanel({
   isEnrolling = false,
   canEnroll,
 }: DecisionActionsPanelProps) {
+  // Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / gia đình) — BE chặn
+  // submit nhưng không nằm trong eligibility, nên gate nút + hiện lý do rõ ràng
+  // ở đây. Cờ bypass-independent (BE phản ánh submit gate VÔ ĐIỀU KIỆN; không
+  // liên quan allow_unverified_submission — cái đó chỉ nới kiểm tra tài liệu).
+  const submitBlockedByData = profile.submit_blocked_by_data ?? false
+  const requiredDataErrors = profile.grouped_validation_errors?.required_data?.errors ?? []
+
   // ----- per-action renderers (closures) -------------------------------------
   const submitButton = () => (
     <Button
       key="submit"
       size="lg"
-      disabled={!isEligible || isSubmitting}
+      disabled={!isEligible || submitBlockedByData || isSubmitting}
       onClick={onSubmit}
       className={PRIMARY_CLASS}
     >
@@ -352,9 +359,18 @@ export function DecisionActionsPanel({
     // mandatory docs, the backend grants `can_submit_with_document_debt`. Offer
     // "Nộp kèm nợ giấy tờ" alongside the (disabled) normal submit. The reason
     // line then points at the debt option instead of a dead "chưa đủ điều kiện".
-    const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt
+    // When required data (family/academic) is still missing, submit is blocked
+    // regardless of docs — hide the doc-debt CTA (it would also be rejected) and
+    // point the user at the missing data instead.
+    const showDebt = canSubmitWithDocumentDebt && !!onSubmitWithDebt && !submitBlockedByData
+    // Guard the data reason on the errors list (not just the flag) so a backend
+    // desync (flag true, list empty) falls through instead of rendering "Còn
+    // thiếu: ". When other blockers also apply (!isEligible), hint at them so the
+    // user isn't bounced again after only supplying the missing data.
     const reasonNode = showDebt ? (
       <Reason>Còn thiếu giấy tờ — có thể nộp kèm nợ giấy tờ.</Reason>
+    ) : submitBlockedByData && requiredDataErrors.length > 0 ? (
+      <Reason>{`Còn thiếu: ${requiredDataErrors.join(" · ")}${!isEligible ? " · và các điều kiện khác" : ""}`}</Reason>
     ) : !isEligible ? (
       <Reason>Chưa đủ điều kiện để nộp.</Reason>
     ) : undefined

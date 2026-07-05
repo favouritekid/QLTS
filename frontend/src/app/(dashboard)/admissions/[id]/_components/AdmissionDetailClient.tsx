@@ -58,6 +58,7 @@ import { usePermissions } from "@/hooks/usePermissions"
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
+import { derivePriorityIssues, firstAttentionStep, missingRequiredDataSteps } from "./layout/priorityIssues"
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
 
@@ -489,15 +490,15 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-    // Navigate to first error step using backend-computed status.
-    // Phase E.4 (G0) — 8-step: 1=Personal, 2=Family, 3=Academic,
-    // 4=Priority, 5=Scores, 6=Documents, 7=Tuition, 8=Finalize.
-    for (let step = 1; step <= 8; step++) {
-      if (stepsStatusRecord[step] === "error") {
-        handleStepChange(step)
-        return
-      }
-    }
+    // Route to the step that actually needs attention, driven by the SAME issue
+    // sources that feed the header "việc cần xử lý" count (validation + priority +
+    // required-data) so the CTA can never dead-end or land on an unrelated tab.
+    // Decision logic lives in the pure, unit-tested `firstAttentionStep` helper.
+    const target = firstAttentionStep(stepsStatusRecord, {
+      requiredDataSteps: missingRequiredDataSteps(profile),
+      priorityIssuesCount: derivePriorityIssues(profile).length,
+    })
+    if (target !== null) handleStepChange(target)
   }
 
   if (!profile) return null
@@ -511,6 +512,7 @@ export function AdmissionDetailClient({
         profile={profile}
         currentStep={currentStep}
         onStepChange={handleStepChange}
+        onCheckCondition={handleCheckCondition}
         stepsStatus={stepsStatusRecord}
         validationErrors={validationErrors}
         validationSummary={validationSummary}
@@ -568,8 +570,10 @@ export function AdmissionDetailClient({
           </div>
         )}
 
-        {/* TAB CONTENT */}
-        <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
+        {/* TAB CONTENT — no wrapper card: each tab renders its own Card(s), so an
+            outer bg-card/shadow here was a redundant card-in-card that boxed the
+            form. Keep only min-height so switching steps doesn't jump the layout. */}
+        <div className="min-h-[500px]">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}

@@ -26,3 +26,29 @@ export function canDecide(perms: AdmissionPermissions | undefined): boolean {
         perms?.enroll),
   )
 }
+
+type StepStatus = "success" | "warning" | "error" | "locked"
+
+/**
+ * Whether a step-navigation surface should DISABLE a step button. Single source
+ * of truth shared by PipelineSidebar (desktop) and MobileStepStrip so the two
+ * can't drift on which steps are reachable.
+ *
+ * Step 8 (Finalize) stays reachable for decision-capable users even when the
+ * backend marks it "locked" (ineligible) — a UI-only navigation override so a
+ * manager/admin can reach the decision surface. The BE mutation APIs
+ * (approve/reject/submit/enroll/…) still validate the state machine + IDOR
+ * independently, so this never bypasses authorization. Every other step locks
+ * strictly on the backend "locked" status.
+ *
+ * NOTE: AdmissionActions' "Tiếp tục" gate is a DIFFERENT rule (advance past
+ * step 7) — do not fold it in here.
+ */
+export function isStepNavLocked(
+  stepId: number,
+  status: StepStatus,
+  decide: boolean,
+): boolean {
+  const isStep8Override = stepId === 8 && decide
+  return !isStep8Override && status === "locked"
+}

@@ -4,14 +4,11 @@ import { AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { IssueSummary } from "./IssueSummary"
-import { derivePriorityIssues } from "./priorityIssues"
+import { derivePriorityIssues, issueTotalCount } from "./priorityIssues"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
-interface GroupedValidationErrors {
-  personal_info?: { category: string; errors: string[]; count: number }
-  documents?: { category: string; errors: string[]; count: number }
-  scores?: { category: string; errors: string[]; count: number }
-}
+// Derived from the zod contract so all buckets stay in sync automatically.
+type GroupedValidationErrors = NonNullable<AdmissionProfileResponse["grouped_validation_errors"]>
 
 interface MobileIssueDrawerProps {
   profile: AdmissionProfileResponse | null
@@ -25,7 +22,7 @@ export function MobileIssueDrawer({
   groupedValidationErrors,
 }: MobileIssueDrawerProps) {
   const priorityIssues = derivePriorityIssues(profile)
-  const totalCount = validationErrors.length + priorityIssues.length
+  const totalCount = issueTotalCount(validationErrors.length, priorityIssues.length, groupedValidationErrors)
 
   if (totalCount === 0) return null
 

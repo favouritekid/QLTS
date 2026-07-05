@@ -1454,7 +1454,11 @@ def _compute_completion_percent(
 
     cccd_error = not profile.citizen_id
     personal_required = ["full_name", "phone", "citizen_id"]
-    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    # place_of_birth: keep step-1 status in sync with _validate_personal_info so
+    # completion_percent doesn't count step 1 as done while it's a submit blocker.
+    personal_optional = [
+        "email", "dob", "gender", "nationality", "ethnicity", "place_of_birth",
+    ]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
     permanent_address_complete = all(
@@ -2010,6 +2014,25 @@ def _build_executive_summary_items(
     return critical_blockers, warnings
 
 
+def _missing_submit_required_data(profile: models.AdmissionProfile) -> List[str]:
+    """Data groups that ``submit_and_evaluate`` rejects UNCONDITIONALLY
+    (``family_info`` / ``academic_history``) yet which never appear in
+    ``validation_errors``. Single source of truth shared by the real submit gate
+    AND the FE-facing ``submit_blocked_by_data`` flag + ``required_data`` bucket,
+    so the draft-view button gate cannot diverge from the actual gate — adding a
+    third mandatory group here updates both at once.
+
+    Bypass-independent: ``allow_unverified_submission`` only relaxes DOCUMENT
+    verification, never these two data groups.
+    """
+    missing: List[str] = []
+    if not profile.academic_history:
+        missing.append("Chưa nhập quá trình học tập")
+    if not profile.family_info:
+        missing.append("Chưa nhập thông tin gia đình")
+    return missing
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -2406,6 +2429,33 @@ def _compute_frontend_fields(
     # in the submit-with-debt dialog (B3).
     profile.missing_doc_codes = list(missing_doc_codes)
 
+    # Family/academic are UNCONDITIONAL submit blockers (submit_and_evaluate
+    # rejects them regardless of docs) but are NOT in validation_errors, so they
+    # never reach _other_errors. Compute the same draft-scoped predicate the
+    # submit_blocked_by_data flag + required_data bucket use (below).
+    _missing_required_data = (
+        _missing_submit_required_data(profile) if status == "draft" else []
+    )
+
+    # Single named set of the SYNC-observable non-document submit blockers, so the
+    # doc-debt gate can't advertise a submit-with-debt the API would reject on a
+    # non-doc error. Folds `_other_errors` (validation errors minus missing-docs)
+    # + `_missing_required_data` (family/academic — absent from validation_errors)
+    # into ONE term future gates can reuse without re-remembering both.
+    #
+    # OPTIMISTIC on two axes by design — two submit gates are NOT observable in
+    # this sync, db-less compute:
+    #   * current-era ward (`_is_current_era_ward`, submit_and_evaluate:~6344) —
+    #     an async administrative_nodes lookup.
+    #   * KV resolution (`_kv_unresolved_error_message`) — the priority snapshot is
+    #     FROZEN AT SUBMIT and is null for an un-previewed draft, so sync-gating on
+    #     it would false-negative every valid-but-un-previewed draft.
+    # For those two the flag is a hint: the API stays authoritative and the FE
+    # surfaces any residual bounce. Do NOT add them here (see the test
+    # `test_document_debt_flag_gated_on_required_data`, which asserts on a FULLY
+    # submittable profile so it doesn't cement the optimistic edge as truth).
+    _non_doc_submit_blockers = bool(_other_errors) or bool(_missing_required_data)
+
     # L1 owner-consistency: gate the submit-with-debt button on the SAME actor
     # set as ``permissions["submit"]`` (is_owner or is_manager or is_admin) to
     # prevent drift — submit-with-debt is just submit + a doc-debt snapshot, so
@@ -2414,12 +2464,12 @@ def _compute_frontend_fields(
     # one not assigned to the lead, which submit itself rejects via is_owner.)
     # The server-side submit gate in submit_and_evaluate is role+IDOR based and
     # unchanged — this only aligns the FE flag. The button shows only when the
-    # draft is eligible apart from missing docs (other_errors empty + ≥1 missing
+    # draft is eligible apart from missing docs (no non-doc blockers + ≥1 missing
     # doc) and is not a multi-NV profile lacking choices.
     profile.can_submit_with_document_debt = bool(
         status == "draft"
         and (is_owner or is_manager or is_admin)
-        and not _other_errors
+        and not _non_doc_submit_blockers
         and missing_doc_codes
         and not _multi_nv_no_choice
     )
@@ -2532,7 +2582,12 @@ def _compute_frontend_fields(
     # =========================================================================
     # Required personal fields for step 1 check
     personal_required = ["full_name", "phone", "citizen_id"]
-    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    # place_of_birth is validated in _validate_personal_info (a blocker); keep it
+    # in step-1 status so a missing value shows amber, not a false "success" that
+    # dead-ends the header work-items CTA (count > 0 but no navigable step).
+    personal_optional = [
+        "email", "dob", "gender", "nationality", "ethnicity", "place_of_birth",
+    ]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
     personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
     permanent_address_complete = all(
@@ -2545,6 +2600,27 @@ def _compute_frontend_fields(
     
     # Academic
     has_academic = profile.academic_history and len(profile.academic_history) > 0
+
+    # --- Required-data visibility (family + academic history) -------------------
+    # These two groups HARD-block submit (submit_and_evaluate rejects them
+    # UNCONDITIONALLY) but are absent from validation_errors → the draft view
+    # showed no error while submit rejected them (draft↔submit mismatch → user bỏ
+    # trống → kẹt). Surface via the SAME predicate the real submit gate uses
+    # (``_missing_submit_required_data``) so the button gate cannot diverge from
+    # the actual gate. Scoped to draft: submit is the only transition these groups
+    # gate (resubmit/approve don't re-check them), so bucket + flag both stay empty
+    # on non-draft statuses — a submitted profile with legacy-empty data must NOT
+    # surface "Thông tin bắt buộc".
+    # NOTE: deliberately NOT added to validation_errors/eligibility_status (that
+    # would flip step-8 lock, bypass_warning, and approve gating — out of scope).
+    # ``_missing_required_data`` is computed once above (shared with the doc-debt
+    # gate) so the two flags cannot diverge.
+    profile.grouped_validation_errors["required_data"] = {
+        "category": "Thông tin bắt buộc",
+        "errors": _missing_required_data,
+        "count": len(_missing_required_data),
+    }
+    profile.submit_blocked_by_data = bool(_missing_required_data)
     
     # P0 hotfix multi-NV — Step 5 (Scores) "has any" must read per-choice
     # ProfileChoiceScore for multi-NV (profile.subject_scores is always empty
@@ -6204,13 +6280,11 @@ async def submit_and_evaluate(
                 f"(Mã SV: {existing_student.student_code})"
             )
 
-    # Validation 4: Check Family Info (Fix Finding 1.7)
-    if not profile.family_info:
-        errors.append("Chưa nhập thông tin gia đình (Family Info is empty)")
-
-    # Validation 5: Check Academic History (Fix Finding 1.7)
-    if not profile.academic_history:
-        errors.append("Chưa nhập quá trình học tập (Academic History is empty)")
+    # Validation 4+5: Family Info + Academic History (Fix Finding 1.7). Shared
+    # with the draft-view ``submit_blocked_by_data`` flag + ``required_data``
+    # bucket via one predicate (``_missing_submit_required_data``) so the button
+    # gate and this real submit gate cannot drift apart.
+    errors.extend(_missing_submit_required_data(profile))
 
     # Q9 #07 Phase E.4 reviewer v4 — KV freeze + assert chuyển từ "post if-errors
     # transition prep" lên đây để errors collect cho cả KV failure. Nếu raise

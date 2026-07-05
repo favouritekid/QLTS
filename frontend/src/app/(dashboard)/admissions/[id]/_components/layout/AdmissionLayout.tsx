@@ -3,6 +3,7 @@
 import { ReactNode } from "react"
 import { AdmissionHeader } from "./AdmissionHeader"
 import { PipelineSidebar } from "./PipelineSidebar"
+import { MobileStepStrip } from "./MobileStepStrip"
 import { MobileIssueDrawer } from "./MobileIssueDrawer"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -11,6 +12,8 @@ interface AdmissionLayoutProps {
   profile: AdmissionProfileResponse | null
   currentStep: number
   onStepChange: (step: number) => void
+  /** Jump to the first blocking step (header CTA + Step-8 "Kiểm tra toàn bộ"). */
+  onCheckCondition?: () => void
   stepsStatus: Record<number, "success" | "warning" | "error" | "locked">
   validationErrors?: string[]
   validationSummary?: {
@@ -18,11 +21,8 @@ interface AdmissionLayoutProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
-  groupedValidationErrors?: {
-    personal_info?: { category: string; errors: string[]; count: number }
-    documents?: { category: string; errors: string[]; count: number }
-    scores?: { category: string; errors: string[]; count: number }
-  } | null
+  // Derived from the zod contract (includes required_data) so buckets stay in sync.
+  groupedValidationErrors?: NonNullable<AdmissionProfileResponse["grouped_validation_errors"]> | null
   // Commit 7 — pass-through cho ProfileActionMenu trong header.
   onClaim?: () => void
   onUnclaim?: () => void
@@ -37,6 +37,7 @@ export function AdmissionLayout({
   profile,
   currentStep,
   onStepChange,
+  onCheckCondition,
   stepsStatus,
   validationErrors = [],
   validationSummary,
@@ -53,6 +54,7 @@ export function AdmissionLayout({
        <div className="sticky top-0 z-30 bg-background border-b shadow-sm">
           <AdmissionHeader
             profile={profile}
+            onCheckCondition={onCheckCondition}
             onClaim={onClaim}
             onUnclaim={onUnclaim}
             isClaiming={isClaiming}
@@ -60,9 +62,21 @@ export function AdmissionLayout({
             onDelete={onDelete}
             isDeleting={isDeleting}
           />
+          {/* Mobile-only step navigator — desktop uses the PipelineSidebar
+              (hidden lg:block); on mobile this keeps step overview + direct
+              jump reachable in the sticky header while content scrolls. */}
+          <MobileStepStrip
+            profile={profile}
+            currentStep={currentStep}
+            onStepChange={onStepChange}
+            stepsStatus={stepsStatus}
+          />
        </div>
 
-       <div className="flex flex-1 container max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-6 gap-4 md:gap-8">
+       {/* Fill the app content area (already capped at --content-max-width by the
+           shell) instead of the narrower max-w-7xl, and use a single px-4 — the
+           app <main> already pads (p-6 on lg), so the old px-6 here double-padded. */}
+       <div className="flex flex-1 px-4 pt-4 md:pt-6 gap-4 md:gap-8">
           <aside className="w-56 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
              <PipelineSidebar
                 profile={profile}

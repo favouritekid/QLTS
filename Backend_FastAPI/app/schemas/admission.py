@@ -18,7 +18,16 @@ from decimal import Decimal
 from typing import Annotated, Any, Dict, List, Literal, Optional
 import html
 
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator, model_validator, ConfigDict
+from pydantic import (
+    BaseModel,
+    EmailStr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+    ConfigDict,
+    computed_field,
+)
 
 from app.schemas.admission_profile_choice import AdmissionProfileChoiceResponse
 
@@ -1296,7 +1305,16 @@ class AdmissionProfileResponse(BaseModel):
     # Grouped validation errors (categorized display)
     grouped_validation_errors: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Validation errors grouped by category: {personal_info: {category, errors, count}, documents: {...}, scores: {...}}"
+        description="Validation errors grouped by category: {personal_info: {category, errors, count}, documents: {...}, scores: {...}, required_data: {...}}"
+    )
+
+    # Draft còn thiếu dữ liệu bắt buộc (quá trình học tập / thông tin gia đình)
+    # vốn chặn submit nhưng không nằm trong validation_errors → FE dùng cờ này để
+    # disable nút Nộp + hiện lý do rõ ràng. Bypass-independent: cờ phản ánh submit
+    # gate VÔ ĐIỀU KIỆN (allow_unverified_submission chỉ nới kiểm tra tài liệu).
+    submit_blocked_by_data: Optional[bool] = Field(
+        default=False,
+        description="Draft blocked from submit by missing required data (family/academic). Bypass-independent: mirrors the unconditional submit gate; allow_unverified_submission only relaxes document verification, never these two groups."
     )
 
     # Executive summary for dashboard overview
@@ -1439,6 +1457,30 @@ class AdmissionProfileResponse(BaseModel):
             # để Pydantic xử lý tự nhiên.
             pass
         return data
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def primary_choice_display(self) -> Optional[str]:
+        """Resolved display name of the primary nguyện vọng — the SINGLE BE source
+        so the FE header doesn't heuristically pick between ``choices[0]`` and the
+        legacy ``program_name``.
+
+        - Choice-engine profile: the lowest-``display_order`` choice's program name
+          (falls back to its path name when the program label is blank).
+        - Legacy single-NV profile (``uses_choice_engine=False``): ``program_name``.
+        - Choice-engine profile with an EMPTY ``choices`` genuinely has no nguyện
+          vọng yet → ``None`` (so the FE shows "Chưa chọn nguyện vọng" rather than a
+          stale lead/offering value). Returns ``None`` when nothing is available.
+        """
+        if self.choices:
+            first = min(self.choices, key=lambda c: c.display_order)
+            name = (first.display_program_name or "").strip()
+            if name:
+                return name
+            return (first.display_path_name or "").strip() or None
+        if not self.uses_choice_engine and self.program_name:
+            return self.program_name.strip() or None
+        return None
 
     model_config = ConfigDict(
         from_attributes=True,

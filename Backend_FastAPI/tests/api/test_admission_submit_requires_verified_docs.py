@@ -37,6 +37,7 @@ from httpx import AsyncClient
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import SUBMITTABLE_PERMANENT_ADDRESS
 from tests.fixtures.constants import AuthURLs, LeadsURLs
 
 
@@ -51,78 +52,84 @@ async def _login(client: AsyncClient, username: str, password: str) -> dict:
 
 @pytest_asyncio.fixture
 async def strict_path_config(seed_lead_dependencies: dict):
-    """Seed an admission path with allow_unverified_submission=False.
+    """Seed a STRICT admission path (allow_unverified_submission=False) on top of
+    the full #337 submittable offering chain.
 
-    Mirrors the inline fixture from prior PRs; duplicated so the test
-    file stays self-contained until a third consumer warrants a
-    promoted conftest fixture.
+    The prior inline seed lacked the legacy target-level config
+    (``OfferingAdmissionConfig`` + ``MajorProgram.degree_level_id``) and the KV
+    school, so ``submit_and_evaluate`` fail-closed with ``CONFIG_GAP_TARGET_LEVEL``
+    before ever reaching the doc-verification rule under test. Build on
+    ``seed_submittable_offering_config`` (the proven #337 recipe) and add ONLY the
+    strict path + a mandatory doc so the doc rule is the sole remaining gate.
+    Pair with the submittable ``_fill_personal`` (KV-resolvable academic_history
+    via ``school_id`` + submittable ward).
     """
+    from tests.fixtures.builders import (
+        AdmissionRoundBuilder,
+        ensure_submittable_ward,
+        seed_submittable_offering_config,
+        _next_id,
+    )
+
     uid = seed_lead_dependencies["unit_id"]
-    mpid = seed_lead_dependencies["major_program_id"]
-    ts = f"{int(datetime.now().timestamp())}"
+    await ensure_submittable_ward()
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            ot = models.ConfigOfferingType(code=f"tq_{ts}", name=f"TQ_{ts}", display_order=1)
-            s.add(ot); await s.flush()
-            dt = models.ConfigDocumentType(code=f"tcc_{ts}", name=f"TCC_{ts}", display_order=1)
-            s.add(dt); await s.flush()
-            po = models.ProgramOffering(
-                offering_type=f"TQ_{ts}", program_id=mpid, offering_type_id=ot.id,
-                is_active=True, duration_semesters=6,
+            # The recipe returns every chain id we need (academic_info/offering/
+            # criteria/method/offering_type), so no config→…→criteria re-walk.
+            seed = await seed_submittable_offering_config(
+                s, unit_id=uid, academic_year=2026
             )
-            s.add(po); await s.flush()
-            ai = models.OfferingAcademicInfo(
-                offering_id=po.id, academic_year=2026,
-                tuition_fee_per_year=5000000, annual_admission_quota=100, is_published=True,
+            method_id = seed["method_id"]
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                s, academic_year=2026
             )
-            s.add(ai); await s.flush()
-            am = models.AdmissionMethod(
-                code=f"hb_{ts}", name=f"HB_{ts}",
-                requires_gpa=True, requires_subject_scores=False, is_active=True,
-            )
-            s.add(am); await s.flush()
-            ac = models.AdmissionCriteria(
-                method_id=am.id, code=f"TC_{ts}", name=f"TC_{ts}",
-                min_gpa=0.0, scoring_method="average", subject_selection_mode="fixed",
-                policy_version="2026.1", is_active=True,
-            )
-            s.add(ac); await s.flush()
-            from tests.fixtures.builders import AdmissionRoundBuilder
-            round_id = await AdmissionRoundBuilder.get_or_create_default_round(s, academic_year=2026)
+
             ap = models.AdmissionPath(
-                academic_info_id=ai.id, admission_method_id=am.id,
-                admission_round_id=round_id, criteria_id=ac.id,
+                academic_info_id=seed["academic_info_id"],
+                admission_method_id=method_id,
+                admission_round_id=round_id,
+                criteria_id=seed["criteria_id"],
                 status="active", display_name="PR6 Strict", display_order=0,
                 visibility="public",
                 allow_unverified_submission=False,  # strict mode explicit
             )
-            s.add(ap); await s.flush()
+            s.add(ap)
+            await s.flush()
+            path_id = ap.id
+
+            # Collision-free suffix (monotonic _next_id, not seconds-resolution
+            # datetime) — code columns are UNIQUE, and two same-second fixture
+            # instantiations would otherwise clash.
+            sid = _next_id()
+            dt = models.ConfigDocumentType(
+                code=f"tcc_{sid}", name=f"TCC_{sid}", display_order=1
+            )
+            s.add(dt)
+            await s.flush()
+            doc_code = dt.code
             dg = models.DocumentGroup(
-                offering_type_id=ot.id,
-                admission_method_id=am.id,
-                code=f"dg_{ts}",
-                name=f"DG_{ts}",
-                is_active=True,
+                offering_type_id=seed["offering_type_id"],
+                admission_method_id=method_id,
+                code=f"dg_{sid}", name=f"DG_{sid}", is_active=True,
             )
-            s.add(dg); await s.flush()
+            s.add(dg)
+            await s.flush()
             dgi = models.DocumentGroupItem(
-                group_id=dg.id,
-                document_type_id=dt.id,
-                is_mandatory=True,
-                requires_upload=True,
-                submission_format="photo",
-                display_order=1,
+                group_id=dg.id, document_type_id=dt.id,
+                is_mandatory=True, requires_upload=True,
+                submission_format="photo", display_order=1,
             )
-            s.add(dgi); await s.flush()
+            s.add(dgi)
+            await s.flush()
     return {
         "unit_id": uid,
-        "offering_id": po.id,
-        "method_id": am.id,
-        "path_id": ap.id,
-        "doc_code": dt.code,
-        # Round contract hardening (plan v4): expose seeded round for the
-        # now-required admission_round_id on create-profile.
+        "offering_id": seed["offering_id"],
+        "method_id": method_id,
+        "path_id": path_id,
+        "doc_code": doc_code,
         "round_id": round_id,
+        "school_id": seed["school_id"],
     }
 
 
@@ -170,11 +177,14 @@ async def _officer_upload(client, oh, pid, doc_code):
     )
 
 
-async def _fill_personal(client, oh, pid):
-    """Fill required personal fields so submit doesn't fail on those instead of docs."""
+async def _fill_personal(client, oh, pid, *, school_id):
+    """Clear every NON-doc submit gate so submit outcome hinges purely on the doc
+    rule: personal fields + submittable address + graduated_thpt cultural level +
+    a KV-resolvable THPT academic_history (``school_id`` → seeded VnSchool) +
+    family_info."""
     ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
-    await client.put(f"{ADMISSIONS}/{pid}", json={
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
         "version": v,
         "citizen_id": ts_cccd,
         "gender": "male",
@@ -182,10 +192,21 @@ async def _fill_personal(client, oh, pid):
         "nationality": "Viet Nam",
         "ethnicity": "Kinh",
         "place_of_birth": "Test",
-        "family_info": [{"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}],
-        "academic_history": [{"school_name": "THPT", "year_from": 2019, "year_to": 2022, "gpa": 8.0, "graduation_type": "THPT"}],
+        "cultural_education_level": "graduated_thpt",
+        "vocational_qualification": "none",
+        **SUBMITTABLE_PERMANENT_ADDRESS,
+        "family_info": [{
+            "relationship": "Cha", "full_name": "P",
+            "phone": "0901111111", "is_primary_guardian": True,
+        }],
+        "academic_history": [{
+            "school_name": "THPT Submittable", "year_from": 2020,
+            "year_to": 2024, "gpa": 8.0, "graduation_type": "THPT",
+            "level": "THPT", "grade_to": 12, "school_id": school_id,
+        }],
         "admission_scores": {"gpa": 8.0, "subject_scores": {}},
     }, headers=oh)
+    assert r.status_code == 200, f"_fill_personal PUT failed: {r.status_code} {r.text}"
 
 
 @pytest.mark.asyncio
@@ -200,7 +221,7 @@ async def test_strict_path_blocks_submit_with_uploaded_only(
     pid = prof["id"]
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid)
+    await _fill_personal(client, oh, pid, school_id=strict_path_config["school_id"])
     assert (await _officer_upload(client, oh, pid, strict_path_config["doc_code"])).status_code in (200, 201)
 
     # Debug: confirm the snapshot is strict before submit.
@@ -236,7 +257,7 @@ async def test_strict_path_allows_submit_when_verified(
     pid = prof["id"]
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid)
+    await _fill_personal(client, oh, pid, school_id=strict_path_config["school_id"])
     assert (await _officer_upload(client, oh, pid, strict_path_config["doc_code"])).status_code in (200, 201)
 
     # Admin verifies (officer doesn't have verify permission per PR #5 service guard).
@@ -311,9 +332,96 @@ async def test_legacy_schema_v1_profile_grandfathered(
                     ))
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid)
+    await _fill_personal(client, oh, pid, school_id=strict_path_config["school_id"])
     assert (await _officer_upload(client, oh, pid, strict_path_config["doc_code"])).status_code in (200, 201)
 
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
     resp = await client.post(f"{ADMISSIONS}/{pid}/submit", json={"version": v}, headers=oh)
     assert resp.status_code == 200, f"Legacy profile should still submit, got {resp.status_code}: {resp.text[:300]}"
+
+
+@pytest.mark.asyncio
+async def test_document_debt_flag_gated_on_required_data(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    strict_path_config: dict,
+):
+    """``can_submit_with_document_debt`` must NOT be advertised while family/
+    academic data is still missing, and MUST be honoured once it is.
+
+    Phase 2 fills the profile so it is GENUINELY submittable-with-debt (submittable
+    address incl. current-era commune_code + KV-resolvable academic_history via
+    ``school_id`` + cultural level), so the flag=True is faithful (not an optimistic
+    edge). Phase 3 then POSTs the advertised debt submission and asserts it is
+    ACCEPTED — closing the flag↔API loop the flag exists to guarantee.
+    """
+    prof = await _create_draft(
+        client, admin_token_headers, officer_user_in_db, strict_path_config
+    )
+    pid = prof["id"]
+    school_id = strict_path_config["school_id"]
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+
+    # Phase 1 — everything a submit-with-debt needs EXCEPT family/academic and the
+    # doc: personal + full submittable address + cultural level + scores. The
+    # mandatory doc is left MISSING so the doc-debt path would otherwise be offered.
+    ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
+    v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
+        "version": v,
+        "citizen_id": ts_cccd,
+        "gender": "male",
+        "dob": "2001-01-01",
+        "nationality": "Viet Nam",
+        "ethnicity": "Kinh",
+        "place_of_birth": "Test",
+        "cultural_education_level": "graduated_thpt",
+        "vocational_qualification": "none",
+        **SUBMITTABLE_PERMANENT_ADDRESS,
+        "admission_scores": {"gpa": 8.0, "subject_scores": {}},
+    }, headers=oh)
+    assert r.status_code == 200, f"phase-1 PUT failed: {r.status_code} {r.text}"
+
+    blocked = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert blocked["submit_blocked_by_data"] is True, blocked
+    assert blocked["can_submit_with_document_debt"] is False, blocked
+
+    # Phase 2 — supply family + a KV-resolvable academic_history. The profile is
+    # now fully submittable-with-debt, so BOTH flags flip.
+    v = blocked["version"]
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
+        "version": v,
+        "family_info": [{
+            "relationship": "Cha", "full_name": "P",
+            "phone": "0901111111", "is_primary_guardian": True,
+        }],
+        "academic_history": [{
+            "school_name": "THPT Submittable", "year_from": 2020,
+            "year_to": 2024, "gpa": 8.0, "graduation_type": "THPT",
+            "level": "THPT", "grade_to": 12, "school_id": school_id,
+        }],
+    }, headers=oh)
+    assert r.status_code == 200, f"phase-2 PUT failed: {r.status_code} {r.text}"
+
+    ok = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
+    assert ok["submit_blocked_by_data"] is False, ok
+    assert ok["can_submit_with_document_debt"] is True, ok
+
+    # Phase 3 — honour the flag end-to-end: the advertised debt submission is
+    # ACCEPTED (status → submitted), not bounced back to draft. This is what makes
+    # the phase-2 flag=True faithful rather than over-advertised.
+    v = ok["version"]
+    submit = await client.post(
+        f"{ADMISSIONS}/{pid}/submit",
+        json={
+            "version": v,
+            "acknowledge_missing_docs": True,
+            "document_debt_reason": "Nợ giấy tờ — nộp trước, bổ sung sau (test)",
+        },
+        headers=oh,
+    )
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["status"] == "submitted", submit.json()
