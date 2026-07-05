@@ -516,6 +516,7 @@ export function AdmissionDetailClient({
         profile={profile}
         currentStep={currentStep}
         onStepChange={handleStepChange}
+        onCheckCondition={handleCheckCondition}
         stepsStatus={stepsStatusRecord}
         validationErrors={validationErrors}
         validationSummary={validationSummary}

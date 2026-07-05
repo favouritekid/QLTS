@@ -12,6 +12,8 @@ interface AdmissionLayoutProps {
   profile: AdmissionProfileResponse | null
   currentStep: number
   onStepChange: (step: number) => void
+  /** Jump to the first blocking step (header CTA + Step-8 "Kiểm tra toàn bộ"). */
+  onCheckCondition?: () => void
   stepsStatus: Record<number, "success" | "warning" | "error" | "locked">
   validationErrors?: string[]
   validationSummary?: {
@@ -35,6 +37,7 @@ export function AdmissionLayout({
   profile,
   currentStep,
   onStepChange,
+  onCheckCondition,
   stepsStatus,
   validationErrors = [],
   validationSummary,
@@ -51,6 +54,7 @@ export function AdmissionLayout({
        <div className="sticky top-0 z-30 bg-background border-b shadow-sm">
           <AdmissionHeader
             profile={profile}
+            onCheckCondition={onCheckCondition}
             onClaim={onClaim}
             onUnclaim={onUnclaim}
             isClaiming={isClaiming}
