@@ -77,8 +77,11 @@ export function AdmissionHeader({
   const extraChoices = Math.max(0, choices.length - 1)
   // Legacy single-NV profiles (uses_choice_engine=false) carry no choices[] but
   // still identify the selected program via the denormalized program_name. Fall
-  // back to it so those valid profiles don't falsely read "Chưa chọn nguyện vọng".
-  const legacyProgram = firstChoice ? null : profile.program_name?.trim() || null
+  // back to it ONLY for those — a real choice-engine profile with an empty
+  // choices[] genuinely has no nguyện vọng yet (program_name may be a stale
+  // lead/offering display value), so it must read "Chưa chọn nguyện vọng".
+  const legacyProgram =
+    firstChoice || profile.uses_choice_engine ? null : profile.program_name?.trim() || null
 
   // "Việc cần xử lý" = the same count the IssueSummary panel shows (validation +
   // priority + required-data), so the header and the panel never disagree.
