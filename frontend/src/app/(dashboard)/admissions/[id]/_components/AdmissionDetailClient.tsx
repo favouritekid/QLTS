@@ -574,8 +574,10 @@ export function AdmissionDetailClient({
           </div>
         )}
 
-        {/* TAB CONTENT */}
-        <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
+        {/* TAB CONTENT — no wrapper card: each tab renders its own Card(s), so an
+            outer bg-card/shadow here was a redundant card-in-card that boxed the
+            form. Keep only min-height so switching steps doesn't jump the layout. */}
+        <div className="min-h-[500px]">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}

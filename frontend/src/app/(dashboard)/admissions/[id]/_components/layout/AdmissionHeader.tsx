@@ -104,7 +104,7 @@ export function AdmissionHeader({
   return (
     <div
       className={cn(
-        "relative border-l-4 px-4 md:px-6 py-3",
+        "relative border-l-4 px-4 py-3",
         mood === "ineligible" && "border-l-warning-600 bg-gradient-to-b from-warning-50 to-transparent",
         mood === "eligible" && "border-l-success bg-gradient-to-b from-success-50 to-transparent",
         mood === "neutral" && "border-l-border",

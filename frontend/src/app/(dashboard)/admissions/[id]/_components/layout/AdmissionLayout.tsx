@@ -73,7 +73,10 @@ export function AdmissionLayout({
           />
        </div>
 
-       <div className="flex flex-1 container max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-6 gap-4 md:gap-8">
+       {/* Fill the app content area (already capped at --content-max-width by the
+           shell) instead of the narrower max-w-7xl, and use a single px-4 — the
+           app <main> already pads (p-6 on lg), so the old px-6 here double-padded. */}
+       <div className="flex flex-1 px-4 pt-4 md:pt-6 gap-4 md:gap-8">
           <aside className="w-56 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
              <PipelineSidebar
                 profile={profile}
