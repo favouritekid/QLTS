@@ -1,4 +1,4 @@
-import { ADMISSION_STEPS, STEP } from "@/lib/constants/admission-steps"
+import { ADMISSION_STEP_IDS, STEP } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 /**
@@ -59,11 +59,10 @@ export function firstAttentionStep(
   stepsStatus: Record<number, StepStatus>,
   opts: { requiredDataSteps: number[]; priorityIssuesCount: number },
 ): number | null {
-  // Iterate in pipeline order, derived from the registry so a step add/reorder
-  // flows through automatically.
-  const orderedIds = ADMISSION_STEPS.map((s) => s.id)
+  // Iterate in pipeline order (registry-derived module const), so a step
+  // add/reorder flows through automatically.
   const firstWith = (status: StepStatus) =>
-    orderedIds.find((s) => stepsStatus[s] === status) ?? null
+    ADMISSION_STEP_IDS.find((s) => stepsStatus[s] === status) ?? null
 
   const errorStep = firstWith("error")
   if (errorStep !== null) return errorStep

@@ -55,6 +55,9 @@ export const STEP = {
   FINALIZE: 8,
 } as const
 
+/** Pipeline step ids in order — derived once so consumers don't re-`map` per call. */
+export const ADMISSION_STEP_IDS: number[] = ADMISSION_STEPS.map((s) => s.id)
+
 /**
  * Map a `grouped_validation_errors` section key (backend `_compute_frontend_fields`,
  * admission_service.py:1878) → its pipeline step. Drives message-level ActionItems

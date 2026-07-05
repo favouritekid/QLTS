@@ -78,7 +78,7 @@ export function AdmissionHeader({
   // amber = chưa đủ, neutral (pending/unknown) = calm.
   const eligibility = profile.eligibility_status
   const mood: Mood =
-    eligibility === "eligible" ? "eligible" : eligibility === "ineligible" ? "ineligible" : "neutral"
+    eligibility === "eligible" || eligibility === "ineligible" ? eligibility : "neutral"
   const isEligible = mood === "eligible"
 
   const choices = [...(profile.choices ?? [])].sort((a, b) => a.display_order - b.display_order)

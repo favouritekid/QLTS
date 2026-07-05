@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from "vitest"
 import { render, screen, fireEvent } from "@testing-library/react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { AdmissionProfileChoiceResponse } from "@/lib/zod/admission-choices"
 
 // Mock FeeStatusLink (depends on react-query)
 vi.mock("@/components/finance", () => ({
@@ -49,7 +50,7 @@ function buildProfile(overrides: Partial<AdmissionProfileResponse> = {}): Admiss
 }
 
 /** A choice-engine nguyện vọng row with sane defaults; override per test. */
-function buildChoice(overrides: Record<string, unknown> = {}) {
+function buildChoice(overrides: Partial<AdmissionProfileChoiceResponse> = {}) {
   return {
     id: 1,
     admission_profile_id: 42,
