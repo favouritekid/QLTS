@@ -119,6 +119,14 @@ describe("AdmissionHeader — dải trạng thái", () => {
     expect(screen.getByText("Chưa chọn nguyện vọng")).toBeInTheDocument()
   })
 
+  it("falls back to legacy program_name when choices empty (single-NV profile)", () => {
+    // uses_choice_engine=false legacy profiles carry no choices[] but still
+    // identify the program via program_name — must NOT read "Chưa chọn nguyện vọng".
+    render(<AdmissionHeader profile={buildProfile({ choices: [], program_name: "Điều dưỡng" } as Partial<AdmissionProfileResponse>)} />)
+    expect(screen.getByText("Điều dưỡng")).toBeInTheDocument()
+    expect(screen.queryByText("Chưa chọn nguyện vọng")).not.toBeInTheDocument()
+  })
+
   // ----- phụ trách -----
   it("renders the assigned officer; 'Chưa phân công' when absent", () => {
     render(<AdmissionHeader profile={buildProfile({ assigned_officer_name: "Ksor Ho Hơn" })} />)

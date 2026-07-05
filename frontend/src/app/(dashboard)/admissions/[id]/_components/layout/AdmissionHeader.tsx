@@ -75,6 +75,10 @@ export function AdmissionHeader({
   const choices = [...(profile.choices ?? [])].sort((a, b) => a.display_order - b.display_order)
   const firstChoice = choices[0]
   const extraChoices = Math.max(0, choices.length - 1)
+  // Legacy single-NV profiles (uses_choice_engine=false) carry no choices[] but
+  // still identify the selected program via the denormalized program_name. Fall
+  // back to it so those valid profiles don't falsely read "Chưa chọn nguyện vọng".
+  const legacyProgram = firstChoice ? null : profile.program_name?.trim() || null
 
   // "Việc cần xử lý" = the same count the IssueSummary panel shows (validation +
   // priority + required-data), so the header and the panel never disagree.
@@ -167,6 +171,8 @@ export function AdmissionHeader({
                 </span>
               )}
             </>
+          ) : legacyProgram ? (
+            <span className="truncate font-semibold text-foreground">{legacyProgram}</span>
           ) : (
             <span className="text-muted-foreground">Chưa chọn nguyện vọng</span>
           )}
