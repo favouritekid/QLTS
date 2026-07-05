@@ -119,21 +119,20 @@ describe("AdmissionHeader — dải trạng thái", () => {
     expect(screen.getByText("Chưa chọn nguyện vọng")).toBeInTheDocument()
   })
 
-  it("falls back to legacy program_name when choices empty (uses_choice_engine=false)", () => {
-    // Legacy single-NV profiles carry no choices[] but still identify the program
-    // via program_name — must NOT read "Chưa chọn nguyện vọng".
-    render(<AdmissionHeader profile={buildProfile({ uses_choice_engine: false, choices: [], program_name: "Điều dưỡng" } as Partial<AdmissionProfileResponse>)} />)
+  it("renders the BE-resolved primary_choice_display when choices empty (legacy single-NV)", () => {
+    // The header reads the SINGLE BE-resolved field (provenance — choice-engine vs
+    // legacy vs empty — is decided by the backend), so a resolved name must NOT
+    // read "Chưa chọn nguyện vọng".
+    render(<AdmissionHeader profile={buildProfile({ choices: [], primary_choice_display: "Điều dưỡng" } as Partial<AdmissionProfileResponse>)} />)
     expect(screen.getByText("Điều dưỡng")).toBeInTheDocument()
     expect(screen.queryByText("Chưa chọn nguyện vọng")).not.toBeInTheDocument()
   })
 
-  it("does NOT show program_name for a choice-engine profile with empty choices[] (reads 'Chưa chọn nguyện vọng')", () => {
-    // uses_choice_engine=true → nguyện vọng comes from choices[]; an empty choices[]
-    // genuinely has none yet, and program_name may be a stale lead/offering display
-    // value → must not masquerade as a chosen program.
-    render(<AdmissionHeader profile={buildProfile({ uses_choice_engine: true, choices: [], program_name: "Điều dưỡng" } as Partial<AdmissionProfileResponse>)} />)
+  it("reads 'Chưa chọn nguyện vọng' when choices empty and primary_choice_display is null", () => {
+    // The backend returns null for an empty choice-engine profile (no stale
+    // program_name leak) — the FE just trusts the field.
+    render(<AdmissionHeader profile={buildProfile({ choices: [], primary_choice_display: null } as Partial<AdmissionProfileResponse>)} />)
     expect(screen.getByText("Chưa chọn nguyện vọng")).toBeInTheDocument()
-    expect(screen.queryByText("Điều dưỡng")).not.toBeInTheDocument()
   })
 
   // ----- phụ trách -----

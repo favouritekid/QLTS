@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react"
 import { AdmissionProfileResponse } from "@/lib/zod/admissions"
-import { getStatusConfig } from "@/lib/status-config"
+import { getStatusConfig, getStatusDotColor } from "@/lib/status-config"
 import { FeeStatusLink } from "@/components/finance"
 import { GraduationCap, MapPin, Award, ArrowRight } from "lucide-react"
 import { ProfileActionMenu } from "./ProfileActionMenu"
@@ -66,13 +66,9 @@ export function AdmissionHeader({
   const choices = [...(profile.choices ?? [])].sort((a, b) => a.display_order - b.display_order)
   const firstChoice = choices[0]
   const extraChoices = Math.max(0, choices.length - 1)
-  // Legacy single-NV profiles (uses_choice_engine=false) carry no choices[] but
-  // still identify the selected program via the denormalized program_name. Fall
-  // back to it ONLY for those — a real choice-engine profile with an empty
-  // choices[] genuinely has no nguyện vọng yet (program_name may be a stale
-  // lead/offering display value), so it must read "Chưa chọn nguyện vọng".
-  const legacyProgram =
-    firstChoice || profile.uses_choice_engine ? null : profile.program_name?.trim() || null
+  // BE-resolved primary program name (handles choice-engine vs legacy vs
+  // empty-choice-engine provenance) — single source, no FE heuristic.
+  const primaryProgram = profile.primary_choice_display?.trim() || null
 
   // "Việc cần xử lý" = the same count the IssueSummary panel shows (validation +
   // priority + required-data), so the header and the panel never disagree.
@@ -116,6 +112,11 @@ export function AdmissionHeader({
             <span className="ml-1.5 text-sm font-medium text-muted-foreground">#{profile.id}</span>
           </h1>
           <div className="flex flex-shrink-0 items-center gap-2">
+            {/* Verdict pill uses the page MOOD colour (amber = chưa đủ, green = đủ)
+                — deliberately softer than the roster EligibilityToken's error-red,
+                so it agrees with the amber border/gradient on this detail page.
+                Rendered only for a known verdict; a "pending" default stays neutral
+                (no pill) by design. Do NOT swap to the roster token here. */}
             {verdictKnown && (
               <span
                 data-testid="header-chip-eligibility"
@@ -152,7 +153,7 @@ export function AdmissionHeader({
                 NV{firstChoice.display_order}
               </span>
               <span className="truncate font-semibold text-foreground">
-                {firstChoice.display_program_name || firstChoice.display_path_name}
+                {primaryProgram || firstChoice.display_program_name || firstChoice.display_path_name}
               </span>
               {firstChoice.display_degree_level && (
                 <span className="hidden flex-shrink-0 text-muted-foreground sm:inline">
@@ -165,8 +166,8 @@ export function AdmissionHeader({
                 </span>
               )}
             </>
-          ) : legacyProgram ? (
-            <span className="truncate font-semibold text-foreground">{legacyProgram}</span>
+          ) : primaryProgram ? (
+            <span className="truncate font-semibold text-foreground">{primaryProgram}</span>
           ) : (
             <span className="text-muted-foreground">Chưa chọn nguyện vọng</span>
           )}
@@ -185,7 +186,9 @@ export function AdmissionHeader({
           </div>
 
           <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1 text-xs font-semibold text-foreground/80">
-            <span className="h-2 w-2 rounded-full bg-slate-400" />
+            {/* Status dot colour from the shared status-config (same source as the
+                list StatusDot) instead of a hardcoded grey. */}
+            <span className={cn("h-2 w-2 rounded-full", getStatusDotColor(profile.status))} />
             {statusConfig?.label ?? profile.status}
           </span>
 

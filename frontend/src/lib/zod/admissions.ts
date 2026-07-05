@@ -944,6 +944,11 @@ export const admissionProfileResponseSchema = z.object({
   // Denormalized fields for list display
   program_name: z.string().optional().nullable(),
 
+  // BE-resolved display name of the primary nguyện vọng (choice-engine: first
+  // choice's program/path; legacy: program_name; empty choice-engine: null).
+  // Single source so the header doesn't heuristically pick the display value.
+  primary_choice_display: z.string().optional().nullable(),
+
   // Học phí HK1 (Admission List v2). NOTE: listAdmissions does NOT .parse() the
   // response — these z.number() declarations are TYPE-ONLY (no runtime coercion).
   // BE sends Decimal as JSON string; the string→number conversion happens in the
