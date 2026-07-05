@@ -240,6 +240,13 @@ async def seed_submittable_offering_config(
         "school_id": school.id,
         "academic_year": academic_year,
         "major_program_id": major.id,
+        # Chain ids so consumers building an AdmissionPath / DocumentGroup on top
+        # don't have to re-walk config→academic_info→offering→criteria.
+        "academic_info_id": academic_info.id,
+        "offering_id": offering.id,
+        "offering_type_id": offering_type.id,
+        "criteria_id": criteria.id,
+        "method_id": method.id,
     }
 
 

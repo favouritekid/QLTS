@@ -68,39 +68,28 @@ async def strict_path_config(seed_lead_dependencies: dict):
         AdmissionRoundBuilder,
         ensure_submittable_ward,
         seed_submittable_offering_config,
+        _next_id,
     )
 
     uid = seed_lead_dependencies["unit_id"]
-    ts = f"{int(datetime.now().timestamp())}"
     await ensure_submittable_ward()
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            # The recipe returns every chain id we need (academic_info/offering/
+            # criteria/method/offering_type), so no config→…→criteria re-walk.
             seed = await seed_submittable_offering_config(
                 s, unit_id=uid, academic_year=2026
             )
-            # Resolve the chain ids the strict path + doc group need; capture
-            # inside the transaction to avoid post-commit lazy access.
-            config = await s.get(
-                models.OfferingAdmissionConfig,
-                seed["offering_admission_config_id"],
-            )
-            academic_info = await s.get(
-                models.OfferingAcademicInfo, config.academic_info_id
-            )
-            offering = await s.get(models.ProgramOffering, academic_info.offering_id)
-            criteria = await s.get(models.AdmissionCriteria, config.criteria_id)
-            offering_id = offering.id
-            offering_type_id = offering.offering_type_id
-            method_id = criteria.method_id
+            method_id = seed["method_id"]
             round_id = await AdmissionRoundBuilder.get_or_create_default_round(
                 s, academic_year=2026
             )
 
             ap = models.AdmissionPath(
-                academic_info_id=academic_info.id,
+                academic_info_id=seed["academic_info_id"],
                 admission_method_id=method_id,
                 admission_round_id=round_id,
-                criteria_id=criteria.id,
+                criteria_id=seed["criteria_id"],
                 status="active", display_name="PR6 Strict", display_order=0,
                 visibility="public",
                 allow_unverified_submission=False,  # strict mode explicit
@@ -109,16 +98,20 @@ async def strict_path_config(seed_lead_dependencies: dict):
             await s.flush()
             path_id = ap.id
 
+            # Collision-free suffix (monotonic _next_id, not seconds-resolution
+            # datetime) — code columns are UNIQUE, and two same-second fixture
+            # instantiations would otherwise clash.
+            sid = _next_id()
             dt = models.ConfigDocumentType(
-                code=f"tcc_{ts}", name=f"TCC_{ts}", display_order=1
+                code=f"tcc_{sid}", name=f"TCC_{sid}", display_order=1
             )
             s.add(dt)
             await s.flush()
             doc_code = dt.code
             dg = models.DocumentGroup(
-                offering_type_id=offering_type_id,
+                offering_type_id=seed["offering_type_id"],
                 admission_method_id=method_id,
-                code=f"dg_{ts}", name=f"DG_{ts}", is_active=True,
+                code=f"dg_{sid}", name=f"DG_{sid}", is_active=True,
             )
             s.add(dg)
             await s.flush()
@@ -131,7 +124,7 @@ async def strict_path_config(seed_lead_dependencies: dict):
             await s.flush()
     return {
         "unit_id": uid,
-        "offering_id": offering_id,
+        "offering_id": seed["offering_id"],
         "method_id": method_id,
         "path_id": path_id,
         "doc_code": doc_code,
@@ -191,7 +184,7 @@ async def _fill_personal(client, oh, pid, *, school_id):
     family_info."""
     ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
-    await client.put(f"{ADMISSIONS}/{pid}", json={
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
         "version": v,
         "citizen_id": ts_cccd,
         "gender": "male",
@@ -213,6 +206,7 @@ async def _fill_personal(client, oh, pid, *, school_id):
         }],
         "admission_scores": {"gpa": 8.0, "subject_scores": {}},
     }, headers=oh)
+    assert r.status_code == 200, f"_fill_personal PUT failed: {r.status_code} {r.text}"
 
 
 @pytest.mark.asyncio
@@ -354,25 +348,29 @@ async def test_document_debt_flag_gated_on_required_data(
     strict_path_config: dict,
 ):
     """``can_submit_with_document_debt`` must NOT be advertised while family/
-    academic data is still missing.
+    academic data is still missing, and MUST be honoured once it is.
 
-    Those two groups hard-block submit-with-debt regardless of docs (the debt API
-    rejects them), so the flag, the (disabled) submit button and the API must all
-    agree — otherwise the response offers a debt submission that bounces.
+    Phase 2 fills the profile so it is GENUINELY submittable-with-debt (submittable
+    address incl. current-era commune_code + KV-resolvable academic_history via
+    ``school_id`` + cultural level), so the flag=True is faithful (not an optimistic
+    edge). Phase 3 then POSTs the advertised debt submission and asserts it is
+    ACCEPTED — closing the flag↔API loop the flag exists to guarantee.
     """
     prof = await _create_draft(
         client, admin_token_headers, officer_user_in_db, strict_path_config
     )
     pid = prof["id"]
+    school_id = strict_path_config["school_id"]
     oh = await _login(
         client, officer_user_in_db["username"], officer_user_in_db["password"]
     )
 
-    # Personal + address + scores complete, mandatory doc left MISSING (so the
-    # doc-debt path would otherwise be offered) — but family/academic omitted.
+    # Phase 1 — everything a submit-with-debt needs EXCEPT family/academic and the
+    # doc: personal + full submittable address + cultural level + scores. The
+    # mandatory doc is left MISSING so the doc-debt path would otherwise be offered.
     ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
-    await client.put(f"{ADMISSIONS}/{pid}", json={
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
         "version": v,
         "citizen_id": ts_cccd,
         "gender": "male",
@@ -380,30 +378,50 @@ async def test_document_debt_flag_gated_on_required_data(
         "nationality": "Viet Nam",
         "ethnicity": "Kinh",
         "place_of_birth": "Test",
-        "permanent_province": "Tỉnh Test KV",
-        "permanent_ward": "Phường Test KV",
+        "cultural_education_level": "graduated_thpt",
+        "vocational_qualification": "none",
+        **SUBMITTABLE_PERMANENT_ADDRESS,
         "admission_scores": {"gpa": 8.0, "subject_scores": {}},
     }, headers=oh)
+    assert r.status_code == 200, f"phase-1 PUT failed: {r.status_code} {r.text}"
 
     blocked = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
     assert blocked["submit_blocked_by_data"] is True, blocked
     assert blocked["can_submit_with_document_debt"] is False, blocked
 
-    # Supplying the required data unblocks BOTH — proving the doc-debt path was
-    # otherwise reachable and the missing family/academic was the only suppressor.
+    # Phase 2 — supply family + a KV-resolvable academic_history. The profile is
+    # now fully submittable-with-debt, so BOTH flags flip.
     v = blocked["version"]
-    await client.put(f"{ADMISSIONS}/{pid}", json={
+    r = await client.put(f"{ADMISSIONS}/{pid}", json={
         "version": v,
         "family_info": [{
             "relationship": "Cha", "full_name": "P",
             "phone": "0901111111", "is_primary_guardian": True,
         }],
         "academic_history": [{
-            "school_name": "THPT", "year_from": 2019,
-            "year_to": 2022, "gpa": 8.0, "graduation_type": "THPT",
+            "school_name": "THPT Submittable", "year_from": 2020,
+            "year_to": 2024, "gpa": 8.0, "graduation_type": "THPT",
+            "level": "THPT", "grade_to": 12, "school_id": school_id,
         }],
     }, headers=oh)
+    assert r.status_code == 200, f"phase-2 PUT failed: {r.status_code} {r.text}"
 
     ok = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
     assert ok["submit_blocked_by_data"] is False, ok
     assert ok["can_submit_with_document_debt"] is True, ok
+
+    # Phase 3 — honour the flag end-to-end: the advertised debt submission is
+    # ACCEPTED (status → submitted), not bounced back to draft. This is what makes
+    # the phase-2 flag=True faithful rather than over-advertised.
+    v = ok["version"]
+    submit = await client.post(
+        f"{ADMISSIONS}/{pid}/submit",
+        json={
+            "version": v,
+            "acknowledge_missing_docs": True,
+            "document_debt_reason": "Nợ giấy tờ — nộp trước, bổ sung sau (test)",
+        },
+        headers=oh,
+    )
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["status"] == "submitted", submit.json()
