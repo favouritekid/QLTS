@@ -161,6 +161,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=45),  # 03:45 — dọn export hết hạn
         "options": {"queue": "default"},
     },
+    # --- SMS Phase 2 interest-event retention (§16.9 data-minimization) ---
+    "cleanup-sms-interest-events-daily": {
+        "task": "cleanup_sms_interest_events_task",
+        # 04:15 — 04:00 đã có check_ctv_attribution_expiry; giữ staggering
+        "schedule": crontab(hour=4, minute=15),
+        "options": {"queue": "default"},
+    },
 
     # --- KPI Plan Daily Actuals Sync (P4) ---
     "sync-kpi-plan-actuals-daily": {

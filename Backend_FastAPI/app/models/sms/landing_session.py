@@ -57,6 +57,7 @@ class SmsLandingSession(Base):
     )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
+        index=True,  # §16.9 retention DELETE WHERE started_at < cutoff
     )
     last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
