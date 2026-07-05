@@ -39,6 +39,23 @@ export const ADMISSION_STEPS: AdmissionStep[] = [
 ]
 
 /**
+ * Semantic step ids — name the pipeline positions so consumers (e.g. the CTA
+ * router in `priorityIssues.ts`) reference `STEP.FAMILY` instead of a bare `2`.
+ * If the 8-step model is ever reordered, update THIS map alongside
+ * `ADMISSION_STEPS` in one place rather than hunting magic numbers.
+ */
+export const STEP = {
+  PERSONAL: 1,
+  FAMILY: 2,
+  ACADEMIC: 3,
+  PRIORITY: 4,
+  SCORES: 5,
+  DOCUMENTS: 6,
+  TUITION: 7,
+  FINALIZE: 8,
+} as const
+
+/**
  * Map a `grouped_validation_errors` section key (backend `_compute_frontend_fields`,
  * admission_service.py:1878) → its pipeline step. Drives message-level ActionItems
  * in `useSubmissionReadiness` (STEP8 plan B2). Step 4 (priority) is derived

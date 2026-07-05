@@ -1,3 +1,4 @@
+import { ADMISSION_STEPS, STEP } from "@/lib/constants/admission-steps"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 /**
@@ -33,8 +34,8 @@ export function missingRequiredDataSteps(
   // the CTA to a read-only step 2/3 dead end.
   if (profile.status !== "draft") return []
   const steps: number[] = []
-  if (!profile.family_info?.length) steps.push(2)
-  if (!profile.academic_history?.length) steps.push(3)
+  if (!profile.family_info?.length) steps.push(STEP.FAMILY)
+  if (!profile.academic_history?.length) steps.push(STEP.ACADEMIC)
   return steps
 }
 
@@ -58,16 +59,18 @@ export function firstAttentionStep(
   stepsStatus: Record<number, StepStatus>,
   opts: { requiredDataSteps: number[]; priorityIssuesCount: number },
 ): number | null {
-  const ALL_STEPS = [1, 2, 3, 4, 5, 6, 7, 8]
+  // Iterate in pipeline order, derived from the registry so a step add/reorder
+  // flows through automatically.
+  const orderedIds = ADMISSION_STEPS.map((s) => s.id)
   const firstWith = (status: StepStatus) =>
-    ALL_STEPS.find((s) => stepsStatus[s] === status) ?? null
+    orderedIds.find((s) => stepsStatus[s] === status) ?? null
 
   const errorStep = firstWith("error")
   if (errorStep !== null) return errorStep
 
   if (opts.requiredDataSteps.length > 0) return Math.min(...opts.requiredDataSteps)
 
-  if (opts.priorityIssuesCount > 0) return 4
+  if (opts.priorityIssuesCount > 0) return STEP.PRIORITY
 
   return firstWith("warning")
 }
