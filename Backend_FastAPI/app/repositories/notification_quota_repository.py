@@ -5,7 +5,7 @@ Phase D1: Repository for NotificationQuota CRUD and quota checks.
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,21 +125,28 @@ class NotificationQuotaRepository(BaseRepository[NotificationQuota]):
             return False  # No quota configured = unlimited
         return quota.blocked or quota.quota_used >= quota.quota_limit
 
-    async def get_all_quotas(
+    async def get_current_quotas(
         self,
-        period_starts: Optional[List[date]] = None,
+        windows: Optional[List[Tuple[str, date]]] = None,
     ) -> List[NotificationQuota]:
-        """Get all quota records whose ``period_start`` is in ``period_starts``.
+        """Get quota records matching any ``(period, period_start)`` window.
 
-        Defaults to today's rows. Callers pass multiple dates (e.g. today +
-        first-of-month) to fetch both daily and monthly channels in one query.
+        Each window targets one channel-class's CURRENT period exactly, so a
+        stale same-``period_start`` row of a different period (e.g. a daily row
+        created on the 1st of the month) is not accidentally returned alongside
+        a monthly row. Defaults to today's daily window.
         """
-        if not period_starts:
-            period_starts = [date.today()]
+        if not windows:
+            windows = [("daily", date.today())]
 
+        conditions = [
+            (NotificationQuota.period == period)
+            & (NotificationQuota.period_start == period_start)
+            for period, period_start in windows
+        ]
         query = (
             select(NotificationQuota)
-            .where(NotificationQuota.period_start.in_(period_starts))
+            .where(or_(*conditions))
             .order_by(NotificationQuota.channel)
         )
         result = await self.db.execute(query)

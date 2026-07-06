@@ -319,14 +319,14 @@ class TestNotificationQuotaRepository:
 # ---------------------------------------------------------------------------
 
 class TestChannelQuotaConfig:
-    """Test _get_channel_quota_config period/limit resolution."""
+    """Test get_channel_quota_config period/limit resolution."""
 
     def test_zalo_bot_is_monthly(self):
         from datetime import date
         from app.config import settings
-        from app.services.notification_quota_service import _get_channel_quota_config
+        from app.services.notification_quota_service import get_channel_quota_config
 
-        cfg = _get_channel_quota_config("zalo_bot")
+        cfg = get_channel_quota_config("zalo_bot")
         assert cfg is not None
         period, period_start, limit = cfg
         assert period == "monthly"
@@ -336,9 +336,9 @@ class TestChannelQuotaConfig:
     def test_zalo_is_daily(self):
         from datetime import date
         from app.config import settings
-        from app.services.notification_quota_service import _get_channel_quota_config
+        from app.services.notification_quota_service import get_channel_quota_config
 
-        cfg = _get_channel_quota_config("zalo")
+        cfg = get_channel_quota_config("zalo")
         assert cfg is not None
         period, period_start, limit = cfg
         assert period == "daily"
@@ -346,10 +346,10 @@ class TestChannelQuotaConfig:
         assert limit == settings.ZALO_DAILY_QUOTA_LIMIT
 
     def test_unknown_channel_is_unlimited(self):
-        from app.services.notification_quota_service import _get_channel_quota_config
+        from app.services.notification_quota_service import get_channel_quota_config
 
-        assert _get_channel_quota_config("email") is None
-        assert _get_channel_quota_config("browser") is None
+        assert get_channel_quota_config("email") is None
+        assert get_channel_quota_config("browser") is None
 
 
 class TestZaloBotMonthlyQuota:
@@ -418,3 +418,78 @@ class TestZaloBotMonthlyQuota:
             await record_send(mock_db, "email")
             repo_instance.get_current_quota.assert_not_awaited()
             repo_instance.upsert_quota.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_record_send_blocks_when_quota_reached(self):
+        """Reaching the monthly limit → blocked=True + cache invalidated (core enforcement)."""
+        from app.services.notification_quota_service import record_send
+
+        mock_db = AsyncMock()
+        mock_quota = MagicMock()  # existing row → increment path
+        mock_updated = MagicMock()
+        mock_updated.quota_used = 2800
+        mock_updated.quota_limit = 2800
+        mock_updated.blocked = False
+
+        with patch(
+            "app.services.notification_quota_service.NotificationQuotaRepository"
+        ) as MockRepo, patch(
+            "app.services.notification_quota_service._invalidate_quota_cache",
+            new_callable=AsyncMock,
+        ) as mock_invalidate:
+            repo_instance = AsyncMock()
+            repo_instance.get_current_quota = AsyncMock(return_value=mock_quota)
+            repo_instance.increment_used = AsyncMock(return_value=mock_updated)
+            MockRepo.return_value = repo_instance
+
+            await record_send(mock_db, "zalo_bot", provider="zalo_bot")
+
+            assert mock_updated.blocked is True       # channel blocked at limit
+            mock_db.flush.assert_awaited_once()        # persisted
+            mock_invalidate.assert_awaited_once()      # cache cleared
+
+
+class TestQuotaSummaryWindows:
+    """get_quota_summary fetches each channel's CURRENT period exactly (no stale rows)."""
+
+    @pytest.mark.asyncio
+    async def test_get_quota_summary_queries_both_period_windows(self):
+        from datetime import date
+        from app.services.notification_quota_service import get_quota_summary
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_quota_service.NotificationQuotaRepository"
+        ) as MockRepo:
+            repo_instance = AsyncMock()
+            repo_instance.get_current_quotas = AsyncMock(return_value=[])
+            MockRepo.return_value = repo_instance
+
+            await get_quota_summary(mock_db)
+
+            repo_instance.get_current_quotas.assert_awaited_once()
+            windows = repo_instance.get_current_quotas.call_args[0][0]
+            today = date.today()
+            # Daily channels queried at today; monthly at first-of-month — as
+            # (period, period_start) pairs so a stale same-date daily row is
+            # NOT pulled in with the monthly row.
+            assert ("daily", today) in windows
+            assert ("monthly", today.replace(day=1)) in windows
+
+    @pytest.mark.asyncio
+    async def test_get_current_quotas_returns_matched_rows(self):
+        from datetime import date
+        from app.repositories.notification_quota_repository import NotificationQuotaRepository
+
+        mock_db = AsyncMock()
+        row = MagicMock()
+        mock_scalars = MagicMock()
+        mock_scalars.all = MagicMock(return_value=[row])
+        mock_result = MagicMock()
+        mock_result.scalars = MagicMock(return_value=mock_scalars)
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        repo = NotificationQuotaRepository(mock_db)
+        result = await repo.get_current_quotas([("monthly", date(2026, 7, 1))])
+        assert result == [row]
+        mock_db.execute.assert_awaited_once()

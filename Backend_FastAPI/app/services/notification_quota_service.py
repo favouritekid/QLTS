@@ -30,12 +30,12 @@ async def check_quota(
     Check if channel has available quota. Returns True if OK to send.
 
     The period (daily vs monthly) and limit are resolved per-channel by
-    ``_get_channel_quota_config`` — zalo_bot is MONTHLY, zalo (ZNS) is daily.
+    ``get_channel_quota_config`` — zalo_bot is MONTHLY, zalo (ZNS) is daily.
     Channels with no configured quota are unlimited.
 
     Fast path: Redis cache. Slow path: DB lookup.
     """
-    cfg = _get_channel_quota_config(channel)
+    cfg = get_channel_quota_config(channel)
     if cfg is None:
         return True  # No quota configured for this channel = unlimited
 
@@ -78,7 +78,7 @@ async def record_send(
     provider: str = "default",
 ) -> None:
     """Record a successful send, incrementing quota_used for the channel's period."""
-    cfg = _get_channel_quota_config(channel)
+    cfg = get_channel_quota_config(channel)
     if cfg is None:
         return  # No quota configured for this channel
 
@@ -177,12 +177,16 @@ async def get_quota_summary(
     like zalo_bot) so the health dashboard shows every channel's live usage.
     """
     repo = NotificationQuotaRepository(db)
+    # Fetch each channel-class's CURRENT period as an exact (period, period_start)
+    # window. Filtering by period_start alone would also match a stale same-date
+    # row of a DIFFERENT period (e.g. a daily row created on the 1st of the
+    # month), producing duplicate/conflicting rows for one channel.
     if period_start is None:
         today = date.today()
-        period_starts = list({today, today.replace(day=1)})
+        windows = [("daily", today), ("monthly", today.replace(day=1))]
     else:
-        period_starts = [period_start]
-    quotas = await repo.get_all_quotas(period_starts=period_starts)
+        windows = [("daily", period_start), ("monthly", period_start)]
+    quotas = await repo.get_current_quotas(windows)
     return [
         {
             "id": q.id,
@@ -243,7 +247,7 @@ async def get_health_summary(db: AsyncSession) -> Dict:
     }
 
 
-def _get_channel_quota_config(
+def get_channel_quota_config(
     channel: str,
 ) -> Optional[Tuple[str, date, int]]:
     """Resolve ``(period, period_start, limit)`` for a channel's quota.
