@@ -166,26 +166,16 @@ async def sync_zalo_quota(
     )
 
 
-async def get_quota_summary(
-    db: AsyncSession,
-    period_start: Optional[date] = None,
-) -> List[Dict]:
-    """Get quota summary for the current period(s) of all channels.
+async def get_quota_summary(db: AsyncSession) -> List[Dict]:
+    """Get the CURRENT-period quota row for every channel.
 
-    When ``period_start`` is None (default), returns rows for BOTH the current
-    day (daily channels) and the first of the current month (monthly channels
-    like zalo_bot) so the health dashboard shows every channel's live usage.
+    Daily channels are read at today; monthly channels (zalo_bot) at the first
+    of the current month. Fetched as exact ``(period, period_start)`` windows
+    so a stale same-date row of a different period is never pulled in.
     """
     repo = NotificationQuotaRepository(db)
-    # Fetch each channel-class's CURRENT period as an exact (period, period_start)
-    # window. Filtering by period_start alone would also match a stale same-date
-    # row of a DIFFERENT period (e.g. a daily row created on the 1st of the
-    # month), producing duplicate/conflicting rows for one channel.
-    if period_start is None:
-        today = date.today()
-        windows = [("daily", today), ("monthly", today.replace(day=1))]
-    else:
-        windows = [("daily", period_start), ("monthly", period_start)]
+    today = date.today()
+    windows = [("daily", today), ("monthly", today.replace(day=1))]
     quotas = await repo.get_current_quotas(windows)
     return [
         {
