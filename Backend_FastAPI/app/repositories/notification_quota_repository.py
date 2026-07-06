@@ -127,15 +127,19 @@ class NotificationQuotaRepository(BaseRepository[NotificationQuota]):
 
     async def get_all_quotas(
         self,
-        period_start: Optional[date] = None,
+        period_starts: Optional[List[date]] = None,
     ) -> List[NotificationQuota]:
-        """Get all quota records for a given period."""
-        if period_start is None:
-            period_start = date.today()
+        """Get all quota records whose ``period_start`` is in ``period_starts``.
+
+        Defaults to today's rows. Callers pass multiple dates (e.g. today +
+        first-of-month) to fetch both daily and monthly channels in one query.
+        """
+        if not period_starts:
+            period_starts = [date.today()]
 
         query = (
             select(NotificationQuota)
-            .where(NotificationQuota.period_start == period_start)
+            .where(NotificationQuota.period_start.in_(period_starts))
             .order_by(NotificationQuota.channel)
         )
         result = await self.db.execute(query)

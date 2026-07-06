@@ -5,8 +5,8 @@ Phase D1: Quota management service.
 Redis cache for fast quota check → DB fallback → sync from provider.
 """
 import structlog
-from datetime import date, datetime, timezone
-from typing import Dict, List, Optional
+from datetime import date
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,11 +29,20 @@ async def check_quota(
     """
     Check if channel has available quota. Returns True if OK to send.
 
+    The period (daily vs monthly) and limit are resolved per-channel by
+    ``_get_channel_quota_config`` — zalo_bot is MONTHLY, zalo (ZNS) is daily.
+    Channels with no configured quota are unlimited.
+
     Fast path: Redis cache. Slow path: DB lookup.
     """
+    cfg = _get_channel_quota_config(channel)
+    if cfg is None:
+        return True  # No quota configured for this channel = unlimited
 
-    today = date.today()
-    cache_key = _QUOTA_CACHE_KEY.format(channel=channel, date=today.isoformat())
+    period, period_start, _limit = cfg
+    # Cache key is scoped to the period_start, so a monthly channel caches
+    # per-month and a daily channel per-day without key collisions.
+    cache_key = _QUOTA_CACHE_KEY.format(channel=channel, date=period_start.isoformat())
 
     # Fast path: check Redis cache
     try:
@@ -42,11 +51,15 @@ async def check_quota(
         if cached is not None:
             return cached != "blocked"
     except Exception as e:
-        log.warning("Redis quota cache read failed, falling through to DB", error=str(e))
+        log.warning(
+            "Redis quota cache read failed, falling through to DB", error=str(e)
+        )
 
     # Slow path: DB check
     repo = NotificationQuotaRepository(db)
-    over = await repo.is_over_quota(channel, provider, period_start=today)
+    over = await repo.is_over_quota(
+        channel, provider, period=period, period_start=period_start
+    )
 
     # Cache result
     try:
@@ -64,37 +77,43 @@ async def record_send(
     channel: str,
     provider: str = "default",
 ) -> None:
-    """Record a successful send, incrementing quota_used."""
-    today = date.today()
+    """Record a successful send, incrementing quota_used for the channel's period."""
+    cfg = _get_channel_quota_config(channel)
+    if cfg is None:
+        return  # No quota configured for this channel
+
+    period, period_start, limit = cfg
     repo = NotificationQuotaRepository(db)
 
-    # Ensure quota row exists for today
-    quota = await repo.get_current_quota(channel, provider, period_start=today)
+    # Ensure quota row exists for the current period
+    quota = await repo.get_current_quota(
+        channel, provider, period=period, period_start=period_start
+    )
     if quota is None:
-        # Auto-create with configured limit
-        limit = _get_channel_limit(channel)
-        if limit is None:
-            return  # No quota configured for this channel
+        # Auto-create with configured limit for this period
         await repo.upsert_quota(
             channel=channel,
             provider=provider,
-            period="daily",
-            period_start=today,
+            period=period,
+            period_start=period_start,
             quota_limit=limit,
             quota_used=1,
         )
         return
 
-    updated = await repo.increment_used(channel, provider, period_start=today)
+    updated = await repo.increment_used(
+        channel, provider, period=period, period_start=period_start
+    )
     if updated and updated.quota_used >= updated.quota_limit:
         # Block and invalidate cache
         updated.blocked = True
         await db.flush()
-        await _invalidate_quota_cache(channel, today)
+        await _invalidate_quota_cache(channel, period_start)
         log.warning(
             "Channel quota exhausted",
             channel=channel,
             provider=provider,
+            period=period,
             used=updated.quota_used,
             limit=updated.quota_limit,
         )
@@ -151,9 +170,19 @@ async def get_quota_summary(
     db: AsyncSession,
     period_start: Optional[date] = None,
 ) -> List[Dict]:
-    """Get quota summary for all channels."""
+    """Get quota summary for the current period(s) of all channels.
+
+    When ``period_start`` is None (default), returns rows for BOTH the current
+    day (daily channels) and the first of the current month (monthly channels
+    like zalo_bot) so the health dashboard shows every channel's live usage.
+    """
     repo = NotificationQuotaRepository(db)
-    quotas = await repo.get_all_quotas(period_start=period_start)
+    if period_start is None:
+        today = date.today()
+        period_starts = list({today, today.replace(day=1)})
+    else:
+        period_starts = [period_start]
+    quotas = await repo.get_all_quotas(period_starts=period_starts)
     return [
         {
             "id": q.id,
@@ -214,15 +243,27 @@ async def get_health_summary(db: AsyncSession) -> Dict:
     }
 
 
-def _get_channel_limit(channel: str) -> Optional[int]:
-    """Get configured quota limit for a channel."""
-    limits = {
-        "zalo": settings.ZALO_DAILY_QUOTA_LIMIT,
-        # v5 Step 14: zalo_bot daily quota — defaults to 80 (20% margin
-        # under the Zalo Basic free tier 100/day ceiling).
-        "zalo_bot": settings.ZALO_BOT_DAILY_QUOTA,
-    }
-    return limits.get(channel)
+def _get_channel_quota_config(
+    channel: str,
+) -> Optional[Tuple[str, date, int]]:
+    """Resolve ``(period, period_start, limit)`` for a channel's quota.
+
+    Returns None for channels with no configured quota (treated as unlimited).
+
+    - ``zalo_bot`` → **MONTHLY** (period_start = first of current month). The
+      Zalo Bot Platform free tier caps at 3000 msg/MONTH with **no** hard daily
+      ceiling, so a daily cap wasted the monthly budget on uneven (bursty
+      admission-season) traffic. A monthly period lets quiet days' unused
+      allowance carry to busy days within the same month.
+    - ``zalo`` (ZNS) → daily. The ZNS provider enforces a per-day quota that we
+      sync from each send response (see ``sync_zalo_quota``).
+    """
+    today = date.today()
+    if channel == "zalo_bot":
+        return ("monthly", today.replace(day=1), settings.ZALO_BOT_MONTHLY_QUOTA)
+    if channel == "zalo":
+        return ("daily", today, settings.ZALO_DAILY_QUOTA_LIMIT)
+    return None
 
 
 async def _invalidate_quota_cache(channel: str, day: date) -> None:

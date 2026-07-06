@@ -549,19 +549,21 @@ def sync_notification_quotas(self):
                     synced += 1
                     await session.commit()
 
-                # v5 Step 13: ensure zalo_bot quota row when ENABLED.
-                # Skipped while the channel is gated off so we don't
-                # accumulate empty rows for an unused channel.
+                # zalo_bot uses a MONTHLY quota (Zalo Bot free tier =
+                # 3000 msg/month, no hard daily cap). Ensure this month's
+                # row when ENABLED; skipped while gated off to avoid empty
+                # rows for an unused channel.
+                month_start = today.replace(day=1)
                 zalo_bot_quota = await repo.get_current_quota(
-                    "zalo_bot", "zalo_bot", "daily", today,
+                    "zalo_bot", "zalo_bot", "monthly", month_start,
                 )
                 if zalo_bot_quota is None and settings.ZALO_BOT_ENABLED:
                     await repo.upsert_quota(
                         channel="zalo_bot",
                         provider="zalo_bot",
-                        period="daily",
-                        period_start=today,
-                        quota_limit=settings.ZALO_BOT_DAILY_QUOTA,
+                        period="monthly",
+                        period_start=month_start,
+                        quota_limit=settings.ZALO_BOT_MONTHLY_QUOTA,
                     )
                     synced += 1
                     await session.commit()

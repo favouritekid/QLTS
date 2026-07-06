@@ -312,3 +312,109 @@ class TestNotificationQuotaRepository:
         repo = NotificationQuotaRepository(mock_db)
         result = await repo.is_over_quota("zalo")
         assert result is True
+
+
+# ---------------------------------------------------------------------------
+# D1-5: Per-channel quota period resolution (zalo_bot = MONTHLY)
+# ---------------------------------------------------------------------------
+
+class TestChannelQuotaConfig:
+    """Test _get_channel_quota_config period/limit resolution."""
+
+    def test_zalo_bot_is_monthly(self):
+        from datetime import date
+        from app.config import settings
+        from app.services.notification_quota_service import _get_channel_quota_config
+
+        cfg = _get_channel_quota_config("zalo_bot")
+        assert cfg is not None
+        period, period_start, limit = cfg
+        assert period == "monthly"
+        assert period_start == date.today().replace(day=1)  # first of month
+        assert limit == settings.ZALO_BOT_MONTHLY_QUOTA
+
+    def test_zalo_is_daily(self):
+        from datetime import date
+        from app.config import settings
+        from app.services.notification_quota_service import _get_channel_quota_config
+
+        cfg = _get_channel_quota_config("zalo")
+        assert cfg is not None
+        period, period_start, limit = cfg
+        assert period == "daily"
+        assert period_start == date.today()
+        assert limit == settings.ZALO_DAILY_QUOTA_LIMIT
+
+    def test_unknown_channel_is_unlimited(self):
+        from app.services.notification_quota_service import _get_channel_quota_config
+
+        assert _get_channel_quota_config("email") is None
+        assert _get_channel_quota_config("browser") is None
+
+
+class TestZaloBotMonthlyQuota:
+    """zalo_bot enforces a MONTHLY quota window, not daily."""
+
+    @pytest.mark.asyncio
+    async def test_check_quota_zalo_bot_queries_monthly_period(self):
+        from datetime import date
+        from app.services.notification_quota_service import check_quota
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_quota_service.NotificationQuotaRepository"
+        ) as MockRepo, patch(
+            "app.services.notification_quota_service.database"
+        ) as mock_database:
+            mock_redis = AsyncMock()
+            mock_redis.get = AsyncMock(return_value=None)  # cache miss → DB
+            mock_database.get_redis = AsyncMock(return_value=mock_redis)
+
+            repo_instance = AsyncMock()
+            repo_instance.is_over_quota = AsyncMock(return_value=False)
+            MockRepo.return_value = repo_instance
+
+            result = await check_quota(mock_db, "zalo_bot", provider="zalo_bot")
+            assert result is True
+            # Verify it checked the MONTHLY window (first of month), not daily
+            kwargs = repo_instance.is_over_quota.call_args[1]
+            assert kwargs["period"] == "monthly"
+            assert kwargs["period_start"] == date.today().replace(day=1)
+
+    @pytest.mark.asyncio
+    async def test_record_send_zalo_bot_creates_monthly_row(self):
+        from datetime import date
+        from app.config import settings
+        from app.services.notification_quota_service import record_send
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_quota_service.NotificationQuotaRepository"
+        ) as MockRepo:
+            repo_instance = AsyncMock()
+            repo_instance.get_current_quota = AsyncMock(return_value=None)
+            MockRepo.return_value = repo_instance
+
+            await record_send(mock_db, "zalo_bot", provider="zalo_bot")
+            repo_instance.upsert_quota.assert_awaited_once()
+            kwargs = repo_instance.upsert_quota.call_args[1]
+            assert kwargs["period"] == "monthly"
+            assert kwargs["period_start"] == date.today().replace(day=1)
+            assert kwargs["quota_limit"] == settings.ZALO_BOT_MONTHLY_QUOTA
+            assert kwargs["quota_used"] == 1
+
+    @pytest.mark.asyncio
+    async def test_record_send_unknown_channel_is_noop(self):
+        """Channel with no quota config → record_send does nothing (no repo call)."""
+        from app.services.notification_quota_service import record_send
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.notification_quota_service.NotificationQuotaRepository"
+        ) as MockRepo:
+            repo_instance = AsyncMock()
+            MockRepo.return_value = repo_instance
+
+            await record_send(mock_db, "email")
+            repo_instance.get_current_quota.assert_not_awaited()
+            repo_instance.upsert_quota.assert_not_awaited()
