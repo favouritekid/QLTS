@@ -7,7 +7,7 @@ hằng ngày qua Celery Beat. Xem SMS_MARKETING_MODULE_DESIGN.md §8.3 / §11.7.
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ..celery_app import celery_app
 from ..config import settings
@@ -86,3 +86,49 @@ def cleanup_sms_export_files_task(self):
         return {"purged": purged, "staging_orphans": orphans}
 
     return run_async_task(_cleanup, "cleanup_sms_export_files_task", log)
+
+
+async def _purge_old_interest_events(db, retention_days: int) -> int:
+    """Xoá `sms_landing_session` có ``started_at`` cũ hơn ``retention_days``
+    ngày; `sms_program_view` đi theo qua FK ``ondelete=CASCADE``. Aggregate
+    `sms_contact_program_interest` KHÔNG cascade → GIỮ nguyên. Trả số session
+    đã xoá. (Helper tách để test chạy đúng query thật.)"""
+    from sqlalchemy import delete
+
+    from app.models.sms import SmsLandingSession
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    res = await db.execute(
+        delete(SmsLandingSession).where(SmsLandingSession.started_at < cutoff)
+    )
+    return res.rowcount or 0
+
+
+@celery_app.task(
+    name="cleanup_sms_interest_events_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=120,
+)
+def cleanup_sms_interest_events_task(self):
+    """Retention §16.9: dọn event tracking chi tiết (`sms_landing_session` +
+    `sms_program_view` cascade) cũ hơn ``SMS_INTEREST_EVENT_RETENTION_DAYS``.
+    GIỮ aggregate `sms_contact_program_interest` (không cascade). Nhất quán:
+    `_recompute_interest` chỉ tính view TRONG cửa sổ retention, nên view bị dọn
+    đằng nào cũng đã ngoài cửa sổ → recompute (kể cả khi contact tương tác lại)
+    KHÔNG lệch view_count/total_dwell/score. Data-minimization; daily Celery Beat."""
+
+    async def _cleanup():
+        retention = settings.SMS_INTEREST_EVENT_RETENTION_DAYS
+        async with task_db_session() as db:
+            deleted = await _purge_old_interest_events(db, retention)
+            await db.commit()
+        log.info(
+            "cleanup_sms_interest_events: retention=%sd deleted_sessions=%s",
+            retention,
+            deleted,
+        )
+        return {"retention_days": retention, "deleted_sessions": deleted}
+
+    return run_async_task(_cleanup, "cleanup_sms_interest_events_task", log)

@@ -115,12 +115,17 @@ class SmsEngagementRepository:
         return res.scalars().first()
 
     async def views_for_interest(
-        self, contact_id: int, major_program_id: int
+        self, contact_id: int, major_program_id: int, since: datetime
     ) -> List[Tuple[int, datetime]]:
         """(dwell_seconds, viewed_at) view NGƯỜI-THẬT của cặp (contact, ngành)
-        — để tính lại interest_score (Σ dwell_factor×recency). JOIN session +
-        LOẠI phiên bot: bot vẫn ghi program_view (audit) nhưng KHÔNG được lẫn
-        vào interest aggregate (khớp report program-interest cũng lọc bot)."""
+        TRONG cửa sổ [since, now] — để tính lại interest. JOIN session + LOẠI
+        phiên bot (bot ghi program_view cho audit nhưng KHÔNG lẫn vào interest,
+        khớp report cũng lọc bot).
+
+        `since` = cửa sổ retention (§16.9): view cũ hơn đằng nào cũng bị cron dọn
+        (+ recency≈0) → KHÔNG tính, để tương tác lại SAU purge không làm tụt
+        view_count/total_dwell (aggregate = rolling-window nhất quán, không mất
+        số liệu khi recompute-ghi-đè)."""
         res = await self.db.execute(
             select(SmsProgramView.dwell_seconds, SmsProgramView.viewed_at)
             .join(
@@ -130,6 +135,7 @@ class SmsEngagementRepository:
             .where(
                 SmsProgramView.contact_id == contact_id,
                 SmsProgramView.major_program_id == major_program_id,
+                SmsProgramView.viewed_at >= since,
                 SmsLandingSession.is_suspected_bot.is_(False),
             )
         )

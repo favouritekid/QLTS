@@ -47,7 +47,10 @@ from .notification_outbox_tasks import (
     dispatch_pending_outbox,  # T0-4a skeleton; T0-4b will replace body
 )
 from .sla_tasks import auto_close_stale_rejected_leads_task
-from .sms_tasks import cleanup_sms_export_files_task
+from .sms_tasks import (
+    cleanup_sms_export_files_task,
+    cleanup_sms_interest_events_task,
+)
 
 __all__ = [
     # Email tasks
@@ -82,4 +85,5 @@ __all__ = [
     "auto_close_stale_rejected_leads_task",
     # SMS Marketing export cleanup (PR-4)
     "cleanup_sms_export_files_task",
+    "cleanup_sms_interest_events_task",
 ]

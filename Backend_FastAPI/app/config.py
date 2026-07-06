@@ -310,6 +310,12 @@ class Settings(BaseSettings):
         default=3.0, gt=0,
         validation_alias="SMS_INTEREST_K",
     )  # hệ số normalize(x)=x/(x+K); cosmetic (không đổi thứ hạng)
+    SMS_INTEREST_EVENT_RETENTION_DAYS: int = Field(
+        default=365, ge=30, le=3650,
+        validation_alias="SMS_INTEREST_EVENT_RETENTION_DAYS",
+    )  # §16.9 retention: dọn event tracking chi tiết (sms_landing_session +
+    # sms_program_view cascade) cũ hơn ngần này; GIỮ aggregate
+    # sms_contact_program_interest (recency_weight khiến view quá cũ ≈0)
 
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.

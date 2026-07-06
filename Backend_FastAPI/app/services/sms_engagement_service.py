@@ -12,7 +12,7 @@ Bot (UA/prefetch) vẫn tạo phiên (không lộ việc phát hiện) NHƯNG b�
 interest + report. Xem SMS_MARKETING_MODULE_DESIGN.md §16.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.utils.tz import ensure_aware
 from typing import Mapping, Optional
@@ -192,9 +192,15 @@ class SmsEngagementService:
     async def _recompute_interest(
         self, *, contact_id: int, major_program_id: int, now: datetime
     ) -> None:
-        """Tính lại interest_score từ MỌI view của (contact, ngành) — nguồn sự
-        thật là program_view (tự lành khi 2 heartbeat đua)."""
-        views = await self.repo.views_for_interest(contact_id, major_program_id)
+        """Tính lại interest từ view của (contact, ngành) TRONG cửa sổ retention
+        — nguồn sự thật là program_view (tự lành khi 2 heartbeat đua). Cửa sổ =
+        `SMS_INTEREST_EVENT_RETENTION_DAYS`: view cũ hơn đằng nào cũng bị cron
+        §16.9 dọn (recency≈0) → không tính, để re-interact SAU purge KHÔNG làm
+        tụt view_count/total_dwell (rolling-window nhất quán, §16.9)."""
+        since = now - timedelta(days=settings.SMS_INTEREST_EVENT_RETENTION_DAYS)
+        views = await self.repo.views_for_interest(
+            contact_id, major_program_id, since=since
+        )
         if not views:
             return
         # Build 1 lần (normalize tz), rồi derive total_dwell/first/last từ đó.
