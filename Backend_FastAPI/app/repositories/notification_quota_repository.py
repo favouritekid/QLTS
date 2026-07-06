@@ -5,7 +5,7 @@ Phase D1: Repository for NotificationQuota CRUD and quota checks.
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,17 +125,28 @@ class NotificationQuotaRepository(BaseRepository[NotificationQuota]):
             return False  # No quota configured = unlimited
         return quota.blocked or quota.quota_used >= quota.quota_limit
 
-    async def get_all_quotas(
+    async def get_current_quotas(
         self,
-        period_start: Optional[date] = None,
+        windows: Optional[List[Tuple[str, date]]] = None,
     ) -> List[NotificationQuota]:
-        """Get all quota records for a given period."""
-        if period_start is None:
-            period_start = date.today()
+        """Get quota records matching any ``(period, period_start)`` window.
 
+        Each window targets one channel-class's CURRENT period exactly, so a
+        stale same-``period_start`` row of a different period (e.g. a daily row
+        created on the 1st of the month) is not accidentally returned alongside
+        a monthly row. Defaults to today's daily window.
+        """
+        if not windows:
+            windows = [("daily", date.today())]
+
+        conditions = [
+            (NotificationQuota.period == period)
+            & (NotificationQuota.period_start == period_start)
+            for period, period_start in windows
+        ]
         query = (
             select(NotificationQuota)
-            .where(NotificationQuota.period_start == period_start)
+            .where(or_(*conditions))
             .order_by(NotificationQuota.channel)
         )
         result = await self.db.execute(query)

@@ -511,9 +511,10 @@ def reconcile_stale_deliveries(self):
 )
 def sync_notification_quotas(self):
     """
-    Celery Beat task: sync quota records (create today's row if missing).
+    Celery Beat task: ensure the current-period quota row exists for each
+    configured channel — daily for ZNS ('zalo'), MONTHLY for 'zalo_bot'.
 
-    Runs every 6 hours. Ensures daily quota rows exist for configured channels.
+    Runs every 6 hours.
     """
     task_name = "sync_notification_quotas"
     task_log = logging.getLogger(task_name)
@@ -549,22 +550,29 @@ def sync_notification_quotas(self):
                     synced += 1
                     await session.commit()
 
-                # v5 Step 13: ensure zalo_bot quota row when ENABLED.
-                # Skipped while the channel is gated off so we don't
-                # accumulate empty rows for an unused channel.
-                zalo_bot_quota = await repo.get_current_quota(
-                    "zalo_bot", "zalo_bot", "daily", today,
+                # zalo_bot uses a MONTHLY quota — derive (period, period_start,
+                # limit) from the shared resolver so this stays in lockstep with
+                # check_quota/record_send (single source of truth). Skipped while
+                # gated off to avoid empty rows for an unused channel.
+                from app.services.notification_quota_service import (
+                    get_channel_quota_config,
                 )
-                if zalo_bot_quota is None and settings.ZALO_BOT_ENABLED:
-                    await repo.upsert_quota(
-                        channel="zalo_bot",
-                        provider="zalo_bot",
-                        period="daily",
-                        period_start=today,
-                        quota_limit=settings.ZALO_BOT_DAILY_QUOTA,
+                zb_cfg = get_channel_quota_config("zalo_bot")
+                if zb_cfg is not None and settings.ZALO_BOT_ENABLED:
+                    zb_period, zb_start, zb_limit = zb_cfg
+                    zalo_bot_quota = await repo.get_current_quota(
+                        "zalo_bot", "zalo_bot", zb_period, zb_start,
                     )
-                    synced += 1
-                    await session.commit()
+                    if zalo_bot_quota is None:
+                        await repo.upsert_quota(
+                            channel="zalo_bot",
+                            provider="zalo_bot",
+                            period=zb_period,
+                            period_start=zb_start,
+                            quota_limit=zb_limit,
+                        )
+                        synced += 1
+                        await session.commit()
 
                 task_log.info(f"Quota sync done: {synced} rows created")
                 return {"synced": synced}

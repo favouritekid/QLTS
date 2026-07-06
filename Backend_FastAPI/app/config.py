@@ -688,9 +688,13 @@ class Settings(BaseSettings):
     ZALO_BOT_WEBHOOK_SECRET: str = Field(
         default="", validation_alias="ZALO_BOT_WEBHOOK_SECRET"
     )  # X-Bot-Api-Secret-Token header value — DO NOT log
-    ZALO_BOT_DAILY_QUOTA: int = Field(
-        default=80, validation_alias="ZALO_BOT_DAILY_QUOTA"
-    )  # v5 Finding 6: 80/day for 20% margin under Zalo Basic ceiling 100/day (3000/month)
+    ZALO_BOT_MONTHLY_QUOTA: int = Field(
+        default=2800, validation_alias="ZALO_BOT_MONTHLY_QUOTA"
+    )  # Zalo Bot free tier = 3000 msg/month; 2800 leaves ~7% safety margin.
+    # MONTHLY (not daily): Zalo Bot Platform has NO hard daily cap (verified
+    # bot.zapps.me docs), so a per-day limit wasted the monthly budget on
+    # bursty admission-season traffic. (Old ZALO_BOT_DAILY_QUOTA removed —
+    # extra="ignore" tolerates any stale env var.)
 
     # -- MoMo Payment Gateway Settings --
     # Get credentials from MoMo merchant portal
