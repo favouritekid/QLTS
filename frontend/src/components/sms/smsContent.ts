@@ -20,6 +20,9 @@ export const SMS_ZALO_URL = "https://oa.zalo.me/bachkhoataynguyen"
 export const SMS_ZALO_ENABLED = SMS_ZALO_URL.startsWith("http")
 /** Địa chỉ trường (footer). */
 export const SCHOOL_ADDRESS = "Số 02 Lý Nhân Tông, phường Tân An, tỉnh Đắk Lắk"
+/** Ảnh hero chung (sinh viên trường) — tier-1 panel phải. Ảnh THẬT tải từ
+ *  tnpc.edu.vn về public/lp/. Owner thay ảnh khác bằng cách ghi đè file này. */
+export const SCHOOL_HERO_IMAGE = "/lp/campus-students.jpg"
 /** Dòng phụ dưới tên trường ở header. */
 export const SMS_SUB_BRAND = "TUYỂN SINH 2026"
 
@@ -135,6 +138,7 @@ export interface ProgramEditorial {
   intro: string // "Giới thiệu ngành"
   subjects: string[] // "Bạn sẽ được học gì?"
   careers: string[] // "Cơ hội nghề nghiệp"
+  image?: string // ảnh THẬT theo ngành (public/lp/programs/…); thiếu → gradient+icon
   goodIf?: string[] // "Ngành này hợp với bạn nếu…"
   considerIf?: string[] // "Cân nhắc nếu bạn…" (anti-fit trung thực)
   trends?: string[] // "Xu hướng việc làm"
@@ -207,6 +211,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /điều dưỡng/i,
     data: {
       group: "Khối Sức khỏe",
+      image: "/lp/programs/dieu-duong.jpg",
       duration: "3 năm",
       tagline:
         "Nghề điều dưỡng — nhu cầu nhân lực lớn trong và ngoài nước, cơ hội làm việc tại bệnh viện và xuất khẩu lao động.",
@@ -260,6 +265,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /y học cổ truyền|cổ truyền|đông y/i,
     data: {
       group: "Khối Sức khỏe",
+      image: "/lp/programs/y-hoc-co-truyen.png",
       duration: "3 năm",
       tagline:
         "Kết hợp tinh hoa y học cổ truyền với y học hiện đại — chăm sóc sức khỏe bằng châm cứu, xoa bóp, dược liệu.",
@@ -308,6 +314,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /y sỹ|y sĩ|đa khoa/i,
     data: {
       group: "Khối Sức khỏe",
+      image: "/lp/programs/y-sy.jpg",
       duration: "3 năm",
       tagline:
         "Đào tạo Y sỹ có năng lực khám, chữa bệnh ban đầu — nền tảng vững chắc để công tác tại y tế cơ sở hoặc học liên thông Bác sỹ.",
@@ -356,6 +363,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /dược/i,
     data: {
       group: "Khối Sức khỏe",
+      image: "/lp/programs/duoc.jpg",
       duration: "3 năm",
       tagline:
         "Trở thành Dược sỹ cao đẳng — nghề được xã hội trọng vọng, nhu cầu nhân lực luôn cao tại các nhà thuốc, bệnh viện và công ty dược.",
@@ -452,6 +460,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /công nghệ thông tin|cntt|phần mềm/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
+      image: "/lp/programs/cntt.jpg",
       duration: "2,5 năm",
       tagline:
         "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
@@ -500,6 +509,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /ô ?tô/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
+      image: "/lp/programs/o-to.jpg",
       duration: "2,5 năm",
       tagline:
         "Làm chủ kỹ thuật sửa chữa, bảo dưỡng ô tô — ngành có nhu cầu tuyển dụng cao tại các gara, hãng xe, showroom.",
@@ -548,6 +558,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /thú y|chăn nuôi/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
+      image: "/lp/programs/chan-nuoi-thu-y.jpg",
       duration: "2,5 năm",
       tagline:
         "Ngành thiết yếu với nông nghiệp Tây Nguyên — chăm sóc, phòng và chữa bệnh cho vật nuôi, cơ hội khởi nghiệp cao.",
@@ -788,6 +799,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /hướng dẫn du lịch|hướng dẫn viên/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/huong-dan-du-lich.png",
       duration: "2,5 năm",
       tagline:
         "Khám phá nghề hướng dẫn viên — đi nhiều, gặp gỡ nhiều, phát huy thế mạnh du lịch Tây Nguyên.",
@@ -942,12 +954,13 @@ export function programEditorial(name: string): ProgramEditorial {
 // Key theo `code` vì CĐ và TC cùng tên có mức KHÁC nhau. Hệ TC tách 2 diện
 // đầu vào (tốt nghiệp THCS / THPT). `pay` = thực đóng toàn khóa sau hỗ trợ.
 // ⚠️ Số hiệu "NĐ 238/NĐ-CP" theo owner cung cấp — cần owner xác nhận lại số+năm.
-/** 1 mức đóng theo diện đầu vào. */
+/** 1 mức đóng theo diện đầu vào. `kind` là NGUỒN SỰ THẬT của mức ưu đãi (badge +
+ *  màu số tiền suy từ đây, KHÔNG dò câu chữ `note` hiển thị). */
 export interface TuitionTier {
   label: string // "Thực tế phải đóng" (CĐ) | "Tốt nghiệp THCS/THPT" (TC)
-  note: string // căn cứ hỗ trợ
+  kind: "free" | "70" | "30" | "none" // free=miễn 100%; none=chưa hỗ trợ
+  note: string // căn cứ hỗ trợ (CHỈ để hiển thị)
   pay: string // thực đóng toàn khóa
-  free?: boolean // true → miễn 100% (highlight)
 }
 /** Học phí 1 ngành (theo code). `total` = tổng học phí toàn khóa trước hỗ trợ. */
 export interface Tuition {
@@ -961,33 +974,74 @@ const T100_THCS = "Miễn 100% theo NĐ 238/NĐ-CP (diện tốt nghiệp THCS)"
 const T70_THPT = "Hỗ trợ 70% theo NĐ 238/NĐ-CP (diện tốt nghiệp THPT)"
 const T_NONE = "Chưa áp dụng hỗ trợ học phí"
 
+// Builders 1 mức đóng — gắn `kind` (cấu trúc) với `note` (hiển thị), tránh lặp.
+const cd70 = (pay: string): TuitionTier => ({ label: "Thực tế phải đóng", kind: "70", note: T70, pay })
+const cd30 = (pay: string): TuitionTier => ({ label: "Thực tế phải đóng", kind: "30", note: T30, pay })
+const thcsFree: TuitionTier = { label: "Tốt nghiệp THCS", kind: "free", note: T100_THCS, pay: "0 đ" }
+const thcsNone = (pay: string): TuitionTier => ({ label: "Tốt nghiệp THCS", kind: "none", note: T_NONE, pay })
+const thpt70 = (pay: string): TuitionTier => ({ label: "Tốt nghiệp THPT", kind: "70", note: T70_THPT, pay })
+const thptNone = (pay: string): TuitionTier => ({ label: "Tốt nghiệp THPT", kind: "none", note: T_NONE, pay })
+
 export const PROGRAM_TUITION: Record<string, Tuition> = {
   // ── Cao đẳng ──
-  "6720301": { total: "49.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "14.900.000 đ" }] }, // Điều dưỡng
-  "6720201": { total: "48.000.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "14.400.000 đ" }] }, // Dược
-  "6720101": { total: "54.300.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "16.300.000 đ" }] }, // Y sỹ CĐ
-  "6720102": { total: "48.000.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "45.900.000 đ" }] }, // YHCT
-  "6620120": { total: "44.100.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "13.200.000 đ" }] }, // Chăn nuôi–Thú y CĐ
-  "6510216": { total: "40.000.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "12.000.000 đ" }] }, // Ô tô CĐ
-  "6810103": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T70, pay: "8.750.000 đ" }] }, // Hướng dẫn du lịch CĐ
-  "6480201": { total: "39.000.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "36.900.000 đ" }] }, // CNTT CĐ
-  "6340101": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "33.850.000 đ" }] }, // QTKD CĐ
-  "6340404": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "33.850.000 đ" }] }, // QTKD CĐ (bản 2)
-  "6340403": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "33.850.000 đ" }] }, // QT văn phòng
-  "6340301": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "33.850.000 đ" }] }, // Kế toán CĐ
-  "6220206": { total: "35.800.000 đ", tiers: [{ label: "Thực tế phải đóng", note: T30, pay: "33.850.000 đ" }] }, // Tiếng Anh
+  "6720301": { total: "49.800.000 đ", tiers: [cd70("14.900.000 đ")] }, // Điều dưỡng
+  "6720201": { total: "48.000.000 đ", tiers: [cd70("14.400.000 đ")] }, // Dược
+  "6720101": { total: "54.300.000 đ", tiers: [cd70("16.300.000 đ")] }, // Y sỹ CĐ
+  "6720102": { total: "48.000.000 đ", tiers: [cd30("45.900.000 đ")] }, // YHCT
+  "6620120": { total: "44.100.000 đ", tiers: [cd70("13.200.000 đ")] }, // Chăn nuôi–Thú y CĐ
+  "6510216": { total: "40.000.000 đ", tiers: [cd70("12.000.000 đ")] }, // Ô tô CĐ
+  "6810103": { total: "35.800.000 đ", tiers: [cd70("8.750.000 đ")] }, // Hướng dẫn du lịch CĐ
+  "6480201": { total: "39.000.000 đ", tiers: [cd30("36.900.000 đ")] }, // CNTT CĐ
+  "6340101": { total: "35.800.000 đ", tiers: [cd30("33.850.000 đ")] }, // QTKD CĐ
+  "6340404": { total: "35.800.000 đ", tiers: [cd30("33.850.000 đ")] }, // QTKD CĐ (bản 2)
+  "6340403": { total: "35.800.000 đ", tiers: [cd30("33.850.000 đ")] }, // QT văn phòng
+  "6340301": { total: "35.800.000 đ", tiers: [cd30("33.850.000 đ")] }, // Kế toán CĐ
+  "6220206": { total: "35.800.000 đ", tiers: [cd30("33.850.000 đ")] }, // Tiếng Anh
   // ── Trung cấp (2 diện đầu vào) ──
-  "5510216": { total: "37.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T70_THPT, pay: "11.340.000 đ" }] }, // Ô tô TC
-  "5480202": { total: "37.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T_NONE, pay: "37.800.000 đ" }] }, // CNTT TC
-  "5810207": { total: "37.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T70_THPT, pay: "11.340.000 đ" }] }, // Chế biến món ăn TC
-  "5620120": { total: "28.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T70_THPT, pay: "8.640.000 đ" }] }, // Chăn nuôi–Thú y TC
-  "5340421": { total: "27.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T_NONE, pay: "27.800.000 đ" }] }, // QL&KD du lịch TC
-  "5340301": { total: "27.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T_NONE, pay: "27.800.000 đ" }] }, // Kế toán TC
-  "5340407": { total: "27.800.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T100_THCS, pay: "0 đ", free: true }, { label: "Tốt nghiệp THPT", note: T_NONE, pay: "27.800.000 đ" }] }, // KD vận tải đường bộ TC
-  "5720101": { total: "28.300.000 đ", tiers: [{ label: "Tốt nghiệp THCS", note: T_NONE, pay: "28.300.000 đ" }, { label: "Tốt nghiệp THPT", note: T70_THPT, pay: "8.490.000 đ" }] }, // Y sỹ TC
+  "5510216": { total: "37.800.000 đ", tiers: [thcsFree, thpt70("11.340.000 đ")] }, // Ô tô TC
+  "5480202": { total: "37.800.000 đ", tiers: [thcsFree, thptNone("37.800.000 đ")] }, // CNTT TC
+  "5810207": { total: "37.800.000 đ", tiers: [thcsFree, thpt70("11.340.000 đ")] }, // Chế biến món ăn TC
+  "5620120": { total: "28.800.000 đ", tiers: [thcsFree, thpt70("8.640.000 đ")] }, // Chăn nuôi–Thú y TC
+  "5340421": { total: "27.800.000 đ", tiers: [thcsFree, thptNone("27.800.000 đ")] }, // QL&KD du lịch TC
+  "5340301": { total: "27.800.000 đ", tiers: [thcsFree, thptNone("27.800.000 đ")] }, // Kế toán TC
+  "5340407": { total: "27.800.000 đ", tiers: [thcsFree, thptNone("27.800.000 đ")] }, // KD vận tải đường bộ TC
+  "5720101": { total: "28.300.000 đ", tiers: [thcsNone("28.300.000 đ"), thpt70("8.490.000 đ")] }, // Y sỹ TC
 }
 
 /** Học phí theo mã ngành (null nếu chưa có dữ liệu → FE hiện khối generic). */
 export function programTuition(code: string): Tuition | null {
   return PROGRAM_TUITION[code] ?? null
+}
+
+/** Mức ưu đãi học phí NỔI BẬT (để hiện badge/TL;DR) — suy TỪ học phí thật, KHÔNG
+ *  từ is_heavy (dữ liệu học phí owner chuẩn hơn: Điều dưỡng/Dược cũng 70%). */
+export type TuitionLevel = "free" | "70" | "30" | null
+export function tuitionTier(code: string): TuitionLevel {
+  const t = PROGRAM_TUITION[code]
+  if (!t) return null
+  if (t.tiers.some((x) => x.kind === "free")) return "free"
+  if (t.tiers.some((x) => x.kind === "70")) return "70"
+  if (t.tiers.some((x) => x.kind === "30")) return "30"
+  return null
+}
+/** Mức ưu đãi "mạnh" (miễn 100% / giảm 70%) → badge flame + viền cam. Nguồn DUY
+ *  NHẤT của quyết định flame, dùng chung tier-1 card / tier-2 hero / TL;DR. */
+export function isStrongTuition(level: TuitionLevel): boolean {
+  return level === "free" || level === "70"
+}
+/** Nhãn ưu đãi ngắn theo mức (card tier-1 gọn / hero tier-2 dài). */
+export function tuitionLevelLabel(
+  level: TuitionLevel,
+  size: "card" | "hero",
+): string {
+  switch (level) {
+    case "free":
+      return size === "card" ? "Miễn 100%" : "Miễn 100% học phí"
+    case "70":
+      return size === "card" ? "Giảm 70%" : "Giảm 70% học phí"
+    case "30":
+      return size === "card" ? "Ưu đãi 30%" : "Ưu đãi 30% kỳ 1"
+    default:
+      return size === "card" ? "Học bổng" : "Học bổng đầu vào"
+  }
 }

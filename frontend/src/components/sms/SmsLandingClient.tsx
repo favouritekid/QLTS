@@ -30,6 +30,7 @@ import { getSmsLanding, postSmsOptOut } from "@/lib/api/sms"
 
 import {
   DiscountBadge,
+  HeroImage,
   SmsErrorCard,
   SmsFooter,
   SmsHeader,
@@ -45,8 +46,10 @@ import {
   HERO_HEADLINE_LEAD,
   HERO_HEADLINE_TAIL,
   HERO_SUBTITLE,
+  isStrongTuition,
   OFFERS,
   REG_CHECKLIST,
+  SCHOOL_HERO_IMAGE,
   SMS_HOTLINE,
   SMS_HOTLINE_TEL,
   STATS,
@@ -143,7 +146,7 @@ function CountdownCard() {
 function ProgramCard({ code, vm }: { code: string; vm: ProgramCardVM }) {
   const { name, variants } = vm
   const Icon = vm.Icon // member access (không phải call trực tiếp làm JSX-type)
-  const hot = vm.isHeavy // "hot" = nặng nhọc (badge 70% + viền cam)
+  const hot = isStrongTuition(vm.level) // ưu đãi lớn (miễn 100%/giảm 70%) → viền cam
   const single = variants.length === 1
   const cardCls = `group relative flex min-h-[126px] flex-col overflow-hidden rounded-2xl border bg-sms-card p-4 shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sms-500 ${
     hot
@@ -162,7 +165,7 @@ function ProgramCard({ code, vm }: { code: string; vm: ProgramCardVM }) {
   )
   const head = (
     <>
-      <DiscountBadge isHeavy={vm.isHeavy} size="card" />
+      <DiscountBadge level={vm.level} size="card" />
       <h3 className="text-sms-ink-strong mt-3 line-clamp-3 text-[15px] font-semibold leading-tight">
         {name}
       </h3>
@@ -330,15 +333,11 @@ export function SmsLandingClient({ code }: { code: string }) {
                 )}
               </div>
             </div>
-            <div
-              aria-hidden
-              className="hidden h-[300px] items-center justify-center rounded-2xl border border-white/25 text-xs font-medium text-white/70 md:flex"
-              style={{
-                background:
-                  "repeating-linear-gradient(135deg,rgba(255,255,255,.14) 0 14px,rgba(255,255,255,.05) 14px 28px)",
-              }}
-            >
-              {data.school_name}
+            <div className="hidden h-[300px] overflow-hidden rounded-2xl border border-white/25 md:block">
+              <HeroImage
+                src={SCHOOL_HERO_IMAGE}
+                alt={`Sinh viên ${data.school_name}`}
+              />
             </div>
           </div>
         </section>
@@ -375,11 +374,11 @@ export function SmsLandingClient({ code }: { code: string }) {
             <div className="mb-7 flex flex-wrap justify-center gap-5">
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
                 <span className="from-sms-flame-from to-sms-flame-to h-3.5 w-3.5 rounded bg-gradient-to-br" />
-                Giảm <b>70%</b> học phí <span className="text-sms-ink-muted">(nghề nặng nhọc)</span>
+                <b>Miễn / giảm</b> học phí đến <b>70–100%</b>
               </span>
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
                 <span className="bg-sms-gold-soft border-sms-gold-line h-3.5 w-3.5 rounded border" />
-                <b>Học bổng</b> đầu vào
+                Ưu đãi <b>30%</b> · Học bổng đầu vào
               </span>
             </div>
 

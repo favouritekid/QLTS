@@ -16,6 +16,9 @@ import {
   SMS_SUB_BRAND,
   SMS_ZALO_ENABLED,
   SMS_ZALO_URL,
+  isStrongTuition,
+  tuitionLevelLabel,
+  type TuitionLevel,
 } from "./smsContent"
 
 /** Khung trang: nền ngoài + khung trắng 1180px căn giữa + font thương hiệu.
@@ -149,26 +152,19 @@ export function ZaloLink({
   )
 }
 
-/** Badge chính sách học phí — suy TỪ CỜ THẬT `isHeavy` của BE (KHÔNG đoán tay):
- *  nghề nặng nhọc/độc hại/nguy hiểm được miễn giảm 70% học phí theo NĐ 238/NĐ-CP
- *  → badge flame "Giảm 70% học phí"; ngành thường → pill vàng "Học bổng đầu vào"
- *  (học bổng đến 100% kỳ I — vẫn là móc tài chính thật). `size`: "card" (thẻ
- *  tier-1, gọn) hoặc "hero" (hero tier-2). */
+/** Badge chính sách học phí — suy TỪ HỌC PHÍ THẬT (mức `level`, KHÔNG từ is_heavy):
+ *  "free" (có diện miễn 100%) / "70" → flame; "30" / null (học bổng) → pill vàng.
+ *  `size`: "card" (thẻ tier-1, gọn) hoặc "hero" (hero tier-2). */
 export function DiscountBadge({
-  isHeavy,
+  level,
   size,
 }: {
-  isHeavy: boolean
+  level: TuitionLevel
   size: "card" | "hero"
 }) {
-  const label = isHeavy
-    ? size === "card"
-      ? "Giảm 70%"
-      : "Giảm 70% học phí"
-    : size === "card"
-      ? "Học bổng"
-      : "Học bổng đầu vào"
-  const color = isHeavy
+  const strong = isStrongTuition(level)
+  const label = tuitionLevelLabel(level, size)
+  const color = strong
     ? "from-sms-flame-from to-sms-flame-to bg-gradient-to-br text-white"
     : "bg-sms-gold-soft text-sms-gold-ink"
   const shape =
@@ -176,4 +172,28 @@ export function DiscountBadge({
       ? "inline-block w-fit rounded-md px-2.5 py-1 text-[11px] font-extrabold"
       : "rounded-full px-3 py-1.5 text-[12.5px] font-bold"
   return <span className={`${shape} ${color}`}>{label}</span>
+}
+
+/** Ảnh hero object-cover (lazy) — gom 1 chỗ quyết định `<img>` vs next/image +
+ *  lazy + object-cover. `src` rỗng → render `fallback` (gradient+icon). Nơi gọi
+ *  tự bọc khung + caption. */
+export function HeroImage({
+  src,
+  alt,
+  fallback,
+}: {
+  src?: string
+  alt: string
+  fallback?: React.ReactNode
+}) {
+  if (!src) return <>{fallback ?? null}</>
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      className="h-full w-full object-cover"
+    />
+  )
 }

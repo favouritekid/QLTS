@@ -8,25 +8,31 @@ import type { LucideIcon } from "lucide-react"
 import type { SmsLandingProgram } from "@/lib/zod/sms"
 
 import { programGlyph } from "./programIcon"
-import { GROUP_ORDER, programEditorial, type ProgramEditorial } from "./smsContent"
+import {
+  GROUP_ORDER,
+  programEditorial,
+  tuitionTier,
+  type TuitionLevel,
+} from "./smsContent"
 
 /** 1 biến thể trình độ của 1 ngành (CĐ/TC cùng tên) — giữ id riêng để đo dwell §16. */
-export type ProgramVariant = {
-  id: number
-  degreeLevel: string
-  code: string
-  isHeavy: boolean
-}
+export type ProgramVariant = { id: number; degreeLevel: string; code: string }
 
 /** View-model 1 card ngành (đã GỘP theo TÊN). Icon resolve SẴN (component chỉ
- *  member-access, thoả react-compiler). `isHeavy` = có BẤT KỲ biến thể nào nặng
- *  nhọc → badge chính sách 70% (NĐ 238/NĐ-CP). */
+ *  member-access, thoả react-compiler). `level` = mức ưu đãi học phí MẠNH NHẤT
+ *  trong các biến thể (suy từ học phí thật) → quyết badge card. */
 export type ProgramCardVM = {
   name: string
-  ed: ProgramEditorial
   Icon: LucideIcon
-  isHeavy: boolean
+  level: TuitionLevel
   variants: ProgramVariant[]
+}
+
+// Thứ tự ưu tiên mức ưu đãi (mạnh nhất thắng khi gộp biến thể).
+const TUITION_RANK: Record<"free" | "70" | "30", number> = {
+  free: 3,
+  "70": 2,
+  "30": 1,
 }
 
 /** Gom ngành BE: nhóm theo group editorial (GROUP_ORDER), rồi GỘP theo TÊN
@@ -48,19 +54,22 @@ export function groupPrograms(
     if (!card) {
       card = {
         name: p.name,
-        ed,
         Icon: programGlyph(p.name).Icon,
-        isHeavy: false,
+        level: null,
         variants: [],
       }
       cards.set(p.name, card)
     }
-    card.isHeavy = card.isHeavy || p.is_heavy
+    // Mức ưu đãi mạnh nhất giữa các biến thể (miễn 100% > 70% > 30%).
+    const lv = tuitionTier(p.code)
+    const cur = card.level
+    if (lv && (cur === null || TUITION_RANK[lv] > TUITION_RANK[cur])) {
+      card.level = lv
+    }
     card.variants.push({
       id: p.id,
       degreeLevel: p.degree_level,
       code: p.code,
-      isHeavy: p.is_heavy,
     })
   }
   const order = [

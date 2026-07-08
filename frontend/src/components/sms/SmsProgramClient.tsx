@@ -21,6 +21,7 @@ import { useSmsDwellTracker } from "@/hooks/useSmsDwellTracker"
 import { programGlyph } from "./programIcon"
 import {
   DiscountBadge,
+  HeroImage,
   SmsErrorCard,
   SmsFooter,
   SmsHeader,
@@ -34,9 +35,12 @@ import {
   GENERIC_FAQ,
   GENERIC_GOOD_IF,
   GENERIC_TRENDS,
+  isStrongTuition,
   programEditorial,
   programTuition,
   SMS_HOTLINE_TEL,
+  tuitionLevelLabel,
+  tuitionTier,
 } from "./smsContent"
 
 /**
@@ -112,14 +116,11 @@ export function SmsProgramClient({
   const faq = ed.faq ?? GENERIC_FAQ
   // Học phí THẬT theo mã ngành (null → khối generic fallback).
   const tuition = programTuition(program.code)
-  // Ô "Ưu đãi học phí" ở TL;DR: ưu tiên diện miễn 100% (hệ TC/THCS), rồi nặng
-  // nhọc 70%, còn lại ưu đãi 30% kỳ 1.
-  const hasFreeTuition = tuition?.tiers.some((t) => t.free) ?? false
-  const policyValue = hasFreeTuition
-    ? "Miễn 100%"
-    : program.is_heavy
-      ? "Giảm 70%"
-      : "Ưu đãi 30%"
+  // Badge/TL;DR/sidebar suy TỪ HỌC PHÍ THẬT (không từ is_heavy): miễn 100% (hệ
+  // TC/THCS) → giảm 70% → ưu đãi 30%.
+  const tuitionLevel = tuitionTier(program.code)
+  const policyValue = tuitionLevelLabel(tuitionLevel, "card")
+  const strongTuition = isStrongTuition(tuitionLevel)
   // "Ngành khác": KHỬ TRÙNG theo tên (biến thể CĐ/TC cùng tên = 1 mục), loại
   // ngành hiện tại, lấy tối đa 4 tên khác nhau (link tới biến thể đầu gặp).
   const others = dedupeByName(data.programs, [program.name]).slice(0, 4)
@@ -156,7 +157,7 @@ export function SmsProgramClient({
             <span className="bg-sms-pill text-sms-pill-ink rounded-full px-3 py-1.5 text-[12.5px] font-bold">
               {ed.group}
             </span>
-            <DiscountBadge isHeavy={program.is_heavy} size="hero" />
+            <DiscountBadge level={tuitionLevel} size="hero" />
             <span className="text-sms-ink-muted text-[12.5px] font-medium">
               Mã ngành: {program.code}
             </span>
@@ -182,20 +183,29 @@ export function SmsProgramClient({
             </a>
           </div>
         </div>
-        <div
-          aria-hidden
-          className="border-sms-line text-sms-ink-muted relative hidden h-[280px] items-end justify-start overflow-hidden rounded-2xl border p-5 md:flex"
-          style={{
-            background:
-              "repeating-linear-gradient(135deg,#e6edf9 0 14px,#f2f5fb 14px 28px)",
-          }}
-        >
-          <Icon
-            aria-hidden
-            strokeWidth={1.25}
-            className="text-sms-500 absolute -right-6 -top-6 h-40 w-40 opacity-[0.12]"
+        <div className="border-sms-line relative hidden h-[280px] overflow-hidden rounded-2xl border md:block">
+          <HeroImage
+            src={ed.image}
+            alt={`Sinh viên ngành ${program.name} — ${data.school_name}`}
+            fallback={
+              <>
+                <div
+                  aria-hidden
+                  className="h-full w-full"
+                  style={{
+                    background:
+                      "repeating-linear-gradient(135deg,#e6edf9 0 14px,#f2f5fb 14px 28px)",
+                  }}
+                />
+                <Icon
+                  aria-hidden
+                  strokeWidth={1.25}
+                  className="text-sms-500 absolute -right-6 -top-6 h-40 w-40 opacity-[0.12]"
+                />
+              </>
+            }
           />
-          <span className="relative text-[13px] font-semibold">
+          <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/55 to-transparent p-4 text-[13px] font-semibold text-white">
             Cơ sở vật chất hiện đại — học đi đôi với thực hành
           </span>
         </div>
@@ -211,7 +221,7 @@ export function SmsProgramClient({
             {
               label: "Ưu đãi học phí",
               value: policyValue,
-              flame: program.is_heavy || hasFreeTuition,
+              flame: strongTuition,
             },
           ].map((f) => (
             <div
@@ -307,16 +317,9 @@ export function SmsProgramClient({
               <Clock className="h-4 w-4" /> Ưu đãi có hạn
             </div>
             <p className="mt-1.5 text-[13px] leading-relaxed text-[#9a7b3a]">
-              {program.is_heavy ? (
-                <>
-                  <b className="text-[#b8560f]">Giảm 70%</b> học phí (nghề nặng
-                  nhọc)
-                </>
-              ) : (
-                <>
-                  <b className="text-[#b8560f]">Học bổng đầu vào</b> đến 100% kỳ I
-                </>
-              )}{" "}
+              <b className="text-[#b8560f]">
+                {tuitionLevelLabel(tuitionLevel, "hero")}
+              </b>{" "}
               áp dụng cho hồ sơ đăng ký trước{" "}
               <b className="text-[#b8560f]">{ADMISSION_DEADLINE_LABEL}</b>.
             </p>
@@ -417,25 +420,26 @@ export function SmsProgramClient({
                 </div>
                 <div className="flex flex-col gap-2.5">
                   {tuition.tiers.map((t) => {
-                    const fullPrice = t.note.startsWith("Chưa")
+                    const free = t.kind === "free"
+                    const fullPrice = t.kind === "none"
                     return (
                       <div
                         key={t.label}
                         className={`rounded-xl p-3.5 ${
-                          t.free
+                          free
                             ? "from-sms-flame-from to-sms-flame-to bg-gradient-to-br text-white"
                             : "bg-sms-surface-alt border-sms-line border"
                         }`}
                       >
                         <div className="flex items-baseline justify-between gap-3">
                           <span
-                            className={`text-[13px] font-semibold ${t.free ? "text-white/90" : "text-sms-ink-soft"}`}
+                            className={`text-[13px] font-semibold ${free ? "text-white/90" : "text-sms-ink-soft"}`}
                           >
                             {t.label}
                           </span>
                           <span
                             className={`text-[18px] font-extrabold tabular-nums ${
-                              t.free
+                              free
                                 ? "text-white"
                                 : fullPrice
                                   ? "text-sms-ink-strong"
@@ -446,7 +450,7 @@ export function SmsProgramClient({
                           </span>
                         </div>
                         <div
-                          className={`mt-0.5 text-[12px] leading-snug ${t.free ? "text-white/85" : "text-sms-ink-muted"}`}
+                          className={`mt-0.5 text-[12px] leading-snug ${free ? "text-white/85" : "text-sms-ink-muted"}`}
                         >
                           {t.note}
                         </div>
@@ -455,16 +459,6 @@ export function SmsProgramClient({
                   })}
                 </div>
               </>
-            ) : program.is_heavy ? (
-              <div className="from-sms-flame-from to-sms-flame-to rounded-xl bg-gradient-to-br p-4 text-white">
-                <div className="text-[15px] font-extrabold">
-                  Giảm 70% học phí
-                </div>
-                <div className="mt-1 text-[13px] leading-relaxed text-white/90">
-                  Nghề nặng nhọc – độc hại – nguy hiểm, được miễn giảm học phí
-                  theo chính sách hỗ trợ của Nhà nước.
-                </div>
-              </div>
             ) : (
               <div className="bg-sms-gold-soft border-sms-gold-line rounded-xl border p-4">
                 <div className="text-sms-gold-ink text-[15px] font-extrabold">
