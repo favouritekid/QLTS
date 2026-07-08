@@ -11,6 +11,9 @@ export const smsLandingProgramSchema = z.object({
   name: z.string(),
   code: z.string(),
   degree_level: z.string(),
+  // Nghề nặng nhọc/độc hại/nguy hiểm (NĐ 81/2021 → miễn giảm 70% học phí).
+  // FE suy badge chính sách học phí từ cờ THẬT này. Default false cho an toàn.
+  is_heavy: z.boolean().default(false),
 })
 export type SmsLandingProgram = z.infer<typeof smsLandingProgramSchema>
 

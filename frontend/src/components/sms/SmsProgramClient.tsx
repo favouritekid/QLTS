@@ -8,8 +8,11 @@ import {
   Check,
   ChevronLeft,
   Clock,
+  GraduationCap,
+  HeartHandshake,
   MessageCircle,
   Phone,
+  TrendingUp,
 } from "lucide-react"
 
 import { getSmsLanding } from "@/lib/api/sms"
@@ -27,6 +30,10 @@ import {
 import { dedupeByName } from "./smsPrograms"
 import {
   ADMISSION_DEADLINE_LABEL,
+  GENERIC_CONSIDER_IF,
+  GENERIC_FAQ,
+  GENERIC_GOOD_IF,
+  GENERIC_TRENDS,
   programEditorial,
   SMS_HOTLINE_TEL,
 } from "./smsContent"
@@ -96,6 +103,14 @@ export function SmsProgramClient({
   const ed = programEditorial(program.name)
   const Icon = programGlyph(program.name).Icon // member access, không call trực tiếp
   const regHref = `/lp/${encodeURIComponent(code)}#reg`
+  // 4 khối mới: dùng nội dung riêng nếu có, không thì fallback generic (mọi
+  // ngành vẫn trả lời đủ "có hợp không / xu hướng / FAQ").
+  const goodIf = ed.goodIf ?? GENERIC_GOOD_IF
+  const considerIf = ed.considerIf ?? GENERIC_CONSIDER_IF
+  const trends = ed.trends ?? GENERIC_TRENDS
+  const faq = ed.faq ?? GENERIC_FAQ
+  // Chính sách học phí suy từ cờ THẬT is_heavy (KHÔNG đoán tay).
+  const policyValue = program.is_heavy ? "Giảm 70%" : "Có học bổng"
   // "Ngành khác": KHỬ TRÙNG theo tên (biến thể CĐ/TC cùng tên = 1 mục), loại
   // ngành hiện tại, lấy tối đa 4 tên khác nhau (link tới biến thể đầu gặp).
   const others = dedupeByName(data.programs, [program.name]).slice(0, 4)
@@ -132,7 +147,7 @@ export function SmsProgramClient({
             <span className="bg-sms-pill text-sms-pill-ink rounded-full px-3 py-1.5 text-[12.5px] font-bold">
               {ed.group}
             </span>
-            <DiscountBadge discount={ed.discount} hot={ed.hot} size="hero" />
+            <DiscountBadge isHeavy={program.is_heavy} size="hero" />
             <span className="text-sms-ink-muted text-[12.5px] font-medium">
               Mã ngành: {program.code}
             </span>
@@ -177,7 +192,7 @@ export function SmsProgramClient({
         </div>
       </section>
 
-      {/* Quick facts */}
+      {/* Trong 30 giây — TL;DR quét nhanh */}
       <section className="px-6 pb-10 lg:px-11">
         <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
           {[
@@ -186,8 +201,8 @@ export function SmsProgramClient({
             { label: "Hình thức xét tuyển", value: "Xét học bạ THPT" },
             {
               label: "Ưu đãi học phí",
-              value: `Giảm ${ed.discount}`,
-              flame: true,
+              value: policyValue,
+              flame: program.is_heavy,
             },
           ].map((f) => (
             <div
@@ -283,12 +298,174 @@ export function SmsProgramClient({
               <Clock className="h-4 w-4" /> Ưu đãi có hạn
             </div>
             <p className="mt-1.5 text-[13px] leading-relaxed text-[#9a7b3a]">
-              Giảm <b className="text-[#b8560f]">{ed.discount}</b> học phí áp dụng
-              cho hồ sơ đăng ký trước{" "}
+              {program.is_heavy ? (
+                <>
+                  <b className="text-[#b8560f]">Giảm 70%</b> học phí (nghề nặng
+                  nhọc)
+                </>
+              ) : (
+                <>
+                  <b className="text-[#b8560f]">Học bổng đầu vào</b> đến 100% kỳ I
+                </>
+              )}{" "}
+              áp dụng cho hồ sơ đăng ký trước{" "}
               <b className="text-[#b8560f]">{ADMISSION_DEADLINE_LABEL}</b>.
             </p>
           </div>
         </aside>
+      </section>
+
+      {/* Mình có phù hợp không? */}
+      <section className="bg-sms-surface-low border-sms-line border-t px-6 py-12 lg:px-11">
+        <div className="mb-6 flex items-center gap-2.5">
+          <span className="bg-sms-pill text-sms-pill-ink flex h-9 w-9 items-center justify-center rounded-xl">
+            <HeartHandshake className="h-5 w-5" />
+          </span>
+          <h2 className="text-sms-700 text-xl font-extrabold md:text-[22px]">
+            Ngành này có hợp với bạn không?
+          </h2>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="border-sms-line bg-sms-card rounded-2xl border p-6">
+            <div className="mb-3 text-sm font-bold text-[#167a53]">
+              Hợp nếu bạn…
+            </div>
+            <div className="flex flex-col gap-2.5">
+              {goodIf.map((g) => (
+                <div key={g} className="flex items-start gap-2.5">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-[#e2f4ec] text-[#167a53]">
+                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                  </span>
+                  <span className="text-[14px] leading-snug text-[#28324a]">
+                    {g}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="border-sms-line bg-sms-card rounded-2xl border p-6">
+            <div className="text-sms-flame-accent mb-3 text-sm font-bold">
+              Cân nhắc nếu bạn…
+            </div>
+            <div className="flex flex-col gap-2.5">
+              {considerIf.map((c) => (
+                <div key={c} className="flex items-start gap-2.5">
+                  <span className="bg-sms-flame-accent mt-2 h-1.5 w-1.5 shrink-0 rounded-full" />
+                  <span className="text-[14px] leading-snug text-[#28324a]">
+                    {c}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Xu hướng việc làm */}
+      <section className="px-6 py-12 lg:px-11">
+        <div className="mb-6 flex items-center gap-2.5">
+          <span className="bg-sms-pill text-sms-pill-ink flex h-9 w-9 items-center justify-center rounded-xl">
+            <TrendingUp className="h-5 w-5" />
+          </span>
+          <h2 className="text-sms-700 text-xl font-extrabold md:text-[22px]">
+            Xu hướng việc làm
+          </h2>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {trends.map((t) => (
+            <div
+              key={t}
+              className="border-sms-line bg-sms-surface-alt flex items-start gap-3 rounded-xl border px-4 py-3.5"
+            >
+              <TrendingUp className="text-sms-500 mt-0.5 h-4 w-4 shrink-0" />
+              <span className="text-[14px] leading-snug text-[#28324a]">{t}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Học phí & hỗ trợ */}
+      <section className="bg-sms-surface-low border-sms-line border-t px-6 py-12 lg:px-11">
+        <div className="mb-6 flex items-center gap-2.5">
+          <span className="bg-sms-pill text-sms-pill-ink flex h-9 w-9 items-center justify-center rounded-xl">
+            <GraduationCap className="h-5 w-5" />
+          </span>
+          <h2 className="text-sms-700 text-xl font-extrabold md:text-[22px]">
+            Học phí & hỗ trợ
+          </h2>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="border-sms-line bg-sms-card flex flex-col gap-3 rounded-2xl border p-6">
+            {program.is_heavy ? (
+              <div className="from-sms-flame-from to-sms-flame-to rounded-xl bg-gradient-to-br p-4 text-white">
+                <div className="text-[15px] font-extrabold">
+                  Giảm 70% học phí
+                </div>
+                <div className="mt-1 text-[13px] leading-relaxed text-white/90">
+                  Nghề nặng nhọc – độc hại – nguy hiểm, được miễn giảm 70% học
+                  phí theo Nghị định 81/2021/NĐ-CP.
+                </div>
+              </div>
+            ) : (
+              <div className="bg-sms-gold-soft border-sms-gold-line rounded-xl border p-4">
+                <div className="text-sms-gold-ink text-[15px] font-extrabold">
+                  Học bổng đầu vào đến 100% kỳ I
+                </div>
+                <div className="text-sms-gold-ink mt-1 text-[13px] leading-relaxed opacity-90">
+                  Dành cho thí sinh điểm cao và diện hộ nghèo, cận nghèo.
+                </div>
+              </div>
+            )}
+            <div className="text-sms-ink-body flex flex-col gap-2 text-[13.5px]">
+              <div className="flex items-start gap-2.5">
+                <Check className="text-sms-500 mt-0.5 h-4 w-4 shrink-0" />
+                Miễn giảm học phí theo chính sách hộ nghèo, dân tộc thiểu số.
+              </div>
+              <div className="flex items-start gap-2.5">
+                <Check className="text-sms-500 mt-0.5 h-4 w-4 shrink-0" />
+                Đóng học phí theo kỳ; hỗ trợ trả góp cho hoàn cảnh khó khăn.
+              </div>
+            </div>
+          </div>
+          <div className="border-sms-line bg-sms-card rounded-2xl border p-6">
+            <div className="text-sms-ink-strong mb-1.5 text-[15px] font-bold">
+              Mức lương & doanh nghiệp đối tác
+            </div>
+            <p className="text-sms-ink-soft text-[13.5px] leading-relaxed">
+              Mức thu nhập tham khảo và danh sách doanh nghiệp đối tác tuyển dụng
+              của ngành thay đổi theo từng kỳ. Gọi hotline để được cung cấp con
+              số và cam kết việc làm cụ thể, cập nhật nhất.
+            </p>
+            <a
+              href={SMS_HOTLINE_TEL}
+              className="bg-sms-pill text-sms-500 mt-4 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-[14px] font-bold transition-opacity hover:opacity-90"
+            >
+              <Phone className="h-4 w-4" /> Gọi để biết mức lương & việc làm
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* Hỏi – Đáp */}
+      <section className="px-6 py-12 lg:px-11">
+        <h2 className="text-sms-700 mb-6 text-xl font-extrabold md:text-[22px]">
+          Hỏi – Đáp
+        </h2>
+        <div className="flex flex-col gap-3">
+          {faq.map((f) => (
+            <div
+              key={f.q}
+              className="border-sms-line bg-sms-card rounded-2xl border p-5"
+            >
+              <div className="text-sms-ink-strong mb-1.5 text-[15px] font-bold">
+                {f.q}
+              </div>
+              <p className="text-sms-ink-body text-[14px] leading-relaxed">
+                {f.a}
+              </p>
+            </div>
+          ))}
+        </div>
       </section>
 
       {/* Ngành khác */}

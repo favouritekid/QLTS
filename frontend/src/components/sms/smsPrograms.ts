@@ -11,14 +11,21 @@ import { programGlyph } from "./programIcon"
 import { GROUP_ORDER, programEditorial, type ProgramEditorial } from "./smsContent"
 
 /** 1 biến thể trình độ của 1 ngành (CĐ/TC cùng tên) — giữ id riêng để đo dwell §16. */
-export type ProgramVariant = { id: number; degreeLevel: string; code: string }
+export type ProgramVariant = {
+  id: number
+  degreeLevel: string
+  code: string
+  isHeavy: boolean
+}
 
 /** View-model 1 card ngành (đã GỘP theo TÊN). Icon resolve SẴN (component chỉ
- *  member-access, thoả react-compiler). */
+ *  member-access, thoả react-compiler). `isHeavy` = có BẤT KỲ biến thể nào nặng
+ *  nhọc → badge chính sách 70% (NĐ 81/2021). */
 export type ProgramCardVM = {
   name: string
   ed: ProgramEditorial
   Icon: LucideIcon
+  isHeavy: boolean
   variants: ProgramVariant[]
 }
 
@@ -39,10 +46,22 @@ export function groupPrograms(
     }
     let card = cards.get(p.name)
     if (!card) {
-      card = { name: p.name, ed, Icon: programGlyph(p.name).Icon, variants: [] }
+      card = {
+        name: p.name,
+        ed,
+        Icon: programGlyph(p.name).Icon,
+        isHeavy: false,
+        variants: [],
+      }
       cards.set(p.name, card)
     }
-    card.variants.push({ id: p.id, degreeLevel: p.degree_level, code: p.code })
+    card.isHeavy = card.isHeavy || p.is_heavy
+    card.variants.push({
+      id: p.id,
+      degreeLevel: p.degree_level,
+      code: p.code,
+      isHeavy: p.is_heavy,
+    })
   }
   const order = [
     ...GROUP_ORDER.filter((g) => byGroup.has(g)),

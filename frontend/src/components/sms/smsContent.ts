@@ -118,23 +118,63 @@ export const GROUP_ORDER: readonly string[] = [
   "Ngành khác",
 ]
 
-// ── Kho editorial 14 ngành (nội dung nguyên văn từ mockup) ──
+/** 1 câu hỏi–đáp trong khối FAQ ngành. */
+export interface Faq {
+  q: string
+  a: string
+}
+
+// ── Kho editorial ngành (nội dung marketing — KHÔNG phải dữ liệu BE) ──
+// 4 trường mới (goodIf/considerIf/trends/faq) là OPTIONAL: ngành chưa biên tập
+// riêng dùng fallback GENERIC_* để vẫn render đủ khối. Badge miễn giảm học phí
+// KHÔNG còn ở đây — suy từ cờ THẬT `is_heavy` của BE (NĐ 81/2021).
 export interface ProgramEditorial {
   group: string
-  discount: string // "70%" | "30%"
-  hot: boolean // true → badge giảm gradient flame + viền cam
   duration: string // "3 năm" | "2,5 năm"
   tagline: string // hero tier-2
   intro: string // "Giới thiệu ngành"
   subjects: string[] // "Bạn sẽ được học gì?"
   careers: string[] // "Cơ hội nghề nghiệp"
+  goodIf?: string[] // "Ngành này hợp với bạn nếu…"
+  considerIf?: string[] // "Cân nhắc nếu bạn…" (anti-fit trung thực)
+  trends?: string[] // "Xu hướng việc làm"
+  faq?: Faq[] // Hỏi – Đáp ngành
 }
+
+// ── Fallback generic cho các ngành CHƯA biên tập riêng 4 khối mới ──
+// Mọi ngành vẫn trả lời đủ "có hợp không / xu hướng / FAQ" (không rỗng section).
+export const GENERIC_GOOD_IF: readonly string[] = [
+  "Yêu thích và muốn theo đuổi nghề một cách nghiêm túc",
+  "Thích học đi đôi với thực hành, làm nghề thực tế",
+  "Muốn ra trường có việc làm sớm, thu nhập ổn định",
+]
+export const GENERIC_CONSIDER_IF: readonly string[] = [
+  "Chưa chắc về sở thích — nên gọi hotline để được tư vấn hướng nghiệp",
+  "Muốn học nặng về nghiên cứu, lý thuyết hàn lâm dài hạn",
+]
+export const GENERIC_TRENDS: readonly string[] = [
+  "Doanh nghiệp ưu tiên nhân lực có tay nghề, làm được việc ngay",
+  "Nhu cầu tuyển dụng ổn định tại Tây Nguyên và các tỉnh lân cận",
+  "Cơ hội liên thông lên bậc cao hơn trong khi vẫn đi làm",
+]
+export const GENERIC_FAQ: readonly Faq[] = [
+  {
+    q: "Xét tuyển bằng cách nào?",
+    a: "Xét học bạ THPT — thủ tục đơn giản, không thi tuyển. Gọi hotline để được hướng dẫn hồ sơ chi tiết.",
+  },
+  {
+    q: "Ra trường có được hỗ trợ việc làm không?",
+    a: "Trường cam kết giới thiệu việc làm qua mạng lưới doanh nghiệp đối tác; nhiều sinh viên có việc ngay trong kỳ thực tập.",
+  },
+  {
+    q: "Học xong có liên thông lên cao hơn được không?",
+    a: "Có. Người học có thể liên thông lên bậc cao hơn (Trung cấp → Cao đẳng → Đại học) theo quy định.",
+  },
+]
 
 /** Generic cho ngành không khớp mockup — vẫn render đủ section. */
 const DEFAULT: ProgramEditorial = {
   group: "Ngành khác",
-  discount: "30%",
-  hot: false,
   duration: "2,5 năm",
   tagline:
     "Chương trình đào tạo gắn thực hành, bám sát nhu cầu tuyển dụng thực tế của doanh nghiệp — học đi đôi với làm.",
@@ -167,8 +207,6 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /điều dưỡng/i,
     data: {
       group: "Khối Sức khỏe",
-      discount: "70%",
-      hot: true,
       duration: "3 năm",
       tagline:
         "Nghề điều dưỡng — nhu cầu nhân lực lớn trong và ngoài nước, cơ hội làm việc tại bệnh viện và xuất khẩu lao động.",
@@ -187,14 +225,41 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Xuất khẩu lao động Nhật, Đức",
         "Nhân viên y tế cơ quan, trường học",
       ],
+      goodIf: [
+        "Thích chăm sóc, giúp đỡ người khác",
+        "Bình tĩnh, tỉ mỉ, cẩn thận, có trách nhiệm",
+        "Sức khỏe tốt, không ngại làm việc theo ca",
+      ],
+      considerIf: [
+        "Sợ máu hoặc môi trường bệnh viện",
+        "Không muốn làm việc ca kíp, cuối tuần, lễ tết",
+      ],
+      trends: [
+        "Dân số già hóa → nhu cầu điều dưỡng tăng mạnh trên cả nước",
+        "Tây Nguyên còn thiếu nhân lực y tế tuyến cơ sở",
+        "Nhật Bản, Đức tuyển điều dưỡng đều đặn với thu nhập cao",
+        "Ngành sức khỏe thuộc nhóm có tỷ lệ việc làm cao nhất",
+      ],
+      faq: [
+        {
+          q: "Không giỏi các môn tự nhiên có học được không?",
+          a: "Được. Chương trình chú trọng thực hành và kỹ năng chăm sóc; nhà trường đồng hành từ nền tảng. Quan trọng nhất là sự chăm chỉ và yêu nghề.",
+        },
+        {
+          q: "Học Điều dưỡng có phải trực đêm không?",
+          a: "Khi thực tập và đi làm tại bệnh viện sẽ có ca trực (kể cả ban đêm) theo lịch — đây là đặc thù của nghề chăm sóc người bệnh 24/7.",
+        },
+        {
+          q: "Muốn đi Nhật/Đức làm điều dưỡng cần gì?",
+          a: "Cần bằng Điều dưỡng và trình độ ngoại ngữ theo chương trình tiếp nhận. Gọi hotline để được tư vấn lộ trình học ngoại ngữ và kết nối đơn hàng.",
+        },
+      ],
     },
   },
   {
     match: /y học cổ truyền|cổ truyền|đông y/i,
     data: {
       group: "Khối Sức khỏe",
-      discount: "30%",
-      hot: false,
       duration: "3 năm",
       tagline:
         "Kết hợp tinh hoa y học cổ truyền với y học hiện đại — chăm sóc sức khỏe bằng châm cứu, xoa bóp, dược liệu.",
@@ -213,14 +278,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Cơ sở xoa bóp – phục hồi chức năng",
         "Kinh doanh dược liệu",
       ],
+      goodIf: [
+        "Yêu thích y học cổ truyền, dược liệu, dưỡng sinh",
+        "Đôi tay khéo léo, kiên nhẫn, tỉ mỉ",
+        "Muốn nghề vừa chăm sóc sức khỏe vừa có thể tự kinh doanh",
+      ],
+      considerIf: [
+        "Muốn theo hướng bác sỹ điều trị chuyên sâu ở bệnh viện lớn",
+        "Không thích công việc cần sự nhẹ nhàng, kiên trì lâu dài",
+      ],
+      trends: [
+        "Xu hướng chăm sóc sức khỏe tự nhiên, phục hồi chức năng lên ngôi",
+        "Nhu cầu spa – dưỡng sinh – phục hồi chức năng tăng nhanh",
+        "Có thể tự mở cơ sở xoa bóp, kinh doanh dược liệu",
+      ],
+      faq: [
+        {
+          q: "Ra trường làm ở đâu?",
+          a: "Khoa/tổ YHCT bệnh viện, phòng khám Đông y, cơ sở xoa bóp – phục hồi chức năng, hoặc tự kinh doanh dược liệu.",
+        },
+        {
+          q: "Có được châm cứu cho bệnh nhân không?",
+          a: "Phạm vi hành nghề theo chứng chỉ và quy định. Chương trình trang bị kỹ thuật châm cứu, xoa bóp bấm huyệt bài bản để làm nghề đúng quy định.",
+        },
+      ],
     },
   },
   {
     match: /y sỹ|y sĩ|đa khoa/i,
     data: {
       group: "Khối Sức khỏe",
-      discount: "70%",
-      hot: true,
       duration: "3 năm",
       tagline:
         "Đào tạo Y sỹ có năng lực khám, chữa bệnh ban đầu — nền tảng vững chắc để công tác tại y tế cơ sở hoặc học liên thông Bác sỹ.",
@@ -239,14 +326,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên y tế trường học, cơ quan",
         "Học liên thông lên Bác sỹ",
       ],
+      goodIf: [
+        "Mơ ước theo nghề y, muốn khám chữa bệnh ban đầu",
+        "Chăm chỉ, chịu khó, có trách nhiệm với sức khỏe người khác",
+        "Định hướng học liên thông lên Bác sỹ về sau",
+      ],
+      considerIf: [
+        "Sợ máu, sợ môi trường lâm sàng",
+        "Không sẵn sàng học lâu và trực ca tại cơ sở y tế",
+      ],
+      trends: [
+        "Y tế cơ sở (trạm y tế xã/phường) luôn cần nhân lực ổn định",
+        "Là bước đệm vững chắc để liên thông lên Bác sỹ",
+        "Nhu cầu chăm sóc sức khỏe ban đầu ở vùng Tây Nguyên còn lớn",
+      ],
+      faq: [
+        {
+          q: "Y sỹ khác Bác sỹ thế nào?",
+          a: "Y sỹ khám, chữa các bệnh thường gặp và làm việc ở tuyến cơ sở; là nền tảng để học liên thông lên Bác sỹ theo quy định.",
+        },
+        {
+          q: "Học xong có được mở phòng khám không?",
+          a: "Việc hành nghề, mở cơ sở phải theo chứng chỉ hành nghề và quy định pháp luật. Gọi hotline để được tư vấn lộ trình cụ thể.",
+        },
+      ],
     },
   },
   {
     match: /dược/i,
     data: {
       group: "Khối Sức khỏe",
-      discount: "70%",
-      hot: true,
       duration: "3 năm",
       tagline:
         "Trở thành Dược sỹ cao đẳng — nghề được xã hội trọng vọng, nhu cầu nhân lực luôn cao tại các nhà thuốc, bệnh viện và công ty dược.",
@@ -265,14 +374,84 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên kho – cung ứng thuốc",
         "Dược sỹ tại khoa Dược bệnh viện",
       ],
+      goodIf: [
+        "Cẩn thận, tỉ mỉ, trí nhớ tốt (nhớ thuốc, liều dùng)",
+        "Thích công việc ổn định, sạch sẽ, giao tiếp với khách",
+        "Muốn nghề có thể tự mở nhà thuốc, quầy thuốc",
+      ],
+      considerIf: [
+        "Cẩu thả, ngại ghi nhớ chi tiết (rủi ro cao với thuốc)",
+        "Không thích công việc cần tuân thủ quy trình nghiêm ngặt",
+      ],
+      trends: [
+        "Hệ thống nhà thuốc mở rộng nhanh → nhu cầu Dược sỹ luôn cao",
+        "Chuỗi nhà thuốc hiện đại tuyển dụng nhiều, đãi ngộ tốt",
+        "Có thể tự khởi nghiệp mở nhà thuốc sau khi đủ điều kiện",
+      ],
+      faq: [
+        {
+          q: "Học Dược cao đẳng có mở được nhà thuốc không?",
+          a: "Việc đứng tên/mở nhà thuốc phải theo chứng chỉ hành nghề và quy định. Bằng Dược cao đẳng là điều kiện nền tảng — gọi hotline để được tư vấn cụ thể.",
+        },
+        {
+          q: "Ra trường dễ xin việc không?",
+          a: "Nhu cầu Dược sỹ tại nhà thuốc, công ty dược, bệnh viện rất lớn; nhiều sinh viên có việc ngay sau thực tập.",
+        },
+      ],
+    },
+  },
+  {
+    match: /chế biến món ăn|nấu ăn|ẩm thực|đầu bếp/i,
+    data: {
+      group: "Kinh tế – Dịch vụ",
+      duration: "2 năm",
+      tagline:
+        "Trở thành đầu bếp chuyên nghiệp — nghề mũi nhọn của nhà hàng – khách sạn, cơ hội việc làm rộng và có thể tự kinh doanh ẩm thực.",
+      intro:
+        "Ngành Kỹ thuật chế biến món ăn đào tạo đầu bếp nắm vững kỹ thuật sơ chế, chế biến món Á – Âu, làm bánh và trang trí món ăn, bảo đảm an toàn vệ sinh thực phẩm. Sinh viên thực hành nhiều tại bếp thực nghiệm và thực tập tại nhà hàng, khách sạn liên kết.",
+      subjects: [
+        "Kỹ thuật sơ chế và cắt thái",
+        "Chế biến món ăn Á – Âu",
+        "Kỹ thuật làm bánh và món tráng miệng",
+        "An toàn vệ sinh thực phẩm – dinh dưỡng",
+        "Thực hành bếp nhà hàng, khách sạn",
+      ],
+      careers: [
+        "Đầu bếp nhà hàng, khách sạn, khu nghỉ dưỡng",
+        "Phụ bếp → tổ trưởng bếp → bếp trưởng (theo kinh nghiệm)",
+        "Bếp bánh, chế biến suất ăn công nghiệp",
+        "Tự mở quán ăn, kinh doanh ẩm thực",
+      ],
+      goodIf: [
+        "Yêu thích nấu ăn, sáng tạo với món ăn",
+        "Nhanh tay, chịu được môi trường bếp nóng, đứng nhiều",
+        "Muốn nghề có thể tự khởi nghiệp quán ăn",
+      ],
+      considerIf: [
+        "Không chịu được áp lực giờ cao điểm, môi trường bếp nóng bức",
+        "Ngại làm buổi tối, cuối tuần, lễ tết (giờ vàng của nhà hàng)",
+      ],
+      trends: [
+        "Du lịch – nhà hàng – khách sạn phục hồi mạnh → cần nhiều đầu bếp",
+        "Đầu bếp giỏi luôn khan hiếm, thu nhập tăng nhanh theo tay nghề",
+        "Dễ khởi nghiệp quán ăn, kinh doanh ẩm thực với vốn vừa phải",
+      ],
+      faq: [
+        {
+          q: "Chưa biết nấu ăn có học được không?",
+          a: "Được. Chương trình dạy từ kỹ thuật cơ bản (sơ chế, cắt thái) đến nâng cao, thực hành rất nhiều tại bếp — quan trọng là chăm chỉ luyện tay nghề.",
+        },
+        {
+          q: "Ra trường có dễ xin việc không?",
+          a: "Nhà hàng, khách sạn, khu nghỉ dưỡng luôn cần đầu bếp; nhiều sinh viên có việc ngay trong kỳ thực tập.",
+        },
+      ],
     },
   },
   {
     match: /công nghệ thông tin|cntt|phần mềm/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
@@ -291,14 +470,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên IT doanh nghiệp",
         "Thiết kế – bảo trì website",
       ],
+      goodIf: [
+        "Thích máy tính, công nghệ, giải quyết vấn đề bằng logic",
+        "Kiên nhẫn tìm lỗi và tự học cái mới liên tục",
+        "Muốn nghề thu nhập tốt, có thể làm từ xa / freelance",
+      ],
+      considerIf: [
+        "Không thích ngồi lâu với máy tính, ngại tư duy logic",
+        "Mong muốn công việc ít phải cập nhật kiến thức mới",
+      ],
+      trends: [
+        "Chuyển đổi số khiến hầu hết doanh nghiệp đều cần nhân lực IT",
+        "Nhu cầu lập trình, quản trị mạng tăng đều, lương hấp dẫn",
+        "Có thể làm từ xa, freelance hoặc cho công ty nước ngoài",
+      ],
+      faq: [
+        {
+          q: "Học IT có cần giỏi Toán không?",
+          a: "Cần tư duy logic hơn là Toán cao siêu. Chương trình dạy từ lập trình cơ bản; quan trọng nhất là chăm thực hành trên dự án thật.",
+        },
+        {
+          q: "Ra trường có làm được ngay không?",
+          a: "Chương trình thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm, giúp sinh viên sớm làm được việc.",
+        },
+      ],
     },
   },
   {
     match: /ô ?tô/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
-      discount: "70%",
-      hot: true,
       duration: "2,5 năm",
       tagline:
         "Làm chủ kỹ thuật sửa chữa, bảo dưỡng ô tô — ngành có nhu cầu tuyển dụng cao tại các gara, hãng xe, showroom.",
@@ -317,14 +518,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên bảo dưỡng đội xe",
         "Tự mở gara sửa chữa ô tô",
       ],
+      goodIf: [
+        "Thích máy móc, động cơ, thích tự tay tháo lắp sửa chữa",
+        "Khỏe khoắn, chịu khó, không ngại dầu mỡ",
+        "Muốn nghề dễ xin việc và có thể tự mở gara",
+      ],
+      considerIf: [
+        "Không thích môi trường xưởng, tiếng ồn, dầu mỡ",
+        "Ngại công việc chân tay, đứng và vận động nhiều",
+      ],
+      trends: [
+        "Ô tô ngày càng phổ biến → gara, hãng xe luôn thiếu thợ lành nghề",
+        "Xe điện, hybrid lên ngôi → thợ biết công nghệ mới rất được săn đón",
+        "Tay nghề cứng có thể tự mở gara, thu nhập cao",
+      ],
+      faq: [
+        {
+          q: "Con gái học Công nghệ ô tô được không?",
+          a: "Được. Ngoài sửa chữa còn nhiều vị trí như cố vấn dịch vụ, quản lý phụ tùng, kinh doanh — phù hợp cả nam và nữ.",
+        },
+        {
+          q: "Ra trường làm ở đâu?",
+          a: "Gara, hãng xe, showroom, trạm bảo dưỡng, hoặc tự mở gara. Trường liên kết gara nên nhiều em có việc ngay khi thực tập.",
+        },
+      ],
     },
   },
   {
     match: /thú y|chăn nuôi/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
-      discount: "70%",
-      hot: true,
       duration: "2,5 năm",
       tagline:
         "Ngành thiết yếu với nông nghiệp Tây Nguyên — chăm sóc, phòng và chữa bệnh cho vật nuôi, cơ hội khởi nghiệp cao.",
@@ -343,14 +566,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Mở cửa hàng thuốc thú y",
         "Khởi nghiệp chăn nuôi",
       ],
+      goodIf: [
+        "Yêu động vật, thích công việc gắn với nông nghiệp, trang trại",
+        "Chịu khó, không ngại môi trường chuồng trại",
+        "Muốn nghề dễ khởi nghiệp ở quê, hợp vùng Tây Nguyên",
+      ],
+      considerIf: [
+        "Sợ hoặc dị ứng với động vật, ngại mùi chuồng trại",
+        "Không thích công việc ngoài trời, tay chân",
+      ],
+      trends: [
+        "Chăn nuôi Tây Nguyên phát triển mạnh → cần kỹ thuật viên thú y",
+        "Trang trại, công ty thức ăn chăn nuôi tuyển dụng đều đặn",
+        "Dễ khởi nghiệp: mở cửa hàng thuốc thú y, trại chăn nuôi",
+      ],
+      faq: [
+        {
+          q: "Học xong có làm bác sỹ thú y được không?",
+          a: "Tốt nghiệp là kỹ thuật viên chăn nuôi – thú y, làm tại trang trại, cửa hàng thuốc thú y; có thể liên thông lên bậc cao hơn theo quy định.",
+        },
+        {
+          q: "Có phải chỉ làm ở quê không?",
+          a: "Không. Ngoài trang trại còn có công ty thức ăn chăn nuôi, thuốc thú y, cơ quan quản lý — ở cả thành phố và nông thôn.",
+        },
+      ],
     },
   },
   {
     match: /vận tải|logistic/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Quản lý và điều hành hoạt động vận tải — ngành gắn với logistics đang phát triển mạnh.",
@@ -369,14 +614,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Quản lý đội xe doanh nghiệp",
         "Kinh doanh dịch vụ vận tải",
       ],
+      goodIf: [
+        "Thích công việc tổ chức, điều phối, quản lý",
+        "Cẩn thận, có tư duy sắp xếp, chịu được nhịp độ nhanh",
+        "Quan tâm lĩnh vực logistics đang phát triển mạnh",
+      ],
+      considerIf: [
+        "Không thích công việc giấy tờ, điều phối, theo dõi lịch trình",
+        "Ngại áp lực thời gian giao – nhận hàng",
+      ],
+      trends: [
+        "Thương mại điện tử bùng nổ → logistics và vận tải tăng nhanh",
+        "Doanh nghiệp vận tải, kho vận liên tục cần nhân lực điều hành",
+        "Cơ hội tự kinh doanh dịch vụ vận tải, nhà xe",
+      ],
+      faq: [
+        {
+          q: "Ngành này ra làm nghề gì?",
+          a: "Điều hành vận tải, nhân viên logistics – kho vận, quản lý đội xe, hoặc kinh doanh dịch vụ vận tải.",
+        },
+        {
+          q: "Có cần bằng lái xe không?",
+          a: "Không bắt buộc để học. Ngành thiên về tổ chức, quản lý và kinh doanh vận tải hơn là trực tiếp lái xe.",
+        },
+      ],
     },
   },
   {
     match: /kế toán/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Nghề ổn định, cần thiết cho mọi doanh nghiệp — thành thạo sổ sách, thuế, phần mềm kế toán.",
@@ -395,14 +662,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên hành chính – tài chính",
         "Dịch vụ kế toán",
       ],
+      goodIf: [
+        "Cẩn thận, tỉ mỉ, thích làm việc với con số",
+        "Ngăn nắp, trung thực, có trách nhiệm cao",
+        "Muốn nghề ổn định, doanh nghiệp nào cũng cần",
+      ],
+      considerIf: [
+        "Cẩu thả với con số, ngại công việc lặp lại đều đặn",
+        "Không thích làm việc với sổ sách, phần mềm, quy định",
+      ],
+      trends: [
+        "Mọi doanh nghiệp đều cần kế toán → nhu cầu ổn định lâu dài",
+        "Thành thạo phần mềm kế toán (MISA…) là lợi thế lớn",
+        "Có thể nhận làm dịch vụ kế toán cho nhiều đơn vị nhỏ",
+      ],
+      faq: [
+        {
+          q: "Không giỏi Toán có học kế toán được không?",
+          a: "Kế toán chủ yếu cộng trừ nhân chia và sự cẩn thận, không cần Toán cao. Quan trọng nhất là tỉ mỉ và trung thực.",
+        },
+        {
+          q: "Ra trường dễ xin việc không?",
+          a: "Doanh nghiệp nào cũng cần kế toán nên cơ hội rộng; nhiều em làm kế toán kho, bán hàng, thuế ngay sau tốt nghiệp.",
+        },
+      ],
     },
   },
   {
     match: /văn phòng/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Tổ chức, điều hành công việc văn phòng chuyên nghiệp — kỹ năng hành chính, văn thư, lễ tân.",
@@ -421,14 +710,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Thư ký, trợ lý",
         "Lễ tân doanh nghiệp",
       ],
+      goodIf: [
+        "Ngăn nắp, cẩn thận, giao tiếp tốt",
+        "Thành thạo (hoặc muốn học) tin học văn phòng",
+        "Thích môi trường công sở, công việc ổn định",
+      ],
+      considerIf: [
+        "Không thích công việc bàn giấy, giao tiếp, tiếp khách",
+        "Mong muốn công việc năng động, ngoài trời",
+      ],
+      trends: [
+        "Cơ quan, doanh nghiệp nào cũng cần nhân sự hành chính – văn phòng",
+        "Kỹ năng văn thư, lưu trữ, tổ chức sự kiện ngày càng được coi trọng",
+        "Bước đệm tốt để lên thư ký, trợ lý, quản lý hành chính",
+      ],
+      faq: [
+        {
+          q: "Ngành này làm những việc gì?",
+          a: "Hành chính – văn phòng, văn thư – lưu trữ, thư ký/trợ lý, lễ tân, tổ chức hội họp – sự kiện cho cơ quan, doanh nghiệp.",
+        },
+        {
+          q: "Có cần ngoại hình không?",
+          a: "Không bắt buộc. Quan trọng là sự cẩn thận, kỹ năng tin học và giao tiếp chuyên nghiệp.",
+        },
+      ],
     },
   },
   {
     match: /tiếng anh|ngôn ngữ anh/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "30%",
-      hot: false,
       duration: "3 năm",
       tagline:
         "Thành thạo tiếng Anh giao tiếp và biên – phiên dịch — chìa khóa cho nhiều cơ hội nghề nghiệp.",
@@ -447,14 +758,36 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Hướng dẫn viên, lễ tân khách sạn",
         "Giáo viên tiếng Anh trung tâm",
       ],
+      goodIf: [
+        "Yêu thích ngoại ngữ, thích giao tiếp",
+        "Kiên trì luyện nghe – nói – đọc – viết đều đặn",
+        "Muốn cơ hội làm việc với công ty nước ngoài, du lịch",
+      ],
+      considerIf: [
+        "Ngại giao tiếp, không thích học thuộc – luyện tập thường xuyên",
+        "Mong muốn một nghề kỹ thuật / tay chân cụ thể",
+      ],
+      trends: [
+        "Hội nhập quốc tế → tiếng Anh là lợi thế cho hầu hết ngành nghề",
+        "Du lịch, thương mại, công ty nước ngoài cần nhân lực tiếng Anh",
+        "Có thể làm biên – phiên dịch, dạy học hoặc kết hợp với ngành khác",
+      ],
+      faq: [
+        {
+          q: "Mất gốc tiếng Anh có học được không?",
+          a: "Được. Chương trình xây lại từ nền tảng nghe – nói – đọc – viết; quan trọng là luyện tập đều đặn.",
+        },
+        {
+          q: "Ra trường làm gì?",
+          a: "Biên – phiên dịch, nhân viên công ty nước ngoài, lễ tân – hướng dẫn khách sạn, giáo viên trung tâm tiếng Anh.",
+        },
+      ],
     },
   },
   {
     match: /hướng dẫn du lịch|hướng dẫn viên/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "70%",
-      hot: true,
       duration: "2,5 năm",
       tagline:
         "Khám phá nghề hướng dẫn viên — đi nhiều, gặp gỡ nhiều, phát huy thế mạnh du lịch Tây Nguyên.",
@@ -473,6 +806,30 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên bán tour",
         "Quản lý điểm du lịch",
       ],
+      goodIf: [
+        "Thích đi đây đó, năng động, giao tiếp tốt",
+        "Ưa khám phá văn hóa, lịch sử, thích kể chuyện",
+        "Không ngại di chuyển nhiều, làm cuối tuần / lễ",
+      ],
+      considerIf: [
+        "Thích công việc ổn định một chỗ, ít di chuyển",
+        "Ngại giao tiếp đám đông, xử lý tình huống bất ngờ",
+      ],
+      trends: [
+        "Du lịch Tây Nguyên và cả nước phục hồi, phát triển mạnh",
+        "Hướng dẫn viên giỏi, biết ngoại ngữ luôn được săn đón",
+        "Có thể làm điều hành tour, kinh doanh du lịch, dẫn tour tự do",
+      ],
+      faq: [
+        {
+          q: "Nghề này có phải đi suốt không?",
+          a: "Khi dẫn tour sẽ đi nhiều, làm cả cuối tuần và lễ. Bù lại được đi đây đó, gặp gỡ nhiều người và thu nhập theo tour thường tốt.",
+        },
+        {
+          q: "Không giỏi ngoại ngữ làm được không?",
+          a: "Vẫn làm được với khách nội địa; biết thêm ngoại ngữ sẽ mở rộng cơ hội với khách quốc tế và thu nhập cao hơn.",
+        },
+      ],
     },
   },
   {
@@ -480,8 +837,6 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /du lịch|lữ hành|khách sạn/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Quản lý dịch vụ lữ hành, khách sạn, nhà hàng — ngành mũi nhọn của kinh tế Tây Nguyên.",
@@ -500,6 +855,30 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên kinh doanh du lịch",
         "Quản lý nhà hàng, khu nghỉ dưỡng",
       ],
+      goodIf: [
+        "Thích lĩnh vực du lịch, nhà hàng – khách sạn",
+        "Giao tiếp tốt, nhanh nhẹn, thích tổ chức – kinh doanh",
+        "Muốn nghề năng động, nhiều cơ hội thăng tiến",
+      ],
+      considerIf: [
+        "Không thích môi trường dịch vụ, làm theo ca, cuối tuần",
+        "Ngại giao tiếp, chăm sóc khách hàng",
+      ],
+      trends: [
+        "Du lịch – khách sạn – nhà hàng là ngành mũi nhọn, phục hồi mạnh",
+        "Nhu cầu quản lý dịch vụ lữ hành, lưu trú tăng nhanh",
+        "Cơ hội thăng tiến lên quản lý bộ phận, quản lý cơ sở",
+      ],
+      faq: [
+        {
+          q: "Khác gì với Hướng dẫn du lịch?",
+          a: "Ngành này thiên về tổ chức, quản lý và kinh doanh dịch vụ (lữ hành, khách sạn, nhà hàng); Hướng dẫn du lịch thiên về trực tiếp dẫn tour.",
+        },
+        {
+          q: "Ra trường làm ở đâu?",
+          a: "Công ty lữ hành, khách sạn, resort, nhà hàng — ở bộ phận điều hành, kinh doanh, quản lý dịch vụ.",
+        },
+      ],
     },
   },
   {
@@ -507,8 +886,6 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /quản trị kinh doanh|kinh doanh|quản trị|kinh tế|marketing/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      discount: "30%",
-      hot: false,
       duration: "2,5 năm",
       tagline:
         "Nền tảng kinh doanh toàn diện — quản lý, marketing, bán hàng, khởi nghiệp trong mọi lĩnh vực.",
@@ -526,6 +903,30 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
         "Nhân viên marketing",
         "Quản lý cửa hàng, chi nhánh",
         "Tự khởi nghiệp",
+      ],
+      goodIf: [
+        "Thích kinh doanh, bán hàng, marketing",
+        "Năng động, giao tiếp tốt, có đầu óc tổ chức",
+        "Mơ ước tự khởi nghiệp hoặc làm quản lý",
+      ],
+      considerIf: [
+        "Ngại giao tiếp, thuyết phục, làm việc với con người",
+        "Muốn một nghề kỹ thuật chuyên sâu, cụ thể",
+      ],
+      trends: [
+        "Kỹ năng kinh doanh – marketing cần cho mọi lĩnh vực",
+        "Thương mại điện tử, bán hàng online mở nhiều cơ hội mới",
+        "Nền tảng tốt để tự khởi nghiệp hoặc thăng tiến lên quản lý",
+      ],
+      faq: [
+        {
+          q: "Học Quản trị kinh doanh ra làm gì?",
+          a: "Nhân viên kinh doanh – bán hàng, marketing, quản lý cửa hàng/chi nhánh, hoặc tự khởi nghiệp.",
+        },
+        {
+          q: "Ngành rộng quá, có khó xin việc không?",
+          a: "Kiến thức rộng là lợi thế để làm nhiều vị trí; quan trọng là chọn hướng (bán hàng, marketing, quản lý) và rèn kỹ năng thực tế qua thực tập.",
+        },
       ],
     },
   },

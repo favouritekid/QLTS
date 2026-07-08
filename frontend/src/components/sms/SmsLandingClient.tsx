@@ -141,9 +141,9 @@ function CountdownCard() {
 }
 
 function ProgramCard({ code, vm }: { code: string; vm: ProgramCardVM }) {
-  const { name, ed, variants } = vm
+  const { name, variants } = vm
   const Icon = vm.Icon // member access (không phải call trực tiếp làm JSX-type)
-  const hot = ed.hot
+  const hot = vm.isHeavy // "hot" = nặng nhọc (badge 70% + viền cam)
   const single = variants.length === 1
   const cardCls = `group relative flex min-h-[126px] flex-col overflow-hidden rounded-2xl border bg-sms-card p-4 shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sms-500 ${
     hot
@@ -162,7 +162,7 @@ function ProgramCard({ code, vm }: { code: string; vm: ProgramCardVM }) {
   )
   const head = (
     <>
-      <DiscountBadge discount={ed.discount} hot={hot} size="card" />
+      <DiscountBadge isHeavy={vm.isHeavy} size="card" />
       <h3 className="text-sms-ink-strong mt-3 line-clamp-3 text-[15px] font-semibold leading-tight">
         {name}
       </h3>
@@ -375,11 +375,11 @@ export function SmsLandingClient({ code }: { code: string }) {
             <div className="mb-7 flex flex-wrap justify-center gap-5">
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
                 <span className="from-sms-flame-from to-sms-flame-to h-3.5 w-3.5 rounded bg-gradient-to-br" />
-                Giảm <b>70%</b> học phí
+                Giảm <b>70%</b> học phí <span className="text-sms-ink-muted">(nghề nặng nhọc)</span>
               </span>
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
-                <span className="bg-sms-500 h-3.5 w-3.5 rounded" />
-                Giảm <b>30%</b> học phí
+                <span className="bg-sms-gold-soft border-sms-gold-line h-3.5 w-3.5 rounded border" />
+                <b>Học bổng</b> đầu vào
               </span>
             </div>
 

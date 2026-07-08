@@ -7,6 +7,7 @@ import {
   Building2,
   Calculator,
   Car,
+  ChefHat,
   GraduationCap,
   HeartPulse,
   Languages,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react"
 
 const LUCIDE_RULES: ReadonlyArray<[RegExp, LucideIcon]> = [
+  [/chế biến món ăn|nấu ăn|ẩm thực|đầu bếp|\bbếp\b/i, ChefHat],
   [/dược|thuốc/i, Pill],
   [/điều dưỡng/i, HeartPulse],
   [/y học cổ truyền|cổ truyền|đông y/i, Leaf],

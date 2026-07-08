@@ -559,6 +559,9 @@ class SmsLandingProgram(BaseModel):
     name: str
     code: str
     degree_level: str
+    # §16.1 — nghề nặng nhọc/độc hại/nguy hiểm (NĐ 81/2021 được miễn giảm 70%
+    # học phí). FE suy badge chính sách từ cờ THẬT này thay vì đoán tay.
+    is_heavy: bool = False
 
 
 class SmsLandingResponse(BaseModel):

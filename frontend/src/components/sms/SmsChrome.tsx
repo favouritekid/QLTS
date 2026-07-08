@@ -149,35 +149,31 @@ export function ZaloLink({
   )
 }
 
-/** Badge "Giảm {discount}": quyết định flame-gradient (hot) vs pill xanh gom 1
- *  chỗ. `size` chọn hình dạng theo ngữ cảnh: "card" (thẻ ngành tier-1, bo nhỏ)
- *  hoặc "hero" (hero tier-2, bo tròn + hậu tố "học phí"). */
+/** Badge chính sách học phí — suy TỪ CỜ THẬT `isHeavy` của BE (KHÔNG đoán tay):
+ *  nghề nặng nhọc/độc hại/nguy hiểm được miễn giảm 70% học phí theo NĐ 81/2021
+ *  → badge flame "Giảm 70% học phí"; ngành thường → pill vàng "Học bổng đầu vào"
+ *  (học bổng đến 100% kỳ I — vẫn là móc tài chính thật). `size`: "card" (thẻ
+ *  tier-1, gọn) hoặc "hero" (hero tier-2). */
 export function DiscountBadge({
-  discount,
-  hot,
+  isHeavy,
   size,
 }: {
-  discount: string
-  hot: boolean
+  isHeavy: boolean
   size: "card" | "hero"
 }) {
-  const color = hot
+  const label = isHeavy
+    ? size === "card"
+      ? "Giảm 70%"
+      : "Giảm 70% học phí"
+    : size === "card"
+      ? "Học bổng"
+      : "Học bổng đầu vào"
+  const color = isHeavy
     ? "from-sms-flame-from to-sms-flame-to bg-gradient-to-br text-white"
-    : "bg-sms-pill text-sms-pill-ink"
-  if (size === "card") {
-    return (
-      <span
-        className={`inline-block w-fit rounded-md px-2.5 py-1 text-[11px] font-extrabold ${color}`}
-      >
-        Giảm {discount}
-      </span>
-    )
-  }
-  return (
-    <span
-      className={`rounded-full px-3 py-1.5 text-[12.5px] font-bold ${color}`}
-    >
-      Giảm {discount} học phí
-    </span>
-  )
+    : "bg-sms-gold-soft text-sms-gold-ink"
+  const shape =
+    size === "card"
+      ? "inline-block w-fit rounded-md px-2.5 py-1 text-[11px] font-extrabold"
+      : "rounded-full px-3 py-1.5 text-[12.5px] font-bold"
+  return <span className={`${shape} ${color}`}>{label}</span>
 }
