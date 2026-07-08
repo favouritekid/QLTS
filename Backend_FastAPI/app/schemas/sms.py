@@ -559,6 +559,9 @@ class SmsLandingProgram(BaseModel):
     name: str
     code: str
     degree_level: str
+    # §16.1 — nghề nặng nhọc/độc hại/nguy hiểm (metadata). FE hiển thị badge
+    # học phí theo bảng học phí chi tiết, không phụ thuộc cờ này.
+    is_heavy: bool = False
 
 
 class SmsLandingResponse(BaseModel):

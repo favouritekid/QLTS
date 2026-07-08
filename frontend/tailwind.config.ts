@@ -89,6 +89,47 @@ const config: Config = {
         background: "var(--background)",
         foreground: "var(--foreground)",
 
+        // ── SMS public landing brand palette (Cao đẳng Bách khoa Tây Nguyên) ──
+        // HEX cứng, tự chứa — KHÔNG dùng CSS var theme dashboard: trang marketing
+        // công khai phải giữ nhận diện dù theme app đổi. "sms" = xanh BK (primary
+        // #1657c9 / dark #0b3d91), "sms-gold" = accent CTA vàng, "sms-flame" =
+        // badge giảm 70% học phí (gradient cam→đỏ). CHỈ 2 file landing dùng token
+        // này (SmsLandingClient / SmsProgramClient — grep đã xác nhận).
+        sms: {
+          50: "#eaf1fd", // soft blue — pill / hover / icon bg
+          100: "#dbe7fb",
+          500: "#1657c9", // primary
+          600: "#1e50b8",
+          700: "#0b3d91", // dark — heading / hero / registration
+          800: "#0a336f",
+          900: "#061634", // footer bg
+          ink: "#0b3d91", // heading ink
+          pill: "#eaf1fd",
+          "pill-ink": "#1657c9",
+          bg: "#eef2f8", // page bg (ngoài khung trắng 1180px)
+          card: "#ffffff",
+          "surface-low": "#f4f8ff", // testimonials / consent strip bg
+          "surface-alt": "#f7f9fd", // quick-fact / subject card bg
+          line: "#e7edf6", // outline
+          "ink-strong": "#141b2e", // on-surface đậm
+          "ink-body": "#43506a", // body text
+          "ink-soft": "#5a6478", // on-surface-variant
+          "ink-muted": "#8a93a6", // caption / subtitle
+        },
+        "sms-gold": {
+          m3: "#ffcf3f", // CTA / badge vàng
+          "m3-ink": "#3a2c00", // chữ trên nền vàng
+          soft: "#fff7e0", // nền cảnh báo / countdown ấm
+          line: "#ffe08a",
+          ink: "#8a6a00",
+        },
+        "sms-flame": {
+          from: "#ff8a3c",
+          to: "#ff4d4d",
+          accent: "#ff5a3c", // viền / chữ card hot
+          line: "#f0e2db", // viền card hot (nhạt)
+        },
+
         primary: {
           DEFAULT: "var(--primary)",
           foreground: "var(--primary-foreground)",

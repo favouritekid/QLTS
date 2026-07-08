@@ -76,7 +76,7 @@ class SmsLandingService:
             programs=[
                 sms_schemas.SmsLandingProgram(
                     id=p.id, name=p.name, code=p.code,
-                    degree_level=p.degree_level,
+                    degree_level=p.degree_level, is_heavy=p.is_heavy,
                 )
                 for p in programs
             ],
