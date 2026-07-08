@@ -799,7 +799,8 @@ async def create_lead(
     Tạo Lead mới với role-based logic.
 
     Role-based behavior:
-    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Admin: Can set any unit_id; a directly-assigned officer PHẢI cùng đơn vị
+      với lead (invariant b), nếu không thì dùng auto-assignment
     - Manager: Can assign to officers in their unit or use auto-assignment
     - Officer: Auto-assigned to themselves, unit forced to their unit
 

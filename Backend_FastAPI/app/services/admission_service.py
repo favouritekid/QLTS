@@ -12851,16 +12851,13 @@ async def bulk_assign(
                 continue
 
             # (b) Invariant lead.unit == officer.unit — áp cho MỌI role kể cả
-            # admin (đóng lỗ hổng bulk-assign chéo đơn vị; khớp
-            # lead_service.assign_lead_manually/create_lead direct-assign).
-            if officer.unit_id != profile.lead.unit_id:
-                failed_ids.append(profile_id)
-                errors[profile_id] = (
-                    f"Officer thuộc đơn vị #{officer.unit_id}, khác đơn vị của "
-                    f"lead #{profile.lead.unit_id}. Chỉ phân công officer cùng "
-                    f"đơn vị."
-                )
-                continue
+            # admin (đóng lỗ hổng bulk-assign chéo đơn vị). Dùng CHUNG helper
+            # lead_service (raise → loop except → _safe_bulk_error_message giữ
+            # message nhất quán với assign_lead_manually/create_lead).
+            from ..services.lead_service import _assert_officer_in_lead_unit
+            _assert_officer_in_lead_unit(
+                officer.unit_id, profile.lead.unit_id
+            )
 
             # Update lead assignment + bump ``lead.version``. The
             # version bump is the optimistic-lock signal a UI client

@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.schemas import LeadUpdate
+from app.schemas import LeadCreate, LeadUpdate
 from app.security import get_password_hash
 from app.services import lead_service
 from app.utils.exceptions import BusinessRuleViolation, DuplicateResourceError
@@ -72,13 +72,14 @@ async def _mk_offering(db, unit_id, tag) -> int:
     return offering.id
 
 
-async def _mk_lead(db, deps, officer, phone, rejected=None, email=None):
+async def _mk_lead(db, deps, officer, phone, rejected=None, email=None,
+                   unit_id=None):
     lead = models.Lead(
         full_name="Keep-Officer Lead",
         phone=phone,
         email=email,
         source="website",
-        unit_id=deps["unit_id"],
+        unit_id=unit_id or deps["unit_id"],
         status=deps["initial_status_id"],
         consultation_status_id=deps["initial_status_id"],
         pipeline_stage_id=deps["stage_id"],
@@ -270,3 +271,43 @@ async def test_manual_assign_accepts_same_unit_officer(
     assert lead.assigned_officer_id == officer.id
     assert lead.unit_id == seeded_dependencies["unit_id"]  # lead.unit GIỮ NGUYÊN
     assert "manual" in await _log_methods(db, lead.id)  # AssignmentLog ghi
+
+
+async def test_bulk_assign_leads_reports_cross_unit_per_lead(
+    db: AsyncSession, seeded_dependencies, second_unit, admin_user
+):
+    """bulk_assign_leads: lead lệch đơn vị officer → báo lỗi PER-LEAD (không
+    abort cả batch) nhờ except bắt BusinessRuleViolation."""
+    officer = await _mk_officer(db, second_unit.id, "bulk")  # unit đích 2001
+    lead_ok = await _mk_lead(
+        db, seeded_dependencies, None, "0909555020", unit_id=second_unit.id
+    )  # cùng đơn vị officer
+    lead_bad = await _mk_lead(
+        db, seeded_dependencies, None, "0909555021"
+    )  # unit 1001, lệch
+    result, _cb = await lead_service.bulk_assign_leads(
+        db, [lead_ok.id, lead_bad.id], officer.id, assigner=admin_user
+    )
+    assert result["successful"] == 1
+    assert result["failed"] == 1  # batch KHÔNG abort — lead lệch báo riêng
+    assert any(e["lead_id"] == lead_bad.id for e in result["errors"])
+    await db.refresh(lead_ok)
+    await db.refresh(lead_bad)
+    assert lead_ok.assigned_officer_id == officer.id  # cùng đơn vị → gán
+    assert lead_bad.assigned_officer_id is None        # lệch → KHÔNG gán
+
+
+async def test_create_lead_rejects_cross_unit_direct_assign(
+    db: AsyncSession, seeded_dependencies, second_unit, admin_user
+):
+    """Admin tạo lead unit A + gán TRỰC TIẾP officer unit B → BusinessRuleViolation."""
+    officer_b = await _mk_officer(db, second_unit.id, "crt")  # unit 2001
+    lead_in = LeadCreate(
+        full_name="Cross Create",
+        phone="0909555022",
+        source="website",
+        unit_id=seeded_dependencies["unit_id"],  # unit 1001
+        assigned_officer_id=officer_b.id,          # officer unit 2001 (lệch)
+    )
+    with pytest.raises(BusinessRuleViolation):
+        await lead_service.create_lead(db, lead_in, created_by=admin_user)
