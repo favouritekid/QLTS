@@ -12850,6 +12850,15 @@ async def bulk_assign(
                 errors[profile_id] = "Profile not found"
                 continue
 
+            # (b) Invariant lead.unit == officer.unit — áp cho MỌI role kể cả
+            # admin (đóng lỗ hổng bulk-assign chéo đơn vị). Dùng CHUNG helper
+            # lead_service (raise → loop except → _safe_bulk_error_message giữ
+            # message nhất quán với assign_lead_manually/create_lead).
+            from ..services.lead_service import _assert_officer_in_lead_unit
+            _assert_officer_in_lead_unit(
+                officer.unit_id, profile.lead.unit_id
+            )
+
             # Update lead assignment + bump ``lead.version``. The
             # version bump is the optimistic-lock signal a UI client
             # uses to detect "someone else updated this lead" — every
