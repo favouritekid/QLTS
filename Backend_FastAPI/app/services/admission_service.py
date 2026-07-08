@@ -12850,6 +12850,18 @@ async def bulk_assign(
                 errors[profile_id] = "Profile not found"
                 continue
 
+            # (b) Invariant lead.unit == officer.unit — áp cho MỌI role kể cả
+            # admin (đóng lỗ hổng bulk-assign chéo đơn vị; khớp
+            # lead_service.assign_lead_manually/create_lead direct-assign).
+            if officer.unit_id != profile.lead.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = (
+                    f"Officer thuộc đơn vị #{officer.unit_id}, khác đơn vị của "
+                    f"lead #{profile.lead.unit_id}. Chỉ phân công officer cùng "
+                    f"đơn vị."
+                )
+                continue
+
             # Update lead assignment + bump ``lead.version``. The
             # version bump is the optimistic-lock signal a UI client
             # uses to detect "someone else updated this lead" — every

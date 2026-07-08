@@ -123,7 +123,9 @@ async def test_keep_officer_when_offering_stays_in_officer_unit(
     await db.refresh(lead)
     assert lead.assigned_officer_id == officer.id  # GIỮ officer
     assert lead.unit_id == second_unit.id          # đồng bộ unit đích
-    assert "offering_change_unit_synced" in await _log_methods(db, lead.id)
+    _logs = await _log_methods(db, lead.id)
+    assert "offering_change_unit_synced" in _logs
+    assert "system_auto_reassign" not in _logs  # nhánh reassign KHÔNG chạy
 
 
 # --- REASSIGN (từng lý do) -----------------------------------------------
@@ -267,3 +269,4 @@ async def test_manual_assign_accepts_same_unit_officer(
     await db.refresh(lead)
     assert lead.assigned_officer_id == officer.id
     assert lead.unit_id == seeded_dependencies["unit_id"]  # lead.unit GIỮ NGUYÊN
+    assert "manual" in await _log_methods(db, lead.id)  # AssignmentLog ghi

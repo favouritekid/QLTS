@@ -1152,21 +1152,15 @@ async def create_lead(
         # === DIRECT ASSIGNMENT (if specified) ===
         # If direct assignment is needed, set it before commit
         if direct_assignment_officer_id:
-            # ✅ (b) Invariant lead.unit == officer.unit: officer direct-assign
-            # PHẢI cùng đơn vị với lead (không tạo lead lệch đơn vị officer).
+            # ✅ (b) Invariant lead.unit == officer.unit cho direct-assign
+            # (nhiều nhánh set direct_assignment_officer_id với object officer
+            # khác nhau → lấy unit qua id đã chốt).
             _da_unit = await db.scalar(
                 select(models.User.unit_id).where(
                     models.User.id == direct_assignment_officer_id
                 )
             )
-            if _da_unit != db_lead.unit_id:
-                raise BusinessRuleViolation(
-                    detail=(
-                        f"Không thể phân công: officer thuộc đơn vị "
-                        f"#{_da_unit}, khác đơn vị của lead "
-                        f"#{db_lead.unit_id}. Chỉ phân công officer cùng đơn vị."
-                    )
-                )
+            _assert_officer_in_lead_unit(_da_unit, db_lead.unit_id)
             db_lead.assigned_officer_id = direct_assignment_officer_id
             db_lead.assigned_at = datetime.now(timezone.utc)
             # Update assignment_status to "assigned" (workflow status)
@@ -2272,6 +2266,21 @@ async def add_consultation(
             raise e
 
 
+def _assert_officer_in_lead_unit(officer_unit_id, lead_unit_id) -> None:
+    """(Invariant b) Officer PHẢI cùng đơn vị với lead — raise `BusinessRuleViolation`
+    nếu lệch. Giữ lãnh thổ lead ổn định: KHÔNG gán officer khác đơn vị (auto-assign
+    cũng chỉ chọn officer cùng đơn vị lead). Chi viện chéo (nếu cần) xử lý riêng có
+    chủ đích. Dùng chung cho assign_lead_manually + create_lead direct-assign."""
+    if officer_unit_id != lead_unit_id:
+        raise BusinessRuleViolation(
+            detail=(
+                f"Không thể phân công: officer thuộc đơn vị #{officer_unit_id}, "
+                f"khác đơn vị của lead #{lead_unit_id}. "
+                f"Chỉ phân công officer cùng đơn vị."
+            )
+        )
+
+
 async def assign_lead_manually(
     db: AsyncSession, lead_id: int, officer_id: int, assigner: models.User
 ) -> Tuple[models.Lead, Callable]:
@@ -2307,18 +2316,8 @@ async def assign_lead_manually(
                     detail=f"Officer with id {officer_id} is not active (status: {officer.status})."
                 )
 
-            # ✅ (b) Invariant lead.unit == officer.unit: officer PHẢI cùng đơn vị
-            # với lead. Giữ lãnh thổ lead ổn định — KHÔNG gán officer khác đơn vị
-            # (làm lệch lead.unit/officer.unit; auto-assign cũng chỉ chọn officer
-            # cùng đơn vị lead). Chi viện chéo (nếu cần) xử lý riêng có chủ đích.
-            if officer.unit_id != lead.unit_id:
-                raise BusinessRuleViolation(
-                    detail=(
-                        f"Không thể phân công: officer thuộc đơn vị "
-                        f"#{officer.unit_id}, khác đơn vị của lead "
-                        f"#{lead.unit_id}. Chỉ phân công officer cùng đơn vị."
-                    )
-                )
+            # ✅ (b) Invariant lead.unit == officer.unit (officer đã load ở trên)
+            _assert_officer_in_lead_unit(officer.unit_id, lead.unit_id)
 
             # ✅ FIX: Manager can only assign to officers in their unit
             if assigner.role == UserRole.MANAGER:
@@ -4189,7 +4188,12 @@ async def bulk_assign_leads(
             if _cb:
                 assign_callbacks.append(_cb)
 
-        except (ResourceNotFoundError, PermissionDeniedError, BadRequest) as e:
+        except (
+            ResourceNotFoundError,
+            PermissionDeniedError,
+            BadRequest,
+            BusinessRuleViolation,  # gán chéo đơn vị (invariant b) = lỗi nghiệp vụ
+        ) as e:
             errors.append({
                 "lead_id": lead_id,
                 "error": str(e)
