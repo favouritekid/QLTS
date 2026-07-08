@@ -20,7 +20,7 @@ export type ProgramVariant = {
 
 /** View-model 1 card ngành (đã GỘP theo TÊN). Icon resolve SẴN (component chỉ
  *  member-access, thoả react-compiler). `isHeavy` = có BẤT KỲ biến thể nào nặng
- *  nhọc → badge chính sách 70% (NĐ 81/2021). */
+ *  nhọc → badge chính sách 70% (NĐ 238/NĐ-CP). */
 export type ProgramCardVM = {
   name: string
   ed: ProgramEditorial

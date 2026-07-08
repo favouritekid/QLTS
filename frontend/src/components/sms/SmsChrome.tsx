@@ -150,7 +150,7 @@ export function ZaloLink({
 }
 
 /** Badge chính sách học phí — suy TỪ CỜ THẬT `isHeavy` của BE (KHÔNG đoán tay):
- *  nghề nặng nhọc/độc hại/nguy hiểm được miễn giảm 70% học phí theo NĐ 81/2021
+ *  nghề nặng nhọc/độc hại/nguy hiểm được miễn giảm 70% học phí theo NĐ 238/NĐ-CP
  *  → badge flame "Giảm 70% học phí"; ngành thường → pill vàng "Học bổng đầu vào"
  *  (học bổng đến 100% kỳ I — vẫn là móc tài chính thật). `size`: "card" (thẻ
  *  tier-1, gọn) hoặc "hero" (hero tier-2). */
