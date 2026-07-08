@@ -1,72 +1,42 @@
 // src/components/sms/SmsProgramClient.tsx
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
 import {
-  Briefcase,
-  CalendarClock,
-  CheckCircle2,
+  ArrowRight,
+  Check,
   ChevronLeft,
-  ClipboardCheck,
-  FileText,
-  GraduationCap,
-  Loader2,
+  Clock,
+  MessageCircle,
   Phone,
-  Smartphone,
-  Sparkles,
-  Wallet,
 } from "lucide-react"
 
 import { getSmsLanding } from "@/lib/api/sms"
 import { useSmsDwellTracker } from "@/hooks/useSmsDwellTracker"
 
-import { programEditorial, SMS_HOTLINE_TEL } from "./smsContent"
-
-const HERO_GLOW: React.CSSProperties = {
-  background:
-    "radial-gradient(circle, rgba(254,166,25,.20) 0%, rgba(254,166,25,0) 70%)",
-}
-
-function Page({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bg-sms-bg min-h-screen">
-      <div className="relative mx-auto max-w-md">{children}</div>
-    </div>
-  )
-}
-
-function SectionCard({
-  icon,
-  title,
-  className,
-  children,
-}: {
-  icon: React.ReactNode
-  title: string
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className={`border-sms-line/40 bg-sms-card rounded-xl border p-4 shadow-sm ${className ?? ""}`}
-    >
-      <div className="mb-2.5 flex items-center gap-2">
-        <span className="text-sms-ink">{icon}</span>
-        <h2 className="text-sms-ink-strong text-[17px] font-semibold">{title}</h2>
-      </div>
-      {children}
-    </div>
-  )
-}
+import { programGlyph } from "./programIcon"
+import {
+  DiscountBadge,
+  SmsErrorCard,
+  SmsFooter,
+  SmsHeader,
+  SmsPage,
+  ZaloLink,
+} from "./SmsChrome"
+import { dedupeByName } from "./smsPrograms"
+import {
+  ADMISSION_DEADLINE_LABEL,
+  programEditorial,
+  SMS_HOTLINE_TEL,
+} from "./smsContent"
 
 /**
- * Landing chốt (tier-2 = trang ngành, nơi ĐO CHÍNH dwell). IDENTITY ngành là
- * thật từ BE (`useSmsDwellTracker` đo theo majorProgramId); nội dung học phí/
- * phương thức/hồ sơ/đợt là EDITORIAL (smsContent — chỉnh được, không phải BE).
- * Form chốt lead: UI + đủ state; submit MÔ PHỎNG — nối `/api/public/leads/intake`
- * sau khi có OK gate pháp lý §16.9 (disclosure/DPIA/consent).
+ * Landing tuyển sinh tier-2 (trang ngành — nơi ĐO CHÍNH dwell). IDENTITY ngành
+ * (tên/trình độ/mã) THẬT từ BE (`useSmsDwellTracker` đo theo majorProgramId);
+ * nội dung (tagline/giới thiệu/môn học/nghề) là EDITORIAL (smsContent). Thu lead
+ * = CTA Gọi/Zalo THẬT + nút "Đăng ký ngành này" cuộn về khối #reg của tier-1
+ * (KHÔNG thu PII qua browser — nối intake sau khi có OK pháp lý §16.9).
  */
 export function SmsProgramClient({
   code,
@@ -84,275 +54,277 @@ export function SmsProgramClient({
   const program = data?.programs.find((p) => p.id === majorProgramId)
   useSmsDwellTracker(code, majorProgramId, Boolean(program))
 
-  // --- Form chốt lead (submit mô phỏng cho tới khi nối intake) ---
-  const [status, setStatus] = useState<"idle" | "sending" | "success" | "error">(
-    "idle",
-  )
-  const [phone, setPhone] = useState("")
-  const [agree, setAgree] = useState(true)
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    const digits = phone.replace(/\D/g, "")
-    if (!agree || digits.length < 10) {
-      setStatus("error")
-      return
-    }
-    setStatus("sending")
-    // TODO(§16.9): sau khi có OK pháp lý, thay bằng submit thật:
-    //   await postLeadIntake({ code, program_id: majorProgramId, phone, ... })
-    await new Promise((r) => setTimeout(r, 1200))
-    setStatus("success")
-  }
-
   if (isLoading) {
     return (
-      <Page>
+      <SmsPage>
         <div role="status" aria-label="Đang tải" className="animate-pulse">
-          <div className="from-sms-700 to-sms-500 bg-gradient-to-br px-5 pb-9 pt-11">
-            <div className="mb-4 h-14 w-14 rounded-2xl bg-white/20" />
-            <div className="h-7 w-2/3 rounded bg-white/25" />
+          <div className="border-sms-line flex items-center justify-between border-b px-5 py-4 lg:px-11">
+            <div className="bg-sms-surface-alt h-10 w-40 rounded-lg" />
           </div>
-          <div className="space-y-3 p-4">
-            <div className="bg-sms-surface-high h-28 rounded-xl" />
-            <div className="bg-sms-surface-high h-24 rounded-xl" />
+          <div className="grid gap-9 px-6 py-8 md:grid-cols-2 lg:px-11">
+            <div className="space-y-4">
+              <div className="bg-sms-surface-alt h-6 w-32 rounded" />
+              <div className="bg-sms-surface-alt h-10 w-2/3 rounded" />
+              <div className="bg-sms-surface-alt h-20 w-full rounded" />
+            </div>
+            <div className="bg-sms-surface-alt hidden h-64 rounded-2xl md:block" />
           </div>
         </div>
-      </Page>
+      </SmsPage>
     )
   }
 
   if (isError || !data || !program) {
     return (
-      <Page>
-        <div className="flex min-h-screen flex-col items-center justify-center px-9 text-center">
-          <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50 text-3xl">
-            ⏳
-          </div>
-          <h1 className="text-sms-ink-strong mb-1.5 text-lg font-bold">
-            Không tìm thấy ngành
-          </h1>
-          <p className="text-sms-ink-soft mb-6 text-sm leading-relaxed">
-            Ngành không tồn tại hoặc liên kết đã hết hạn.
-          </p>
-          <Link
-            href={`/lp/${encodeURIComponent(code)}`}
-            className="bg-sms-600 flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold text-white transition-colors hover:bg-sms-700"
-          >
-            <ChevronLeft className="h-4 w-4" /> Về danh mục ngành
-          </Link>
-        </div>
-      </Page>
+      <SmsPage>
+        <SmsErrorCard
+          title="Không tìm thấy ngành"
+          message="Ngành không tồn tại hoặc liên kết đã hết hạn."
+          action={
+            <Link
+              href={`/lp/${encodeURIComponent(code)}`}
+              className="bg-sms-500 hover:bg-sms-700 flex h-11 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold text-white transition-colors"
+            >
+              <ChevronLeft className="h-4 w-4" /> Về danh mục ngành
+            </Link>
+          }
+        />
+      </SmsPage>
     )
   }
 
   const ed = programEditorial(program.name)
+  const Icon = programGlyph(program.name).Icon // member access, không call trực tiếp
+  const regHref = `/lp/${encodeURIComponent(code)}#reg`
+  // "Ngành khác": KHỬ TRÙNG theo tên (biến thể CĐ/TC cùng tên = 1 mục), loại
+  // ngành hiện tại, lấy tối đa 4 tên khác nhau (link tới biến thể đầu gặp).
+  const others = dedupeByName(data.programs, [program.name]).slice(0, 4)
 
   return (
-    <Page>
-      {/* Top bar */}
-      <header className="bg-sms-bg/85 border-sms-line/40 sticky top-0 z-40 flex items-center justify-between border-b px-4 py-2.5 backdrop-blur-md">
-        <Link
-          href={`/lp/${encodeURIComponent(code)}`}
-          className="text-sms-ink flex items-center gap-1 text-sm font-semibold hover:opacity-80"
-        >
-          <ChevronLeft className="h-5 w-5" /> Xem ngành khác
+    <SmsPage>
+      <SmsHeader
+        schoolName={data.school_name}
+        homeHref={`/lp/${encodeURIComponent(code)}`}
+        registerHref={regHref}
+      />
+
+      {/* Breadcrumb */}
+      <nav className="text-sms-ink-muted px-6 pt-4 text-[13px] lg:px-11">
+        <Link href={`/lp/${encodeURIComponent(code)}`} className="text-sms-500">
+          Trang chủ
         </Link>
-        <div className="flex items-center gap-1.5">
-          <GraduationCap className="text-sms-ink h-5 w-5" />
-        </div>
-      </header>
+        <span className="mx-2">›</span>
+        <Link
+          href={`/lp/${encodeURIComponent(code)}#prog`}
+          className="text-sms-500"
+        >
+          Ngành đào tạo
+        </Link>
+        <span className="mx-2">›</span>
+        <span className="text-sms-ink-soft">{program.name}</span>
+      </nav>
 
-      <main className="pb-[228px]">
-        {/* Hero ngành */}
-        <section className="from-sms-700 to-sms-500 relative overflow-hidden bg-gradient-to-br px-5 pb-9 pt-8 text-white">
-          <div aria-hidden className="absolute -right-12 -top-8 h-52 w-52 rounded-full" style={HERO_GLOW} />
-          <div className="relative flex flex-col items-start gap-3">
-            <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/15 text-3xl backdrop-blur-md">
-              {ed.icon}
+      <main>
+      {/* Hero */}
+      <section className="grid items-center gap-9 px-6 pb-10 pt-6 md:grid-cols-[1.1fr_.9fr] lg:px-11">
+        <div>
+          <div className="mb-3.5 flex flex-wrap items-center gap-2.5">
+            <span className="bg-sms-pill text-sms-pill-ink rounded-full px-3 py-1.5 text-[12.5px] font-bold">
+              {ed.group}
             </span>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="bg-sms-gold-m3 text-sms-gold-m3-ink rounded-full px-3 py-0.5 text-[11px] font-semibold">
-                {program.degree_level}
-              </span>
-              <span className="text-[11px] font-medium text-white/80">
-                Mã ngành: {program.code}
-              </span>
-            </div>
-            <h1 className="text-[28px] font-extrabold leading-tight tracking-tight">
-              {program.name}
-            </h1>
+            <DiscountBadge discount={ed.discount} hot={ed.hot} size="hero" />
+            <span className="text-sms-ink-muted text-[12.5px] font-medium">
+              Mã ngành: {program.code}
+            </span>
           </div>
-        </section>
-
-        {/* Bento sections (nội dung editorial) */}
-        <section className="-mt-4 flex flex-col gap-3 px-4">
-          <SectionCard
-            icon={<Briefcase className="h-5 w-5" />}
-            title="Học xong làm gì?"
-            className="shadow-md"
-          >
-            <ul className="flex flex-col gap-2">
-              {ed.careers.map((c, i) => (
-                <li key={i} className="text-sms-ink-soft flex gap-2 text-[15px] leading-relaxed">
-                  <span className="text-sms-600 font-bold">›</span> {c}
-                </li>
-              ))}
-            </ul>
-          </SectionCard>
-
-          <SectionCard
-            icon={<Wallet className="h-5 w-5" />}
-            title="Học phí & học bổng"
-            className="border-sms-gold-m3 border-l-4"
-          >
-            <div className="border-sms-line/60 mb-2 flex items-center justify-between border-b pb-2">
-              <span className="text-sms-ink-soft text-xs">Học phí</span>
-              <span className="text-sms-ink text-[15px] font-bold">
-                {ed.tuitionPerTerm}
-              </span>
-            </div>
-            <p className="bg-sms-gold-50 rounded-lg px-3 py-2 text-sm leading-relaxed text-[#7a4a00]">
-              🎁 {ed.scholarship}
-            </p>
-          </SectionCard>
-
-          <SectionCard
-            icon={<ClipboardCheck className="h-5 w-5" />}
-            title="Phương thức xét tuyển"
-          >
-            <ul className="flex flex-col gap-2">
-              {ed.methods.map((m, i) => (
-                <li key={i} className="text-sms-ink-soft flex items-center gap-2 text-[15px]">
-                  <CheckCircle2 className="text-sms-green h-4 w-4 shrink-0" /> {m}
-                </li>
-              ))}
-            </ul>
-          </SectionCard>
-
-          <SectionCard
-            icon={<FileText className="h-5 w-5" />}
-            title="Hồ sơ cần chuẩn bị"
-          >
-            <ul className="flex flex-col gap-2">
-              {ed.documents.map((d, i) => (
-                <li key={i} className="text-sms-ink-soft flex gap-2.5 text-[15px] leading-snug">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-[12px] font-extrabold text-emerald-600">
-                    ✓
-                  </span>
-                  {d}
-                </li>
-              ))}
-            </ul>
-          </SectionCard>
-
-          <div className="bg-sms-surface-high border-sms-500/10 rounded-xl border p-4">
-            <div className="mb-2.5 flex items-center gap-2">
-              <CalendarClock className="text-sms-ink h-5 w-5" />
-              <h2 className="text-sms-ink-strong text-[17px] font-semibold">
-                Đợt & hạn nộp
-              </h2>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sms-ink-soft text-[15px]">{ed.roundLabel}</span>
-              <span className="rounded-lg bg-[#FFDAD6] px-3 py-1 text-[11px] font-bold text-[#93000A]">
-                {ed.roundDeadline}
-              </span>
-            </div>
-          </div>
-        </section>
-
-        {/* Visual anchor (gradient nhẹ thay ảnh stock — nhanh, không lộ nguồn) */}
-        <div className="px-4 pt-4">
-          <div className="from-sms-800 to-sms-500 relative flex h-40 items-end overflow-hidden rounded-2xl bg-gradient-to-br p-4 shadow-md">
-            <Sparkles className="absolute right-3 top-3 h-16 w-16 text-white/15" />
-            <p className="relative text-sm font-semibold text-white">
-              Cơ sở vật chất hiện đại — học đi đôi với thực hành
-            </p>
+          <h1 className="text-sms-700 text-3xl font-extrabold leading-[1.12] md:text-[40px]">
+            {program.name}
+          </h1>
+          <p className="text-sms-ink-body mt-3.5 max-w-xl text-base leading-relaxed">
+            {ed.tagline}
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href={regHref}
+              className="bg-sms-gold-m3 text-sms-gold-m3-ink inline-flex items-center gap-2 rounded-xl px-6 py-3.5 text-[15px] font-extrabold transition-opacity hover:opacity-90"
+            >
+              Đăng ký ngành này <ArrowRight className="h-4 w-4" />
+            </Link>
+            <a
+              href={SMS_HOTLINE_TEL}
+              className="bg-sms-pill text-sms-500 inline-flex items-center gap-2 rounded-xl px-5 py-3.5 text-[15px] font-bold transition-opacity hover:opacity-90"
+            >
+              <Phone className="h-4 w-4" /> Tư vấn
+            </a>
           </div>
         </div>
+        <div
+          aria-hidden
+          className="border-sms-line text-sms-ink-muted relative hidden h-[280px] items-end justify-start overflow-hidden rounded-2xl border p-5 md:flex"
+          style={{
+            background:
+              "repeating-linear-gradient(135deg,#e6edf9 0 14px,#f2f5fb 14px 28px)",
+          }}
+        >
+          <Icon
+            aria-hidden
+            strokeWidth={1.25}
+            className="text-sms-500 absolute -right-6 -top-6 h-40 w-40 opacity-[0.12]"
+          />
+          <span className="relative text-[13px] font-semibold">
+            Cơ sở vật chất hiện đại — học đi đôi với thực hành
+          </span>
+        </div>
+      </section>
 
-        {/* Footer consent */}
-        <p className="text-sms-ink-soft mt-6 px-4 text-center text-xs leading-relaxed">
-          {data.consent_notice}
-        </p>
-      </main>
-
-      {/* Sticky CTA — form chốt lead (submit mô phỏng) */}
-      <div className="border-sms-line/50 bg-sms-card/95 fixed inset-x-0 bottom-0 z-50 mx-auto max-w-md rounded-t-2xl border-t px-4 py-3.5 shadow-[0_-8px_30px_rgba(15,23,42,.12)] backdrop-blur-xl">
-        {status === "success" ? (
-          <div className="flex items-center gap-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3.5">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-lg font-bold text-white">
-              ✓
-            </span>
-            <div>
-              <div className="text-[15px] font-bold text-emerald-900">
-                Đã ghi nhận thành công!
-              </div>
-              <div className="text-[13px] leading-snug text-emerald-700">
-                Nhà trường sẽ liên hệ tư vấn cho bạn sớm nhất.
-              </div>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={onSubmit} className="flex flex-col gap-2.5">
-            <div className="relative">
-              <Smartphone className="text-sms-ink-soft pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2" />
-              <input
-                type="tel"
-                inputMode="tel"
-                value={phone}
-                onChange={(e) => {
-                  setPhone(e.target.value)
-                  if (status === "error") setStatus("idle")
-                }}
-                placeholder="Nhập số điện thoại của bạn…"
-                aria-label="Số điện thoại"
-                className={`bg-sms-surface-low w-full rounded-xl border py-3 pl-9 pr-4 text-[15px] outline-none transition-colors focus:ring-2 focus:ring-sms-500 ${
-                  status === "error" ? "border-red-500" : "border-sms-line"
+      {/* Quick facts */}
+      <section className="px-6 pb-10 lg:px-11">
+        <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
+          {[
+            { label: "Trình độ", value: program.degree_level },
+            { label: "Thời gian đào tạo", value: ed.duration },
+            { label: "Hình thức xét tuyển", value: "Xét học bạ THPT" },
+            {
+              label: "Ưu đãi học phí",
+              value: `Giảm ${ed.discount}`,
+              flame: true,
+            },
+          ].map((f) => (
+            <div
+              key={f.label}
+              className="bg-sms-surface-alt border-sms-line rounded-xl border px-5 py-4"
+            >
+              <div className="text-sms-ink-muted mb-1 text-xs">{f.label}</div>
+              <div
+                className={`text-[15px] font-bold ${
+                  f.flame ? "text-sms-flame-accent" : "text-sms-ink-strong"
                 }`}
-              />
-            </div>
-            <div className="grid grid-cols-5 gap-2">
-              <button
-                type="submit"
-                disabled={status === "sending"}
-                className="bg-sms-gold-m3 text-sms-gold-m3-ink col-span-3 flex items-center justify-center gap-2 rounded-xl py-3 text-[15px] font-bold transition-opacity hover:opacity-90 disabled:opacity-70"
               >
-                {status === "sending" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Đang gửi…
-                  </>
-                ) : (
-                  "Đăng ký tư vấn"
-                )}
-              </button>
+                {f.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Body 2 cột */}
+      <section className="grid items-start gap-10 px-6 pb-12 lg:grid-cols-[1.5fr_1fr] lg:px-11">
+        <div>
+          <h2 className="text-sms-700 mb-3 text-xl font-extrabold md:text-[22px]">
+            Giới thiệu ngành
+          </h2>
+          <p className="text-sms-ink-body mb-7 text-[15px] leading-[1.75]">
+            {ed.intro}
+          </p>
+
+          <h2 className="text-sms-700 mb-3.5 text-xl font-extrabold md:text-[22px]">
+            Bạn sẽ được học gì?
+          </h2>
+          <div className="mb-7 flex flex-col gap-2.5">
+            {ed.subjects.map((s) => (
+              <div
+                key={s}
+                className="bg-sms-surface-alt border-sms-line flex items-start gap-3 rounded-lg border px-4 py-3"
+              >
+                <span className="bg-sms-500 mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md text-white">
+                  <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                </span>
+                <span className="text-[14.5px] leading-snug text-[#28324a]">
+                  {s}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <h2 className="text-sms-700 mb-3.5 text-xl font-extrabold md:text-[22px]">
+            Cơ hội nghề nghiệp
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {ed.careers.map((c) => (
+              <div
+                key={c}
+                className="border-sms-line flex items-center gap-2.5 rounded-lg border px-4 py-3"
+              >
+                <span className="bg-sms-flame-accent h-2 w-2 shrink-0 rounded-full" />
+                <span className="text-sm text-[#28324a]">{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Sidebar sticky */}
+        <aside className="flex flex-col gap-4 self-start lg:sticky lg:top-5">
+          <div className="from-sms-700 to-sms-500 rounded-2xl bg-gradient-to-br p-6 text-white">
+            <div className="text-lg font-extrabold">Quan tâm ngành này?</div>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-white/80">
+              Gọi hotline để được tư vấn — hướng dẫn hồ sơ chi tiết, hoàn toàn
+              miễn phí.
+            </p>
+            <Link
+              href={regHref}
+              className="bg-sms-gold-m3 text-sms-gold-m3-ink mt-4 block rounded-xl py-3.5 text-center text-[15px] font-extrabold transition-opacity hover:opacity-90"
+            >
+              Đăng ký xét tuyển
+            </Link>
+            <div className="mt-2.5 flex gap-2">
               <a
                 href={SMS_HOTLINE_TEL}
-                className="bg-sms-600 col-span-2 flex items-center justify-center gap-1.5 rounded-xl py-3 text-[15px] font-bold text-white transition-opacity hover:opacity-90"
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/25 bg-white/15 py-3 text-[13px] font-bold text-white transition-colors hover:bg-white/25"
               >
-                <Phone className="h-4 w-4" /> Gọi ngay
+                <Phone className="h-4 w-4" /> Hotline
               </a>
+              <ZaloLink className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/25 bg-white/15 py-3 text-[13px] font-bold text-white transition-colors hover:bg-white/25">
+                <MessageCircle className="h-4 w-4" /> Zalo
+              </ZaloLink>
             </div>
-            {status === "error" && (
-              <p className="text-[12px] font-medium text-red-600">
-                {agree
-                  ? "Số điện thoại chưa hợp lệ (tối thiểu 10 số)."
-                  : "Vui lòng đồng ý được liên hệ tư vấn."}
-              </p>
-            )}
-            <label className="text-sms-ink-soft flex cursor-pointer select-none items-center gap-2 text-[12px]">
-              <input
-                type="checkbox"
-                checked={agree}
-                onChange={(e) => setAgree(e.target.checked)}
-                className="accent-sms-600 h-4 w-4"
-              />
-              Tôi đồng ý được liên hệ tư vấn
-            </label>
-          </form>
-        )}
-      </div>
-    </Page>
+          </div>
+          <div className="from-[#fff7e0] to-[#ffeec2] border-sms-gold-line rounded-2xl border bg-gradient-to-br px-5 py-4">
+            <div className="text-sms-gold-ink flex items-center gap-2 text-sm font-bold">
+              <Clock className="h-4 w-4" /> Ưu đãi có hạn
+            </div>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-[#9a7b3a]">
+              Giảm <b className="text-[#b8560f]">{ed.discount}</b> học phí áp dụng
+              cho hồ sơ đăng ký trước{" "}
+              <b className="text-[#b8560f]">{ADMISSION_DEADLINE_LABEL}</b>.
+            </p>
+          </div>
+        </aside>
+      </section>
+
+      {/* Ngành khác */}
+      {others.length > 0 && (
+        <section className="bg-sms-surface-low border-sms-line border-t px-6 py-10 lg:px-11">
+          <h2 className="text-sms-700 mb-5 text-xl font-extrabold md:text-[22px]">
+            Các ngành khác
+          </h2>
+          <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
+            {others.map((o) => (
+              <Link
+                key={o.id}
+                href={`/lp/${encodeURIComponent(code)}/nganh/${o.id}`}
+                className="border-sms-line bg-sms-card hover:border-sms-500 block rounded-xl border p-4 transition-all hover:shadow-md"
+              >
+                <div className="text-sms-ink-muted mb-1.5 text-[11.5px]">
+                  {programEditorial(o.name).group}
+                </div>
+                <div className="text-sms-ink-strong text-[14.5px] font-semibold leading-tight">
+                  {o.name}
+                </div>
+                <div className="text-sms-500 mt-2 text-[12px] font-semibold">
+                  Xem chi tiết →
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+      </main>
+
+      {/* Consent + footer */}
+      <p className="text-sms-ink-muted bg-sms-surface-low border-sms-line border-t px-6 py-5 text-center text-xs leading-relaxed lg:px-11">
+        {data.consent_notice}
+      </p>
+      <SmsFooter schoolName={data.school_name} />
+    </SmsPage>
   )
 }
