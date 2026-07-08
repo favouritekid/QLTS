@@ -1688,49 +1688,42 @@ async def update_lead(
                     # Offering removed - keep current unit
                     new_target_unit_id = db_lead.unit_id
 
-                # Check if unit actually changed (territory conflict)
+                # Unit đích đổi so với unit hiện tại của lead
                 if new_target_unit_id != db_lead.unit_id:
                     old_unit_id = db_lead.unit_id
                     old_officer_id = db_lead.assigned_officer_id
 
-                    log.warning(
-                        "Offering change causes Unit change - Auto-reassigning Lead",
-                        lead_id=lead_id,
-                        old_offering_id=old_offering_id,
-                        new_offering_id=new_offering_id,
-                        old_unit_id=old_unit_id,
-                        new_unit_id=new_target_unit_id,
-                        old_officer_id=old_officer_id,
-                        reason="territorial_conflict"
-                    )
+                    # ✅ FIX: chỉ reassign khi officer hiện tại KHÔNG còn ĐỦ ĐIỀU
+                    # KIỆN nhận lead ở đơn vị đích. Nếu ngành mới vẫn thuộc đơn vị
+                    # officer đang quản lý VÀ officer còn eligible → GIỮ officer
+                    # (chỉ đồng bộ unit_id, không round-robin). Điều kiện khớp
+                    # CHÍNH XÁC pool auto-assign (assignment_service.py:209-213):
+                    # role=officer + active + available + đúng đơn vị — nếu THIẾU
+                    # 1 (officer bị vô hiệu hoá / đang nghỉ / lên manager) thì phải
+                    # reassign, KHÔNG để lead kẹt trên người auto-assign không với
+                    # tới. Loại officer đã TỪ CHỐI lead này (rejected_by_officer_ids)
+                    # để không dán ngược người vừa từ chối.
+                    keep_officer = False
+                    if old_officer_id is not None:
+                        cur_officer = await db.scalar(
+                            select(models.User).where(
+                                models.User.id == old_officer_id
+                            )
+                        )
+                        blacklist = db_lead.rejected_by_officer_ids or []
+                        keep_officer = (
+                            cur_officer is not None
+                            and cur_officer.role == UserRole.OFFICER
+                            and cur_officer.status == "active"
+                            and cur_officer.availability_status == "available"
+                            and cur_officer.unit_id == new_target_unit_id
+                            and old_officer_id not in blacklist
+                        )
 
-                    # === ATOMIC REASSIGNMENT TRANSACTION ===
-                    # 1. Update unit_id
+                    # Unit đổi ở CẢ HAI nhánh → đồng bộ unit_id + kiểm email trùng
+                    # trong đơn vị đích (P0: offering change → unit change → email
+                    # có thể đụng lead khác cùng đơn vị đích).
                     db_lead.unit_id = new_target_unit_id
-
-                    # 2. Reset assignment fields
-                    db_lead.assigned_officer_id = None
-                    db_lead.assigned_at = None
-
-                    # 3. Set assignment_status to pending (waiting for new assignment)
-                    StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
-
-                    # 4. Create system AssignmentLog
-                    reassignment_log = models.AssignmentLog(
-                        lead_id=lead_id,
-                        officer_id=updated_by.id,  # Log who triggered the change
-                        method="system_auto_reassign",
-                        reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}. "
-                               f"Unit changed from #{old_unit_id} to #{new_target_unit_id}. "
-                               f"Previous officer: {old_officer_id}",
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    db.add(reassignment_log)
-
-                    reassignment_triggered = True
-
-                    # ✅ P0 FIX: Re-check email uniqueness in NEW unit
-                    # Offering change → unit change → email might conflict in target unit
                     if db_lead.email:
                         email_conflict = await repo.check_email_conflict(
                             email=db_lead.email,
@@ -1739,17 +1732,76 @@ async def update_lead(
                         )
                         if email_conflict:
                             raise DuplicateResourceError(
-                                detail=f"Không thể chuyển đơn vị: Email '{db_lead.email}' đã tồn tại trong đơn vị đích. "
-                                       f"Lead: {email_conflict.full_name} (SĐT: {email_conflict.phone})"
+                                detail=(
+                                    "Không thể chuyển đơn vị: Email "
+                                    f"'{db_lead.email}' đã tồn tại trong đơn "
+                                    "vị đích. Lead: "
+                                    f"{email_conflict.full_name} "
+                                    f"(SĐT: {email_conflict.phone})"
+                                )
                             )
 
-                    log.info(
-                        "Lead auto-reassignment completed",
-                        lead_id=lead_id,
-                        new_unit_id=new_target_unit_id,
-                        old_officer_id=old_officer_id,
-                        assignment_status=db_lead.assignment_status
-                    )
+                    if keep_officer:
+                        # Ngành mới vẫn thuộc đơn vị officer → GIỮ officer, chỉ
+                        # đồng bộ unit_id. KHÔNG reset/round-robin.
+                        db.add(models.AssignmentLog(
+                            lead_id=lead_id,
+                            officer_id=old_officer_id,
+                            method="offering_change_unit_synced",
+                            reason=(
+                                f"Offering changed from #{old_offering_id} "
+                                f"to #{new_offering_id}. Unit synced "
+                                f"#{old_unit_id} -> #{new_target_unit_id}. "
+                                f"Officer {old_officer_id} giữ (đơn vị đích)."
+                            ),
+                            timestamp=datetime.now(timezone.utc)
+                        ))
+                        log.info(
+                            "Offering change: officer kept (covers target unit)",
+                            lead_id=lead_id,
+                            officer_id=old_officer_id,
+                            new_unit_id=new_target_unit_id,
+                        )
+                    else:
+                        # Officer ngoài đơn vị đích / đã từ chối / không có →
+                        # reassign: reset + PENDING → auto-assign (tôn trọng
+                        # blacklist).
+                        log.warning(
+                            "Offering change causes Unit change - "
+                            "Auto-reassigning Lead",
+                            lead_id=lead_id,
+                            old_offering_id=old_offering_id,
+                            new_offering_id=new_offering_id,
+                            old_unit_id=old_unit_id,
+                            new_unit_id=new_target_unit_id,
+                            old_officer_id=old_officer_id,
+                            reason="territorial_conflict"
+                        )
+                        db_lead.assigned_officer_id = None
+                        db_lead.assigned_at = None
+                        StatusHelper.set_assignment_status(
+                            db_lead, AssignmentStatus.PENDING
+                        )
+                        db.add(models.AssignmentLog(
+                            lead_id=lead_id,
+                            officer_id=updated_by.id,  # ai trigger thay đổi
+                            method="system_auto_reassign",
+                            reason=(
+                                f"Offering changed from #{old_offering_id} "
+                                f"to #{new_offering_id}. Unit changed from "
+                                f"#{old_unit_id} to #{new_target_unit_id}. "
+                                f"Previous officer: {old_officer_id}"
+                            ),
+                            timestamp=datetime.now(timezone.utc)
+                        ))
+                        reassignment_triggered = True
+                        log.info(
+                            "Lead auto-reassignment completed",
+                            lead_id=lead_id,
+                            new_unit_id=new_target_unit_id,
+                            old_officer_id=old_officer_id,
+                            assignment_status=db_lead.assignment_status
+                        )
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(db_lead)
