@@ -22,7 +22,7 @@ from app import models
 from app.schemas import LeadUpdate
 from app.security import get_password_hash
 from app.services import lead_service
-from app.utils.exceptions import DuplicateResourceError
+from app.utils.exceptions import BusinessRuleViolation, DuplicateResourceError
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -239,3 +239,31 @@ async def test_keep_path_still_rechecks_email_conflict(
                 db, lead.id, LeadUpdate(offering_id=offering_id),
                 updated_by=admin_user,
             )
+
+
+# --- (b) gán tay: officer PHẢI cùng đơn vị lead --------------------------
+
+async def test_manual_assign_rejects_cross_unit_officer(
+    db: AsyncSession, seeded_dependencies, second_unit, admin_user
+):
+    """Gán tay officer KHÁC đơn vị lead → BusinessRuleViolation (invariant b)."""
+    officer = await _mk_officer(db, second_unit.id, "xunit")  # unit đích 2001
+    lead = await _mk_lead(db, seeded_dependencies, None, "0909555010")  # unit 1001
+    with pytest.raises(BusinessRuleViolation):
+        await lead_service.assign_lead_manually(
+            db, lead.id, officer.id, assigner=admin_user
+        )
+
+
+async def test_manual_assign_accepts_same_unit_officer(
+    db: AsyncSession, seeded_dependencies, admin_user
+):
+    """Gán tay officer CÙNG đơn vị lead → OK, lead.unit KHÔNG đổi."""
+    officer = await _mk_officer(db, seeded_dependencies["unit_id"], "sunit")
+    lead = await _mk_lead(db, seeded_dependencies, None, "0909555011")
+    await lead_service.assign_lead_manually(
+        db, lead.id, officer.id, assigner=admin_user
+    )
+    await db.refresh(lead)
+    assert lead.assigned_officer_id == officer.id
+    assert lead.unit_id == seeded_dependencies["unit_id"]  # lead.unit GIỮ NGUYÊN
