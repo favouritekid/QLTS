@@ -141,6 +141,79 @@ class SmsCampaignService:
         return campaign
 
     # ===============================================================
+    # Measure/preview template (form soạn campaign — chưa recipient)
+    # ===============================================================
+    def _optout_violations(self, footer: str) -> List[str]:
+        """3 luật optout NĐ91 (build gate + measure warning DÙNG CHUNG → không
+        drift). Trả list mô tả vi phạm (rỗng = hợp lệ). `footer` đã strip."""
+        violations: List[str] = []
+        if not footer:
+            violations.append(
+                "Chưa cấu hình hướng dẫn từ chối (SMS_OPTOUT_INSTRUCTION) — "
+                "bắt buộc footer từ chối NĐ91."
+            )
+            return violations
+        if settings.APP_ENV == "production" and (
+            footer == SMS_OPTOUT_INSTRUCTION_DEFAULT.strip()
+            or re.search(r"[xX]{3,}", footer)
+        ):
+            violations.append(
+                "SMS_OPTOUT_INSTRUCTION còn là placeholder (vd 'xxxx') — "
+                "production phải đặt kênh từ chối SMS/điện thoại thật."
+            )
+        if len(footer) > 160:
+            violations.append(
+                "Hướng dẫn từ chối quá dài (>160 ký tự) — rút gọn để khớp bản "
+                "ghi audit và tiết kiệm segment."
+            )
+        return violations
+
+    def _resolve_optout_for_measure(self) -> Tuple[str, List[str], bool]:
+        """Dùng CHUNG `_optout_violations` với build() (không drift) nhưng KHÔNG
+        raise → measure vẫn đo được (footer placeholder cũng có độ dài); điều
+        kiện build-sẽ-chặn trả dưới dạng warning + optout_ok=False."""
+        footer = (settings.SMS_OPTOUT_INSTRUCTION or "").strip()
+        violations = self._optout_violations(footer)
+        warnings = [f"{v} (build sẽ bị chặn)" for v in violations]
+        return footer, warnings, not violations
+
+    def measure_template(
+        self, template: str, *, sample_full_name: Optional[str] = None
+    ) -> sms_schemas.SmsMeasureResult:
+        """Đo skeleton = assemble_skeleton([QC]+body+optout, sentinel link) +
+        measure_skeleton — CÙNG hàm build dùng → số khớp. Tên rỗng → NAME_FALLBACK.
+
+        ⚠ Sentinel gate: `render_body` GỠ ÂM THẦM __SMS_LINK__ → preview trông
+        'ổn' nhưng `_validate_content` (create/update) lại REJECT → drift. Vì vậy
+        set `has_internal_sentinel` TRƯỚC khi assemble để FE cảnh báo lỗi-chặn-lưu
+        (cùng tinh thần `unknown_vars`)."""
+        unknown = sorted(find_unknown_vars(template))
+        has_sentinel = LINK_SENTINEL in (template or "")
+        link = has_link(template)
+        footer, warnings, optout_ok = self._resolve_optout_for_measure()
+        skeleton = assemble_skeleton(
+            template, sample_full_name or "", optout_instruction=footer
+        )
+        encoding, length, segments, is_over = measure_skeleton(skeleton)
+        if is_over:
+            warnings.append(
+                f"Tin vượt 1 đoạn ({segments} đoạn, {encoding}) — rút gọn nội "
+                "dung để export không bị chặn."
+            )
+        return sms_schemas.SmsMeasureResult(
+            encoding=encoding,
+            length=length,
+            segments=segments,
+            is_over_limit=is_over,
+            preview=preview_message(skeleton),
+            has_link=link,
+            unknown_vars=unknown,
+            has_internal_sentinel=has_sentinel,
+            optout_configured=optout_ok,
+            warnings=warnings,
+        )
+
+    # ===============================================================
     # CRUD campaign
     # ===============================================================
     async def create_campaign(
@@ -423,27 +496,12 @@ class SmsCampaignService:
         link = has_link(campaign.sms_template)
         # --- Compliance fail-closed (NĐ91) ---
         # [QC] LUÔN được chèn (assemble_skeleton); optout PHẢI cấu hình thật.
+        # Cùng `_optout_violations` với measure preview → không drift; ≤160 khớp
+        # cột optout_instruction_snapshot String(160) (audit KHỚP tin cuối).
         optout_instruction = (settings.SMS_OPTOUT_INSTRUCTION or "").strip()
-        if not optout_instruction:
-            raise BusinessRuleViolation(
-                detail="Chưa cấu hình hướng dẫn từ chối "
-                "(SMS_OPTOUT_INSTRUCTION) — bắt buộc footer từ chối NĐ91."
-            )
-        if settings.APP_ENV == "production" and (
-            optout_instruction == SMS_OPTOUT_INSTRUCTION_DEFAULT.strip()
-            or re.search(r"[xX]{3,}", optout_instruction)
-        ):
-            raise BusinessRuleViolation(
-                detail="SMS_OPTOUT_INSTRUCTION còn là placeholder (vd 'xxxx') — "
-                "production phải đặt kênh từ chối SMS/điện thoại thật."
-            )
-        # Footer ≤160 (khớp cột optout_instruction_snapshot String(160)) → bản
-        # ghi audit KHỚP đúng footer trong tin cuối, không cắt ngầm.
-        if len(optout_instruction) > 160:
-            raise BusinessRuleViolation(
-                detail="Hướng dẫn từ chối quá dài (>160 ký tự) — rút gọn để "
-                "khớp bản ghi audit và tiết kiệm segment."
-            )
+        violations = self._optout_violations(optout_instruction)
+        if violations:
+            raise BusinessRuleViolation(detail=violations[0])
         # Token secret/keyring (prod) — chỉ cần khi có {link}.
         if link:
             ensure_token_secrets_configured()

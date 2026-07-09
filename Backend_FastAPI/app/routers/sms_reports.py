@@ -124,3 +124,31 @@ async def contact_interests(
 ):
     """Hồ sơ 'quan tâm ngành' của 1 contact (rank tổng dwell desc)."""
     return await SmsReportService(db).contact_interests(contact_id)
+
+
+@router.get(
+    "/reports/program-interest/{major_program_id}/contacts",
+    response_model=sms_schemas.SmsProgramContactsResponse,
+)
+async def report_program_contacts(
+    major_program_id: Annotated[int, Path(ge=1, le=_MAX_ID)],
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+    campaign_id: Optional[int] = Query(None, ge=1, le=_MAX_ID),
+    group_id: Optional[int] = Query(None, ge=1, le=_MAX_ID),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    skip: int = Query(0, ge=0, le=_MAX_ID),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Drill-down: contact nào quan tâm 1 ngành (masked phone §16.9). CÙNG filter
+    với /reports/program-interest → số khớp dòng ngành đã bấm. Read-only."""
+    return await SmsReportService(db).program_contacts(
+        major_program_id=major_program_id,
+        campaign_id=campaign_id,
+        group_id=group_id,
+        date_from=date_from,
+        date_to=date_to,
+        skip=skip,
+        limit=limit,
+    )

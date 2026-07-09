@@ -21,6 +21,7 @@ import {
   getSmsCampaignPreflight,
   listCampaignGroups,
   listSmsCampaignsFull,
+  measureSmsTemplate,
   updateSmsCampaign,
   type SmsCampaignListParams,
 } from "@/lib/api/sms"
@@ -87,6 +88,31 @@ export function useSmsCampaignPreflight(
     queryFn: () => getSmsCampaignPreflight(campaignId as number),
     enabled: campaignId != null && (options.enabled ?? true),
     staleTime: 30 * 1000,
+  })
+}
+
+/** Đo/preview template LIVE cho form soạn campaign. `template` nên là giá trị
+ * đã DEBOUNCE (component lo debounce) — hook chỉ query khi non-rỗng. */
+export function useMeasureSmsTemplate(
+  template: string,
+  sampleFullName?: string,
+) {
+  return useQuery({
+    queryKey: [
+      ...smsCampaignKeys.all,
+      "measure",
+      template,
+      sampleFullName ?? "",
+    ],
+    queryFn: () =>
+      measureSmsTemplate({
+        template,
+        sample_full_name: sampleFullName?.trim() || undefined,
+      }),
+    enabled: template.trim().length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
   })
 }
 

@@ -82,6 +82,20 @@ async def update_campaign(
     return campaign
 
 
+@router.post("/campaigns/measure", response_model=sms_schemas.SmsMeasureResult)
+async def measure_template(
+    payload: sms_schemas.SmsMeasureRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+):
+    """Đo encoding/length/segments + preview tin cuối cho form soạn campaign
+    (chưa gắn recipient). Dùng CÙNG nguồn optout (settings.SMS_OPTOUT_INSTRUCTION)
+    với build để số đo khớp. Read-only → không commit."""
+    return SmsCampaignService(db).measure_template(
+        payload.template, sample_full_name=payload.sample_full_name
+    )
+
+
 # =====================================================================
 # Campaign ↔ group
 # =====================================================================

@@ -2,7 +2,7 @@
 "use client"
 
 import { useState } from "react"
-import { Pencil, Plus, ShieldCheck } from "lucide-react"
+import { GraduationCap, Pencil, Plus, ShieldCheck } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -25,8 +25,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import {
   useAddContactToGroup,
   useConsentEvents,
+  useContactSmsInterests,
   useSmsContactGroups,
 } from "@/hooks/useSmsContacts"
+import { formatDwell } from "@/lib/format"
 import type { SmsContact } from "@/lib/zod/sms"
 
 import {
@@ -68,6 +70,8 @@ export function SmsContactDetailDialog({ open, onOpenChange, contact }: Props) {
 
   const contactId = open && contact ? contact.id : null
   const { data: events, isLoading: eventsLoading } = useConsentEvents(contactId)
+  const { data: interests, isLoading: interestsLoading } =
+    useContactSmsInterests(contactId, open)
   // Chỉ tải danh sách nhóm cho picker khi dialog mở (tránh fetch thừa lúc tab
   // liên hệ render mà chưa mở chi tiết).
   const { data: groupsData } = useSmsContactGroups({ limit: 200 }, { enabled: open })
@@ -215,6 +219,42 @@ export function SmsContactDetailDialog({ open, onOpenChange, contact }: Props) {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Quan tâm ngành (§16.7) — ngành khách đã xem qua landing */}
+          <div className="space-y-2 border-t pt-3">
+            <p className="text-sm font-medium">Quan tâm ngành</p>
+            {interestsLoading ? (
+              <div className="space-y-2">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-9 w-full" />
+                ))}
+              </div>
+            ) : !interests || interests.items.length === 0 ? (
+              <p className="text-muted-foreground py-2 text-sm">
+                Chưa có dữ liệu quan tâm ngành (khách chưa xem trang ngành nào).
+              </p>
+            ) : (
+              <ul className="max-h-64 space-y-2 overflow-y-auto">
+                {interests.items.map((it) => (
+                  <li
+                    key={it.major_program_id}
+                    className="flex items-center gap-3 rounded border p-2"
+                  >
+                    <GraduationCap className="text-primary h-4 w-4 shrink-0" />
+                    <span
+                      title={it.program_name}
+                      className="min-w-0 flex-1 truncate text-sm font-medium"
+                    >
+                      {it.program_name}
+                    </span>
+                    <Badge variant="secondary" className="shrink-0">
+                      {formatDwell(it.total_dwell_seconds)}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </DialogContent>
