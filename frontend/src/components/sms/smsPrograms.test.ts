@@ -15,14 +15,16 @@ function mk(
 
 describe("groupPrograms", () => {
   it("gộp biến thể CÙNG TÊN thành 1 card + chọn mức ưu đãi mạnh nhất", () => {
+    // free ĐỨNG TRƯỚC 70 để bug 'last-value-wins' (gán đè, bỏ TUITION_RANK) lộ
+    // ra: last-wins sẽ cho "70", chỉ max-rank đúng mới cho "free".
     const groups = groupPrograms([
-      mk(1, "Ô tô", "6510216", "Cao đẳng"), // cd70 → "70"
-      mk(2, "Ô tô", "5510216", "Trung cấp"), // thcsFree → "free"
+      mk(1, "Ô tô", "5510216", "Trung cấp"), // thcsFree → "free"
+      mk(2, "Ô tô", "6510216", "Cao đẳng"), // cd70 → "70"
     ])
     const cards = groups.flatMap((g) => g.items)
     const oto = cards.find((c) => c.name === "Ô tô")
     expect(oto?.variants).toHaveLength(2) // 2 biến thể trong 1 card
-    expect(oto?.level).toBe("free") // free > 70
+    expect(oto?.level).toBe("free") // free > 70 (max-rank, không phải last-wins)
   })
 
   it("ngành khác tên → card riêng", () => {

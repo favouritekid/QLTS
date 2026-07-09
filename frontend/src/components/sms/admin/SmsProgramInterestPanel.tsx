@@ -40,7 +40,12 @@ import {
 import type { SmsProgramInterestParams } from "@/lib/api/sms"
 import type { SmsProgramInterestRow } from "@/lib/zod/sms"
 
-import { campaignStatusLabel, formatDwell, formatInt } from "./labels"
+import {
+  campaignStatusLabel,
+  formatDateTimeVN,
+  formatDwell,
+  formatInt,
+} from "./labels"
 import { SmsSummaryCard } from "./SmsSummaryCard"
 
 const ALL = "all"
@@ -366,6 +371,12 @@ function ProgramContactsSheet({
                     <div className="text-muted-foreground mt-1 flex items-center justify-between gap-2 text-xs tabular-nums">
                       <span>{c.phone_masked}</span>
                       <span>{formatInt(c.view_count)} lượt xem</span>
+                    </div>
+                    <div className="text-muted-foreground mt-1 flex items-center justify-between gap-2 text-xs">
+                      <span>Điểm quan tâm {c.interest_score.toFixed(2)}</span>
+                      {c.last_viewed_at && (
+                        <span>Xem gần nhất: {formatDateTimeVN(c.last_viewed_at)}</span>
+                      )}
                     </div>
                   </li>
                 ))}

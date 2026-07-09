@@ -406,7 +406,9 @@ class SmsEngagementRepository:
                 SmsContact.full_name,
                 SmsContact.phone_normalized,
             )
-            .order_by(total_dwell.desc())
+            # Tiebreaker SmsContact.id: nhiều contact xem-chưa-heartbeat có
+            # dwell=0 (ties) → offset/limit ổn định giữa các trang (không lặp/sót).
+            .order_by(total_dwell.desc(), SmsContact.id)
             .offset(skip)
             .limit(limit)
         )
@@ -419,7 +421,7 @@ class SmsEngagementRepository:
                 int(r.total_dwell),
                 r.first_viewed,
                 r.last_viewed,
-                float(r.score or 0.0),
+                float(r.score),
             )
             for r in res.all()
         ]
