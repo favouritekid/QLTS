@@ -333,7 +333,7 @@ export function SmsLandingClient({ code }: { code: string }) {
                 )}
               </div>
             </div>
-            <div className="hidden h-[300px] overflow-hidden rounded-2xl border border-white/25 md:block">
+            <div className="h-[200px] overflow-hidden rounded-2xl border border-white/25 md:h-[300px]">
               <HeroImage
                 src={SCHOOL_HERO_IMAGE}
                 alt={`Sinh viên ${data.school_name}`}
