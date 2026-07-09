@@ -46,10 +46,12 @@ export function SmsHeader({
 }) {
   const brandInner = (
     <>
+      {/* Logo trang trí — tên trường đã có dạng text kề bên → alt rỗng, tránh
+          screen reader đọc lặp. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/lp/logo-truong.png"
-        alt={schoolName}
+        alt=""
         className="h-10 w-10 shrink-0 object-contain"
       />
       <span className="min-w-0 leading-tight">

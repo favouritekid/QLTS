@@ -509,7 +509,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
   },
   {
     // Mã TC hẹp hơn — đặt TRƯỚC entry CNTT chung để khớp đầu tiên (ảnh riêng).
-    match: /ứng dụng phần mềm|phần mềm/i,
+    match: /phần mềm/i,
     data: { ...CNTT_EDITORIAL, image: "/lp/programs/cntt-phan-mem.jpg" },
   },
   {
