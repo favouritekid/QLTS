@@ -53,7 +53,7 @@ export function SmsHeader({
         className="h-10 w-10 shrink-0 object-contain"
       />
       <span className="min-w-0 leading-tight">
-        <span className="text-sms-ink block truncate text-[14px] font-extrabold sm:text-[15px]">
+        <span className="text-sms-ink block text-[14px] font-extrabold sm:text-[15px]">
           {schoolName}
         </span>
         <span className="text-sms-ink-muted block text-[11px] font-medium tracking-wider">
