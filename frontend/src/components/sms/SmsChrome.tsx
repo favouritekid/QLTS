@@ -53,7 +53,7 @@ export function SmsHeader({
         className="h-10 w-10 shrink-0 object-contain"
       />
       <span className="min-w-0 leading-tight">
-        <span className="text-sms-ink block truncate text-[15px] font-extrabold">
+        <span className="text-sms-ink block truncate text-[14px] font-extrabold sm:text-[15px]">
           {schoolName}
         </span>
         <span className="text-sms-ink-muted block text-[11px] font-medium tracking-wider">
@@ -71,7 +71,7 @@ export function SmsHeader({
       ) : (
         <div className="flex min-w-0 items-center gap-3">{brandInner}</div>
       )}
-      <div className="flex items-center gap-2.5">
+      <div className="flex shrink-0 items-center gap-2.5">
         <a
           href={SMS_HOTLINE_TEL}
           className="border-sms-100 text-sms-500 hidden items-center gap-1.5 rounded-lg border px-3.5 py-2 text-[13.5px] font-bold sm:inline-flex"
@@ -80,7 +80,7 @@ export function SmsHeader({
         </a>
         <Link
           href={registerHref}
-          className="bg-sms-500 rounded-lg px-4 py-2.5 text-[13.5px] font-bold text-white transition-opacity hover:opacity-90"
+          className="bg-sms-500 shrink-0 whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-bold text-white transition-opacity hover:opacity-90 sm:px-4 sm:py-2.5 sm:text-[13.5px]"
         >
           Đăng ký ngay
         </Link>
