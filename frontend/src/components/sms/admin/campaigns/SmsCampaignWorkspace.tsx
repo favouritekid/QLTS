@@ -9,6 +9,12 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { PageHeader } from "@/components/layouts/PageHeader"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useSmsCampaign } from "@/hooks/useSmsCampaigns"
 
 import { campaignStatusLabel } from "../labels"
@@ -69,7 +75,25 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
             <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" /> Sửa
             </Button>
-          ) : undefined
+          ) : (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* span để tooltip vẫn hiện dù Button disabled không nhận
+                      pointer/focus event */}
+                  <span tabIndex={0}>
+                    <Button variant="outline" size="sm" disabled>
+                      <Pencil className="mr-2 h-4 w-4" /> Sửa
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Chỉ sửa nội dung khi chiến dịch ở trạng thái nháp. Gỡ hết nhóm
+                  khỏi chiến dịch để đưa về nháp rồi sửa.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )
         }
       />
 

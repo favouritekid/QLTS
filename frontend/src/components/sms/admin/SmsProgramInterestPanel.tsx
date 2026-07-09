@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react"
 import { AlertCircle, RotateCcw } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -15,6 +16,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -26,9 +34,11 @@ import {
 } from "@/components/ui/table"
 import {
   useSmsCampaignList,
+  useSmsProgramContacts,
   useSmsProgramInterest,
 } from "@/hooks/useSmsAdmin"
 import type { SmsProgramInterestParams } from "@/lib/api/sms"
+import type { SmsProgramInterestRow } from "@/lib/zod/sms"
 
 import { campaignStatusLabel, formatDwell, formatInt } from "./labels"
 import { SmsSummaryCard } from "./SmsSummaryCard"
@@ -55,6 +65,8 @@ export function SmsProgramInterestPanel() {
   const [campaignId, setCampaignId] = useState<string>(ALL)
   const [dateFrom, setDateFrom] = useState<string>("")
   const [dateTo, setDateTo] = useState<string>("")
+  const [selectedProgram, setSelectedProgram] =
+    useState<SmsProgramInterestRow | null>(null)
 
   const { data: campaignData } = useSmsCampaignList({ limit: 200 })
 
@@ -224,9 +236,24 @@ export function SmsProgramInterestPanel() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.items.map((row, i) => (
+                    {data.items.map((row, i) => {
+                      const drillable = row.major_program_id !== null
+                      return (
                       <TableRow
                         key={row.major_program_id ?? `deleted-${i}`}
+                        onClick={
+                          drillable
+                            ? () => setSelectedProgram(row)
+                            : undefined
+                        }
+                        className={
+                          drillable ? "hover:bg-muted/50 cursor-pointer" : undefined
+                        }
+                        title={
+                          drillable
+                            ? "Xem danh sách người quan tâm ngành này"
+                            : undefined
+                        }
                       >
                         <TableCell className="text-muted-foreground text-right tabular-nums">
                           {i + 1}
@@ -247,7 +274,8 @@ export function SmsProgramInterestPanel() {
                           {formatDwell(Math.round(row.avg_dwell_seconds))}
                         </TableCell>
                       </TableRow>
-                    ))}
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -255,6 +283,97 @@ export function SmsProgramInterestPanel() {
           </CardContent>
         </Card>
       )}
+
+      <ProgramContactsSheet
+        program={selectedProgram}
+        params={params}
+        onClose={() => setSelectedProgram(null)}
+      />
     </div>
+  )
+}
+
+/** Drawer liệt kê contact quan tâm 1 ngành (§16.7) — số ẩn (masked) theo §16.9.
+ * Fetch cùng `params` (campaign/ngày) với bảng → số khớp dòng ngành đã bấm. */
+function ProgramContactsSheet({
+  program,
+  params,
+  onClose,
+}: {
+  program: SmsProgramInterestRow | null
+  params: SmsProgramInterestParams
+  onClose: () => void
+}) {
+  const programId = program?.major_program_id ?? null
+  const { data, isLoading, isError, refetch, isFetching } =
+    useSmsProgramContacts(programId, params, program !== null)
+
+  return (
+    <Sheet open={program !== null} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+        <SheetHeader>
+          <SheetTitle className="truncate">
+            {program?.program_name ?? "Ngành"}
+          </SheetTitle>
+          <SheetDescription>
+            Liên hệ đã xem ngành này (số điện thoại ẩn theo quy định bảo mật).
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="mt-4">
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-16 w-full" />
+              ))}
+            </div>
+          ) : isError ? (
+            <div className="text-muted-foreground flex flex-col items-center gap-2 py-8 text-center text-sm">
+              <AlertCircle className="text-destructive h-6 w-6" />
+              <span>Không tải được danh sách.</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching}
+              >
+                Thử lại
+              </Button>
+            </div>
+          ) : !data || data.items.length === 0 ? (
+            <p className="text-muted-foreground py-8 text-center text-sm">
+              Chưa có liên hệ nào quan tâm ngành này trong phạm vi đã chọn.
+            </p>
+          ) : (
+            <>
+              <p className="text-muted-foreground mb-3 text-xs">
+                {formatInt(data.total)} người quan tâm
+                {data.items.length < data.total
+                  ? ` (hiển thị ${data.items.length})`
+                  : ""}
+              </p>
+              <ul className="space-y-2">
+                {data.items.map((c) => (
+                  <li key={c.contact_id} className="rounded border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        {c.full_name}
+                      </span>
+                      <Badge variant="secondary" className="shrink-0">
+                        {formatDwell(c.total_dwell_seconds)}
+                      </Badge>
+                    </div>
+                    <div className="text-muted-foreground mt-1 flex items-center justify-between gap-2 text-xs tabular-nums">
+                      <span>{c.phone_masked}</span>
+                      <span>{formatInt(c.view_count)} lượt xem</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   )
 }

@@ -18,12 +18,14 @@ import {
   createManualOptOut,
   getSmsCampaignDashboard,
   getSmsClickReport,
+  getSmsProgramContacts,
   getSmsProgramInterestReport,
   listSmsCampaigns,
   listSmsOptOuts,
   type ManualOptOutPayload,
   type SmsCampaignListParams,
   type SmsClickReportParams,
+  type SmsProgramContactsParams,
   type SmsProgramInterestParams,
   type SmsOptOutListParams,
 } from "@/lib/api/sms"
@@ -45,6 +47,8 @@ export const smsAdminKeys = {
     [...smsAdminKeys.all, "opt-outs", params] as const,
   programInterest: (params: SmsProgramInterestParams) =>
     [...smsAdminKeys.all, "program-interest", params] as const,
+  programContacts: (programId: number, params: SmsProgramContactsParams) =>
+    [...smsAdminKeys.all, "program-contacts", programId, params] as const,
 }
 
 // ---------------------------------------------------------------------
@@ -79,6 +83,20 @@ export function useSmsProgramInterest(params: SmsProgramInterestParams) {
   return useQuery({
     queryKey: smsAdminKeys.programInterest(params),
     queryFn: () => getSmsProgramInterestReport(params),
+    staleTime: 60 * 1000,
+  })
+}
+
+/** Drill-down contact theo ngành. `enabled` để chỉ fetch khi mở drawer. */
+export function useSmsProgramContacts(
+  programId: number | null,
+  params: SmsProgramContactsParams,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: smsAdminKeys.programContacts(programId ?? 0, params),
+    queryFn: () => getSmsProgramContacts(programId as number, params),
+    enabled: enabled && programId != null && programId > 0,
     staleTime: 60 * 1000,
   })
 }

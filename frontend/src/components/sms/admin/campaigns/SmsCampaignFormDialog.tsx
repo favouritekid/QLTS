@@ -45,6 +45,7 @@ import {
 } from "@/lib/zod/sms"
 
 import { LANDING_TYPE_OPTIONS, isoToDatetimeLocal } from "../labels"
+import { SmsTemplatePreview } from "./SmsTemplatePreview"
 
 interface Props {
   open: boolean
@@ -88,6 +89,7 @@ export function SmsCampaignFormDialog({
     defaultValues: DEFAULTS,
   })
   const landingType = form.watch("landing_type")
+  const smsTemplate = form.watch("sms_template")
 
   useEffect(() => {
     if (!open) return
@@ -247,6 +249,8 @@ export function SmsCampaignFormDialog({
                 </FormItem>
               )}
             />
+
+            <SmsTemplatePreview template={smsTemplate ?? ""} />
 
             <FormField
               control={form.control}
