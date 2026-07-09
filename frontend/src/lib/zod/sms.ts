@@ -109,6 +109,30 @@ export type SmsContactInterestList = z.infer<
   typeof smsContactInterestListSchema
 >
 
+// Drill-down: contact nào quan tâm 1 ngành (§16.7). PII masked (§16.9).
+// interest_score = điểm GLOBAL non-null (BE coalesce 0); first/last_viewed_at =
+// min/max viewed_at TRONG scope (nullable — luôn có ≥1 view nên thực tế non-null).
+export const smsProgramContactRowSchema = z.object({
+  contact_id: z.number().int(),
+  full_name: z.string(),
+  phone_masked: z.string(),
+  view_count: z.number().int(),
+  total_dwell_seconds: z.number().int(),
+  interest_score: z.number(),
+  first_viewed_at: z.string().nullable().optional(),
+  last_viewed_at: z.string().nullable().optional(),
+})
+export type SmsProgramContactRow = z.infer<typeof smsProgramContactRowSchema>
+
+export const smsProgramContactsResponseSchema = z.object({
+  major_program_id: z.number().int(),
+  total: z.number().int(),
+  items: z.array(smsProgramContactRowSchema).default([]),
+})
+export type SmsProgramContactsResponse = z.infer<
+  typeof smsProgramContactsResponseSchema
+>
+
 // --- P2-3/P2-4b consult officer (§16.7) ---
 export const smsConsultLinkResponseSchema = z.object({
   code: z.string(),
@@ -631,6 +655,23 @@ export const smsPreflightReportSchema = z.object({
   preview: z.array(z.string()),
 })
 export type SmsPreflightReport = z.infer<typeof smsPreflightReportSchema>
+
+// --- Measure/preview template (form soạn campaign, chưa recipient) ---
+// unknown_vars + has_internal_sentinel = điều kiện SẼ bị từ chối khi LƯU
+// (mirror gate `_validate_content`); warnings + optout_configured = cảnh báo mềm.
+export const smsMeasureResultSchema = z.object({
+  encoding: z.string(),
+  length: z.number().int(),
+  segments: z.number().int(),
+  is_over_limit: z.boolean(),
+  preview: z.string(),
+  has_link: z.boolean(),
+  unknown_vars: z.array(z.string()).default([]),
+  has_internal_sentinel: z.boolean(),
+  optout_configured: z.boolean(),
+  warnings: z.array(z.string()).default([]),
+})
+export type SmsMeasureResult = z.infer<typeof smsMeasureResultSchema>
 
 // =====================================================================
 // Admin — Attestation + Export lifecycle (PR-6e; mirror SmsAttestationCreate,

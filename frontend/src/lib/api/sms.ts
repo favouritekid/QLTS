@@ -23,6 +23,7 @@ import {
   smsExportBatchSchema,
   smsExportResultSchema,
   smsPreflightReportSchema,
+  smsMeasureResultSchema,
   smsConsentEventListSchema,
   smsConsentEventSchema,
   smsContactGroupListSchema,
@@ -34,6 +35,7 @@ import {
   smsOptOutListSchema,
   smsOptOutSchema,
   smsProgramInterestReportSchema,
+  smsProgramContactsResponseSchema,
   smsContactInterestListSchema,
   smsConsultLinkResponseSchema,
   smsLeadInterestResponseSchema,
@@ -53,6 +55,7 @@ import {
   type SmsExportBatchList,
   type SmsExportResult,
   type SmsPreflightReport,
+  type SmsMeasureResult,
   type SmsConsentEvent,
   type SmsConsentEventCreateInput,
   type SmsConsentEventList,
@@ -71,6 +74,7 @@ import {
   type SmsOptOut,
   type SmsOptOutList,
   type SmsProgramInterestReport,
+  type SmsProgramContactsResponse,
   type SmsContactInterestList,
   type SmsConsultLinkResponse,
   type SmsLeadInterestResponse,
@@ -216,6 +220,24 @@ export async function getSmsContactInterests(
     `/api/sms/contacts/${contactId}/interests`,
   )
   return smsContactInterestListSchema.parse(res.data)
+}
+
+export interface SmsProgramContactsParams extends SmsProgramInterestParams {
+  skip?: number
+  limit?: number
+}
+
+/** Drill-down: contact nào quan tâm 1 ngành (masked phone §16.9). Cùng filter
+ * (campaign/nhóm/ngày) với report ngành nóng → số khớp dòng ngành đã bấm. */
+export async function getSmsProgramContacts(
+  programId: number,
+  params: SmsProgramContactsParams = {},
+): Promise<SmsProgramContactsResponse> {
+  const res = await api.get<SmsProgramContactsResponse>(
+    `/api/sms/reports/program-interest/${programId}/contacts`,
+    { params },
+  )
+  return smsProgramContactsResponseSchema.parse(res.data)
 }
 
 // =====================================================================
@@ -539,6 +561,23 @@ export async function getSmsCampaignPreflight(
     `/api/sms/campaigns/${campaignId}/preflight`,
   )
   return smsPreflightReportSchema.parse(res.data)
+}
+
+export interface MeasureTemplatePayload {
+  template: string
+  sample_full_name?: string
+}
+
+/** Đo/preview 1 template soạn dở (chưa gắn campaign) — encoding/length/segments
+ * + tin cuối mẫu + cảnh báo biến lạ/sentinel. Cùng logic đo với build. */
+export async function measureSmsTemplate(
+  payload: MeasureTemplatePayload,
+): Promise<SmsMeasureResult> {
+  const res = await api.post<SmsMeasureResult>(
+    `/api/sms/campaigns/measure`,
+    payload,
+  )
+  return smsMeasureResultSchema.parse(res.data)
 }
 
 // =====================================================================

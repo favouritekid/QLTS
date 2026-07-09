@@ -18,6 +18,7 @@ import {
   createSmsContact,
   createSmsContactGroup,
   getSmsContactGroup,
+  getSmsContactInterests,
   listConsentEvents,
   listGroupContacts,
   listSmsContactGroups,
@@ -56,6 +57,8 @@ export const smsContactKeys = {
     [...smsContactKeys.all, "contacts", p] as const,
   consentEvents: (contactId: number) =>
     [...smsContactKeys.all, "consent-events", contactId] as const,
+  interests: (contactId: number) =>
+    [...smsContactKeys.all, "interests", contactId] as const,
 }
 
 function invalidateContacts(qc: ReturnType<typeof useQueryClient>) {
@@ -116,6 +119,21 @@ export function useConsentEvents(contactId: number | null) {
     queryFn: () => listConsentEvents(contactId as number, { limit: 100 }),
     enabled: contactId != null,
     staleTime: 30 * 1000,
+  })
+}
+
+/** Hồ sơ "quan tâm ngành" của 1 contact. `enabled` để lazy-fetch khi mở chi
+ * tiết. BE gác quyền (require_admin) → dùng kết quả API, không đoán theo role. */
+export function useContactSmsInterests(
+  contactId: number | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: smsContactKeys.interests(contactId ?? 0),
+    queryFn: () => getSmsContactInterests(contactId as number),
+    enabled: enabled && contactId != null && contactId > 0,
+    staleTime: 60 * 1000,
+    retry: false,
   })
 }
 

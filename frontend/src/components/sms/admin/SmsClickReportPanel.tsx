@@ -256,10 +256,12 @@ export function SmsClickReportPanel() {
                 ))}
               </div>
             ) : !data || data.buckets.length === 0 ? (
-              <p className="text-muted-foreground py-8 text-center text-sm">
+              <p className="text-muted-foreground mx-auto max-w-md py-8 text-center text-sm">
                 {isFetching
                   ? "Đang tải…"
-                  : "Chưa có lượt click nào trong phạm vi đã chọn."}
+                  : data && data.recipients_handed_off === 0
+                    ? "Báo cáo chỉ tính click của người nhận đã BÀN GIAO gửi (handed-off). Chưa có chiến dịch nào bàn giao trong phạm vi đã chọn — hãy export & bàn giao một chiến dịch để bắt đầu đo click."
+                    : "Chưa có lượt click nào trong phạm vi đã chọn."}
               </p>
             ) : (
               <div className="overflow-x-auto">
