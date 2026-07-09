@@ -203,6 +203,56 @@ const DEFAULT: ProgramEditorial = {
  * Match theo TÊN ngành (khớp đầu tiên thắng → đặt luật hẹp/đặc thù lên trên).
  * Nội dung chép nguyên văn từ object `D` của mockup nganh-detail.
  */
+// CNTT: 2 mã dùng CHUNG nội dung, chỉ khác ẢNH — CĐ "Công nghệ thông tin"
+// (cntt.jpg) + TC "Công nghệ thông tin (ứng dụng phần mềm)" (cntt-phan-mem.jpg).
+// Tách entry /phần mềm/ đặt TRƯỚC entry CNTT chung bên dưới (khớp đầu tiên thắng).
+const CNTT_EDITORIAL: ProgramEditorial = {
+  group: "Kỹ thuật – Công nghệ",
+  image: "/lp/programs/cntt.jpg",
+  duration: "2,5 năm",
+  tagline:
+    "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
+  intro:
+    "Ngành Công nghệ thông tin đào tạo lập trình viên, kỹ thuật viên có khả năng phát triển phần mềm, thiết kế website, quản trị hệ thống mạng và cơ sở dữ liệu. Sinh viên thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm.",
+  subjects: [
+    "Lập trình cơ bản và hướng đối tượng",
+    "Thiết kế và lập trình web",
+    "Cơ sở dữ liệu",
+    "Mạng máy tính và quản trị hệ thống",
+    "Đồ án phần mềm thực tế",
+  ],
+  careers: [
+    "Lập trình viên web / ứng dụng",
+    "Kỹ thuật viên quản trị mạng",
+    "Nhân viên IT doanh nghiệp",
+    "Thiết kế – bảo trì website",
+  ],
+  goodIf: [
+    "Thích máy tính, công nghệ, giải quyết vấn đề bằng logic",
+    "Kiên nhẫn tìm lỗi và tự học cái mới liên tục",
+    "Muốn nghề thu nhập tốt, có thể làm từ xa / freelance",
+  ],
+  considerIf: [
+    "Không thích ngồi lâu với máy tính, ngại tư duy logic",
+    "Mong muốn công việc ít phải cập nhật kiến thức mới",
+  ],
+  trends: [
+    "Chuyển đổi số khiến hầu hết doanh nghiệp đều cần nhân lực IT",
+    "Nhu cầu lập trình, quản trị mạng tăng đều, lương hấp dẫn",
+    "Có thể làm từ xa, freelance hoặc cho công ty nước ngoài",
+  ],
+  faq: [
+    {
+      q: "Học IT có cần giỏi Toán không?",
+      a: "Cần tư duy logic hơn là Toán cao siêu. Chương trình dạy từ lập trình cơ bản; quan trọng nhất là chăm thực hành trên dự án thật.",
+    },
+    {
+      q: "Ra trường có làm được ngay không?",
+      a: "Chương trình thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm, giúp sinh viên sớm làm được việc.",
+    },
+  ],
+}
+
 const PROGRAMS_EDITORIAL: ReadonlyArray<{
   match: RegExp
   data: ProgramEditorial
@@ -265,7 +315,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /y học cổ truyền|cổ truyền|đông y/i,
     data: {
       group: "Khối Sức khỏe",
-      image: "/lp/programs/y-hoc-co-truyen.png",
+      image: "/lp/programs/y-hoc-co-truyen.jpg",
       duration: "3 năm",
       tagline:
         "Kết hợp tinh hoa y học cổ truyền với y học hiện đại — chăm sóc sức khỏe bằng châm cứu, xoa bóp, dược liệu.",
@@ -457,53 +507,13 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     },
   },
   {
-    match: /công nghệ thông tin|cntt|phần mềm/i,
-    data: {
-      group: "Kỹ thuật – Công nghệ",
-      image: "/lp/programs/cntt.jpg",
-      duration: "2,5 năm",
-      tagline:
-        "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
-      intro:
-        "Ngành Công nghệ thông tin đào tạo lập trình viên, kỹ thuật viên có khả năng phát triển phần mềm, thiết kế website, quản trị hệ thống mạng và cơ sở dữ liệu. Sinh viên thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm.",
-      subjects: [
-        "Lập trình cơ bản và hướng đối tượng",
-        "Thiết kế và lập trình web",
-        "Cơ sở dữ liệu",
-        "Mạng máy tính và quản trị hệ thống",
-        "Đồ án phần mềm thực tế",
-      ],
-      careers: [
-        "Lập trình viên web / ứng dụng",
-        "Kỹ thuật viên quản trị mạng",
-        "Nhân viên IT doanh nghiệp",
-        "Thiết kế – bảo trì website",
-      ],
-      goodIf: [
-        "Thích máy tính, công nghệ, giải quyết vấn đề bằng logic",
-        "Kiên nhẫn tìm lỗi và tự học cái mới liên tục",
-        "Muốn nghề thu nhập tốt, có thể làm từ xa / freelance",
-      ],
-      considerIf: [
-        "Không thích ngồi lâu với máy tính, ngại tư duy logic",
-        "Mong muốn công việc ít phải cập nhật kiến thức mới",
-      ],
-      trends: [
-        "Chuyển đổi số khiến hầu hết doanh nghiệp đều cần nhân lực IT",
-        "Nhu cầu lập trình, quản trị mạng tăng đều, lương hấp dẫn",
-        "Có thể làm từ xa, freelance hoặc cho công ty nước ngoài",
-      ],
-      faq: [
-        {
-          q: "Học IT có cần giỏi Toán không?",
-          a: "Cần tư duy logic hơn là Toán cao siêu. Chương trình dạy từ lập trình cơ bản; quan trọng nhất là chăm thực hành trên dự án thật.",
-        },
-        {
-          q: "Ra trường có làm được ngay không?",
-          a: "Chương trình thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm, giúp sinh viên sớm làm được việc.",
-        },
-      ],
-    },
+    // Mã TC hẹp hơn — đặt TRƯỚC entry CNTT chung để khớp đầu tiên (ảnh riêng).
+    match: /ứng dụng phần mềm|phần mềm/i,
+    data: { ...CNTT_EDITORIAL, image: "/lp/programs/cntt-phan-mem.jpg" },
+  },
+  {
+    match: /công nghệ thông tin|cntt/i,
+    data: CNTT_EDITORIAL,
   },
   {
     match: /ô ?tô/i,

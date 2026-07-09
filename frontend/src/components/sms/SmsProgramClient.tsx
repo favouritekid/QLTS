@@ -183,7 +183,7 @@ export function SmsProgramClient({
             </a>
           </div>
         </div>
-        <div className="border-sms-line relative hidden h-[280px] overflow-hidden rounded-2xl border md:block">
+        <div className="border-sms-line relative h-[220px] overflow-hidden rounded-2xl border md:h-[280px]">
           <HeroImage
             src={ed.image}
             alt={`Sinh viên ngành ${program.name} — ${data.school_name}`}
