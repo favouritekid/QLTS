@@ -374,7 +374,8 @@ export function SmsLandingClient({ code }: { code: string }) {
             <div className="mb-7 flex flex-wrap justify-center gap-5">
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
                 <span className="from-sms-flame-from to-sms-flame-to h-3.5 w-3.5 rounded bg-gradient-to-br" />
-                <b>Miễn / giảm</b> học phí đến <b>70–100%</b>
+                <b>Giảm 70% – miễn 100% học phí</b> (tùy ngành &amp; diện xét
+                tuyển)
               </span>
               <span className="text-sms-ink-body flex items-center gap-2 text-[13px]">
                 <span className="bg-sms-gold-soft border-sms-gold-line h-3.5 w-3.5 rounded border" />
