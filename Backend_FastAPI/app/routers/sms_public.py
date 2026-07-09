@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database
 from app.core.client_ip import get_client_ip
-from app.core.rate_limits import RateLimits, limiter
+from app.core.rate_limits import limiter
 from app.schemas import sms as sms_schemas
 from app.services.sms_engagement_service import SmsEngagementService
 from app.services.sms_landing_service import SmsLandingService
@@ -21,6 +21,12 @@ router = APIRouter(prefix="/api/public/sms", tags=["SMS Public"])
 # egress cho nhiều thuê bao → trần rộng + key theo get_client_ip (XFF-aware,
 # X-Real-IP nginx overwrite non-spoofable) chứ KHÔNG get_remote_address (=IP
 # nginx → khoá global). nginx limit_req là lớp chặn DoS thật.
+# GET landing là FIRST-TOUCH mọi khách (+ reload/back-forward/React-Query refetch)
+# → phải rộng như session/view, KHÔNG dùng PUBLIC_READ=100/giờ (mâu thuẫn với
+# chính lý do CGNAT ở trên: khách thứ 101 sau 1 IP nhà mạng nhận 429 ngay trên
+# trang landing). opt-out là QUYỀN từ chối — cũng không được chặn oan.
+_LANDING_LIMIT = "3000/hour"  # GET landing/{code} — first-touch, dưới CGNAT chung IP
+_OPTOUT_LIMIT = "600/hour"    # POST opt-out — quyền từ chối, chống chặn oan CGNAT
 _SESSION_LIMIT = "600/hour"   # ~1 phiên/lượt xem landing
 _VIEW_LIMIT = "2000/hour"     # khách mở nhiều trang ngành
 _HEARTBEAT_LIMIT = "6000/hour"  # heartbeat ~15s × nhiều phiên/IP
@@ -33,7 +39,7 @@ def _set_public_headers(response: Response) -> None:
 
 
 @router.get("/landing/{code}", response_model=sms_schemas.SmsLandingResponse)
-@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
+@limiter.limit(_LANDING_LIMIT, key_func=get_client_ip)
 async def get_landing(
     request: Request,  # required by slowapi rate limiter
     response: Response,
@@ -48,7 +54,7 @@ async def get_landing(
 
 
 @router.post("/opt-out", response_model=sms_schemas.SmsPublicOptOutResponse)
-@limiter.limit(RateLimits.PUBLIC_READ, key_func=get_client_ip)
+@limiter.limit(_OPTOUT_LIMIT, key_func=get_client_ip)
 async def public_opt_out(
     request: Request,  # required by slowapi rate limiter
     response: Response,
