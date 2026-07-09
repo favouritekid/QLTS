@@ -5,7 +5,7 @@
 // → gom về đây để đổi 1 chỗ, tránh drift. Thuần trình bày, KHÔNG hook động
 // (render được cả server/client) → không cần "use client".
 import Link from "next/link"
-import { GraduationCap, Phone } from "lucide-react"
+import { Phone } from "lucide-react"
 
 import {
   COPYRIGHT_YEAR,
@@ -46,9 +46,12 @@ export function SmsHeader({
 }) {
   const brandInner = (
     <>
-      <span className="from-sms-500 to-sms-700 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-sm">
-        <GraduationCap className="h-5 w-5" />
-      </span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/lp/logo-truong.png"
+        alt={schoolName}
+        className="h-10 w-10 shrink-0 object-contain"
+      />
       <span className="min-w-0 leading-tight">
         <span className="text-sms-ink block truncate text-[15px] font-extrabold">
           {schoolName}
