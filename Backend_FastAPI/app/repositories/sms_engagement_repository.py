@@ -22,6 +22,7 @@ from app.models.major_program import MajorProgram
 from app.models.sms import (
     SmsCampaignRecipient,
     SmsConsultLink,
+    SmsContact,
     SmsContactProgramInterest,
     SmsLandingSession,
     SmsProgramView,
@@ -335,6 +336,93 @@ class SmsEngagementRepository:
         )
         r = res.first()
         return int(r[0]), int(r[1]), int(r[2])
+
+    async def program_contacts(
+        self,
+        *,
+        major_program_id: int,
+        campaign_id: Optional[int] = None,
+        group_id: Optional[int] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> Tuple[int, List[Tuple]]:
+        """(total_distinct_contacts, rows[(contact_id, full_name, phone_normalized,
+        view_count, total_dwell, first_viewed, last_viewed, interest_score)]) cho 1
+        ngành TRONG scope campaign/group/date; rank total_dwell desc.
+
+        GROUP BY CONTACT (không theo session/view). Build TRÊN sms_program_view
+        (giống program_interest_report) → giữ contact đã xem nhưng chưa heartbeat
+        + số KHỚP report. LEFT JOIN sms_contact_program_interest chỉ để lấy
+        interest_score GLOBAL (NULL→0, không fan-out vì (contact,program) unique).
+        first/last = min/max(viewed_at) TRONG scope. Bot loại qua _report_conds."""
+        conds = self._report_conds(
+            campaign_id=campaign_id,
+            group_id=group_id,
+            major_program_id=major_program_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        total = await self.db.scalar(
+            select(func.count(func.distinct(SmsProgramView.contact_id)))
+            .select_from(self._report_from(group_id=group_id))
+            .where(and_(*conds))
+        )
+        total_dwell = func.coalesce(func.sum(SmsProgramView.dwell_seconds), 0)
+        from_clause = (
+            self._report_from(group_id=group_id)
+            .join(
+                SmsContact.__table__,
+                SmsContact.id == SmsProgramView.contact_id,
+            )
+            .outerjoin(
+                SmsContactProgramInterest.__table__,
+                and_(
+                    SmsContactProgramInterest.contact_id
+                    == SmsProgramView.contact_id,
+                    SmsContactProgramInterest.major_program_id
+                    == SmsProgramView.major_program_id,
+                ),
+            )
+        )
+        res = await self.db.execute(
+            select(
+                SmsContact.id,
+                SmsContact.full_name,
+                SmsContact.phone_normalized,
+                func.count().label("view_count"),
+                total_dwell.label("total_dwell"),
+                func.min(SmsProgramView.viewed_at).label("first_viewed"),
+                func.max(SmsProgramView.viewed_at).label("last_viewed"),
+                func.coalesce(
+                    func.max(SmsContactProgramInterest.interest_score), 0.0
+                ).label("score"),
+            )
+            .select_from(from_clause)
+            .where(and_(*conds))
+            .group_by(
+                SmsContact.id,
+                SmsContact.full_name,
+                SmsContact.phone_normalized,
+            )
+            .order_by(total_dwell.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        return int(total or 0), [
+            (
+                r.id,
+                r.full_name,
+                r.phone_normalized,
+                int(r.view_count),
+                int(r.total_dwell),
+                r.first_viewed,
+                r.last_viewed,
+                float(r.score or 0.0),
+            )
+            for r in res.all()
+        ]
 
     # ---------------------------------------------------------------
     # Hồ sơ sở thích 1 contact

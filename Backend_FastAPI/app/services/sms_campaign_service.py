@@ -141,6 +141,75 @@ class SmsCampaignService:
         return campaign
 
     # ===============================================================
+    # Measure/preview template (form soạn campaign — chưa recipient)
+    # ===============================================================
+    def _resolve_optout_for_measure(self) -> Tuple[str, List[str], bool]:
+        """Mirror 3 kiểm tra optout của `build()` NHƯNG không raise → measure
+        vẫn đo được (footer placeholder cũng có độ dài); điều kiện build-sẽ-chặn
+        trả dưới dạng warning + optout_ok=False."""
+        footer = (settings.SMS_OPTOUT_INSTRUCTION or "").strip()
+        warnings: List[str] = []
+        ok = True
+        if not footer:
+            warnings.append(
+                "Chưa cấu hình SMS_OPTOUT_INSTRUCTION — build sẽ bị chặn; "
+                "số đo CHƯA gồm hướng dẫn từ chối."
+            )
+            ok = False
+            return footer, warnings, ok
+        if settings.APP_ENV == "production" and (
+            footer == SMS_OPTOUT_INSTRUCTION_DEFAULT.strip()
+            or re.search(r"[xX]{3,}", footer)
+        ):
+            warnings.append(
+                "SMS_OPTOUT_INSTRUCTION còn là placeholder — production build "
+                "sẽ bị chặn."
+            )
+            ok = False
+        if len(footer) > 160:
+            warnings.append(
+                "SMS_OPTOUT_INSTRUCTION > 160 ký tự — build sẽ bị chặn."
+            )
+            ok = False
+        return footer, warnings, ok
+
+    def measure_template(
+        self, template: str, *, sample_full_name: Optional[str] = None
+    ) -> sms_schemas.SmsMeasureResult:
+        """Đo skeleton = assemble_skeleton([QC]+body+optout, sentinel link) +
+        measure_skeleton — CÙNG hàm build dùng → số khớp. Tên rỗng → NAME_FALLBACK.
+
+        ⚠ Sentinel gate: `render_body` GỠ ÂM THẦM __SMS_LINK__ → preview trông
+        'ổn' nhưng `_validate_content` (create/update) lại REJECT → drift. Vì vậy
+        set `has_internal_sentinel` TRƯỚC khi assemble để FE cảnh báo lỗi-chặn-lưu
+        (cùng tinh thần `unknown_vars`)."""
+        unknown = sorted(find_unknown_vars(template))
+        has_sentinel = LINK_SENTINEL in (template or "")
+        link = has_link(template)
+        footer, warnings, optout_ok = self._resolve_optout_for_measure()
+        skeleton = assemble_skeleton(
+            template, sample_full_name or "", optout_instruction=footer
+        )
+        encoding, length, segments, is_over = measure_skeleton(skeleton)
+        if is_over:
+            warnings.append(
+                f"Tin vượt 1 đoạn ({segments} đoạn, {encoding}) — rút gọn nội "
+                "dung để export không bị chặn."
+            )
+        return sms_schemas.SmsMeasureResult(
+            encoding=encoding,
+            length=length,
+            segments=segments,
+            is_over_limit=is_over,
+            preview=preview_message(skeleton),
+            has_link=link,
+            unknown_vars=unknown,
+            has_internal_sentinel=has_sentinel,
+            optout_configured=optout_ok,
+            warnings=warnings,
+        )
+
+    # ===============================================================
     # CRUD campaign
     # ===============================================================
     async def create_campaign(

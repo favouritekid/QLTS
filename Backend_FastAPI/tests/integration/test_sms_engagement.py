@@ -497,6 +497,244 @@ async def test_report_deleted_programs_not_merged(
     assert rep.json()["total_dwell_seconds"] == 120
 
 
+# ---------------------------------------------------------------------
+# Drill-down: contact nào quan tâm 1 ngành (§16.7) + measure template
+# ---------------------------------------------------------------------
+async def _view_beat(client, code, major_id, dwell, *, ua=None):
+    """1 session mới (theo code) → mở ngành → đẩy viewed_at về quá khứ (tránh
+    clamp) → heartbeat dwell. Trả program_view_id."""
+    headers = ua or _H
+    token = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=headers)
+    ).json()["session_token"]
+    vid = (
+        await client.post(
+            f"{PUB}/landing/{code}/program-view",
+            json={"session_token": token, "major_program_id": major_id},
+            headers=headers,
+        )
+    ).json()["program_view_id"]
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            text(
+                "UPDATE sms_program_view SET viewed_at = now() - "
+                "interval '1 hour' WHERE id=:i"
+            ),
+            {"i": vid},
+        )
+        await s.commit()
+    await client.post(
+        f"{PUB}/landing/{code}/heartbeat",
+        json={"session_token": token, "program_view_id": vid,
+              "dwell_seconds": dwell},
+        headers=headers,
+    )
+    return vid
+
+
+async def _setup_multi(client, h):
+    """group + 2 contact granted + campaign {link} + build + handoff (past).
+    Trả (campaign_id, {contact_id: raw_code}, (contact_a, contact_b))."""
+    gid = await _mk_group(client, h, "Drill Nhom")
+    ca = await _mk_contact(client, h, "Phu huynh A", "0981111111")
+    cb = await _mk_contact(client, h, "Phu huynh B", "0982222222")
+    for cid_ in (ca, cb):
+        await client.post(
+            f"{API}/contacts/{cid_}/groups", json={"group_id": gid}, headers=h
+        )
+    r = await client.post(
+        f"{API}/campaigns",
+        json={
+            "name": "Drill QA",
+            "sms_template": "Chao {full_name}, xem {link}",
+            "landing_headline": "Tuyển sinh 2026",
+            "landing_body": "Thông tin chi tiết.",
+        },
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    camp = r.json()["id"]
+    await client.post(
+        f"{API}/campaigns/{camp}/groups", json={"group_id": gid}, headers=h
+    )
+    rb = await client.post(f"{API}/campaigns/{camp}/build", headers=h)
+    assert rb.status_code == 200, rb.text
+    async with AsyncSessionLocal() as s:
+        rows = (
+            await s.execute(
+                text(
+                    "SELECT contact_id, token_ciphertext, token_key_version "
+                    "FROM sms_campaign_recipient WHERE campaign_id=:c"
+                ),
+                {"c": camp},
+            )
+        ).all()
+        await s.execute(
+            text(
+                "UPDATE sms_campaign_recipient SET handed_off_at = now() - "
+                "interval '1 hour' WHERE campaign_id=:c"
+            ),
+            {"c": camp},
+        )
+        await s.commit()
+    codes = {cid_: decrypt_code(ct, kv) for cid_, ct, kv in rows}
+    assert all(codes.values()), "decrypt token thất bại"
+    return camp, codes, (ca, cb)
+
+
+async def test_program_contacts_drilldown(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """Endpoint A2 — 2 contact KHÁC NHAU cùng ngành 1 → 2 hàng, rank scoped
+    total_dwell desc; số khớp report; bot loại; mask phone; filter+pagination."""
+    h = admin_token_headers
+    camp, codes, (ca, cb) = await _setup_multi(client, h)
+    # A: 40s ; B: 120s (B nóng hơn)
+    await _view_beat(client, codes[ca], 1, 40)
+    await _view_beat(client, codes[cb], 1, 120)
+
+    base = f"{API}/reports/program-interest/1/contacts"
+    body = (await client.get(base, headers=h)).json()
+    assert body["major_program_id"] == 1
+    assert body["total"] == 2
+    items = body["items"]
+    assert len(items) == 2
+    # rank scoped total_dwell desc → B trước A
+    assert items[0]["contact_id"] == cb and items[0]["total_dwell_seconds"] == 120
+    assert items[1]["contact_id"] == ca and items[1]["total_dwell_seconds"] == 40
+    # mask phone — KHÔNG lộ số đầy đủ
+    for it in items:
+        assert "*" in it["phone_masked"]
+    assert "0981111111" not in {it["phone_masked"] for it in items}
+
+    # đối chiếu tổng KHỚP dòng report ngành 1
+    rep = (
+        await client.get(
+            f"{API}/reports/program-interest?major_program_id=1", headers=h
+        )
+    ).json()
+    assert rep["items"][0]["distinct_contacts"] == 2
+    assert rep["items"][0]["total_dwell_seconds"] == 160  # 40 + 120
+    assert (
+        sum(it["total_dwell_seconds"] for it in items)
+        == rep["items"][0]["total_dwell_seconds"]
+    )
+
+    # bot session xem ngành 1 (code A) → KHÔNG được đếm (kế thừa _report_conds)
+    await _view_beat(client, codes[ca], 1, 500, ua={"User-Agent": _UA_BOT})
+    r2 = (await client.get(base, headers=h)).json()
+    assert r2["total"] == 2  # không thêm contact
+    a_row = next(it for it in r2["items"] if it["contact_id"] == ca)
+    assert a_row["total_dwell_seconds"] == 40  # bot 500s KHÔNG cộng
+
+    # pagination: limit=1 → 1 item, total vẫn 2, nóng nhất đứng đầu
+    r1 = (await client.get(f"{base}?limit=1", headers=h)).json()
+    assert r1["total"] == 2 and len(r1["items"]) == 1
+    assert r1["items"][0]["contact_id"] == cb
+
+    # filter campaign_id: đúng camp → 2; camp khác → 0
+    rc = (await client.get(f"{base}?campaign_id={camp}", headers=h)).json()
+    assert rc["total"] == 2
+    rc0 = (await client.get(f"{base}?campaign_id=999999", headers=h)).json()
+    assert rc0["total"] == 0 and rc0["items"] == []
+
+
+async def test_program_contacts_groups_by_contact_not_session(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """CHỐNG group-by-session sai: 2 session của CÙNG 1 contact cùng ngành 1 →
+    vẫn 1 hàng aggregate (view_count/total_dwell cộng dồn), KHÔNG 2 hàng."""
+    h = admin_token_headers
+    _cid, code, contact_id = await _setup(client, h)
+    await _view_beat(client, code, 1, 30)  # session 1
+    await _view_beat(client, code, 1, 50)  # session 2 (cùng contact)
+
+    body = (
+        await client.get(
+            f"{API}/reports/program-interest/1/contacts", headers=h
+        )
+    ).json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+    it = body["items"][0]
+    assert it["contact_id"] == contact_id
+    assert it["view_count"] == 2          # 2 view
+    assert it["total_dwell_seconds"] == 80  # 30 + 50
+
+
+async def test_program_contacts_view_without_heartbeat(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """Contact chỉ MỞ ngành (chưa heartbeat) → vẫn xuất hiện (build trên
+    program_view), interest_score=0 (LEFT JOIN NULL→coalesce), first/last non-null."""
+    h = admin_token_headers
+    _cid, code, contact_id = await _setup(client, h)
+    token = (
+        await client.post(f"{PUB}/landing/{code}/session", headers=_H)
+    ).json()["session_token"]
+    await client.post(
+        f"{PUB}/landing/{code}/program-view",
+        json={"session_token": token, "major_program_id": 1},
+        headers=_H,
+    )
+    body = (
+        await client.get(
+            f"{API}/reports/program-interest/1/contacts", headers=h
+        )
+    ).json()
+    assert body["total"] == 1
+    it = body["items"][0]
+    assert it["contact_id"] == contact_id
+    assert it["view_count"] == 1
+    assert it["total_dwell_seconds"] == 0
+    assert it["interest_score"] == 0.0  # chưa heartbeat → không có interest row
+    assert it["first_viewed_at"] is not None  # scoped min(viewed_at)
+    assert it["last_viewed_at"] is not None
+
+
+async def test_measure_template(
+    client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
+):
+    """Endpoint A1 — GSM7 vs UCS2, has_link, unknown_vars, sentinel drift, auth."""
+    h = admin_token_headers
+    base = f"{API}/campaigns/measure"
+
+    # GSM7 (không dấu) + {link}
+    g = (
+        await client.post(base, json={"template": "Chao ban xem {link}"}, headers=h)
+    )
+    assert g.status_code == 200, g.text
+    gb = g.json()
+    assert gb["encoding"] == "GSM7"
+    assert gb["has_link"] is True
+    assert gb["unknown_vars"] == []
+    assert gb["has_internal_sentinel"] is False
+    assert gb["segments"] >= 1
+
+    # UCS2 (tiếng Việt có dấu)
+    u = (
+        await client.post(base, json={"template": "Chào bạn, xem {link}"}, headers=h)
+    ).json()
+    assert u["encoding"] == "UCS2"
+
+    # biến lạ {foo} → unknown_vars
+    bad = (
+        await client.post(base, json={"template": "Xin chao {foo}"}, headers=h)
+    ).json()
+    assert "{foo}" in bad["unknown_vars"]
+
+    # sentinel nội bộ __SMS_LINK__ → has_internal_sentinel (drift gate #3)
+    sent = (
+        await client.post(base, json={"template": "Xem __SMS_LINK__ ngay"}, headers=h)
+    ).json()
+    assert sent["has_internal_sentinel"] is True
+
+    # auth: de-auth thật (client giữ cookie phiên từ fixture) → 401/403
+    client.cookies.clear()
+    anon = await client.post(base, json={"template": "Chao"})
+    assert anon.status_code in (401, 403)
+
+
 async def test_heartbeat_rejects_cross_session_view(
     client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies
 ):

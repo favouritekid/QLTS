@@ -255,3 +255,52 @@ class SmsReportService:
                 for r, name in rows
             ],
         )
+
+    async def program_contacts(
+        self,
+        *,
+        major_program_id: int,
+        campaign_id: Optional[int] = None,
+        group_id: Optional[int] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        skip: int = 0,
+        limit: int = 50,
+    ) -> sms_schemas.SmsProgramContactsResponse:
+        """Drill-down: contact nào quan tâm 1 ngành (masked phone §16.9). Cùng
+        filter với program_interest_report → số khớp dòng ngành đã bấm."""
+        total, rows = await self.engagement_repo.program_contacts(
+            major_program_id=major_program_id,
+            campaign_id=campaign_id,
+            group_id=group_id,
+            date_from=date_from,
+            date_to=date_to,
+            skip=skip,
+            limit=limit,
+        )
+        return sms_schemas.SmsProgramContactsResponse(
+            major_program_id=major_program_id,
+            total=total,
+            items=[
+                sms_schemas.SmsProgramContactRow(
+                    contact_id=cid,
+                    full_name=full_name,
+                    phone_masked=mask_phone(phone_norm),
+                    view_count=vc,
+                    total_dwell_seconds=dwell,
+                    interest_score=score,
+                    first_viewed_at=first,
+                    last_viewed_at=last,
+                )
+                for (
+                    cid,
+                    full_name,
+                    phone_norm,
+                    vc,
+                    dwell,
+                    first,
+                    last,
+                    score,
+                ) in rows
+            ],
+        )

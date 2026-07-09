@@ -283,9 +283,10 @@ class Settings(BaseSettings):
     )  # re-download tới expires_at; cleanup job xoá file + set purged_at
     # -- Landing page công khai /lp/{code} (PR-5) --
     SMS_LANDING_SCHOOL_NAME: str = Field(
-        default="Nhà trường",
+        default="Cao đẳng Bách khoa Tây Nguyên",
         validation_alias="SMS_LANDING_SCHOOL_NAME",
-    )  # tên trường hiển thị header landing (nhận diện, chống nghi lừa đảo)
+    )  # tên trường hiển thị header landing (nhận diện, chống nghi lừa đảo).
+    # Default = tên thật (hệ thống phục vụ 1 trường); env vẫn override được.
     SMS_LANDING_CONSENT_NOTICE: str = Field(
         default=(
             "Bạn nhận tin này vì đã đăng ký/quan tâm tuyển sinh. "

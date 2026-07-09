@@ -469,6 +469,39 @@ class SmsPreflightReport(BaseModel):
     preview: List[str] = Field(default_factory=list)
 
 
+class SmsMeasureRequest(BaseModel):
+    """Đo thử 1 template soạn dở (chưa gắn recipient) cho form soạn campaign.
+    `sample_full_name` tùy chọn — bỏ trống → render dùng NAME_FALLBACK
+    (worst-case tiếng Việt → UCS2)."""
+
+    template: str = Field(..., min_length=1, max_length=2000)
+    sample_full_name: Optional[str] = Field(None, max_length=255)
+
+    @field_validator("template")
+    @classmethod
+    def _v_template(cls, v):
+        return _strip_required_text(v)
+
+
+class SmsMeasureResult(BaseModel):
+    """Kết quả đo/preview template. Phân 2 tầng cho FE:
+    - BLOCKING (sẽ bị `_validate_content` từ chối khi LƯU): `unknown_vars`
+      (biến lạ) + `has_internal_sentinel` (template chứa __SMS_LINK__).
+    - SOFT (`warnings`) + `optout_configured`: optout chưa cấu hình/placeholder
+      />160 (build sẽ chặn), tin vượt 1 segment."""
+
+    encoding: str
+    length: int
+    segments: int
+    is_over_limit: bool
+    preview: str
+    has_link: bool
+    unknown_vars: List[str] = Field(default_factory=list)
+    has_internal_sentinel: bool = False
+    optout_configured: bool = True
+    warnings: List[str] = Field(default_factory=list)
+
+
 class SmsAttestationCreate(BaseModel):
     """Ghi attestation consent/DNC/opt-out-channel cho build_revision hiện
     tại (gate export PR-4)."""
@@ -662,6 +695,33 @@ class SmsContactInterestList(BaseModel):
 
     contact_id: int
     items: List[SmsContactInterestRow] = Field(default_factory=list)
+
+
+class SmsProgramContactRow(BaseModel):
+    """1 contact quan tâm 1 ngành (drill-down §16.7). PII masked (§16.9).
+
+    `view_count`/`total_dwell_seconds`/`first_viewed_at`/`last_viewed_at` là số
+    liệu TRONG scope filter (khớp dòng report đã bấm). `interest_score` là điểm
+    GLOBAL rolling (ngoài scope) — chỉ làm bối cảnh 'nóng tổng thể'; NULL (contact
+    đã xem nhưng chưa heartbeat) → 0.0."""
+
+    contact_id: int
+    full_name: str
+    phone_masked: str
+    view_count: int = 0
+    total_dwell_seconds: int = 0
+    interest_score: float = 0.0
+    first_viewed_at: Optional[datetime] = None
+    last_viewed_at: Optional[datetime] = None
+
+
+class SmsProgramContactsResponse(BaseModel):
+    """Danh sách contact quan tâm 1 ngành (drill-down từ report ngành nóng).
+    `total` = distinct contact trong scope (cho phân trang), rank total_dwell desc."""
+
+    major_program_id: int
+    total: int = 0
+    items: List[SmsProgramContactRow] = Field(default_factory=list)
 
 
 # --- P2-3 consult officer (§16.7) ---
