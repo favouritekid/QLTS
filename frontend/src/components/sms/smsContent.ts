@@ -462,6 +462,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /chế biến món ăn|nấu ăn|ẩm thực|đầu bếp/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/che-bien-mon-an.jpg",
       duration: "2 năm",
       tagline:
         "Trở thành đầu bếp chuyên nghiệp — nghề mũi nhọn của nhà hàng – khách sạn, cơ hội việc làm rộng và có thể tự kinh doanh ẩm thực.",
@@ -617,6 +618,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /vận tải|logistic/i,
     data: {
       group: "Kỹ thuật – Công nghệ",
+      image: "/lp/programs/van-tai.jpg",
       duration: "2,5 năm",
       tagline:
         "Quản lý và điều hành hoạt động vận tải — ngành gắn với logistics đang phát triển mạnh.",
@@ -665,6 +667,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /kế toán/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/ke-toan.jpg",
       duration: "2,5 năm",
       tagline:
         "Nghề ổn định, cần thiết cho mọi doanh nghiệp — thành thạo sổ sách, thuế, phần mềm kế toán.",
@@ -713,6 +716,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /văn phòng/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/van-phong.jpg",
       duration: "2,5 năm",
       tagline:
         "Tổ chức, điều hành công việc văn phòng chuyên nghiệp — kỹ năng hành chính, văn thư, lễ tân.",
@@ -761,6 +765,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /tiếng anh|ngôn ngữ anh/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/tieng-anh.jpg",
       duration: "3 năm",
       tagline:
         "Thành thạo tiếng Anh giao tiếp và biên – phiên dịch — chìa khóa cho nhiều cơ hội nghề nghiệp.",
@@ -809,7 +814,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /hướng dẫn du lịch|hướng dẫn viên/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      image: "/lp/programs/huong-dan-du-lich.png",
+      image: "/lp/programs/huong-dan-du-lich.jpg",
       duration: "2,5 năm",
       tagline:
         "Khám phá nghề hướng dẫn viên — đi nhiều, gặp gỡ nhiều, phát huy thế mạnh du lịch Tây Nguyên.",
@@ -859,6 +864,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /du lịch|lữ hành|khách sạn/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/du-lich.jpg",
       duration: "2,5 năm",
       tagline:
         "Quản lý dịch vụ lữ hành, khách sạn, nhà hàng — ngành mũi nhọn của kinh tế Tây Nguyên.",
@@ -908,6 +914,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /quản trị kinh doanh|kinh doanh|quản trị|kinh tế|marketing/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/quan-tri-kinh-doanh.jpg",
       duration: "2,5 năm",
       tagline:
         "Nền tảng kinh doanh toàn diện — quản lý, marketing, bán hàng, khởi nghiệp trong mọi lĩnh vực.",
