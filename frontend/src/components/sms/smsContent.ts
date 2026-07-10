@@ -132,8 +132,10 @@ export const TESTIMONIALS: readonly Testimonial[] = [
 /** Checklist ở khối đăng ký (#reg). */
 export const REG_CHECKLIST: readonly string[] = [
   "Xét tuyển bằng học bạ THPT",
-  "Học bổng đến 100% học phí kỳ I",
+  "Học bổng đến 100% học phí",
   "Cam kết giới thiệu việc làm",
+  "Tặng balo, áo thun đồng phục, hỗ trợ học bằng lái xe A1",
+  "Miễn 03 tháng ký túc xá; hỗ trợ khóa học tiếng Nhật",
 ]
 
 /** Thứ tự nhóm ngành hiển thị ở tier-1 (ngành lạ gom vào "Ngành khác" cuối). */
