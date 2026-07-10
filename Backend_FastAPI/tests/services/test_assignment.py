@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app import models
 from app.config import settings
+from app.core.task_constants import AssignmentFailureReason
 from app.services import assignment_service
 from app.services.status_helper import AssignmentStatus
 
@@ -326,7 +327,8 @@ async def test_matrix_member_on_weight_gets_more(
     """member ON, fairness OFF. Hai officer CÙNG workload dương bằng nhau (4/10 —
     không dùng 0 vì eff_util đều 0 thì weight vô nghĩa). officer_2 weight=2 ⇒
     eff_util = 4/(10*2)=0.2 < officer_1 eff_util 0.4 ⇒ officer_2 được chọn.
-    Cũng kiểm audit contract: scores_snapshot là dict {real_util,eff_util,weight,score}.
+    Cũng kiểm audit contract: scores_snapshot là dict
+    {workload,dist_load,real_util,eff_util,weight,score}.
     """
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
@@ -348,11 +350,16 @@ async def test_matrix_member_on_weight_gets_more(
     snap = decision.scores_snapshot
     assert set(snap.keys()) == {"101", "102"}
     for v in snap.values():
-        assert set(v.keys()) == {"real_util", "eff_util", "weight", "score"}
+        assert set(v.keys()) == {
+            "workload", "dist_load", "real_util", "eff_util", "weight", "score",
+        }
     # real_util KHÔNG nhân weight (bằng nhau); eff_util có nhân weight.
     assert snap["101"]["real_util"] == snap["102"]["real_util"] == 0.4
     assert snap["102"]["eff_util"] < snap["101"]["eff_util"]
     assert snap["102"]["weight"] == 2
+    # flag EXCLUDE_SELF_SOURCED OFF (mặc định) ⇒ dist_load == workload.
+    assert snap["101"]["dist_load"] == snap["101"]["workload"] == 4
+    assert snap["102"]["dist_load"] == snap["102"]["workload"] == 4
 
 
 @pytest.mark.asyncio
@@ -455,3 +462,136 @@ async def test_matrix_fairness_and_member_insufficient_history_falls_back(
 
     assert lead_new.assigned_officer_id == officer_2.id
     assert _decision_log(mock_db_session).reason == "member_weighted"
+
+
+# =====================================================================
+# Self-sourced exclusion (ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED)
+# =====================================================================
+# BƯỚC 3b query self_map chạy khi flag ON ⇒ side_effect THÊM 1 phần tử
+# (_self_result) so với khi OFF. real_util/eff_util (khóa SẮP XẾP) đổi sang
+# dist_load = workload − self_cnt; cổng `overloaded` + gate `workload <
+# capacity` VẪN theo TỔNG workload. (Subquery tương quan thật kiểm ở
+# test_assignment_self_sourced.py — mock ở đây inject self_map trực tiếp.)
+
+
+class MockSelfRow:
+    """Row shape của self_stmt GROUP BY (BƯỚC 3b). GROUP BY BỎ officer self_cnt=0
+    (không có row) ⇒ chỉ liệt kê officer CÓ lead tự tuyển."""
+
+    def __init__(self, assigned_officer_id, self_cnt):
+        self.assigned_officer_id = assigned_officer_id
+        self.self_cnt = self_cnt
+
+
+def _self_result(rows):
+    # BƯỚC 3b iterates the result directly (`for row in self_results`).
+    return list(rows)
+
+
+@pytest.mark.asyncio
+async def test_self_sourced_flag_off_is_regression_safe(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """Flag OFF (mặc định) ⇒ self_stmt KHÔNG chạy: side_effect chỉ 3 phần tử
+    vẫn đủ (service cố query self_map sẽ HẾT side_effect → lỗi). Kết quả y hệt
+    member mode hôm nay: officer_2 (tải 2) thắng officer_1 (tải 5)."""
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", False)
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 5), MockWorkloadRow(102, 2)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+
+
+@pytest.mark.asyncio
+async def test_self_sourced_flips_winner_to_high_selftuyen_officer(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member + flag ON. officer_1 tải TỔNG cao hơn (7) nhưng phần lớn tự tuyển
+    (self=5 ⇒ dist=2); officer_2 tải 4 toàn đã-chia (self=0 ⇒ dist=4). Khóa SẮP
+    XẾP theo dist ⇒ officer_1 (eff dist 0.2) THẮNG officer_2 (0.4) — NGƯỢC với
+    khi không loại tự tuyển (eff TỔNG 0.7 vs 0.4 ⇒ officer_2 thắng). Cả hai CHƯA
+    overloaded (0.7/0.4 < 0.8). Audit: snapshot có dist_load + workload=TỔNG."""
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 7), MockWorkloadRow(102, 4)]),
+        _self_result([MockSelfRow(101, 5)]),  # officer_2 self=0 ⇒ KHÔNG có row
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_1.id
+    decision = _decision_log(mock_db_session)
+    assert decision.reason == "member_weighted"
+    snap = decision.scores_snapshot
+    # dist_load vào snapshot (audit §3.5); workload GIỮ = TỔNG
+    assert snap["101"]["dist_load"] == 2 and snap["101"]["workload"] == 7
+    assert snap["102"]["dist_load"] == 4 and snap["102"]["workload"] == 4
+    assert snap["101"]["eff_util"] < snap["102"]["eff_util"]
+
+
+@pytest.mark.asyncio
+async def test_self_sourced_safety_gate_still_uses_total(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """flag ON. officer_1 tự tuyển GẦN HẾT: tổng 9 (self=9 ⇒ dist=0 ⇒ eff thấp
+    nhất) NHƯNG tổng 9/10=0.9 ≥ 0.8 ⇒ overloaded (theo TỔNG) ⇒ bị đẩy sau.
+    officer_2 tải 4, dist 4, không overloaded ⇒ THẮNG dù eff dist cao hơn. Chứng
+    minh cổng an toàn đọc TỔNG chứ không đọc dist_load."""
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([MockWorkloadRow(101, 9), MockWorkloadRow(102, 4)]),
+        _self_result([MockSelfRow(101, 9)]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+
+
+@pytest.mark.asyncio
+async def test_self_sourced_capacity_gate_still_uses_total(
+    monkeypatch, mock_db_session, lead_new, officer_1
+):
+    """flag ON. Officer DUY NHẤT có tổng == capacity (10/10) dù TOÀN tự tuyển
+    (self=10 ⇒ dist=0). Gate còn-capacity đọc dist (0<10) thì officer được nhận;
+    nhưng gate đọc TỔNG (10<10 sai) ⇒ bị loại ⇒ FAILED/AT_CAPACITY."""
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1]),
+        _workload_result([MockWorkloadRow(101, 10)]),
+        _self_result([MockSelfRow(101, 10)]),
+    ]
+
+    result, _ = await assignment_service.automatically_assign_lead(
+        lead_new.id, mock_db_session
+    )
+
+    assert lead_new.assignment_status == AssignmentStatus.FAILED
+    assert result["reason"] == AssignmentFailureReason.AT_CAPACITY
