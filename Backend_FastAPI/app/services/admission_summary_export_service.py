@@ -274,7 +274,9 @@ _OFFICER_SQL = text(
 _MAJOR_SQL = text(
     """
     SELECT id, code, name, degree_level FROM major_program
-    ORDER BY name, CASE degree_level WHEN 'Cao đẳng' THEN 0 ELSE 1 END, code
+    ORDER BY CASE degree_level WHEN 'Cao đẳng' THEN 0
+                               WHEN 'Trung cấp' THEN 1 ELSE 2 END,
+             name, code
     """
 )
 
