@@ -1,14 +1,26 @@
 """Xuất báo cáo tuyển sinh (snapshot) ra Excel — orchestration only, no FastAPI.
 
 Báo cáo "ảnh chụp" phân bố TẠI THỜI ĐIỂM xuất, KHÁC cockpit tuần (funnel theo
-thời gian). Đếm:
-- Phễu LEAD exclusive (mỗi lead 1 ô — cộng = tổng lead): Chưa tư vấn | Đang tư vấn
-  | Chỉ đóng lệ phí | Đã đóng học phí | Đã dừng. Ưu tiên theo TIỀN thật (đóng cả
-  lệ phí + học phí → CHỈ tính học phí); phần chưa đóng tiền phân theo
-  consultation_status.
-- HỒ SƠ đếm riêng theo ``admission_profile.status``: Nháp (draft) | Đã nộp (submitted).
-- Nguồn tuyển nhập học = breakdown nhóm "đã đóng học phí": Liên hệ/Giới thiệu
-  (referral / có referrer) vs Hệ thống phân phối (còn lại).
+thời gian). Cột "PHÂN LOẠI" gồm 4 nhóm thước đo SONG SONG (khác nhau về chiều
+đếm → tổng các nhóm KHÔNG bằng "Tổng lead"):
+
+- ĐANG TƯ VẤN (đếm theo LEAD, theo ``lead.consultation_status_id`` HIỆN TẠI —
+  khớp bộ lọc lead trên giao diện): 5 cột
+    Chưa tiếp cận (sts00) | Đã kết nối (sts02) | Có nhu cầu tìm hiểu (sts03) |
+    Đồng ý tư vấn/Hẹn liên hệ (sts06+sts05) | Từ chối tư vấn/Đã ngừng liên hệ
+    (sts04+sts20). Các trạng thái phổ quát (sts01/sts15/sts19) và lead chưa
+    đặt trạng thái KHÔNG thuộc 5 cột này (giống filter — nhánh "Hoạt động khác").
+- HỒ SƠ (đếm theo HỒ SƠ, mỗi lead lấy hồ sơ đại diện của năm): Chưa hoàn thiện
+    (draft) | Hoàn thiện 1 phần (đã nộp + còn nợ giấy tờ) | Đủ điều kiện (đã nộp
+    + hết nợ giấy tờ) | Tổng hồ sơ (= cộng 3 cột). "Nợ giấy tờ" = còn mã trong
+    ``admission_profile.document_debt`` CHƯA được duyệt (verified/paper_submitted)
+    — đúng cơ chế fast-track nộp-kèm-nợ (``can_submit_with_document_debt``).
+- LỆ PHÍ (đếm theo HỒ SƠ): đã đóng/được miễn lệ phí xét tuyển
+    (application: paid_amount>0 OR waived).
+- HỌC PHÍ: Đóng một phần (SỐ HỒ SƠ có học phí HK1 = partial) | Đóng đủ HK1 (SỐ
+    HỒ SƠ có học phí HK1 đã thu đủ/miễn) | Tổng học phí (TIỀN học phí HK1 phải
+    thu của hồ sơ đã đóng) | Doanh thu (TIỀN học phí HK1 đã thu). HK1 = dòng fee
+    tuition ``semester_no=1``.
 
 Scope: admin = toàn trường (hoặc đơn vị chọn); manager = ép đơn vị của mình.
 Read-only → service không commit. Raises domain exceptions, never HTTPException.
@@ -33,51 +45,83 @@ from app.utils.csv_helpers import sanitize_csv_cell
 
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
-# ---- Quy ước phân nhóm (xem docstring) --------------------------------------
-LEAD_BUCKETS = [
-    ("chua", "Chưa tư vấn"),
-    ("dang", "Đang tư vấn"),
-    ("lephi", "Chỉ đóng lệ phí"),
-    ("hocphi", "Đã đóng học phí"),
-    ("dung", "Đã dừng"),
+# ---- Quy ước cột (xem docstring) --------------------------------------------
+# Mỗi cột = (key, nhãn). Nhóm = (tên nhóm, cột, màu nền).
+TV_COLS = [
+    ("tv_ctc", "Chưa tiếp cận"),
+    ("tv_kn", "Đã kết nối"),
+    ("tv_nc", "Có nhu cầu tìm hiểu"),
+    ("tv_dyh", "Đồng ý tư vấn/Hẹn liên hệ"),
+    ("tv_tcn", "Từ chối tư vấn/Đã ngừng liên hệ"),
 ]
-LB_KEYS = [b[0] for b in LEAD_BUCKETS]
-LB_LABEL = dict(LEAD_BUCKETS)
-HS_BUCKETS = [("nhap", "Nháp (draft)"), ("danop", "Đã nộp (submitted)")]
-HS_KEYS = [b[0] for b in HS_BUCKETS]
-HS_LABEL = dict(HS_BUCKETS)
-SRC_BUCKETS = [("lienhe", "Liên hệ/Giới thiệu"), ("hethong", "Hệ thống phân phối")]
-SRC_KEYS = [b[0] for b in SRC_BUCKETS]
-SRC_LABEL = dict(SRC_BUCKETS)
+HS_COLS = [
+    ("hs_ct", "Chưa hoàn thiện"),
+    ("hs_1p", "Hoàn thiện 1 phần"),
+    ("hs_dk", "Đủ điều kiện"),
+    ("hs_tong", "Tổng hồ sơ"),
+]
+LP_COLS = [("le_phi", "Lệ phí")]
+HP_COLS = [
+    ("hp_1p", "Đóng một phần"),
+    ("hp_dhk1", "Đóng đủ HK1"),
+    ("hp_tonghp", "Tổng học phí"),
+    ("hp_dt", "Doanh thu"),
+]
 
-_DUNG_CS = {"sts20", "sts16", "sts08", "sts18", "sts12"}
-_CHUA_CS = {"sts00", "sts02", "sts01", "sts15", "sts19"}
+# Consultation status HIỆN TẠI → cột "Đang tư vấn". Trạng thái không có ở đây
+# (sts01/sts15/sts19 phổ quát, hoặc đã sang giai đoạn hồ sơ/học phí, hoặc NULL)
+# không rơi vào cột tư vấn nào — đúng như nhánh "Tư vấn" của filter lead.
+_TV_OF_CS = {
+    "sts00": "tv_ctc",
+    "sts02": "tv_kn",
+    "sts03": "tv_nc",
+    "sts06": "tv_dyh",
+    "sts05": "tv_dyh",
+    "sts04": "tv_tcn",
+    "sts20": "tv_tcn",
+}
+
 _UNASSIGNED = 0  # sentinel cột "Chưa PC" cho lead không có nhân viên phụ trách
+_TL_KEY = "_tl"  # pseudo-key: Tổng lead (dùng cho khối per-nhân-viên sheet 2)
 
 # ---- Styling ----------------------------------------------------------------
 _THIN = Side(style="thin", color="B0B0B0")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _HEAD_FILL = PatternFill("solid", fgColor="4472C4")
 _HEAD_FONT = Font(bold=True, color="FFFFFF", size=10)
-_GRPA_FILL = PatternFill("solid", fgColor="D9E1F2")
-_GRPB_FILL = PatternFill("solid", fgColor="E2EFDA")
-_GRPC_FILL = PatternFill("solid", fgColor="FCE4D6")
+_GRPA_FILL = PatternFill("solid", fgColor="D9E1F2")  # Đang tư vấn
+_GRPB_FILL = PatternFill("solid", fgColor="E2EFDA")  # Hồ sơ
+_GRPC_FILL = PatternFill("solid", fgColor="FCE4D6")  # Lệ phí
+_GRPD_FILL = PatternFill("solid", fgColor="FFF2CC")  # Học phí
 _SUB_FONT = Font(bold=True, color="1F3864", size=9)
-_TOTAL_FILL = PatternFill("solid", fgColor="FFF2CC")
+_TOTAL_FILL = PatternFill("solid", fgColor="FFE699")
 _TOTAL_FONT = Font(bold=True, size=10)
 _TITLE_FONT = Font(bold=True, size=14, color="1F3864")
 _CTR = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
+_MONEY_FMT = "#,##0"
+
+# 4 nhóm cột "PHÂN LOẠI" (sheet 1). Sheet 2 chèn thêm khối "Tổng lead" ở đầu.
+GROUPS = [
+    ("Đang tư vấn", TV_COLS, _GRPA_FILL),
+    ("Hồ sơ", HS_COLS, _GRPB_FILL),
+    ("Lệ phí", LP_COLS, _GRPC_FILL),
+    ("Học phí", HP_COLS, _GRPD_FILL),
+]
+ALL_COLS = TV_COLS + HS_COLS + LP_COLS + HP_COLS
+ALL_KEYS = [k for k, _ in ALL_COLS]
+COL_LABEL = dict(ALL_COLS)
+MONEY_KEYS = {"hp_tonghp", "hp_dt"}
+# Các key được cộng dồn theo lead (gồm _tl để sheet 2 có khối Tổng lead).
+STORE_KEYS = [_TL_KEY] + ALL_KEYS
 
 # Lead is year-scoped via its offering's academic year (lead has no year column).
 # A lead WITHOUT an offering has no year of its own → scope it by the VN-tz year of
 # its created_at (a brand-new lead that hasn't picked a ngành still counts in the
 # year it arrived). Without this guard an offering-less lead from ANY prior year
-# would show up in EVERY year's report and inflate "Tổng lead"/"Chưa tư vấn".
+# would show up in EVERY year's report and inflate "Tổng lead".
 # Shared by _LEAD_SQL and _OFFICER_SQL, so it may reference only lead/po columns
 # (the officer query doesn't join admission_profile) → both sheets stay reconciled.
-# Major attribution: nguyện vọng 1 of the year's profile (display_order=1) if any,
-# else the lead's intent offering. "đã đóng" = paid_amount>0 OR waived (miễn).
 _YEAR_SCOPE = """
       AND (
           EXISTS (
@@ -91,34 +135,104 @@ _YEAR_SCOPE = """
               )::int = :year
           )
       )"""
+
+# Một dòng / lead. Các CTE gom fee + hồ sơ về mức profile TRƯỚC khi nối vào lead
+# nên KHÔNG có row-multiplication (không cần GROUP BY). Mỗi lead lấy 1 hồ sơ đại
+# diện của năm (mới nhất) qua DISTINCT ON — nếu 1 lead lỡ có 2 hồ sơ cùng năm thì
+# "Tổng lead" vẫn khớp filter (đếm theo lead).
+#   - has_doc_debt: hồ sơ đã nộp còn NỢ giấy tờ = có mã trong document_debt->codes
+#     chưa được duyệt (verified/paper_submitted). Khớp outstanding_debt_codes.
+#   - has_app: đã đóng/miễn lệ phí xét tuyển.
+#   - hk1_partial / hk1_settled: học phí HK1 (fee tuition semester_no=1) đóng một
+#     phần / đã đủ (paid|waived hoặc remaining<=0), bỏ cancelled.
+#   - hk1_final / hk1_paid: TIỀN học phí HK1 (phải thu / đã thu) — CHỈ tính trên
+#     hồ sơ đã đóng (partial hoặc settled), để "Tổng học phí"/"Doanh thu" đúng
+#     tập với 2 cột đếm.
+# Ngành (pid): nguyện vọng 1 của hồ sơ năm (display_order=1) nếu có, else ngành
+# quan tâm (offering) của lead.
 _LEAD_SQL = text(
     """
+    WITH fee_agg AS (
+        SELECT f.admission_profile_id AS ap_id,
+               bool_or(f.fee_type='application'
+                       AND (f.paid_amount > 0 OR f.status='waived')) AS has_app,
+               bool_or(f.fee_type='tuition' AND f.semester_no=1
+                       AND f.status='partial') AS hk1_partial,
+               bool_or(f.fee_type='tuition' AND f.semester_no=1
+                       AND f.status<>'cancelled'
+                       AND (f.status IN ('paid','waived')
+                            OR (f.final_amount - f.paid_amount
+                                - f.waived_amount) <= 0)) AS hk1_settled,
+               COALESCE(sum(f.final_amount) FILTER (
+                   WHERE f.fee_type='tuition' AND f.semester_no=1
+                     AND f.status<>'cancelled'
+                     AND (f.status='partial' OR f.status IN ('paid','waived')
+                          OR (f.final_amount - f.paid_amount
+                              - f.waived_amount) <= 0)), 0) AS hk1_final,
+               COALESCE(sum(f.paid_amount) FILTER (
+                   WHERE f.fee_type='tuition' AND f.semester_no=1
+                     AND f.status<>'cancelled'
+                     AND (f.status='partial' OR f.status IN ('paid','waived')
+                          OR (f.final_amount - f.paid_amount
+                              - f.waived_amount) <= 0)), 0) AS hk1_paid
+        FROM fee f
+        GROUP BY f.admission_profile_id
+    ),
+    prof AS (
+        SELECT DISTINCT ON (ap.lead_id)
+               ap.id AS ap_id, ap.lead_id, ap.status AS pstatus,
+               (ap.document_debt IS NOT NULL AND EXISTS (
+                   SELECT 1
+                   FROM jsonb_array_elements_text(
+                            ap.document_debt->'codes') AS d(code)
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM profile_document pd
+                       JOIN config_document_type cdt
+                            ON cdt.id = pd.document_type_id
+                       WHERE pd.profile_id = ap.id AND pd.category='path'
+                         AND cdt.code = d.code
+                         AND pd.status IN ('verified','paper_submitted')
+                   )
+               )) AS has_doc_debt,
+               COALESCE(fa.has_app, false) AS has_app,
+               COALESCE(fa.hk1_partial, false) AS hk1_partial,
+               COALESCE(fa.hk1_settled, false) AS hk1_settled,
+               COALESCE(fa.hk1_final, 0) AS hk1_final,
+               COALESCE(fa.hk1_paid, 0) AS hk1_paid
+        FROM admission_profile ap
+        LEFT JOIN fee_agg fa ON fa.ap_id = ap.id
+        WHERE ap.academic_year = :year
+        ORDER BY ap.lead_id, ap.id DESC
+    ),
+    nv1maj AS (
+        SELECT DISTINCT ON (nv1.admission_profile_id)
+               nv1.admission_profile_id AS ap_id, nv1_po.program_id
+        FROM admission_profile_choice nv1
+        JOIN admission_path nv1_path ON nv1.admission_path_id = nv1_path.id
+        JOIN offering_academic_info nv1_oai
+             ON nv1_path.academic_info_id = nv1_oai.id
+        JOIN program_offering nv1_po ON nv1_oai.offering_id = nv1_po.id
+        WHERE nv1.display_order = 1
+        ORDER BY nv1.admission_profile_id, nv1.id
+    )
     SELECT l.id,
-           COALESCE(max(nv1_po.program_id), max(po.program_id)) AS pid,
+           COALESCE(nm.program_id, po.program_id) AS pid,
            l.consultation_status_id AS cs,
-           l.assigned_officer_id AS off, l.source, l.referrer_id,
-           max(ap.status) AS pstatus,
-           bool_or(f.fee_type='application'
-                   AND (f.paid_amount > 0 OR f.status = 'waived')) AS has_app,
-           bool_or(f.fee_type='tuition'
-                   AND (f.paid_amount > 0 OR f.status = 'waived')) AS has_tui
+           l.assigned_officer_id AS off,
+           p.pstatus AS pstatus,
+           COALESCE(p.has_doc_debt, false) AS has_doc_debt,
+           COALESCE(p.has_app, false) AS has_app,
+           COALESCE(p.hk1_partial, false) AS hk1_partial,
+           COALESCE(p.hk1_settled, false) AS hk1_settled,
+           COALESCE(p.hk1_final, 0) AS hk1_final,
+           COALESCE(p.hk1_paid, 0) AS hk1_paid
     FROM lead l
     LEFT JOIN program_offering po ON l.offering_id = po.id
-    LEFT JOIN admission_profile ap ON ap.lead_id = l.id AND ap.academic_year = :year
-    LEFT JOIN admission_profile_choice nv1
-           ON nv1.admission_profile_id = ap.id AND nv1.display_order = 1
-    LEFT JOIN admission_path nv1_path ON nv1.admission_path_id = nv1_path.id
-    LEFT JOIN offering_academic_info nv1_oai
-           ON nv1_path.academic_info_id = nv1_oai.id
-    LEFT JOIN program_offering nv1_po ON nv1_oai.offering_id = nv1_po.id
-    LEFT JOIN fee f ON f.admission_profile_id = ap.id
+    LEFT JOIN prof p ON p.lead_id = l.id
+    LEFT JOIN nv1maj nm ON nm.ap_id = p.ap_id
     WHERE l.deleted_at IS NULL
       AND (CAST(:unit AS INTEGER) IS NULL OR l.unit_id = CAST(:unit AS INTEGER))"""
     + _YEAR_SCOPE
-    + """
-    GROUP BY l.id, l.consultation_status_id,
-             l.assigned_officer_id, l.source, l.referrer_id
-    """
 )
 _OFFICER_SQL = text(
     """
@@ -143,18 +257,6 @@ _MAJOR_SQL = text(
     ORDER BY name, CASE degree_level WHEN 'Cao đẳng' THEN 0 ELSE 1 END, code
     """
 )
-
-
-def _lead_bucket(has_tui, has_app, cs) -> str:
-    if has_tui:
-        return "hocphi"
-    if has_app:
-        return "lephi"
-    if cs in _DUNG_CS:
-        return "dung"
-    if cs is None or cs in _CHUA_CS:
-        return "chua"
-    return "dang"
 
 
 def _H(cell, fill=_HEAD_FILL, font=_HEAD_FONT):
@@ -232,39 +334,55 @@ class AdmissionSummaryExportService:
         NONE = -1
         all_keys = major_ids + [NONE]
 
-        s1 = {p: {k: 0 for k in LB_KEYS} for p in all_keys}
-        s1hs = {p: {k: 0 for k in HS_KEYS} for p in all_keys}
-        s2 = {p: {k: {o: 0 for o in officer_cols} for k in LB_KEYS} for p in all_keys}
-        s2hs = {p: {k: {o: 0 for o in officer_cols} for k in HS_KEYS} for p in all_keys}
-        src = {p: {g: {o: 0 for o in officer_cols} for g in SRC_KEYS} for p in all_keys}
+        # s1[pid][key] = giá trị tổng (sheet 1); s2[pid][key][officer] (sheet 2).
+        s1 = {p: {k: 0 for k in STORE_KEYS} for p in all_keys}
+        s2 = {
+            p: {k: {o: 0 for o in officer_cols} for k in STORE_KEYS} for p in all_keys
+        }
+
+        def bump(pid, col, key, val):
+            s1[pid][key] += val
+            s2[pid][key][col] += val
 
         for r in leads:
             pid = r["pid"] if r["pid"] in s1 else NONE
-            b = _lead_bucket(r["has_tui"], r["has_app"], r["cs"])
-            s1[pid][b] += 1
             off = r["off"]
             # col is always a valid key: an unassigned lead implies _UNASSIGNED ∈ cols
             col = off if off in officer_id_set else _UNASSIGNED
-            s2[pid][b][col] += 1
-            ps = r["pstatus"]
-            # draft → Nháp; bất kỳ trạng thái khác (đã nộp trở lên: submitted/
-            # approved/enrolled/…) → Đã nộp (mốc lũy kế); không hồ sơ → bỏ qua.
-            hk = "nhap" if ps == "draft" else ("danop" if ps is not None else None)
-            if hk:
-                s1hs[pid][hk] += 1
-                s2hs[pid][hk][col] += 1
-            if b == "hocphi":
-                g = (
-                    "lienhe"
-                    if (r["source"] == "referral" or r["referrer_id"] is not None)
-                    else "hethong"
-                )
-                src[pid][g][col] += 1
 
-        ordered = [
-            p for p in major_ids if sum(s1[p].values()) + sum(s1hs[p].values()) > 0
-        ]
-        if sum(s1[NONE].values()) + sum(s1hs[NONE].values()) > 0:
+            bump(pid, col, _TL_KEY, 1)  # Tổng lead
+
+            tvk = _TV_OF_CS.get(r["cs"])
+            if tvk:
+                bump(pid, col, tvk, 1)
+
+            ps = r["pstatus"]
+            if ps is not None:  # có hồ sơ
+                if ps == "draft":
+                    hk = "hs_ct"
+                elif r["has_doc_debt"]:
+                    hk = "hs_1p"
+                else:
+                    hk = "hs_dk"
+                bump(pid, col, hk, 1)
+                bump(pid, col, "hs_tong", 1)
+
+            if r["has_app"]:
+                bump(pid, col, "le_phi", 1)
+            if r["hk1_partial"]:
+                bump(pid, col, "hp_1p", 1)
+            if r["hk1_settled"]:
+                bump(pid, col, "hp_dhk1", 1)
+            fin = int(r["hk1_final"] or 0)
+            paid = int(r["hk1_paid"] or 0)
+            if fin:
+                bump(pid, col, "hp_tonghp", fin)
+            if paid:
+                bump(pid, col, "hp_dt", paid)
+
+        # Chỉ giữ ngành có lead (hoặc dòng "chưa xác định ngành" có dữ liệu).
+        ordered = [p for p in major_ids if s1[p][_TL_KEY] > 0]
+        if s1[NONE][_TL_KEY] > 0:
             ordered.append(NONE)
 
         def desc_of(pid):
@@ -282,7 +400,7 @@ class AdmissionSummaryExportService:
         DESC = ["TT", "Mã ngành", "Ngành, nghề", "Trình độ", "Liên thông/VB2"]
         ND = len(DESC)
 
-        self._sheet_summary(wb, year, ts_label, DESC, ND, ordered, desc_of, s1, s1hs)
+        self._sheet_summary(wb, year, ts_label, DESC, ND, ordered, desc_of, s1)
         self._sheet_by_officer(
             wb,
             year,
@@ -295,20 +413,17 @@ class AdmissionSummaryExportService:
             oshort,
             n_unassigned,
             s2,
-            s2hs,
-            src,
         )
         self._sheet_notes(wb, year, n_unassigned, len(leads))
         return wb
 
     # --------------------------------------------------------- sheet 1: chung
-    def _sheet_summary(self, wb, year, ts_label, DESC, ND, ordered, desc_of, s1, s1hs):
+    def _sheet_summary(self, wb, year, ts_label, DESC, ND, ordered, desc_of, s1):
         ws = wb.active
         ws.title = "Số liệu chung"
-        c_tong = ND + 1
-        c_lead = c_tong + 1
-        c_hs = c_lead + len(LB_KEYS)
-        total = ND + 1 + len(LB_KEYS) + len(HS_KEYS)
+        c_tong = ND + 1  # cột "Tổng lead"
+        c_metric = c_tong + 1  # cột đầu tiên của khối PHÂN LOẠI
+        total = ND + 1 + len(ALL_KEYS)
 
         ws.cell(1, 1, f"SỐ LIỆU TUYỂN SINH NĂM {year}").font = _TITLE_FONT
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total)
@@ -316,58 +431,51 @@ class AdmissionSummaryExportService:
         ws.cell(2, 1, "Thời điểm báo cáo:").font = Font(italic=True, size=9)
         ws.cell(2, 2, ts_label).font = Font(italic=True, size=9)
 
+        # Header 3 hàng (4,5,6): DESC + Tổng lead merge dọc; PHÂN LOẠI → nhóm → cột.
         for i, h in enumerate(DESC, 1):
-            ws.merge_cells(start_row=4, start_column=i, end_row=5, end_column=i)
+            ws.merge_cells(start_row=4, start_column=i, end_row=6, end_column=i)
             _H(ws.cell(4, i, h))
-        ws.merge_cells(start_row=4, start_column=c_tong, end_row=5, end_column=c_tong)
+        ws.merge_cells(start_row=4, start_column=c_tong, end_row=6, end_column=c_tong)
         _H(ws.cell(4, c_tong, "Tổng lead"))
-        ws.merge_cells(
-            start_row=4,
-            start_column=c_lead,
-            end_row=4,
-            end_column=c_lead + len(LB_KEYS) - 1,
-        )
-        _H(
-            ws.cell(
-                4,
-                c_lead,
-                "PHÂN LOẠI LEAD THEO TRẠNG THÁI  (mỗi lead 1 ô — cộng = Tổng lead)",
-            )
-        )
-        ws.merge_cells(
-            start_row=4,
-            start_column=c_hs,
-            end_row=4,
-            end_column=c_hs + len(HS_KEYS) - 1,
-        )
-        _H(ws.cell(4, c_hs, "HỒ SƠ (đếm theo hồ sơ)"))
-        for j, k in enumerate(LB_KEYS):
-            _H(ws.cell(5, c_lead + j, LB_LABEL[k]), fill=_GRPA_FILL, font=_SUB_FONT)
-        for j, k in enumerate(HS_KEYS):
-            _H(ws.cell(5, c_hs + j, HS_LABEL[k]), fill=_GRPB_FILL, font=_SUB_FONT)
+        ws.merge_cells(start_row=4, start_column=c_metric, end_row=4, end_column=total)
+        _H(ws.cell(4, c_metric, "PHÂN LOẠI"))
 
-        # TỔNG (row 6)
-        ws.cell(6, 1, "TỔNG CỘNG")
-        ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=ND)
-        ws.cell(6, 1).font = _TOTAL_FONT
-        ws.cell(6, 1).alignment = _CTR
+        col = c_metric
+        for gname, gcols, gfill in GROUPS:
+            n = len(gcols)
+            if n == 1:  # nhóm 1 cột (Lệ phí) → gộp nhãn nhóm + cột theo chiều dọc
+                ws.merge_cells(start_row=5, start_column=col, end_row=6, end_column=col)
+                _H(ws.cell(5, col, gname), fill=gfill, font=_SUB_FONT)
+            else:
+                ws.merge_cells(
+                    start_row=5, start_column=col, end_row=5, end_column=col + n - 1
+                )
+                _H(ws.cell(5, col, gname), fill=gfill, font=_SUB_FONT)
+                for j, (k, label) in enumerate(gcols):
+                    _H(ws.cell(6, col + j, label), fill=gfill, font=_SUB_FONT)
+            col += n
+
+        # TỔNG CỘNG (row 7)
+        ws.cell(7, 1, "TỔNG CỘNG")
+        ws.merge_cells(start_row=7, start_column=1, end_row=7, end_column=ND)
+        ws.cell(7, 1).font = _TOTAL_FONT
+        ws.cell(7, 1).alignment = _CTR
         for i in range(1, ND + 1):
-            ws.cell(6, i).fill = _TOTAL_FILL
-            ws.cell(6, i).border = _BORDER
-        tot = sum(sum(s1[p].values()) for p in ordered)
-        vals = (
-            [tot]
-            + [sum(s1[p][k] for p in ordered) for k in LB_KEYS]
-            + [sum(s1hs[p][k] for p in ordered) for k in HS_KEYS]
-        )
+            ws.cell(7, i).fill = _TOTAL_FILL
+            ws.cell(7, i).border = _BORDER
+        vals = [sum(s1[p][_TL_KEY] for p in ordered)] + [
+            sum(s1[p][k] for p in ordered) for k in ALL_KEYS
+        ]
         for j, v in enumerate(vals):
-            c = ws.cell(6, c_tong + j, v)
+            c = ws.cell(7, c_tong + j, v)
             c.fill = _TOTAL_FILL
             c.font = _TOTAL_FONT
             c.alignment = _CTR
             c.border = _BORDER
+            if j >= 1 and ALL_KEYS[j - 1] in MONEY_KEYS:
+                c.number_format = _MONEY_FMT
 
-        r = 7
+        r = 8
         for n, pid in enumerate(ordered, 1):
             code, name, deg = desc_of(pid)
             ws.cell(r, 1, n).alignment = _CTR
@@ -375,29 +483,27 @@ class AdmissionSummaryExportService:
             ws.cell(r, 3, name).alignment = _LEFT
             ws.cell(r, 4, deg).alignment = _CTR
             ws.cell(r, 5, "Không").alignment = _CTR
-            row_vals = (
-                [sum(s1[pid].values())]
-                + [s1[pid][k] for k in LB_KEYS]
-                + [s1hs[pid][k] for k in HS_KEYS]
-            )
+            row_vals = [s1[pid][_TL_KEY]] + [s1[pid][k] for k in ALL_KEYS]
             for j, v in enumerate(row_vals):
                 c = ws.cell(r, c_tong + j, v)
                 c.alignment = _CTR
                 if j == 0:
                     c.font = Font(bold=True)
+                elif ALL_KEYS[j - 1] in MONEY_KEYS:
+                    c.number_format = _MONEY_FMT
             for i in range(1, total + 1):
                 ws.cell(r, i).border = _BORDER
             r += 1
 
-        for col, w in zip("ABCDE", (4.5, 11, 34, 10, 9)):
-            ws.column_dimensions[col].width = w
+        for col_letter, w in zip("ABCDE", (4.5, 11, 34, 10, 9)):
+            ws.column_dimensions[col_letter].width = w
         ws.column_dimensions[get_column_letter(c_tong)].width = 8
-        for j in range(len(LB_KEYS)):
-            ws.column_dimensions[get_column_letter(c_lead + j)].width = 11
-        for j in range(len(HS_KEYS)):
-            ws.column_dimensions[get_column_letter(c_hs + j)].width = 12
-        # Freeze rows 1-6 (header + TỔNG) and the A-E descriptor cols, like sheet 2.
-        ws.freeze_panes = ws.cell(7, c_tong).coordinate
+        for j, k in enumerate(ALL_KEYS):
+            ws.column_dimensions[get_column_letter(c_metric + j)].width = (
+                14 if k in MONEY_KEYS else 11
+            )
+        # Freeze header rows 1-7 + descriptor cols A-E + Tổng lead.
+        ws.freeze_panes = ws.cell(8, c_metric).coordinate
 
     # ----------------------------------------------------- sheet 2: nhân viên
     def _sheet_by_officer(
@@ -413,16 +519,15 @@ class AdmissionSummaryExportService:
         oshort,
         n_unassigned,
         s2,
-        s2hs,
-        src,
     ):
         ws = wb.create_sheet("Chia theo nhân viên")
         noff = len(officer_cols)
         block_w = 1 + noff  # cột "Tổng" + mỗi nhân viên (+ "Chưa PC" nếu có)
-        aA = ND + 1
-        aB = aA + len(LB_KEYS) * block_w
-        aC = aB + len(HS_KEYS) * block_w
-        total2 = ND + (len(LB_KEYS) + len(HS_KEYS) + len(SRC_KEYS)) * block_w
+        # Khối đầu = Tổng lead; sau đó 4 nhóm PHÂN LOẠI.
+        blocks = [("Tổng lead", [(_TL_KEY, "Tổng lead")], _TOTAL_FILL)] + GROUPS
+        n_metric = len(STORE_KEYS)  # 1 (_tl) + 14
+        aStart = ND + 1
+        total2 = ND + n_metric * block_w
 
         ws.cell(1, 1, f"SỐ LIỆU TUYỂN SINH NĂM {year} — CHIA THEO NHÂN VIÊN").font = (
             _TITLE_FONT
@@ -447,31 +552,30 @@ class AdmissionSummaryExportService:
         for i, h in enumerate(DESC, 1):
             ws.merge_cells(start_row=3, start_column=i, end_row=5, end_column=i)
             _H(ws.cell(3, i, h))
-        ws.merge_cells(start_row=3, start_column=aA, end_row=3, end_column=aB - 1)
-        _H(ws.cell(3, aA, "PHÂN LOẠI LEAD THEO TRẠNG THÁI"))
-        ws.merge_cells(start_row=3, start_column=aB, end_row=3, end_column=aC - 1)
-        _H(ws.cell(3, aB, "HỒ SƠ (đếm theo hồ sơ)"))
-        ws.merge_cells(start_row=3, start_column=aC, end_row=3, end_column=total2)
-        _H(ws.cell(3, aC, "Nguồn tuyển nhập học (nhóm đã đóng học phí)"))
 
-        # mỗi khối: cột "Tổng" + 1 cột / nhân viên (+ "Chưa PC")
-        def grp(col, keys, label, fill):
-            for k in keys:
+        # Header: row3 nhóm, row4 nhãn cột (merge block_w), row5 Tổng + nhân viên.
+        col = aStart
+        for gname, gcols, gfill in blocks:
+            span = len(gcols) * block_w
+            ws.merge_cells(
+                start_row=3, start_column=col, end_row=3, end_column=col + span - 1
+            )
+            _H(ws.cell(3, col, gname))
+            col += span
+        col = aStart
+        for gname, gcols, gfill in blocks:
+            for k, label in gcols:
                 ws.merge_cells(
                     start_row=4,
                     start_column=col,
                     end_row=4,
                     end_column=col + block_w - 1,
                 )
-                _H(ws.cell(4, col, label[k]), fill=fill, font=_SUB_FONT)
-                _H(ws.cell(5, col, "Tổng"), fill=fill, font=_SUB_FONT)
+                _H(ws.cell(4, col, label), fill=gfill, font=_SUB_FONT)
+                _H(ws.cell(5, col, "Tổng"), fill=gfill, font=_SUB_FONT)
                 for t, oid in enumerate(officer_cols):
-                    _H(ws.cell(5, col + 1 + t, oshort[oid]), fill=fill, font=_SUB_FONT)
+                    _H(ws.cell(5, col + 1 + t, oshort[oid]), fill=gfill, font=_SUB_FONT)
                 col += block_w
-
-        grp(aA, LB_KEYS, LB_LABEL, _GRPA_FILL)
-        grp(aB, HS_KEYS, HS_LABEL, _GRPB_FILL)
-        grp(aC, SRC_KEYS, SRC_LABEL, _GRPC_FILL)
 
         # TỔNG CỘNG row 6
         ws.cell(6, 1, "TỔNG CỘNG")
@@ -482,35 +586,35 @@ class AdmissionSummaryExportService:
             ws.cell(6, i).fill = _TOTAL_FILL
             ws.cell(6, i).border = _BORDER
 
-        def emit(row, col, store, keys, pid, is_total):
-            for k in keys:
-                vals = [
-                    (
-                        sum(store[p][k][oid] for p in ordered)
-                        if is_total
-                        else store[pid][k][oid]
-                    )
-                    for oid in officer_cols
-                ]
-                # cột "Tổng" của khối = cộng các nhân viên (khớp sheet Số liệu chung)
-                cells = [(col, sum(vals), True)]
-                cells += [(col + 1 + t, v, False) for t, v in enumerate(vals)]
-                for cc, v, is_block_total in cells:
-                    c = ws.cell(row, cc, v)
-                    c.alignment = _CTR
-                    c.border = _BORDER
-                    if is_total:
-                        c.fill = _TOTAL_FILL
-                        c.font = _TOTAL_FONT
-                    elif is_block_total:
-                        c.font = Font(bold=True)
-                col += block_w
-            return col
+        def emit(row, pid, is_total):
+            col = aStart
+            for gname, gcols, gfill in blocks:
+                for k, _label in gcols:
+                    vals = [
+                        (
+                            sum(s2[p][k][oid] for p in ordered)
+                            if is_total
+                            else s2[pid][k][oid]
+                        )
+                        for oid in officer_cols
+                    ]
+                    # cột "Tổng" của khối = cộng nhân viên (khớp sheet Số liệu chung)
+                    cells = [(col, sum(vals), True)]
+                    cells += [(col + 1 + t, v, False) for t, v in enumerate(vals)]
+                    for cc, v, is_block_total in cells:
+                        c = ws.cell(row, cc, v)
+                        c.alignment = _CTR
+                        c.border = _BORDER
+                        if k in MONEY_KEYS:
+                            c.number_format = _MONEY_FMT
+                        if is_total:
+                            c.fill = _TOTAL_FILL
+                            c.font = _TOTAL_FONT
+                        elif is_block_total:
+                            c.font = Font(bold=True)
+                    col += block_w
 
-        emit(6, aA, s2, LB_KEYS, None, True)
-        emit(6, aB, s2hs, HS_KEYS, None, True)
-        emit(6, aC, src, SRC_KEYS, None, True)
-
+        emit(6, None, True)
         r = 7
         for n, pid in enumerate(ordered, 1):
             code, name, deg = desc_of(pid)
@@ -519,24 +623,22 @@ class AdmissionSummaryExportService:
             ws.cell(r, 3, name).alignment = _LEFT
             ws.cell(r, 4, deg).alignment = _CTR
             ws.cell(r, 5, "Không").alignment = _CTR
-            emit(r, aA, s2, LB_KEYS, pid, False)
-            emit(r, aB, s2hs, HS_KEYS, pid, False)
-            emit(r, aC, src, SRC_KEYS, pid, False)
+            emit(r, pid, False)
             for i in range(1, ND + 1):
                 ws.cell(r, i).border = _BORDER
             r += 1
 
-        for col, w in zip("ABCDE", (4.5, 11, 28, 9, 8)):
-            ws.column_dimensions[col].width = w
-        for cc in range(aA, total2 + 1):
-            ws.column_dimensions[get_column_letter(cc)].width = 6.5
-        ws.freeze_panes = ws.cell(7, aA).coordinate
+        for col_letter, w in zip("ABCDE", (4.5, 11, 28, 9, 8)):
+            ws.column_dimensions[col_letter].width = w
+        for cc in range(aStart, total2 + 1):
+            ws.column_dimensions[get_column_letter(cc)].width = 8
+        ws.freeze_panes = ws.cell(7, aStart).coordinate
 
     # ----------------------------------------------------- sheet 3: quy ước
     def _sheet_notes(self, wb, year, n_unassigned, n_leads):
         ws = wb.create_sheet("Quy ước & ghi chú")
-        ws.column_dimensions["A"].width = 26
-        ws.column_dimensions["B"].width = 78
+        ws.column_dimensions["A"].width = 28
+        ws.column_dimensions["B"].width = 82
         ws.cell(1, 1, "QUY ƯỚC ĐẾM & GHI CHÚ").font = _TITLE_FONT
         ws.merge_cells("A1:B1")
         rows = [
@@ -546,49 +648,73 @@ class AdmissionSummaryExportService:
                 "có hồ sơ thì theo ngành quan tâm (offering). Đếm theo LEAD.",
             ),
             (
-                "Chưa tư vấn",
-                "Lead chưa tiếp cận: sts00, sts02, các trạng thái phổ quát "
-                "sts01/sts15/sts19, hoặc chưa có trạng thái. Đếm theo LEAD.",
+                "ĐANG TƯ VẤN — 5 cột",
+                "Đếm theo LEAD, theo trạng thái tư vấn HIỆN TẠI "
+                "(consultation_status) — khớp bộ lọc lead. Lead đã sang giai "
+                "đoạn hồ sơ/học phí KHÔNG còn ở đây.",
+            ),
+            ("• Chưa tiếp cận", "Lead trạng thái sts00 (Chưa tiếp cận)."),
+            ("• Đã kết nối", "Lead trạng thái sts02 (Đã kết nối liên hệ)."),
+            ("• Có nhu cầu tìm hiểu", "Lead trạng thái sts03."),
+            (
+                "• Đồng ý tư vấn/Hẹn liên hệ",
+                "Lead trạng thái sts06 (Đồng ý tư vấn) hoặc sts05 (Hẹn liên hệ lại).",
             ),
             (
-                "Đang tư vấn",
-                "Lead còn trong quy trình, chưa đóng phí và chưa dừng "
-                "(sts03–sts06 và các trạng thái khác). Đếm theo LEAD.",
+                "• Từ chối tư vấn/Đã ngừng liên hệ",
+                "Lead trạng thái sts04 (Từ chối tư vấn) hoặc sts20 (Đã ngừng tư vấn).",
             ),
             (
-                "Chỉ đóng lệ phí",
-                "Đã đóng/được miễn lệ phí xét tuyển NHƯNG chưa đóng học phí. "
-                "Đếm theo TIỀN thật (paid_amount>0 hoặc miễn).",
+                "HỒ SƠ — 4 cột",
+                "Đếm theo HỒ SƠ (mỗi lead lấy hồ sơ đại diện của năm). 3 cột con "
+                "loại trừ nhau, cộng = 'Tổng hồ sơ'.",
             ),
             (
-                "Đã đóng học phí",
-                "Đã đóng/được miễn học phí (đã gồm lệ phí). Đóng cả 2 → CHỈ "
-                "tính ở đây. Đếm theo TIỀN thật (paid_amount>0 hoặc miễn).",
+                "• Chưa hoàn thiện",
+                "Hồ sơ đang NHÁP, chưa nộp (admission_profile = draft).",
             ),
             (
-                "Đã dừng",
-                "Lead ngừng/loại: sts20 (ngừng tư vấn), sts16/sts08 (hồ sơ "
-                "rớt/rút), sts18 (hoàn HP), sts12 (nghỉ học). Đếm theo LEAD.",
+                "• Hoàn thiện 1 phần",
+                "Hồ sơ ĐÃ NỘP nhưng còn NỢ giấy tờ: còn tài liệu bắt buộc trong "
+                "document_debt chưa được duyệt (verified/nộp bản giấy).",
             ),
             (
-                "Nháp (draft)",
-                "Số HỒ SƠ đang nháp, chưa nộp (admission_profile = draft). "
+                "• Đủ điều kiện",
+                "Hồ sơ ĐÃ NỘP và ĐỦ giấy tờ (không còn nợ tài liệu bắt buộc).",
+            ),
+            (
+                "• Tổng hồ sơ",
+                "Tổng số hồ sơ đã tồn tại (= Chưa hoàn thiện + Hoàn thiện 1 phần "
+                "+ Đủ điều kiện).",
+            ),
+            (
+                "Lệ phí",
+                "Số hồ sơ đã ĐÓNG/được MIỄN lệ phí xét tuyển "
+                "(application: paid_amount>0 hoặc miễn). Đếm theo HỒ SƠ.",
+            ),
+            (
+                "HỌC PHÍ — 4 cột",
+                "Chỉ tính học kỳ 1 (HK1 = fee học phí semester_no=1).",
+            ),
+            (
+                "• Đóng một phần",
+                "SỐ HỒ SƠ đã đóng học phí HK1 nhưng CHƯA đủ (status=partial). "
                 "Đếm theo HỒ SƠ.",
             ),
             (
-                "Đã nộp (submitted)",
-                "Số HỒ SƠ đã nộp chính thức (submitted trở lên — gồm đã "
-                "duyệt/nhập học, KHÔNG gồm nháp). Đếm theo HỒ SƠ.",
+                "• Đóng đủ HK1",
+                "SỐ HỒ SƠ đã đóng ĐỦ học phí HK1 (đã thu đủ hoặc được miễn). "
+                "Đếm theo HỒ SƠ.",
             ),
             (
-                "Liên hệ/Giới thiệu",
-                "Trong nhóm đã đóng học phí: lead có source='referral' hoặc "
-                "có người giới thiệu.",
+                "• Tổng học phí",
+                "TIỀN học phí HK1 phải thu (final_amount) của các hồ sơ ĐÃ ĐÓNG "
+                "(một phần + đủ). Đơn vị: VND.",
             ),
             (
-                "Hệ thống phân phối",
-                "Trong nhóm đã đóng học phí: các lead còn lại "
-                "(website/social/phone/walk-in/event/other).",
+                "• Doanh thu",
+                "TIỀN học phí HK1 ĐÃ THU thực tế (paid_amount) của các hồ sơ đã "
+                "đóng. Đơn vị: VND (miễn học phí không tạo doanh thu).",
             ),
         ]
         _H(ws.cell(3, 1, "Cột"))
@@ -604,23 +730,23 @@ class AdmissionSummaryExportService:
         r += 1
         notes = [
             "GHI CHÚ:",
-            "• 5 cột phân loại lead (Chưa TV + Đang TV + Chỉ lệ phí + Học "
-            "phí + Đã dừng) LOẠI TRỪ nhau → cộng đúng = Tổng lead. Mỗi lead "
-            "chỉ nằm 1 ô (theo nấc cao nhất).",
-            "• Cột Nháp & Đã nộp đếm theo HỒ SƠ (chiều khác) — đặt riêng, "
-            "KHÔNG cộng vào Tổng lead. Nháp và Đã nộp rời nhau (mỗi hồ sơ 1 "
-            "trạng thái, mỗi lead tối đa 1 hồ sơ).",
-            "• 'Đã đóng học phí' nằm trong 'đã đóng lệ phí' về bản chất, "
-            "nhưng theo quy ước: đóng cả 2 CHỈ tính học phí → 2 cột rời "
-            "nhau, cộng = tổng đã đóng tiền.",
-            "• Nguồn tuyển nhập học chỉ tính cho nhóm 'đã đóng học phí'.",
+            "• 4 nhóm (Đang tư vấn / Hồ sơ / Lệ phí / Học phí) là các thước đo "
+            "SONG SONG, đếm theo chiều khác nhau (lead / hồ sơ / tiền) → tổng "
+            "các nhóm KHÔNG bằng 'Tổng lead'.",
+            "• 'Đang tư vấn' chỉ gồm lead đang ở giai đoạn tư vấn; lead đã nộp "
+            "hồ sơ / đóng học phí không nằm ở đây (đã chuyển giai đoạn).",
+            "• Các trạng thái phổ quát (không nghe máy / nhắn tin không phản hồi "
+            "/ hủy lịch hẹn) và lead chưa đặt trạng thái KHÔNG thuộc 5 cột tư "
+            "vấn (giống nhánh 'Hoạt động khác' của bộ lọc lead).",
+            "• 'Tổng học phí' và 'Doanh thu' là SỐ TIỀN (VND); các cột còn lại "
+            "là SỐ LƯỢNG (lead / hồ sơ).",
             "• Sheet 'Chia theo nhân viên': mỗi khối có cột 'Tổng' (= cộng các "
             "nhân viên, KHỚP sheet 'Số liệu chung') và cột 'Chưa PC' (lead chưa "
             "phân công nhân viên) nên sheet 2 đối chiếu khớp sheet 1.",
         ]
         if n_unassigned:
             notes.append(
-                f"• Có {n_unassigned} lead chưa phân công nhân viên (cột " "'Chưa PC')."
+                f"• Có {n_unassigned} lead chưa phân công nhân viên (cột 'Chưa PC')."
             )
         for t in notes:
             ws.cell(r, 1, t).alignment = _LEFT
