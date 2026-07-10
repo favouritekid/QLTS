@@ -45,7 +45,19 @@ else:
 # get_client_ip also fixes SSR (server-rendered fetches bypass nginx but carry the
 # X-Real-IP forwarded by serverFetch; get_remote_address would key on the frontend
 # container IP). Every @limiter.limit inherits this default unless it passes key_func.
-limiter = Limiter(key_func=get_client_ip, storage_uri=STORAGE_URI)
+# in_memory_fallback_enabled: Redis là storage đếm rate-limit cho MỌI endpoint
+# (gồm public landing /r/, session, heartbeat). Mặc định slowapi fail-CLOSED —
+# Redis chết/đầy → lệnh storage raise → request 500 hàng loạt (SPOF). Bật fallback
+# → khi Redis lỗi, tự chuyển sang bộ đếm IN-MEMORY (per-process) với CÙNG limits:
+# landing không 500, và vẫn GIỮ enforcement (khác swallow_errors=tắt hẳn → hở
+# brute-force auth). Redis lành lại thì tự quay về Redis. circuit-breaker
+# redis_breaker (database.py) chỉ bọc safe_redis_*, KHÔNG bọc client nội bộ của
+# slowapi → fallback này là lớp bảo vệ riêng cho rate-limit.
+limiter = Limiter(
+    key_func=get_client_ip,
+    storage_uri=STORAGE_URI,
+    in_memory_fallback_enabled=True,
+)
 
 
 # ============================================================================

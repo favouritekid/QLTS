@@ -27,8 +27,14 @@ else:
         settings.DATABASE_URL,
         pool_pre_ping=True,
         pool_recycle=3600,
-        pool_size=20,
-        max_overflow=40,
+        # Engine DÙNG CHUNG cho web workers + celery-worker + celery-beat (mỗi
+        # process 1 pool riêng). Cũ 20+40=60/process × ~4 process → burst tối đa
+        # ~240 » Postgres max_connections=100 → nguy cơ "too many connections".
+        # Giảm về 10+10=20/process → worst-case 4 process ≈ 80 < 100 (chừa ~20
+        # cho psql admin / alembic lúc deploy). ⚠️ Nếu nâng GUNICORN_WORKERS (>2)
+        # hoặc celery concurrency, phải tính lại hoặc nâng PG max_connections.
+        pool_size=10,
+        max_overflow=10,
         echo=False,
         connect_args={
             # ✅ Sét timeout ở mức độ command (phía client driver - asyncpg)
