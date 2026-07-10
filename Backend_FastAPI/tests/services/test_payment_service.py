@@ -225,10 +225,36 @@ class TestRecordPayment:
 
         assert "not active" in str(exc_info.value).lower()
 
+    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    async def test_record_payment_blocked_when_profile_terminal(
+        self, db, payment_fixtures, terminal_status
+    ):
+        """P0: cannot even stage a pending payment on a withdrawn/rejected
+        profile — its invoice can still be `issued` because withdraw does not
+        cancel the fee. (``withdrawal_pending`` arrives with PR-B; the CHECK
+        constraint rejects it today, so it is covered by the pure-logic unit
+        test ``test_assert_payable_target``.)"""
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        pf["profile"].status = terminal_status
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.record_manual_payment(
+                invoice_id=pf["invoice"].id,
+                method_id=pf["cash_method"].id,
+                amount=Decimal("100000"),
+                user_id=pf["maker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "hồ sơ" in str(exc.value).lower()
+
 
 # =============================================================================
 # PAYMENT VERIFICATION TESTS
 # =============================================================================
+
 
 class TestVerifyPayment:
     """Tests for payment verification (maker-checker)."""
@@ -407,10 +433,44 @@ class TestVerifyPayment:
         assert pf["fee"].status == FeeStatusEnum.paid.value
         assert pf["fee"].paid_amount == Decimal("1000000")
 
+    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    async def test_verify_payment_blocked_when_profile_terminal(
+        self, db, payment_fixtures, terminal_status
+    ):
+        """P0 race guard: a pending payment recorded while the profile was live,
+        then the profile is withdrawn/rejected → verify refuses to write money
+        (fee.paid_amount stays 0). Mirrors the cancelled-fee race guard."""
+        service = PaymentService(db)
+        pf = payment_fixtures
+
+        payment, _ = await service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("500000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        pf["profile"].status = terminal_status
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.verify_payment(
+                payment_id=payment.id,
+                verifier_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "hồ sơ" in str(exc.value).lower()
+
+        await db.refresh(pf["fee"])
+        assert pf["fee"].paid_amount == Decimal("0")
+
 
 # =============================================================================
 # PAYMENT REJECTION TESTS
 # =============================================================================
+
 
 class TestRejectPayment:
     """Tests for payment rejection."""
@@ -782,10 +842,49 @@ class TestOverpaymentService:
             )
         assert "status" in str(exc.value).lower()
 
+    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    async def test_apply_overpayment_blocked_when_profile_terminal(
+        self, db, payment_fixtures, terminal_status
+    ):
+        """P0: overpayment credit must not be applied onto a withdrawn/rejected
+        profile's invoice. The overpayment-apply path writes money but does NOT
+        run through ``assert_payable_target``, so it carries its own inline
+        profile guard."""
+        pf = payment_fixtures
+        overpayment = await self._create_pending_overpayment(db, pf)
+
+        target_invoice = Invoice(
+            fee_id=pf["fee"].id,
+            invoice_number="INV-TEST-TERMGUARD-0001",
+            installment_no=2,
+            amount=Decimal("500000"),
+            paid_amount=Decimal("0"),
+            penalty_amount=Decimal("0"),
+            status=InvoiceStatusEnum.issued.value,
+            due_date=date.today() + timedelta(days=30),
+        )
+        db.add(target_invoice)
+        await db.flush()
+        await db.refresh(target_invoice)
+
+        pf["profile"].status = terminal_status
+        await db.commit()
+
+        service = OverpaymentService(db)
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await service.apply_to_invoice(
+                overpayment_id=overpayment.id,
+                target_invoice_id=target_invoice.id,
+                user_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "hồ sơ" in str(exc.value).lower()
+
 
 # =============================================================================
 # REFUND SERVICE TESTS
 # =============================================================================
+
 
 class TestRefundService:
     """Tests for refund request lifecycle."""

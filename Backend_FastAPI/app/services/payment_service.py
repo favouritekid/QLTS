@@ -49,6 +49,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
 )
+from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.config import settings
 
 log = structlog.get_logger(__name__)
@@ -131,13 +132,30 @@ def reverse_payment_balances(
 
 
 def assert_payable_target(
-    fee: Optional[Fee], invoice: Optional[Invoice], *, action: str
+    fee: Optional[Fee],
+    invoice: Optional[Invoice],
+    profile: Optional["models.AdmissionProfile"],
+    *,
+    action: str,
 ) -> None:
-    """Refuse to act on a cancelled fee/invoice — the SINGLE invariant every
+    """Refuse to write money onto a dead target — the SINGLE invariant every
     money-touching entry runs right after locking the fee+invoice (manual
     verify, online callback, intent creation). Centralising it means a future
-    fourth entry point can't silently re-open the "ghi tiền vào fee đã huỷ"
-    hole. ``action`` customises the Vietnamese message.
+    entry point can't silently re-open the "ghi tiền vào target đã chết" hole.
+    ``action`` customises the Vietnamese message.
+
+    Two dead-target classes are refused:
+      1. **Cancelled fee/invoice** — the fee or its invoice was cancelled
+         (``cancel_fee`` / cancel-invoice) after this operation started.
+      2. **Non-payable profile** — the admission profile was withdrawn /
+         rejected / is awaiting refund (``NON_PAYABLE_PROFILE_STATUSES``).
+         The invoice can still be ``issued`` on a withdrawn profile (withdraw
+         does not cancel fees today), so the invoice-status check alone would
+         let money land on a profile that is on its way out.
+
+    ``profile`` is REQUIRED (pass ``None`` explicitly when the fee has no
+    admission-profile linkage) so every caller consciously resolves it — a
+    silent default would re-open exactly the hole this guard closes.
     """
     if (fee is not None and fee.status == FeeStatusEnum.cancelled.value) or (
         invoice is not None
@@ -145,6 +163,10 @@ def assert_payable_target(
     ):
         raise BusinessRuleViolation(
             f"Không thể {action}: khoản phí/hoá đơn đã bị huỷ."
+        )
+    if profile is not None and profile.status in NON_PAYABLE_PROFILE_STATUSES:
+        raise BusinessRuleViolation(
+            f"Không thể {action}: hồ sơ đã rút/từ chối/đang chờ hoàn tiền."
         )
 
 
@@ -225,6 +247,20 @@ class PaymentService:
             raise BusinessRuleViolation(
                 f"Cannot record payment for invoice with status '{invoice.status}'. "
                 f"Allowed: {list(PAYABLE_INVOICE_STATUSES)}"
+            )
+
+        # P0: never even stage a pending payment on a withdrawn/rejected/
+        # refund-pending profile. The invoice can still be `issued` on such a
+        # profile (withdraw does not cancel fees), so the payable-status check
+        # above is not enough — resolve the profile and refuse up front.
+        _fee_for_guard = (
+            await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        )
+        if _fee_for_guard is not None:
+            _profile_for_guard = await self._get_profile_for_fee(_fee_for_guard)
+            assert_payable_target(
+                _fee_for_guard, invoice, _profile_for_guard,
+                action="ghi nhận thanh toán",
             )
 
         # Validate amount doesn't exceed remaining
@@ -381,11 +417,14 @@ class PaymentService:
             raise ResourceNotFoundError("Fee not found")
 
         # Defense-in-depth: the fee/invoice may have been cancelled (cancel_fee)
-        # AFTER this pending payment was recorded but BEFORE verification. Refuse
-        # to write money onto a cancelled target — the pending payment is left
-        # for rejection. cancel_fee blocks while a pending payment exists, so
-        # this only fires for the narrow record-during-cancel race window.
-        assert_payable_target(fee, invoice, action="xác minh thanh toán")
+        # AFTER this pending payment was recorded but BEFORE verification, or the
+        # profile may have been withdrawn/rejected in the meantime. Refuse to
+        # write money onto a dead target — the pending payment is left for
+        # rejection. cancel_fee blocks while a pending payment exists, so the
+        # cancelled-target case only fires for the narrow record-during-cancel
+        # race; the profile check closes the withdrawn-but-fee-still-issued hole.
+        profile = await self._get_profile_for_fee(fee)
+        assert_payable_target(fee, invoice, profile, action="xác minh thanh toán")
 
         # Capture settled state BEFORE mutation (PR 5 transition detection)
         from app.services.fee_calculation_service import is_hk1_settled_fee
@@ -1153,7 +1192,13 @@ class RefundService:
         self,
         fee: Fee,
     ) -> Optional[models.AdmissionProfile]:
-        """Get admission profile for fee with Lead relationship loaded."""
+        """Get admission profile for fee with Lead relationship loaded.
+
+        RefundService's own copy — ``process_approved_refund`` resolves the
+        profile via ``self``. Deliberately NOT shared with
+        ``PaymentService._get_profile_for_fee``: they are the same body on two
+        separate service classes, not a duplicate to dedupe.
+        """
         query = (
             select(models.AdmissionProfile)
             .options(selectinload(models.AdmissionProfile.lead))

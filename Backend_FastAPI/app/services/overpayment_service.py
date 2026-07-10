@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import AdmissionProfile
 from app.models.finance import (
     FeeStatusEnum,
     InvoiceStatusEnum,
@@ -23,6 +25,7 @@ from app.models.finance import (
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import OverpaymentRepository
 from app.services.payment_service import RefundService
+from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
@@ -116,6 +119,23 @@ class OverpaymentService:
         if target_fee.admission_profile_id != overpayment.admission_profile_id:
             raise BusinessRuleViolation(
                 "Overpayment can only be applied to an invoice on the same profile"
+            )
+
+        # P0: applying an overpayment writes money onto the target fee/invoice
+        # but does NOT pass through assert_payable_target — inline the profile
+        # guard so credit can't be applied to a withdrawn/rejected/refund-pending
+        # profile (its invoice can still be `issued` because withdraw does not
+        # cancel the fee).
+        target_profile_status = (
+            await self.db.execute(
+                select(AdmissionProfile.status).where(
+                    AdmissionProfile.id == target_fee.admission_profile_id
+                )
+            )
+        ).scalar_one_or_none()
+        if target_profile_status in NON_PAYABLE_PROFILE_STATUSES:
+            raise BusinessRuleViolation(
+                "Không thể áp khoản dư: hồ sơ đã rút/từ chối/đang chờ hoàn tiền."
             )
 
         # Use `is not None` (not `or`): Decimal('0') is falsy, so `amount or ...`
