@@ -2,10 +2,10 @@
 
 Covers the DB-free logic: officer short-name safety (whitespace crash guard,
 CSV-injection sanitize, collision disambiguation) and the FUNNEL workbook
-aggregation — each lead lands in exactly one of the 11 funnel columns
-(Đang tư vấn / Hồ sơ / Lệ phí / Học phí) so they sum to Tổng lead; plus the
-reference block (Tổng hồ sơ đã tạo) that counts every profile regardless of
-funnel stage.
+aggregation — each lead lands in exactly one of the 9 funnel columns
+(5 tư vấn + Hồ sơ chưa đóng phí + Lệ phí + Đóng một phần + Đóng đủ HK1) so they
+sum to Tổng lead; plus the reference block (Chi tiết hồ sơ đã tạo) that counts
+every profile regardless of funnel stage.
 """
 
 from app.services.admission_summary_export_service import (
@@ -161,3 +161,41 @@ def test_build_workbook_handles_zero_officers():
     wb = svc._build_workbook(2026, leads, [], majors)
     assert "Chia theo nhân viên" in wb.sheetnames
     assert wb["Số liệu chung"].cell(7, 6).value == len(leads)
+
+
+def test_build_workbook_edge_cases():
+    # (a) miễn học phí 100%: settled nhưng hk1_paid=0 → "Đóng đủ HK1" +1 nhưng
+    #     Doanh thu KHÔNG cộng (miễn không tạo doanh thu).
+    # (b) has_app + hồ sơ NHÁP → phễu xếp "Lệ phí" (has_app trước ps), KHÔNG vào
+    #     "Hồ sơ chưa đóng phí"; nhưng khối tham chiếu đếm nó là nháp.
+    leads = [
+        _lead(
+            id=1,
+            cs="sts10",
+            off=10,
+            pstatus="approved",
+            has_app=True,
+            hk1_settled=True,
+            hk1_final=8_000_000,
+            hk1_paid=0,  # miễn 100%
+        ),
+        _lead(id=2, cs="sts13", off=10, pstatus="draft", has_app=True),  # lệ phí+nháp
+    ]
+    officers = [dict(id=10, nm="Nguyễn An")]
+    majors = [dict(id=1, code="6480201", name="CNTT", degree_level="Cao đẳng")]
+    svc = AdmissionSummaryExportService(db=None)
+    ws = svc._build_workbook(2026, leads, officers, majors)["Số liệu chung"]
+    assert ws.cell(7, 6).value == 2  # Tổng lead
+    # (a) miễn học phí
+    assert ws.cell(7, 15).value == 1  # Đóng đủ HK1
+    assert ws.cell(7, 16).value == 1  # Tổng học phí (đếm) = 1
+    assert ws.cell(7, 17).value == 0  # Doanh thu = 0 (miễn, paid=0)
+    # (b) has_app + nháp → Lệ phí, KHÔNG vào Hồ sơ
+    assert ws.cell(7, 13).value == 1  # Lệ phí
+    assert ws.cell(7, 12).value == 0  # Hồ sơ chưa đóng phí = 0
+    # Tham chiếu: id2 nháp → Chưa hoàn thiện; id1 approved → Đủ điều kiện
+    assert ws.cell(7, 18).value == 1  # ref Chưa hoàn thiện
+    assert ws.cell(7, 20).value == 1  # ref Đủ điều kiện
+    assert ws.cell(7, 21).value == 2  # ref Tổng
+    # Phễu 9 cột (7-15) = Tổng lead
+    assert sum(ws.cell(7, c).value for c in range(7, 16)) == 2

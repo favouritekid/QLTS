@@ -2,8 +2,11 @@
 
 Báo cáo "ảnh chụp" phân bố TẠI THỜI ĐIỂM xuất, KHÁC cockpit tuần (funnel theo
 thời gian). Là một PHỄU: mỗi lead xếp vào đúng GIAI ĐOẠN CAO NHẤT đạt được, nên
-11 cột đếm của phễu CỘNG = "Tổng lead". Ưu tiên cao→thấp:
+9 cột đếm của phễu (5 tư vấn + Hồ sơ chưa đóng phí + Lệ phí + Đóng một phần +
+Đóng đủ HK1) CỘNG = "Tổng lead". Ưu tiên cao→thấp:
   Học phí > Lệ phí > Hồ sơ > Đang tư vấn.
+(Các cột "Tổng học phí" (số đếm = tổng con) và "Doanh thu" (tiền) KHÔNG thuộc 9
+cột phễu; nhóm "Chi tiết hồ sơ" cũng ngoài phễu.)
 
 - HỌC PHÍ (đã đóng học phí HK1 = fee tuition ``semester_no=1``, partial hoặc đủ):
     Đóng một phần (partial) | Đóng đủ HK1 (đã thu đủ/miễn) | Tổng học phí (SỐ HỒ
@@ -128,10 +131,7 @@ GROUPS = [
 ]
 ALL_COLS = TV_COLS + HS_COLS + LP_COLS + HP_COLS + REF_COLS
 ALL_KEYS = [k for k, _ in ALL_COLS]
-COL_LABEL = dict(ALL_COLS)
 MONEY_KEYS = {"hp_dt"}  # chỉ Doanh thu là VND; hp_tong là số ĐẾM hồ sơ
-# Cột đếm thuộc PHỄU (loại trừ, cộng = Tổng lead) — dùng để kiểm tra/đối chiếu.
-FUNNEL_KEYS = [k for k, _ in TV_COLS + HS_COLS + LP_COLS] + ["hp_1p", "hp_dhk1"]
 # Các key được cộng dồn theo lead (gồm _tl để sheet 2 có khối Tổng lead).
 STORE_KEYS = [_TL_KEY] + ALL_KEYS
 
@@ -165,9 +165,8 @@ _YEAR_SCOPE = """
 #   - has_app: đã đóng/miễn lệ phí xét tuyển.
 #   - hk1_partial / hk1_settled: học phí HK1 (fee tuition semester_no=1) đóng một
 #     phần / đã đủ (paid|waived hoặc remaining<=0), bỏ cancelled.
-#   - hk1_final / hk1_paid: TIỀN học phí HK1 (phải thu / đã thu) — CHỈ tính trên
-#     hồ sơ đã đóng (partial hoặc settled), để "Tổng học phí"/"Doanh thu" đúng
-#     tập với 2 cột đếm.
+#   - hk1_paid: TIỀN học phí HK1 đã thu (Σ paid_amount trên hồ sơ đã đóng) — cho
+#     cột "Doanh thu". ("Tổng học phí" là SỐ ĐẾM hồ sơ, không dùng final_amount.)
 # Ngành (pid): nguyện vọng 1 của hồ sơ năm (display_order=1) nếu có, else ngành
 # quan tâm (offering) của lead.
 _LEAD_SQL = text(
@@ -183,12 +182,6 @@ _LEAD_SQL = text(
                        AND (f.status IN ('paid','waived')
                             OR (f.final_amount - f.paid_amount
                                 - f.waived_amount) <= 0)) AS hk1_settled,
-               COALESCE(sum(f.final_amount) FILTER (
-                   WHERE f.fee_type='tuition' AND f.semester_no=1
-                     AND f.status<>'cancelled'
-                     AND (f.status='partial' OR f.status IN ('paid','waived')
-                          OR (f.final_amount - f.paid_amount
-                              - f.waived_amount) <= 0)), 0) AS hk1_final,
                COALESCE(sum(f.paid_amount) FILTER (
                    WHERE f.fee_type='tuition' AND f.semester_no=1
                      AND f.status<>'cancelled'
@@ -217,7 +210,6 @@ _LEAD_SQL = text(
                COALESCE(fa.has_app, false) AS has_app,
                COALESCE(fa.hk1_partial, false) AS hk1_partial,
                COALESCE(fa.hk1_settled, false) AS hk1_settled,
-               COALESCE(fa.hk1_final, 0) AS hk1_final,
                COALESCE(fa.hk1_paid, 0) AS hk1_paid
         FROM admission_profile ap
         LEFT JOIN fee_agg fa ON fa.ap_id = ap.id
@@ -244,7 +236,6 @@ _LEAD_SQL = text(
            COALESCE(p.has_app, false) AS has_app,
            COALESCE(p.hk1_partial, false) AS hk1_partial,
            COALESCE(p.hk1_settled, false) AS hk1_settled,
-           COALESCE(p.hk1_final, 0) AS hk1_final,
            COALESCE(p.hk1_paid, 0) AS hk1_paid
     FROM lead l
     LEFT JOIN program_offering po ON l.offering_id = po.id
@@ -555,7 +546,7 @@ class AdmissionSummaryExportService:
         block_w = 1 + noff  # cột "Tổng" + mỗi nhân viên (+ "Chưa PC" nếu có)
         # Khối đầu = Tổng lead; sau đó 4 nhóm PHÂN LOẠI.
         blocks = [("Tổng lead", [(_TL_KEY, "Tổng lead")], _TOTAL_FILL)] + GROUPS
-        n_metric = len(STORE_KEYS)  # 1 (_tl) + 14
+        n_metric = len(STORE_KEYS)  # 1 (_tl) + 15 (ALL_KEYS: 5+1+1+4+4)
         aStart = ND + 1
         total2 = ND + n_metric * block_w
 
