@@ -39,6 +39,14 @@ from app.utils.exceptions import (
 pytestmark = pytest.mark.asyncio
 
 
+# Non-payable statuses the P0 guard blocks that are ALSO valid in the DB CHECK
+# constraint today, so they can be exercised end-to-end here.
+# ⚠️ PR-B widens the constraint to allow "withdrawal_pending" — add it to this
+# list then (the pure-logic path is already covered by
+# tests/unit/test_assert_payable_target.py).
+_DB_VALID_NON_PAYABLE = ["withdrawn", "rejected"]
+
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -225,7 +233,7 @@ class TestRecordPayment:
 
         assert "not active" in str(exc_info.value).lower()
 
-    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    @pytest.mark.parametrize("terminal_status", _DB_VALID_NON_PAYABLE)
     async def test_record_payment_blocked_when_profile_terminal(
         self, db, payment_fixtures, terminal_status
     ):
@@ -248,7 +256,7 @@ class TestRecordPayment:
                 user_id=pf["maker"].id,
                 unit_id=pf["unit_id"],
             )
-        assert "hồ sơ" in str(exc.value).lower()
+        assert "rút/từ chối" in str(exc.value).lower()
 
 
 # =============================================================================
@@ -433,7 +441,7 @@ class TestVerifyPayment:
         assert pf["fee"].status == FeeStatusEnum.paid.value
         assert pf["fee"].paid_amount == Decimal("1000000")
 
-    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    @pytest.mark.parametrize("terminal_status", _DB_VALID_NON_PAYABLE)
     async def test_verify_payment_blocked_when_profile_terminal(
         self, db, payment_fixtures, terminal_status
     ):
@@ -461,7 +469,7 @@ class TestVerifyPayment:
                 verifier_id=pf["checker"].id,
                 unit_id=pf["unit_id"],
             )
-        assert "hồ sơ" in str(exc.value).lower()
+        assert "rút/từ chối" in str(exc.value).lower()
 
         await db.refresh(pf["fee"])
         assert pf["fee"].paid_amount == Decimal("0")
@@ -842,7 +850,7 @@ class TestOverpaymentService:
             )
         assert "status" in str(exc.value).lower()
 
-    @pytest.mark.parametrize("terminal_status", ["withdrawn", "rejected"])
+    @pytest.mark.parametrize("terminal_status", _DB_VALID_NON_PAYABLE)
     async def test_apply_overpayment_blocked_when_profile_terminal(
         self, db, payment_fixtures, terminal_status
     ):
@@ -878,7 +886,7 @@ class TestOverpaymentService:
                 user_id=pf["checker"].id,
                 unit_id=pf["unit_id"],
             )
-        assert "hồ sơ" in str(exc.value).lower()
+        assert "rút/từ chối" in str(exc.value).lower()
 
 
 # =============================================================================

@@ -138,10 +138,13 @@ def assert_payable_target(
     *,
     action: str,
 ) -> None:
-    """Refuse to write money onto a dead target — the SINGLE invariant every
-    money-touching entry runs right after locking the fee+invoice (manual
-    verify, online callback, intent creation). Centralising it means a future
-    entry point can't silently re-open the "ghi tiền vào target đã chết" hole.
+    """Refuse to write money onto a dead target — the shared invariant the
+    money-touching entries run right after locking the fee+invoice: manual
+    record, manual verify, online callback, intent creation, and overpayment
+    apply. The ONE exception is bulk import, which inlines an equivalent
+    per-row check (routing each row through here would force a per-row
+    ``selectinload``); keep the two in sync. Centralising it means a future
+    entry point can reuse one guard instead of re-deriving the checks.
     ``action`` customises the Vietnamese message.
 
     Two dead-target classes are refused:
@@ -252,16 +255,14 @@ class PaymentService:
         # P0: never even stage a pending payment on a withdrawn/rejected/
         # refund-pending profile. The invoice can still be `issued` on such a
         # profile (withdraw does not cancel fees), so the payable-status check
-        # above is not enough — resolve the profile and refuse up front.
-        _fee_for_guard = (
-            await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        # above is not enough — resolve the fee/profile ONCE here, refuse up
+        # front, and reuse them for the notification payload below.
+        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        profile = (
+            await self._get_profile_for_fee(fee) if fee is not None else None
         )
-        if _fee_for_guard is not None:
-            _profile_for_guard = await self._get_profile_for_fee(_fee_for_guard)
-            assert_payable_target(
-                _fee_for_guard, invoice, _profile_for_guard,
-                action="ghi nhận thanh toán",
-            )
+        if fee is not None:
+            assert_payable_target(fee, invoice, profile, action="ghi nhận thanh toán")
 
         # Validate amount doesn't exceed remaining
         remaining = invoice.remaining_amount
@@ -305,17 +306,14 @@ class PaymentService:
             created_by=user_id,
         )
 
-        # Resolve data for notification while session is active
-        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        # Notification payload (fee/profile already resolved above for the guard)
         _profile_id = fee.admission_profile_id if fee else None
         _lead_id = None
         _officer_id = None
-        if fee:
-            profile = await self._get_profile_for_fee(fee)
-            if profile:
-                _lead_id = profile.lead_id
-                if hasattr(profile, 'lead') and profile.lead:
-                    _officer_id = profile.lead.assigned_officer_id
+        if profile:
+            _lead_id = profile.lead_id
+            if hasattr(profile, 'lead') and profile.lead:
+                _officer_id = profile.lead.assigned_officer_id
 
         _notify_payload = {
             "payment_id": payment.id,

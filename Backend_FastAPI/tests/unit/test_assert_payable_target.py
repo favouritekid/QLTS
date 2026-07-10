@@ -75,7 +75,7 @@ class TestAssertPayableTarget:
             assert_payable_target(
                 _fee(), _invoice(), _profile(status), action="thu tiền"
             )
-        assert "hồ sơ" in str(exc.value).lower()
+        assert "rút/từ chối" in str(exc.value).lower()
 
     def test_cancelled_target_message_takes_priority(self):
         """Cancelled fee is checked first, so its message wins over the profile
