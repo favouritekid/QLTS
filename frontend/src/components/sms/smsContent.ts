@@ -87,30 +87,55 @@ export interface Testimonial {
   q: string
   name: string
   role: string
+  img?: string // avatar THẬT (public/lp/testimonials/…); thiếu → placeholder gradient
 }
+// Cảm nghĩ THẬT của sinh viên (nguyên văn + ảnh từ tnpc.edu.vn "Cảm nghĩ TNPC").
 export const TESTIMONIALS: readonly Testimonial[] = [
   {
-    q: "Em học Điều dưỡng, ngay học kỳ cuối đã được bệnh viện nhận thực tập rồi ký hợp đồng. Thầy cô đồng hành sát sao.",
-    name: "Nguyễn Thị Hoa",
-    role: "Cựu SV Điều dưỡng – khóa 2022",
+    q: "Được trở thành sinh viên cao đẳng chuyên ngành Công nghệ Ô tô tại trường là cơ hội để em vừa phát triển cả về kiến thức chuyên môn vừa trau dồi kỹ năng tay nghề lẫn kỹ năng mềm. Điều này làm nền tảng để bản thân em có thể ứng dụng vào công việc thực tế sau khi tốt nghiệp.",
+    name: "Phạm Thế Hùng",
+    role: "Lớp Công nghệ Ô tô – CCO2331",
+    img: "/lp/testimonials/sv-o-to.jpg",
   },
   {
-    q: "Con tôi học Công nghệ ô tô, trường liên kết gara nên cháu có việc ngay. Học phí lại được miễn giảm.",
-    name: "Trần Văn Minh",
-    role: "Phụ huynh sinh viên",
+    q: "Mình rất vui khi được trở thành tân sinh viên của Cao đẳng Bách khoa Tây Nguyên. Mình đã lựa chọn trường vì chương trình học thực tế từ đó nhanh chóng tiếp cận với công việc sau khi ra trường. Mình tin rằng 2 năm rưỡi học tại trường sẽ là quãng thời gian đáng nhớ nhất.",
+    name: "Thái Văn Quang",
+    role: "Lớp Chăn nuôi-Thú y – CTY2331",
+    img: "/lp/testimonials/sv-chan-nuoi.jpg",
   },
   {
-    q: "Ngành CNTT được thực hành nhiều, ra trường mình vào được công ty phần mềm ở Buôn Ma Thuột.",
-    name: "Lê Quốc Bảo",
-    role: "Cựu SV CNTT – khóa 2021",
+    q: "Môi trường học tập năng động và cơ sở vật chất tốt là hai yếu tố chính em yêu thích nhất tại Cao đẳng Bách khoa Tây Nguyên. Là sinh viên ngành công nghệ thông tin, em tin rằng nhà trường sẽ giúp em phát triển điểm mạnh CNTT của mình, từng bước đạt được ước mơ.",
+    name: "Lê Minh Chương",
+    role: "Lớp Công nghệ Thông tin – CIT2331",
+    img: "/lp/testimonials/sv-cntt.jpg",
+  },
+  {
+    q: "Bản thân em có niềm yêu thích với ngành y, từ đó em đã tìm hiểu trường Cao đẳng Bách khoa Tây Nguyên. Không chỉ lựa chọn môi trường học tập mà đây còn là nơi để em phát triển bản thân. Bên cạnh đào tạo chuyên môn, trường còn có nhiều hoạt động văn nghệ, thể thao, giao lưu.",
+    name: "H Sana Niê",
+    role: "Lớp Điều dưỡng – CDD2131",
+    img: "/lp/testimonials/sv-dieu-duong.jpg",
+  },
+  {
+    q: "Sau khi tìm hiểu biết được Cao đẳng Bách khoa Tây Nguyên có đào tạo ngành Y sỹ đa khoa. Đây là ngôi trường phù hợp với nhu cầu và tiêu chí của em nên em quyết định theo học. Với mục tiêu đề ra, em sẽ học hỏi và rèn luyện để có nghề nghiệp và tương lai tốt hơn.",
+    name: "Lê Minh Nhân",
+    role: "Lớp Y sỹ đa khoa – TYS2121",
+    img: "/lp/testimonials/sv-y-sy.jpg",
+  },
+  {
+    q: "Để được cơ hội công tác trong ngành Dược em đã tham khảo chương trình học của nhiều trường. Với lộ trình học xen kẽ thực hành chiếm 75% thời lượng, kết hợp đi thực tập tại các đơn vị, cơ sở y tế tại trường Cao đẳng Bách khoa Tây Nguyên đã giúp em tự tin hơn khi sắp tốt nghiệp.",
+    name: "H Thu Huyền Niê",
+    role: "Lớp Dược – CDU2231",
+    img: "/lp/testimonials/sv-duoc.jpg",
   },
 ]
 
 /** Checklist ở khối đăng ký (#reg). */
 export const REG_CHECKLIST: readonly string[] = [
   "Xét tuyển bằng học bạ THPT",
-  "Học bổng đến 100% học phí kỳ I",
+  "Học bổng đến 100% học phí",
   "Cam kết giới thiệu việc làm",
+  "Tặng balo, áo thun đồng phục, hỗ trợ học bằng lái xe A1",
+  "Miễn 03 tháng ký túc xá; hỗ trợ khóa học tiếng Nhật",
 ]
 
 /** Thứ tự nhóm ngành hiển thị ở tier-1 (ngành lạ gom vào "Ngành khác" cuối). */
@@ -203,6 +228,56 @@ const DEFAULT: ProgramEditorial = {
  * Match theo TÊN ngành (khớp đầu tiên thắng → đặt luật hẹp/đặc thù lên trên).
  * Nội dung chép nguyên văn từ object `D` của mockup nganh-detail.
  */
+// CNTT: 2 mã dùng CHUNG nội dung, chỉ khác ẢNH — CĐ "Công nghệ thông tin"
+// (cntt.jpg) + TC "Công nghệ thông tin (ứng dụng phần mềm)" (cntt-phan-mem.jpg).
+// Tách entry /phần mềm/ đặt TRƯỚC entry CNTT chung bên dưới (khớp đầu tiên thắng).
+const CNTT_EDITORIAL: ProgramEditorial = {
+  group: "Kỹ thuật – Công nghệ",
+  image: "/lp/programs/cntt.jpg",
+  duration: "2,5 năm",
+  tagline:
+    "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
+  intro:
+    "Ngành Công nghệ thông tin đào tạo lập trình viên, kỹ thuật viên có khả năng phát triển phần mềm, thiết kế website, quản trị hệ thống mạng và cơ sở dữ liệu. Sinh viên thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm.",
+  subjects: [
+    "Lập trình cơ bản và hướng đối tượng",
+    "Thiết kế và lập trình web",
+    "Cơ sở dữ liệu",
+    "Mạng máy tính và quản trị hệ thống",
+    "Đồ án phần mềm thực tế",
+  ],
+  careers: [
+    "Lập trình viên web / ứng dụng",
+    "Kỹ thuật viên quản trị mạng",
+    "Nhân viên IT doanh nghiệp",
+    "Thiết kế – bảo trì website",
+  ],
+  goodIf: [
+    "Thích máy tính, công nghệ, giải quyết vấn đề bằng logic",
+    "Kiên nhẫn tìm lỗi và tự học cái mới liên tục",
+    "Muốn nghề thu nhập tốt, có thể làm từ xa / freelance",
+  ],
+  considerIf: [
+    "Không thích ngồi lâu với máy tính, ngại tư duy logic",
+    "Mong muốn công việc ít phải cập nhật kiến thức mới",
+  ],
+  trends: [
+    "Chuyển đổi số khiến hầu hết doanh nghiệp đều cần nhân lực IT",
+    "Nhu cầu lập trình, quản trị mạng tăng đều, lương hấp dẫn",
+    "Có thể làm từ xa, freelance hoặc cho công ty nước ngoài",
+  ],
+  faq: [
+    {
+      q: "Học IT có cần giỏi Toán không?",
+      a: "Cần tư duy logic hơn là Toán cao siêu. Chương trình dạy từ lập trình cơ bản; quan trọng nhất là chăm thực hành trên dự án thật.",
+    },
+    {
+      q: "Ra trường có làm được ngay không?",
+      a: "Chương trình thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm, giúp sinh viên sớm làm được việc.",
+    },
+  ],
+}
+
 const PROGRAMS_EDITORIAL: ReadonlyArray<{
   match: RegExp
   data: ProgramEditorial
@@ -265,7 +340,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /y học cổ truyền|cổ truyền|đông y/i,
     data: {
       group: "Khối Sức khỏe",
-      image: "/lp/programs/y-hoc-co-truyen.png",
+      image: "/lp/programs/y-hoc-co-truyen.jpg",
       duration: "3 năm",
       tagline:
         "Kết hợp tinh hoa y học cổ truyền với y học hiện đại — chăm sóc sức khỏe bằng châm cứu, xoa bóp, dược liệu.",
@@ -412,6 +487,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /chế biến món ăn|nấu ăn|ẩm thực|đầu bếp/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/che-bien-mon-an.jpg",
       duration: "2 năm",
       tagline:
         "Trở thành đầu bếp chuyên nghiệp — nghề mũi nhọn của nhà hàng – khách sạn, cơ hội việc làm rộng và có thể tự kinh doanh ẩm thực.",
@@ -457,53 +533,13 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     },
   },
   {
-    match: /công nghệ thông tin|cntt|phần mềm/i,
-    data: {
-      group: "Kỹ thuật – Công nghệ",
-      image: "/lp/programs/cntt.jpg",
-      duration: "2,5 năm",
-      tagline:
-        "Ngành công nghệ hot nhất — lập trình, quản trị mạng, thiết kế web, cơ hội việc làm rộng mở với thu nhập hấp dẫn.",
-      intro:
-        "Ngành Công nghệ thông tin đào tạo lập trình viên, kỹ thuật viên có khả năng phát triển phần mềm, thiết kế website, quản trị hệ thống mạng và cơ sở dữ liệu. Sinh viên thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm.",
-      subjects: [
-        "Lập trình cơ bản và hướng đối tượng",
-        "Thiết kế và lập trình web",
-        "Cơ sở dữ liệu",
-        "Mạng máy tính và quản trị hệ thống",
-        "Đồ án phần mềm thực tế",
-      ],
-      careers: [
-        "Lập trình viên web / ứng dụng",
-        "Kỹ thuật viên quản trị mạng",
-        "Nhân viên IT doanh nghiệp",
-        "Thiết kế – bảo trì website",
-      ],
-      goodIf: [
-        "Thích máy tính, công nghệ, giải quyết vấn đề bằng logic",
-        "Kiên nhẫn tìm lỗi và tự học cái mới liên tục",
-        "Muốn nghề thu nhập tốt, có thể làm từ xa / freelance",
-      ],
-      considerIf: [
-        "Không thích ngồi lâu với máy tính, ngại tư duy logic",
-        "Mong muốn công việc ít phải cập nhật kiến thức mới",
-      ],
-      trends: [
-        "Chuyển đổi số khiến hầu hết doanh nghiệp đều cần nhân lực IT",
-        "Nhu cầu lập trình, quản trị mạng tăng đều, lương hấp dẫn",
-        "Có thể làm từ xa, freelance hoặc cho công ty nước ngoài",
-      ],
-      faq: [
-        {
-          q: "Học IT có cần giỏi Toán không?",
-          a: "Cần tư duy logic hơn là Toán cao siêu. Chương trình dạy từ lập trình cơ bản; quan trọng nhất là chăm thực hành trên dự án thật.",
-        },
-        {
-          q: "Ra trường có làm được ngay không?",
-          a: "Chương trình thực hành trên dự án thực tế và thực tập tại doanh nghiệp phần mềm, giúp sinh viên sớm làm được việc.",
-        },
-      ],
-    },
+    // Mã TC hẹp hơn — đặt TRƯỚC entry CNTT chung để khớp đầu tiên (ảnh riêng).
+    match: /phần mềm/i,
+    data: { ...CNTT_EDITORIAL, image: "/lp/programs/cntt-phan-mem.jpg" },
+  },
+  {
+    match: /công nghệ thông tin|cntt/i,
+    data: CNTT_EDITORIAL,
   },
   {
     match: /ô ?tô/i,
@@ -606,7 +642,8 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
   {
     match: /vận tải|logistic/i,
     data: {
-      group: "Kỹ thuật – Công nghệ",
+      group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/van-tai.jpg",
       duration: "2,5 năm",
       tagline:
         "Quản lý và điều hành hoạt động vận tải — ngành gắn với logistics đang phát triển mạnh.",
@@ -655,6 +692,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /kế toán/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/ke-toan.jpg",
       duration: "2,5 năm",
       tagline:
         "Nghề ổn định, cần thiết cho mọi doanh nghiệp — thành thạo sổ sách, thuế, phần mềm kế toán.",
@@ -703,6 +741,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /văn phòng/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/van-phong.jpg",
       duration: "2,5 năm",
       tagline:
         "Tổ chức, điều hành công việc văn phòng chuyên nghiệp — kỹ năng hành chính, văn thư, lễ tân.",
@@ -751,6 +790,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /tiếng anh|ngôn ngữ anh/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/tieng-anh.jpg",
       duration: "3 năm",
       tagline:
         "Thành thạo tiếng Anh giao tiếp và biên – phiên dịch — chìa khóa cho nhiều cơ hội nghề nghiệp.",
@@ -799,7 +839,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /hướng dẫn du lịch|hướng dẫn viên/i,
     data: {
       group: "Kinh tế – Dịch vụ",
-      image: "/lp/programs/huong-dan-du-lich.png",
+      image: "/lp/programs/huong-dan-du-lich.jpg",
       duration: "2,5 năm",
       tagline:
         "Khám phá nghề hướng dẫn viên — đi nhiều, gặp gỡ nhiều, phát huy thế mạnh du lịch Tây Nguyên.",
@@ -849,6 +889,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /du lịch|lữ hành|khách sạn/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/du-lich.jpg",
       duration: "2,5 năm",
       tagline:
         "Quản lý dịch vụ lữ hành, khách sạn, nhà hàng — ngành mũi nhọn của kinh tế Tây Nguyên.",
@@ -898,6 +939,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
     match: /quản trị kinh doanh|kinh doanh|quản trị|kinh tế|marketing/i,
     data: {
       group: "Kinh tế – Dịch vụ",
+      image: "/lp/programs/quan-tri-kinh-doanh.jpg",
       duration: "2,5 năm",
       tagline:
         "Nền tảng kinh doanh toàn diện — quản lý, marketing, bán hàng, khởi nghiệp trong mọi lĩnh vực.",
