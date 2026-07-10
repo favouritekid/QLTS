@@ -120,6 +120,14 @@ SUBMIT_FLOOR_EVENTS: frozenset[str] = frozenset(
 # value at the call site.
 _RESULT_PUBLISHED_NO_OP: str = "result_published"
 
+# Sentinel for ``profile.status == "withdrawal_pending"`` (PR-B). While a
+# withdrawal waits for its refund to be processed, the lead KEEPS its current
+# consultation status (owner decision): sync is an explicit no-op here. The
+# pipeline only moves to sts08 when the withdrawal finalizes (status →
+# ``withdrawn``, handled by the withdrawn mapping), or stays put if the admin
+# cancels the withdrawal (status → ``draft``, handled by the draft short-circuit).
+_WITHDRAWAL_PENDING_NO_OP: str = "withdrawal_pending"
+
 
 def _should_apply_admission_floor(
     profile_status: str,
@@ -217,6 +225,18 @@ async def sync_lead_from_admission(
         log.debug(
             "sync_lead_from_admission: result_published is a future intermediate "
             "state / T6 broadcast marker — explicit no-op for lead sync",
+            profile_id=profile.id,
+        )
+        return False
+
+    # Explicit no-op for ``withdrawal_pending`` (PR-B). Holds the lead at its
+    # current consultation status until the refund finalizes (→ withdrawn → sts08)
+    # or is cancelled (→ draft, short-circuited above). Prevents an unmapped
+    # fall-through from logging a misleading "unknown status" warning.
+    if profile.status == _WITHDRAWAL_PENDING_NO_OP:
+        log.debug(
+            "sync_lead_from_admission: withdrawal_pending holds the lead status "
+            "until the refund finalizes — explicit no-op for lead sync",
             profile_id=profile.id,
         )
         return False

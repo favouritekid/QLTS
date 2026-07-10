@@ -3413,23 +3413,29 @@ async def _populate_unrefunded_payment_flag(
     lets ops see "cần hoàn tiền" on the detail page (refund stays manual via
     the existing maker-checker flow).
 
-    ``SUM(fee.paid_amount)`` is the currently-HELD amount: a processed refund
-    decrements ``paid_amount`` (``payment_service.process_approved_refund``),
-    so the sum is exactly the unrefunded balance.
+    ``sum_unrefunded_refundable_paid`` is the currently-HELD REFUNDABLE amount:
+    a processed refund decrements ``paid_amount``
+    (``payment_service.process_approved_refund``), so the sum is exactly the
+    unrefunded refundable balance. It EXCLUDES the non-refundable ``application``
+    fee (PR-B) — otherwise a profile whose only paid fee is the lệ phí xét tuyển
+    (e.g. prod #251: 70k application, never refunded) would falsely show the
+    "cần hoàn tiền" badge forever.
 
-    Cost guard: ONLY queries when ``status in (rejected, withdrawn)``; every
-    other status short-circuits to ``False`` with no DB hit. Idempotent — safe
-    to call from both ``_populate_response_fields`` (mutations) and
-    ``get_profile`` (GET detail) for parity.
+    Cost guard: ONLY queries when ``status in (rejected, withdrawn,
+    withdrawal_pending)``; every other status short-circuits to ``False`` with
+    no DB hit. Idempotent — safe to call from both ``_populate_response_fields``
+    (mutations) and ``get_profile`` (GET detail) for parity.
     """
-    if profile.status not in ("rejected", "withdrawn"):
+    if profile.status not in ("rejected", "withdrawn", "withdrawal_pending"):
         profile.has_unrefunded_payment = False
         return
 
     from app.repositories.fee_repository import FeeRepository
 
-    total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
-    profile.has_unrefunded_payment = total_paid > 0
+    refundable_held = await FeeRepository(db).sum_unrefunded_refundable_paid(
+        profile.id
+    )
+    profile.has_unrefunded_payment = refundable_held > 0
 
 
 async def _load_priority_audit_log(

@@ -67,6 +67,13 @@ class AdmissionStatus(str, Enum):
     ADMITTED = "admitted"
     WAITLISTED = "waitlisted"
 
+    # PR-B (DB CHECK extend 15-state) — intermediate "Chờ hoàn để rút" state
+    # between an in-progress state and terminal WITHDRAWN, held while a refund
+    # is being processed. NOT final: has edges → WITHDRAWN (refund done) and
+    # → DRAFT (refund rejected, admin cancels the withdrawal), so is_final_state
+    # derives False automatically.
+    WITHDRAWAL_PENDING = "withdrawal_pending"
+
 
 # Single source of truth for transitions — 14-state graph mixing legacy
 # single-NV edges + Phase 3 multi-NV edges. Engine writers
@@ -77,13 +84,20 @@ class AdmissionStatus(str, Enum):
 # service guards per plan v0.7 G7 add_choice precheck pattern).
 ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
     # Legacy 10-state lifecycle (preserved for uses_choice_engine=false)
-    AdmissionStatus.DRAFT: {AdmissionStatus.SUBMITTED, AdmissionStatus.WITHDRAWN},
+    AdmissionStatus.DRAFT: {
+        AdmissionStatus.SUBMITTED,
+        AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
+    },
     AdmissionStatus.SUBMITTED: {
         # Legacy: direct decision by manager (single-NV)
         AdmissionStatus.APPROVED,
         AdmissionStatus.REJECTED,
         AdmissionStatus.REVISION_REQUESTED,
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3 T2: submitted → reviewing (manager review window)
         AdmissionStatus.REVIEWING,
         # Phase 3 PR-3C Sub-3.5 T17: admin rollback → draft
@@ -92,6 +106,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
     AdmissionStatus.REJECTED: {
         AdmissionStatus.RESUBMITTED,
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3 PR-3C Sub-3.5 T17
         AdmissionStatus.DRAFT,
     },
@@ -99,6 +115,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.RESUBMITTED,
         AdmissionStatus.REJECTED,
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3 T4: revision_requested → reviewing (after candidate fix)
         AdmissionStatus.REVIEWING,
         # Phase 3 PR-3C Sub-3.5 T17
@@ -109,6 +127,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.REJECTED,
         AdmissionStatus.REVISION_REQUESTED,
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3: resubmitted → reviewing (uses_choice_engine path)
         AdmissionStatus.REVIEWING,
         # Phase 3 PR-3C Sub-3.5 T17
@@ -141,6 +161,8 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.RESULT_PUBLISHED,
         # Candidate withdraws during review window
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3 PR-3C Sub-3.5 T17
         AdmissionStatus.DRAFT,
     },
@@ -169,7 +191,21 @@ ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
         AdmissionStatus.REJECTED,
         # Candidate withdraws while waitlisted
         AdmissionStatus.WITHDRAWN,
+        # PR-B: withdraw with refundable money already paid → refund-pending
+        AdmissionStatus.WITHDRAWAL_PENDING,
         # Phase 3 PR-3C Sub-3.5 T17
+        AdmissionStatus.DRAFT,
+    },
+
+    # PR-B: intermediate refund-pending state. Non-final (is_final_state derives
+    # False from this non-empty set).
+    #   → WITHDRAWN: refund fully processed (finalize in process_approved_refund)
+    #   → DRAFT: refund rejected → admin cancels the withdrawal (cancel_withdrawal)
+    # NOTE (v3): ADMITTED intentionally has NO → WITHDRAWAL_PENDING edge above;
+    # withdrawing a seat-occupying (admitted) profile keeps the legacy direct
+    # → WITHDRAWN path (no auto-refund) to avoid quota-seat churn.
+    AdmissionStatus.WITHDRAWAL_PENDING: {
+        AdmissionStatus.WITHDRAWN,
         AdmissionStatus.DRAFT,
     },
 }
