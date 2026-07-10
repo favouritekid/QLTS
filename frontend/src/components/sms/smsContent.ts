@@ -640,7 +640,7 @@ const PROGRAMS_EDITORIAL: ReadonlyArray<{
   {
     match: /vận tải|logistic/i,
     data: {
-      group: "Kỹ thuật – Công nghệ",
+      group: "Kinh tế – Dịch vụ",
       image: "/lp/programs/van-tai.jpg",
       duration: "2,5 năm",
       tagline:
