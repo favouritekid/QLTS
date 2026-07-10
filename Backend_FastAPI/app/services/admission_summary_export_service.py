@@ -154,7 +154,7 @@ _LEAD_SQL = text(
     """
     WITH fee_agg AS (
         SELECT f.admission_profile_id AS ap_id,
-               bool_or(f.fee_type='application'
+               bool_or(f.fee_type='application' AND f.status<>'cancelled'
                        AND (f.paid_amount > 0 OR f.status='waived')) AS has_app,
                bool_or(f.fee_type='tuition' AND f.semester_no=1
                        AND f.status='partial') AS hk1_partial,
@@ -369,7 +369,10 @@ class AdmissionSummaryExportService:
 
             if r["has_app"]:
                 bump(pid, col, "le_phi", 1)
-            if r["hk1_partial"]:
+            # partial & settled loại trừ nhau: nếu HK1 đã đủ (remaining<=0) thì
+            # xếp "Đóng đủ HK1", KHÔNG đếm lại ở "Đóng một phần" (data lệch có thể
+            # để status='partial' dù remaining<=0).
+            if r["hk1_partial"] and not r["hk1_settled"]:
                 bump(pid, col, "hp_1p", 1)
             if r["hk1_settled"]:
                 bump(pid, col, "hp_dhk1", 1)
@@ -630,8 +633,15 @@ class AdmissionSummaryExportService:
 
         for col_letter, w in zip("ABCDE", (4.5, 11, 28, 9, 8)):
             ws.column_dimensions[col_letter].width = w
-        for cc in range(aStart, total2 + 1):
-            ws.column_dimensions[get_column_letter(cc)].width = 8
+        # Khối tiền (Tổng học phí / Doanh thu) cần rộng hơn — cột "Tổng" của khối
+        # cộng mọi nhân viên có thể tới hàng tỷ; width 8 sẽ hiện "########".
+        cc = aStart
+        for gname, gcols, gfill in blocks:
+            for k, _label in gcols:
+                w = 14 if k in MONEY_KEYS else 8
+                for t in range(block_w):
+                    ws.column_dimensions[get_column_letter(cc + t)].width = w
+                cc += block_w
         ws.freeze_panes = ws.cell(7, aStart).coordinate
 
     # ----------------------------------------------------- sheet 3: quy ước

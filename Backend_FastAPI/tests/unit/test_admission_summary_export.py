@@ -1,34 +1,14 @@
 """Pure-logic unit tests for the admission-summary Excel export (no DB).
 
-Covers the DB-free logic: lead bucketing priority, officer short-name safety
-(whitespace crash guard, CSV-injection sanitize, collision disambiguation),
-and the workbook aggregation (exclusive 5-bucket funnel sums to total leads,
-'Đã nộp' counts submitted-or-beyond).
+Covers the DB-free logic: officer short-name safety (whitespace crash guard,
+CSV-injection sanitize, collision disambiguation) and the workbook aggregation
+for the 14-column "PHÂN LOẠI" layout (Đang tư vấn / Hồ sơ / Lệ phí / Học phí).
 """
 
 from app.services.admission_summary_export_service import (
     AdmissionSummaryExportService,
-    _lead_bucket,
     _officer_short_names,
 )
-
-
-# ----------------------------------------------------------------- _lead_bucket
-def test_lead_bucket_priority_money_first():
-    # paid tuition wins even over a terminal consultation status
-    assert _lead_bucket(True, True, "sts20") == "hocphi"
-    assert _lead_bucket(True, False, "sts06") == "hocphi"
-    # paid application (no tuition) → lephi, even over 'đã dừng'
-    assert _lead_bucket(False, True, "sts20") == "lephi"
-
-
-def test_lead_bucket_no_money_falls_to_status():
-    assert _lead_bucket(False, False, "sts20") == "dung"
-    assert _lead_bucket(False, False, "sts16") == "dung"
-    assert _lead_bucket(False, False, "sts00") == "chua"
-    assert _lead_bucket(False, False, "sts02") == "chua"
-    assert _lead_bucket(False, False, None) == "chua"
-    assert _lead_bucket(False, False, "sts06") == "dang"
 
 
 # ------------------------------------------------------- _officer_short_names
@@ -59,77 +39,69 @@ def test_officer_short_name_plain_uses_last_token():
 
 
 # ------------------------------------------------------------- _build_workbook
+def _lead(**kw):
+    """Row shape the workbook reads — defaults = 'không hoạt động gì'."""
+    base = dict(
+        id=0,
+        pid=1,
+        cs=None,
+        off=None,
+        pstatus=None,
+        has_doc_debt=False,
+        has_app=False,
+        hk1_partial=False,
+        hk1_settled=False,
+        hk1_final=0,
+        hk1_paid=0,
+    )
+    base.update(kw)
+    return base
+
+
 def _rows():
     leads = [
-        # (bucket, hồ sơ)
-        dict(
-            id=1,
-            pid=1,
-            cs="sts06",
-            off=10,
-            source="website",
-            referrer_id=None,
-            pstatus="draft",
-            has_app=False,
-            has_tui=False,
-        ),
-        dict(
-            id=2,
-            pid=1,
-            cs="sts13",
-            off=10,
-            source="website",
-            referrer_id=None,
-            pstatus="submitted",
-            has_app=True,
-            has_tui=False,
-        ),
-        # approved profile + paid tuition → hocphi + counts as 'đã nộp'
-        dict(
+        # đang tư vấn sts00 (Chưa tiếp cận), chưa có hồ sơ
+        _lead(id=1, cs="sts00", off=10),
+        # hồ sơ nháp (Chưa hoàn thiện) + đã đóng lệ phí; cs sts06 → Đồng ý/Hẹn
+        _lead(id=2, cs="sts06", off=10, pstatus="draft", has_app=True),
+        # đã nộp + NỢ giấy tờ (Hoàn thiện 1 phần) + lệ phí + học phí partial
+        _lead(
             id=3,
-            pid=1,
-            cs="sts10",
+            cs="sts13",
             off=11,
-            source="referral",
-            referrer_id=None,
+            pstatus="submitted",
+            has_doc_debt=True,
+            has_app=True,
+            hk1_partial=True,
+            hk1_final=10_000_000,
+            hk1_paid=3_000_000,
+        ),
+        # đã nộp + đủ giấy tờ (Đủ điều kiện) + lệ phí + đóng đủ HK1
+        _lead(
+            id=4,
+            cs="sts10",
+            off=12,
             pstatus="approved",
             has_app=True,
-            has_tui=True,
+            hk1_settled=True,
+            hk1_final=12_000_000,
+            hk1_paid=12_000_000,
         ),
-        dict(
-            id=4,
-            pid=1,
-            cs="sts20",
-            off=12,
-            source="website",
-            referrer_id=None,
-            pstatus=None,
-            has_app=False,
-            has_tui=False,
-        ),
-        # unassigned officer
-        dict(
-            id=5,
-            pid=1,
-            cs="sts00",
-            off=None,
-            source="website",
-            referrer_id=None,
-            pstatus=None,
-            has_app=False,
-            has_tui=False,
-        ),
-        # offering points to a major not in catalog → '(Chưa xác định ngành)'
-        dict(
+        # tư vấn sts04 (Từ chối/Ngừng), officer chưa phân công
+        _lead(id=5, cs="sts04", off=None),
+        # pid ngoài catalog → '(Chưa xác định ngành)'; partial VÀ settled cùng lúc
+        # → chỉ được đếm ở "Đóng đủ HK1", KHÔNG đếm lại ở "Đóng một phần".
+        _lead(
             id=6,
             pid=999,
-            cs="sts06",
+            cs="sts02",
             off=10,
-            source="website",
-            referrer_id=None,
-            pstatus=None,
-            has_app=False,
-            has_tui=False,
+            pstatus="submitted",
+            has_app=True,
+            hk1_partial=True,
+            hk1_settled=True,
+            hk1_final=5_000_000,
+            hk1_paid=5_000_000,
         ),
     ]
     officers = [
@@ -153,19 +125,36 @@ def test_build_workbook_structure_and_totals():
         "Quy ước & ghi chú",
     ]
     ws = wb["Số liệu chung"]
-    # row 6 = TỔNG; col 6 = Tổng lead; cols 7..11 = 5 buckets; 12=Nháp 13=Đã nộp
-    assert ws.cell(6, 6).value == len(leads)  # 6 leads
-    bucket_sum = sum(ws.cell(6, c).value for c in range(7, 12))
-    assert bucket_sum == len(leads)  # exclusive funnel reconciles
-    assert ws.cell(6, 12).value == 1  # Nháp: only id=1 draft
-    # Đã nộp counts submitted-or-beyond: id=2 submitted + id=3 approved
-    assert ws.cell(6, 13).value == 2
+    # Layout: cột 6 = Tổng lead; 7-11 = Đang tư vấn; 12-15 = Hồ sơ;
+    # 16 = Lệ phí; 17-20 = Học phí. Hàng 7 = TỔNG CỘNG.
+    assert ws.cell(7, 6).value == 6  # Tổng lead
+    # Đang tư vấn (chỉ lead đang ở phase tư vấn — id3/id4 đã sang phase khác)
+    assert ws.cell(7, 7).value == 1  # Chưa tiếp cận (sts00)
+    assert ws.cell(7, 8).value == 1  # Đã kết nối (sts02, id6)
+    assert ws.cell(7, 10).value == 1  # Đồng ý tư vấn/Hẹn liên hệ (sts06)
+    assert ws.cell(7, 11).value == 1  # Từ chối/Đã ngừng (sts04)
+    # Hồ sơ
+    assert ws.cell(7, 12).value == 1  # Chưa hoàn thiện (draft: id2)
+    assert ws.cell(7, 13).value == 1  # Hoàn thiện 1 phần (nộp+nợ: id3)
+    assert ws.cell(7, 14).value == 2  # Đủ điều kiện (id4, id6)
+    assert ws.cell(7, 15).value == 4  # Tổng hồ sơ
+    # Tổng hồ sơ == cộng 3 cột con
+    assert ws.cell(7, 15).value == (
+        ws.cell(7, 12).value + ws.cell(7, 13).value + ws.cell(7, 14).value
+    )
+    # Lệ phí (id2,3,4,6)
+    assert ws.cell(7, 16).value == 4
+    # Học phí: Đóng một phần loại trừ Đóng đủ HK1 (id6 partial+settled → chỉ đủ)
+    assert ws.cell(7, 17).value == 1  # Đóng một phần (chỉ id3)
+    assert ws.cell(7, 18).value == 2  # Đóng đủ HK1 (id4, id6)
+    assert ws.cell(7, 19).value == 27_000_000  # Tổng học phí (10+12+5)
+    assert ws.cell(7, 20).value == 20_000_000  # Doanh thu (3+12+5)
 
 
 def test_build_workbook_handles_zero_officers():
     leads, _, majors = _rows()
     svc = AdmissionSummaryExportService(db=None)
-    # no officers in scope → sheet 2 still renders (title only), no crash
+    # no officers in scope → sheet 2 still renders (Chưa PC only), no crash
     wb = svc._build_workbook(2026, leads, [], majors)
     assert "Chia theo nhân viên" in wb.sheetnames
-    assert wb["Số liệu chung"].cell(6, 6).value == len(leads)
+    assert wb["Số liệu chung"].cell(7, 6).value == len(leads)
