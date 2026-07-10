@@ -125,34 +125,33 @@ def test_build_workbook_funnel_sums_to_total():
         "Quy ước & ghi chú",
     ]
     ws = wb["Số liệu chung"]
-    # Cột: 6=Tổng lead | 7-11 Tư vấn | 12-14 Hồ sơ | 15 Lệ phí |
-    #      16-17 Học phí (đếm) | 18-19 Học phí (tiền) | 20-23 Tham chiếu. TỔNG=row 7.
+    # Cột: 6=Tổng lead | 7-11 Tư vấn | 12 Hồ sơ chưa đóng phí | 13 Lệ phí |
+    #      14-17 Học phí (Đóng 1 phần/Đủ HK1/Tổng=đếm/Doanh thu=tiền) |
+    #      18-21 Chi tiết hồ sơ. TỔNG = row 7.
     assert ws.cell(7, 6).value == 9  # Tổng lead
     # Đang tư vấn
     assert ws.cell(7, 7).value == 1  # Chưa tiếp cận (sts00)
     assert ws.cell(7, 11).value == 1  # Từ chối/Đã ngừng (sts04)
-    # Hồ sơ (chưa đóng phí)
-    assert ws.cell(7, 12).value == 1  # Chưa hoàn thiện (draft)
-    assert ws.cell(7, 13).value == 1  # Hoàn thiện 1 phần
-    assert ws.cell(7, 14).value == 1  # Đủ điều kiện
+    # Hồ sơ chưa đóng phí (1 cột) — id3 (draft) + id4 (nộp+nợ) + id5 (nộp+đủ)
+    assert ws.cell(7, 12).value == 3
     # Lệ phí
-    assert ws.cell(7, 15).value == 1
-    # Học phí (đếm) — id9 partial+settled chỉ vào "Đóng đủ HK1"
-    assert ws.cell(7, 16).value == 1  # Đóng một phần (id7)
-    assert ws.cell(7, 17).value == 2  # Đóng đủ HK1 (id8, id9)
-    # PHỄU: 11 cột đếm (7-17) CỘNG = Tổng lead
-    funnel = sum(ws.cell(7, c).value for c in range(7, 18))
+    assert ws.cell(7, 13).value == 1
+    # Học phí — id9 partial+settled chỉ vào "Đóng đủ HK1"
+    assert ws.cell(7, 14).value == 1  # Đóng một phần (id7)
+    assert ws.cell(7, 15).value == 2  # Đóng đủ HK1 (id8, id9)
+    assert ws.cell(7, 16).value == 3  # Tổng học phí = SỐ hồ sơ đã đóng HP (1+2)
+    assert ws.cell(7, 16).value == ws.cell(7, 14).value + ws.cell(7, 15).value
+    assert ws.cell(7, 17).value == 20_000_000  # Doanh thu = TIỀN đã thu (3+12+5)
+    # PHỄU: 9 cột đếm (7-15) CỘNG = Tổng lead
+    funnel = sum(ws.cell(7, c).value for c in range(7, 16))
     assert funnel == 9
-    # Tiền
-    assert ws.cell(7, 18).value == 27_000_000  # Tổng học phí (10+12+5)
-    assert ws.cell(7, 19).value == 20_000_000  # Doanh thu (3+12+5)
-    # Tham chiếu: tổng hồ sơ đã tạo = mọi profile (7), KHÁC nhóm Hồ sơ phễu (3)
-    assert ws.cell(7, 20).value == 1  # ref Chưa hoàn thiện
-    assert ws.cell(7, 21).value == 1  # ref Hoàn thiện 1 phần
-    assert ws.cell(7, 22).value == 5  # ref Đủ điều kiện
-    assert ws.cell(7, 23).value == 7  # ref Tổng hồ sơ (mọi giai đoạn)
-    assert ws.cell(7, 23).value == (
-        ws.cell(7, 20).value + ws.cell(7, 21).value + ws.cell(7, 22).value
+    # Chi tiết hồ sơ đã tạo = mọi profile (7), KHÁC nhóm Hồ sơ phễu (3)
+    assert ws.cell(7, 18).value == 1  # Chưa hoàn thiện (id3 draft)
+    assert ws.cell(7, 19).value == 1  # Hoàn thiện 1 phần (id4)
+    assert ws.cell(7, 20).value == 5  # Đủ điều kiện (id5,6,7,8,9)
+    assert ws.cell(7, 21).value == 7  # Tổng hồ sơ (mọi giai đoạn)
+    assert ws.cell(7, 21).value == (
+        ws.cell(7, 18).value + ws.cell(7, 19).value + ws.cell(7, 20).value
     )
 
 

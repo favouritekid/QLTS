@@ -6,14 +6,14 @@ thời gian). Là một PHỄU: mỗi lead xếp vào đúng GIAI ĐOẠN CAO NH
   Học phí > Lệ phí > Hồ sơ > Đang tư vấn.
 
 - HỌC PHÍ (đã đóng học phí HK1 = fee tuition ``semester_no=1``, partial hoặc đủ):
-    Đóng một phần (partial, chưa đủ) | Đóng đủ HK1 (đã thu đủ/miễn) + 2 cột TIỀN:
-    Tổng học phí (Σ final_amount HK1) | Doanh thu (Σ paid_amount HK1).
+    Đóng một phần (partial) | Đóng đủ HK1 (đã thu đủ/miễn) | Tổng học phí (SỐ HỒ
+    SƠ đã đóng học phí = hp_1p + hp_dhk1; là cột tổng con, KHÔNG cộng vào phễu) |
+    Doanh thu (SỐ TIỀN học phí HK1 đã thu = Σ paid_amount, VND).
 - LỆ PHÍ: đã đóng/miễn lệ phí xét tuyển (application: paid_amount>0 OR waived)
     NHƯNG chưa đóng học phí.
-- HỒ SƠ (đã có hồ sơ nhưng CHƯA đóng phí nào): Chưa hoàn thiện (draft) | Hoàn
-    thiện 1 phần (đã nộp + còn nợ giấy tờ) | Đủ điều kiện (đã nộp + hết nợ).
-    "Nợ giấy tờ" = còn mã trong ``admission_profile.document_debt`` CHƯA duyệt
-    (verified/paper_submitted) — cơ chế fast-track nộp-kèm-nợ.
+- HỒ SƠ (đã có hồ sơ nhưng CHƯA đóng phí nào) — 1 cột. Chi tiết nháp/nợ/đủ xem
+    khối "Chi tiết hồ sơ" (tránh cột 0/0 vô nghĩa vì hồ sơ đã nộp thường đã đóng
+    phí nên chỉ còn hồ sơ nháp ở đây).
 - ĐANG TƯ VẤN (CHƯA có hồ sơ), theo ``consultation_status`` hiện tại: Chưa tiếp
     cận (sts00) | Đã kết nối (sts02) | Có nhu cầu tìm hiểu (sts03) | Đồng ý tư
     vấn/Hẹn liên hệ (sts06+sts05) | Từ chối tư vấn/Đã ngừng liên hệ (sts04+sts20).
@@ -57,24 +57,23 @@ TV_COLS = [
     ("tv_dyh", "Đồng ý tư vấn/Hẹn liên hệ"),
     ("tv_tcn", "Từ chối tư vấn/Đã ngừng liên hệ"),
 ]
-# Hồ sơ (PHỄU) = lead ĐÃ có hồ sơ nhưng CHƯA đóng phí nào (chưa lệ phí, chưa
-# học phí). 3 cột loại trừ.
-HS_COLS = [
-    ("hs_ct", "Chưa hoàn thiện"),
-    ("hs_1p", "Hoàn thiện 1 phần"),
-    ("hs_dk", "Đủ điều kiện"),
-]
+# Hồ sơ (PHỄU) = lead ĐÃ có hồ sơ nhưng CHƯA đóng phí nào. 1 cột (chi tiết
+# nháp/nợ/đủ ở khối "Chi tiết hồ sơ" bên dưới, tránh cột 0/0 vô nghĩa).
+HS_COLS = [("hs_cd", "Hồ sơ chưa đóng phí")]
 LP_COLS = [("le_phi", "Lệ phí")]
+# Học phí — 3 cột ĐẾM hồ sơ (Đóng một phần / Đóng đủ HK1 / Tổng học phí = số hồ
+# sơ đã đóng học phí = hp_1p + hp_dhk1) + 1 cột TIỀN (Doanh thu = học phí HK1 đã
+# thu, VND). Chỉ hp_1p + hp_dhk1 thuộc phễu; hp_tong là tổng con, hp_dt là tiền.
 HP_COLS = [
     ("hp_1p", "Đóng một phần"),
     ("hp_dhk1", "Đóng đủ HK1"),
-    ("hp_tonghp", "Tổng học phí"),
+    ("hp_tong", "Tổng học phí"),
     ("hp_dt", "Doanh thu"),
 ]
-# THAM CHIẾU (KHÔNG thuộc phễu, KHÔNG cộng vào Tổng lead): tổng số hồ sơ ĐÃ TẠO
-# ở MỌI giai đoạn (kể cả đã đóng phí) phân theo trạng thái. Giải thích vì sao
-# cột "Hồ sơ" của phễu < tổng hồ sơ thật: hồ sơ đã đóng phí đã tiến sang nhóm
-# Lệ phí/Học phí nên rời khỏi nhóm Hồ sơ.
+# CHI TIẾT HỒ SƠ (KHÔNG thuộc phễu, KHÔNG cộng vào Tổng lead): MỌI hồ sơ đã tạo
+# ở mọi giai đoạn (kể cả đã đóng phí) phân theo trạng thái. Nhóm 'Hồ sơ' của phễu
+# chỉ gồm hồ sơ CHƯA đóng phí; hồ sơ đã đóng phí đã tiến sang Lệ phí/Học phí →
+# Tổng hồ sơ đã tạo = Hồ sơ (phễu) + Lệ phí + Học phí.
 REF_COLS = [
     ("ref_ct", "Chưa hoàn thiện"),
     ("ref_1p", "Hoàn thiện 1 phần"),
@@ -125,12 +124,12 @@ GROUPS = [
     ("Hồ sơ (chưa đóng phí)", HS_COLS, _GRPB_FILL),
     ("Lệ phí", LP_COLS, _GRPC_FILL),
     ("Học phí", HP_COLS, _GRPD_FILL),
-    ("Tổng hồ sơ đã tạo (tham chiếu — KHÔNG thuộc phễu)", REF_COLS, _GRPE_FILL),
+    ("Chi tiết hồ sơ đã tạo (mọi giai đoạn — KHÔNG thuộc phễu)", REF_COLS, _GRPE_FILL),
 ]
 ALL_COLS = TV_COLS + HS_COLS + LP_COLS + HP_COLS + REF_COLS
 ALL_KEYS = [k for k, _ in ALL_COLS]
 COL_LABEL = dict(ALL_COLS)
-MONEY_KEYS = {"hp_tonghp", "hp_dt"}
+MONEY_KEYS = {"hp_dt"}  # chỉ Doanh thu là VND; hp_tong là số ĐẾM hồ sơ
 # Cột đếm thuộc PHỄU (loại trừ, cộng = Tổng lead) — dùng để kiểm tra/đối chiếu.
 FUNNEL_KEYS = [k for k, _ in TV_COLS + HS_COLS + LP_COLS] + ["hp_1p", "hp_dhk1"]
 # Các key được cộng dồn theo lead (gồm _tl để sheet 2 có khối Tổng lead).
@@ -387,21 +386,14 @@ class AdmissionSummaryExportService:
                     bump(pid, col, "hp_1p", 1)
                 else:
                     bump(pid, col, "hp_dhk1", 1)
-                fin = int(r["hk1_final"] or 0)
+                bump(pid, col, "hp_tong", 1)  # tổng con: số hồ sơ đã đóng học phí
                 paid = int(r["hk1_paid"] or 0)
-                if fin:
-                    bump(pid, col, "hp_tonghp", fin)
                 if paid:
-                    bump(pid, col, "hp_dt", paid)
+                    bump(pid, col, "hp_dt", paid)  # Doanh thu (VND đã thu)
             elif has_app:  # Lệ phí (đã đóng lệ phí, chưa học phí)
                 bump(pid, col, "le_phi", 1)
-            elif ps is not None:  # Hồ sơ (có hồ sơ, chưa đóng phí nào)
-                if ps == "draft":
-                    bump(pid, col, "hs_ct", 1)
-                elif r["has_doc_debt"]:
-                    bump(pid, col, "hs_1p", 1)
-                else:
-                    bump(pid, col, "hs_dk", 1)
+            elif ps is not None:  # Hồ sơ (có hồ sơ, chưa đóng phí nào) — 1 cột
+                bump(pid, col, "hs_cd", 1)
             else:  # Đang tư vấn (chưa có hồ sơ)
                 bump(pid, col, _TV_OF_CS.get(r["cs"], _TV_FALLBACK), 1)
 
@@ -688,8 +680,9 @@ class AdmissionSummaryExportService:
             (
                 "MÔ HÌNH: PHỄU",
                 "Mỗi lead xếp vào ĐÚNG 1 cột theo GIAI ĐOẠN CAO NHẤT: Học phí > "
-                "Lệ phí > Hồ sơ > Đang tư vấn. 11 cột đếm của phễu CỘNG = Tổng "
-                "lead. (Nhóm 'Tổng hồ sơ đã tạo' là THAM CHIẾU, không cộng.)",
+                "Lệ phí > Hồ sơ > Đang tư vấn. 9 cột đếm của phễu (5 tư vấn + Hồ "
+                "sơ + Lệ phí + Đóng một phần + Đóng đủ HK1) CỘNG = Tổng lead. Cột "
+                "'Tổng học phí', 'Doanh thu' và nhóm 'Chi tiết hồ sơ' KHÔNG cộng.",
             ),
             (
                 "Tổng lead",
@@ -711,17 +704,11 @@ class AdmissionSummaryExportService:
                 "sts04 (Từ chối) hoặc sts20 (Ngừng).",
             ),
             (
-                "HỒ SƠ — 3 cột",
+                "Hồ sơ (chưa đóng phí) — 1 cột",
                 "Lead ĐÃ có hồ sơ nhưng CHƯA đóng phí nào (chưa lệ phí, chưa học "
-                "phí). 3 cột loại trừ.",
+                "phí). Chi tiết nháp/nợ/đủ xem nhóm 'Chi tiết hồ sơ' (thường chỉ "
+                "còn hồ sơ nháp vì hồ sơ đã nộp phần lớn đã đóng phí).",
             ),
-            ("• Chưa hoàn thiện", "Hồ sơ NHÁP (admission_profile = draft)."),
-            (
-                "• Hoàn thiện 1 phần",
-                "ĐÃ NỘP nhưng còn NỢ giấy tờ (mã trong document_debt chưa duyệt "
-                "verified/nộp bản giấy).",
-            ),
-            ("• Đủ điều kiện", "ĐÃ NỘP và ĐỦ giấy tờ (hết nợ tài liệu bắt buộc)."),
             (
                 "Lệ phí",
                 "Đã ĐÓNG/miễn lệ phí xét tuyển (application: paid_amount>0 hoặc "
@@ -729,26 +716,27 @@ class AdmissionSummaryExportService:
             ),
             (
                 "HỌC PHÍ — 4 cột",
-                "Đã đóng học phí HK1 (fee tuition semester_no=1). 2 cột đếm hồ "
-                "sơ + 2 cột TIỀN.",
+                "Đã đóng học phí HK1 (fee tuition semester_no=1). 3 cột ĐẾM hồ sơ "
+                "+ 1 cột TIỀN (Doanh thu).",
             ),
-            ("• Đóng một phần", "Số hồ sơ HK1 = partial (đã đóng chưa đủ)."),
-            ("• Đóng đủ HK1", "Số hồ sơ HK1 đã thu đủ hoặc được miễn."),
+            ("• Đóng một phần", "SỐ hồ sơ HK1 = partial (đã đóng chưa đủ)."),
+            ("• Đóng đủ HK1", "SỐ hồ sơ HK1 đã thu đủ hoặc được miễn."),
             (
                 "• Tổng học phí",
-                "TIỀN học phí HK1 phải thu (Σ final_amount) của hồ sơ ĐÃ ĐÓNG. "
-                "Đơn vị VND.",
+                "SỐ hồ sơ đã đóng học phí = Đóng một phần + Đóng đủ HK1 (KHÔNG "
+                "phải tiền; là tổng con, không cộng vào phễu).",
             ),
             (
                 "• Doanh thu",
                 "TIỀN học phí HK1 ĐÃ THU (Σ paid_amount). Đơn vị VND (miễn học "
-                "phí không tạo doanh thu).",
+                "phí không tạo doanh thu; không gồm lệ phí).",
             ),
             (
-                "TỔNG HỒ SƠ ĐÃ TẠO — 4 cột (tham chiếu)",
+                "CHI TIẾT HỒ SƠ ĐÃ TẠO — 4 cột (ngoài phễu)",
                 "KHÔNG thuộc phễu, KHÔNG cộng vào Tổng lead. Đếm MỌI hồ sơ đã tạo "
-                "(mọi giai đoạn, kể cả đã đóng phí), phân Chưa hoàn thiện/Hoàn "
-                "thiện 1 phần/Đủ điều kiện + Tổng.",
+                "(mọi giai đoạn, kể cả đã đóng phí), phân Chưa hoàn thiện (nháp)/"
+                "Hoàn thiện 1 phần (nộp+nợ giấy tờ)/Đủ điều kiện (nộp+đủ) + Tổng. "
+                "= Hồ sơ(phễu) + Lệ phí + Học phí.",
             ),
             (
                 "• Vì sao ≠ nhóm 'Hồ sơ'",
@@ -770,15 +758,16 @@ class AdmissionSummaryExportService:
         r += 1
         notes = [
             "GHI CHÚ:",
-            "• PHỄU: mỗi lead đúng 1 cột (trong 11 cột đếm) → 5 cột Tư vấn + 3 "
-            "cột Hồ sơ + Lệ phí + 2 cột Học phí (Đóng một phần, Đóng đủ HK1) "
-            "CỘNG = Tổng lead. 'Tổng học phí'/'Doanh thu' là TIỀN, không cộng.",
-            "• Nhóm 'Tổng hồ sơ đã tạo' (xám) là THAM CHIẾU — KHÔNG cộng vào "
+            "• PHỄU: mỗi lead đúng 1 cột (trong 9 cột đếm) → 5 cột Tư vấn + Hồ "
+            "sơ chưa đóng phí + Lệ phí + Đóng một phần + Đóng đủ HK1 CỘNG = Tổng "
+            "lead. 'Tổng học phí' (số đếm) và 'Doanh thu' (tiền) KHÔNG cộng.",
+            "• Nhóm 'Chi tiết hồ sơ đã tạo' (xám) NGOÀI phễu — KHÔNG cộng vào "
             "Tổng lead; dùng để tra tổng số hồ sơ thật ở mọi giai đoạn.",
-            "• Cột 'Đang tư vấn' KHÁC số của bộ lọc lead: phễu chỉ tính lead "
-            "CHƯA có hồ sơ; lead đã có hồ sơ nháp được xếp sang nhóm Hồ sơ.",
-            "• 'Tổng học phí' và 'Doanh thu' là SỐ TIỀN (VND); các cột còn lại "
-            "là SỐ LƯỢNG (lead / hồ sơ).",
+            "• Cột 'Đang tư vấn' KHÁC bộ lọc lead ở cột 'Đồng ý tư vấn/Hẹn': phễu "
+            "chỉ tính lead CHƯA có hồ sơ; lead đã có hồ sơ nháp xếp sang nhóm Hồ "
+            "sơ (4/5 cột tư vấn còn lại KHỚP bộ lọc).",
+            "• Chỉ 'Doanh thu' là SỐ TIỀN (VND); tất cả cột còn lại là SỐ LƯỢNG "
+            "(lead / hồ sơ) — kể cả 'Tổng học phí'.",
             "• Sheet 'Chia theo nhân viên': mỗi khối có cột 'Tổng' (= cộng các "
             "nhân viên, KHỚP sheet 'Số liệu chung') và cột 'Chưa PC' (lead chưa "
             "phân công nhân viên) nên sheet 2 đối chiếu khớp sheet 1.",
