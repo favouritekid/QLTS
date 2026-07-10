@@ -446,14 +446,24 @@ export function SmsLandingClient({ code }: { code: string }) {
                 className="border-sms-line bg-sms-card rounded-2xl border p-6"
               >
                 <div className="mb-3.5 flex items-center gap-3">
-                  <span
-                    aria-hidden
-                    className="border-sms-100 h-11 w-11 rounded-full border"
-                    style={{
-                      background:
-                        "repeating-linear-gradient(135deg,#dbe7fb 0 8px,#eaf1fd 8px 16px)",
-                    }}
-                  />
+                  {t.img ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={t.img}
+                      alt=""
+                      loading="lazy"
+                      className="border-sms-100 h-11 w-11 shrink-0 rounded-full border object-cover"
+                    />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="border-sms-100 h-11 w-11 shrink-0 rounded-full border"
+                      style={{
+                        background:
+                          "repeating-linear-gradient(135deg,#dbe7fb 0 8px,#eaf1fd 8px 16px)",
+                      }}
+                    />
+                  )}
                   <span className="leading-tight">
                     <span className="text-sms-ink-strong block text-sm font-bold">
                       {t.name}

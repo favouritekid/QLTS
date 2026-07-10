@@ -87,22 +87,45 @@ export interface Testimonial {
   q: string
   name: string
   role: string
+  img?: string // avatar THẬT (public/lp/testimonials/…); thiếu → placeholder gradient
 }
+// Cảm nghĩ THẬT của sinh viên (nguyên văn + ảnh từ tnpc.edu.vn "Cảm nghĩ TNPC").
 export const TESTIMONIALS: readonly Testimonial[] = [
   {
-    q: "Em học Điều dưỡng, ngay học kỳ cuối đã được bệnh viện nhận thực tập rồi ký hợp đồng. Thầy cô đồng hành sát sao.",
-    name: "Nguyễn Thị Hoa",
-    role: "Cựu SV Điều dưỡng – khóa 2022",
+    q: "Được trở thành sinh viên cao đẳng chuyên ngành Công nghệ Ô tô tại trường là cơ hội để em vừa phát triển cả về kiến thức chuyên môn vừa trau dồi kỹ năng tay nghề lẫn kỹ năng mềm. Điều này làm nền tảng để bản thân em có thể ứng dụng vào công việc thực tế sau khi tốt nghiệp.",
+    name: "Phạm Thế Hùng",
+    role: "Lớp Công nghệ Ô tô – CCO2331",
+    img: "/lp/testimonials/sv-o-to.jpg",
   },
   {
-    q: "Con tôi học Công nghệ ô tô, trường liên kết gara nên cháu có việc ngay. Học phí lại được miễn giảm.",
-    name: "Trần Văn Minh",
-    role: "Phụ huynh sinh viên",
+    q: "Mình rất vui khi được trở thành tân sinh viên của Cao đẳng Bách khoa Tây Nguyên. Mình đã lựa chọn trường vì chương trình học thực tế từ đó nhanh chóng tiếp cận với công việc sau khi ra trường. Mình tin rằng 2 năm rưỡi học tại trường sẽ là quãng thời gian đáng nhớ nhất.",
+    name: "Thái Văn Quang",
+    role: "Lớp Chăn nuôi-Thú y – CTY2331",
+    img: "/lp/testimonials/sv-chan-nuoi.jpg",
   },
   {
-    q: "Ngành CNTT được thực hành nhiều, ra trường mình vào được công ty phần mềm ở Buôn Ma Thuột.",
-    name: "Lê Quốc Bảo",
-    role: "Cựu SV CNTT – khóa 2021",
+    q: "Môi trường học tập năng động và cơ sở vật chất tốt là hai yếu tố chính em yêu thích nhất tại Cao đẳng Bách khoa Tây Nguyên. Là sinh viên ngành công nghệ thông tin, em tin rằng nhà trường sẽ giúp em phát triển điểm mạnh CNTT của mình, từng bước đạt được ước mơ.",
+    name: "Lê Minh Chương",
+    role: "Lớp Công nghệ Thông tin – CIT2331",
+    img: "/lp/testimonials/sv-cntt.jpg",
+  },
+  {
+    q: "Bản thân em có niềm yêu thích với ngành y, từ đó em đã tìm hiểu trường Cao đẳng Bách khoa Tây Nguyên. Không chỉ lựa chọn môi trường học tập mà đây còn là nơi để em phát triển bản thân. Bên cạnh đào tạo chuyên môn, trường còn có nhiều hoạt động văn nghệ, thể thao, giao lưu.",
+    name: "H Sana Niê",
+    role: "Lớp Điều dưỡng – CDD2131",
+    img: "/lp/testimonials/sv-dieu-duong.jpg",
+  },
+  {
+    q: "Sau khi tìm hiểu biết được Cao đẳng Bách khoa Tây Nguyên có đào tạo ngành Y sỹ đa khoa. Đây là ngôi trường phù hợp với nhu cầu và tiêu chí của em nên em quyết định theo học. Với mục tiêu đề ra, em sẽ học hỏi và rèn luyện để có nghề nghiệp và tương lai tốt hơn.",
+    name: "Lê Minh Nhân",
+    role: "Lớp Y sỹ đa khoa – TYS2121",
+    img: "/lp/testimonials/sv-y-sy.jpg",
+  },
+  {
+    q: "Để được cơ hội công tác trong ngành Dược em đã tham khảo chương trình học của nhiều trường. Với lộ trình học xen kẽ thực hành chiếm 75% thời lượng, kết hợp đi thực tập tại các đơn vị, cơ sở y tế tại trường Cao đẳng Bách khoa Tây Nguyên đã giúp em tự tin hơn khi sắp tốt nghiệp.",
+    name: "H Thu Huyền Niê",
+    role: "Lớp Dược – CDU2231",
+    img: "/lp/testimonials/sv-duoc.jpg",
   },
 ]
 
