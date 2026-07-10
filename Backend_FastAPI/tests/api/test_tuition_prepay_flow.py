@@ -883,8 +883,12 @@ class TestUnrefundedPaymentFlag:
         accountant_user_in_db: dict,
         seed_lead_dependencies: dict,
     ):
-        """(c) Withdraw a profile that holds a verified prepay → flag True on
-        the mutation response AND a subsequent GET."""
+        """(c) PR-B: withdraw a profile holding a verified TUITION prepay →
+        the orchestrator AUTO-FILES a refund request and parks the profile in
+        ``withdrawal_pending`` (NOT ``withdrawn``); it settles to ``withdrawn``
+        only once the refund is processed. The refundable money is still held
+        (refund is 'pending'), so ``has_unrefunded_payment`` is True on both the
+        mutation response and a subsequent GET."""
         unit_id = seed_lead_dependencies["unit_id"]
         officer = await _auth(client, officer_user_in_db)
         manager = await _auth(client, manager_user_in_db)
@@ -894,15 +898,25 @@ class TestUnrefundedPaymentFlag:
             client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
         )
 
-        # withdraw lead-sync advances the lead to sts08 (not in the conftest
-        # seed list) — seed it so the sync resolves.
+        # withdraw finalize lead-sync advances the lead to sts08 (not in the
+        # conftest seed list) — seed it so the sync resolves.
         await _ensure_consultation_status(
             "sts08", "Tu choi tu van", "stg07", "#CC0000"
         )
 
-        withdrawn = await _withdraw(client, manager, pid, "Học sinh đổi nguyện vọng")
+        # Withdraw with collected refundable tuition → withdrawal_pending.
+        body = await _get(client, manager, pid)
+        res = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=manager,
+            json={"reason": "Học sinh đổi nguyện vọng", "version": body["version"]},
+        )
+        assert res.status_code == 200, res.text
+        withdrawn = res.json()
+        assert withdrawn["status"] == "withdrawal_pending", withdrawn
         assert withdrawn["has_unrefunded_payment"] is True, withdrawn
         after = await _get(client, manager, pid)
+        assert after["status"] == "withdrawal_pending", after
         assert after["has_unrefunded_payment"] is True, after
 
     async def test_nonterminal_statuses_flag_false(

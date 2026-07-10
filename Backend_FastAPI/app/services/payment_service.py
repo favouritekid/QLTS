@@ -1098,7 +1098,15 @@ class RefundService:
         profile = await self._get_profile_for_fee(fee)
 
         # ADR-002 PR 5 (D9): Only HK1 refund projects into admission pipeline.
-        if fee.fee_type == "tuition" and fee.semester_no == 1 and profile is not None:
+        # PR-B (blocker 1): while a withdrawal is pending, the lead is HELD — do
+        # NOT push it to sts18 here; the finalize below moves it to sts08 once
+        # the refund completes. Refunds OUTSIDE a withdrawal still project sts18.
+        if (
+            fee.fee_type == "tuition"
+            and fee.semester_no == 1
+            and profile is not None
+            and profile.status != "withdrawal_pending"
+        ):
             from app.services.lead_admission_sync import sync_lead_tuition_refunded
             await sync_lead_tuition_refunded(
                 db=self.db,
@@ -1107,6 +1115,32 @@ class RefundService:
                 changed_by_user_id=processor_id,
                 reason=f"Tuition fee refunded: {refund.amount:,.0f} VND. Reason: {refund.reason}",
             )
+
+        # PR-B: finalize the withdrawal once the LAST refundable payment is
+        # returned. reverse_payment_balances above already decremented this
+        # fee's paid_amount, so sum_unrefunded_refundable_paid reflects the
+        # post-refund balance. Gate on status==withdrawal_pending so ordinary
+        # refunds are untouched. NOTE: not row-locked — refunds are processed
+        # sequentially in practice; two concurrent last-refunds on one profile
+        # are vanishingly rare (plan §2.3).
+        withdraw_finalize_cb = None
+        if profile is not None and profile.status == "withdrawal_pending":
+            from app.repositories.fee_repository import FeeRepository
+            _remaining = await FeeRepository(
+                self.db
+            ).sum_unrefunded_refundable_paid(profile.id)
+            if _remaining <= 0:
+                import app.services.admission_service as admission_service
+                _processor = await self.db.get(models.User, processor_id)
+                profile, withdraw_finalize_cb = (
+                    await admission_service._finalize_withdrawn(
+                        self.db,
+                        profile,
+                        _processor,
+                        from_status="withdrawal_pending",
+                        reason=f"Hoàn tất hoàn tiền — chốt rút hồ sơ #{profile.id}",
+                    )
+                )
 
         log.info(
             "refund_processed",
@@ -1155,6 +1189,11 @@ class RefundService:
                 payload=_notify_payload,
                 rooms=_rooms,
             )
+            # PR-B: run the withdraw-finalize bundle (milestone + APPLICATION/
+            # LEAD status-changed) AFTER the refund notification, in the same
+            # post-commit frame.
+            if withdraw_finalize_cb is not None:
+                await withdraw_finalize_cb()
 
         return refund, post_commit
 

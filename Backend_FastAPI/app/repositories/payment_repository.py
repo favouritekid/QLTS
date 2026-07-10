@@ -138,6 +138,28 @@ class PaymentRepository(BaseRepository[Payment]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_verified_by_profile(self, profile_id: int) -> List[Payment]:
+        """All VERIFIED payments on REFUNDABLE fees of an admission profile.
+
+        Joins Payment→Invoice→Fee, keeps only ``status='verified'`` payments and
+        EXCLUDES the non-refundable ``application`` fee (lệ phí xét tuyển). Used
+        by the withdraw orchestrator (PR-B) to auto-create a refund request per
+        collected tuition payment. No IDOR filter — the caller
+        (``withdraw_profile``) has already authorized access to the profile.
+        """
+        query = (
+            select(Payment)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .join(Fee, Invoice.fee_id == Fee.id)
+            .where(
+                Fee.admission_profile_id == profile_id,
+                Payment.status == PaymentStatusEnum.verified.value,
+                Fee.fee_type != "application",
+            )
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def get_by_invoice_id(
         self,
         invoice_id: int,
