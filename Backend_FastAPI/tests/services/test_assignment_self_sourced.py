@@ -17,8 +17,8 @@ import pytest
 from sqlalchemy import func, select
 
 from app import models
-from app.core.constants import UserRole
 from app.security import get_password_hash
+from app.services.assignment_reason import build_assignment_reason
 from app.services.assignment_service import (
     _non_final_status_filter,
     _self_sourced_subquery,
@@ -26,16 +26,16 @@ from app.services.assignment_service import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-# ⚠️ COUPLING: reason phải khớp cái lead_service.py sinh (create+direct-assign
-# ~1179 + assign_lead_to_officer ~2350) và pattern ILIKE '%by officer %' của
-# _self_sourced_subquery. Role token DERIVE từ UserRole.OFFICER (StrEnum→'officer')
-# ⇒ ĐỔI GIÁ TRỊ enum mà quên pattern subquery → reason không chứa 'by officer ' →
-# self_cnt=0 ≠ 2 → TEST ĐỎ (ghim role-value drift). ⚠️ Giới hạn: template prefix
-# "Assigned during lead creation by" hardcode ở đây → KHÔNG bắt nếu lead_service đổi
-# RIÊNG câu prefix (hướng no-op an toàn). Ghim đủ cần extract prefix ra hằng chung —
-# hoãn (out of scope flag-OFF).
-_REASON_SELF_CREATE = f"Assigned during lead creation by {UserRole.OFFICER} " + "{u}"
+# Seed reason officer-self qua CHÍNH build_assignment_reason (real producer, User
+# THẬT role=String 'officer') ⇒ integration exercise đúng path prod (User.role str
+# → token), KHÔNG hardcode shape. Admin negative case giữ literal (chỉ cần KHÔNG
+# chứa token). Coupling ghim thêm bởi test_self_sourced_reason_token_contract.
 _REASON_ADMIN_ASSIGN = "Manually assigned by admin {u}"
+
+
+def _self_reason(officer):
+    """reason officer tự tạo — qua CHÍNH builder production (User thật, role=str)."""
+    return build_assignment_reason("Assigned during lead creation", officer)
 
 
 async def _mk_officer(db, unit_id, tag):
@@ -122,7 +122,7 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     # A: manual by officer (TỰ TUYỂN) ✓
     a = await _mk_lead(db, deps, officer, "0940000001")
     await _log(db, a, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0)
+               _self_reason(officer), t0)
 
     # B: manual by admin (đã-chia — admin gán tay) ✗
     b = await _mk_lead(db, deps, officer, "0940000002")
@@ -140,12 +140,12 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     e = await _mk_lead(db, deps, officer, "0940000005")
     await _log(db, e, officer, "automatic", "auto cũ", t0)
     await _log(db, e, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0 + timedelta(days=1))
+               _self_reason(officer), t0 + timedelta(days=1))
 
     # F: manual by officer (cũ) → reassignment (mới) ⇒ latest = đã-chia ✗
     f = await _mk_lead(db, deps, officer, "0940000006")
     await _log(db, f, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0)
+               _self_reason(officer), t0)
     await _log(
         db, f, officer, "manual_reassignment", "reassigned", t0 + timedelta(days=1)
     )
@@ -155,7 +155,7 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     # officer ⇒ VẪN tự tuyển ✓ (khử P2: reject self-sourced lead không hoá đã-chia).
     g = await _mk_lead(db, deps, officer, "0940000007")
     await _log(db, g, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0)
+               _self_reason(officer), t0)
     await _log(
         db, g, officer, "officer_reject", "Officer từ chối", t0 + timedelta(days=1)
     )
@@ -166,7 +166,7 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     # case LUÔN load-bearing).
     h = await _mk_lead(db, deps, officer, "0940000008")
     await _log(db, h, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0)
+               _self_reason(officer), t0)
     await _log(
         db, h, officer, "offering_change_unit_synced", "Đổi ngành",
         t0 + timedelta(days=1)
@@ -179,7 +179,7 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     # officer_id không bị đếm nhầm sang officer khác).
     i_lead = await _mk_lead(db, deps, officer2, "0940000009")
     await _log(db, i_lead, officer, "manual",
-               _REASON_SELF_CREATE.format(u=officer.username), t0)
+               _self_reason(officer), t0)
     await _log(
         db, i_lead, officer2, "manual_reassignment", "reassign→officer2",
         t0 + timedelta(days=1)
