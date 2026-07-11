@@ -2194,6 +2194,9 @@ def _compute_frontend_fields(
             or is_manager
             or (is_officer and is_owner)
         ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
+        # PR-B: admin reverts a pending withdrawal back to draft when the refund
+        # was rejected (so the profile is not stuck awaiting a refund).
+        "cancel_withdrawal": is_admin and status == "withdrawal_pending",
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),

@@ -288,6 +288,45 @@ export async function dropStudent(
 }
 
 /**
+ * Withdraw admission profile (Officer/Manager/Admin action)
+ * POST /api/admissions/{id}/withdraw
+ *
+ * Transitions to ``withdrawn`` — OR, if refundable tuition was already
+ * collected, to ``withdrawal_pending`` (BE auto-files refund requests and the
+ * profile settles to ``withdrawn`` once the refund is processed). Requires
+ * reason (min 5) + version for optimistic locking.
+ */
+export async function withdrawAdmission(
+  id: number,
+  data: { reason: string; version: number }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/withdraw`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Cancel a pending withdrawal (Admin action) — revert withdrawal_pending → draft
+ * POST /api/admissions/{id}/cancel-withdrawal
+ *
+ * Used when the refund tied to a ``withdrawal_pending`` profile was rejected,
+ * so the profile is not stuck awaiting a refund that will never complete.
+ * Admin-only. Requires reason (min 5); no version (rare recovery action).
+ */
+export async function cancelWithdrawal(
+  id: number,
+  data: { reason: string }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/cancel-withdrawal`,
+    data
+  )
+  return response.data
+}
+
+/**
  * Upload admission document
  */
 export async function uploadAdmissionDocument(
@@ -616,6 +655,8 @@ export const admissionsApi = {
   rejectAdmission,
   minorCorrection,
   dropStudent,
+  withdrawAdmission,
+  cancelWithdrawal,
   enrollStudent,
   deleteAdmission,
   uploadAdmissionDocument,

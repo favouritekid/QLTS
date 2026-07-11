@@ -323,6 +323,68 @@ export function useResubmitAdmission(id: number) {
 }
 
 /**
+ * Withdraw admission profile (Officer/Manager/Admin).
+ *
+ * POSTs reason + version to ``/admissions/{id}/withdraw``. Response status is
+ * ``withdrawn`` (settled immediately) OR ``withdrawal_pending`` (refundable
+ * tuition was collected → BE auto-files refund requests; settles to withdrawn
+ * once the refund is processed). Invalidates admissions + finance-by-profile
+ * (a refund request may have been created).
+ */
+export function useWithdrawAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.withdrawAdmission(id, data),
+    onSuccess: (data) => {
+      if (data.status === "withdrawal_pending") {
+        toast.info("Đã ghi nhận rút hồ sơ — đang chờ hoàn học phí", {
+          description: "Hồ sơ chỉ rút xong khi hoàn tiền hoàn tất.",
+        })
+      } else {
+        toast.success("Đã rút hồ sơ")
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "rút hồ sơ",
+      })
+    },
+  })
+}
+
+/**
+ * Cancel a pending withdrawal (Admin) — revert ``withdrawal_pending`` → draft.
+ *
+ * Used when the refund tied to a pending withdrawal was rejected, so the
+ * profile is not stuck awaiting a refund that will never complete.
+ */
+export function useCancelWithdrawal(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string }) =>
+      admissionsApi.cancelWithdrawal(id, data),
+    onSuccess: () => {
+      toast.success("Đã hủy quy trình rút — hồ sơ trở về nháp")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "hủy quy trình rút",
+      })
+    },
+  })
+}
+
+/**
  * Apply post-approval minor correction (Officer/Manager/Admin).
  *
  * Submits the diffed `changes` payload + reason + version to
