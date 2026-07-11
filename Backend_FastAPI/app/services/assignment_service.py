@@ -43,16 +43,32 @@ def _non_final_status_filter():
     )
 
 
+# Các method = SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ lead). PHÂN BIỆT với hành
+# động STATUS giữ nguyên officer: officer_reject (từ chối, giữ officer + non-final
+# sts04) và offering_change_unit_synced (keep-sync đổi ngành) — hai cái này KHÔNG
+# đổi "nguồn sở hữu" nên KHÔNG được reset phân loại tự-tuyển. officer_reassign nulls
+# officer nên không bao giờ match (assigned_officer_id đã NULL).
+_ASSIGNMENT_SOURCE_METHODS = (
+    "automatic",
+    "manual",
+    "manual_reassignment",
+    "system_auto_reassign",
+)
+
+
 def _self_sourced_subquery():
     """Correlated boolean scalar subquery — True nếu lead do CHÍNH officer đang
-    được gán TỰ TUYỂN (tự tạo + tự nhận), theo bản ghi ``assignment_log`` MỚI NHẤT
-    của cặp (lead, officer hiện tại).
+    được gán TỰ TUYỂN (tự tạo + tự nhận), theo bản ghi (RE-)PHÂN CÔNG MỚI NHẤT của
+    cặp (lead, officer hiện tại) — CHỈ xét ``_ASSIGNMENT_SOURCE_METHODS``, bỏ qua
+    hành động status (officer_reject) / keep-sync.
 
-    Tự tuyển = latest method='manual' VÀ ``reason`` do một OFFICER khởi tạo. Mọi
-    thứ khác — 'automatic', reassign, manual do admin/manager chỉ định (phân
-    phối), hay không có log — đều KHÔNG phải tự tuyển ⇒ tính vào tải đã-chia. Dùng
-    khi ``exclude_active`` để loại lead tự tuyển khỏi CƠ SỞ SẮP XẾP (real_util/
-    eff_util), KHÔNG khỏi tổng workload.
+    Tự tuyển = latest (assignment-source) method='manual' VÀ ``reason`` do một
+    OFFICER khởi tạo. Mọi thứ khác — 'automatic', reassign, manual do admin/manager
+    chỉ định (phân phối), hay không có log — đều KHÔNG phải tự tuyển ⇒ tính vào tải
+    đã-chia. ⚠️ officer_reject/offering_change_unit_synced KHÔNG reset (nếu xét MỌI
+    log, self-sourced lead bị officer reject sẽ hoá đã-chia OAN → giảm suất officer,
+    ngược ý đồ). Dùng khi ``exclude_active`` để loại lead tự tuyển khỏi CƠ SỞ SẮP
+    XẾP (real_util/eff_util), KHÔNG khỏi tổng workload.
 
     ⚠️ NGỮ NGHĨA (latent): pattern chỉ kiểm VAI TRÒ người-gán = officer, KHÔNG kiểm
     assigner == assigned_officer_id. Hôm nay AN TOÀN vì officer-create ép
@@ -80,6 +96,10 @@ def _self_sourced_subquery():
         .where(
             al.lead_id == models.Lead.id,
             al.officer_id == models.Lead.assigned_officer_id,
+            # CHỈ xét sự kiện (re-)phân công — bỏ qua status-action (officer_reject)
+            # + keep-sync (offering_change_unit_synced) để chúng KHÔNG reset phân
+            # loại tự-tuyển của lead.
+            al.method.in_(_ASSIGNMENT_SOURCE_METHODS),
         )
         # tie-breaker id DESC: timestamp=datetime.now() có thể trùng microsecond
         # trên 2 log cùng (lead, officer) ⇒ LIMIT 1 non-deterministic; id DESC làm

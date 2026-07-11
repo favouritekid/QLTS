@@ -110,9 +110,9 @@ def _count_stmt(officer_ids, *extra_where):
 
 
 async def test_self_sourced_subquery_classification(db, seeded_dependencies):
-    """6 lead non-final gán cho 1 officer, đủ 6 tình huống latest-log. Đếm tự-tuyển
-    = A + E (manual 'by officer' là bản ghi mới nhất) = 2; self_cnt ≤ workload (bất
-    biến ⇒ balance_load ≥ 0). Kiểm CẢ subquery-làm-WHERE LẪN COUNT-FILTER gộp."""
+    """7 lead non-final gán cho 1 officer, đủ 7 tình huống latest-log. Đếm tự-tuyển
+    = A + E + G (latest-ASSIGNMENT là manual 'by officer') = 3; self_cnt ≤ workload
+    (bất biến ⇒ balance_load ≥ 0). Kiểm CẢ subquery-WHERE LẪN COUNT-FILTER gộp."""
     deps = seeded_dependencies
     officer = await _mk_officer(db, deps["unit_id"], "clf")
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -148,6 +148,16 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
         db, f, officer, "manual_reassignment", "reassigned", t0 + timedelta(days=1)
     )
 
+    # G: manual by officer (cũ) → officer_reject (mới, GIỮ officer + non-final) ⇒
+    # officer_reject KHÔNG phải assignment-source ⇒ latest-assignment = manual by
+    # officer ⇒ VẪN tự tuyển ✓ (khử P2: reject self-sourced lead không hoá đã-chia).
+    g = await _mk_lead(db, deps, officer, "0940000007")
+    await _log(db, g, officer, "manual",
+               _REASON_SELF_CREATE.format(u=officer.username), t0)
+    await _log(
+        db, g, officer, "officer_reject", "Officer từ chối", t0 + timedelta(days=1)
+    )
+
     # (1) subquery làm WHERE — đếm số dòng tự tuyển
     workload = {
         r[0]: r[1] for r in (await db.execute(_count_stmt([officer.id]))).all()
@@ -181,7 +191,7 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
     )
     frow = (await db.execute(filter_stmt)).one()
 
-    assert workload[officer.id] == 6                   # tất cả 6 lead non-final
-    assert self_where.get(officer.id, 0) == 2          # subquery-WHERE: chỉ A + E
-    assert frow.workload == 6 and frow.self_cnt == 2   # FILTER gộp khớp
+    assert workload[officer.id] == 7                   # tất cả 7 lead non-final
+    assert self_where.get(officer.id, 0) == 3          # subquery-WHERE: A + E + G
+    assert frow.workload == 7 and frow.self_cnt == 3   # FILTER gộp khớp
     assert frow.self_cnt <= frow.workload              # bất biến subset (cấu trúc)
