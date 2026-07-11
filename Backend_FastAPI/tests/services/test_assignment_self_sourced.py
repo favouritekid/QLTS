@@ -1,13 +1,13 @@
 # tests/services/test_assignment_self_sourced.py
 # -*- coding: utf-8 -*-
-"""Real-DB test cho ``_self_sourced_subquery`` (BƯỚC 3b của auto-assign).
+"""Real-DB test cho ``_self_sourced_subquery`` + query GỘP COUNT-FILTER (BƯỚC 3).
 
-Mock-suite (test_assignment.py) inject ``self_map`` trực tiếp nên KHÔNG chạy
-subquery tương quan thật. File này seed lead + assignment_log THẬT rồi execute
-đúng ``self_stmt`` để chốt: chỉ lead 'manual' + reason 'by officer' (bản ghi mới
-nhất của officer hiện tại) mới bị loại; admin-manual / automatic / không-log /
-reassign-mới-nhất đều tính đã-chia. Ghim coupling định dạng ``reason`` ở
-lead_service.py (create+direct-assign).
+Mock-suite (test_assignment.py) inject self_cnt trực tiếp nên KHÔNG chạy subquery
+tương quan / FILTER thật. File này seed lead + assignment_log THẬT rồi execute cả
+subquery (làm WHERE) LẪN production path ``COUNT(id) FILTER(_self_sourced_subquery)``
+để chốt: chỉ lead 'manual' + reason 'by officer' (bản ghi MỚI NHẤT của officer
+hiện tại) mới bị loại; admin-manual / automatic / không-log / reassign-mới-nhất
+đều tính đã-chia.
 
 Chạy one-off container (CLAUDE.md) — seed DB thật.
 """
@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app import models
+from app.core.constants import UserRole
 from app.security import get_password_hash
 from app.services.assignment_service import (
     _non_final_status_filter,
@@ -25,10 +26,15 @@ from app.services.assignment_service import (
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
-# ⚠️ PHẢI khớp reason sinh ở lead_service.py (create+direct-assign ~1179 và
-# assign_lead_to_officer ~2350) — _self_sourced_subquery lọc ILIKE '%by officer %'.
-# Đổi chữ "by officer" ở lead_service mà quên chỗ này ⇒ test đỏ.
-_REASON_SELF_CREATE = "Assigned during lead creation by officer {u}"
+# ⚠️ COUPLING: reason phải khớp cái lead_service.py sinh (create+direct-assign
+# ~1179 + assign_lead_to_officer ~2350) và pattern ILIKE '%by officer %' của
+# _self_sourced_subquery. Role token DERIVE từ UserRole.OFFICER (StrEnum→'officer')
+# ⇒ ĐỔI GIÁ TRỊ enum mà quên pattern subquery → reason không chứa 'by officer ' →
+# self_cnt=0 ≠ 2 → TEST ĐỎ (ghim role-value drift). ⚠️ Giới hạn: template prefix
+# "Assigned during lead creation by" hardcode ở đây → KHÔNG bắt nếu lead_service đổi
+# RIÊNG câu prefix (hướng no-op an toàn). Ghim đủ cần extract prefix ra hằng chung —
+# hoãn (out of scope flag-OFF).
+_REASON_SELF_CREATE = f"Assigned during lead creation by {UserRole.OFFICER} " + "{u}"
 _REASON_ADMIN_ASSIGN = "Manually assigned by admin {u}"
 
 
@@ -104,9 +110,9 @@ def _count_stmt(officer_ids, *extra_where):
 
 
 async def test_self_sourced_subquery_classification(db, seeded_dependencies):
-    """6 lead non-final gán cho 1 officer, đủ 6 tình huống latest-log. self_stmt
-    chỉ đếm A + E (manual 'by officer' là bản ghi mới nhất) = 2; self_cnt ≤
-    workload (bất biến ⇒ balance_load ≥ 0)."""
+    """6 lead non-final gán cho 1 officer, đủ 6 tình huống latest-log. Đếm tự-tuyển
+    = A + E (manual 'by officer' là bản ghi mới nhất) = 2; self_cnt ≤ workload (bất
+    biến ⇒ balance_load ≥ 0). Kiểm CẢ subquery-làm-WHERE LẪN COUNT-FILTER gộp."""
     deps = seeded_dependencies
     officer = await _mk_officer(db, deps["unit_id"], "clf")
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -142,16 +148,40 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
         db, f, officer, "manual_reassignment", "reassigned", t0 + timedelta(days=1)
     )
 
+    # (1) subquery làm WHERE — đếm số dòng tự tuyển
     workload = {
         r[0]: r[1] for r in (await db.execute(_count_stmt([officer.id]))).all()
     }
-    self_map = {
+    self_where = {
         r[0]: r[1]
         for r in (
             await db.execute(_count_stmt([officer.id], _self_sourced_subquery()))
         ).all()
     }
+    # (2) PRODUCTION path: COUNT(id) FILTER(_self_sourced_subquery()) GỘP 1 query
+    filter_stmt = (
+        select(
+            models.Lead.assigned_officer_id,
+            func.count(models.Lead.id).label("workload"),
+            func.count(models.Lead.id)
+            .filter(_self_sourced_subquery())
+            .label("self_cnt"),
+        )
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True,
+        )
+        .where(
+            models.Lead.assigned_officer_id == officer.id,
+            models.Lead.deleted_at.is_(None),
+            _non_final_status_filter(),
+        )
+        .group_by(models.Lead.assigned_officer_id)
+    )
+    frow = (await db.execute(filter_stmt)).one()
 
-    assert workload[officer.id] == 6           # tất cả 6 lead non-final
-    assert self_map.get(officer.id, 0) == 2    # chỉ A + E
-    assert self_map.get(officer.id, 0) <= workload[officer.id]  # bất biến subset
+    assert workload[officer.id] == 6                   # tất cả 6 lead non-final
+    assert self_where.get(officer.id, 0) == 2          # subquery-WHERE: chỉ A + E
+    assert frow.workload == 6 and frow.self_cnt == 2   # FILTER gộp khớp
+    assert frow.self_cnt <= frow.workload              # bất biến subset (cấu trúc)

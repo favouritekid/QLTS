@@ -467,34 +467,22 @@ async def test_matrix_fairness_and_member_insufficient_history_falls_back(
 # =====================================================================
 # Self-sourced exclusion (ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED)
 # =====================================================================
-# BƯỚC 3b query self_map chạy khi flag ON ⇒ side_effect THÊM 1 phần tử
-# (_self_result) so với khi OFF. real_util/eff_util (khóa SẮP XẾP) đổi sang
-# dist_load = workload − self_cnt; cổng `overloaded` + gate `workload <
-# capacity` VẪN theo TỔNG workload. (Subquery tương quan thật kiểm ở
-# test_assignment_self_sourced.py — mock ở đây inject self_map trực tiếp.)
-
-
-class MockSelfRow:
-    """Row shape của self_stmt GROUP BY (BƯỚC 3b). GROUP BY BỎ officer self_cnt=0
-    (không có row) ⇒ chỉ liệt kê officer CÓ lead tự tuyển."""
-
-    def __init__(self, assigned_officer_id, self_cnt):
-        self.assigned_officer_id = assigned_officer_id
-        self.self_cnt = self_cnt
-
-
-def _self_result(rows):
-    # BƯỚC 3b iterates the result directly (`for row in self_results`).
-    return list(rows)
+# self_cnt GỘP vào workload query (COUNT FILTER) khi exclude_active = flag ON +
+# (member hoặc fairness) ⇒ side_effect KHÔNG thêm phần tử; workload row mang thêm
+# self_cnt (MockWorkloadRow(..., self_cnt=N)). real_util/eff_util (khóa SẮP XẾP)
+# đổi sang dist_load = workload − self_cnt; cổng `overloaded` + gate `workload <
+# capacity` VẪN theo TỔNG workload. Cả 2 weighted flag OFF (legacy) ⇒
+# exclude_active=False ⇒ self_cnt bỏ qua (feature no-op ở legacy). Subquery +
+# query gộp FILTER kiểm trên DB THẬT ở test_assignment_self_sourced.py.
 
 
 @pytest.mark.asyncio
 async def test_self_sourced_flag_off_is_regression_safe(
     monkeypatch, mock_db_session, lead_new, officer_1, officer_2
 ):
-    """Flag OFF (mặc định) ⇒ self_stmt KHÔNG chạy: side_effect chỉ 3 phần tử
-    vẫn đủ (service cố query self_map sẽ HẾT side_effect → lỗi). Kết quả y hệt
-    member mode hôm nay: officer_2 (tải 2) thắng officer_1 (tải 5)."""
+    """Flag OFF (mặc định) ⇒ exclude_active False ⇒ workload query KHÔNG có cột
+    self_cnt: side_effect 3 phần tử vẫn đủ. Kết quả y hệt member mode hôm nay:
+    officer_2 (tải 2) thắng officer_1 (tải 5)."""
     monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", False)
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
@@ -530,8 +518,9 @@ async def test_self_sourced_flips_winner_to_high_selftuyen_officer(
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
         _officers_result([officer_1, officer_2]),
-        _workload_result([MockWorkloadRow(101, 7), MockWorkloadRow(102, 4)]),
-        _self_result([MockSelfRow(101, 5)]),  # officer_2 self=0 ⇒ KHÔNG có row
+        _workload_result(
+            [MockWorkloadRow(101, 7, self_cnt=5), MockWorkloadRow(102, 4, self_cnt=0)]
+        ),
     ]
 
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
@@ -563,8 +552,9 @@ async def test_self_sourced_safety_gate_still_uses_total(
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
         _officers_result([officer_1, officer_2]),
-        _workload_result([MockWorkloadRow(101, 9), MockWorkloadRow(102, 4)]),
-        _self_result([MockSelfRow(101, 9)]),
+        _workload_result(
+            [MockWorkloadRow(101, 9, self_cnt=9), MockWorkloadRow(102, 4, self_cnt=0)]
+        ),
     ]
 
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
@@ -581,12 +571,12 @@ async def test_self_sourced_capacity_gate_still_uses_total(
     nhưng gate đọc TỔNG (10<10 sai) ⇒ bị loại ⇒ FAILED/AT_CAPACITY."""
     monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
     monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    officer_1.max_capacity = 10  # tường minh: gate workload(10) < capacity(10) = False
 
     mock_db_session.execute.side_effect = [
         _lead_result(lead_new),
         _officers_result([officer_1]),
-        _workload_result([MockWorkloadRow(101, 10)]),
-        _self_result([MockSelfRow(101, 10)]),
+        _workload_result([MockWorkloadRow(101, 10, self_cnt=10)]),
     ]
 
     result, _ = await assignment_service.automatically_assign_lead(
