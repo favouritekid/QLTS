@@ -18,6 +18,7 @@ from app.models.finance import (
     PAYABLE_INVOICE_STATUSES,
     PaymentTransaction,
     RefundRequest,
+    RefundSourceEnum,
     RefundStatusEnum,
     ResolutionTypeEnum,
     TransactionTypeEnum,
@@ -220,6 +221,7 @@ class OverpaymentService:
             reason=notes or f"Refund overpayment {overpayment.id}",
             user_id=user_id,
             unit_id=unit_id,
+            source=RefundSourceEnum.overpayment.value,
         )
 
         # F4: the overpayment liability stays *pending* and is only linked to the

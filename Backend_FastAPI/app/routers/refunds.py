@@ -251,6 +251,7 @@ def _build_refund_response(
         amount=refund.amount,
         reason=refund.reason,
         status=refund.status,
+        source=refund.source,
         requested_at=refund.requested_at,
         requested_by_id=refund.requested_by_id,
         approved_at=refund.approved_at,

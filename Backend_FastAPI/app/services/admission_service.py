@@ -11240,6 +11240,7 @@ async def withdraw_profile(
     from app.services.payment_service import RefundService
     from app.repositories.fee_repository import FeeRepository
     from app.repositories.payment_repository import PaymentRepository
+    from app.models.finance import RefundSourceEnum
 
     fee_repo = FeeRepository(db)
     payment_repo = PaymentRepository(db)
@@ -11270,6 +11271,7 @@ async def withdraw_profile(
                 amount=available,
                 reason=f"Rút hồ sơ #{profile_id}",
                 user_id=_uid,
+                source=RefundSourceEnum.withdrawal.value,
             )
 
     # STEP 2: cancel every UNPAID fee (paid_amount==0) — cascades to its

@@ -34,7 +34,7 @@ from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentTransaction, PaymentMethod,
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
-    RefundRequest, RefundStatusEnum, TransactionTypeEnum,
+    RefundRequest, RefundStatusEnum, RefundSourceEnum, TransactionTypeEnum,
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
     PAYABLE_INVOICE_STATUSES,
 )
@@ -819,6 +819,7 @@ class RefundService:
         reason: str,
         user_id: int,
         unit_id: Optional[int] = None,
+        source: str = RefundSourceEnum.manual.value,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
         Request a refund for a verified payment.
@@ -829,6 +830,10 @@ class RefundService:
             reason: Refund reason (required)
             user_id: User requesting refund
             unit_id: Unit ID for IDOR protection
+            source: Origin of the request (``manual`` by default). The withdraw
+                orchestrator passes ``withdrawal`` and overpayment refunds pass
+                ``overpayment`` so ``reject_open_refunds_for_profile`` can target
+                only auto-filed withdrawal refunds.
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
@@ -874,6 +879,7 @@ class RefundService:
             amount=amount,
             reason=reason,
             status=RefundStatusEnum.pending.value,
+            source=source,
             requested_by_id=user_id,
             requested_at=datetime.now(timezone.utc),
         )
@@ -997,13 +1003,15 @@ class RefundService:
         reason: str,
         rejector_id: int,
     ) -> int:
-        """Reject every PENDING refund of a profile (PR-B F1).
+        """Reject every open WITHDRAWAL-sourced refund of a profile (PR-B F1).
 
         Used when a withdrawal is cancelled/rolled back (``withdrawal_pending →
         draft``): the withdraw orchestrator auto-files refund requests, and if
         those are left open they could later be processed — returning money on a
         profile that has since been re-activated (draft → … → enrolled). This
-        rejects the pending ones so they can never be processed.
+        rejects the pending ones so they can never be processed. Only
+        ``source='withdrawal'`` refunds are touched — a manual or overpayment
+        refund is independently managed and left as-is.
 
         Raises ``BusinessRuleViolation`` if any refund is already APPROVED
         (awaiting processing): that cannot be silently cancelled here — the
@@ -1018,6 +1026,12 @@ class RefundService:
             .join(Fee, Invoice.fee_id == Fee.id)
             .where(
                 Fee.admission_profile_id == profile_id,
+                # Only the refunds THIS withdraw orchestrator auto-filed. A
+                # pre-existing manual (finance-created) or overpayment refund is
+                # independently managed and must survive the withdrawal rollback
+                # — rejecting it here would silently kill an unrelated refund and
+                # (for overpayment) re-open a liability that was being settled.
+                RefundRequest.source == RefundSourceEnum.withdrawal.value,
                 RefundRequest.status.in_([
                     RefundStatusEnum.pending.value,
                     RefundStatusEnum.approved.value,
@@ -1211,6 +1225,38 @@ class RefundService:
                             ),
                         )
                     )
+                    # Issue 1 (PR-B follow-up): every refundable fee's
+                    # paid_amount is now 0, but reverse_payment_balances reopened
+                    # each invoice to 'issued' (payable) — a phantom receivable
+                    # ("còn nợ") on a profile that just settled to withdrawn.
+                    # Cancel the now-unpaid non-application fees (cancel_fee
+                    # cascades to their invoices) so no payable surface survives.
+                    # Runs AFTER _finalize_withdrawn: the lead is already at sts08
+                    # so cancel_fee's HK1 sts14-revert is a guarded no-op, and the
+                    # application (lệ phí xét tuyển) fee is skipped — it is not
+                    # refunded and must stay collected. cancel_fee returns no
+                    # callback, so nothing to compose.
+                    from app.services.fee_calculation_service import (
+                        FeeCalculationService,
+                    )
+                    _fee_calc = FeeCalculationService(self.db)
+                    _fees = await FeeRepository(self.db).get_by_profile_id(
+                        locked_profile.id
+                    )
+                    for _f in _fees:
+                        if (
+                            _f.fee_type != "application"
+                            and _f.paid_amount == 0
+                            and _f.status != FeeStatusEnum.cancelled.value
+                        ):
+                            await _fee_calc.cancel_fee(
+                                _f.id,
+                                reason=(
+                                    "Chốt rút hồ sơ "
+                                    f"#{locked_profile.id} — huỷ phí đã hoàn"
+                                ),
+                                user_id=processor_id,
+                            )
 
         log.info(
             "refund_processed",

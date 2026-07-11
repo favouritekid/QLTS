@@ -27,6 +27,7 @@ from app.models.finance import (
     PaymentStatusEnum,
     PaymentIntentStatusEnum,
     RefundStatusEnum,
+    RefundSourceEnum,
     OverpaymentStatusEnum,
     ResolutionTypeEnum,
     TransactionTypeEnum,
@@ -754,6 +755,7 @@ class RefundRequestResponse(BaseModel):
     amount: Decimal
     reason: str
     status: RefundStatusEnum
+    source: RefundSourceEnum = RefundSourceEnum.manual
     requested_at: datetime
     requested_by_id: int
     approved_at: Optional[datetime]

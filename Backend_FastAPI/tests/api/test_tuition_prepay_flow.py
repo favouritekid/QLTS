@@ -830,6 +830,55 @@ async def _lead_status_of(profile_id: int) -> str | None:
         return row.scalar_one_or_none()
 
 
+async def _fees_of(profile_id: int) -> list[models.Fee]:
+    """All fees of a profile (finance-state asserts)."""
+    async with AsyncSessionLocal() as session:
+        rows = await session.execute(
+            select(models.Fee).where(
+                models.Fee.admission_profile_id == profile_id
+            )
+        )
+        return list(rows.scalars().all())
+
+
+async def _invoice_statuses_of(profile_id: int) -> list[str]:
+    """Statuses of every invoice hanging off a profile's fees."""
+    async with AsyncSessionLocal() as session:
+        rows = await session.execute(
+            select(models.Invoice.status)
+            .join(models.Fee, models.Fee.id == models.Invoice.fee_id)
+            .where(models.Fee.admission_profile_id == profile_id)
+        )
+        return list(rows.scalars().all())
+
+
+async def _refund_by_id(refund_id: int) -> models.RefundRequest | None:
+    async with AsyncSessionLocal() as session:
+        return await session.get(models.RefundRequest, refund_id)
+
+
+async def _seed_unpaid_dormitory_fee(profile_id: int) -> int:
+    """Attach an UNPAID (paid_amount=0) non-tuition fee to a profile so the
+    withdraw orchestrator's STEP 2 (cancel every unpaid fee) has something to
+    cancel. Non-tuition → semester_no must be NULL. Returns the fee id."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            fee = models.Fee(
+                admission_profile_id=profile_id,
+                fee_type="dormitory",
+                academic_year=2026,
+                semester_no=None,
+                base_amount=Decimal("1000000"),
+                final_amount=Decimal("1000000"),
+                paid_amount=Decimal("0"),
+                status="invoiced",
+                version=1,
+            )
+            session.add(fee)
+            await session.flush()
+            return fee.id
+
+
 class TestUnrefundedPaymentFlag:
     async def test_reject_with_prepay_sets_flag_and_warns(
         self,
@@ -1057,6 +1106,24 @@ class TestWithdrawalPendingFlow:
         assert after["has_unrefunded_payment"] is False, after
         assert await _lead_status_of(pid) == "sts08"
 
+        # Issue 1: reverse_payment_balances reopened the tuition invoice to
+        # 'issued' (payable). Finalize must cancel the now-unpaid non-application
+        # fee + cascade its invoice — no phantom receivable ("còn nợ") may survive
+        # on the withdrawn profile.
+        fees = await _fees_of(pid)
+        leftover = [
+            (f.id, f.fee_type, f.status)
+            for f in fees
+            if f.fee_type != "application" and f.status != "cancelled"
+        ]
+        assert not leftover, f"non-application fee left payable: {leftover}"
+        payable = [
+            s
+            for s in await _invoice_statuses_of(pid)
+            if s in ("issued", "partial", "overdue")
+        ]
+        assert not payable, f"payable invoice left on withdrawn profile: {payable}"
+
     async def test_admin_cancel_withdrawal_back_to_draft(
         self,
         client: AsyncClient,
@@ -1112,6 +1179,148 @@ class TestWithdrawalPendingFlow:
             f"#{pid}" in (r.get("reason") or "")
             for r in rejected.json()["items"]
         ), rejected.json()
+
+    async def test_cancel_withdrawal_preserves_manual_refund(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Issue 2: cancel-withdrawal rejects ONLY the withdraw-auto-filed
+        (``source=withdrawal``) refund. A pre-existing manual refund on the same
+        profile is independently managed and must survive the rollback."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        admin = await _auth(client, admin_user_in_db)
+
+        # Submitted profile with a tuition fee paid by TWO verified payments — so
+        # a manual refund can sit on one while withdraw auto-files on the other.
+        _doc_id, doc_code = await _create_doc_type("hocba")
+        lead_id = await _create_lead(unit_id, officer_user_in_db["id"])
+        pid, _oac = await _build_draft_profile(lead_id, mandatory_docs=[doc_code])
+        await _submit_with_debt(client, officer, pid, "giữ chỗ")
+        fee_detail = await _calculate_tuition(client, officer, pid)
+        invoice_id = fee_detail["invoices"][0]["id"]
+        await _record_and_verify_payment(
+            client, accountant, manager, invoice_id, Decimal("3000000")
+        )
+        pay2 = await _record_and_verify_payment(
+            client, accountant, manager, invoice_id, Decimal("3000000")
+        )
+
+        # Finance user manually files a refund on pay2 (source defaults 'manual',
+        # fully committing pay2) — unrelated to any withdrawal.
+        man = await client.post(
+            "/api/refunds",
+            json={
+                "payment_id": pay2["id"],
+                "amount": "3000000",
+                "reason": "Hoàn thủ công — thu thừa tay",
+            },
+            headers=accountant,
+        )
+        assert man.status_code == 201, man.text
+        manual_refund_id = man.json()["id"]
+        assert man.json()["source"] == "manual", man.json()
+
+        # Withdraw (officer) → withdrawal_pending; STEP 1 files a refund only on
+        # pay1 (pay2 has 0 available after the manual refund commitment).
+        body = await _get(client, officer, pid)
+        wd = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=officer,
+            json={"reason": "Rút hồ sơ", "version": body["version"]},
+        )
+        assert wd.status_code == 200, wd.text
+        assert wd.json()["status"] == "withdrawal_pending", wd.json()
+
+        pend = await client.get(
+            "/api/refunds", params={"status": "pending"}, headers=manager
+        )
+        auto = [
+            r
+            for r in pend.json()["items"]
+            if r["source"] == "withdrawal"
+            and f"#{pid}" in (r.get("reason") or "")
+        ]
+        assert len(auto) == 1, auto
+        withdrawal_refund_id = auto[0]["id"]
+
+        # Admin cancels the withdrawal → draft.
+        cancel = await client.post(
+            f"{ADMISSIONS}/{pid}/cancel-withdrawal",
+            headers=admin,
+            json={"reason": "Hoàn tiền bị từ chối — về nháp"},
+        )
+        assert cancel.status_code == 200, cancel.text
+        assert cancel.json()["status"] == "draft", cancel.json()
+
+        # Withdrawal-sourced refund rejected; manual one untouched.
+        wr = await _refund_by_id(withdrawal_refund_id)
+        mr = await _refund_by_id(manual_refund_id)
+        assert wr is not None and wr.status == "rejected", wr
+        assert mr is not None and mr.status == "pending", mr
+        assert mr.source == "manual", mr
+
+    async def test_cancel_withdrawal_leaves_unpaid_fee_cancelled(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Issue 3: withdraw STEP 2 cancels every UNPAID fee. When admin later
+        cancels the withdrawal (→ draft) those fees are NOT auto-restored — the
+        officer recalculates them. Pins that documented behavior for the
+        'paid refundable fee + unpaid fee' combo (previously untested)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        admin = await _auth(client, admin_user_in_db)
+
+        # Paid refundable tuition (→ withdrawal_pending) + a SECOND unpaid fee
+        # that STEP 2 will cancel.
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+        dorm_fee_id = await _seed_unpaid_dormitory_fee(pid)
+
+        body = await _get(client, officer, pid)
+        wd = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=officer,
+            json={"reason": "Rút hồ sơ", "version": body["version"]},
+        )
+        assert wd.status_code == 200, wd.text
+        assert wd.json()["status"] == "withdrawal_pending", wd.json()
+
+        # Unpaid dormitory fee cancelled by withdraw STEP 2.
+        fees = {f.id: f for f in await _fees_of(pid)}
+        assert fees[dorm_fee_id].status == "cancelled", fees[dorm_fee_id].status
+
+        # Admin cancels the withdrawal → draft.
+        cancel = await client.post(
+            f"{ADMISSIONS}/{pid}/cancel-withdrawal",
+            headers=admin,
+            json={"reason": "Hoàn tiền bị từ chối — về nháp"},
+        )
+        assert cancel.status_code == 200, cancel.text
+        assert cancel.json()["status"] == "draft", cancel.json()
+
+        # Documented behavior: the cancelled fee is NOT restored on rollback.
+        fees2 = {f.id: f for f in await _fees_of(pid)}
+        assert fees2[dorm_fee_id].status == "cancelled", (
+            "cancel-withdrawal must NOT auto-restore the fee withdraw cancelled "
+            f"(got {fees2[dorm_fee_id].status})"
+        )
 
     async def test_cannot_rewithdraw_pending(
         self,
