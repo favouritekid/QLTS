@@ -127,7 +127,10 @@ export function useProcessRefund() {
       // to keep those views in sync.
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() })
+      // pipelineKeys.all — NOT fullPipeline(): the board mounts with concrete
+      // params, so fullPipeline()'s trailing `undefined` fails React Query's
+      // partial match and the invalidation would be a silent no-op.
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all })
     },
     onError: (error) => {
       toast.error(getErrorMessage(error, "Không thể xử lý hoàn phí"))

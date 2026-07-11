@@ -11073,6 +11073,55 @@ async def _finalize_withdrawn(
     # construction (finalize only runs once the refundable balance hits 0).
     await _populate_unrefunded_payment_flag(db, profile)
 
+    # Issue 1 (PR-B follow-up) — ONLY on the refund-finalize path
+    # (from_status == "withdrawal_pending"): each refundable payment was returned
+    # via reverse_payment_balances, which zeroed the fee's paid_amount BUT
+    # reopened its invoice to 'issued' (payable) — a phantom receivable ("còn
+    # nợ") on a profile that just settled to withdrawn. Cancel the now-unpaid
+    # non-application fees (cancel_fee cascades to their invoices) so no payable
+    # surface survives. The direct path (admitted / no-refundable-money) is
+    # EXCLUDED — its unpaid fees were already cancelled in withdraw STEP 2, and
+    # the admitted legacy path intentionally never touches finance.
+    #
+    # Runs after the lead is at sts08, so cancel_fee's HK1 sts14-revert is a
+    # guarded no-op; the application (lệ phí xét tuyển) fee is skipped (not
+    # refunded, stays collected). Each cancel is wrapped in a SAVEPOINT and is
+    # best-effort: a stale pending payment / active online intent on a sibling
+    # fee makes cancel_fee raise BusinessRuleViolation, which must NOT unwind the
+    # (already money-out) finalize — the phantom is money-safe via the payable
+    # guard, so we log and leave that one fee. Fees are locked in id order to
+    # keep a deterministic acquisition order under concurrency.
+    if from_status == "withdrawal_pending":
+        from app.services.fee_calculation_service import FeeCalculationService
+        from app.repositories.fee_repository import FeeRepository as _FeeRepo
+
+        _fee_calc = FeeCalculationService(db)
+        _fees = sorted(
+            await _FeeRepo(db).get_by_profile_id(profile.id), key=lambda f: f.id
+        )
+        for _f in _fees:
+            if (
+                _f.fee_type == "application"
+                or _f.paid_amount != 0
+                or _f.status == "cancelled"
+            ):
+                continue
+            try:
+                async with db.begin_nested():
+                    await _fee_calc.cancel_fee(
+                        _f.id,
+                        reason=f"Chốt rút hồ sơ #{profile.id} — huỷ phí đã hoàn",
+                        user_id=_actor_id,
+                    )
+            except Exception:
+                log.warning(
+                    "finalize_withdrawn: best-effort cancel of refunded fee "
+                    "failed (phantom invoice left; money-safe via payable guard)",
+                    profile_id=profile.id,
+                    fee_id=_f.id,
+                    exc_info=True,
+                )
+
     # Path C / Arch-3: atomic paired bundle (APPLICATION_STATUS_CHANGED +
     # LEAD_STATUS_CHANGED). Withdraw has no commission check.
     bundle_callback = None

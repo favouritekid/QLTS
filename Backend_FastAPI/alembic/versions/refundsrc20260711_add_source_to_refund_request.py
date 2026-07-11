@@ -70,6 +70,20 @@ def upgrade() -> None:
         WHERE reason LIKE 'Refund overpayment %'
         """
     )
+    # Authoritative overpayment reclassification: any refund an overpayment
+    # record points at IS an overpayment refund, regardless of its (possibly
+    # custom `notes`) reason text. Runs after the reason-based passes so it
+    # corrects rows a custom note left as 'manual'.
+    op.execute(
+        """
+        UPDATE refund_request
+        SET source = 'overpayment'
+        WHERE id IN (
+            SELECT refund_request_id FROM overpayment_record
+            WHERE refund_request_id IS NOT NULL
+        )
+        """
+    )
 
     # 3. Guard rails: value CHECK + lookup index (rollback targets it by source).
     op.create_check_constraint(

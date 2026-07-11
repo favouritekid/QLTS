@@ -1225,38 +1225,8 @@ class RefundService:
                             ),
                         )
                     )
-                    # Issue 1 (PR-B follow-up): every refundable fee's
-                    # paid_amount is now 0, but reverse_payment_balances reopened
-                    # each invoice to 'issued' (payable) — a phantom receivable
-                    # ("còn nợ") on a profile that just settled to withdrawn.
-                    # Cancel the now-unpaid non-application fees (cancel_fee
-                    # cascades to their invoices) so no payable surface survives.
-                    # Runs AFTER _finalize_withdrawn: the lead is already at sts08
-                    # so cancel_fee's HK1 sts14-revert is a guarded no-op, and the
-                    # application (lệ phí xét tuyển) fee is skipped — it is not
-                    # refunded and must stay collected. cancel_fee returns no
-                    # callback, so nothing to compose.
-                    from app.services.fee_calculation_service import (
-                        FeeCalculationService,
-                    )
-                    _fee_calc = FeeCalculationService(self.db)
-                    _fees = await FeeRepository(self.db).get_by_profile_id(
-                        locked_profile.id
-                    )
-                    for _f in _fees:
-                        if (
-                            _f.fee_type != "application"
-                            and _f.paid_amount == 0
-                            and _f.status != FeeStatusEnum.cancelled.value
-                        ):
-                            await _fee_calc.cancel_fee(
-                                _f.id,
-                                reason=(
-                                    "Chốt rút hồ sơ "
-                                    f"#{locked_profile.id} — huỷ phí đã hoàn"
-                                ),
-                                user_id=processor_id,
-                            )
+                    # (Phantom-invoice cleanup lives INSIDE _finalize_withdrawn,
+                    # gated on from_status=='withdrawal_pending' — Issue 1/#7.)
 
         log.info(
             "refund_processed",

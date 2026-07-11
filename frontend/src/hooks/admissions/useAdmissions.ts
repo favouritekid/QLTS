@@ -14,6 +14,8 @@ import { useRouter } from "next/navigation"
 import { admissionsApi } from "@/lib/api/admissions"
 import { feesKeys } from "@/hooks/finance/useFees"
 import { refundsKeys } from "@/hooks/finance/useRefunds"
+import { leadsKeys } from "@/hooks/useLeads"
+import { pipelineKeys } from "@/hooks/usePipeline"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
@@ -354,6 +356,14 @@ export function useWithdrawAdmission(id: number) {
       // (mirrors useCreateRefund).
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
+      // Direct-withdraw (no refundable money) finalizes immediately and projects
+      // the lead to sts08 (withdrawn), so refresh the lead list + pipeline board.
+      // The withdrawal_pending path HOLDS the lead (no move) → only the withdrawn
+      // path needs this; its eventual finalize refreshes via useProcessRefund.
+      if (data.status === "withdrawn") {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists() })
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.all })
+      }
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, {
