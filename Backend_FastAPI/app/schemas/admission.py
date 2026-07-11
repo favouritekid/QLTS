@@ -2011,6 +2011,30 @@ class WithdrawRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+class CancelWithdrawalRequest(BaseModel):
+    """Schema for the admin "cancel withdrawal" action (PR-B).
+
+    Reverts a ``withdrawal_pending`` profile back to ``draft`` when the refund
+    was rejected, so the profile is not stuck awaiting a refund that will never
+    complete. Admin-only (router gate). No optimistic-lock version: this is a
+    rare recovery action on a profile that is, by definition, not being edited.
+    """
+    reason: str = Field(
+        ...,
+        min_length=5,
+        max_length=1000,
+        description="Reason for cancelling the withdrawal (required)",
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS prevention: escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
 class OverrideRequest(BaseModel):
     """
     Schema for override action (Admin only).

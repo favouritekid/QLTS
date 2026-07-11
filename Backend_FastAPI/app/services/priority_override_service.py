@@ -117,6 +117,7 @@ _HARD_DENIED_STATUS: frozenset[str] = frozenset({
     "withdrawn",
     "dropped",
     "rejected",
+    "withdrawal_pending",  # PR-B: profile is on its way out (awaiting refund)
 })
 
 _MIN_REASON_LEN = 20
@@ -174,6 +175,7 @@ _EVIDENCE_HARD_DENIED_STATUS: frozenset[str] = frozenset({
     "withdrawn",
     "dropped",
     "rejected",
+    "withdrawal_pending",  # PR-B: profile is on its way out (awaiting refund)
 })
 
 # Legacy alias retained — referenced by external callers; matches the

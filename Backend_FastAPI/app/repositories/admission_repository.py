@@ -919,11 +919,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             )
             .where(ProfileDocument.graduation_proof_kind == "provisional_cert")
             # Review F3 — chỉ nhắc hồ sơ CÒN actionable: bỏ withdrawn (thí sinh
-            # rút) + dropped (is_dropped=True, status vẫn 'enrolled'). GIỮ
-            # enrolled-không-dropped (đúng use case: nhập học với giấy tạm thời,
-            # vẫn nợ bằng) + rejected (có thể resubmit; reject_document đã clear
-            # field khi reject ở tầng doc).
-            .where(models.AdmissionProfile.status != "withdrawn")
+            # rút) + withdrawal_pending (PR-B: đang rút, chờ hoàn tiền) + dropped
+            # (is_dropped=True, status vẫn 'enrolled'). GIỮ enrolled-không-dropped
+            # (đúng use case: nhập học với giấy tạm thời, vẫn nợ bằng) + rejected
+            # (có thể resubmit; reject_document đã clear field khi reject ở tầng doc).
+            .where(
+                models.AdmissionProfile.status.notin_(
+                    ("withdrawn", "withdrawal_pending")
+                )
+            )
             .where(models.AdmissionProfile.is_dropped.isnot(True))
             # Exclude profiles whose parent Lead is soft-deleted (don't remind
             # diploma debt for leads that have been removed).

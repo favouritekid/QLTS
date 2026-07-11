@@ -2303,6 +2303,47 @@ async def withdraw_admission(
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
+    "/{profile_id}/cancel-withdrawal",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Cancel a pending withdrawal (Admin only) — revert to draft",
+)
+async def cancel_withdrawal(
+    request: Request,
+    profile_id: int,
+    data: schemas.CancelWithdrawalRequest,
+    current_user: models.User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Admin reverts a ``withdrawal_pending`` profile back to ``draft`` when the
+    refund was rejected (the money stays with the school), so the profile is not
+    stuck awaiting a refund that will never complete.
+
+    **State transition:** withdrawal_pending → draft (edge exists).
+    **Security:** admin-only (``require_admin``); IDOR enforced in the service.
+    **Errors:** 400 (not in withdrawal_pending / missing reason), 404 (not found
+    or IDOR denial).
+    """
+    try:
+        result, callback = await admission_service.cancel_withdrawal(
+            db=db,
+            profile_id=profile_id,
+            actor=current_user,
+            reason=data.reason,
+        )
+        await db.commit()
+        await db.refresh(result)
+        if callback:
+            await callback()
+        return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except (BadRequest, BusinessRuleViolation) as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
     "/{profile_id}/finalize",
     response_model=schemas.AdmissionProfileResponse,
     summary="Finalize to enrolled (Admin only)",

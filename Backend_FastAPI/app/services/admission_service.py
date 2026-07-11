@@ -2168,15 +2168,20 @@ def _compute_frontend_fields(
         # Service-layer (priority_override_service) cũng có hard-deny officer
         # ngay đầu override_kv là defense-in-depth.
         "override_priority_kv": (
-            is_admin
-            or (
-                is_manager
-                and status in [
-                    "draft",
-                    "submitted",
-                    "reviewing",
-                    "revision_requested",
-                ]
+            # PR-B: never on a withdrawal_pending profile (on its way out) —
+            # gate the admin-unconditional branch too.
+            status != "withdrawal_pending"
+            and (
+                is_admin
+                or (
+                    is_manager
+                    and status in [
+                        "draft",
+                        "submitted",
+                        "reviewing",
+                        "revision_requested",
+                    ]
+                )
             )
         ),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
@@ -2188,7 +2193,7 @@ def _compute_frontend_fields(
             is_admin
             or is_manager
             or (is_officer and is_owner)
-        ) and status not in ["draft", "withdrawn", "dropped"],
+        ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
@@ -11296,6 +11301,72 @@ async def withdraw_profile(
 
     final_callback = compose_post_commit_callbacks(
         label="admission_withdrawal_pending",
+        callbacks=[transition_callback],
+    )
+    return profile, final_callback
+
+
+async def cancel_withdrawal(
+    db: AsyncSession,
+    profile_id: int,
+    actor: Optional[models.User],
+    reason: str,
+) -> tuple[models.AdmissionProfile, Any]:
+    """Admin cancels a pending withdrawal → back to DRAFT (PR-B).
+
+    Used when the refund tied to a ``withdrawal_pending`` profile is rejected:
+    the profile can't settle to ``withdrawn`` (the money stays with the school),
+    so an admin reverts it to ``draft`` — reusing the withdrawal_pending→draft
+    edge — instead of leaving it stuck. Admin-only (router gate); IDOR still
+    enforced. The lead is untouched: it was HELD at its pre-withdraw status
+    throughout ``withdrawal_pending`` and the ``draft`` sync short-circuits, so
+    there is no lead move to undo.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    profile = (await db.execute(stmt)).scalar_one_or_none()
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    _check_idor_access(profile, actor)
+
+    if profile.status != "withdrawal_pending":
+        raise BusinessRuleViolation(
+            "Chỉ có thể hủy quy trình rút khi hồ sơ đang ở trạng thái "
+            "'Chờ hoàn để rút'."
+        )
+    if not reason:
+        raise BadRequest("Lý do hủy quy trình rút là bắt buộc")
+
+    _old_status = profile.status
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "draft",
+        actor=actor,
+        reason=reason,
+        source="api",
+        event_metadata={"from_status": _old_status, "reason": reason},
+    )
+    await db.flush()
+    await _populate_unrefunded_payment_flag(db, profile)
+
+    log.info(
+        "Withdrawal cancelled → draft",
+        profile_id=profile.id,
+        actor_id=(actor.id if actor else None),
+        reason=reason[:50],
+    )
+
+    final_callback = compose_post_commit_callbacks(
+        label="admission_cancel_withdrawal",
         callbacks=[transition_callback],
     )
     return profile, final_callback
