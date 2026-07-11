@@ -816,6 +816,20 @@ async def _submit_and_prepay(
     return pid
 
 
+async def _lead_status_of(profile_id: int) -> str | None:
+    """Consultation status of the lead behind a profile (lead-sync asserts)."""
+    async with AsyncSessionLocal() as session:
+        row = await session.execute(
+            select(models.Lead.consultation_status_id)
+            .join(
+                models.AdmissionProfile,
+                models.AdmissionProfile.lead_id == models.Lead.id,
+            )
+            .where(models.AdmissionProfile.id == profile_id)
+        )
+        return row.scalar_one_or_none()
+
+
 class TestUnrefundedPaymentFlag:
     async def test_reject_with_prepay_sets_flag_and_warns(
         self,
@@ -1010,14 +1024,21 @@ class TestWithdrawalPendingFlow:
         assert res.status_code == 200, res.text
         assert res.json()["status"] == "withdrawal_pending", res.json()
 
-        # Find the auto-filed pending refund, then approve + process it.
+        # Find the auto-filed pending refund for THIS profile by reason (NOT
+        # items[0] — the pending list is unit-wide and other tests leave pending
+        # refunds behind). Assert exactly one, for the collected tuition amount.
         refunds = await client.get(
             "/api/refunds", params={"status": "pending"}, headers=manager
         )
         assert refunds.status_code == 200, refunds.text
-        items = refunds.json()["items"]
-        assert len(items) >= 1, items
-        refund_id = items[0]["id"]
+        mine = [
+            r for r in refunds.json()["items"]
+            if f"#{pid}" in (r.get("reason") or "")
+        ]
+        assert len(mine) == 1, mine
+        refund = mine[0]
+        refund_id = refund["id"]
+        assert Decimal(refund["amount"]) == PREPAY, refund
 
         appr = await client.post(
             f"/api/refunds/{refund_id}/approve", headers=manager
@@ -1030,10 +1051,11 @@ class TestWithdrawalPendingFlow:
         )
         assert proc.status_code == 200, proc.text
 
-        # Finalize hook fired: profile self-settled to withdrawn.
+        # Finalize hook fired: profile self-settled to withdrawn + lead → sts08.
         after = await _get(client, manager, pid)
         assert after["status"] == "withdrawn", after
         assert after["has_unrefunded_payment"] is False, after
+        assert await _lead_status_of(pid) == "sts08"
 
     async def test_admin_cancel_withdrawal_back_to_draft(
         self,
@@ -1079,3 +1101,48 @@ class TestWithdrawalPendingFlow:
         )
         assert cancel.status_code == 200, cancel.text
         assert cancel.json()["status"] == "draft", cancel.json()
+
+        # F1: the refund the withdraw auto-filed must now be REJECTED — so it can
+        # never be processed and return money on this re-activated profile.
+        rejected = await client.get(
+            "/api/refunds", params={"status": "rejected"}, headers=admin
+        )
+        assert rejected.status_code == 200, rejected.text
+        assert any(
+            f"#{pid}" in (r.get("reason") or "")
+            for r in rejected.json()["items"]
+        ), rejected.json()
+
+    async def test_cannot_rewithdraw_pending(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """F6: a profile already in withdrawal_pending rejects a second withdraw
+        cleanly (400) instead of running STEP 1/2 then dying at STEP 3."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+        body = await _get(client, manager, pid)
+        r1 = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=manager,
+            json={"reason": "Rút lần một", "version": body["version"]},
+        )
+        assert r1.status_code == 200 and r1.json()["status"] == "withdrawal_pending"
+
+        body2 = await _get(client, manager, pid)
+        r2 = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=manager,
+            json={"reason": "Rút lần hai", "version": body2["version"]},
+        )
+        assert r2.status_code == 400, r2.text

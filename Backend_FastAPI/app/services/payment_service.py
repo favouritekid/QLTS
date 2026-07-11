@@ -990,6 +990,58 @@ class RefundService:
 
         return refund, None
 
+    async def reject_open_refunds_for_profile(
+        self,
+        profile_id: int,
+        *,
+        reason: str,
+        rejector_id: int,
+    ) -> int:
+        """Reject every PENDING refund of a profile (PR-B F1).
+
+        Used when a withdrawal is cancelled/rolled back (``withdrawal_pending →
+        draft``): the withdraw orchestrator auto-files refund requests, and if
+        those are left open they could later be processed — returning money on a
+        profile that has since been re-activated (draft → … → enrolled). This
+        rejects the pending ones so they can never be processed.
+
+        Raises ``BusinessRuleViolation`` if any refund is already APPROVED
+        (awaiting processing): that cannot be silently cancelled here — the
+        operator must process or reject it first — so the caller (cancel/rollback)
+        surfaces a 400 instead of orphaning an in-flight refund. Returns the
+        number of refunds rejected.
+        """
+        stmt = (
+            select(RefundRequest)
+            .join(Payment, RefundRequest.payment_id == Payment.id)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .join(Fee, Invoice.fee_id == Fee.id)
+            .where(
+                Fee.admission_profile_id == profile_id,
+                RefundRequest.status.in_([
+                    RefundStatusEnum.pending.value,
+                    RefundStatusEnum.approved.value,
+                ]),
+            )
+        )
+        open_refunds = list((await self.db.execute(stmt)).scalars().all())
+
+        if any(
+            r.status == RefundStatusEnum.approved.value for r in open_refunds
+        ):
+            raise BusinessRuleViolation(
+                "Không thể hủy quy trình rút: còn yêu cầu hoàn tiền ĐÃ DUYỆT "
+                "đang chờ xử lý. Hãy xử lý (hoặc từ chối) yêu cầu hoàn đó trước."
+            )
+
+        count = 0
+        for r in open_refunds:
+            await self.reject_refund(
+                r.id, reason=reason, rejector_id=rejector_id,
+            )
+            count += 1
+        return count
+
     async def process_approved_refund(
         self,
         refund_id: int,
@@ -1120,27 +1172,45 @@ class RefundService:
         # returned. reverse_payment_balances above already decremented this
         # fee's paid_amount, so sum_unrefunded_refundable_paid reflects the
         # post-refund balance. Gate on status==withdrawal_pending so ordinary
-        # refunds are untouched. NOTE: not row-locked — refunds are processed
-        # sequentially in practice; two concurrent last-refunds on one profile
-        # are vanishingly rare (plan §2.3).
+        # refunds are untouched.
         withdraw_finalize_cb = None
         if profile is not None and profile.status == "withdrawal_pending":
-            from app.repositories.fee_repository import FeeRepository
-            _remaining = await FeeRepository(
-                self.db
-            ).sum_unrefunded_refundable_paid(profile.id)
-            if _remaining <= 0:
-                import app.services.admission_service as admission_service
-                _processor = await self.db.get(models.User, processor_id)
-                profile, withdraw_finalize_cb = (
-                    await admission_service._finalize_withdrawn(
-                        self.db,
-                        profile,
-                        _processor,
-                        from_status="withdrawal_pending",
-                        reason=f"Hoàn tất hoàn tiền — chốt rút hồ sơ #{profile.id}",
-                    )
+            # F5: LOCK the profile row so two concurrent last-refunds serialize.
+            # Without the lock each reads the other's not-yet-committed balance as
+            # >0 → NEITHER finalizes → the profile is stranded in
+            # withdrawal_pending with money fully refunded. Re-read status under
+            # the lock (an admin cancel-withdrawal may have moved it to draft).
+            locked_profile = (
+                await self.db.execute(
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile.id)
+                    .options(selectinload(models.AdmissionProfile.lead))
+                    .with_for_update()
                 )
+            ).scalar_one_or_none()
+            if (
+                locked_profile is not None
+                and locked_profile.status == "withdrawal_pending"
+            ):
+                from app.repositories.fee_repository import FeeRepository
+                _remaining = await FeeRepository(
+                    self.db
+                ).sum_unrefunded_refundable_paid(locked_profile.id)
+                if _remaining <= 0:
+                    import app.services.admission_service as admission_service
+                    _processor = await self.db.get(models.User, processor_id)
+                    profile, withdraw_finalize_cb = (
+                        await admission_service._finalize_withdrawn(
+                            self.db,
+                            locked_profile,
+                            _processor,
+                            from_status="withdrawal_pending",
+                            reason=(
+                                "Hoàn tất hoàn tiền — chốt rút hồ sơ "
+                                f"#{locked_profile.id}"
+                            ),
+                        )
+                    )
 
         log.info(
             "refund_processed",

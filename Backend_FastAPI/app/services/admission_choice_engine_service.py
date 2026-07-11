@@ -1478,6 +1478,23 @@ async def admin_rollback_profile(
             None,
         )
 
+    # F1: if rolling back FROM withdrawal_pending, reject any pending refund the
+    # withdraw orchestrator auto-filed — else it could later be processed and
+    # return money on the re-activated profile (parity with cancel_withdrawal).
+    # Raises 400 if a refund is already approved + awaiting processing.
+    if rolled_back_from == "withdrawal_pending":
+        from .payment_service import RefundService
+        from .admission_service import _get_system_application_fee_user
+
+        _rej_id = getattr(actor, "id", None) or (
+            await _get_system_application_fee_user(db)
+        ).id
+        await RefundService(db).reject_open_refunds_for_profile(
+            profile.id,
+            reason=f"Hủy quy trình rút (admin rollback) hồ sơ #{profile.id}",
+            rejector_id=_rej_id,
+        )
+
     _, callback = await state_service.transition(
         db, profile, "draft",
         actor=actor,

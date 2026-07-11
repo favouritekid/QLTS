@@ -8929,9 +8929,14 @@ async def reject_profile(
     if getattr(profile, "has_unrefunded_payment", False):
         from app.repositories.fee_repository import FeeRepository
 
-        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        # F8: mirror the flag's refundable-only basis (exclude the
+        # non-refundable application fee) so the logged amount == the amount
+        # actually to refund, not overstated by the 70k lệ phí xét tuyển.
+        _total_paid = await FeeRepository(db).sum_unrefunded_refundable_paid(
+            profile.id
+        )
         log.warning(
-            "Profile reject với khoản học phí chưa hoàn",
+            "Profile reject với khoản học phí chưa hoàn (refundable)",
             profile_id=profile.id,
             total_paid=str(_total_paid),
             status=profile.status,
@@ -11171,6 +11176,16 @@ async def withdraw_profile(
     # (re)computed inside ``_finalize_withdrawn`` where the bundle is built.
     _actor_id: Optional[int] = actor.id if actor else None
 
+    # F6: a profile already in withdrawal_pending must not be re-withdrawn — the
+    # withdrawal_pending→withdrawn edge would let it pass validate_transition,
+    # then STEP 3's state_transition(...,"withdrawal_pending") would 400 after
+    # STEP 1/2 already ran. Reject cleanly up front.
+    if profile.status == "withdrawal_pending":
+        raise BusinessRuleViolation(
+            "Hồ sơ đang ở 'Chờ hoàn để rút' — không thể rút lại. Hãy chờ hoàn "
+            "tất hoàn tiền, hoặc dùng 'Hủy quy trình rút' để đưa về nháp."
+        )
+
     from .admission_state_machine import validate_transition
 
     try:
@@ -11237,6 +11252,13 @@ async def withdraw_profile(
     verified_payments = await payment_repo.get_verified_by_profile(profile_id)
     if verified_payments:
         refund_service = RefundService(db)
+        # F3 (by design, not a system-user override): the refund's MAKER is the
+        # withdrawing actor (magic-link → system user). Maker-checker then
+        # requires a DIFFERENT approver — a manager who withdrew cannot approve
+        # their own auto-filed refund; an admin or second manager must. This is
+        # the intended finance control, not a bug. (Using the system user as
+        # requester was rejected: it needs the 'system' technical account seeded,
+        # which dev/test envs lack, and would weaken maker-checker.)
         _uid = await _actor_or_system_id()
         for pay in verified_payments:
             committed = await payment_repo.get_total_refunds_for_payment(pay.id)
@@ -11255,20 +11277,24 @@ async def withdraw_profile(
     # payment exists; let it surface as 400 so the officer resolves that payment
     # first (safer than silently proceeding).
     fee_calc = FeeCalculationService(db)
-    for fee in await fee_repo.get_by_profile_id(profile_id):
+    fees = await fee_repo.get_by_profile_id(profile_id)
+    for fee in fees:
         if fee.paid_amount == 0 and fee.status != "cancelled":
             _uid = await _actor_or_system_id()
             await fee_calc.cancel_fee(
                 fee.id, reason=f"Rút hồ sơ #{profile_id}", user_id=_uid,
             )
 
-    # STEP 3: pick the target. The refunds created above are still 'pending'
-    # (not processed), so paid_amount is unchanged — a profile with collected
-    # refundable tuition still has refundable_held>0 and must WAIT in
-    # ``withdrawal_pending`` until the refund is processed (finalize happens in
-    # ``process_approved_refund``). No refundable money → settle to ``withdrawn``
-    # now via the shared helper.
-    refundable_held = await fee_repo.sum_unrefunded_refundable_paid(profile_id)
+    # STEP 3: pick the target — computed IN-MEMORY from the STEP 2 fee list (F7,
+    # no extra query): the refunds above are still 'pending' so paid_amount is
+    # unchanged, and cancelled fees had paid_amount==0. Excludes the
+    # non-refundable ``application`` fee (mirrors sum_unrefunded_refundable_paid).
+    # refundable_held>0 → WAIT in ``withdrawal_pending`` until the refund is
+    # processed (finalize in ``process_approved_refund``); =0 → ``withdrawn`` now.
+    refundable_held = sum(
+        (f.paid_amount for f in fees if f.fee_type != "application"),
+        Decimal("0"),
+    )
     if refundable_held <= 0:
         return await _finalize_withdrawn(
             db, profile, actor,
@@ -11347,6 +11373,21 @@ async def cancel_withdrawal(
         )
     if not reason:
         raise BadRequest("Lý do hủy quy trình rút là bắt buộc")
+
+    # F1: reject any pending refund auto-filed by the withdraw orchestrator
+    # BEFORE reverting to draft — otherwise that refund could later be processed
+    # and return money on a re-activated (draft → … → enrolled) profile. Raises
+    # 400 if a refund is already APPROVED and awaiting processing (resolve first).
+    from app.services.payment_service import RefundService
+
+    _rejector_id = (
+        actor.id if actor else (await _get_system_application_fee_user(db)).id
+    )
+    await RefundService(db).reject_open_refunds_for_profile(
+        profile_id,
+        reason=f"Hủy quy trình rút hồ sơ #{profile_id}",
+        rejector_id=_rejector_id,
+    )
 
     _old_status = profile.status
     profile, transition_callback = await state_transition(
