@@ -43,6 +43,91 @@ def _non_final_status_filter():
     )
 
 
+# _ASSIGNMENT_SOURCE_METHODS = method của SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ
+# lead). _self_sourced_subquery chỉ xét bản ghi có method này cho "latest", BỎ QUA
+# status-action / keep-sync giữ nguyên officer (chúng KHÔNG đổi "nguồn sở hữu").
+#
+# ⚠️ AUDIT 7 write-site models.AssignmentLog(method=...) (11-07):
+#  SOURCE (whitelist): 'automatic' · 'manual' · 'manual_reassignment' · (defensive)
+#    'system_auto_reassign'.
+#  NON-SOURCE (loại đúng — KHÔNG reset phân loại):
+#   - 'offering_change_unit_synced' (keep-sync đổi ngành, GIỮ officer + non-final):
+#     case LUÔN load-bearing.
+#   - 'officer_reject' (process_officer_action reject, GIỮ officer): thành non-final
+#     qua get_rejected_status()→None→fallback consultation_status_id=None (prod: 0
+#     status legacy='rejected'+is_final=true → luôn None), hoặc FINAL nếu env có
+#     status đó (khi đó lead rớt khỏi workload, việc loại thành no-op). Prod scope
+#     officer_reject-as-latest hiện = 0 lead.
+#  DEAD-nhưng-defensive: 'officer_reassign' + 'system_auto_reassign' đều NULL/đổi
+#    assigned_officer_id nên KHÔNG BAO GIỜ correlate (al.officer_id==assigned) — vô
+#    hại, giữ để rõ ý "source".
+# ⚠️ THÊM method mới (re-)assign lead cho officer + giữ non-final ⇒ PHẢI thêm vào
+#    đây; quên → lead phân phối bị coi self-sourced → OVER-GRANT (UNSAFE). Ghim bởi
+#    test_assignment_source_methods_documented.
+_ASSIGNMENT_SOURCE_METHODS = (
+    "automatic",
+    "manual",
+    "manual_reassignment",
+    "system_auto_reassign",
+)
+
+
+def _self_sourced_subquery():
+    """Correlated boolean scalar subquery — True nếu lead do CHÍNH officer đang
+    được gán TỰ TUYỂN (tự tạo + tự nhận), theo bản ghi (RE-)PHÂN CÔNG MỚI NHẤT của
+    cặp (lead, officer hiện tại) — CHỈ xét ``_ASSIGNMENT_SOURCE_METHODS``, bỏ qua
+    hành động status (officer_reject) / keep-sync.
+
+    Tự tuyển = latest (assignment-source) method='manual' VÀ ``reason`` do một
+    OFFICER khởi tạo. Mọi thứ khác — 'automatic', reassign, manual do admin/manager
+    chỉ định (phân phối), hay không có log — đều KHÔNG phải tự tuyển ⇒ tính vào tải
+    đã-chia. ⚠️ offering_change_unit_synced (keep-sync, LUÔN giữ officer + non-final)
+    và officer_reject KHÔNG reset phân loại (nếu xét MỌI log, self-sourced lead sau
+    các action đó hoá đã-chia OAN → giảm suất officer, ngược ý đồ) — xem
+    ``_ASSIGNMENT_SOURCE_METHODS``. Dùng khi ``exclude_active`` để loại lead tự tuyển
+    khỏi CƠ SỞ SẮP XẾP (real_util/eff_util), KHÔNG khỏi tổng workload.
+
+    ⚠️ NGỮ NGHĨA (latent): pattern chỉ kiểm VAI TRÒ người-gán = officer, KHÔNG kiểm
+    assigner == assigned_officer_id. Hôm nay AN TOÀN vì officer-create ép
+    direct_assignment = created_by (lead_service.py:~837) và ``/assign`` chỉ
+    manager/admin (Casbin OFFICER_TEMPLATE không cấp). NẾU RBAC sau cho officer gán
+    cho ĐỒNG NGHIỆP → lead đã-chia của B bị tính B tự tuyển → over-grant (UNSAFE,
+    ngược ý đồ). Khi đó ghi ý định ở write-time (method='self_claim' / actor_id)
+    thay vì match chuỗi reason.
+
+    Fail-safe: NULL (không log) hoặc reason không khớp ⇒ KHÔNG phải tự tuyển (an
+    toàn: không cấp thêm suất).
+
+    ⚠️ COUPLING: khớp ``reason`` sinh ở lead_service.py (create+direct-assign
+    ~1179 + assign_lead_to_officer ~2350); ghim bởi test_assignment_self_sourced.py.
+    ⚠️ INDEX: ORDER BY ... LIMIT 1 dựa ``ix_assignment_log_lead_officer_ts``
+    (lead_id, officer_id, timestamp DESC) — thiếu → seq-scan mỗi lead-row. Audit
+    prod unit 14 (2026-07-10): 467/537 manual = 'by officer', 70 = admin gán.
+    """
+    al = models.AssignmentLog
+    return (
+        select(
+            (al.method == "manual")
+            & al.reason.ilike("%by officer %")
+        )
+        .where(
+            al.lead_id == models.Lead.id,
+            al.officer_id == models.Lead.assigned_officer_id,
+            # CHỈ xét sự kiện (re-)phân công — bỏ qua status-action (officer_reject)
+            # + keep-sync (offering_change_unit_synced) để chúng KHÔNG reset phân
+            # loại tự-tuyển của lead.
+            al.method.in_(_ASSIGNMENT_SOURCE_METHODS),
+        )
+        # tie-breaker id DESC: timestamp=datetime.now() có thể trùng microsecond
+        # trên 2 log cùng (lead, officer) ⇒ LIMIT 1 non-deterministic; id DESC làm
+        # sort toàn phần.
+        .order_by(al.timestamp.desc(), al.id.desc())
+        .limit(1)
+        .correlate(models.Lead)
+        .scalar_subquery()
+    )
+
+
 def _safe_positive_int(value: int | None, default: int) -> int:
     """Coerce to a usable positive int: None → ``default``, any value <= 0 → 1.
     Single backbone for _safe_capacity / _safe_weight."""
@@ -267,14 +352,36 @@ async def automatically_assign_lead(
                     f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
                 )
 
-                # === BƯỚC 3: TÍNH TOÁN WORKLOAD (Chỉ cho các officer lấy được) ===
-                # ✅ REFACTORED: Sử dụng JOIN với ConsultationStatus thay vì danh sách hard-coded
+                # === BƯỚC 3: TÍNH TOÁN WORKLOAD (+ tải TỰ TUYỂN nếu exclude_active) ===
+                # `exclude_active` = flag loại-self CHỈ có tác dụng ở chế độ member/
+                # fairness (legacy sắp xếp thuần last_assigned → dist_load vô nghĩa;
+                # gate ở đây tránh query thừa + không bẩn legacy snapshot). Khi active
+                # thêm 1 aggregate self_cnt = COUNT(...) FILTER(tự tuyển) NGAY trên
+                # workload_stmt ⇒ 1 round-trip, và bất biến self_cnt ≤ workload là CẤU
+                # TRÚC (subset của FILTER trên cùng tập dòng) ⇒ balance_load ≥ 0 khỏi
+                # cần max(0). Flags đọc 1 lần ở đây, tái dùng ở BƯỚC 5.
+                from ..config import settings
+
+                member_on = settings.ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
+                fairness_on = settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
+                exclude_active = (
+                    settings.ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED
+                    and (member_on or fairness_on)
+                )
+
                 officer_ids = [o.id for o in available_officers]
-                workload_stmt = (
-                    select(
-                        models.Lead.assigned_officer_id,
-                        func.count(models.Lead.id).label("workload"),
+                _wl_cols = [
+                    models.Lead.assigned_officer_id,
+                    func.count(models.Lead.id).label("workload"),
+                ]
+                if exclude_active:
+                    _wl_cols.append(
+                        func.count(models.Lead.id)
+                        .filter(_self_sourced_subquery())
+                        .label("self_cnt")
                     )
+                workload_stmt = (
+                    select(*_wl_cols)
                     .join(
                         models.ConsultationStatus,
                         models.Lead.consultation_status_id == models.ConsultationStatus.id,
@@ -289,12 +396,14 @@ async def automatically_assign_lead(
                     )
                     .group_by(models.Lead.assigned_officer_id)
                 )
-                workload_results = await db.execute(workload_stmt)
-                workload_map = {
-                    row.assigned_officer_id: row.workload for row in workload_results
-                }
+                workload_map: dict = {}
+                self_map: dict = {}
+                for row in await db.execute(workload_stmt):
+                    workload_map[row.assigned_officer_id] = row.workload
+                    if exclude_active:
+                        self_map[row.assigned_officer_id] = row.self_cnt
                 log.debug(
-                    f"[Lead ID: {lead_id}] Calculated workloads (non-final leads only) for available officers: {workload_map}"
+                    f"[Lead ID: {lead_id}] Workloads={workload_map} self-sourced={self_map}"
                 )
 
                 # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
@@ -305,24 +414,38 @@ async def automatically_assign_lead(
                     # cùng helper với is_officer_at_threshold.
                     capacity = _safe_capacity(officer)
 
+                    # Gate còn-capacity LUÔN theo TỔNG workload (trần cứng) —
+                    # self-tuyển/weight KHÔNG BAO GIỜ nới trần này.
                     if workload < capacity:
-                        # real_util = tải THẬT (workload/capacity), KHÔNG nhân weight —
-                        # cổng an toàn `overloaded` LUÔN đọc con số này. eff_util = tải
-                        # hiệu dụng có nhân weight: weight cao ⇒ eff_util thấp ⇒ officer
-                        # "được coi là vơi hơn" ⇒ nhận nhiều lead hơn (khi member ON).
-                        real_util = workload / capacity
                         weight = _safe_weight(officer)
-                        eff_util = workload / (capacity * weight)
+                        # balance_load = CƠ SỞ SẮP XẾP. Khi exclude_active, trừ phần
+                        # officer tự tuyển ⇒ lead tự tuyển không làm giảm suất nhận
+                        # lead-chia. self_cnt = COUNT FILTER trên cùng tập dòng ⇒
+                        # self_cnt ≤ workload (bất biến CẤU TRÚC) ⇒ balance_load ≥ 0,
+                        # KHÔNG cần max(0).
+                        balance_load = (
+                            workload - self_map.get(officer.id, 0)
+                            if exclude_active
+                            else workload
+                        )
+                        # real_util/eff_util tính trên balance_load (đầu vào SẮP
+                        # XẾP ở BƯỚC 5). eff_util có nhân weight: weight cao ⇒
+                        # eff_util thấp ⇒ officer "được coi là vơi hơn" ⇒ nhận
+                        # nhiều lead hơn (member ON).
+                        real_util = balance_load / capacity
+                        eff_util = balance_load / (capacity * weight)
                         officer_loads.append(
                             {
                                 "officer": officer,
-                                "workload": workload,
+                                "workload": workload,  # TỔNG tải (audit + gate)
+                                "dist_load": balance_load,  # cơ sở SẮP XẾP
                                 "real_util": real_util,
                                 "eff_util": eff_util,
                                 "weight": weight,
-                                # Cổng an toàn theo tải THẬT — đặt sẵn ở đây, khỏi cần
-                                # vòng lặp phụ ở BƯỚC 5 (weight không bao giờ phá trần).
-                                "overloaded": real_util >= SAFETY_THRESHOLD,
+                                # ⚠️ Cổng an toàn theo TỔNG tải (workload/capacity),
+                                # TÁCH khỏi real_util (dist-based khi exclude_active).
+                                # weight/self-tuyển KHÔNG phá trần. Đặt sẵn ở đây.
+                                "overloaded": (workload / capacity) >= SAFETY_THRESHOLD,
                                 # score = giá trị dùng để SẮP XẾP; mặc định real_util,
                                 # các nhánh weighted ở BƯỚC 5 ghi đè. Ở nhánh legacy/
                                 # fallback score GIỮ real_util nhưng KHÔNG quyết định thứ
@@ -383,12 +506,9 @@ async def automatically_assign_lead(
                 #   ENABLE_MEMBER_WEIGHTED_ASSIGNMENT   → order theo eff_util (nhân weight)
                 #   ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT → thêm thành phần fairness share
                 # order_util = eff_util nếu member ON, ngược lại real_util (=== hôm nay).
-                # overloaded = real_util >= SAFETY_THRESHOLD — LUÔN tải thật; weight
-                # KHÔNG BAO GIỜ phá cổng an toàn (không dồn quá tải thật).
-                from ..config import settings
-
-                member_on = settings.ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
-                fairness_on = settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
+                # overloaded = (workload/capacity) >= SAFETY_THRESHOLD — LUÔN theo
+                # TỔNG tải; weight/self-tuyển KHÔNG BAO GIỜ phá cổng an toàn (không
+                # dồn quá tải thật). (member_on/fairness_on/settings đã đọc ở BƯỚC 3.)
 
                 # `overloaded` (cổng an toàn theo tải THẬT) đã đặt sẵn ở BƯỚC 4 —
                 # SAFETY_THRESHOLD là hằng module (chia sẻ với referral fast-path qua
@@ -447,17 +567,19 @@ async def automatically_assign_lead(
                     assign_reason = "member_fairness_weighted"
                     log.info(f"[Lead ID: {lead_id}] Member+fairness weighted (pool_hist={eligible_hist_total})")
                 elif scoring == "fairness":
+                    # ⚠️ Khi exclude_active, real_util là DIST-based ⇒ score fairness
+                    # KHÁC P2-2 gốc (officer thắng có thể lật). Chủ đích (spec §5).
                     for e in officer_loads:
                         share = hist_counts.get(e["officer"].id, 0) / total_hist
-                        e["score"] = 0.6 * e["real_util"] + 0.4 * share  # Y HỆT P2-2 cũ
+                        e["score"] = 0.6 * e["real_util"] + 0.4 * share
                     assign_reason = "fairness_weighted"
                     log.info(f"[Lead ID: {lead_id}] Using fairness-weighted scoring (history={total_hist})")
                 elif scoring == "member":
                     # Tie-break đầu là eff_util (weight cao ⇒ eff_util thấp ⇒ ưu tiên),
-                    # rồi last_assigned. ⚠️ Weight ĐỒNG ĐỀU (đều =1) ⇒ eff_util == real_util
-                    # ⇒ order theo TẢI THẬT (workload-proportional), KHÔNG phải round-robin
-                    # thuần như legacy — đây là chủ đích của member mode, KHÁC legacy dù
-                    # chưa phân hoá weight (xem test_matrix_member_on_uniform_weight...).
+                    # rồi last_assigned. Weight ĐỒNG ĐỀU (đều =1) ⇒ eff_util == real_util
+                    # ⇒ order theo TẢI (proportional), KHÁC round-robin thuần legacy —
+                    # chủ đích member mode. ⚠️ Khi exclude_active, "TẢI" ở đây là
+                    # DIST-based (đã trừ tự tuyển), KHÔNG phải tổng workload.
                     for e in officer_loads:
                         e["score"] = e["eff_util"]
                     assign_reason = "member_weighted"
@@ -478,8 +600,8 @@ async def automatically_assign_lead(
                 chosen_workload = chosen_officer_data["workload"]
                 log.info(
                     f"[Lead ID: {lead_id}] Selected officer {chosen_one.id} ({chosen_one.username}). "
-                    f"Current Workload: {chosen_workload}, Max Capacity: {chosen_one.max_capacity}, "
-                    f"Utilization: {chosen_officer_data['real_util']:.2f}, "
+                    f"Current Workload (TỔNG): {chosen_workload}, Max Capacity: {chosen_one.max_capacity}, "
+                    f"Util(cơ sở sắp xếp, dist khi exclude_active): {chosen_officer_data['real_util']:.2f}, "
                     f"Last Assigned: {chosen_officer_data['last_assigned']}"
                 )
 
@@ -510,10 +632,11 @@ async def automatically_assign_lead(
                 # fairness_weighted / member_weighted / member_fairness_weighted).
                 # scores_snapshot (thuần audit — KHÔNG consumer runtime nào đọc;
                 # fairness_service chỉ đọc capacity_snapshot):
-                #  - Chế độ weighted → dict {real_util, eff_util, weight, score}
-                #    (`score` là thành phần SẮP XẾP; đọc kèm `reason`).
+                #  - Chế độ weighted → dict {workload, dist_load, real_util, eff_util,
+                #    weight, score} (workload=TỔNG; dist_load=cơ sở sắp xếp = tổng khi
+                #    KHÔNG exclude_active; `score` = thành phần SẮP XẾP, đọc kèm reason).
                 #  - Legacy/round-robin → gọn: chỉ real_util (eff_util==real_util,
-                #    weight==1, score==real_util nên 3 field kia thừa; sort chỉ theo
+                #    weight==1, score==real_util nên các field kia thừa; sort chỉ theo
                 #    overloaded + last_assigned).
                 await _log_assignment_decision(
                     db, lead_id=lead_id, assigned_officer_id=chosen_one.id,
@@ -527,6 +650,8 @@ async def automatically_assign_lead(
                         if scoring == "legacy"
                         else {
                             str(ol["officer"].id): {
+                                "workload": ol["workload"],  # TỔNG (cổng an toàn)
+                                "dist_load": ol["dist_load"],  # =tổng khi flag OFF
                                 "real_util": round(ol["real_util"], 4),
                                 "eff_util": round(ol["eff_util"], 4),
                                 "weight": ol["weight"],

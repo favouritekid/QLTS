@@ -448,6 +448,18 @@ class AssignmentLog(Base):
 
     __tablename__ = "assignment_log"
 
+    # Composite index cho _self_sourced_subquery (assignment_service): latest log
+    # của cặp (lead_id, officer_id) qua ORDER BY timestamp DESC LIMIT 1. Đồng bộ
+    # với migration assignlogidx20260711 (tránh autogenerate drift → spurious DROP).
+    __table_args__ = (
+        Index(
+            "ix_assignment_log_lead_officer_ts",
+            "lead_id",
+            "officer_id",
+            text("timestamp DESC"),
+        ),
+    )
+
     id = Column(Integer, primary_key=True)
     lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, index=True)  # ✅ FIX: Added index
     method = Column(String(50))

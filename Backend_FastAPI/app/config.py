@@ -576,6 +576,16 @@ class Settings(BaseSettings):
     # proportionally more leads. INDEPENDENT of ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
     # (either, both, or neither may be on). Default False ⇒ no behavior change until
     # flipped. The safety gate (real_util >= SAFETY_THRESHOLD) is never bent by weight.
+    ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED: bool = Field(
+        default=False,
+        validation_alias="ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED",
+    )  # Khi ON: khóa SẮP XẾP auto-assign (real_util/eff_util) tính trên
+    # dist_load = workload − (lead officer TỰ TUYỂN, xem _self_sourced_subquery),
+    # KHÔNG trên tổng workload. Mục tiêu: lead tự tuyển không làm giảm suất nhận
+    # lead-chia. Cổng an toàn `overloaded`, gate `workload < capacity`, và
+    # is_officer_at_threshold (referral fast-path) VẪN dùng TỔNG workload —
+    # self-tuyển không phá trần quá tải thật. Default False ⇒ 0 đổi hành vi + 0
+    # query phụ cho tới khi bật.
 
     # -- Lead Lifecycle SLA: auto-close stale rejected consultations --
     # A lead in sts04 (CONSULT_REJECTED, is_final=false for re-engagement) that
