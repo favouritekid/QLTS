@@ -678,7 +678,9 @@ export function SocketHandler() {
       queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all });
       if (data.lead_stage_changed) {
         queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-        queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() });
+        // pipelineKeys.all — fullPipeline() would be a no-op invalidation
+        // (trailing undefined fails React Query's partial match).
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
       }
     };
 
