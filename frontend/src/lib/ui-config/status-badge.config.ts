@@ -58,6 +58,7 @@ export type AdmissionStatus =
   | "confirmed"
   | "overridden"
   | "enrolled"
+  | "withdrawal_pending" // PR-B: "Chờ hoàn để rút"
   | "withdrawn";
 
 export type LeadStatus =
@@ -232,6 +233,18 @@ export const ADMISSION_BADGE_CONFIG: Record<AdmissionStatus, StatusBadgeConfig> 
     variant: "default",
     description: "Thí sinh đã hoàn tất nhập học",
     order: 10,
+  },
+  // PR-B: intermediate "Chờ hoàn để rút" — a refund is being processed; the
+  // profile only settles to ``withdrawn`` once the money is returned. Amber
+  // (pending-but-not-done), ordered just before withdrawn.
+  withdrawal_pending: {
+    label: "Chờ hoàn để rút",
+    shortLabel: "Chờ rút",
+    icon: Clock,
+    className: "bg-amber-50 text-amber-700 border-amber-200",
+    variant: "outline",
+    description: "Đang chờ hoàn tiền trước khi rút hồ sơ",
+    order: 10.5,
   },
   withdrawn: {
     label: "Đã rút hồ sơ",

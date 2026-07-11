@@ -910,6 +910,7 @@ export const admissionProfileResponseSchema = z.object({
     "draft", "submitted", "resubmitted", "approved", "rejected",
     "revision_requested", "confirmed", "overridden", "enrolled", "withdrawn",
     "reviewing", "result_published", "admitted", "waitlisted",
+    "withdrawal_pending", // PR-B: "Chờ hoàn để rút" (intermediate refund-pending)
   ]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
@@ -1435,6 +1436,7 @@ const STATUS_COLORS: Record<string, string> = {
   enrolled: "bg-info-100 text-info-800",
   overridden: "bg-purple-100 text-purple-800",
   withdrawn: "bg-muted text-muted-foreground",
+  withdrawal_pending: "bg-amber-100 text-amber-800",
 }
 
 /**
@@ -1460,6 +1462,7 @@ const STATUS_LABELS: Record<string, string> = {
   enrolled: "Đã nhập học",
   overridden: "Đã override",
   withdrawn: "Đã rút hồ sơ",
+  withdrawal_pending: "Chờ hoàn để rút",
 }
 
 /**
