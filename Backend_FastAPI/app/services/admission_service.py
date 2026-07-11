@@ -11077,50 +11077,20 @@ async def _finalize_withdrawn(
     # (from_status == "withdrawal_pending"): each refundable payment was returned
     # via reverse_payment_balances, which zeroed the fee's paid_amount BUT
     # reopened its invoice to 'issued' (payable) — a phantom receivable ("còn
-    # nợ") on a profile that just settled to withdrawn. Cancel the now-unpaid
-    # non-application fees (cancel_fee cascades to their invoices) so no payable
-    # surface survives. The direct path (admitted / no-refundable-money) is
-    # EXCLUDED — its unpaid fees were already cancelled in withdraw STEP 2, and
-    # the admitted legacy path intentionally never touches finance.
-    #
-    # Runs after the lead is at sts08, so cancel_fee's HK1 sts14-revert is a
-    # guarded no-op; the application (lệ phí xét tuyển) fee is skipped (not
-    # refunded, stays collected). Each cancel is wrapped in a SAVEPOINT and is
-    # best-effort: a stale pending payment / active online intent on a sibling
-    # fee makes cancel_fee raise BusinessRuleViolation, which must NOT unwind the
-    # (already money-out) finalize — the phantom is money-safe via the payable
-    # guard, so we log and leave that one fee. Fees are locked in id order to
-    # keep a deterministic acquisition order under concurrency.
-    if from_status == "withdrawal_pending":
-        from app.services.fee_calculation_service import FeeCalculationService
-        from app.repositories.fee_repository import FeeRepository as _FeeRepo
-
-        _fee_calc = FeeCalculationService(db)
-        _fees = sorted(
-            await _FeeRepo(db).get_by_profile_id(profile.id), key=lambda f: f.id
-        )
-        for _f in _fees:
-            if (
-                _f.fee_type == "application"
-                or _f.paid_amount != 0
-                or _f.status == "cancelled"
-            ):
-                continue
-            try:
-                async with db.begin_nested():
-                    await _fee_calc.cancel_fee(
-                        _f.id,
-                        reason=f"Chốt rút hồ sơ #{profile.id} — huỷ phí đã hoàn",
-                        user_id=_actor_id,
-                    )
-            except Exception:
-                log.warning(
-                    "finalize_withdrawn: best-effort cancel of refunded fee "
-                    "failed (phantom invoice left; money-safe via payable guard)",
-                    profile_id=profile.id,
-                    fee_id=_f.id,
-                    exc_info=True,
-                )
+    # nợ") on a profile that just settled to withdrawn. Those now-unpaid
+    # non-application fees are cancelled POST-COMMIT in a fresh session
+    # (_cancel_phantom_fees_callback) — NOT in this transaction: cancel_fee can
+    # raise (stale pending payment / active online intent) and row-locks fees, so
+    # doing it here would either abort the already-money-out finalize or add a
+    # profile↔fee lock-order hazard, and its savepoint would expire the ORM
+    # objects this function still uses. The direct path (admitted /
+    # no-refundable-money) is EXCLUDED — its unpaid fees were already cancelled in
+    # withdraw STEP 2. Snapshot the ids now (the profile object must not be
+    # captured into the post-commit closure — the session is gone by then).
+    _cleanup_pid: Optional[int] = (
+        profile.id if from_status == "withdrawal_pending" else None
+    )
+    _cleanup_actor_id = _actor_id
 
     # Path C / Arch-3: atomic paired bundle (APPLICATION_STATUS_CHANGED +
     # LEAD_STATUS_CHANGED). Withdraw has no commission check.
@@ -11165,9 +11135,61 @@ async def _finalize_withdrawn(
             profile_id=profile.id,
         )
 
+    # Issue 1 cleanup — best-effort, POST-COMMIT, OWN session (see rationale
+    # above). Cancels the non-application fees the refund left at paid==0 (their
+    # invoices were reopened to 'issued') so no phantom payable survives on the
+    # withdrawn profile. Runs only on the refund-finalize path (_cleanup_pid set).
+    # A per-fee failure (pending payment / active intent) is money-safe via the
+    # payable guard — logged and skipped, never propagated. `compose_...` also
+    # swallows this callback's exceptions so it can never break notifications.
+    async def _cancel_phantom_fees_callback():
+        if _cleanup_pid is None:
+            return
+        from app.database import AsyncSessionLocal
+        from app.services.fee_calculation_service import FeeCalculationService
+        from app.repositories.fee_repository import FeeRepository as _FeeRepo
+
+        async with AsyncSessionLocal() as _sess:
+            _fee_calc = FeeCalculationService(_sess)
+            _fee_ids = [
+                f.id
+                for f in sorted(
+                    await _FeeRepo(_sess).get_by_profile_id(_cleanup_pid),
+                    key=lambda f: f.id,
+                )
+                if f.fee_type != "application"
+                and f.paid_amount == 0
+                and f.status != "cancelled"
+            ]
+            for _fid in _fee_ids:
+                try:
+                    await _fee_calc.cancel_fee(
+                        _fid,
+                        reason=(
+                            f"Chốt rút hồ sơ #{_cleanup_pid} — huỷ phí đã hoàn"
+                        ),
+                        user_id=_cleanup_actor_id,
+                    )
+                    await _sess.commit()
+                except Exception:
+                    await _sess.rollback()
+                    log.warning(
+                        "finalize_withdrawn post-commit: best-effort cancel of "
+                        "refunded fee failed (phantom invoice left; money-safe "
+                        "via payable guard)",
+                        profile_id=_cleanup_pid,
+                        fee_id=_fid,
+                        exc_info=True,
+                    )
+
     final_callback = compose_post_commit_callbacks(
         label="admission_withdraw",
-        callbacks=[_audit_log_callback, bundle_callback, transition_callback],
+        callbacks=[
+            _audit_log_callback,
+            _cancel_phantom_fees_callback,
+            bundle_callback,
+            transition_callback,
+        ],
     )
 
     return profile, final_callback

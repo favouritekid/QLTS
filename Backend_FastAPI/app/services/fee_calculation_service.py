@@ -1308,9 +1308,17 @@ class FeeCalculationService:
         """
         fees = await self.fee_repo.get_by_profile_id(profile_id, unit_id)
 
-        total_fees = sum(f.final_amount for f in fees)
-        total_paid = sum(f.paid_amount for f in fees)
-        total_waived = sum(f.waived_amount for f in fees)
+        # Exclude CANCELLED fees from the money aggregates: a cancelled fee is
+        # void (final_amount>0, paid==0) so counting its remaining would surface
+        # a phantom "Còn nợ" on a settled/withdrawn profile. The ``fees`` list
+        # still returns every fee (incl cancelled) for display/history.
+        _active = [
+            f for f in fees
+            if f.status != FeeStatusEnum.cancelled.value
+        ]
+        total_fees = sum(f.final_amount for f in _active)
+        total_paid = sum(f.paid_amount for f in _active)
+        total_waived = sum(f.waived_amount for f in _active)
         total_remaining = total_fees - total_paid - total_waived
 
         return {

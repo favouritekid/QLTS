@@ -965,6 +965,11 @@ def _inv_status_value(inv):
     return inv.status.value if hasattr(inv.status, "value") else inv.status
 
 
+def _fee_status_value(fee):
+    """Normalize a fee status to its string value (Enum or str)."""
+    return fee.status.value if hasattr(fee.status, "value") else fee.status
+
+
 def _invoice_is_payable(inv) -> bool:
     """Hóa đơn còn THU ĐƯỢC: đã phát hành (issued/partial/overdue) và còn dư nợ
     (inv.remaining_amount = amount + penalty - paid > 0, GỒM penalty). Khớp
@@ -1000,7 +1005,18 @@ def _total_remaining_with_penalty(fees, invoices):
     Σ invoice.remaining (amount+penalty-paid) would OVER-state the header by
     the waived amount. Penalties live on the invoice (not the fee), so add the
     penalty of non-terminal invoices on top."""
-    principal = sum((f.remaining_amount for f in fees), Decimal("0"))
+    # Exclude CANCELLED fees: a cancelled fee (e.g. one auto-voided when a
+    # withdrawn profile's tuition was refunded) carries a non-zero
+    # remaining_amount (final − paid − waived) but is void — counting it would
+    # surface a phantom "Còn nợ" on a settled/withdrawn profile.
+    principal = sum(
+        (
+            f.remaining_amount
+            for f in fees
+            if _fee_status_value(f) != "cancelled"
+        ),
+        Decimal("0"),
+    )
     penalty = sum(
         (
             inv.penalty_amount
