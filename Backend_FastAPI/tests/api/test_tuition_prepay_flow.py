@@ -857,6 +857,19 @@ async def _refund_by_id(refund_id: int) -> models.RefundRequest | None:
         return await session.get(models.RefundRequest, refund_id)
 
 
+async def _audit_actions(entity_type: str, entity_id: int) -> list[str]:
+    """Actions logged to entity_audit_log for one entity (A1 assertions)."""
+    async with AsyncSessionLocal() as session:
+        rows = await session.execute(
+            select(models.EntityAuditLog.action)
+            .where(
+                models.EntityAuditLog.entity_type == entity_type,
+                models.EntityAuditLog.entity_id == entity_id,
+            )
+        )
+        return list(rows.scalars().all())
+
+
 async def _seed_unpaid_dormitory_fee(profile_id: int) -> int:
     """Attach an UNPAID (paid_amount=0) non-tuition fee to a profile so the
     withdraw orchestrator's STEP 2 (cancel every unpaid fee) has something to
@@ -1123,6 +1136,14 @@ class TestWithdrawalPendingFlow:
             if s in ("issued", "partial", "overdue")
         ]
         assert not payable, f"payable invoice left on withdrawn profile: {payable}"
+
+        # A1: the fee cancellation is persisted to entity_audit_log (unified
+        # audit timeline), not only on the fee.notes / invoice.cancelled_* row
+        # fields — even though it runs in the post-commit cleanup session.
+        tuition = next(f for f in fees if f.fee_type == "tuition")
+        assert "status_changed" in await _audit_actions("Fee", tuition.id), (
+            "fee cancellation must be written to entity_audit_log"
+        )
 
     async def test_admin_cancel_withdrawal_back_to_draft(
         self,

@@ -2168,9 +2168,13 @@ def _compute_frontend_fields(
         # Service-layer (priority_override_service) cũng có hard-deny officer
         # ngay đầu override_kv là defense-in-depth.
         "override_priority_kv": (
-            # PR-B: never on a withdrawal_pending profile (on its way out) —
-            # gate the admin-unconditional branch too.
-            status != "withdrawal_pending"
+            # PR-B: never on a profile on its way out / already out —
+            # withdrawal_pending (awaiting refund) OR terminal withdrawn — gate
+            # the admin-unconditional branch too (a KV override is meaningless
+            # once the profile is withdrawn). ``assign_officer`` below is NOT
+            # gated: it is a LEAD-level action (re-engagement) valid regardless
+            # of admission state.
+            status not in ("withdrawal_pending", "withdrawn")
             and (
                 is_admin
                 or (
@@ -11181,6 +11185,36 @@ async def _finalize_withdrawn(
                         fee_id=_fid,
                         exc_info=True,
                     )
+                    # A2: persist the failure to entity_audit_log so a left-behind
+                    # phantom fee is discoverable by ops (the log.warning above is
+                    # ephemeral stdout only). Own tiny commit; if even this fails
+                    # we swallow it — the phantom is money-safe regardless.
+                    try:
+                        from app.services import audit_service
+                        await audit_service.log_audit(
+                            _sess,
+                            entity_type="Fee",
+                            entity_id=_fid,
+                            action="phantom_cleanup_failed",
+                            actor_user_id=_cleanup_actor_id,
+                            new_value="phantom_invoice_left",
+                            reason=(
+                                "Post-commit huỷ phí đã hoàn THẤT BẠI khi chốt "
+                                f"rút hồ sơ #{_cleanup_pid} — hoá đơn payable còn "
+                                "sót (an toàn tiền qua payable guard)"
+                            ),
+                            source="system",
+                        )
+                        await _sess.commit()
+                    except Exception:
+                        await _sess.rollback()
+                        log.warning(
+                            "finalize_withdrawn post-commit: could not persist "
+                            "phantom-cleanup-failure audit",
+                            profile_id=_cleanup_pid,
+                            fee_id=_fid,
+                            exc_info=True,
+                        )
 
     final_callback = compose_post_commit_callbacks(
         label="admission_withdraw",
