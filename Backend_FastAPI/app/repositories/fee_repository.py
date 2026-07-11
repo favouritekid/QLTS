@@ -1013,6 +1013,13 @@ class InvoiceRepository(BaseRepository[Invoice]):
 
         def _scoped(query):
             query = query.join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            # F4: exclude withdrawn / awaiting-refund profiles — they owe nothing,
+            # so their leftover invoices must not inflate outstanding / overdue.
+            query = query.where(
+                models.AdmissionProfile.status.notin_(
+                    ("withdrawn", "withdrawal_pending")
+                )
+            )
             if unit_id is not None:
                 query = query.where(models.Lead.unit_id == unit_id)
             return query

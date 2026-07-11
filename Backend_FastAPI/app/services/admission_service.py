@@ -11076,6 +11076,11 @@ async def _finalize_withdrawn(
     # manual via maker-checker). On the refund-finalize path this is 0 by
     # construction (finalize only runs once the refundable balance hits 0).
     await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate computed fields so the direct
+    # withdraw response (STEP 0 admitted / refundable<=0 path) matches a GET.
+    # Harmless on the refund-finalize path (the RefundRequest is the response
+    # there); _populate_response_fields is a no-op when actor is None.
+    await _populate_response_fields(db, profile, actor)
 
     # Issue 1 (PR-B follow-up) — ONLY on the refund-finalize path
     # (from_status == "withdrawal_pending"): each refundable payment was returned
@@ -11426,6 +11431,9 @@ async def withdraw_profile(
     )
     await db.flush()
     await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate permissions/available_actions/
+    # eligibility/completion so the withdraw response matches a subsequent GET.
+    await _populate_response_fields(db, profile, actor)
 
     log.info(
         "Admission profile → withdrawal_pending (awaiting refund)",
@@ -11508,6 +11516,23 @@ async def cancel_withdrawal(
     )
     await db.flush()
     await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate computed fields so the
+    # cancel-withdrawal response matches a subsequent GET.
+    await _populate_response_fields(db, profile, actor)
+
+    # F7: the lead was HELD at its mid-admission consultation status throughout
+    # withdrawal_pending (the draft sync short-circuits). Now that the profile is
+    # back to draft, reset the lead to the draft mapping (sts06) so the pair is
+    # consistent — force=True bypasses the draft short-circuit + anti-regression
+    # floor, which is the intended behaviour for this admin reset only.
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db,
+        profile,
+        changed_by_user_id=(actor.id if actor else None),
+        reason=f"Hủy quy trình rút hồ sơ #{profile.id} — đưa lead về nháp",
+        force=True,
+    )
 
     log.info(
         "Withdrawal cancelled → draft",
