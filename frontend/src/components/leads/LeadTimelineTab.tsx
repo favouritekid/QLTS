@@ -4,18 +4,15 @@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Clock,
   User,
-  FileText,
   Phone,
   Mail,
   MessageSquare,
@@ -43,7 +40,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
-import { vi } from "date-fns/locale";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useState } from "react";
 import {
@@ -162,7 +158,7 @@ const getEventConfig = (eventType: string, method?: string) => {
   };
 };
 
-// Get outcome type styling
+// Get outcome type styling (compact mode)
 const getOutcomeStyles = (outcomeType?: string | null) => {
   switch (outcomeType) {
     case "positive":
@@ -187,48 +183,42 @@ const getOutcomeStyles = (outcomeType?: string | null) => {
   }
 };
 
-// Format date for grouping
-const formatDateGroup = (dateString: string) => {
-  const date = parseISO(dateString);
-  if (isToday(date)) return "Hôm nay";
-  if (isYesterday(date)) return "Hôm qua";
-  return format(date, "EEEE, dd/MM/yyyy", { locale: vi });
-};
-
-// Group timeline by date
-const groupTimelineByDate = (timeline: TimelineItem[]) => {
-  const groups: Record<string, typeof timeline> = {};
-
-  // Sort by date descending (newest first)
-  const sorted = [...timeline].sort((a, b) => {
-    const dateA = new Date(a.timestamp || 0);
-    const dateB = new Date(b.timestamp || 0);
-    return dateB.getTime() - dateA.getTime();
-  });
-
-  sorted.forEach((event) => {
-    const dateKey = format(
-      parseISO(event.timestamp || new Date().toISOString()),
-      "yyyy-MM-dd"
-    );
-    if (!groups[dateKey]) {
-      groups[dateKey] = [];
-    }
-    groups[dateKey].push(event);
-  });
-
-  return groups;
-};
-
-// Get initials from name
-const getInitials = (name: string) => {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+// ── "Đường mạch kết quả" (outcome spine) theme — full mode ────────────────────
+// The vertical spine + node encode the OUTCOME of each touch, so an officer reads
+// the relationship's trajectory in one glance. Restraint: only positive/negative
+// carry saturated color; neutral stays quiet so the eye catches the turning points.
+// All tokens are theme-aware (dark variants + /alpha) — no hardcoded white.
+const getOutcomeSpine = (outcomeType?: string | null) => {
+  switch (outcomeType) {
+    case "positive":
+      return {
+        seg: "bg-success-500/70",
+        node: "bg-success-500/10 dark:bg-success-500/15",
+        icon: "text-success-600 dark:text-success-400",
+        tag: "bg-success-500/10 text-success-700 dark:text-success-300",
+        tagLabel: "Tích cực",
+        emphasize: true,
+      };
+    case "negative":
+      return {
+        seg: "bg-error-500/70",
+        node: "bg-error-500/10 dark:bg-error-500/15",
+        icon: "text-error-600 dark:text-error-400",
+        tag: "bg-error-500/10 text-error-700 dark:text-error-300",
+        tagLabel: "Tiêu cực",
+        emphasize: true,
+      };
+    default:
+      // neutral / null / assignment → quiet
+      return {
+        seg: "bg-border",
+        node: "bg-muted",
+        icon: "text-muted-foreground",
+        tag: "",
+        tagLabel: "",
+        emphasize: false,
+      };
+  }
 };
 
 export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimelineTabProps) {
@@ -404,17 +394,18 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
     );
   }
 
-  const groupedTimeline = groupTimelineByDate(timeline);
-  const dateKeys = Object.keys(groupedTimeline).sort().reverse();
-
-  // Calculate items to show based on maxItems prop
+  // ── Full mode — "Đường mạch kết quả" ────────────────────────────────────────
+  // Flatten to a single outcome-ordered rail (newest → oldest). No heavy date
+  // headers: per-row relative time ("2 giờ trước") answers recency directly and
+  // scans better than date dividers in both the 3-item panel and the long sheet.
   const hasLimit = maxItems && maxItems > 0 && !showAll;
   const totalItems = timeline.length;
-  const remainingItems = hasLimit ? Math.max(0, totalItems - maxItems) : 0;
-  
-  // Limit items if maxItems is set and showAll is false
   const itemsToShow = hasLimit ? maxItems : totalItems;
-  let itemCount = 0;
+  const sortedTimeline = [...(timeline as TimelineItem[])].sort(
+    (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+  );
+  const visibleTimeline = hasLimit ? sortedTimeline.slice(0, itemsToShow) : sortedTimeline;
+  const remainingItems = Math.max(0, totalItems - visibleTimeline.length);
 
   // Quyền thao tác lịch hẹn: officer chỉ sửa được consultation MỚI NHẤT (khớp
   // BE leads.py:1091 → tránh bấm rồi ăn 403); manager/admin sửa bất kỳ.
@@ -439,6 +430,22 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
     }
     return best?.id ?? null;
   })();
+
+  // Relative "time ago" — hydration-safe: absolute on SSR (now===null), relative
+  // on client. Tabular mono rendering keeps the time column aligned like a log.
+  const formatWhen = (ts: string): string => {
+    const d = parseISO(ts);
+    if (now === null) return format(d, "dd/MM HH:mm");
+    const diffMs = now - d.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return "vừa xong";
+    if (mins < 60) return `${mins} phút trước`;
+    if (isToday(d)) return `${Math.floor(mins / 60)} giờ trước`;
+    if (isYesterday(d)) return `Hôm qua ${format(d, "HH:mm")}`;
+    const days = Math.floor(diffMs / 86400000);
+    if (days < 7) return `${days} ngày trước`;
+    return format(d, "dd/MM/yyyy");
+  };
 
   const handleEditConsultation = (consultation: Consultation) => {
     setEditingConsultation(consultation);
@@ -517,329 +524,256 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
 
   return (
     <>
-      <div className="space-y-8">
-        {dateKeys.map((dateKey) => {
-          // Get items for this date
-          const dateItems = groupedTimeline[dateKey];
-          
-          // Filter items based on limit
-          const visibleItems = dateItems.filter(() => {
-            if (!hasLimit) return true;
-            if (itemCount >= itemsToShow) return false;
-            itemCount++;
-            return true;
-          });
+      <div className="animate-in fade-in duration-300">
+        {visibleTimeline.map((event, index) => {
+          const eventType = event.type || "lead_created";
+          const eventData = event.data || {};
 
-          // Skip entire date group if no visible items
-          if (visibleItems.length === 0) return null;
+          const isConsultation =
+            eventType === "consultation" ||
+            eventType === "consultation_added" ||
+            eventType === "consultation_updated";
+          const isAssignment = eventType === "assignment" || eventType === "assigned";
+
+          const config = getEventConfig(
+            eventType,
+            isConsultation ? (eventData as { method?: string }).method : undefined
+          );
+          const Icon = config.icon;
+
+          const consultData = isConsultation ? (eventData as Consultation) : null;
+          const outcomeType = consultData?.consultation_status?.outcome_type;
+          const spine = getOutcomeSpine(isConsultation ? outcomeType : null);
+
+          // Title / note / actor
+          let title = "";
+          let note = "";
+          let actorName = "";
+          if (isConsultation && consultData) {
+            const statusName = consultData.consultation_status?.name || "Tư vấn";
+            title = statusName;
+            // Bỏ note tự-sinh (trùng tên trạng thái) — chỉ giữ ghi chú thật.
+            const rawNotes = consultData.notes || "";
+            const autoPatterns = [
+              `Ghi nhận nhanh: ${statusName}`,
+              `Ghi nhận: ${statusName}`,
+            ];
+            if (rawNotes && !autoPatterns.includes(rawNotes)) note = rawNotes;
+            actorName = consultData.officer?.full_name || "";
+          } else if (isAssignment) {
+            const assignData = eventData as { reason?: string; officer?: { full_name?: string } };
+            title = "Phân công lead";
+            note = assignData.reason || "";
+            actorName = assignData.officer?.full_name || "";
+          } else {
+            title = event.description || config.label;
+            actorName = event.actor?.full_name || "";
+          }
+
+          const itemId = isConsultation
+            ? (eventData as { id?: number })?.id
+            : isAssignment
+              ? (eventData as { id?: number })?.id
+              : undefined;
+          const itemKey = `${event.type}-${event.timestamp}-${itemId ?? index}`;
+          const isLast = index === visibleTimeline.length - 1;
+
+          // Lịch hẹn: chỉ cho thao tác khi hẹn ở TƯƠNG LAI (client-time) + có quyền.
+          const schedMs = consultData?.scheduled_at
+            ? new Date(consultData.scheduled_at).getTime()
+            : null;
+          const isFutureAppt = now !== null && schedMs !== null && schedMs > now;
+          const canActOnAppt = isPrivilegedActor || consultData?.id === latestConsultationId;
+
+          const durationMin =
+            consultData?.duration_minutes && consultData.duration_minutes > 0
+              ? consultData.duration_minutes
+              : null;
+
+          const assignMethod = isAssignment ? (eventData as { method?: string }).method : undefined;
+          const assignMethodLabel =
+            assignMethod === "automatic"
+              ? "Tự động"
+              : assignMethod === "officer_reassign"
+                ? "Yêu cầu phân công lại"
+                : assignMethod === "manual"
+                  ? "Thủ công"
+                  : null;
 
           return (
-          <div key={dateKey}>
-            {/* Date Header */}
-            <div className="flex items-center gap-3 mb-4">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
-              <span className="text-sm font-semibold text-foreground">
-                {formatDateGroup(dateKey + "T00:00:00")}
-              </span>
-              <div className="flex-1 h-px bg-border" />
-            </div>
+            <div key={itemKey} className="group relative flex gap-3 pb-5 last:pb-0">
+              {/* Spine + node — the outcome-colored rail */}
+              <div className="relative flex w-6 shrink-0 justify-center">
+                {!isLast && (
+                  <span
+                    className={cn(
+                      "absolute left-1/2 top-6 -bottom-5 w-0.5 -translate-x-1/2 rounded-full",
+                      spine.seg
+                    )}
+                  />
+                )}
+                <span
+                  className={cn(
+                    "relative z-10 flex h-6 w-6 items-center justify-center rounded-lg ring-4 ring-background",
+                    spine.node
+                  )}
+                >
+                  <Icon className={cn("h-3.5 w-3.5", spine.icon)} />
+                </span>
+              </div>
 
-            {/* Events for this date - with connecting line */}
-            <div className="relative pl-6 space-y-6">
-              {/* Connecting line */}
-              <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
-
-              {visibleItems.map((event, index) => {
-                const eventType = event.type || "lead_created";
-                // ✅ TECHNICAL DEBT FIX: Use typed event data instead of `as any`
-                const eventData = event.data || {};
-
-                // ✅ FIX: Match actual backend event types ("consultation", "assignment")
-                // Backend sends: type: "consultation" | "assignment"
-                // NOT "consultation_added", "consultation_updated", or "assigned"
-                const isConsultation = eventType === "consultation" || eventType === "consultation_added" || eventType === "consultation_updated";
-                const isAssignment = eventType === "assignment" || eventType === "assigned";
-
-                const config = getEventConfig(
-                  eventType,
-                  isConsultation ? (eventData.method as string) : undefined
-                );
-                const Icon = config.icon;
-
-                // Generate title and subtitle
-                let title = "";
-                let subtitle = "";
-                let actorName = "";
-
-                // Type assertion for consultation data (used in JSX below)
-                const consultData = isConsultation ? (eventData as Consultation) : null;
-                const statusColor = consultData?.consultation_status?.color_code;
-                const outcomeType = consultData?.consultation_status?.outcome_type;
-                const outcomeStyles = getOutcomeStyles(outcomeType);
-
-                if (isConsultation && consultData) {
-                  const statusName = consultData.consultation_status?.name || "Tư vấn";
-                  title = statusName;
-
-                  // Only show notes if it's not the auto-generated pattern
-                  const notes = consultData.notes || "";
-                  const autoPatterns = [
-                    `Ghi nhận nhanh: ${statusName}`,
-                    `Ghi nhận: ${statusName}`,
-                  ];
-                  if (notes && !autoPatterns.includes(notes)) {
-                    subtitle = notes;
-                  }
-
-                  actorName = consultData.officer?.full_name || "";
-                } else if (isAssignment) {
-                  // Type assertion for assignment data
-                  const assignData = eventData as { reason?: string; officer?: { full_name?: string } };
-                  title = "Phân công lead";
-                  subtitle = assignData.reason || "";
-                  actorName = assignData.officer?.full_name || "";
-                } else {
-                  // Fallback for other event types (lead_created, pipeline_moved, etc.)
-                  title = event.description || config.label;
-                  actorName = event.actor?.full_name || "";
-                }
-
-                const consultId = isConsultation ? (eventData as { id?: number })?.id : undefined;
-                const assignId = isAssignment ? (eventData as { id?: number })?.id : undefined;
-                const itemId = consultId ?? assignId;
-                const itemKey = `${event.type}-${event.timestamp}-${itemId ?? index}`;
-
-                return (
-                  <div key={itemKey} className="relative flex gap-3 group">
-                    {/* Timeline Dot (Icon) - smaller and neutral */}
-                    <div
+              {/* Content */}
+              <div className="min-w-0 flex-1">
+                {/* Line 1: status · outcome tag · time · actions */}
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-semibold text-foreground">{title}</span>
+                  {spine.emphasize && (
+                    <span
                       className={cn(
-                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-shadow ring-1",
-                        config.bgColor,
-                        config.ringColor
+                        "shrink-0 rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wide",
+                        spine.tag
                       )}
                     >
-                      <Icon className={cn("h-3.5 w-3.5", config.color)} />
-                    </div>
+                      {spine.tagLabel}
+                    </span>
+                  )}
+                  <time
+                    suppressHydrationWarning
+                    className="ml-auto shrink-0 font-mono text-[11px] tabular-nums tracking-tight text-muted-foreground"
+                  >
+                    {formatWhen(event.timestamp || "")}
+                  </time>
 
-                    {/* Content Block */}
-                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-shadow hover:shadow-md hover:border-primary/30">
-                      <div className="p-4">
-                        {/* Header: Title, Actor, Time, Actions */}
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <div className="flex-1 min-w-0">
-                            {/* Title with status color and method badge */}
-                            <div className="flex items-center gap-2 mb-1 flex-wrap">
-                              {isConsultation && statusColor ? (
-                                <Badge
-                                  variant="outline"
-                                  className={cn(
-                                    "text-xs font-semibold px-2 py-0.5 border",
-                                    outcomeStyles.badgeBg,
-                                    outcomeStyles.badgeText,
-                                    outcomeStyles.badgeBorder
-                                  )}
-                                >
-                                  <span
-                                    className="w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
-                                    style={{ backgroundColor: sanitizeColorCode(statusColor) }}
-                                  />
-                                  {title}
-                                </Badge>
-                              ) : (
-                                <h4 className="font-semibold text-sm text-foreground">
-                                  {title}
-                                </h4>
-                              )}
-                              {isConsultation && consultData?.method && (
-                                <Badge
-                                  variant="secondary"
-                                  className={cn(
-                                    "text-[10px] px-1.5 py-0 font-normal",
-                                    config.bgColor,
-                                    config.color
-                                  )}
-                                >
-                                  <Icon className="w-2.5 h-2.5 mr-1" />
-                                  {config.label}
-                                </Badge>
-                              )}
-                            </div>
+                  {/* Overflow menu: Sửa / Xóa (lịch hẹn có control riêng bên dưới) */}
+                  {isConsultation && consultData?.id && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-11 w-11 sm:h-7 sm:w-7 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0"
+                        >
+                          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleEditConsultation(consultData)}>
+                          <Edit className="mr-2 h-4 w-4" />
+                          Sửa
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => handleDeleteConsultation(consultData.id)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Xóa
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
 
-                            {/* Actor and time */}
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              {actorName && (
-                                <>
-                                  <Avatar className="h-4 w-4">
-                                    <AvatarFallback className="text-[8px] bg-primary/10">
-                                      {getInitials(actorName)}
-                                    </AvatarFallback>
-                                  </Avatar>
-                                  <span className="font-medium">{actorName}</span>
-                                  <span>•</span>
-                                </>
-                              )}
-                              <time suppressHydrationWarning>
-                                {format(parseISO(event.timestamp || ""), "HH:mm")}
-                              </time>
-                            </div>
-                          </div>
-
-                          {/* Actions Menu */}
-                          {isConsultation && consultData?.id && (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-11 w-11 sm:h-7 sm:w-7 p-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
-                                >
-                                  <MoreVertical className="h-4 w-4 text-muted-foreground" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {(() => {
-                                  // Chỉ hiện khi: hẹn ở TƯƠNG LAI (client-time, tránh
-                                  // hydration) + có quyền (privileged, hoặc officer trên
-                                  // consultation MỚI NHẤT — khớp BE, tránh 403).
-                                  const schedMs = consultData?.scheduled_at
-                                    ? new Date(consultData.scheduled_at).getTime()
-                                    : null;
-                                  const isFutureAppt =
-                                    now !== null && schedMs !== null && schedMs > now;
-                                  const canActOnAppt =
-                                    isPrivilegedActor ||
-                                    consultData?.id === latestConsultationId;
-                                  if (!isFutureAppt || !canActOnAppt || !consultData?.id) {
-                                    return null;
-                                  }
-                                  const cid = consultData.id;
-                                  return (
-                                    <>
-                                      <DropdownMenuItem onClick={() => openReschedule(consultData)}>
-                                        <CalendarClock className="h-4 w-4 mr-2" />
-                                        Dời lịch
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem onClick={() => openCancelAppointment(cid)}>
-                                        <CalendarX2 className="h-4 w-4 mr-2" />
-                                        Hủy lịch hẹn
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
-                                    </>
-                                  );
-                                })()}
-                                <DropdownMenuItem
-                                  onClick={() => handleEditConsultation(consultData)}
-                                >
-                                  <Edit className="h-4 w-4 mr-2" />
-                                  Sửa
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  className="text-destructive focus:text-destructive"
-                                  onClick={() => handleDeleteConsultation(consultData.id)}
-                                >
-                                  <Trash2 className="h-4 w-4 mr-2" />
-                                  Xóa
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          )}
-                        </div>
-
-                        {/* Body: Description/Notes - only if not redundant */}
-                        {subtitle && (
-                          <div className="text-sm text-muted-foreground leading-relaxed mb-3">
-                            <div className="flex items-start gap-2">
-                              <FileText className="h-3.5 w-3.5 shrink-0 mt-0.5 opacity-40" />
-                              <p className="flex-1">{subtitle}</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Footer: Metadata badges */}
+                {/* Line 2: method · actor · duration · assignment method */}
+                {(isConsultation || isAssignment || actorName) && (
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                    {(isConsultation || isAssignment) && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+                        {config.label}
+                      </span>
+                    )}
+                    {actorName && (
+                      <>
                         {(isConsultation || isAssignment) && (
-                          <div className="flex flex-wrap gap-2">
-                            {/* Consultation: Outcome indicator */}
-                            {isConsultation && outcomeType && (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-xs font-normal gap-1",
-                                  outcomeType === "positive" && "border-success-200 bg-success-50 text-success-700",
-                                  outcomeType === "negative" && "border-error-200 bg-error-50 text-error-700",
-                                  outcomeType === "neutral" && "border-border bg-muted text-muted-foreground"
-                                )}
-                              >
-                                {outcomeType === "positive" && "✓ Tích cực"}
-                                {outcomeType === "negative" && "✗ Tiêu cực"}
-                                {outcomeType === "neutral" && "○ Trung lập"}
-                              </Badge>
-                            )}
-
-                            {/* Consultation: Scheduled follow-up */}
-                            {isConsultation && consultData?.scheduled_at && (
-                              <Badge
-                                variant="outline"
-                                className="text-xs font-normal gap-1 border-info-200 bg-info-50 text-info-700"
-                              >
-                                <Calendar className="h-3 w-3" />
-                                <span suppressHydrationWarning>Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}</span>
-                              </Badge>
-                            )}
-
-                            {/* Consultation: Loss reason */}
-                            {isConsultation && consultData?.loss_reason_code && (() => {
-                              const labels = getLossReasonLabelMap();
-                              const label = consultData.loss_reason_code === "OTHER"
-                                ? (consultData.loss_reason_note || "Lý do khác")
-                                : labels[consultData.loss_reason_code] || consultData.loss_reason_code;
-                              return (
-                                <Badge
-                                  variant="outline"
-                                  className="text-xs font-normal gap-1 border-amber-200 bg-amber-50 text-amber-700"
-                                >
-                                  <AlertTriangle className="h-3 w-3" />
-                                  Lý do: {label}
-                                </Badge>
-                              );
-                            })()}
-
-                            {/* Consultation: Duration */}
-                            {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (
-                              <Badge
-                                variant="outline"
-                                className="text-xs font-normal gap-1 border-border bg-muted text-muted-foreground"
-                              >
-                                <Clock className="h-3 w-3" />
-                                {consultData.duration_minutes} phút
-                              </Badge>
-                            )}
-
-                            {/* Assignment: Method (automatic, officer_reassign, manual) */}
-                            {isAssignment && (eventData as { method?: string }).method && (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-xs font-normal gap-1",
-                                  (eventData as { method?: string }).method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
-                                  (eventData as { method?: string }).method === "officer_reassign" && "border-info-200 bg-info-50 text-info-700",
-                                  (eventData as { method?: string }).method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
-                                )}
-                              >
-                                {(eventData as { method?: string }).method === "automatic" && "Tự động"}
-                                {(eventData as { method?: string }).method === "officer_reassign" && "Yêu cầu phân công lại"}
-                                {(eventData as { method?: string }).method === "manual" && "Thủ công"}
-                              </Badge>
-                            )}
-                          </div>
+                          <span className="text-muted-foreground/40">·</span>
                         )}
-                      </div>
-                    </div>
+                        <span className="inline-flex items-center gap-1">
+                          <User className="h-3 w-3" />
+                          {actorName}
+                        </span>
+                      </>
+                    )}
+                    {durationMin && (
+                      <>
+                        <span className="text-muted-foreground/40">·</span>
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {durationMin} phút
+                        </span>
+                      </>
+                    )}
+                    {assignMethodLabel && (
+                      <>
+                        <span className="text-muted-foreground/40">·</span>
+                        <span>{assignMethodLabel}</span>
+                      </>
+                    )}
                   </div>
-                );
-              })}
+                )}
+
+                {/* Note — quiet secondary line */}
+                {note && (
+                  <p className="mt-1.5 border-l-2 border-border pl-2.5 text-[13px] leading-relaxed text-muted-foreground">
+                    {note}
+                  </p>
+                )}
+
+                {/* Loss reason */}
+                {isConsultation && consultData?.loss_reason_code && (() => {
+                  const labels = getLossReasonLabelMap();
+                  const label = consultData.loss_reason_code === "OTHER"
+                    ? (consultData.loss_reason_note || "Lý do khác")
+                    : labels[consultData.loss_reason_code] || consultData.loss_reason_code;
+                  return (
+                    <div className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                      <AlertTriangle className="h-3 w-3 shrink-0" />
+                      Lý do: {label}
+                    </div>
+                  );
+                })()}
+
+                {/* Follow-up appointment — actionable when scheduled in the future */}
+                {isConsultation && consultData?.scheduled_at && (
+                  <div
+                    className={cn(
+                      "mt-2 flex flex-wrap items-center gap-2 rounded-lg px-2.5 py-1.5",
+                      isFutureAppt ? "bg-primary/5 dark:bg-primary/10" : "bg-muted"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1.5 text-xs font-semibold",
+                        isFutureAppt ? "text-primary" : "text-muted-foreground"
+                      )}
+                    >
+                      <Calendar className="h-3.5 w-3.5 shrink-0" />
+                      <span suppressHydrationWarning>
+                        Hẹn {format(parseISO(consultData.scheduled_at), "HH:mm dd/MM")}
+                      </span>
+                    </span>
+                    {isFutureAppt && canActOnAppt && consultData?.id && (
+                      <span className="ml-auto flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openReschedule(consultData)}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                        >
+                          <CalendarClock className="h-3 w-3" />
+                          Dời
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openCancelAppointment(consultData.id)}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-error-300 hover:text-error-600"
+                        >
+                          <CalendarX2 className="h-3 w-3" />
+                          Hủy
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           );
         })}
       </div>
