@@ -685,3 +685,42 @@ def test_assignment_source_methods_documented():
     )
     # sanity: scan thật sự bắt được các method lõi
     assert {"automatic", "manual", "officer_reject"} <= found
+
+
+def test_self_sourced_reason_token_contract():
+    """Ghim coupling producer↔matcher (#2): reason `build_assignment_reason()` sinh
+    cho OFFICER PHẢI chứa `SELF_SOURCED_REASON_TOKEN` mà `_self_sourced_subquery`
+    match; admin/manager/system thì KHÔNG. Đổi shape reason (bỏ 'by', đảo thứ tự)
+    hoặc đổi token mà quên bên kia ⇒ test ĐỎ (chống silent-no-op khi bật flag)."""
+    from types import SimpleNamespace
+
+    from app.core.constants import UserRole
+    from app.services.assignment_reason import (
+        SELF_SOURCED_REASON_TOKEN,
+        build_assignment_reason,
+    )
+
+    officer = SimpleNamespace(role=UserRole.OFFICER, username="hieu")
+    admin = SimpleNamespace(role=UserRole.ADMIN, username="boss")
+    manager = SimpleNamespace(role=UserRole.MANAGER, username="mgr")
+
+    # OFFICER actor ⇒ reason CHỨA token (cả 2 prefix producer thực dùng)
+    for prefix in ("Assigned during lead creation", "Manually assigned"):
+        assert SELF_SOURCED_REASON_TOKEN in build_assignment_reason(prefix, officer)
+    # admin / manager / system ⇒ KHÔNG chứa token (phân phối, không self-sourced)
+    assert SELF_SOURCED_REASON_TOKEN not in build_assignment_reason("X", admin)
+    assert SELF_SOURCED_REASON_TOKEN not in build_assignment_reason("X", manager)
+    assert SELF_SOURCED_REASON_TOKEN not in build_assignment_reason("X", None)
+
+    # Byte-identical hành vi cũ: token="by officer ", pattern subquery="%by officer %"
+    assert SELF_SOURCED_REASON_TOKEN == "by officer "
+    # Reason cụ thể byte-identical chuỗi cũ ⇒ dữ liệu prod hiện có vẫn khớp (CẢ 2
+    # prefix producer thực dùng — pin đầy đủ để bắt reword RIÊNG câu prefix).
+    assert (
+        build_assignment_reason("Assigned during lead creation", officer)
+        == "Assigned during lead creation by officer hieu"
+    )
+    assert (
+        build_assignment_reason("Manually assigned", officer)
+        == "Manually assigned by officer hieu"
+    )

@@ -17,6 +17,7 @@ from ..core.constants import UserRole
 from ..core.events import SystemEvents
 from ..core.task_constants import AssignmentResult, AssignmentFailureReason
 from ..utils.exceptions import LockContentionError
+from .assignment_reason import SELF_SOURCED_REASON_TOKEN
 from .notification_dispatcher import dispatch
 from .notification_payloads import EventPayload
 from .status_helper import StatusHelper, AssignmentStatus
@@ -108,7 +109,9 @@ def _self_sourced_subquery():
     return (
         select(
             (al.method == "manual")
-            & al.reason.ilike("%by officer %")
+            # token single-source từ assignment_reason (= "by officer ") — khớp
+            # reason build_assignment_reason() sinh khi actor là OFFICER.
+            & al.reason.ilike(f"%{SELF_SOURCED_REASON_TOKEN}%")
         )
         .where(
             al.lead_id == models.Lead.id,

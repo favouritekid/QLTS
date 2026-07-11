@@ -29,6 +29,7 @@ from ..core.status_mapping import (
 )
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
+from .assignment_reason import build_assignment_reason
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
@@ -1168,15 +1169,16 @@ async def create_lead(
             StatusHelper.set_assignment_status(db_lead, AssignmentStatus.ASSIGNED)
 
             # ✅ FIX: Create AssignmentLog for direct assignment during lead creation
-            # Without this, timeline has no record of the initial assignment
-            assigner_name = (
-                f"{created_by.role} {created_by.username}" if created_by else "system"
-            )
+            # Without this, timeline has no record of the initial assignment.
+            # reason qua build_assignment_reason: single-source token cho
+            # _self_sourced_subquery (xem assignment_reason.py). Output byte-identical.
             assignment_log_entry = models.AssignmentLog(
                 lead_id=db_lead.id,
                 officer_id=direct_assignment_officer_id,
                 method="manual",
-                reason=f"Assigned during lead creation by {assigner_name}",
+                reason=build_assignment_reason(
+                    "Assigned during lead creation", created_by
+                ),
                 timestamp=datetime.now(timezone.utc),
             )
             db.add(assignment_log_entry)
@@ -2347,7 +2349,7 @@ async def assign_lead_manually(
             log_reason = (
                 f"Reassigned from officer #{old_officer_id} to #{officer_id} by {assigner.role} {assigner.username}"
                 if is_reassignment
-                else f"Manually assigned by {assigner.role} {assigner.username}"
+                else build_assignment_reason("Manually assigned", assigner)
             )
             log_entry = models.AssignmentLog(
                 lead_id=lead_id,
