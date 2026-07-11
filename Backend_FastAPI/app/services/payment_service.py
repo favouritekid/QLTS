@@ -952,6 +952,8 @@ class RefundService:
         reason: str,
         rejector_id: int,
         unit_id: Optional[int] = None,
+        *,
+        allow_withdrawal_pending: bool = False,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
         Reject a refund request.
@@ -961,6 +963,11 @@ class RefundService:
             reason: Rejection reason
             rejector_id: User rejecting refund
             unit_id: Unit ID for IDOR protection
+            allow_withdrawal_pending: bypass the F1 guard below — set ONLY by
+                ``reject_open_refunds_for_profile`` (cancel-withdrawal), which
+                rejects ALL withdrawal refunds atomically and reverts the profile
+                to draft, so the strand-in-``withdrawal_pending`` risk cannot
+                occur there.
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
@@ -978,6 +985,32 @@ class RefundService:
 
         if not reason or not reason.strip():
             raise BadRequest("Rejection reason is required")
+
+        # F1: a withdrawal-sourced refund on a profile still in
+        # 'withdrawal_pending' must NOT be rejected individually — rejecting one
+        # of several strands the profile forever (the finalize gate
+        # sum_unrefunded_refundable_paid never reaches 0, money stays held). The
+        # admin must use cancel-withdrawal, which rejects ALL withdrawal refunds
+        # atomically and reverts the profile to draft.
+        if (
+            not allow_withdrawal_pending
+            and refund.source == RefundSourceEnum.withdrawal.value
+        ):
+            _prof_status = (
+                await self.db.execute(
+                    select(models.AdmissionProfile.status)
+                    .join(Fee, Fee.admission_profile_id == models.AdmissionProfile.id)
+                    .join(Invoice, Invoice.fee_id == Fee.id)
+                    .join(Payment, Payment.invoice_id == Invoice.id)
+                    .where(Payment.id == refund.payment_id)
+                )
+            ).scalar_one_or_none()
+            if _prof_status == "withdrawal_pending":
+                raise BusinessRuleViolation(
+                    "Không thể từ chối lẻ yêu cầu hoàn của hồ sơ đang rút "
+                    "(sẽ kẹt hồ sơ ở trạng thái chờ hoàn). Dùng 'Hủy quy trình "
+                    "rút' để hủy toàn bộ và đưa hồ sơ về nháp."
+                )
 
         # Update refund status
         refund.status = RefundStatusEnum.rejected.value
@@ -1052,6 +1085,7 @@ class RefundService:
         for r in open_refunds:
             await self.reject_refund(
                 r.id, reason=reason, rejector_id=rejector_id,
+                allow_withdrawal_pending=True,  # F1: this IS the safe bulk path
             )
             count += 1
         return count
@@ -1112,12 +1146,24 @@ class RefundService:
         refund.refunded_at = datetime.now(timezone.utc)
         refund.refund_reference = refund_reference
 
+        # F2: snapshot BEFORE reverse — reverse_payment_balances recomputes
+        # fee.status from paid_amount and reopens the invoice to 'issued'. If the
+        # fee was already CANCELLED (e.g. a prior withdrawal finalize voided it),
+        # processing this (overpayment/manual) refund would un-cancel it and
+        # resurrect a phantom receivable on a withdrawn profile — re-void below.
+        _fee_was_cancelled = fee.status == FeeStatusEnum.cancelled.value
+
         # Rút tiền khỏi invoice + fee — 1 NGUỒN SỰ THẬT chung với void lô import
         # (reverse_payment_balances). paid về 0 → invoice 'issued' (mở lại để thu),
         # fee recompute status + bump version.
         fee_balance_before, fee_balance_after = reverse_payment_balances(
             invoice=invoice, fee=fee, amount=refund.amount
         )
+        if _fee_was_cancelled:
+            # F2: keep the void — money still returned, but the fee/invoice stay
+            # cancelled so no payable surface / "Còn nợ" reappears.
+            fee.status = FeeStatusEnum.cancelled.value
+            invoice.status = InvoiceStatusEnum.cancelled.value
 
         # Create audit transaction
         transaction = PaymentTransaction(

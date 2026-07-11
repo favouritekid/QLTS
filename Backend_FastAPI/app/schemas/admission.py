@@ -2355,6 +2355,8 @@ class AdmissionStats(BaseModel):
     enrolled_count: int = 0
     rejected_count: int = 0
     dropped_count: int = 0
+    withdrawn_count: int = 0
+    withdrawal_pending_count: int = 0
     conversion_rate: float = 0.0
     avg_completion: float = 0.0
 

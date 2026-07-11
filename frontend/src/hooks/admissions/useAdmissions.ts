@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation"
 
 import { admissionsApi } from "@/lib/api/admissions"
 import { feesKeys } from "@/hooks/finance/useFees"
+import { invoicesKeys } from "@/hooks/finance/useInvoices"
 import { refundsKeys } from "@/hooks/finance/useRefunds"
 import { leadsKeys } from "@/hooks/useLeads"
 import { pipelineKeys } from "@/hooks/usePipeline"
@@ -349,7 +350,14 @@ export function useWithdrawAdmission(id: number) {
         toast.success("Đã rút hồ sơ")
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      // Withdraw STEP 2 cancels every unpaid fee → cascades to its invoices.
+      // Refresh the fee views the admission UI actually reads (profileSummary
+      // drives the Tuition tab + "Còn nợ" badge; byProfile has no consumer but
+      // kept for parity) + the fees/invoices workspaces.
       queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: invoicesKeys.all })
       // BE auto-files pending refund requests for every verified refundable
       // payment (admission_service.withdraw STEP 1). Refresh the finance refunds
       // list + dashboard so an already-open finance page shows the new requests
@@ -391,6 +399,7 @@ export function useCancelWithdrawal(id: number) {
       toast.success("Đã hủy quy trình rút — hồ sơ trở về nháp")
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
       queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(id) })
       // BE rejects every open (pending) refund auto-filed by the withdraw
       // orchestrator before reverting to draft (admission_service.cancel_withdrawal
       // F1 → reject_open_refunds_for_profile). Refresh the finance refunds list +

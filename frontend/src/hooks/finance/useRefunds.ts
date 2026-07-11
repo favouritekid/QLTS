@@ -3,6 +3,8 @@ import { AxiosError } from "axios"
 import { toast } from "sonner"
 import { refundsApi, type RefundPaginatedResponse, type RefundRejectRequest } from "@/lib/api/refunds"
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
+import { feesKeys } from "@/hooks/finance/useFees"
+import { invoicesKeys } from "@/hooks/finance/useInvoices"
 import { leadsKeys } from "@/hooks/useLeads"
 import { pipelineKeys } from "@/hooks/usePipeline"
 import type { ApiErrorResponse } from "@/types/api.types"
@@ -131,6 +133,14 @@ export function useProcessRefund() {
       // params, so fullPipeline()'s trailing `undefined` fails React Query's
       // partial match and the invalidation would be a silent no-op.
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all })
+      // Processing a refund reverses fee.paid_amount (reverse_payment_balances)
+      // and, on the withdrawal-finalize path, cancels the reopened fees/invoices.
+      // The RefundRequest response carries only payment_id (no profile/fee id),
+      // so invalidate the fee + invoice roots — the admission Tuition tab /
+      // "Còn nợ" badge (feesKeys.profileSummary) and /finance/invoices otherwise
+      // keep showing the money as still collected / the invoice as payable.
+      queryClient.invalidateQueries({ queryKey: feesKeys.all })
+      queryClient.invalidateQueries({ queryKey: invoicesKeys.all })
     },
     onError: (error) => {
       toast.error(getErrorMessage(error, "Không thể xử lý hoàn phí"))
