@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation"
 
 import { admissionsApi } from "@/lib/api/admissions"
 import { feesKeys } from "@/hooks/finance/useFees"
+import { refundsKeys } from "@/hooks/finance/useRefunds"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
@@ -347,6 +348,12 @@ export function useWithdrawAdmission(id: number) {
       }
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
       queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      // BE auto-files pending refund requests for every verified refundable
+      // payment (admission_service.withdraw STEP 1). Refresh the finance refunds
+      // list + dashboard so an already-open finance page shows the new requests
+      // (mirrors useCreateRefund).
+      queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, {
@@ -373,6 +380,13 @@ export function useCancelWithdrawal(id: number) {
     onSuccess: () => {
       toast.success("Đã hủy quy trình rút — hồ sơ trở về nháp")
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      // BE rejects every open (pending) refund auto-filed by the withdraw
+      // orchestrator before reverting to draft (admission_service.cancel_withdrawal
+      // F1 → reject_open_refunds_for_profile). Refresh the finance refunds list +
+      // dashboard so an already-open finance page drops the now-rejected requests.
+      queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, {

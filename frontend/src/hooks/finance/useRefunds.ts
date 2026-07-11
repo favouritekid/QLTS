@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
 import { toast } from "sonner"
 import { refundsApi, type RefundPaginatedResponse, type RefundRejectRequest } from "@/lib/api/refunds"
+import { admissionsKeys } from "@/hooks/admissions/useAdmissions"
+import { leadsKeys } from "@/hooks/useLeads"
+import { pipelineKeys } from "@/hooks/usePipeline"
 import type { ApiErrorResponse } from "@/types/api.types"
 import type {
   RefundCreateRequest,
@@ -88,6 +91,10 @@ export function useRejectRefund() {
       toast.success("Đã từ chối hoàn phí")
       queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
       queryClient.invalidateQueries({ queryKey: refundsKeys.detail(refund.id) })
+      // Rejecting a pending refund drops it from the "chờ hoàn" totals, so the
+      // dashboard stat must refresh too (parity with useCreateRefund, which
+      // increments the same counter on the way in).
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
     },
     onError: (error) => {
       toast.error(getErrorMessage(error, "Không thể từ chối hoàn phí"))
@@ -111,6 +118,16 @@ export function useProcessRefund() {
       // Processing a refund can auto-close a linked overpayment (F4), so refresh
       // the overpayments cache too.
       queryClient.invalidateQueries({ queryKey: ["overpayments"] })
+      // Processing the LAST refundable payment finalizes a pending withdrawal
+      // (admission_service.process_approved_refund → _finalize_withdrawn):
+      // admission status withdrawal_pending → withdrawn AND the lead advances to
+      // sts08. An ordinary HK1-tuition refund likewise projects the lead to
+      // sts18 (sync_lead_tuition_refunded). Neither is reflected in the response
+      // (a bare RefundRequest), so refresh the admission + lead + pipeline caches
+      // to keep those views in sync.
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() })
     },
     onError: (error) => {
       toast.error(getErrorMessage(error, "Không thể xử lý hoàn phí"))
