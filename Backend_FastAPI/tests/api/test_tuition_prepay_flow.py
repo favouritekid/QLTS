@@ -963,3 +963,119 @@ class TestUnrefundedPaymentFlag:
         assert ok.status_code == 200, ok.text
         assert ok.json()["status"] == "approved", ok.json()
         assert ok.json()["has_unrefunded_payment"] is False, ok.json()
+
+
+# ===========================================================================
+# PR-B §2.10 — withdrawal_pending finalize + cancel-withdrawal
+# ===========================================================================
+
+
+class TestWithdrawalPendingFlow:
+    """Withdraw with collected refundable tuition → withdrawal_pending, then
+    either finalize (refund processed → withdrawn) or cancel (admin → draft)."""
+
+    async def test_finalize_on_last_refund(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Scenario (e): withdraw parks the profile in withdrawal_pending and
+        auto-files a refund; processing that refund self-settles the profile to
+        ``withdrawn`` (finalize hook) + lead → sts08."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        await _ensure_consultation_status(
+            "sts08", "Tu choi tu van", "stg07", "#CC0000"
+        )
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+
+        # Withdraw → withdrawal_pending (BE auto-files a refund request whose
+        # requester is the withdrawing actor). Withdraw as the OFFICER so the
+        # auto-filed refund's maker (officer) differs from its approver
+        # (manager) — otherwise the approve step self-approves and 400s.
+        body = await _get(client, officer, pid)
+        res = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=officer,
+            json={"reason": "Học sinh rút hồ sơ", "version": body["version"]},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "withdrawal_pending", res.json()
+
+        # Find the auto-filed pending refund, then approve + process it.
+        refunds = await client.get(
+            "/api/refunds", params={"status": "pending"}, headers=manager
+        )
+        assert refunds.status_code == 200, refunds.text
+        items = refunds.json()["items"]
+        assert len(items) >= 1, items
+        refund_id = items[0]["id"]
+
+        appr = await client.post(
+            f"/api/refunds/{refund_id}/approve", headers=manager
+        )
+        assert appr.status_code == 200, appr.text
+        proc = await client.post(
+            f"/api/refunds/{refund_id}/process",
+            json={"refund_id": refund_id, "refund_reference": "BANK-REF-FIN"},
+            headers=accountant,
+        )
+        assert proc.status_code == 200, proc.text
+
+        # Finalize hook fired: profile self-settled to withdrawn.
+        after = await _get(client, manager, pid)
+        assert after["status"] == "withdrawn", after
+        assert after["has_unrefunded_payment"] is False, after
+
+    async def test_admin_cancel_withdrawal_back_to_draft(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """§2.4: admin cancels a pending withdrawal → draft; a non-admin
+        (manager) is blocked by ``require_admin`` (403)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        admin = await _auth(client, admin_user_in_db)
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id, officer_user_in_db["id"]
+        )
+        body = await _get(client, manager, pid)
+        res = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=manager,
+            json={"reason": "Rút hồ sơ chờ hoàn", "version": body["version"]},
+        )
+        assert res.status_code == 200 and res.json()["status"] == "withdrawal_pending"
+
+        # Non-admin (manager) cannot cancel → 403.
+        forbidden = await client.post(
+            f"{ADMISSIONS}/{pid}/cancel-withdrawal",
+            headers=manager,
+            json={"reason": "Manager thử hủy — phải bị chặn"},
+        )
+        assert forbidden.status_code == 403, forbidden.text
+
+        # Admin cancels → draft.
+        cancel = await client.post(
+            f"{ADMISSIONS}/{pid}/cancel-withdrawal",
+            headers=admin,
+            json={"reason": "Hoàn tiền bị từ chối — đưa hồ sơ về nháp"},
+        )
+        assert cancel.status_code == 200, cancel.text
+        assert cancel.json()["status"] == "draft", cancel.json()

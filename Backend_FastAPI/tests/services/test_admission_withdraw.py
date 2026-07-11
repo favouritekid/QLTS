@@ -260,6 +260,47 @@ class TestWithdrawService:
                     data={"reason": "Stale client version", "version": 999},
                 )
 
+    async def test_admitted_profile_withdraws_directly(
+        self,
+        admin_user_in_db: dict,
+        seed_sts08: dict,
+    ):
+        """PR-B v3 scenario (f): an ``admitted`` (seat-occupying) profile is
+        withdrawn STRAIGHT to ``withdrawn`` — the orchestrator's STEP 0 keeps the
+        legacy direct path (no auto-refund/cancel, no ``withdrawal_pending``) so
+        withdrawal never churns quota-seat accounting."""
+        from app.services import admission_service
+
+        unit_id = seed_sts08["unit_id"]
+        officer_id = admin_user_in_db["id"]
+
+        lead_id = await _create_lead(unit_id, officer_id)
+        profile = await _create_profile(lead_id, status="admitted")
+
+        actor = models.User(
+            id=officer_id,
+            username=admin_user_in_db["username"],
+            email="admitted@test.com",
+            password_hash="x",
+            role="admin",
+            status="active",
+        )
+
+        async with AsyncSessionLocal() as session:
+            result, callback = await admission_service.withdraw_profile(
+                db=session,
+                profile_id=profile.id,
+                actor=actor,
+                data={"reason": "Trúng tuyển nhưng đổi ý", "version": 1},
+            )
+            await session.commit()
+            if callback:
+                await callback()
+
+        reloaded = await _reload_profile(profile.id)
+        assert reloaded.status == "withdrawn"
+        assert await _get_lead_status(lead_id) == "sts08"
+
 
 # ==============================================================================
 # HTTP-LEVEL TESTS
