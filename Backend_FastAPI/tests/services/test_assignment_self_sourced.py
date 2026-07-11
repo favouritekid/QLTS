@@ -110,11 +110,13 @@ def _count_stmt(officer_ids, *extra_where):
 
 
 async def test_self_sourced_subquery_classification(db, seeded_dependencies):
-    """7 lead non-final gán cho 1 officer, đủ 7 tình huống latest-log. Đếm tự-tuyển
-    = A + E + G (latest-ASSIGNMENT là manual 'by officer') = 3; self_cnt ≤ workload
-    (bất biến ⇒ balance_load ≥ 0). Kiểm CẢ subquery-WHERE LẪN COUNT-FILTER gộp."""
+    """officer1: 8 lead non-final, 8 tình huống latest-log ⇒ tự-tuyển = A+E+G+H
+    (latest-ASSIGNMENT là manual 'by officer') = 4. officer2: 1 lead (I) chứng minh
+    correlation officer_id — log 'by officer' của officer1 KHÔNG lọt sang officer2.
+    self_cnt ≤ workload. Kiểm CẢ subquery-WHERE LẪN COUNT-FILTER gộp."""
     deps = seeded_dependencies
     officer = await _mk_officer(db, deps["unit_id"], "clf")
+    officer2 = await _mk_officer(db, deps["unit_id"], "clf2")
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     # A: manual by officer (TỰ TUYỂN) ✓
@@ -158,15 +160,37 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
         db, g, officer, "officer_reject", "Officer từ chối", t0 + timedelta(days=1)
     )
 
-    # (1) subquery làm WHERE — đếm số dòng tự tuyển
-    workload = {
-        r[0]: r[1] for r in (await db.execute(_count_stmt([officer.id]))).all()
-    }
+    # H: manual by officer (cũ) → offering_change_unit_synced (mới, keep-sync đổi
+    # ngành, GIỮ officer + non-final) ⇒ KHÔNG phải assignment-source ⇒ latest-
+    # assignment = manual by officer ⇒ VẪN tự tuyển ✓ (nửa còn lại của fix P2 —
+    # case LUÔN load-bearing).
+    h = await _mk_lead(db, deps, officer, "0940000008")
+    await _log(db, h, officer, "manual",
+               _REASON_SELF_CREATE.format(u=officer.username), t0)
+    await _log(
+        db, h, officer, "offering_change_unit_synced", "Đổi ngành",
+        t0 + timedelta(days=1)
+    )
+
+    # I (CROSS-OFFICER): lead nay gán OFFICER2 nhưng có log 'by officer' của
+    # OFFICER1 (t0) rồi manual_reassignment sang officer2 (t1). Subquery của officer2
+    # (correlate al.officer_id==assigned=officer2) chỉ thấy log officer2 = reassign ⇒
+    # KHÔNG tự tuyển; log 'by officer' của officer1 KHÔNG lọt (chứng minh correlation
+    # officer_id không bị đếm nhầm sang officer khác).
+    i_lead = await _mk_lead(db, deps, officer2, "0940000009")
+    await _log(db, i_lead, officer, "manual",
+               _REASON_SELF_CREATE.format(u=officer.username), t0)
+    await _log(
+        db, i_lead, officer2, "manual_reassignment", "reassign→officer2",
+        t0 + timedelta(days=1)
+    )
+
+    ids = [officer.id, officer2.id]
+    # (1) subquery làm WHERE — đếm số dòng tự tuyển, theo officer
+    workload = {r[0]: r[1] for r in (await db.execute(_count_stmt(ids))).all()}
     self_where = {
         r[0]: r[1]
-        for r in (
-            await db.execute(_count_stmt([officer.id], _self_sourced_subquery()))
-        ).all()
+        for r in (await db.execute(_count_stmt(ids, _self_sourced_subquery()))).all()
     }
     # (2) PRODUCTION path: COUNT(id) FILTER(_self_sourced_subquery()) GỘP 1 query
     filter_stmt = (
@@ -183,15 +207,22 @@ async def test_self_sourced_subquery_classification(db, seeded_dependencies):
             isouter=True,
         )
         .where(
-            models.Lead.assigned_officer_id == officer.id,
+            models.Lead.assigned_officer_id.in_(ids),
             models.Lead.deleted_at.is_(None),
             _non_final_status_filter(),
         )
         .group_by(models.Lead.assigned_officer_id)
     )
-    frow = (await db.execute(filter_stmt)).one()
+    frows = {r.assigned_officer_id: r for r in (await db.execute(filter_stmt)).all()}
 
-    assert workload[officer.id] == 7                   # tất cả 7 lead non-final
-    assert self_where.get(officer.id, 0) == 3          # subquery-WHERE: A + E + G
-    assert frow.workload == 7 and frow.self_cnt == 3   # FILTER gộp khớp
-    assert frow.self_cnt <= frow.workload              # bất biến subset (cấu trúc)
+    # officer1: 8 lead, tự tuyển A+E+G+H = 4 (officer_reject + offering-sync ko reset)
+    assert workload[officer.id] == 8
+    assert self_where.get(officer.id, 0) == 4
+    assert frows[officer.id].workload == 8 and frows[officer.id].self_cnt == 4
+    # officer2: 1 lead (I) — correlation officer_id ⇒ log 'by officer' của officer1
+    # KHÔNG lọt sang officer2 ⇒ self_cnt = 0
+    assert workload[officer2.id] == 1
+    assert self_where.get(officer2.id, 0) == 0
+    assert frows[officer2.id].workload == 1 and frows[officer2.id].self_cnt == 0
+    # bất biến subset cấu trúc
+    assert all(fr.self_cnt <= fr.workload for fr in frows.values())

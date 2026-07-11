@@ -43,11 +43,27 @@ def _non_final_status_filter():
     )
 
 
-# Các method = SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ lead). PHÂN BIỆT với hành
-# động STATUS giữ nguyên officer: officer_reject (từ chối, giữ officer + non-final
-# sts04) và offering_change_unit_synced (keep-sync đổi ngành) — hai cái này KHÔNG
-# đổi "nguồn sở hữu" nên KHÔNG được reset phân loại tự-tuyển. officer_reassign nulls
-# officer nên không bao giờ match (assigned_officer_id đã NULL).
+# _ASSIGNMENT_SOURCE_METHODS = method của SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ
+# lead). _self_sourced_subquery chỉ xét bản ghi có method này cho "latest", BỎ QUA
+# status-action / keep-sync giữ nguyên officer (chúng KHÔNG đổi "nguồn sở hữu").
+#
+# ⚠️ AUDIT 7 write-site models.AssignmentLog(method=...) (11-07):
+#  SOURCE (whitelist): 'automatic' · 'manual' · 'manual_reassignment' · (defensive)
+#    'system_auto_reassign'.
+#  NON-SOURCE (loại đúng — KHÔNG reset phân loại):
+#   - 'offering_change_unit_synced' (keep-sync đổi ngành, GIỮ officer + non-final):
+#     case LUÔN load-bearing.
+#   - 'officer_reject' (process_officer_action reject, GIỮ officer): thành non-final
+#     qua get_rejected_status()→None→fallback consultation_status_id=None (prod: 0
+#     status legacy='rejected'+is_final=true → luôn None), hoặc FINAL nếu env có
+#     status đó (khi đó lead rớt khỏi workload, việc loại thành no-op). Prod scope
+#     officer_reject-as-latest hiện = 0 lead.
+#  DEAD-nhưng-defensive: 'officer_reassign' + 'system_auto_reassign' đều NULL/đổi
+#    assigned_officer_id nên KHÔNG BAO GIỜ correlate (al.officer_id==assigned) — vô
+#    hại, giữ để rõ ý "source".
+# ⚠️ THÊM method mới (re-)assign lead cho officer + giữ non-final ⇒ PHẢI thêm vào
+#    đây; quên → lead phân phối bị coi self-sourced → OVER-GRANT (UNSAFE). Ghim bởi
+#    test_assignment_source_methods_documented.
 _ASSIGNMENT_SOURCE_METHODS = (
     "automatic",
     "manual",
@@ -65,10 +81,11 @@ def _self_sourced_subquery():
     Tự tuyển = latest (assignment-source) method='manual' VÀ ``reason`` do một
     OFFICER khởi tạo. Mọi thứ khác — 'automatic', reassign, manual do admin/manager
     chỉ định (phân phối), hay không có log — đều KHÔNG phải tự tuyển ⇒ tính vào tải
-    đã-chia. ⚠️ officer_reject/offering_change_unit_synced KHÔNG reset (nếu xét MỌI
-    log, self-sourced lead bị officer reject sẽ hoá đã-chia OAN → giảm suất officer,
-    ngược ý đồ). Dùng khi ``exclude_active`` để loại lead tự tuyển khỏi CƠ SỞ SẮP
-    XẾP (real_util/eff_util), KHÔNG khỏi tổng workload.
+    đã-chia. ⚠️ offering_change_unit_synced (keep-sync, LUÔN giữ officer + non-final)
+    và officer_reject KHÔNG reset phân loại (nếu xét MỌI log, self-sourced lead sau
+    các action đó hoá đã-chia OAN → giảm suất officer, ngược ý đồ) — xem
+    ``_ASSIGNMENT_SOURCE_METHODS``. Dùng khi ``exclude_active`` để loại lead tự tuyển
+    khỏi CƠ SỞ SẮP XẾP (real_util/eff_util), KHÔNG khỏi tổng workload.
 
     ⚠️ NGỮ NGHĨA (latent): pattern chỉ kiểm VAI TRÒ người-gán = officer, KHÔNG kiểm
     assigner == assigned_officer_id. Hôm nay AN TOÀN vì officer-create ép
