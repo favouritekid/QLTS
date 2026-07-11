@@ -33,7 +33,7 @@ Coupled deploy items (BE+FE atomic — Zod strict enum)
   ``withdrawal_pending`` BEFORE the BE writes it, or admission list parse fails.
 
 Revision ID: wpend20260710
-Revises: zbmonthlyseed20260706
+Revises: assignlogidx20260711
 Create Date: 2026-07-10
 """
 from typing import Sequence, Union
@@ -44,7 +44,10 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "wpend20260710"
-down_revision: Union[str, None] = "zbmonthlyseed20260706"
+# Rebased onto assignlogidx20260711 (#473, merged after this branch was cut) so
+# the two migrations chain linearly instead of forking two heads off
+# zbmonthlyseed20260706 → prevents "Multiple head revisions" at deploy.
+down_revision: Union[str, None] = "assignlogidx20260711"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
