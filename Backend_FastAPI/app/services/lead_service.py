@@ -4852,6 +4852,15 @@ async def _populate_lead_detail_fields(
             else ("not_terminal" if not cs_terminal else "forbidden")
         )
 
+    # ✅ Reassign/Transfer (P0 thin-client): FE gate nút "Chuyển giao lead"
+    # (manager/admin — đổi trực tiếp) vs "Yêu cầu đổi người phụ trách" (officer
+    # ĐƯỢC GIAO lead — xin đổi) THUẦN theo cờ này thay vì đọc user.role ở FE.
+    # Backend là nơi role-gate duy nhất. Chỉ áp khi lead đã có người phụ trách;
+    # lead chưa gán dùng luồng "Gán cho cán bộ" riêng.
+    lead_assigned = lead.assigned_officer_id is not None
+    permissions["can_transfer_lead"] = is_manager_admin and lead_assigned
+    permissions["can_request_reassign"] = is_officer_assigned  # officer được giao
+
     lead.permissions = permissions
     lead.available_actions = [k for k, v in permissions.items() if v]
     lead.action_blockers = blockers
