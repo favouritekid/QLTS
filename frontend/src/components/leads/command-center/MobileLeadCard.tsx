@@ -21,7 +21,7 @@ import { LeadActionMenu } from "./LeadActionMenu";
 import { SwipeToCall } from "@/components/common/SwipeToCall";
 import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
-import { getLeadSourceLabel, getEducationLevelLabel } from "@/constants";
+import { getLeadSourceLabel } from "@/constants";
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -59,10 +59,12 @@ export function MobileLeadCard({
   const owner = lead.assigned_officer?.full_name;
   const major =
     lead.offering?.program?.name || lead.offering?.offering_type || null;
-  // "Trình độ Ngành học" = trình độ học vấn của LEAD (education_level, có nhãn VN)
-  // + ngành đăng ký. Ghép phần có sẵn; rỗng cả hai → "Chưa chọn ngành".
-  const eduLabel = getEducationLevelLabel(lead.education_level);
-  const eduMajor = [eduLabel, major].filter(Boolean).join(" · ") || "Chưa chọn ngành";
+  // "Trình độ Ngành học" = trình độ của NGÀNH (degree_level: "Cao đẳng"/"Trung cấp"
+  // — đã là nhãn VN sẵn) + tên ngành. Lấy từ offering nên lead có chọn ngành là có
+  // (KHÁC education_level của lead — gần như trống). Ghép bằng " " đọc tự nhiên
+  // ("Cao đẳng Công nghệ ô tô"); rỗng cả hai → "Chưa chọn ngành".
+  const degreeLevel = lead.offering?.program?.degree_level || null;
+  const eduMajor = [degreeLevel, major].filter(Boolean).join(" ") || "Chưa chọn ngành";
   // Overdue tính client theo next_activity_at (cache is_overdue có thể trễ ~14h).
   const overdue = isLeadOverdue({ next_activity_at: lead.next_activity_at ?? null });
   const selected = isSelected || isChecked;
