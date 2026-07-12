@@ -2301,12 +2301,12 @@ async def withdraw_admission(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
-@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/cancel-withdrawal",
     response_model=schemas.AdmissionProfileResponse,
     summary="Cancel a pending withdrawal (Admin only) — revert to draft",
 )
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 async def cancel_withdrawal(
     request: Request,
     profile_id: int,
