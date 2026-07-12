@@ -351,6 +351,15 @@ async def get_all_leads(
         consultation_status_id=consultation_status_id,
     )
 
+    # Thin-client: gắn cờ hành động query-free cho từng lead (can_transfer_lead /
+    # can_request_reassign) để menu card mobile + hàng bảng desktop khớp menu panel
+    # mà KHỎI fetch chi tiết từng dòng. Không truy vấn DB thêm — chỉ đọc role +
+    # assigned_officer_id đã có sẵn. Single source: compute_lead_action_permissions().
+    for _lead in leads:
+        _lead.permissions = lead_service.compute_lead_action_permissions(
+            _lead, current_user
+        )
+
     # Scope-only counts for the "Giai đoạn" filter tree (static navigation map).
     # Reuses the SAME LeadListFilter scope as the list → no RBAC leak; ignores
     # secondary filters on purpose. See LEAD_STAGE_TREE_FILTER_PLAN.md §2.

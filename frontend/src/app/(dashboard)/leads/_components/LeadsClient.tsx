@@ -491,6 +491,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
                   onSelectLead={handleLeadSelect}
                   onEditLead={handleEdit}
                   onDeleteLead={handleDelete}
+                  onAssignLead={handleAssign}
                   page={filterState.page}
                   pageSize={filterState.pageSize}
                   totalCount={leadsPage?.total_count || 0}
@@ -560,6 +561,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
               onSelectLead={handleLeadSelect}
               onEditLead={handleEdit}
               onDeleteLead={handleDelete}
+              onAssignLead={handleAssign}
               page={filterState.page}
               pageSize={filterState.pageSize}
               totalCount={leadsPage?.total_count || 0}

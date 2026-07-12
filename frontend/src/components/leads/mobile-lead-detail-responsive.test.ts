@@ -37,6 +37,7 @@ const bulkBar = read("./command-center/BulkActionsBar.tsx");
 const filterBar = read("./command-center/LeadFilterBar.tsx");
 const filterPanel = read("./command-center/LeadFilterPanel.tsx");
 const mobileCard = read("./command-center/MobileLeadCard.tsx");
+const actionMenu = read("./command-center/LeadActionMenu.tsx");
 const detailClient = read("../../app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx");
 const infoTabs = read("../../app/(dashboard)/leads/[id]/_components/LeadInfoTabs.tsx");
 const sidebar = read("../../app/(dashboard)/leads/[id]/_components/LeadSidebar.tsx");
@@ -135,10 +136,13 @@ describe("Round 2 #8 — command-center touch targets + bulk-bar overflow", () =
     expect(filterBar).not.toMatch(/FilterDropdown/);
   });
 
-  it("MobileLeadCard action button 44px + labelled", () => {
-    expect(mobileCard).toMatch(/h-11 w-11/);
-    expect(mobileCard).toMatch(/aria-label="Mở menu hành động"/);
+  it("MobileLeadCard action menu 44px + labelled (shared LeadActionMenu)", () => {
+    // Nút menu dùng chung LeadActionMenu; card truyền triggerClassName 44px.
+    expect(mobileCard).toMatch(/triggerClassName="h-11 w-11/);
     expect(mobileCard).not.toMatch(/className="h-10 w-10"/);
+    // LeadActionMenu: nút trigger có aria-label + mặc định 44px touch trên mobile.
+    expect(actionMenu).toMatch(/aria-label=\{triggerLabel\}/);
+    expect(actionMenu).toMatch(/h-11 w-11/);
   });
 });
 

@@ -140,6 +140,7 @@ describe("LeadsTable", () => {
     onSelectLead: vi.fn(),
     onEditLead: vi.fn(),
     onDeleteLead: vi.fn(),
+    onAssignLead: vi.fn(),
   };
 
   beforeEach(() => {

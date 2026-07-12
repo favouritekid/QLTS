@@ -129,6 +129,7 @@ from .lead import (
     LeadBase,
     LeadCreate,
     LeadDetail,
+    LeadListItem,  # ✅ list item = Lead + query-free action flags (permissions)
     ReopenReasonBody,  # ✅ Reopen: body {reason} (Phase A reopen + Phase B request)
     ReopenReviewBody,  # ✅ Reopen Phase B: body approve/reject
     LeadReopenRequestOut,  # ✅ Reopen Phase B: response 1 yêu cầu

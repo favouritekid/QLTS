@@ -4767,6 +4767,35 @@ async def restore_lead(
 # Thin-client gate fields for LeadDetail response (GET /leads/{id})
 # =============================================================================
 
+def compute_lead_action_permissions(
+    lead: models.Lead,
+    current_user: Optional[models.User],
+) -> dict[str, bool]:
+    """Query-free lead action flags (transfer / reassign) from role + assignment
+    state only.
+
+    Shared by the ``LeadDetail`` populate path (GET /leads/{id}) AND the paginated
+    list serializer (GET /leads) so the mobile card / desktop row menu can gate
+    "Chuyển giao lead" / "Yêu cầu đổi người phụ trách" WITHOUT a per-row detail
+    fetch — and WITHOUT the FE reading ``user.role`` (thin-client rule). No DB
+    access → safe to call per list item. Returns ``{}`` for system contexts.
+    """
+    if current_user is None:
+        return {}
+    is_manager_admin = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    is_officer_assigned = (
+        current_user.role == UserRole.OFFICER
+        and lead.assigned_officer_id == current_user.id
+    )
+    lead_assigned = lead.assigned_officer_id is not None
+    return {
+        # manager/admin đổi trực tiếp; chỉ khi lead đã có người phụ trách
+        "can_transfer_lead": is_manager_admin and lead_assigned,
+        # officer ĐƯỢC GIAO lead → xin đổi
+        "can_request_reassign": is_officer_assigned,
+    }
+
+
 async def _populate_lead_detail_fields(
     db: AsyncSession,
     lead: models.Lead,
@@ -4856,10 +4885,9 @@ async def _populate_lead_detail_fields(
     # (manager/admin — đổi trực tiếp) vs "Yêu cầu đổi người phụ trách" (officer
     # ĐƯỢC GIAO lead — xin đổi) THUẦN theo cờ này thay vì đọc user.role ở FE.
     # Backend là nơi role-gate duy nhất. Chỉ áp khi lead đã có người phụ trách;
-    # lead chưa gán dùng luồng "Gán cho cán bộ" riêng.
-    lead_assigned = lead.assigned_officer_id is not None
-    permissions["can_transfer_lead"] = is_manager_admin and lead_assigned
-    permissions["can_request_reassign"] = is_officer_assigned  # officer được giao
+    # lead chưa gán dùng luồng "Gán cho cán bộ" riêng. Cùng nguồn với list
+    # serializer qua compute_lead_action_permissions() (single source of truth).
+    permissions.update(compute_lead_action_permissions(lead, current_user))
 
     lead.permissions = permissions
     lead.available_actions = [k for k, v in permissions.items() if v]

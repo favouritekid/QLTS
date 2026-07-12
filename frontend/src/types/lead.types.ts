@@ -143,6 +143,12 @@ export interface Lead {
   validity_status: string | null;
   created_via: string | null;
   referrer: CollaboratorShallow | null;
+
+  // Thin-client action flags. Populated on the paginated list (LeadListItem:
+  // can_transfer_lead / can_request_reassign) and fully on LeadDetail
+  // (create_admission, can_reopen, ...). Absent on create/update responses →
+  // optional. Gate visibility via lead.permissions?.<flag>, NOT user.role.
+  permissions?: Record<string, boolean>;
 }
 
 /**

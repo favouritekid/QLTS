@@ -11,8 +11,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Edit,
-  Trash2,
   UserPlus,
   Phone,
   Mail,
@@ -23,27 +21,16 @@ import {
   History,
   ExternalLink,
   RefreshCcw,
-  MoreVertical,
   FileText,
   ArrowRight,
   AlertCircle,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn, sanitizeColorCode } from "@/lib/utils";
-import { useIsMobile } from "@/hooks/useMediaQuery";
-import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
-import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
+import { LeadActionMenu } from "@/components/leads/command-center/LeadActionMenu";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { getEducationLevelLabel } from "@/constants";
@@ -101,10 +88,6 @@ const getInitials = (name: string) => {
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
   const { data: lead, isLoading, isError, refetch } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [reassignOpen, setReassignOpen] = useState(false);
-  const [actionSheetOpen, setActionSheetOpen] = useState(false);
-  const isMobile = useIsMobile();
 
   // ✅ FIX: Calculate days since contact in useEffect to avoid impure Date.now() in render
   // Also prevents hydration mismatch (useState defaults to null, matching SSR)
@@ -286,139 +269,14 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             </Button>
           </div>
 
-          {/* More Actions - Mobile: ActionSheet, Desktop: Dropdown */}
-          {isMobile ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-11 w-11 sm:h-7 sm:w-7 p-0"
-                onClick={() => setActionSheetOpen(true)}
-                aria-label="Mở menu thao tác"
-              >
-                <MoreVertical className="h-4 w-4" />
-              </Button>
-              <MobileActionSheet
-                open={actionSheetOpen}
-                onOpenChange={setActionSheetOpen}
-                title="Thao tác"
-              >
-                <MobileActionSheet.Item
-                  icon={Edit}
-                  onClick={() => {
-                    setActionSheetOpen(false);
-                    onEdit(lead);
-                  }}
-                >
-                  Chỉnh sửa
-                </MobileActionSheet.Item>
-                {lead.email && (
-                  <MobileActionSheet.Item
-                    icon={Mail}
-                    href={`mailto:${lead.email}`}
-                    onClick={() => setActionSheetOpen(false)}
-                  >
-                    Gửi email
-                  </MobileActionSheet.Item>
-                )}
-                <MobileActionSheet.Divider />
-                {!lead.assigned_officer && (
-                  <MobileActionSheet.Item
-                    icon={UserPlus}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      onAssign(lead);
-                    }}
-                  >
-                    Gán cho cán bộ
-                  </MobileActionSheet.Item>
-                )}
-                {lead.assigned_officer && lead.permissions.can_transfer_lead && (
-                  <MobileActionSheet.Item
-                    icon={UserPlus}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      setAssignOpen(true);
-                    }}
-                  >
-                    Chuyển giao lead
-                  </MobileActionSheet.Item>
-                )}
-                {lead.assigned_officer && lead.permissions.can_request_reassign && (
-                  <MobileActionSheet.Item
-                    icon={RefreshCcw}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      setReassignOpen(true);
-                    }}
-                  >
-                    Yêu cầu đổi người phụ trách
-                  </MobileActionSheet.Item>
-                )}
-                <MobileActionSheet.Divider />
-                <MobileActionSheet.Item
-                  icon={Trash2}
-                  variant="destructive"
-                  onClick={() => {
-                    setActionSheetOpen(false);
-                    onDelete(lead);
-                  }}
-                >
-                  Xóa lead
-                </MobileActionSheet.Item>
-                <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
-              </MobileActionSheet>
-            </>
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-11 w-11 sm:h-7 sm:w-7 p-0" aria-label="Mở menu thao tác">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={() => onEdit(lead)}>
-                  <Edit className="mr-2 h-4 w-4" />
-                  Chỉnh sửa
-                </DropdownMenuItem>
-                {lead.email && (
-                  <DropdownMenuItem asChild>
-                    <a href={`mailto:${lead.email}`}>
-                      <Mail className="mr-2 h-4 w-4" />
-                      Gửi email
-                    </a>
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                {!lead.assigned_officer && (
-                  <DropdownMenuItem onClick={() => onAssign(lead)}>
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Gán cho cán bộ
-                  </DropdownMenuItem>
-                )}
-                {lead.assigned_officer && lead.permissions.can_transfer_lead && (
-                  <DropdownMenuItem onClick={() => setAssignOpen(true)}>
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Chuyển giao lead
-                  </DropdownMenuItem>
-                )}
-                {lead.assigned_officer && lead.permissions.can_request_reassign && (
-                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-                    <RefreshCcw className="mr-2 h-4 w-4" />
-                    Yêu cầu đổi người phụ trách
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => onDelete(lead)}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Xóa lead
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {/* Menu thao tác — dùng chung LeadActionMenu (khớp card + hàng bảng) */}
+          <LeadActionMenu
+            lead={lead}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onAssign={onAssign}
+            sheetTitle="Thao tác"
+          />
         </div>
       </div>
 
@@ -684,19 +542,6 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </Card>
         </div>
       </ScrollArea>
-      
-      {/* Assign Dialog (Manager/Admin: direct reassign) */}
-      <AssignLeadDialog
-        open={assignOpen}
-        onOpenChange={setAssignOpen}
-        lead={lead}
-      />
-      {/* Reassign Dialog (Officer: request reassign) */}
-      <ReassignLeadDialog
-        open={reassignOpen}
-        onOpenChange={setReassignOpen}
-        lead={lead}
-      />
     </div>
   );
 }

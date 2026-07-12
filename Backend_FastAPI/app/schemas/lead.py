@@ -450,22 +450,42 @@ class Lead(LeadBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LeadDetail(Lead):
+class LeadListItem(Lead):
+    """Lead as returned in the paginated list (GET /leads).
+
+    Extends plain ``Lead`` with query-free action permission flags so the
+    mobile card / desktop row menu can gate "Chuyển giao lead" /
+    "Yêu cầu đổi người phụ trách" WITHOUT a per-row detail fetch and WITHOUT
+    the FE reading ``user.role`` (thin-client rule). Populated per item in the
+    GET /leads router via ``lead_service.compute_lead_action_permissions()``.
+
+    Only ``can_transfer_lead`` / ``can_request_reassign`` are carried here; the
+    fuller ``create_admission`` / reopen flags stay on ``LeadDetail`` (they need
+    eligibility/config lookups that would be too costly per list row).
+    """
+    permissions: Dict[str, bool] = Field(
+        default_factory=dict,
+        description=(
+            "Query-free per-user action flags "
+            "(can_transfer_lead, can_request_reassign)."
+        ),
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LeadDetail(LeadListItem):
     """Lead response for GET /leads/{id} with thin-client gate flags.
 
     Populated by lead_service._populate_lead_detail_fields() based on
-    admission_service.check_lead_level_admission_eligibility(). Other lead
-    endpoints (list/create/update) continue returning plain ``Lead`` and
-    do not carry these fields.
+    admission_service.check_lead_level_admission_eligibility(). Inherits the
+    query-free ``permissions`` flags from ``LeadListItem`` and augments the dict
+    with detail-only flags (create_admission, can_reopen, ...).
 
     Blocker codes emitted for ``create_admission``:
       forbidden, already_has_profile, invalid_lead_status, missing_offering,
       no_consultation, consultation_missing_status, consultation_universal_status.
     """
-    permissions: Dict[str, bool] = Field(
-        default_factory=dict,
-        description="Permission flags computed per-user (e.g. create_admission).",
-    )
     available_actions: List[str] = Field(
         default_factory=list,
         description="Actions currently allowed (subset of permissions keys where value=True).",
@@ -546,7 +566,7 @@ class EffectiveScope(BaseModel):
 
 class LeadsPage(BaseModel):
     total_count: int
-    leads: List[Lead]
+    leads: List[LeadListItem]
     summary: Optional[LeadsSummary] = None
     effective_scope: Optional[EffectiveScope] = None
     # Scope-only counts per consultation_status_id for the "Giai đoạn" filter

@@ -8,13 +8,12 @@
 "use client";
 
 import React from "react";
-import { Phone, MoreVertical, Zap, Edit, Trash2, UserPlus, ArrowRightLeft } from "lucide-react";
+import { Phone, Zap } from "lucide-react";
 import { sanitizeColorCode } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
-import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+import { LeadActionMenu } from "./LeadActionMenu";
 import {
   BaseCard,
   CardHeader,
@@ -37,8 +36,8 @@ interface MobileLeadCardProps {
   onCheck?: (checked: boolean) => void;
   onEdit: (lead: Lead) => void;
   onDelete: (lead: Lead) => void;
-  onAssign?: (lead: Lead) => void;
-  onChangeStage?: (lead: Lead) => void;
+  /** "Gán cho cán bộ" khi lead chưa phân công (mở dialog gán ở parent). */
+  onAssign: (lead: Lead) => void;
   showCheckbox?: boolean;
 }
 
@@ -54,22 +53,16 @@ export function MobileLeadCard({
   onEdit,
   onDelete,
   onAssign,
-  onChangeStage,
   showCheckbox = false,
 }: MobileLeadCardProps) {
-  const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
-
   // Get stage color
   const stageColor = sanitizeColorCode(lead.pipeline_stage?.color_code) ||
     STAGE_COLORS[lead.pipeline_stage?.id || ""] ||
     "#6B7280";
 
-  // Handle card click - only trigger if action sheet is closed
-  const handleCardClick = () => {
-    if (!actionSheetOpen) {
-      onSelect(lead);
-    }
-  };
+  // Bấm card → mở panel chi tiết. Nút menu (LeadActionMenu) tự stopPropagation
+  // nên không kích hoạt onSelect khi thao tác menu.
+  const handleCardClick = () => onSelect(lead);
 
   return (
     <SwipeToCall phone={lead.phone} label={lead.full_name}>
@@ -130,67 +123,18 @@ export function MobileLeadCard({
         )}
       </CardMeta>
 
-      {/* Actions */}
+      {/* Menu thao tác — dùng chung LeadActionMenu (khớp panel + hàng bảng) */}
       <CardActions>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-11 w-11"
-          onClick={() => setActionSheetOpen(true)}
-          aria-label="Mở menu hành động"
-        >
-          <MoreVertical className="h-4 w-4" />
-        </Button>
+        <LeadActionMenu
+          lead={lead}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onAssign={onAssign}
+          sheetTitle={lead.full_name}
+          triggerClassName="h-11 w-11 sm:h-11 sm:w-11"
+          stopPropagation
+        />
       </CardActions>
-
-      {/* Action Sheet */}
-      <MobileActionSheet
-        open={actionSheetOpen}
-        onOpenChange={setActionSheetOpen}
-        title={lead.full_name}
-      >
-        <MobileActionSheet.Item
-          icon={Edit}
-          onClick={() => {
-            setActionSheetOpen(false);
-            onEdit(lead);
-          }}
-        >
-          Chỉnh sửa
-        </MobileActionSheet.Item>
-        {onAssign && (
-          <MobileActionSheet.Item
-            icon={UserPlus}
-            onClick={() => {
-              setActionSheetOpen(false);
-              onAssign(lead);
-            }}
-          >
-            Gán cán bộ
-          </MobileActionSheet.Item>
-        )}
-        {onChangeStage && (
-          <MobileActionSheet.Item
-            icon={ArrowRightLeft}
-            onClick={() => {
-              setActionSheetOpen(false);
-              onChangeStage(lead);
-            }}
-          >
-            Đổi giai đoạn
-          </MobileActionSheet.Item>
-        )}
-        <MobileActionSheet.Item
-          icon={Trash2}
-          variant="destructive"
-          onClick={() => {
-            setActionSheetOpen(false);
-            onDelete(lead);
-          }}
-        >
-          Xóa lead
-        </MobileActionSheet.Item>
-      </MobileActionSheet>
     </BaseCard>
     </SwipeToCall>
   );
@@ -206,8 +150,7 @@ interface MobileLeadListProps {
   onSelectLead: (lead: Lead) => void;
   onEditLead: (lead: Lead) => void;
   onDeleteLead: (lead: Lead) => void;
-  onAssignLead?: (lead: Lead) => void;
-  onChangeStage?: (lead: Lead) => void;
+  onAssignLead: (lead: Lead) => void;
   // Bulk selection
   selectedLeads?: Lead[];
   onSelectionChange?: (leads: Lead[]) => void;
@@ -221,7 +164,6 @@ export function MobileLeadList({
   onEditLead,
   onDeleteLead,
   onAssignLead,
-  onChangeStage,
   selectedLeads = [],
   onSelectionChange,
   showBulkSelect = false,
@@ -255,7 +197,6 @@ export function MobileLeadList({
           onEdit={onEditLead}
           onDelete={onDeleteLead}
           onAssign={onAssignLead}
-          onChangeStage={onChangeStage}
           showCheckbox={showBulkSelect}
         />
       ))}
