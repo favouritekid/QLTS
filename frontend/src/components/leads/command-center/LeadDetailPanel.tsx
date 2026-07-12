@@ -33,6 +33,8 @@ import {
   ExternalLink,
   RefreshCcw,
   MoreVertical,
+  FileText,
+  ArrowRight,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -55,6 +57,7 @@ import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { getEducationLevelLabel } from "@/constants";
+import { getStatusConfig, getStatusDotColor } from "@/lib/status-config";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
 import type { Lead } from "@/types/lead.types";
 
@@ -412,6 +415,55 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
         <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
+          {/* ================================================== */}
+          {/* CỬA VÀO HỒ SƠ — 1 chạm sang /admissions khi đã có hồ sơ */}
+          {/* Đặt trên cùng: khi lead đã có hồ sơ thì hồ sơ là ưu tiên. */}
+          {/* Thin-client: label/màu lấy từ getStatusConfig('admission'). */}
+          {/* ================================================== */}
+          {(() => {
+            const profile = lead.admission_profiles?.[0];
+            if (!profile) return null;
+            const cfg = getStatusConfig(profile.status, "admission");
+            const extraCount = (lead.admission_profiles?.length ?? 1) - 1;
+            return (
+              <Link
+                href={`/admissions/${profile.id}`}
+                aria-label={`Xem hồ sơ tuyển sinh #${profile.id} — ${cfg.label}`}
+                className="group relative flex min-h-14 items-center gap-3 overflow-hidden rounded-xl border bg-card p-2.5 pl-3 shadow-sm transition-colors hover:border-primary/40 active:scale-[0.995]"
+              >
+                {/* Vạch màu trạng thái (viền-trái) */}
+                <span className={cn("absolute inset-y-0 left-0 w-1", getStatusDotColor(profile.status))} />
+                {/* Chip nhận diện hồ sơ, tô theo trạng thái */}
+                <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-lg", cfg.badgeColor)}>
+                  <FileText className="h-[18px] w-[18px]" />
+                </span>
+                {/* Nội dung: eyebrow + trạng thái + mã SV */}
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Hồ sơ tuyển sinh
+                    <span className="font-mono font-semibold tracking-tight text-muted-foreground/80">#{profile.id}</span>
+                    {extraCount > 0 && (
+                      <span className="font-sans font-medium normal-case text-muted-foreground/70">· +{extraCount} hồ sơ</span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 flex items-baseline gap-1.5 truncate text-[15px] font-semibold leading-tight text-foreground">
+                    {cfg.label}
+                    {profile.student_code && (
+                      <span className="truncate font-mono text-[11px] font-medium tracking-tight text-muted-foreground">
+                        · Mã SV {profile.student_code}
+                      </span>
+                    )}
+                  </span>
+                </span>
+                {/* Lối vào — chevron trỏ sang module tuyển sinh */}
+                <span className="flex shrink-0 items-center gap-1 pr-0.5 text-xs font-semibold text-muted-foreground transition-colors group-hover:text-primary">
+                  Xem
+                  <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
+                </span>
+              </Link>
+            );
+          })()}
+
           {/* ================================================== */}
           {/* SECTION 1: Thông tin học viên (Combined) */}
           {/* ================================================== */}
