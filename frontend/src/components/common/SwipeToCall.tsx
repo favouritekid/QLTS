@@ -190,7 +190,9 @@ export function SwipeToCall({
   return (
     <div
       ref={containerRef}
-      className={cn("relative overflow-hidden rounded-lg", className)}
+      // rounded-xl khớp bán kính card con (MobileLeadCard) — lệch (card rounded-xl
+      // > container rounded-lg) làm nền "Gọi" xanh ló ở 4 góc mọi card.
+      className={cn("relative overflow-hidden rounded-xl", className)}
       // pan-y: browser vẫn cuộn dọc; ngang do JS xử lý.
       style={{ touchAction: "pan-y" }}
       onPointerDown={onPointerDown}
@@ -217,7 +219,7 @@ export function SwipeToCall({
       <motion.div
         style={{ x }}
         className={cn(
-          "relative z-10 rounded-lg",
+          "relative z-10 rounded-xl",
           armed && "shadow-lg ring-2 ring-success-400"
         )}
       >
