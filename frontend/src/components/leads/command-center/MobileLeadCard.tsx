@@ -1,17 +1,18 @@
 // src/components/leads/command-center/MobileLeadCard.tsx
 /**
- * MobileLeadCard — thẻ lead cho mobile, thiết kế "Chấm trạng thái" (dot-only).
- *
- * 3 tầng: (1) tên + 🔥hot + thời-gian-gần-nhất + menu · (2) 🎓 ngành + SĐT ·
- * (3) ●trạng-thái · phụ-trách · nguồn. Màu consultation_status dồn vào CHẤM ●
- * (có ring để chấm nhạt vẫn thấy) — KHÔNG tô chữ (nhiều mã màu sáng như vàng
- * #FACC15 sẽ không đọc được nếu làm màu chữ). Bỏ vạch spine đầy chiều cao (rối
- * khi cả cột nhiều màu). Giữ SwipeToCall + LeadActionMenu + chạm mở panel.
+ * MobileLeadCard — thẻ lead mobile, 3 tầng gọn:
+ *   1. Tên lead (đầy chiều rộng → đỡ bị cắt) + menu ⋮
+ *   2. 🎓 Trình độ · Ngành học · Thời gian · Nguồn
+ *   3. ● Trạng thái · Người tư vấn
+ * Tầng 2 & 3 CÙNG cỡ chữ (text-xs). Màu consultation_status dồn vào CHẤM ●
+ * (chữ để foreground vì nhiều color_code sáng như #FACC15 khó đọc). Giữ
+ * SwipeToCall + LeadActionMenu + chạm mở panel. (SĐT bỏ khỏi mặt card — vẫn gọi
+ * được qua vuốt-để-gọi / menu / chi tiết.)
  */
 "use client";
 
 import React from "react";
-import { GraduationCap, User, UserPlus, Flame } from "lucide-react";
+import { GraduationCap, User, UserPlus } from "lucide-react";
 import { formatDistanceToNowStrict } from "date-fns";
 import { vi } from "date-fns/locale";
 import { cn, sanitizeColorCode } from "@/lib/utils";
@@ -20,7 +21,7 @@ import { LeadActionMenu } from "./LeadActionMenu";
 import { SwipeToCall } from "@/components/common/SwipeToCall";
 import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
-import { getLeadSourceLabel } from "@/constants";
+import { getLeadSourceLabel, getEducationLevelLabel } from "@/constants";
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -58,6 +59,10 @@ export function MobileLeadCard({
   const owner = lead.assigned_officer?.full_name;
   const major =
     lead.offering?.program?.name || lead.offering?.offering_type || null;
+  // "Trình độ Ngành học" = trình độ học vấn của LEAD (education_level, có nhãn VN)
+  // + ngành đăng ký. Ghép phần có sẵn; rỗng cả hai → "Chưa chọn ngành".
+  const eduLabel = getEducationLevelLabel(lead.education_level);
+  const eduMajor = [eduLabel, major].filter(Boolean).join(" · ") || "Chưa chọn ngành";
   // Overdue tính client theo next_activity_at (cache is_overdue có thể trễ ~14h).
   const overdue = isLeadOverdue({ next_activity_at: lead.next_activity_at ?? null });
   const selected = isSelected || isChecked;
@@ -98,39 +103,11 @@ export function MobileLeadCard({
         )}
 
         <div className="min-w-0 flex-1 space-y-1.5">
-          {/* Tầng 1: tên · 🔥hot · thời gian gần nhất · menu */}
+          {/* Tầng 1: tên lead (đầy chiều rộng) + menu */}
           <div className="flex items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-tight">
               {lead.full_name}
             </span>
-            {lead.is_hot_lead && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md bg-orange-100 px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-orange-600 dark:bg-orange-950/50 dark:text-orange-400">
-                <Flame className="h-3 w-3" />
-                Hot
-              </span>
-            )}
-            {overdue ? (
-              <span
-                className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-error-600 dark:text-error-500"
-                suppressHydrationWarning
-              >
-                Quá hạn
-              </span>
-            ) : lead.last_consultation_at ? (
-              <span
-                className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground"
-                suppressHydrationWarning
-              >
-                {formatDistanceToNowStrict(new Date(lead.last_consultation_at), {
-                  addSuffix: true,
-                  locale: vi,
-                })}
-              </span>
-            ) : (
-              <span className="shrink-0 text-[11px] text-muted-foreground/60">
-                Chưa liên hệ
-              </span>
-            )}
             <LeadActionMenu
               lead={lead}
               onEdit={onEdit}
@@ -143,22 +120,39 @@ export function MobileLeadCard({
             />
           </div>
 
-          {/* Tầng 2: 🎓 ngành + SĐT */}
-          <div className="flex items-center gap-2">
-            <span className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-[13.5px] text-foreground">
-              <GraduationCap className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{major ?? "Chưa chọn ngành"}</span>
+          {/* Tầng 2: 🎓 Trình độ · Ngành học · Thời gian · Nguồn */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+              <GraduationCap className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+              <span className="truncate text-foreground/90">{eduMajor}</span>
             </span>
-            {lead.phone && (
-              <span className="shrink-0 font-mono text-[11.5px] tracking-tight text-muted-foreground">
-                {lead.phone}
+            <span className="text-muted-foreground/40">·</span>
+            {overdue ? (
+              <span
+                className="shrink-0 font-medium text-error-600 dark:text-error-500"
+                suppressHydrationWarning
+              >
+                Quá hạn
               </span>
+            ) : lead.last_consultation_at ? (
+              <span className="shrink-0 tabular-nums" suppressHydrationWarning>
+                {formatDistanceToNowStrict(new Date(lead.last_consultation_at), {
+                  addSuffix: true,
+                  locale: vi,
+                })}
+              </span>
+            ) : (
+              <span className="shrink-0 text-muted-foreground/60">Chưa liên hệ</span>
             )}
+            <span className="text-muted-foreground/40">·</span>
+            <span className="shrink-0 text-muted-foreground/80">
+              {getLeadSourceLabel(lead.source)}
+            </span>
           </div>
 
-          {/* Tầng 3: ● trạng thái · phụ trách · nguồn */}
-          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-muted-foreground">
-            <span className="inline-flex shrink-0 items-center gap-1.5">
+          {/* Tầng 3: ● Trạng thái · Người tư vấn (cùng cỡ chữ tầng 2) */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
               <span
                 className={cn(
                   "h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/15",
@@ -166,24 +160,20 @@ export function MobileLeadCard({
                 )}
                 style={statusColor ? { backgroundColor: statusColor } : undefined}
               />
-              <span className="font-medium text-foreground/90">{statusName}</span>
+              <span className="truncate font-medium text-foreground/90">{statusName}</span>
             </span>
-            <span className="text-muted-foreground/40">·</span>
+            <span className="shrink-0 text-muted-foreground/40">·</span>
             {owner ? (
-              <span className="inline-flex min-w-0 items-center gap-1">
+              <span className="inline-flex min-w-0 flex-1 items-center gap-1">
                 <User className="h-3 w-3 shrink-0 opacity-70" />
                 <span className="truncate">{owner}</span>
               </span>
             ) : (
-              <span className="inline-flex shrink-0 items-center gap-1 font-semibold text-amber-600 dark:text-amber-500">
+              <span className="inline-flex shrink-0 items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
                 <UserPlus className="h-3 w-3" />
                 Chưa phân công
               </span>
             )}
-            <span className="text-muted-foreground/40">·</span>
-            <span className="shrink-0 text-muted-foreground/80">
-              {getLeadSourceLabel(lead.source)}
-            </span>
           </div>
         </div>
       </div>
