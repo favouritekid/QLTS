@@ -2,7 +2,6 @@
 "use client";
 
 import React, { useRef, useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,12 +11,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   Edit,
   Trash2,
   UserPlus,
@@ -25,8 +18,6 @@ import {
   Mail,
   MapPin,
   GraduationCap,
-  Building,
-  Calendar,
   User,
   Zap,
   History,
@@ -35,6 +26,7 @@ import {
   MoreVertical,
   FileText,
   ArrowRight,
+  AlertCircle,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -48,8 +40,6 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
-import { useAuth } from "@/hooks/useAuth";
-import { isManagerOrAbove } from "@/lib/utils/permissions";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
@@ -109,9 +99,7 @@ const getInitials = (name: string) => {
 };
 
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
-  const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
-  const { user } = useAuth();
-  const hasManagerAccess = isManagerOrAbove(user);
+  const { data: lead, isLoading, isError, refetch } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
@@ -164,8 +152,32 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </div>
           <div>
             <p className="text-muted-foreground font-medium">Chọn lead để xem chi tiết</p>
-            <p className="text-muted-foreground/70 text-sm">Click vào lead trong danh sách</p>
+            <p className="text-muted-foreground/70 text-sm">Chọn lead trong danh sách</p>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state — fetch lỗi (network/403/404). Tránh kẹt skeleton vĩnh viễn:
+  // báo rõ + cho thử lại (mẫu như trang /leads/[id]).
+  if (isError) {
+    return (
+      <div className="flex h-full items-center justify-center p-4">
+        <div className="max-w-xs space-y-3 text-center">
+          <div className="bg-error-50 dark:bg-error-950/40 mx-auto flex h-12 w-12 items-center justify-center rounded-full">
+            <AlertCircle className="text-error-500 h-6 w-6" />
+          </div>
+          <div>
+            <p className="text-foreground font-medium">Không tải được thông tin lead</p>
+            <p className="text-muted-foreground text-sm">
+              Có thể do mất mạng hoặc bạn không có quyền xem lead này.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+            Thử lại
+          </Button>
         </div>
       </div>
     );
@@ -204,7 +216,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 {getInitials(lead.full_name)}
               </AvatarFallback>
             </Avatar>
-            <h2 className="truncate text-sm font-semibold font-display">
+            <h2 className="truncate text-base font-semibold font-display">
               {lead.full_name}
             </h2>
           </div>
@@ -256,23 +268,21 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 Xem
               </Link>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-11 sm:h-7 px-2 text-xs"
-              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-            >
-              <Phone className="h-3.5 w-3.5 mr-1" />
-              Gọi
+            <Button variant="outline" size="sm" className="h-11 sm:h-7 px-2 text-xs" asChild>
+              <a href={`tel:${lead.phone}`}>
+                <Phone className="h-3.5 w-3.5 mr-1" />
+                Gọi
+              </a>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-11 sm:h-7 px-2 text-xs"
-              onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
-            >
-              <span className="font-bold mr-1">Z</span>
-              Zalo
+            <Button variant="outline" size="sm" className="h-11 sm:h-7 px-2 text-xs" asChild>
+              <a
+                href={`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="font-bold mr-1">Z</span>
+                Zalo
+              </a>
             </Button>
           </div>
 
@@ -305,10 +315,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 {lead.email && (
                   <MobileActionSheet.Item
                     icon={Mail}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      window.open(`mailto:${lead.email}`, "_blank");
-                    }}
+                    href={`mailto:${lead.email}`}
+                    onClick={() => setActionSheetOpen(false)}
                   >
                     Gửi email
                   </MobileActionSheet.Item>
@@ -325,7 +333,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     Gán cho cán bộ
                   </MobileActionSheet.Item>
                 )}
-                {lead.assigned_officer && hasManagerAccess && (
+                {lead.assigned_officer && lead.permissions.can_transfer_lead && (
                   <MobileActionSheet.Item
                     icon={UserPlus}
                     onClick={() => {
@@ -336,7 +344,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     Chuyển giao lead
                   </MobileActionSheet.Item>
                 )}
-                {lead.assigned_officer && !hasManagerAccess && (
+                {lead.assigned_officer && lead.permissions.can_request_reassign && (
                   <MobileActionSheet.Item
                     icon={RefreshCcw}
                     onClick={() => {
@@ -374,9 +382,11 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   Chỉnh sửa
                 </DropdownMenuItem>
                 {lead.email && (
-                  <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
-                    <Mail className="mr-2 h-4 w-4" />
-                    Gửi email
+                  <DropdownMenuItem asChild>
+                    <a href={`mailto:${lead.email}`}>
+                      <Mail className="mr-2 h-4 w-4" />
+                      Gửi email
+                    </a>
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
@@ -386,13 +396,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     Gán cho cán bộ
                   </DropdownMenuItem>
                 )}
-                {lead.assigned_officer && hasManagerAccess && (
+                {lead.assigned_officer && lead.permissions.can_transfer_lead && (
                   <DropdownMenuItem onClick={() => setAssignOpen(true)}>
                     <UserPlus className="mr-2 h-4 w-4" />
                     Chuyển giao lead
                   </DropdownMenuItem>
                 )}
-                {lead.assigned_officer && !hasManagerAccess && (
+                {lead.assigned_officer && lead.permissions.can_request_reassign && (
                   <DropdownMenuItem onClick={() => setReassignOpen(true)}>
                     <RefreshCcw className="mr-2 h-4 w-4" />
                     Yêu cầu đổi người phụ trách
@@ -533,9 +543,9 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                       size="sm"
                       variant="outline"
                       className="h-11 sm:h-5 px-2 text-xs sm:text-[10px] border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
-                      onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                      asChild
                     >
-                      Gọi ngay
+                      <a href={`tel:${lead.phone}`}>Gọi ngay</a>
                     </Button>
                   </div>
                 </div>
@@ -595,7 +605,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
 
                   {/* Days in Stage */}
                   <div className="flex items-center justify-between h-5">
-                    <span className="text-muted-foreground">Ngày trong stage:</span>
+                    <span className="text-muted-foreground">Ngày trong giai đoạn:</span>
                     <span className="font-semibold">{lead.days_in_stage ?? 0}</span>
                   </div>
 
