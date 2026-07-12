@@ -720,6 +720,7 @@ async def get_leads(
     is_hot: Optional[bool] = None,
     consultation_status_id: Optional[str] = None,
     include_summary: bool = True,
+    current_user: Optional[models.User] = None,
 ) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
     Lấy danh sách Leads (List View) + optional summary stats.
@@ -759,6 +760,14 @@ async def get_leads(
         order=order,
         **filter_kwargs,
     )
+
+    # Thin-client: gắn cờ hành động query-free cho từng lead (can_assign_lead /
+    # can_transfer_lead / can_request_reassign) để menu card/hàng khớp panel mà
+    # KHỎI fetch chi tiết từng dòng. Chỉ khi có current_user — caller export
+    # truyền None nên bỏ qua. Không truy vấn DB thêm (đọc role + assigned_officer_id).
+    if current_user is not None:
+        for _lead in leads:
+            _lead.permissions = compute_lead_action_permissions(_lead, current_user)
 
     return total_count, leads, summary
 
@@ -4789,6 +4798,9 @@ def compute_lead_action_permissions(
     )
     lead_assigned = lead.assigned_officer_id is not None
     return {
+        # manager/admin gán lead CHƯA có người phụ trách (endpoint /assign =
+        # "Admin/Manager only") → thin-client gate nút "Gán cho cán bộ".
+        "can_assign_lead": is_manager_admin,
         # manager/admin đổi trực tiếp; chỉ khi lead đã có người phụ trách
         "can_transfer_lead": is_manager_admin and lead_assigned,
         # officer ĐƯỢC GIAO lead → xin đổi

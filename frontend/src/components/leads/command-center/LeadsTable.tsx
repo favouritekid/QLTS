@@ -66,7 +66,7 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { LeadActionMenu } from "./LeadActionMenu";
 import type { Lead } from "@/types/lead.types";
-import { LEAD_SOURCE_OPTIONS, getLeadScoreTextColor } from "@/constants";
+import { getLeadSourceLabel, getLeadScoreTextColor } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -153,9 +153,6 @@ const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: stri
 
 const columnHelper = createColumnHelper<Lead>();
 
-const getSourceLabel = (value: string) =>
-  LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
-
 // =============================================================================
 // ROW ACTIONS COMPONENT — dùng chung LeadActionMenu (khớp card + panel)
 // =============================================================================
@@ -176,6 +173,7 @@ function RowActions({ lead, onEdit, onDelete, onAssign }: RowActionsProps) {
       onEdit={onEdit}
       onDelete={onDelete}
       onAssign={onAssign}
+      variant="dropdown"
       sheetTitle={lead.full_name}
       triggerClassName="h-8 w-8 sm:h-8 sm:w-8"
       stopPropagation
@@ -367,7 +365,7 @@ export function LeadsTable({
           if (!source) return <span className="text-muted-foreground">—</span>;
           return (
             <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal">
-              {getSourceLabel(source)}
+              {getLeadSourceLabel(source)}
             </Badge>
           );
         },

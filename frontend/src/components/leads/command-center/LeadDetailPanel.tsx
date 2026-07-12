@@ -26,6 +26,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
@@ -88,6 +89,8 @@ const getInitials = (name: string) => {
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
   const { data: lead, isLoading, isError, refetch } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  // 1 instance duy nhất (panel không phải list) → chọn sheet/dropdown cho menu.
+  const isMobile = useIsMobile();
 
   // ✅ FIX: Calculate days since contact in useEffect to avoid impure Date.now() in render
   // Also prevents hydration mismatch (useState defaults to null, matching SSR)
@@ -275,6 +278,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             onEdit={onEdit}
             onDelete={onDelete}
             onAssign={onAssign}
+            variant={isMobile ? "sheet" : "dropdown"}
             sheetTitle="Thao tác"
           />
         </div>

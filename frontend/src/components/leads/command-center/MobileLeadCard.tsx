@@ -20,7 +20,7 @@ import { LeadActionMenu } from "./LeadActionMenu";
 import { SwipeToCall } from "@/components/common/SwipeToCall";
 import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
-import { LEAD_SOURCE_OPTIONS } from "@/constants";
+import { getLeadSourceLabel } from "@/constants";
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -34,9 +34,6 @@ interface MobileLeadCardProps {
   onAssign: (lead: Lead) => void;
   showCheckbox?: boolean;
 }
-
-const getSourceLabel = (value: string) =>
-  LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
 
 export function MobileLeadCard({
   lead,
@@ -55,7 +52,8 @@ export function MobileLeadCard({
 
   // Màu trạng thái tư vấn dồn vào CHẤM ● (chữ để foreground cho dễ đọc — nhiều
   // color_code rất sáng như #FACC15/#FBBF24 sẽ không đọc được nếu làm màu chữ).
-  const statusColor = sanitizeColorCode(lead.consultation_status?.color_code);
+  // fallback "" (KHÔNG mặc định #6B7280) để nhánh dot trung tính theo-theme sống.
+  const statusColor = sanitizeColorCode(lead.consultation_status?.color_code, "");
   const statusName = lead.consultation_status?.name ?? "Chưa tư vấn";
   const owner = lead.assigned_officer?.full_name;
   const major =
@@ -71,6 +69,10 @@ export function MobileLeadCard({
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
+          // Chỉ act khi CHÍNH card được focus — không nuốt Enter/Space của nút
+          // menu ⋮ / checkbox con (chúng bubble lên đây; guard target tránh
+          // preventDefault chặn kích hoạt của chúng).
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             onSelect(lead);
@@ -134,6 +136,7 @@ export function MobileLeadCard({
               onEdit={onEdit}
               onDelete={onDelete}
               onAssign={onAssign}
+              variant="sheet"
               sheetTitle={lead.full_name}
               triggerClassName="h-11 w-11 sm:h-11 sm:w-11 -my-2 -mr-2"
               stopPropagation
@@ -179,7 +182,7 @@ export function MobileLeadCard({
             )}
             <span className="text-muted-foreground/40">·</span>
             <span className="shrink-0 text-muted-foreground/80">
-              {getSourceLabel(lead.source)}
+              {getLeadSourceLabel(lead.source)}
             </span>
           </div>
         </div>
