@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { AmountDisplay } from "./AmountDisplay"
 import type { VietQRResponse } from "@/types/finance.types"
 import { toast } from "sonner"
+import { copyToClipboard } from "@/lib/clipboard"
 
 interface VietQRDisplayProps {
   data?: VietQRResponse
@@ -18,8 +19,8 @@ interface VietQRDisplayProps {
 
 export function VietQRDisplay({ data, isLoading, error, onRetry }: VietQRDisplayProps) {
   const copy = React.useCallback(async (value: string, label: string) => {
-    await navigator.clipboard.writeText(value)
-    toast.success(`Đã sao chép ${label}`)
+    if (await copyToClipboard(value)) toast.success(`Đã sao chép ${label}`)
+    else toast.error("Không sao chép được")
   }, [])
 
   return (

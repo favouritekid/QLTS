@@ -70,6 +70,7 @@ import { LeadInfoTabs } from "./LeadInfoTabs";
 import { LeadConsultSection } from "@/components/leads/LeadConsultSection";
 import { WorkflowBreadcrumb } from "@/components/common";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { copyToClipboard } from "@/lib/clipboard";
 import { getLeadScoreLabel, getLeadScoreTextColor } from "@/constants";
 import type { LeadDetail, TimelineItem, LeadInsights } from "@/types/lead.types";
 
@@ -105,14 +106,11 @@ export function LeadDetailClient({ leadId, initialData, initialTimeline, initial
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
 
-  // Copy phone number to clipboard
+  // Copy phone number to clipboard (fallback execCommand khi HTTP/insecure)
   const handleCopyPhone = async (phone: string) => {
-    try {
-      await navigator.clipboard.writeText(phone);
+    if (await copyToClipboard(phone)) {
       setPhoneCopied(true);
       setTimeout(() => setPhoneCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy phone:", err);
     }
   };
 
