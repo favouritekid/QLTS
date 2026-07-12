@@ -386,7 +386,11 @@ export function DateTimePicker({
             )}
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-auto p-0" align="start">
+        <PopoverContent
+          className="w-auto max-w-[calc(100vw-1rem)] overflow-auto p-0"
+          align="start"
+          collisionPadding={8}
+        >
           {/* Input display */}
           <div className="p-3 border-b">
             <Input
@@ -397,9 +401,11 @@ export function DateTimePicker({
             />
           </div>
 
-          <div className="flex">
+          {/* Xếp DỌC trên mobile (calendar trên, giờ dưới) để không tràn màn ~390px;
+              NGANG (side-by-side) từ sm trở lên. */}
+          <div className="flex flex-col sm:flex-row">
             {/* Calendar */}
-            <div className="border-r">
+            <div className="border-b sm:border-b-0 sm:border-r">
               <Calendar
                 mode="single"
                 selected={value || undefined}
@@ -428,8 +434,9 @@ export function DateTimePicker({
               </div>
             </div>
 
-            {/* Time picker columns */}
-            <div className="flex divide-x">
+            {/* Time picker columns — trên mobile mỗi cột flex-1 trải đều bằng bề
+                rộng calendar cho cân đối; desktop giữ bề rộng tự nhiên. */}
+            <div className="flex divide-x [&>div]:flex-1 sm:[&>div]:flex-none">
               {use12Hour ? (
                 <>
                   {/* Hour (12-hour) */}
