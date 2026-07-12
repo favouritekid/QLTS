@@ -41,7 +41,7 @@ import {
 } from "@/components/ui/dialog";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
 import { cn, sanitizeColorCode } from "@/lib/utils";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -239,6 +239,21 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   const [reschedulingConsultation, setReschedulingConsultation] = useState<Consultation | null>(null);
   const [rescheduleDate, setRescheduleDate] = useState<Date | undefined>(undefined);
 
+  // Sắp xếp mới→cũ MỘT lần theo dữ liệu. useMemo đặt ở đầu component (trước các
+  // early return) để tuân rules-of-hooks; guard `timeline` vì hook chạy TRƯỚC nhánh
+  // `if (!timeline)`. Tránh re-sort + cấp phát Date mỗi lần re-render do state dialog.
+  const sortedTimeline = useMemo(
+    () =>
+      timeline
+        ? [...(timeline as TimelineItem[])].sort(
+            (a, b) =>
+              new Date(b.timestamp || 0).getTime() -
+              new Date(a.timestamp || 0).getTime()
+          )
+        : [],
+    [timeline]
+  );
+
   if (isLoading || !timeline) {
     return (
       <div className="space-y-4">
@@ -288,9 +303,8 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           const lossReasonCode = consultData?.loss_reason_code;
           const lossReasonNote = consultData?.loss_reason_note;
 
-          const compactDataId = isConsultation
-            ? (eventData as { id?: number })?.id
-            : isAssignment
+          const compactDataId =
+            isConsultation || isAssignment
               ? (eventData as { id?: number })?.id
               : undefined;
           const compactKey = `${event.type}-${event.timestamp}-${compactDataId ?? index}`;
@@ -400,11 +414,8 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   // scans better than date dividers in both the 3-item panel and the long sheet.
   const hasLimit = maxItems && maxItems > 0 && !showAll;
   const totalItems = timeline.length;
-  const itemsToShow = hasLimit ? maxItems : totalItems;
-  const sortedTimeline = [...(timeline as TimelineItem[])].sort(
-    (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
-  );
-  const visibleTimeline = hasLimit ? sortedTimeline.slice(0, itemsToShow) : sortedTimeline;
+  // sortedTimeline đã memo ở đầu component (rules-of-hooks).
+  const visibleTimeline = hasLimit ? sortedTimeline.slice(0, maxItems) : sortedTimeline;
   const remainingItems = Math.max(0, totalItems - visibleTimeline.length);
 
   // Quyền thao tác lịch hẹn: officer chỉ sửa được consultation MỚI NHẤT (khớp
@@ -570,9 +581,8 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             actorName = event.actor?.full_name || "";
           }
 
-          const itemId = isConsultation
-            ? (eventData as { id?: number })?.id
-            : isAssignment
+          const itemId =
+            isConsultation || isAssignment
               ? (eventData as { id?: number })?.id
               : undefined;
           const itemKey = `${event.type}-${event.timestamp}-${itemId ?? index}`;

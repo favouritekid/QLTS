@@ -45,6 +45,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import type { ProgramOffering } from "@/types/organization.types";
+import { DEGREE_LEVEL_ABBR } from "@/constants";
 
 // =============================================================================
 // TYPES
@@ -94,15 +95,10 @@ const DEGREE_LEVEL_LABELS: Record<string, string> = {
   "Trung cấp": "📖 TRUNG CẤP",
 };
 
-// Compact bậc cho nhãn TRIGGER (giá trị đã chọn). Dropdown đã phân nhóm theo
-// bậc, nhưng khi đóng lại trigger mất ngữ cảnh nhóm → "Công nghệ ô tô" không
-// phân biệt được TC vs CĐ (2 offering cùng tên khác bậc). Thêm bậc rút gọn vào
-// nhãn trigger để disambiguate.
-const DEGREE_LEVEL_SHORT: Record<string, string> = {
-  "Đại học": "ĐH",
-  "Cao đẳng": "CĐ",
-  "Trung cấp": "TC",
-};
+// Bậc rút gọn cho nhãn TRIGGER (giá trị đã chọn): dropdown phân nhóm theo bậc,
+// nhưng khi đóng lại trigger mất ngữ cảnh nhóm → "Công nghệ ô tô" không phân biệt
+// được TC vs CĐ (2 offering cùng tên khác bậc). Dùng CHUNG DEGREE_LEVEL_ABBR với
+// card/bảng lead (undefined khi bậc lạ → bỏ hậu tố, giữ hành vi cũ).
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -136,7 +132,7 @@ function processOfferings(
       const degreeLevel = offering.program?.degree_level || "Khác";
       const offeringType = offering.offering_type || "Chính quy";
 
-      const shortLevel = DEGREE_LEVEL_SHORT[degreeLevel];
+      const shortLevel = DEGREE_LEVEL_ABBR[degreeLevel];
       return {
         ...offering,
         // Display format trong dropdown: "Ngành - Loại hình" (bậc đã ở group header)

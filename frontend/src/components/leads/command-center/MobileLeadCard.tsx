@@ -36,7 +36,11 @@ interface MobileLeadCardProps {
   showCheckbox?: boolean;
 }
 
-export function MobileLeadCard({
+// React.memo: list mobile không virtualize nên mỗi lần chọn lead (setSelectedLeadId
+// ở LeadsClient) re-render CẢ danh sách. leads array ref ổn định (React Query
+// structural sharing) → memo bỏ qua card không đổi, tránh chạy lại format ngày /
+// isLeadOverdue / subtree framer-motion cho từng card.
+export const MobileLeadCard = React.memo(function MobileLeadCard({
   lead,
   isSelected,
   isChecked,
@@ -110,7 +114,11 @@ export function MobileLeadCard({
       >
         {/* Checkbox bulk-select (hiếm khi bật trên mobile) */}
         {showCheckbox && (
-          <div className="shrink-0 pt-0.5" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="shrink-0 pt-0.5"
+            data-swipe-ignore
+            onClick={(e) => e.stopPropagation()}
+          >
             <Checkbox
               checked={isChecked}
               onCheckedChange={(c) => onCheck?.(c === true)}
@@ -182,7 +190,7 @@ export function MobileLeadCard({
       </div>
     </SwipeToCall>
   );
-}
+});
 
 // =============================================================================
 // MOBILE LEAD LIST - Container for card list with bulk selection

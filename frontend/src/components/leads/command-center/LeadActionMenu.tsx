@@ -95,8 +95,12 @@ export function LeadActionMenu({
     setReassignOpen(true);
   };
 
-  // Thin-client: đọc THẲNG cờ backend (không && lại với hasOfficer — backend đã
-  // gate can_transfer/reassign kèm điều kiện lead đã gán rồi).
+  // can_transfer_lead / can_request_reassign: đọc THẲNG cờ backend (BE đã gate KÈM
+  // điều kiện "lead đã có người phụ trách"). RIÊNG can_assign_lead backend chỉ
+  // role-gate (endpoint /assign = admin/manager-only, KHÔNG gate assigned-state),
+  // nên "chỉ hiện nút Gán khi lead chưa có người" là điều kiện HIỂN THỊ ghép ở FE
+  // qua !hasOfficer. (Muốn thuần thin-client thì đẩy `and not lead_assigned` vào
+  // can_assign_lead ở backend — đổi contract + test, defer chờ owner chốt.)
   const hasOfficer = !!lead.assigned_officer;
   const canAssign = !hasOfficer && !!lead.permissions?.can_assign_lead;
   const canTransfer = !!lead.permissions?.can_transfer_lead;
@@ -253,6 +257,10 @@ export function LeadActionMenu({
   return (
     <span
       style={{ display: "contents" }}
+      // data-swipe-ignore: nằm trong card có SwipeToCall (bấm-giữ-kéo-gọi), báo cho
+      // container BỎ QUA pointerdown trên trigger/menu-item để long-press mở menu
+      // không bị nuốt thành cử chỉ gọi. Vô hại ở ngữ cảnh không có SwipeToCall.
+      data-swipe-ignore
       onClick={stopPropagation ? (e) => e.stopPropagation() : undefined}
     >
       {menu}

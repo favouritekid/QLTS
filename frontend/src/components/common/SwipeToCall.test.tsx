@@ -112,6 +112,27 @@ describe("SwipeToCall — bấm giữ rồi kéo phải để gọi", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it("bấm-giữ trên control [data-swipe-ignore] (menu ⋮ / checkbox) → KHÔNG arm, click con vẫn chạy", () => {
+    // Regression: trước đây long-press ≥400ms trên nút con vẫn arm gesture rồi
+    // onClickCapture nuốt tap → menu không mở / checkbox không tick.
+    const onCall = vi.fn();
+    const onChild = vi.fn();
+    const utils = render(
+      <SwipeToCall phone="0900000000" onCall={onCall}>
+        <button data-swipe-ignore onClick={onChild}>
+          menu
+        </button>
+      </SwipeToCall>
+    );
+    const child = utils.getByText("menu");
+    down(child, 0, 0);
+    vi.advanceTimersByTime(400); // vượt ARM_MS mà KHÔNG được khoá chế độ kéo
+    up(child);
+    fireEvent.click(child);
+    expect(onCall).not.toHaveBeenCalled();
+    expect(onChild).toHaveBeenCalledTimes(1);
+  });
+
   it("không có SĐT → render children, bỏ qua cử chỉ", () => {
     const onCall = vi.fn();
     const { getByText, root } = (() => {

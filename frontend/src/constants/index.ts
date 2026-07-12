@@ -24,6 +24,7 @@ export {
   getLeadScoreLabel,
   getLeadScoreLabelShort,
   getEducationLevelLabel,
+  DEGREE_LEVEL_ABBR,
   getDegreeLevelAbbr,
   isComplexStatus,
   isSchedulableStatus,

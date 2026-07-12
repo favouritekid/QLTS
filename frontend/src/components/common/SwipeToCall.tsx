@@ -82,13 +82,17 @@ export function SwipeToCall({
     }
   }, []);
 
-  const dims = React.useCallback(() => {
-    // offsetWidth=0 (jsdom / chưa layout) → fallback 320 để logic test được.
-    const w = containerRef.current?.offsetWidth || 320;
-    return { max: w * REVEAL_RATIO, threshold: w * THRESHOLD_RATIO };
-  }, []);
+  // Kích thước kéo chốt 1 LẦN lúc arm (bề rộng card cố định suốt cử chỉ) → khỏi
+  // đọc offsetWidth (layout read) mỗi pointermove trên hot path.
+  // offsetWidth=0 (jsdom / chưa layout) → fallback 320 để logic test được.
+  const dimsRef = React.useRef({
+    max: 320 * REVEAL_RATIO,
+    threshold: 320 * THRESHOLD_RATIO,
+  });
 
-  const reset = React.useCallback(() => {
+  // Hàm thường (không useCallback): chỉ được gọi bởi các inline pointer-handler tạo
+  // mới mỗi render, không phải dep của consumer memo hoá nào — wrap chỉ tốn bookkeeping.
+  const reset = () => {
     clearTimer();
     armedRef.current = false;
     draggingRef.current = false;
@@ -97,17 +101,21 @@ export function SwipeToCall({
     setPast(false);
     if (prefersReduced) x.set(0);
     else animate(x, 0, { type: "spring", stiffness: 500, damping: 40 });
-  }, [clearTimer, prefersReduced, x]);
+  };
 
-  const triggerCall = React.useCallback(() => {
+  const triggerCall = () => {
     if (!phone) return;
     if (onCall) onCall(phone);
     else if (typeof window !== "undefined") window.location.href = `tel:${phone}`;
-  }, [phone, onCall]);
+  };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!canSwipe) return;
     if (e.pointerType === "mouse" && e.button !== 0) return; // bỏ chuột phải/giữa
+    // Bấm vào control con TỰ-XỬ-LÝ (menu ⋮, checkbox…): pointerdown của chúng bubble
+    // lên đây; nếu vẫn arm gesture thì onClickCapture sẽ nuốt luôn tap mở menu / tick
+    // chọn (giữ ≥400ms). Bỏ qua mọi subtree đánh dấu [data-swipe-ignore].
+    if ((e.target as HTMLElement).closest?.("[data-swipe-ignore]")) return;
     startRef.current = { x: e.clientX, y: e.clientY };
     // Xoá cờ chặn-click còn sót từ gesture trước bị huỷ (tránh nuốt oan tap mới).
     suppressClickRef.current = false;
@@ -120,6 +128,9 @@ export function SwipeToCall({
     clearTimer();
     timerRef.current = setTimeout(() => {
       // Đủ ARM_MS mà chưa huỷ (không cuộn/tap) → khoá chế độ kéo.
+      // Chốt kích thước kéo 1 lần (bề rộng card cố định từ đây tới hết cử chỉ).
+      const w = containerRef.current?.offsetWidth || 320;
+      dimsRef.current = { max: w * REVEAL_RATIO, threshold: w * THRESHOLD_RATIO };
       armedRef.current = true;
       suppressClickRef.current = true; // chặn mở-chi-tiết sau long-press
       setArmed(true);
@@ -145,7 +156,7 @@ export function SwipeToCall({
     }
     // Đã armed → kéo phải, kẹp trong [0, max].
     draggingRef.current = true;
-    const { max, threshold } = dims();
+    const { max, threshold } = dimsRef.current;
     const nx = Math.max(0, Math.min(dx, max));
     x.set(nx);
     const p = nx >= threshold;
@@ -168,7 +179,7 @@ export function SwipeToCall({
     }
     pointerIdRef.current = null;
     if (armedRef.current && draggingRef.current) {
-      const { threshold } = dims();
+      const { threshold } = dimsRef.current;
       if (x.get() >= threshold) triggerCall();
     }
     reset();
