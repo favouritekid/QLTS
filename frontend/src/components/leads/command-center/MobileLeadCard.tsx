@@ -23,6 +23,14 @@ import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
 import { getLeadSourceLabel } from "@/constants";
 
+// Viết tắt trình độ ngành cho gọn mặt card (fallback nhãn đầy nếu gặp giá trị lạ).
+const DEGREE_ABBR: Record<string, string> = {
+  "Đại học": "ĐH",
+  "Cao đẳng": "CĐ",
+  "Trung cấp": "TC",
+  "Sơ cấp": "SC",
+};
+
 interface MobileLeadCardProps {
   lead: Lead;
   isSelected?: boolean;
@@ -64,7 +72,8 @@ export function MobileLeadCard({
   // (KHÁC education_level của lead — gần như trống). Ghép bằng " " đọc tự nhiên
   // ("Cao đẳng Công nghệ ô tô"); rỗng cả hai → "Chưa chọn ngành".
   const degreeLevel = lead.offering?.program?.degree_level || null;
-  const eduMajor = [degreeLevel, major].filter(Boolean).join(" ") || "Chưa chọn ngành";
+  const degreeShort = degreeLevel ? DEGREE_ABBR[degreeLevel] ?? degreeLevel : null;
+  const eduMajor = [degreeShort, major].filter(Boolean).join(" ") || "Chưa chọn ngành";
   // Overdue tính client theo next_activity_at (cache is_overdue có thể trễ ~14h).
   const overdue = isLeadOverdue({ next_activity_at: lead.next_activity_at ?? null });
   const selected = isSelected || isChecked;
