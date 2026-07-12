@@ -13,6 +13,10 @@ import { useRouter } from "next/navigation"
 
 import { admissionsApi } from "@/lib/api/admissions"
 import { feesKeys } from "@/hooks/finance/useFees"
+import { invoicesKeys } from "@/hooks/finance/useInvoices"
+import { refundsKeys } from "@/hooks/finance/useRefunds"
+import { leadsKeys } from "@/hooks/useLeads"
+import { pipelineKeys } from "@/hooks/usePipeline"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
@@ -317,6 +321,97 @@ export function useResubmitAdmission(id: number) {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
         context: "nộp lại hồ sơ"
+      })
+    },
+  })
+}
+
+/**
+ * Withdraw admission profile (Officer/Manager/Admin).
+ *
+ * POSTs reason + version to ``/admissions/{id}/withdraw``. Response status is
+ * ``withdrawn`` (settled immediately) OR ``withdrawal_pending`` (refundable
+ * tuition was collected → BE auto-files refund requests; settles to withdrawn
+ * once the refund is processed). Invalidates admissions + finance-by-profile
+ * (a refund request may have been created).
+ */
+export function useWithdrawAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.withdrawAdmission(id, data),
+    onSuccess: (data) => {
+      if (data.status === "withdrawal_pending") {
+        toast.info("Đã ghi nhận rút hồ sơ — đang chờ hoàn học phí", {
+          description: "Hồ sơ chỉ rút xong khi hoàn tiền hoàn tất.",
+        })
+      } else {
+        toast.success("Đã rút hồ sơ")
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      // Withdraw STEP 2 cancels every unpaid fee → cascades to its invoices.
+      // Refresh the fee views the admission UI actually reads (profileSummary
+      // drives the Tuition tab + "Còn nợ" badge; byProfile has no consumer but
+      // kept for parity) + the fees/invoices workspaces.
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: invoicesKeys.all })
+      // BE auto-files pending refund requests for every verified refundable
+      // payment (admission_service.withdraw STEP 1). Refresh the finance refunds
+      // list + dashboard so an already-open finance page shows the new requests
+      // (mirrors useCreateRefund).
+      queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
+      // Direct-withdraw (no refundable money) finalizes immediately and projects
+      // the lead to sts08 (withdrawn), so refresh the lead list + pipeline board.
+      // The withdrawal_pending path HOLDS the lead (no move) → only the withdrawn
+      // path needs this; its eventual finalize refreshes via useProcessRefund.
+      if (data.status === "withdrawn") {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.lists() })
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.all })
+      }
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "rút hồ sơ",
+      })
+    },
+  })
+}
+
+/**
+ * Cancel a pending withdrawal (Admin) — revert ``withdrawal_pending`` → draft.
+ *
+ * Used when the refund tied to a pending withdrawal was rejected, so the
+ * profile is not stuck awaiting a refund that will never complete.
+ */
+export function useCancelWithdrawal(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string }) =>
+      admissionsApi.cancelWithdrawal(id, data),
+    onSuccess: () => {
+      toast.success("Đã hủy quy trình rút — hồ sơ trở về nháp")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.all })
+      queryClient.invalidateQueries({ queryKey: feesKeys.byProfile(id) })
+      queryClient.invalidateQueries({ queryKey: feesKeys.profileSummary(id) })
+      // BE rejects every open (pending) refund auto-filed by the withdraw
+      // orchestrator before reverting to draft (admission_service.cancel_withdrawal
+      // F1 → reject_open_refunds_for_profile). Refresh the finance refunds list +
+      // dashboard so an already-open finance page drops the now-rejected requests.
+      queryClient.invalidateQueries({ queryKey: refundsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: ["finance", "dashboard"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "hủy quy trình rút",
       })
     },
   })

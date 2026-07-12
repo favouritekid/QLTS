@@ -13,6 +13,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
 import { admissionsKeys } from "@/hooks/admissions/useAdmissions";
 import { feesKeys } from "@/hooks/finance/useFees";
+import { invoicesKeys } from "@/hooks/finance/useInvoices";
+import { refundsKeys } from "@/hooks/finance/useRefunds";
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
 import { pipelineKeys } from "@/hooks/usePipeline";
 import { isSafeUrl } from "@/lib/utils";
@@ -647,6 +649,18 @@ export function SocketHandler() {
       // detail gets a targeted refresh too so the open page updates instantly.
       queryClient.invalidateQueries({ queryKey: admissionsKeys.all });
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(data.application_id) });
+      // Cross-tab finance sync: the withdrawal-finalize transition
+      // (→ 'withdrawn') reverses/cancels fees, reopens-then-cancels invoices and
+      // settles refunds server-side. Without this, another user's open finance
+      // views (fees / invoices / refunds / dashboard + the admission Tuition tab)
+      // stay stale. Gated on 'withdrawn' so ordinary status changes don't trigger
+      // a finance refetch storm.
+      if (data.new_status === "withdrawn") {
+        queryClient.invalidateQueries({ queryKey: feesKeys.all });
+        queryClient.invalidateQueries({ queryKey: invoicesKeys.all });
+        queryClient.invalidateQueries({ queryKey: refundsKeys.lists() });
+        queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all });
+      }
       // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
@@ -678,7 +692,9 @@ export function SocketHandler() {
       queryClient.invalidateQueries({ queryKey: financeDashboardKeys.all });
       if (data.lead_stage_changed) {
         queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-        queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline() });
+        // pipelineKeys.all — fullPipeline() would be a no-op invalidation
+        // (trailing undefined fails React Query's partial match).
+        queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
       }
     };
 

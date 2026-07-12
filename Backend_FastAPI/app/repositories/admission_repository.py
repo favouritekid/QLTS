@@ -780,6 +780,12 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         )
         enrolled_count = status_counts.get("enrolled", 0)
         rejected_count = status_counts.get("rejected", 0)
+        # F6: surface the withdrawal states as their own buckets — before this
+        # they were counted in ``total`` but had no named bucket, so the returned
+        # counts did not sum to total_profiles and the withdrawal cohort was a
+        # silent orphan in any breakdown that trusts these fields.
+        withdrawn_count = status_counts.get("withdrawn", 0)
+        withdrawal_pending_count = status_counts.get("withdrawal_pending", 0)
         conversion_rate = round((enrolled_count / total) * 100, 1) if total > 0 else 0.0
 
         return {
@@ -789,6 +795,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             "approved_count": approved_count,
             "enrolled_count": enrolled_count,
             "rejected_count": rejected_count,
+            "withdrawn_count": withdrawn_count,
+            "withdrawal_pending_count": withdrawal_pending_count,
             "conversion_rate": conversion_rate,
             "avg_completion": 0.0,
         }
@@ -919,11 +927,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             )
             .where(ProfileDocument.graduation_proof_kind == "provisional_cert")
             # Review F3 — chỉ nhắc hồ sơ CÒN actionable: bỏ withdrawn (thí sinh
-            # rút) + dropped (is_dropped=True, status vẫn 'enrolled'). GIỮ
-            # enrolled-không-dropped (đúng use case: nhập học với giấy tạm thời,
-            # vẫn nợ bằng) + rejected (có thể resubmit; reject_document đã clear
-            # field khi reject ở tầng doc).
-            .where(models.AdmissionProfile.status != "withdrawn")
+            # rút) + withdrawal_pending (PR-B: đang rút, chờ hoàn tiền) + dropped
+            # (is_dropped=True, status vẫn 'enrolled'). GIỮ enrolled-không-dropped
+            # (đúng use case: nhập học với giấy tạm thời, vẫn nợ bằng) + rejected
+            # (có thể resubmit; reject_document đã clear field khi reject ở tầng doc).
+            .where(
+                models.AdmissionProfile.status.notin_(
+                    ("withdrawn", "withdrawal_pending")
+                )
+            )
             .where(models.AdmissionProfile.is_dropped.isnot(True))
             # Exclude profiles whose parent Lead is soft-deleted (don't remind
             # diploma debt for leads that have been removed).

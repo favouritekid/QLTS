@@ -121,6 +121,17 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
     bannerMessage: 'Hồ sơ đã được rút lại.',
     allowedActions: [],
   },
+  // PR-B: intermediate "Chờ hoàn để rút" — a refund is being processed; the
+  // profile settles to withdrawn only once the money is returned.
+  withdrawal_pending: {
+    label: 'Chờ hoàn để rút',
+    badgeVariant: 'outline',
+    badgeColor: 'bg-amber-50 text-amber-700',
+    showBanner: true,
+    bannerType: 'warning',
+    bannerMessage: 'Hồ sơ có học phí đã thu — đang chờ hoàn tiền trước khi rút. Chỉ rút xong khi hoàn tất.',
+    allowedActions: [],
+  },
   // Phase 3 PR-3D-A Sub-3: 4 NEW multi-NV states (Phase 1 #11 DB CHECK
   // extension, choice-engine workflow). Status badge config trong
   // `status-badge.config.ts` đã có entries từ Phase 1 — đây là
@@ -184,6 +195,7 @@ export const ADMISSION_STATUS_DOT_COLOR: Record<string, string> = {
   enrolled: 'bg-blue-500',
   rejected: 'bg-error-500',
   withdrawn: 'bg-gray-400',
+  withdrawal_pending: 'bg-amber-500',
   result_published: 'bg-sky-500',
 }
 

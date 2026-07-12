@@ -135,6 +135,7 @@ from .finance import (
     PaymentStatusEnum,
     TransactionTypeEnum,
     RefundStatusEnum,
+    RefundSourceEnum,
     OverpaymentStatusEnum,
     ResolutionTypeEnum,
     # Models
@@ -280,6 +281,7 @@ __all__ = [
     "PaymentStatusEnum",
     "TransactionTypeEnum",
     "RefundStatusEnum",
+    "RefundSourceEnum",
     "OverpaymentStatusEnum",
     "ResolutionTypeEnum",
     # Models

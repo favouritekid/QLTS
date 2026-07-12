@@ -33,7 +33,7 @@ export const ADMISSION_STATUS_TABS: ReadonlyArray<{
   { key: "waitlisted", label: "Chờ ghế", statuses: ["waitlisted"] },
   { key: "confirmed", label: "Đã xác nhận", statuses: ["confirmed"] },
   { key: "enrolled", label: "Đã nhập học", statuses: ["enrolled"] },
-  { key: "rejected", label: "Từ chối", statuses: ["rejected", "withdrawn"] },
+  { key: "rejected", label: "Từ chối", statuses: ["rejected", "withdrawn", "withdrawal_pending"] },
 ]
 
 export const ADMISSIONS_DEFAULT_PAGE_SIZE = 20

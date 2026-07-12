@@ -18,6 +18,9 @@ export type PaymentStatus = "pending" | "verified" | "rejected" | "refunded"
 export type PaymentIntentStatus = "created" | "pending" | "completed" | "failed" | "expired" | "cancelled"
 export type OverpaymentStatus = "pending" | "applied" | "refunded" | "cancelled"
 export type RefundStatus = "pending" | "approved" | "rejected" | "refunded"
+// Mirrors backend RefundSourceEnum. Only `withdrawal` refunds are auto-rejected
+// when a pending withdrawal is cancelled.
+export type RefundSource = "withdrawal" | "manual" | "overpayment"
 export type TransactionType = "payment" | "refund" | "adjustment" | "waive" | "penalty" | "reversal"
 export type ResolutionType = "apply_to_next" | "refund" | "write_off"
 
@@ -397,6 +400,7 @@ export interface RefundRequest {
   amount: string
   reason: string
   status: RefundStatus
+  source: RefundSource
   requested_at: string
   requested_by_id: number
   approved_at: string | null

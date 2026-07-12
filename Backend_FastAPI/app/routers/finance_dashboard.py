@@ -166,7 +166,15 @@ async def get_dashboard_stats(
         )
         .join(models.AdmissionProfile)
         .join(models.Lead)
-        .where(Fee.status.in_(pending_fees_statuses))
+        .where(
+            Fee.status.in_(pending_fees_statuses),
+            # F4: a withdrawn / awaiting-refund profile owes nothing — its
+            # leftover 'invoiced'/'partial' fees (e.g. a refund-reopened invoice
+            # not yet cancelled) must NOT count as a receivable on the dashboard.
+            models.AdmissionProfile.status.notin_(
+                ("withdrawn", "withdrawal_pending")
+            ),
+        )
     )
     if unit_id is not None:
         pending_fees_query = pending_fees_query.where(models.Lead.unit_id == unit_id)
@@ -265,6 +273,39 @@ async def get_dashboard_stats(
         period_query = period_query.where(models.Lead.unit_id == unit_id)
     result = await db.execute(period_query)
     period_collections = Decimal(str(result.scalar() or 0))
+
+    # 5.9. F3 — net out PROCESSED refunds so "collections" match
+    # AccountingPeriod.net_revenue (a refunded payment is not revenue; the gross
+    # sums above still count it because process_approved_refund leaves
+    # payment.status='verified'). Refunds are matched by ``refunded_at`` within
+    # the SAME window as each collection metric. Net can go slightly negative in
+    # a window where refunds of prior-period payments exceed new collections —
+    # that is the correct net-outflow figure, left unclamped.
+    async def _refunds_processed(*conds) -> Decimal:
+        rq = (
+            select(func.coalesce(func.sum(RefundRequest.amount), 0))
+            .join(Payment, RefundRequest.payment_id == Payment.id)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .join(Fee, Invoice.fee_id == Fee.id)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(RefundRequest.status == "refunded", *conds)
+        )
+        if unit_id is not None:
+            rq = rq.where(models.Lead.unit_id == unit_id)
+        return Decimal(str((await db.execute(rq)).scalar() or 0))
+
+    today_collections -= await _refunds_processed(
+        RefundRequest.refunded_at >= today_start,
+        RefundRequest.refunded_at <= today_end,
+    )
+    monthly_collections -= await _refunds_processed(
+        func.date(RefundRequest.refunded_at) >= month_start,
+    )
+    period_collections -= await _refunds_processed(
+        RefundRequest.refunded_at >= period_start_dt,
+        RefundRequest.refunded_at <= period_end_dt,
+    )
 
     # 6. Pending overpayments count
     overpayments_query = (

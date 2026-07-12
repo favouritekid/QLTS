@@ -25,8 +25,8 @@ class TestAdmissionStatusEnum:
     """Test AdmissionStatus enum values."""
 
     def test_all_statuses_defined(self):
-        """Verify all 14 statuses defined — 10 legacy + 4 Phase 3 multi-NV
-        (phase1_11 DB CHECK extend, plan v0.7 PR-3B).
+        """Verify all 15 statuses defined — 10 legacy + 4 Phase 3 multi-NV
+        (phase1_11 DB CHECK extend) + 1 PR-B refund-pending state.
         """
         expected_statuses = {
             # Legacy 10-state
@@ -45,6 +45,8 @@ class TestAdmissionStatusEnum:
             "result_published",
             "admitted",
             "waitlisted",
+            # PR-B intermediate refund-pending state
+            "withdrawal_pending",
         }
         actual_statuses = {status.value for status in AdmissionStatus}
         assert actual_statuses == expected_statuses
@@ -60,48 +62,53 @@ class TestAllowedTransitions:
     """Test ALLOWED_TRANSITIONS state machine map."""
 
     def test_draft_transitions(self):
-        """DRAFT can transition to SUBMITTED or WITHDRAWN."""
+        """DRAFT can transition to SUBMITTED, WITHDRAWN or WITHDRAWAL_PENDING."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.DRAFT] == {
             AdmissionStatus.SUBMITTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.WITHDRAWAL_PENDING,  # PR-B
         }
 
     def test_submitted_transitions(self):
-        """SUBMITTED: legacy 4 + REVIEWING (Phase 3 T2) + DRAFT (T17 PR-3C)."""
+        """SUBMITTED: legacy 4 + REVIEWING (T2) + DRAFT (T17) + WITHDRAWAL_PENDING."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.SUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.WITHDRAWAL_PENDING,  # PR-B
             AdmissionStatus.REVIEWING,
             AdmissionStatus.DRAFT,  # T17 PR-3C Sub-3.5
         }
 
     def test_rejected_transitions(self):
-        """REJECTED: legacy 2 + DRAFT (T17 PR-3C Sub-3.5)."""
+        """REJECTED: legacy 2 + DRAFT (T17) + WITHDRAWAL_PENDING (PR-B)."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REJECTED] == {
             AdmissionStatus.RESUBMITTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.WITHDRAWAL_PENDING,  # PR-B
             AdmissionStatus.DRAFT,
         }
 
     def test_resubmitted_transitions(self):
-        """RESUBMITTED: legacy 4 + REVIEWING + DRAFT (T17)."""
+        """RESUBMITTED: legacy 4 + REVIEWING + DRAFT (T17) + WITHDRAWAL_PENDING."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.RESUBMITTED] == {
             AdmissionStatus.APPROVED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.REVISION_REQUESTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.WITHDRAWAL_PENDING,  # PR-B
             AdmissionStatus.REVIEWING,
             AdmissionStatus.DRAFT,
         }
 
     def test_revision_requested_transitions(self):
-        """REVISION_REQUESTED: legacy 3 + REVIEWING (T4) + DRAFT (T17)."""
+        """REVISION_REQUESTED: legacy 3 + REVIEWING (T4) + DRAFT (T17) + WITHDRAWAL_PENDING."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.REVISION_REQUESTED] == {
             AdmissionStatus.RESUBMITTED,
             AdmissionStatus.REJECTED,
             AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.WITHDRAWAL_PENDING,  # PR-B
             AdmissionStatus.REVIEWING,
             AdmissionStatus.DRAFT,
         }
@@ -135,6 +142,26 @@ class TestAllowedTransitions:
     def test_withdrawn_transitions(self):
         """WITHDRAWN is final state - no transitions allowed."""
         assert ALLOWED_TRANSITIONS[AdmissionStatus.WITHDRAWN] == set()
+
+    def test_withdrawal_pending_transitions(self):
+        """WITHDRAWAL_PENDING (PR-B): → WITHDRAWN (refund done) or DRAFT
+        (refund rejected → admin cancels the withdrawal). Non-final."""
+        assert ALLOWED_TRANSITIONS[AdmissionStatus.WITHDRAWAL_PENDING] == {
+            AdmissionStatus.WITHDRAWN,
+            AdmissionStatus.DRAFT,
+        }
+
+    def test_admitted_has_no_withdrawal_pending_edge(self):
+        """v3: a seat-occupying ``admitted`` profile keeps the legacy DIRECT
+        → WITHDRAWN path; it must NOT gain a → WITHDRAWAL_PENDING edge."""
+        assert (
+            AdmissionStatus.WITHDRAWAL_PENDING
+            not in ALLOWED_TRANSITIONS[AdmissionStatus.ADMITTED]
+        )
+        assert (
+            AdmissionStatus.WITHDRAWN
+            in ALLOWED_TRANSITIONS[AdmissionStatus.ADMITTED]
+        )
 
     def test_all_statuses_have_transitions_defined(self):
         """Verify every status has a transition rule (even if empty)."""
@@ -219,34 +246,36 @@ class TestGetAllowedTransitions:
     """Test get_allowed_transitions() helper function."""
 
     def test_draft_allowed_transitions(self):
-        """DRAFT can go to SUBMITTED or WITHDRAWN."""
-        assert get_allowed_transitions("draft") == {"submitted", "withdrawn"}
+        """DRAFT can go to SUBMITTED, WITHDRAWN or WITHDRAWAL_PENDING (PR-B)."""
+        assert get_allowed_transitions("draft") == {
+            "submitted", "withdrawn", "withdrawal_pending",
+        }
 
     def test_submitted_allowed_transitions(self):
-        """SUBMITTED: legacy 4 + Phase 3 reviewing (T2) + draft (T17)."""
+        """SUBMITTED: legacy 4 + reviewing (T2) + draft (T17) + withdrawal_pending."""
         assert get_allowed_transitions("submitted") == {
             "approved", "rejected", "revision_requested", "withdrawn",
-            "reviewing", "draft",
+            "withdrawal_pending", "reviewing", "draft",
         }
 
     def test_rejected_allowed_transitions(self):
-        """REJECTED: legacy 2 + draft (T17 PR-3C Sub-3.5)."""
+        """REJECTED: legacy 2 + draft (T17) + withdrawal_pending (PR-B)."""
         assert get_allowed_transitions("rejected") == {
-            "resubmitted", "withdrawn", "draft",
+            "resubmitted", "withdrawn", "withdrawal_pending", "draft",
         }
 
     def test_revision_requested_allowed_transitions(self):
-        """REVISION_REQUESTED: legacy 3 + Phase 3 reviewing (T4) + draft (T17)."""
+        """REVISION_REQUESTED: legacy 3 + reviewing (T4) + draft (T17) + withdrawal_pending."""
         assert get_allowed_transitions("revision_requested") == {
             "resubmitted", "rejected", "withdrawn",
-            "reviewing", "draft",
+            "withdrawal_pending", "reviewing", "draft",
         }
 
     def test_resubmitted_allowed_transitions(self):
-        """RESUBMITTED: legacy 4 + Phase 3 reviewing + draft (T17)."""
+        """RESUBMITTED: legacy 4 + reviewing + draft (T17) + withdrawal_pending."""
         assert get_allowed_transitions("resubmitted") == {
             "approved", "rejected", "revision_requested", "withdrawn",
-            "reviewing", "draft",
+            "withdrawal_pending", "reviewing", "draft",
         }
 
     def test_approved_allowed_transitions(self):
@@ -298,6 +327,7 @@ class TestIsFinalState:
             "resubmitted",
             "confirmed",
             "overridden",
+            "withdrawal_pending",  # PR-B: intermediate, not final
         ],
     )
     def test_non_final_states(self, status):

@@ -28,7 +28,7 @@ import { ADMISSION_STATUS_MAP } from "@/components/common/status/StatusBadge"
 // (admitted / waitlisted / result_published) plus the 11 legacy
 // states. Adding a new status = update this list, the
 // ``AdmissionStatus`` type union, and both badge maps in lockstep.
-const ALL_14_STATES: ReadonlyArray<AdmissionStatus> = [
+const ALL_STATES: ReadonlyArray<AdmissionStatus> = [
   "draft",
   "submitted",
   "resubmitted",
@@ -43,6 +43,7 @@ const ALL_14_STATES: ReadonlyArray<AdmissionStatus> = [
   "overridden",
   "enrolled",
   "withdrawn",
+  "withdrawal_pending", // PR-B: "Chờ hoàn để rút"
 ]
 
 
@@ -52,8 +53,8 @@ const ALL_14_STATES: ReadonlyArray<AdmissionStatus> = [
 
 
 describe("ADMISSION_BADGE_CONFIG", () => {
-  it("has a config entry for every one of the 14 admission status", () => {
-    for (const status of ALL_14_STATES) {
+  it("has a config entry for every one of the 15 admission status", () => {
+    for (const status of ALL_STATES) {
       expect(
         ADMISSION_BADGE_CONFIG[status],
         `missing badge config for ${status}`,
@@ -62,7 +63,7 @@ describe("ADMISSION_BADGE_CONFIG", () => {
   })
 
   it("every entry has label + shortLabel + className + variant + order", () => {
-    for (const status of ALL_14_STATES) {
+    for (const status of ALL_STATES) {
       const config = ADMISSION_BADGE_CONFIG[status]
       expect(config.label, `${status}.label`).toBeTruthy()
       expect(config.shortLabel, `${status}.shortLabel`).toBeTruthy()
@@ -72,10 +73,10 @@ describe("ADMISSION_BADGE_CONFIG", () => {
     }
   })
 
-  it("has exactly 14 entries (no leftover legacy keys, no orphan future keys)", () => {
+  it("has exactly 15 entries (no leftover legacy keys, no orphan future keys)", () => {
     const keys = Object.keys(ADMISSION_BADGE_CONFIG)
-    expect(keys).toHaveLength(14)
-    expect(new Set(keys)).toEqual(new Set(ALL_14_STATES))
+    expect(keys).toHaveLength(15)
+    expect(new Set(keys)).toEqual(new Set(ALL_STATES))
   })
 
   it("3 new phase1_11 states have distinct order between approved (5) and rejected (6)", () => {
@@ -101,8 +102,8 @@ describe("ADMISSION_BADGE_CONFIG", () => {
 
 
 describe("ADMISSION_STATUS_MAP", () => {
-  it("has a label for every one of the 14 admission status", () => {
-    for (const status of ALL_14_STATES) {
+  it("has a label for every one of the 15 admission status", () => {
+    for (const status of ALL_STATES) {
       expect(
         ADMISSION_STATUS_MAP[status],
         `missing ADMISSION_STATUS_MAP entry for ${status}`,

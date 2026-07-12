@@ -1195,6 +1195,9 @@ class FeeCalculationService:
                 )
 
         now = datetime.now(timezone.utc)
+        # Snapshot prior statuses BEFORE mutating — for the audit trail (A1).
+        _prev_fee_status = fee.status
+        _cancelled_invoices = [(inv.id, inv.status) for inv in active_invoices]
         # Cascade-cancel every non-cancelled invoice in the same transaction.
         for inv in active_invoices:
             inv.status = InvoiceStatusEnum.cancelled.value
@@ -1208,6 +1211,36 @@ class FeeCalculationService:
                     f"Cancelled by user {user_id}. Reason: {reason}"
 
         await self.db.flush()
+
+        # A1: persist the fee + invoice cancellation to entity_audit_log so a
+        # unified audit timeline shows the void (previously only on the invoice
+        # row's cancelled_* fields + fee.notes, invisible to an audit query).
+        from app.services import audit_service
+        await audit_service.log_audit(
+            self.db,
+            entity_type="Fee",
+            entity_id=fee.id,
+            action="status_changed",
+            actor_user_id=user_id,
+            field_name="status",
+            old_value=_prev_fee_status,
+            new_value=FeeStatusEnum.cancelled.value,
+            reason=reason,
+            source="api",
+        )
+        for _inv_id, _inv_prev in _cancelled_invoices:
+            await audit_service.log_audit(
+                self.db,
+                entity_type="Invoice",
+                entity_id=_inv_id,
+                action="status_changed",
+                actor_user_id=user_id,
+                field_name="status",
+                old_value=_inv_prev,
+                new_value=InvoiceStatusEnum.cancelled.value,
+                reason=reason,
+                source="api",
+            )
 
         # Lead projection reverse: ONLY HK1 tuition projects onto the lead, and
         # ONLY when NO OTHER non-cancelled HK1 tuition fee remains for the lead.
@@ -1308,9 +1341,17 @@ class FeeCalculationService:
         """
         fees = await self.fee_repo.get_by_profile_id(profile_id, unit_id)
 
-        total_fees = sum(f.final_amount for f in fees)
-        total_paid = sum(f.paid_amount for f in fees)
-        total_waived = sum(f.waived_amount for f in fees)
+        # Exclude CANCELLED fees from the money aggregates: a cancelled fee is
+        # void (final_amount>0, paid==0) so counting its remaining would surface
+        # a phantom "Còn nợ" on a settled/withdrawn profile. The ``fees`` list
+        # still returns every fee (incl cancelled) for display/history.
+        _active = [
+            f for f in fees
+            if f.status != FeeStatusEnum.cancelled.value
+        ]
+        total_fees = sum(f.final_amount for f in _active)
+        total_paid = sum(f.paid_amount for f in _active)
+        total_waived = sum(f.waived_amount for f in _active)
         total_remaining = total_fees - total_paid - total_waived
 
         return {

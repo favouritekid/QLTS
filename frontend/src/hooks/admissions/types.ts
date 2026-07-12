@@ -50,6 +50,7 @@ export type AdmissionStatus =
   | "confirmed"
   | "enrolled"
   | "overridden"
+  | "withdrawal_pending" // PR-B: "Chờ hoàn để rút"
   | "withdrawn"
 
 // ============================================================================

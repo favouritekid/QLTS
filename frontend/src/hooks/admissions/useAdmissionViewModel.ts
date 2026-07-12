@@ -33,6 +33,7 @@ const STATUS_LABELS: Record<string, string> = {
   overridden: "Đã override",
   revision_requested: "Yêu cầu bổ sung",
   withdrawn: "Đã rút hồ sơ",
+  withdrawal_pending: "Chờ hoàn để rút",
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -46,6 +47,7 @@ const STATUS_COLORS: Record<string, string> = {
   overridden: "purple",
   revision_requested: "orange",
   withdrawn: "gray",
+  withdrawal_pending: "amber",
 }
 
 // ============================================================================

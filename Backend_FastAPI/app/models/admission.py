@@ -53,14 +53,17 @@ class AdmissionProfile(Base):
         # keeping it in sync với migration prevents drift symptom per
         # memory ``test-db-schema-source``.
         UniqueConstraint('lead_id', 'academic_year', name='uq_admission_profile_lead_year'),
-        # Wave 3-A (M-1-11) extends 10-state CHECK to 14-state, adding the
+        # Wave 3-A (M-1-11) extended 10-state CHECK to 14-state, adding the
         # 4 choice-engine milestone states (reviewing / result_published /
-        # admitted / waitlisted). Migration owner:
-        # ``alembic/versions/phase1_11_extend_profile_status_check_constraint.py``.
+        # admitted / waitlisted). PR-B extends it to 15-state, adding the
+        # intermediate ``withdrawal_pending`` ("Chờ hoàn để rút") state.
+        # Migration owners:
+        # ``alembic/versions/phase1_11_extend_profile_status_check_constraint.py``
+        # (14-state) and ``alembic/versions/wpend20260710_*.py`` (15-state).
         # Test DB (``Base.metadata.create_all()``) reads this declaration —
         # keeping it in sync with the migration prevents test-vs-prod drift.
         CheckConstraint(
-            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn','reviewing','result_published','admitted','waitlisted')",
+            "status IN ('draft','submitted','approved','rejected','confirmed','enrolled','resubmitted','overridden','revision_requested','withdrawn','reviewing','result_published','admitted','waitlisted','withdrawal_pending')",
             name="ck_admission_profile_status"
         ),
         CheckConstraint(

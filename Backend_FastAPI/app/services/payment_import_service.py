@@ -54,6 +54,7 @@ from app.models.finance import (
     TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.utils.csv_helpers import sanitize_csv_row
 from app.utils.exceptions import (
     BadRequest,
@@ -1300,19 +1301,34 @@ async def commit_batch(
                 # Re-check lead chưa xóa mềm: preview lọc Lead.deleted_at IS NULL nhưng
                 # get_for_update KHÔNG lọc → chặn ghi tiền vào hồ sơ bị xóa mềm giữa
                 # preview→commit (mirror filter của _fetch_profiles).
-                lead_deleted = (
+                _pd_row = (
                     await db.execute(
-                        select(models.Lead.deleted_at)
+                        select(
+                            models.Lead.deleted_at,
+                            models.AdmissionProfile.status,
+                        )
                         .join(
                             models.AdmissionProfile,
                             models.AdmissionProfile.lead_id == models.Lead.id,
                         )
                         .where(models.AdmissionProfile.id == fee.admission_profile_id)
                     )
-                ).scalar_one_or_none()
+                ).one_or_none()
+                lead_deleted = _pd_row[0] if _pd_row else None
+                profile_status = _pd_row[1] if _pd_row else None
                 if lead_deleted is not None:
                     raise BusinessRuleViolation(
                         "hồ sơ đã bị xóa giữa preview→commit"
+                    )
+                # P0: bulk import does NOT pass through assert_payable_target, so
+                # inline the profile guard here (mirrors the fee cancelled/waived
+                # + lead-soft-deleted checks above). Refuse auto-verifying money
+                # onto a withdrawn/rejected/refund-pending profile — the invoice
+                # can still be `issued` because withdraw does not cancel the fee.
+                if profile_status in NON_PAYABLE_PROFILE_STATUSES:
+                    raise BusinessRuleViolation(
+                        f"hồ sơ đã {profile_status} — không thể thu tiền vào "
+                        f"hồ sơ đã rút/từ chối/đang chờ hoàn"
                     )
                 was_hk1 = is_hk1_settled_fee(fee)
 

@@ -76,6 +76,14 @@ export const refundStatusSchema = z.enum([
   "refunded",
 ])
 
+// Origin of a refund — mirrors backend RefundSourceEnum. Only `withdrawal`
+// refunds are auto-rejected when a pending withdrawal is cancelled.
+export const refundSourceSchema = z.enum([
+  "withdrawal",
+  "manual",
+  "overpayment",
+])
+
 export const transactionTypeSchema = z.enum([
   "payment",
   "refund",
@@ -383,6 +391,7 @@ export const refundRequestSchema = z.object({
   amount: z.string(),
   reason: z.string(),
   status: refundStatusSchema,
+  source: refundSourceSchema,
   requested_at: z.string(),
   requested_by_id: z.number().int().positive(),
   approved_at: z.string().nullable(),

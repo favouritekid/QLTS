@@ -234,9 +234,18 @@ _LEAD_SQL = text(
            p.pstatus AS pstatus,
            COALESCE(p.has_doc_debt, false) AS has_doc_debt,
            COALESCE(p.has_app, false) AS has_app,
-           COALESCE(p.hk1_partial, false) AS hk1_partial,
-           COALESCE(p.hk1_settled, false) AS hk1_settled,
-           COALESCE(p.hk1_paid, 0) AS hk1_paid
+           -- F13: a withdrawn / awaiting-refund profile's HK1 tuition is
+           -- refunded (or being refunded), so it is NOT realized revenue —
+           -- zero the tuition flags/amount so it drops out of 'Doanh thu' and
+           -- the Học phí funnel, consistent with a finalized withdrawn profile
+           -- (whose cancelled fees already drop via the status<>'cancelled'
+           -- filter). Lệ phí xét tuyển (has_app) is non-refundable and stays.
+           CASE WHEN p.pstatus IN ('withdrawn', 'withdrawal_pending')
+                THEN false ELSE COALESCE(p.hk1_partial, false) END AS hk1_partial,
+           CASE WHEN p.pstatus IN ('withdrawn', 'withdrawal_pending')
+                THEN false ELSE COALESCE(p.hk1_settled, false) END AS hk1_settled,
+           CASE WHEN p.pstatus IN ('withdrawn', 'withdrawal_pending')
+                THEN 0 ELSE COALESCE(p.hk1_paid, 0) END AS hk1_paid
     FROM lead l
     LEFT JOIN program_offering po ON l.offering_id = po.id
     LEFT JOIN prof p ON p.lead_id = l.id

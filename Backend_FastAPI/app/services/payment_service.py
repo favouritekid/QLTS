@@ -34,7 +34,7 @@ from app import models
 from app.models.finance import (
     Fee, Invoice, Payment, PaymentTransaction, PaymentMethod,
     PaymentStatusEnum, InvoiceStatusEnum, FeeStatusEnum,
-    RefundRequest, RefundStatusEnum, TransactionTypeEnum,
+    RefundRequest, RefundStatusEnum, RefundSourceEnum, TransactionTypeEnum,
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
     PAYABLE_INVOICE_STATUSES,
 )
@@ -49,6 +49,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
 )
+from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.config import settings
 
 log = structlog.get_logger(__name__)
@@ -131,13 +132,33 @@ def reverse_payment_balances(
 
 
 def assert_payable_target(
-    fee: Optional[Fee], invoice: Optional[Invoice], *, action: str
+    fee: Optional[Fee],
+    invoice: Optional[Invoice],
+    profile: Optional["models.AdmissionProfile"],
+    *,
+    action: str,
 ) -> None:
-    """Refuse to act on a cancelled fee/invoice — the SINGLE invariant every
-    money-touching entry runs right after locking the fee+invoice (manual
-    verify, online callback, intent creation). Centralising it means a future
-    fourth entry point can't silently re-open the "ghi tiền vào fee đã huỷ"
-    hole. ``action`` customises the Vietnamese message.
+    """Refuse to write money onto a dead target — the shared invariant the
+    money-touching entries run right after locking the fee+invoice: manual
+    record, manual verify, online callback, intent creation, and overpayment
+    apply. The ONE exception is bulk import, which inlines an equivalent
+    per-row check (routing each row through here would force a per-row
+    ``selectinload``); keep the two in sync. Centralising it means a future
+    entry point can reuse one guard instead of re-deriving the checks.
+    ``action`` customises the Vietnamese message.
+
+    Two dead-target classes are refused:
+      1. **Cancelled fee/invoice** — the fee or its invoice was cancelled
+         (``cancel_fee`` / cancel-invoice) after this operation started.
+      2. **Non-payable profile** — the admission profile was withdrawn /
+         rejected / is awaiting refund (``NON_PAYABLE_PROFILE_STATUSES``).
+         The invoice can still be ``issued`` on a withdrawn profile (withdraw
+         does not cancel fees today), so the invoice-status check alone would
+         let money land on a profile that is on its way out.
+
+    ``profile`` is REQUIRED (pass ``None`` explicitly when the fee has no
+    admission-profile linkage) so every caller consciously resolves it — a
+    silent default would re-open exactly the hole this guard closes.
     """
     if (fee is not None and fee.status == FeeStatusEnum.cancelled.value) or (
         invoice is not None
@@ -145,6 +166,10 @@ def assert_payable_target(
     ):
         raise BusinessRuleViolation(
             f"Không thể {action}: khoản phí/hoá đơn đã bị huỷ."
+        )
+    if profile is not None and profile.status in NON_PAYABLE_PROFILE_STATUSES:
+        raise BusinessRuleViolation(
+            f"Không thể {action}: hồ sơ đã rút/từ chối/đang chờ hoàn tiền."
         )
 
 
@@ -227,6 +252,18 @@ class PaymentService:
                 f"Allowed: {list(PAYABLE_INVOICE_STATUSES)}"
             )
 
+        # P0: never even stage a pending payment on a withdrawn/rejected/
+        # refund-pending profile. The invoice can still be `issued` on such a
+        # profile (withdraw does not cancel fees), so the payable-status check
+        # above is not enough — resolve the fee/profile ONCE here, refuse up
+        # front, and reuse them for the notification payload below.
+        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        profile = (
+            await self._get_profile_for_fee(fee) if fee is not None else None
+        )
+        if fee is not None:
+            assert_payable_target(fee, invoice, profile, action="ghi nhận thanh toán")
+
         # Validate amount doesn't exceed remaining
         remaining = invoice.remaining_amount
         if amount > remaining:
@@ -269,17 +306,14 @@ class PaymentService:
             created_by=user_id,
         )
 
-        # Resolve data for notification while session is active
-        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        # Notification payload (fee/profile already resolved above for the guard)
         _profile_id = fee.admission_profile_id if fee else None
         _lead_id = None
         _officer_id = None
-        if fee:
-            profile = await self._get_profile_for_fee(fee)
-            if profile:
-                _lead_id = profile.lead_id
-                if hasattr(profile, 'lead') and profile.lead:
-                    _officer_id = profile.lead.assigned_officer_id
+        if profile:
+            _lead_id = profile.lead_id
+            if hasattr(profile, 'lead') and profile.lead:
+                _officer_id = profile.lead.assigned_officer_id
 
         _notify_payload = {
             "payment_id": payment.id,
@@ -381,11 +415,14 @@ class PaymentService:
             raise ResourceNotFoundError("Fee not found")
 
         # Defense-in-depth: the fee/invoice may have been cancelled (cancel_fee)
-        # AFTER this pending payment was recorded but BEFORE verification. Refuse
-        # to write money onto a cancelled target — the pending payment is left
-        # for rejection. cancel_fee blocks while a pending payment exists, so
-        # this only fires for the narrow record-during-cancel race window.
-        assert_payable_target(fee, invoice, action="xác minh thanh toán")
+        # AFTER this pending payment was recorded but BEFORE verification, or the
+        # profile may have been withdrawn/rejected in the meantime. Refuse to
+        # write money onto a dead target — the pending payment is left for
+        # rejection. cancel_fee blocks while a pending payment exists, so the
+        # cancelled-target case only fires for the narrow record-during-cancel
+        # race; the profile check closes the withdrawn-but-fee-still-issued hole.
+        profile = await self._get_profile_for_fee(fee)
+        assert_payable_target(fee, invoice, profile, action="xác minh thanh toán")
 
         # Capture settled state BEFORE mutation (PR 5 transition detection)
         from app.services.fee_calculation_service import is_hk1_settled_fee
@@ -782,6 +819,7 @@ class RefundService:
         reason: str,
         user_id: int,
         unit_id: Optional[int] = None,
+        source: str = RefundSourceEnum.manual.value,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
         Request a refund for a verified payment.
@@ -792,6 +830,10 @@ class RefundService:
             reason: Refund reason (required)
             user_id: User requesting refund
             unit_id: Unit ID for IDOR protection
+            source: Origin of the request (``manual`` by default). The withdraw
+                orchestrator passes ``withdrawal`` and overpayment refunds pass
+                ``overpayment`` so ``reject_open_refunds_for_profile`` can target
+                only auto-filed withdrawal refunds.
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
@@ -837,6 +879,7 @@ class RefundService:
             amount=amount,
             reason=reason,
             status=RefundStatusEnum.pending.value,
+            source=source,
             requested_by_id=user_id,
             requested_at=datetime.now(timezone.utc),
         )
@@ -909,6 +952,8 @@ class RefundService:
         reason: str,
         rejector_id: int,
         unit_id: Optional[int] = None,
+        *,
+        allow_withdrawal_pending: bool = False,
     ) -> Tuple["RefundRequest", Optional[Callable]]:
         """
         Reject a refund request.
@@ -918,6 +963,11 @@ class RefundService:
             reason: Rejection reason
             rejector_id: User rejecting refund
             unit_id: Unit ID for IDOR protection
+            allow_withdrawal_pending: bypass the F1 guard below — set ONLY by
+                ``reject_open_refunds_for_profile`` (cancel-withdrawal), which
+                rejects ALL withdrawal refunds atomically and reverts the profile
+                to draft, so the strand-in-``withdrawal_pending`` risk cannot
+                occur there.
 
         Returns:
             Tuple of (RefundRequest, post_commit_callback)
@@ -936,6 +986,32 @@ class RefundService:
         if not reason or not reason.strip():
             raise BadRequest("Rejection reason is required")
 
+        # F1: a withdrawal-sourced refund on a profile still in
+        # 'withdrawal_pending' must NOT be rejected individually — rejecting one
+        # of several strands the profile forever (the finalize gate
+        # sum_unrefunded_refundable_paid never reaches 0, money stays held). The
+        # admin must use cancel-withdrawal, which rejects ALL withdrawal refunds
+        # atomically and reverts the profile to draft.
+        if (
+            not allow_withdrawal_pending
+            and refund.source == RefundSourceEnum.withdrawal.value
+        ):
+            _prof_status = (
+                await self.db.execute(
+                    select(models.AdmissionProfile.status)
+                    .join(Fee, Fee.admission_profile_id == models.AdmissionProfile.id)
+                    .join(Invoice, Invoice.fee_id == Fee.id)
+                    .join(Payment, Payment.invoice_id == Invoice.id)
+                    .where(Payment.id == refund.payment_id)
+                )
+            ).scalar_one_or_none()
+            if _prof_status == "withdrawal_pending":
+                raise BusinessRuleViolation(
+                    "Không thể từ chối lẻ yêu cầu hoàn của hồ sơ đang rút "
+                    "(sẽ kẹt hồ sơ ở trạng thái chờ hoàn). Dùng 'Hủy quy trình "
+                    "rút' để hủy toàn bộ và đưa hồ sơ về nháp."
+                )
+
         # Update refund status
         refund.status = RefundStatusEnum.rejected.value
         refund.rejected_by_id = rejector_id
@@ -952,6 +1028,67 @@ class RefundService:
         )
 
         return refund, None
+
+    async def reject_open_refunds_for_profile(
+        self,
+        profile_id: int,
+        *,
+        reason: str,
+        rejector_id: int,
+    ) -> int:
+        """Reject every open WITHDRAWAL-sourced refund of a profile (PR-B F1).
+
+        Used when a withdrawal is cancelled/rolled back (``withdrawal_pending →
+        draft``): the withdraw orchestrator auto-files refund requests, and if
+        those are left open they could later be processed — returning money on a
+        profile that has since been re-activated (draft → … → enrolled). This
+        rejects the pending ones so they can never be processed. Only
+        ``source='withdrawal'`` refunds are touched — a manual or overpayment
+        refund is independently managed and left as-is.
+
+        Raises ``BusinessRuleViolation`` if any refund is already APPROVED
+        (awaiting processing): that cannot be silently cancelled here — the
+        operator must process or reject it first — so the caller (cancel/rollback)
+        surfaces a 400 instead of orphaning an in-flight refund. Returns the
+        number of refunds rejected.
+        """
+        stmt = (
+            select(RefundRequest)
+            .join(Payment, RefundRequest.payment_id == Payment.id)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .join(Fee, Invoice.fee_id == Fee.id)
+            .where(
+                Fee.admission_profile_id == profile_id,
+                # Only the refunds THIS withdraw orchestrator auto-filed. A
+                # pre-existing manual (finance-created) or overpayment refund is
+                # independently managed and must survive the withdrawal rollback
+                # — rejecting it here would silently kill an unrelated refund and
+                # (for overpayment) re-open a liability that was being settled.
+                RefundRequest.source == RefundSourceEnum.withdrawal.value,
+                RefundRequest.status.in_([
+                    RefundStatusEnum.pending.value,
+                    RefundStatusEnum.approved.value,
+                ]),
+            )
+        )
+        open_refunds = list((await self.db.execute(stmt)).scalars().all())
+
+        if any(
+            r.status == RefundStatusEnum.approved.value for r in open_refunds
+        ):
+            raise BusinessRuleViolation(
+                "Không thể hủy quy trình rút: còn yêu cầu hoàn tiền ĐÃ DUYỆT "
+                "đang chờ xử lý. Hãy xử lý (hoặc từ chối) yêu cầu hoàn đó trước."
+            )
+
+        count = 0
+        for r in open_refunds:
+            await self.reject_refund(
+                r.id, reason=reason, rejector_id=rejector_id,
+                allow_withdrawal_pending=True,  # F1: this IS the safe bulk path
+            )
+            count += 1
+        return count
 
     async def process_approved_refund(
         self,
@@ -1009,12 +1146,24 @@ class RefundService:
         refund.refunded_at = datetime.now(timezone.utc)
         refund.refund_reference = refund_reference
 
+        # F2: snapshot BEFORE reverse — reverse_payment_balances recomputes
+        # fee.status from paid_amount and reopens the invoice to 'issued'. If the
+        # fee was already CANCELLED (e.g. a prior withdrawal finalize voided it),
+        # processing this (overpayment/manual) refund would un-cancel it and
+        # resurrect a phantom receivable on a withdrawn profile — re-void below.
+        _fee_was_cancelled = fee.status == FeeStatusEnum.cancelled.value
+
         # Rút tiền khỏi invoice + fee — 1 NGUỒN SỰ THẬT chung với void lô import
         # (reverse_payment_balances). paid về 0 → invoice 'issued' (mở lại để thu),
         # fee recompute status + bump version.
         fee_balance_before, fee_balance_after = reverse_payment_balances(
             invoice=invoice, fee=fee, amount=refund.amount
         )
+        if _fee_was_cancelled:
+            # F2: keep the void — money still returned, but the fee/invoice stay
+            # cancelled so no payable surface / "Còn nợ" reappears.
+            fee.status = FeeStatusEnum.cancelled.value
+            invoice.status = InvoiceStatusEnum.cancelled.value
 
         # Create audit transaction
         transaction = PaymentTransaction(
@@ -1061,7 +1210,15 @@ class RefundService:
         profile = await self._get_profile_for_fee(fee)
 
         # ADR-002 PR 5 (D9): Only HK1 refund projects into admission pipeline.
-        if fee.fee_type == "tuition" and fee.semester_no == 1 and profile is not None:
+        # PR-B (blocker 1): while a withdrawal is pending, the lead is HELD — do
+        # NOT push it to sts18 here; the finalize below moves it to sts08 once
+        # the refund completes. Refunds OUTSIDE a withdrawal still project sts18.
+        if (
+            fee.fee_type == "tuition"
+            and fee.semester_no == 1
+            and profile is not None
+            and profile.status != "withdrawal_pending"
+        ):
             from app.services.lead_admission_sync import sync_lead_tuition_refunded
             await sync_lead_tuition_refunded(
                 db=self.db,
@@ -1070,6 +1227,52 @@ class RefundService:
                 changed_by_user_id=processor_id,
                 reason=f"Tuition fee refunded: {refund.amount:,.0f} VND. Reason: {refund.reason}",
             )
+
+        # PR-B: finalize the withdrawal once the LAST refundable payment is
+        # returned. reverse_payment_balances above already decremented this
+        # fee's paid_amount, so sum_unrefunded_refundable_paid reflects the
+        # post-refund balance. Gate on status==withdrawal_pending so ordinary
+        # refunds are untouched.
+        withdraw_finalize_cb = None
+        if profile is not None and profile.status == "withdrawal_pending":
+            # F5: LOCK the profile row so two concurrent last-refunds serialize.
+            # Without the lock each reads the other's not-yet-committed balance as
+            # >0 → NEITHER finalizes → the profile is stranded in
+            # withdrawal_pending with money fully refunded. Re-read status under
+            # the lock (an admin cancel-withdrawal may have moved it to draft).
+            locked_profile = (
+                await self.db.execute(
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile.id)
+                    .options(selectinload(models.AdmissionProfile.lead))
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if (
+                locked_profile is not None
+                and locked_profile.status == "withdrawal_pending"
+            ):
+                from app.repositories.fee_repository import FeeRepository
+                _remaining = await FeeRepository(
+                    self.db
+                ).sum_unrefunded_refundable_paid(locked_profile.id)
+                if _remaining <= 0:
+                    import app.services.admission_service as admission_service
+                    _processor = await self.db.get(models.User, processor_id)
+                    profile, withdraw_finalize_cb = (
+                        await admission_service._finalize_withdrawn(
+                            self.db,
+                            locked_profile,
+                            _processor,
+                            from_status="withdrawal_pending",
+                            reason=(
+                                "Hoàn tất hoàn tiền — chốt rút hồ sơ "
+                                f"#{locked_profile.id}"
+                            ),
+                        )
+                    )
+                    # (Phantom-invoice cleanup lives INSIDE _finalize_withdrawn,
+                    # gated on from_status=='withdrawal_pending' — Issue 1/#7.)
 
         log.info(
             "refund_processed",
@@ -1118,6 +1321,11 @@ class RefundService:
                 payload=_notify_payload,
                 rooms=_rooms,
             )
+            # PR-B: run the withdraw-finalize bundle (milestone + APPLICATION/
+            # LEAD status-changed) AFTER the refund notification, in the same
+            # post-commit frame.
+            if withdraw_finalize_cb is not None:
+                await withdraw_finalize_cb()
 
         return refund, post_commit
 
@@ -1153,7 +1361,13 @@ class RefundService:
         self,
         fee: Fee,
     ) -> Optional[models.AdmissionProfile]:
-        """Get admission profile for fee with Lead relationship loaded."""
+        """Get admission profile for fee with Lead relationship loaded.
+
+        RefundService's own copy — ``process_approved_refund`` resolves the
+        profile via ``self``. Deliberately NOT shared with
+        ``PaymentService._get_profile_for_fee``: they are the same body on two
+        separate service classes, not a duplicate to dedupe.
+        """
         query = (
             select(models.AdmissionProfile)
             .options(selectinload(models.AdmissionProfile.lead))

@@ -28,6 +28,11 @@ import type { LossReason } from "@/lib/loss-reasons";
 export const pipelineKeys = {
   all: ["pipeline"] as const,
   stages: () => [...pipelineKeys.all, "stages"] as const,
+  // NOTE: use `fullPipeline(params)` ONLY as a useQuery key. As an
+  // invalidateQueries target the no-arg `fullPipeline()` builds
+  // ["pipeline","full",undefined], whose trailing `undefined` fails React
+  // Query's partial match against the board's ["pipeline","full",{params}] →
+  // a silent no-op. Invalidate `pipelineKeys.all` instead.
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
@@ -280,7 +285,7 @@ export function useCreatePipelineStage() {
       });
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -327,7 +332,7 @@ export function useUpdatePipelineStage() {
       });
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -364,7 +369,7 @@ export function useDeletePipelineStage() {
       toast.success("Pipeline stage deleted!");
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.stages(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -412,7 +417,7 @@ export function useCreateConsultationStatus() {
       });
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -459,7 +464,7 @@ export function useUpdateConsultationStatus() {
       });
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {
@@ -496,7 +501,7 @@ export function useDeleteConsultationStatus() {
       toast.success("Consultation status deleted!");
 
       queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.fullPipeline(), refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all, refetchType: 'active' });
     },
 
     onError: (error) => {

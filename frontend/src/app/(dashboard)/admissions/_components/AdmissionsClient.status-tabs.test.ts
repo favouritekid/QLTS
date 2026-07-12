@@ -31,8 +31,10 @@ describe("ADMISSION_STATUS_TABS — grouping", () => {
     )
   })
 
-  it("'rejected' bundles rejected/withdrawn", () => {
-    expect(byKey.get("rejected")).toEqual(new Set(["rejected", "withdrawn"]))
+  it("'rejected' bundles rejected/withdrawn/withdrawal_pending", () => {
+    expect(byKey.get("rejected")).toEqual(
+      new Set(["rejected", "withdrawn", "withdrawal_pending"]),
+    )
   })
 
   it("'all' tab = empty (no filter)", () => {
@@ -63,6 +65,7 @@ describe("ADMISSION_STATUS_TABS — 14-state coverage", () => {
     "overridden",
     "enrolled",
     "withdrawn",
+    "withdrawal_pending", // PR-B: grouped in the "Từ chối" tab with withdrawn
   ] as const
 
   it("every workflow-target status appears in at least one specific tab", () => {

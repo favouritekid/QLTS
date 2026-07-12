@@ -212,7 +212,20 @@ class PaymentIntentService:
         fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
         if fee is None:
             raise ResourceNotFoundError("Fee not found")
-        assert_payable_target(fee, invoice, action="tạo giao dịch thanh toán")
+        # Resolve the profile so the guard can also refuse creating an intent on
+        # a withdrawn/rejected/refund-pending profile (not just a cancelled fee).
+        _intent_profile = None
+        if fee.admission_profile_id:
+            _intent_profile = (
+                await self.db.execute(
+                    select(models.AdmissionProfile).where(
+                        models.AdmissionProfile.id == fee.admission_profile_id
+                    )
+                )
+            ).scalar_one_or_none()
+        assert_payable_target(
+            fee, invoice, _intent_profile, action="tạo giao dịch thanh toán"
+        )
 
         # Get payment method
         method = await self._get_payment_method(method_id)
@@ -598,12 +611,25 @@ class PaymentIntentService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
-        # Defense-in-depth (Nhóm B): never write money onto a cancelled fee or
-        # invoice. cancel_fee blocks while an active intent exists, so the normal
-        # path can't reach here; this also closes the manual cancel-invoice /
+        # Resolve admission profile (with lead eager-loaded) BEFORE the payable
+        # guard so a late gateway success is refused on a withdrawn/rejected/
+        # refund-pending profile too, not only a cancelled fee/invoice. Reused
+        # below for post-commit payload + HK1 lead sync.
+        profile: Optional[models.AdmissionProfile] = None
+        if fee.admission_profile_id:
+            result = await self.db.execute(
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == fee.admission_profile_id)
+                .options(selectinload(models.AdmissionProfile.lead))
+            )
+            profile = result.scalar_one_or_none()
+
+        # Defense-in-depth (Nhóm B): never write money onto a dead target.
+        # cancel_fee blocks while an active intent exists, so the normal path
+        # can't reach here; this also closes the manual cancel-invoice /
         # cancel-intent surface. A late gateway success on a dead target is
         # refused — the caller marks the intent failed; reconcile out-of-band.
-        assert_payable_target(fee, invoice, action="ghi nhận thanh toán")
+        assert_payable_target(fee, invoice, profile, action="ghi nhận thanh toán")
 
         # Capture balance before
         fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
@@ -669,18 +695,6 @@ class PaymentIntentService:
 
         await self.db.flush()
         await self.db.refresh(payment)
-
-        # Resolve admission profile (with lead eager-loaded) for post-commit
-        # payload + lead sync. Mirrors payment_service._get_profile_for_fee
-        # pattern; inlined here to avoid cross-service dependency.
-        profile: Optional[models.AdmissionProfile] = None
-        if fee.admission_profile_id:
-            result = await self.db.execute(
-                select(models.AdmissionProfile)
-                .where(models.AdmissionProfile.id == fee.admission_profile_id)
-                .options(selectinload(models.AdmissionProfile.lead))
-            )
-            profile = result.scalar_one_or_none()
 
         # ADR-002 PR 5: Sync lead only on HK1 SETTLED-state transition
         # (remaining<=0). Partial online payment leaves lead at sts14.

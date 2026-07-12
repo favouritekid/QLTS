@@ -25,6 +25,7 @@ import { canDecide } from "@/lib/utils/admission-permissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
 import { SendMagicLinkButton } from "./SendMagicLinkButton"
+import { WithdrawActionButton } from "./WithdrawActionButton"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
@@ -109,8 +110,21 @@ export function AdmissionActions({
           {can('send_resubmit_link') && (
             <SendMagicLinkButton profileId={profile.id} action="resubmit" />
           )}
+          {/* PR-B: officer withdraws on the spot (candidate at school) —
+              replaces the magic-link for withdraw; submit/resubmit still use it. */}
           {can('send_withdraw_link') && (
-            <SendMagicLinkButton profileId={profile.id} action="withdraw" />
+            <WithdrawActionButton
+              profileId={profile.id}
+              version={profile.version ?? 0}
+              mode="withdraw"
+            />
+          )}
+          {can('cancel_withdrawal') && (
+            <WithdrawActionButton
+              profileId={profile.id}
+              version={profile.version ?? 0}
+              mode="cancel"
+            />
           )}
         </div>
       </div>

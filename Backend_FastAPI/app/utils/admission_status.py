@@ -85,6 +85,23 @@ CONFIRMATION_ELIGIBLE_STATUSES: frozenset[str] = frozenset(
 )
 
 
+# Profile statuses on which NO money may be recorded — the shared money-write
+# gate for the whole finance surface. A profile that has been withdrawn /
+# rejected / is awaiting-refund (``withdrawal_pending``) must never accept a new
+# payment through ANY entry point: manual verify, online-gateway callback,
+# intent creation, bulk import, or overpayment application. Centralised here (a
+# pure, side-effect-free module) so every money-touching service checks the
+# SAME set and a future entry point cannot silently re-open the hole.
+#
+# ``withdrawal_pending`` is pre-seeded here BEFORE the state itself lands (it
+# arrives with the refund-cleanup PR-B). It is a harmless, never-matched string
+# until the CHECK constraint / state machine widen to allow it, and pre-seeding
+# means PR-B need not re-touch every guard site.
+NON_PAYABLE_PROFILE_STATUSES: frozenset[str] = frozenset(
+    {"withdrawn", "rejected", "withdrawal_pending"}
+)
+
+
 def is_admitted_like(profile: "AdmissionProfile") -> bool:
     """True iff ``profile.status`` is in the admitted-equivalent set.
 

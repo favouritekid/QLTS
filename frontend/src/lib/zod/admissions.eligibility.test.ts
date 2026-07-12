@@ -169,11 +169,11 @@ describe("admissionProfileResponseSchema — strict 14-state status parse (Stage
     }
   })
 
-  it("locks the strict enum to exactly 14 entries (drift guard)", () => {
+  it("locks the strict enum to exactly 15 entries (drift guard)", () => {
     // Anchor non-tautological — count any enum drift on this schema.
     // If a 15th state is added to BE without this test updating, CI
     // fails here, forcing the coordinated FE bump.
-    const expected14 = [
+    const expected15 = [
       "draft",
       "submitted",
       "resubmitted",
@@ -188,16 +188,17 @@ describe("admissionProfileResponseSchema — strict 14-state status parse (Stage
       "result_published",
       "admitted",
       "waitlisted",
+      "withdrawal_pending", // PR-B
     ]
 
-    for (const status of expected14) {
+    for (const status of expected15) {
       const result = admissionProfileResponseSchema.safeParse({
         ..._baselineProfile(),
         status,
       })
       expect(result.success, `expected state ${status} not accepted`).toBe(true)
     }
-    expect(expected14.length).toBe(14)
+    expect(expected15.length).toBe(15)
   })
 })
 

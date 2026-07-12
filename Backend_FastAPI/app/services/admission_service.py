@@ -2168,15 +2168,24 @@ def _compute_frontend_fields(
         # Service-layer (priority_override_service) cũng có hard-deny officer
         # ngay đầu override_kv là defense-in-depth.
         "override_priority_kv": (
-            is_admin
-            or (
-                is_manager
-                and status in [
-                    "draft",
-                    "submitted",
-                    "reviewing",
-                    "revision_requested",
-                ]
+            # PR-B: never on a profile on its way out / already out —
+            # withdrawal_pending (awaiting refund) OR terminal withdrawn — gate
+            # the admin-unconditional branch too (a KV override is meaningless
+            # once the profile is withdrawn). ``assign_officer`` below is NOT
+            # gated: it is a LEAD-level action (re-engagement) valid regardless
+            # of admission state.
+            status not in ("withdrawal_pending", "withdrawn")
+            and (
+                is_admin
+                or (
+                    is_manager
+                    and status in [
+                        "draft",
+                        "submitted",
+                        "reviewing",
+                        "revision_requested",
+                    ]
+                )
             )
         ),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
@@ -2188,7 +2197,10 @@ def _compute_frontend_fields(
             is_admin
             or is_manager
             or (is_officer and is_owner)
-        ) and status not in ["draft", "withdrawn", "dropped"],
+        ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
+        # PR-B: admin reverts a pending withdrawal back to draft when the refund
+        # was rejected (so the profile is not stuck awaiting a refund).
+        "cancel_withdrawal": is_admin and status == "withdrawal_pending",
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
                   and not profile.assigned_reviewer_id),
@@ -3413,23 +3425,29 @@ async def _populate_unrefunded_payment_flag(
     lets ops see "cần hoàn tiền" on the detail page (refund stays manual via
     the existing maker-checker flow).
 
-    ``SUM(fee.paid_amount)`` is the currently-HELD amount: a processed refund
-    decrements ``paid_amount`` (``payment_service.process_approved_refund``),
-    so the sum is exactly the unrefunded balance.
+    ``sum_unrefunded_refundable_paid`` is the currently-HELD REFUNDABLE amount:
+    a processed refund decrements ``paid_amount``
+    (``payment_service.process_approved_refund``), so the sum is exactly the
+    unrefunded refundable balance. It EXCLUDES the non-refundable ``application``
+    fee (PR-B) — otherwise a profile whose only paid fee is the lệ phí xét tuyển
+    (e.g. prod #251: 70k application, never refunded) would falsely show the
+    "cần hoàn tiền" badge forever.
 
-    Cost guard: ONLY queries when ``status in (rejected, withdrawn)``; every
-    other status short-circuits to ``False`` with no DB hit. Idempotent — safe
-    to call from both ``_populate_response_fields`` (mutations) and
-    ``get_profile`` (GET detail) for parity.
+    Cost guard: ONLY queries when ``status in (rejected, withdrawn,
+    withdrawal_pending)``; every other status short-circuits to ``False`` with
+    no DB hit. Idempotent — safe to call from both ``_populate_response_fields``
+    (mutations) and ``get_profile`` (GET detail) for parity.
     """
-    if profile.status not in ("rejected", "withdrawn"):
+    if profile.status not in ("rejected", "withdrawn", "withdrawal_pending"):
         profile.has_unrefunded_payment = False
         return
 
     from app.repositories.fee_repository import FeeRepository
 
-    total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
-    profile.has_unrefunded_payment = total_paid > 0
+    refundable_held = await FeeRepository(db).sum_unrefunded_refundable_paid(
+        profile.id
+    )
+    profile.has_unrefunded_payment = refundable_held > 0
 
 
 async def _load_priority_audit_log(
@@ -8915,9 +8933,14 @@ async def reject_profile(
     if getattr(profile, "has_unrefunded_payment", False):
         from app.repositories.fee_repository import FeeRepository
 
-        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
+        # F8: mirror the flag's refundable-only basis (exclude the
+        # non-refundable application fee) so the logged amount == the amount
+        # actually to refund, not overstated by the 70k lệ phí xét tuyển.
+        _total_paid = await FeeRepository(db).sum_unrefunded_refundable_paid(
+            profile.id
+        )
         log.warning(
-            "Profile reject với khoản học phí chưa hoàn",
+            "Profile reject với khoản học phí chưa hoàn (refundable)",
             profile_id=profile.id,
             total_paid=str(_total_paid),
             status=profile.status,
@@ -10978,6 +11001,239 @@ async def delete_profile(
 # ==============================================================================
 
 
+async def _finalize_withdrawn(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    actor: Optional[models.User],
+    *,
+    from_status: str,
+    reason: str,
+) -> tuple[models.AdmissionProfile, Any]:
+    """Transition a (row-locked) profile to terminal ``withdrawn`` + build the
+    paired notification bundle. Shared by:
+
+    * the DIRECT-withdraw path — no refundable money collected, or an
+      ``admitted`` (seat-occupying) profile kept on the legacy direct path;
+    * the REFUND-FINALIZE path — ``payment_service.process_approved_refund``
+      once the last refundable payment on a ``withdrawal_pending`` profile is
+      returned.
+
+    ``from_status`` is the status BEFORE this finalize (original status on the
+    direct path, ``withdrawal_pending`` on the refund-finalize path); it drives
+    the audit ``from_status`` and the notification ``old_status``. The profile
+    is mutated in place AND returned (``state_transition`` may hand back a
+    different instance). Caller must hold the profile row lock.
+    """
+    _actor_id: Optional[int] = actor.id if actor else None
+    _actor_name: str = (
+        (actor.full_name or actor.username) if actor else "Ứng viên (magic-link)"
+    )
+
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "withdrawn",
+        actor=actor,
+        reason=reason,
+        source="api",
+        event_metadata={
+            "from_status": from_status,
+            "withdrawn_by_role": (actor.role if actor else "system"),
+            "reason": reason,
+        },
+    )
+
+    # PIPELINE SYNC: withdrawal milestone consultation
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_withdrawn",
+            actor=actor,
+            profile_id=profile.id,
+            reason=reason,
+        )
+
+    await db.flush()
+
+    # SYNC: lead consultation status → sts08 (withdrawn mapping)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=_actor_id,
+        reason=f"Admission profile withdrawn: {reason[:50]}",
+    )
+
+    log.info(
+        "Admission profile withdrawn",
+        profile_id=profile.id,
+        actor_id=_actor_id,
+        old_status=from_status,
+    )
+
+    # Flag any still-unrefunded refundable money for the FE badge (refund stays
+    # manual via maker-checker). On the refund-finalize path this is 0 by
+    # construction (finalize only runs once the refundable balance hits 0).
+    await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate computed fields so the direct
+    # withdraw response (STEP 0 admitted / refundable<=0 path) matches a GET.
+    # Harmless on the refund-finalize path (the RefundRequest is the response
+    # there); _populate_response_fields is a no-op when actor is None.
+    await _populate_response_fields(db, profile, actor)
+
+    # Issue 1 (PR-B follow-up) — ONLY on the refund-finalize path
+    # (from_status == "withdrawal_pending"): each refundable payment was returned
+    # via reverse_payment_balances, which zeroed the fee's paid_amount BUT
+    # reopened its invoice to 'issued' (payable) — a phantom receivable ("còn
+    # nợ") on a profile that just settled to withdrawn. Those now-unpaid
+    # non-application fees are cancelled POST-COMMIT in a fresh session
+    # (_cancel_phantom_fees_callback) — NOT in this transaction: cancel_fee can
+    # raise (stale pending payment / active online intent) and row-locks fees, so
+    # doing it here would either abort the already-money-out finalize or add a
+    # profile↔fee lock-order hazard, and its savepoint would expire the ORM
+    # objects this function still uses. The direct path (admitted /
+    # no-refundable-money) is EXCLUDED — its unpaid fees were already cancelled in
+    # withdraw STEP 2. Snapshot the ids now (the profile object must not be
+    # captured into the post-commit closure — the session is gone by then).
+    _cleanup_pid: Optional[int] = (
+        profile.id if from_status == "withdrawal_pending" else None
+    )
+    _cleanup_actor_id = _actor_id
+
+    # Path C / Arch-3: atomic paired bundle (APPLICATION_STATUS_CHANGED +
+    # LEAD_STATUS_CHANGED). Withdraw has no commission check.
+    bundle_callback = None
+    if profile.lead_id:
+        intents = [
+            NotificationIntent(
+                event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                payload={
+                    "application_id": profile.id,
+                    "lead_id": profile.lead_id,
+                    "old_status": from_status,
+                    "new_status": "withdrawn",
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
+                },
+                dedupe_key=f"admission_profile_withdrawn:{profile.id}",
+                rooms=rooms_for_admission(profile),
+            ),
+            NotificationIntent(
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": profile.lead_id,
+                    "lead_name": f"Profile #{profile.id}",
+                    "old_status": from_status,
+                    "new_status": "sts08",
+                    "actor_id": _actor_id,
+                    "actor_name": _actor_name,
+                },
+                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
+                rooms=rooms_for_admission(profile),
+            ),
+        ]
+        bundle = await dispatch_bundle(
+            db, bundle_label="admission_withdraw", intents=intents,
+        )
+        bundle_callback = bundle.callback
+
+    async def _audit_log_callback():
+        log.info(
+            "Post-commit: Profile withdrawn notification",
+            profile_id=profile.id,
+        )
+
+    # Issue 1 cleanup — best-effort, POST-COMMIT, OWN session (see rationale
+    # above). Cancels the non-application fees the refund left at paid==0 (their
+    # invoices were reopened to 'issued') so no phantom payable survives on the
+    # withdrawn profile. Runs only on the refund-finalize path (_cleanup_pid set).
+    # A per-fee failure (pending payment / active intent) is money-safe via the
+    # payable guard — logged and skipped, never propagated. `compose_...` also
+    # swallows this callback's exceptions so it can never break notifications.
+    async def _cancel_phantom_fees_callback():
+        if _cleanup_pid is None:
+            return
+        from app.database import AsyncSessionLocal
+        from app.services.fee_calculation_service import FeeCalculationService
+        from app.repositories.fee_repository import FeeRepository as _FeeRepo
+
+        async with AsyncSessionLocal() as _sess:
+            _fee_calc = FeeCalculationService(_sess)
+            _fee_ids = [
+                f.id
+                for f in sorted(
+                    await _FeeRepo(_sess).get_by_profile_id(_cleanup_pid),
+                    key=lambda f: f.id,
+                )
+                if f.fee_type != "application"
+                and f.paid_amount == 0
+                and f.status != "cancelled"
+            ]
+            for _fid in _fee_ids:
+                try:
+                    await _fee_calc.cancel_fee(
+                        _fid,
+                        reason=(
+                            f"Chốt rút hồ sơ #{_cleanup_pid} — huỷ phí đã hoàn"
+                        ),
+                        user_id=_cleanup_actor_id,
+                    )
+                    await _sess.commit()
+                except Exception:
+                    await _sess.rollback()
+                    log.warning(
+                        "finalize_withdrawn post-commit: best-effort cancel of "
+                        "refunded fee failed (phantom invoice left; money-safe "
+                        "via payable guard)",
+                        profile_id=_cleanup_pid,
+                        fee_id=_fid,
+                        exc_info=True,
+                    )
+                    # A2: persist the failure to entity_audit_log so a left-behind
+                    # phantom fee is discoverable by ops (the log.warning above is
+                    # ephemeral stdout only). Own tiny commit; if even this fails
+                    # we swallow it — the phantom is money-safe regardless.
+                    try:
+                        from app.services import audit_service
+                        await audit_service.log_audit(
+                            _sess,
+                            entity_type="Fee",
+                            entity_id=_fid,
+                            action="phantom_cleanup_failed",
+                            actor_user_id=_cleanup_actor_id,
+                            new_value="phantom_invoice_left",
+                            reason=(
+                                "Post-commit huỷ phí đã hoàn THẤT BẠI khi chốt "
+                                f"rút hồ sơ #{_cleanup_pid} — hoá đơn payable còn "
+                                "sót (an toàn tiền qua payable guard)"
+                            ),
+                            source="system",
+                        )
+                        await _sess.commit()
+                    except Exception:
+                        await _sess.rollback()
+                        log.warning(
+                            "finalize_withdrawn post-commit: could not persist "
+                            "phantom-cleanup-failure audit",
+                            profile_id=_cleanup_pid,
+                            fee_id=_fid,
+                            exc_info=True,
+                        )
+
+    final_callback = compose_post_commit_callbacks(
+        label="admission_withdraw",
+        callbacks=[
+            _audit_log_callback,
+            _cancel_phantom_fees_callback,
+            bundle_callback,
+            transition_callback,
+        ],
+    )
+
+    return profile, final_callback
+
+
 async def withdraw_profile(
     db: AsyncSession,
     profile_id: int,
@@ -11025,16 +11281,20 @@ async def withdraw_profile(
     # IDOR bypass when actor=None (magic-link path verifies CCCD).
     _check_idor_access(profile, actor)
 
-    # Actor attribution capture (officer dashboard vs. magic-link
-    # self-service). All downstream audit/notification consumers
-    # already accept Optional ids; the human-readable label is used
-    # only in notification payloads.
+    # Actor attribution (officer dashboard vs. magic-link self-service).
+    # Downstream consumers accept Optional ids; the human-readable label is
+    # (re)computed inside ``_finalize_withdrawn`` where the bundle is built.
     _actor_id: Optional[int] = actor.id if actor else None
-    _actor_name: str = (
-        (actor.full_name or actor.username)
-        if actor
-        else "Ứng viên (magic-link)"
-    )
+
+    # F6: a profile already in withdrawal_pending must not be re-withdrawn — the
+    # withdrawal_pending→withdrawn edge would let it pass validate_transition,
+    # then STEP 3's state_transition(...,"withdrawal_pending") would 400 after
+    # STEP 1/2 already ran. Reject cleanly up front.
+    if profile.status == "withdrawal_pending":
+        raise BusinessRuleViolation(
+            "Hồ sơ đang ở 'Chờ hoàn để rút' — không thể rút lại. Hãy chờ hoàn "
+            "tất hoàn tiền, hoặc dùng 'Hủy quy trình rút' để đưa về nháp."
+        )
 
     from .admission_state_machine import validate_transition
 
@@ -11062,122 +11322,229 @@ async def withdraw_profile(
     # Caller still captures old_status for the legacy bundle below.
     _old_status_for_audit = profile.status
 
-    # Phase 1 hotfix-2 + magic-link FU: enrich payload với ``from_status``
-    # + ``withdrawn_by_role`` so the seeded ADMISSION_WITHDRAWN template's
-    # placeholders resolve at render time. ``actor=None`` (magic-link
-    # candidate self-service) maps to role "system" for the template.
+    # ---- PR-B orchestrator: auto-clean finances, then pick the target ----
+    # System user for the magic-link path (actor=None): cancel_fee /
+    # request_refund require a non-null user_id. Resolved lazily + cached.
+    _system_user_id: Optional[int] = None
+
+    async def _actor_or_system_id() -> int:
+        nonlocal _system_user_id
+        if _actor_id is not None:
+            return _actor_id
+        if _system_user_id is None:
+            _system_user_id = (await _get_system_application_fee_user(db)).id
+        return _system_user_id
+
+    # STEP 0 (v3): a seat-occupying (``admitted``) profile keeps the legacy
+    # DIRECT path — settle straight to ``withdrawn`` with NO auto-refund/cancel,
+    # so withdrawal never touches quota-seat accounting. (approved/confirmed/
+    # overridden/enrolled cannot reach here — they have no →withdrawn edge and
+    # are already blocked by validate_transition above.)
+    if _old_status_for_audit in QUOTA_OCCUPYING_STATUSES:
+        return await _finalize_withdrawn(
+            db, profile, actor,
+            from_status=_old_status_for_audit, reason=data["reason"],
+        )
+
+    from app.services.fee_calculation_service import FeeCalculationService
+    from app.services.payment_service import RefundService
+    from app.repositories.fee_repository import FeeRepository
+    from app.repositories.payment_repository import PaymentRepository
+    from app.models.finance import RefundSourceEnum
+
+    fee_repo = FeeRepository(db)
+    payment_repo = PaymentRepository(db)
+
+    # STEP 1 (refund-first): request a refund for every verified refundable
+    # payment. MUST run BEFORE cancel_fee — cancel_fee rejects a fee with
+    # paid_amount>0, so the payable surface is only removed after money is
+    # scheduled to be returned. Refund is per-payment (ceiling = amount −
+    # already-committed refunds) and stays 'pending' (maker-checker).
+    verified_payments = await payment_repo.get_verified_by_profile(profile_id)
+    if verified_payments:
+        refund_service = RefundService(db)
+        # F3 (by design, not a system-user override): the refund's MAKER is the
+        # withdrawing actor (magic-link → system user). Maker-checker then
+        # requires a DIFFERENT approver — a manager who withdrew cannot approve
+        # their own auto-filed refund; an admin or second manager must. This is
+        # the intended finance control, not a bug. (Using the system user as
+        # requester was rejected: it needs the 'system' technical account seeded,
+        # which dev/test envs lack, and would weaken maker-checker.)
+        _uid = await _actor_or_system_id()
+        for pay in verified_payments:
+            committed = await payment_repo.get_total_refunds_for_payment(pay.id)
+            available = pay.amount - committed
+            if available <= 0:
+                continue
+            await refund_service.request_refund(
+                payment_id=pay.id,
+                amount=available,
+                reason=f"Rút hồ sơ #{profile_id}",
+                user_id=_uid,
+                source=RefundSourceEnum.withdrawal.value,
+            )
+
+    # STEP 2: cancel every UNPAID fee (paid_amount==0) — cascades to its
+    # invoices. cancel_fee raises BusinessRuleViolation if a pending (unverified)
+    # payment exists; let it surface as 400 so the officer resolves that payment
+    # first (safer than silently proceeding).
+    fee_calc = FeeCalculationService(db)
+    fees = await fee_repo.get_by_profile_id(profile_id)
+    for fee in fees:
+        if fee.paid_amount == 0 and fee.status != "cancelled":
+            _uid = await _actor_or_system_id()
+            await fee_calc.cancel_fee(
+                fee.id, reason=f"Rút hồ sơ #{profile_id}", user_id=_uid,
+            )
+
+    # STEP 3: pick the target — computed IN-MEMORY from the STEP 2 fee list (F7,
+    # no extra query): the refunds above are still 'pending' so paid_amount is
+    # unchanged, and cancelled fees had paid_amount==0. Excludes the
+    # non-refundable ``application`` fee (mirrors sum_unrefunded_refundable_paid).
+    # refundable_held>0 → WAIT in ``withdrawal_pending`` until the refund is
+    # processed (finalize in ``process_approved_refund``); =0 → ``withdrawn`` now.
+    refundable_held = sum(
+        (f.paid_amount for f in fees if f.fee_type != "application"),
+        Decimal("0"),
+    )
+    if refundable_held <= 0:
+        return await _finalize_withdrawn(
+            db, profile, actor,
+            from_status=_old_status_for_audit, reason=data["reason"],
+        )
+
+    # → withdrawal_pending. Lead is HELD at its current status (no-op sync); the
+    # pipeline only moves to sts08 at finalize. No ADMISSION event is mapped for
+    # withdrawal_pending (v3) so the intermediate transition is silent — the
+    # ADMISSION_WITHDRAWN notification fires exactly once, at finalize.
     profile, transition_callback = await state_transition(
         db,
         profile,
-        "withdrawn",
+        "withdrawal_pending",
         actor=actor,
         reason=data["reason"],
         source="api",
         event_metadata={
             "from_status": _old_status_for_audit,
-            "withdrawn_by_role": (actor.role if actor else "system"),
             "reason": data["reason"],
         },
     )
-
-    # PIPELINE SYNC: Create system consultation for withdrawal milestone
-    if profile.lead:
-        await _create_admission_milestone_consultation(
-            db=db,
-            lead=profile.lead,
-            event="profile_withdrawn",
-            actor=actor,
-            profile_id=profile.id,
-            reason=data["reason"],
-        )
-
     await db.flush()
-
-    # SYNC: Update lead consultation status (withdrawn → sts08)
-    from .lead_admission_sync import sync_lead_from_admission
-    await sync_lead_from_admission(
-        db=db,
-        profile=profile,
-        changed_by_user_id=_actor_id,
-        reason=f"Admission profile withdrawn: {data['reason'][:50]}",
-    )
+    await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate permissions/available_actions/
+    # eligibility/completion so the withdraw response matches a subsequent GET.
+    await _populate_response_fields(db, profile, actor)
 
     log.info(
-        "Admission profile withdrawn",
+        "Admission profile → withdrawal_pending (awaiting refund)",
         profile_id=profile.id,
         actor_id=_actor_id,
         old_status=_old_status_for_audit,
+        refundable_held=str(refundable_held),
     )
-
-    # TUITION_PREPAY_FASTTRACK finding #1 — flag + warn về học phí trả trước
-    # chưa hoàn khi rút hồ sơ. ``withdraw_profile`` không gọi
-    # ``_populate_response_fields`` (response tối giản theo thiết kế), nên set
-    # cờ trực tiếp qua helper nhẹ để mutation response có parity với GET. KHÔNG
-    # chặn rút — hoàn tiền vẫn thủ công qua maker-checker.
-    await _populate_unrefunded_payment_flag(db, profile)
-    if getattr(profile, "has_unrefunded_payment", False):
-        from app.repositories.fee_repository import FeeRepository
-
-        _total_paid = await FeeRepository(db).sum_paid_amount_by_profile(profile.id)
-        log.warning(
-            "Profile withdraw với khoản học phí chưa hoàn",
-            profile_id=profile.id,
-            total_paid=str(_total_paid),
-            status=profile.status,
-        )
-
-    # Path C / Arch-3: build atomic notification bundle for the paired
-    # transition (APPLICATION_STATUS_CHANGED + LEAD_STATUS_CHANGED).
-    # Withdraw is the one paired flow that does NOT have a commission
-    # check (withdrawn lead does not trigger commission); only the
-    # bundle callback is composed.
-    bundle_callback = None
-    if profile.lead_id:
-        intents = [
-            NotificationIntent(
-                event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                payload={
-                    "application_id": profile_id,
-                    "lead_id": profile.lead_id,
-                    "old_status": _old_status_for_audit,
-                    "new_status": "withdrawn",
-                    "actor_id": _actor_id,
-                    "actor_name": _actor_name,
-                },
-                dedupe_key=f"admission_profile_withdrawn:{profile_id}",
-                rooms=rooms_for_admission(profile),
-            ),
-            NotificationIntent(
-                event=SystemEvents.LEAD_STATUS_CHANGED,
-                payload={
-                    "lead_id": profile.lead_id,
-                    "lead_name": f"Profile #{profile_id}",
-                    "old_status": _old_status_for_audit,
-                    "new_status": "sts08",
-                    "actor_id": _actor_id,
-                    "actor_name": _actor_name,
-                },
-                dedupe_key=f"lead_status_changed:{profile.lead_id}:sts08",
-                rooms=rooms_for_admission(profile),
-            ),
-        ]
-        bundle = await dispatch_bundle(
-            db, bundle_label="admission_withdraw", intents=intents,
-        )
-        bundle_callback = bundle.callback
-
-    async def _audit_log_callback():
-        """Existing post-commit log preserved for parity."""
-        log.info(
-            "Post-commit: Profile withdrawn notification",
-            profile_id=profile.id,
-        )
 
     final_callback = compose_post_commit_callbacks(
-        label="admission_withdraw",
-        callbacks=[_audit_log_callback, bundle_callback, transition_callback],
+        label="admission_withdrawal_pending",
+        callbacks=[transition_callback],
+    )
+    return profile, final_callback
+
+
+async def cancel_withdrawal(
+    db: AsyncSession,
+    profile_id: int,
+    actor: Optional[models.User],
+    reason: str,
+) -> tuple[models.AdmissionProfile, Any]:
+    """Admin cancels a pending withdrawal → back to DRAFT (PR-B).
+
+    Used when the refund tied to a ``withdrawal_pending`` profile is rejected:
+    the profile can't settle to ``withdrawn`` (the money stays with the school),
+    so an admin reverts it to ``draft`` — reusing the withdrawal_pending→draft
+    edge — instead of leaving it stuck. Admin-only (router gate); IDOR still
+    enforced. The lead is untouched: it was HELD at its pre-withdraw status
+    throughout ``withdrawal_pending`` and the ``draft`` sync short-circuits, so
+    there is no lead move to undo.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    profile = (await db.execute(stmt)).scalar_one_or_none()
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    _check_idor_access(profile, actor)
+
+    if profile.status != "withdrawal_pending":
+        raise BusinessRuleViolation(
+            "Chỉ có thể hủy quy trình rút khi hồ sơ đang ở trạng thái "
+            "'Chờ hoàn để rút'."
+        )
+    if not reason:
+        raise BadRequest("Lý do hủy quy trình rút là bắt buộc")
+
+    # F1: reject any pending refund auto-filed by the withdraw orchestrator
+    # BEFORE reverting to draft — otherwise that refund could later be processed
+    # and return money on a re-activated (draft → … → enrolled) profile. Raises
+    # 400 if a refund is already APPROVED and awaiting processing (resolve first).
+    from app.services.payment_service import RefundService
+
+    _rejector_id = (
+        actor.id if actor else (await _get_system_application_fee_user(db)).id
+    )
+    await RefundService(db).reject_open_refunds_for_profile(
+        profile_id,
+        reason=f"Hủy quy trình rút hồ sơ #{profile_id}",
+        rejector_id=_rejector_id,
     )
 
+    _old_status = profile.status
+    profile, transition_callback = await state_transition(
+        db,
+        profile,
+        "draft",
+        actor=actor,
+        reason=reason,
+        source="api",
+        event_metadata={"from_status": _old_status, "reason": reason},
+    )
+    await db.flush()
+    await _populate_unrefunded_payment_flag(db, profile)
+    # F12: Mutation Response Contract — populate computed fields so the
+    # cancel-withdrawal response matches a subsequent GET.
+    await _populate_response_fields(db, profile, actor)
+
+    # F7: the lead was HELD at its mid-admission consultation status throughout
+    # withdrawal_pending (the draft sync short-circuits). Now that the profile is
+    # back to draft, reset the lead to the draft mapping (sts06) so the pair is
+    # consistent — force=True bypasses the draft short-circuit + anti-regression
+    # floor, which is the intended behaviour for this admin reset only.
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db,
+        profile,
+        changed_by_user_id=(actor.id if actor else None),
+        reason=f"Hủy quy trình rút hồ sơ #{profile.id} — đưa lead về nháp",
+        force=True,
+    )
+
+    log.info(
+        "Withdrawal cancelled → draft",
+        profile_id=profile.id,
+        actor_id=(actor.id if actor else None),
+        reason=reason[:50],
+    )
+
+    final_callback = compose_post_commit_callbacks(
+        label="admission_cancel_withdrawal",
+        callbacks=[transition_callback],
+    )
     return profile, final_callback
 
 

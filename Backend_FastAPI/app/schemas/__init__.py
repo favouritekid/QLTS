@@ -208,6 +208,7 @@ from .admission import (
     ConfirmRequest,
     OverrideRequest,
     WithdrawRequest,
+    CancelWithdrawalRequest,
     FinalizeRequest,
     DropStudentRequest,
     MinorCorrectionRequest,

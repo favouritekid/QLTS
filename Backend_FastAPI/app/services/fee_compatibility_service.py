@@ -298,6 +298,15 @@ class FeeCompatibilityService:
                 'remaining': remaining,
                 'status': fee.status,
             })
+            # F14: keep parity with FeeCalculationService.get_fee_summary —
+            # exclude CANCELLED fees from the money aggregates (a cancelled fee
+            # is void, final_amount>0/paid==0, so counting its remaining would
+            # surface a phantom "Còn nợ"). Still listed in ['fees'] for history.
+            _fee_status = (
+                fee.status.value if hasattr(fee.status, "value") else fee.status
+            )
+            if _fee_status == "cancelled":
+                continue
             summary['total_amount'] += fee.final_amount
             summary['total_paid'] += fee.paid_amount
             summary['total_remaining'] += remaining

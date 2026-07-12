@@ -130,6 +130,7 @@ export const ADMISSION_STATUS_MAP: Record<string, StatusConfig> = {
   overridden: { label: "Đã override", variant: "primary" },
   enrolled: { label: "Đã nhập học", variant: "admission-enrolled" },
   withdrawn: { label: "Đã rút hồ sơ", variant: "neutral" },
+  withdrawal_pending: { label: "Chờ hoàn để rút", variant: "warning" },
 };
 
 export const SCORE_LEVEL_MAP: Record<string, StatusConfig> = {

@@ -35,7 +35,7 @@ from .invoice import (
 )
 from .payment_intent import PaymentIntent, PaymentIntentStatusEnum, GatewayStatusEnum
 from .payment import Payment, PaymentTransaction, PaymentStatusEnum, TransactionTypeEnum
-from .refund import RefundRequest, RefundStatusEnum
+from .refund import RefundRequest, RefundSourceEnum, RefundStatusEnum
 from .overpayment import OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum
 from .payment_import import (
     PaymentImportBatch,
@@ -59,6 +59,7 @@ __all__ = [
     "TransactionTypeEnum",
     # Enums - Refund
     "RefundStatusEnum",
+    "RefundSourceEnum",
     # Enums - Overpayment
     "OverpaymentStatusEnum",
     "ResolutionTypeEnum",

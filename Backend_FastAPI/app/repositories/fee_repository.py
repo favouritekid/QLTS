@@ -160,6 +160,28 @@ class FeeRepository(BaseRepository[Fee]):
         )
         return Decimal(str(result.scalar() or 0))
 
+    async def sum_unrefunded_refundable_paid(self, profile_id: int) -> Decimal:
+        """Sum of ``paid_amount`` across REFUNDABLE fees still unrefunded.
+
+        Identical to ``sum_paid_amount_by_profile`` but EXCLUDES the
+        ``application`` fee (lệ phí xét tuyển) which is non-refundable and
+        therefore keeps ``paid_amount > 0`` forever. This is the amount that
+        determines whether a withdraw must wait in ``withdrawal_pending``
+        (PR-B): using the all-fees total instead would trap the profile in
+        ``withdrawal_pending`` permanently whenever an application fee was paid.
+
+        A processed refund DECREMENTS ``fee.paid_amount``, so this sum is exactly
+        the refundable money currently HELD (collected and NOT yet refunded).
+        Returns ``Decimal("0")`` when there is no unrefunded refundable balance.
+        """
+        result = await self.db.execute(
+            select(func.coalesce(func.sum(Fee.paid_amount), 0)).where(
+                Fee.admission_profile_id == profile_id,
+                Fee.fee_type != "application",
+            )
+        )
+        return Decimal(str(result.scalar() or 0))
+
     async def get_for_update(
         self,
         fee_id: int,
@@ -991,6 +1013,13 @@ class InvoiceRepository(BaseRepository[Invoice]):
 
         def _scoped(query):
             query = query.join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            # F4: exclude withdrawn / awaiting-refund profiles — they owe nothing,
+            # so their leftover invoices must not inflate outstanding / overdue.
+            query = query.where(
+                models.AdmissionProfile.status.notin_(
+                    ("withdrawn", "withdrawal_pending")
+                )
+            )
             if unit_id is not None:
                 query = query.where(models.Lead.unit_id == unit_id)
             return query

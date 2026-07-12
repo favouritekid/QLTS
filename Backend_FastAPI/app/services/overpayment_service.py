@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import AdmissionProfile
 from app.models.finance import (
     FeeStatusEnum,
     InvoiceStatusEnum,
@@ -16,13 +18,14 @@ from app.models.finance import (
     PAYABLE_INVOICE_STATUSES,
     PaymentTransaction,
     RefundRequest,
+    RefundSourceEnum,
     RefundStatusEnum,
     ResolutionTypeEnum,
     TransactionTypeEnum,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import OverpaymentRepository
-from app.services.payment_service import RefundService
+from app.services.payment_service import RefundService, assert_payable_target
 from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
@@ -118,6 +121,23 @@ class OverpaymentService:
                 "Overpayment can only be applied to an invoice on the same profile"
             )
 
+        # P0: applying an overpayment writes money onto the target fee/invoice.
+        # Route through the shared money-write guard (target_fee + target_invoice
+        # already locked above) so credit can't land on a cancelled fee/invoice
+        # OR a withdrawn/rejected/refund-pending profile — one invariant. This
+        # also closes the pre-existing gap where a cancelled target_fee with an
+        # `issued` invoice slipped past the invoice-status check above.
+        target_profile = (
+            await self.db.execute(
+                select(AdmissionProfile).where(
+                    AdmissionProfile.id == target_fee.admission_profile_id
+                )
+            )
+        ).scalar_one_or_none()
+        assert_payable_target(
+            target_fee, target_invoice, target_profile, action="áp khoản dư"
+        )
+
         # Use `is not None` (not `or`): Decimal('0') is falsy, so `amount or ...`
         # would silently fall through to the full amount instead of being
         # rejected by the `<= 0` guard below.
@@ -201,6 +221,7 @@ class OverpaymentService:
             reason=notes or f"Refund overpayment {overpayment.id}",
             user_id=user_id,
             unit_id=unit_id,
+            source=RefundSourceEnum.overpayment.value,
         )
 
         # F4: the overpayment liability stays *pending* and is only linked to the

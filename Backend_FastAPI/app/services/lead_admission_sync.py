@@ -120,6 +120,14 @@ SUBMIT_FLOOR_EVENTS: frozenset[str] = frozenset(
 # value at the call site.
 _RESULT_PUBLISHED_NO_OP: str = "result_published"
 
+# Sentinel for ``profile.status == "withdrawal_pending"`` (PR-B). While a
+# withdrawal waits for its refund to be processed, the lead KEEPS its current
+# consultation status (owner decision): sync is an explicit no-op here. The
+# pipeline only moves to sts08 when the withdrawal finalizes (status →
+# ``withdrawn``, handled by the withdrawn mapping), or stays put if the admin
+# cancels the withdrawal (status → ``draft``, handled by the draft short-circuit).
+_WITHDRAWAL_PENDING_NO_OP: str = "withdrawal_pending"
+
 
 def _should_apply_admission_floor(
     profile_status: str,
@@ -164,6 +172,7 @@ async def sync_lead_from_admission(
     profile: models.AdmissionProfile,
     changed_by_user_id: Optional[int] = None,
     reason: Optional[str] = None,
+    force: bool = False,
 ) -> bool:
     """
     Sync lead consultation status when admission profile status changes.
@@ -198,7 +207,11 @@ async def sync_lead_from_admission(
     # Skip draft — milestone consultation is the canonical sync for profile creation.
     # Avoids double LeadStatusHistory records when create_profile() calls both
     # sync_lead_from_admission() and _create_admission_milestone_consultation().
-    if profile.status == "draft":
+    # F7: ``force=True`` (admin cancel-withdrawal, wpend→draft) DELIBERATELY
+    # resets the held lead back to the draft mapping (sts06) so the reactivated
+    # draft profile and its lead are consistent — there is no milestone
+    # consultation on this path, so no double-history risk.
+    if profile.status == "draft" and not force:
         log.debug(
             "sync_lead_from_admission: Skipping draft, milestone consultation handles this",
             profile_id=profile.id,
@@ -221,6 +234,18 @@ async def sync_lead_from_admission(
         )
         return False
 
+    # Explicit no-op for ``withdrawal_pending`` (PR-B). Holds the lead at its
+    # current consultation status until the refund finalizes (→ withdrawn → sts08)
+    # or is cancelled (→ draft, short-circuited above). Prevents an unmapped
+    # fall-through from logging a misleading "unknown status" warning.
+    if profile.status == _WITHDRAWAL_PENDING_NO_OP:
+        log.debug(
+            "sync_lead_from_admission: withdrawal_pending holds the lead status "
+            "until the refund finalizes — explicit no-op for lead sync",
+            profile_id=profile.id,
+        )
+        return False
+
     # Get target consultation status from mapping
     target_status_id = ADMISSION_TO_LEAD_STATUS_MAP.get(profile.status)
 
@@ -236,7 +261,11 @@ async def sync_lead_from_admission(
     # must not regress a lead past sts07, and ``submitted`` / ``resubmitted``
     # must not erase a finance overlay (sts13/sts14/sts10/sts18 — SL1). See the
     # _should_apply_admission_floor docstring for the rationale.
-    if not _should_apply_admission_floor(profile.status, lead.consultation_status_id):
+    # F7: ``force`` bypasses the anti-regression floor — a cancel-withdrawal
+    # reset INTENDS to move the lead backward (sts07/sts14 → sts06 draft).
+    if not force and not _should_apply_admission_floor(
+        profile.status, lead.consultation_status_id
+    ):
         log.debug(
             "sync_lead_from_admission: Floor-only status, lead already past "
             "pre-application phase — preserving later state",

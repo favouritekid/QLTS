@@ -203,7 +203,11 @@ class QuotaMatrixService:
             select(
                 AdmissionProfileChoice.admission_path_id.label("path_id"),
                 func.count(distinct(AdmissionProfileChoice.admission_profile_id))
-                .filter(AdmissionProfile.status.not_in(("draft", "withdrawn")))
+                .filter(
+                    AdmissionProfile.status.not_in(
+                        ("draft", "withdrawn", "withdrawal_pending")
+                    )
+                )
                 .label("submitted_cnt"),
                 func.count(distinct(AdmissionProfileChoice.admission_profile_id))
                 .filter(
@@ -249,7 +253,11 @@ class QuotaMatrixService:
             select(
                 path_id_text.label("path_id_text"),
                 func.count(AdmissionProfile.id)
-                .filter(AdmissionProfile.status.not_in(("draft", "withdrawn")))
+                .filter(
+                    AdmissionProfile.status.not_in(
+                        ("draft", "withdrawn", "withdrawal_pending")
+                    )
+                )
                 .label("submitted_cnt"),
                 func.count(AdmissionProfile.id)
                 .filter(AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES))

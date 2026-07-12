@@ -37,6 +37,20 @@ class RefundStatusEnum(str, enum.Enum):
     refunded = "refunded"    # Refund completed
 
 
+class RefundSourceEnum(str, enum.Enum):
+    """Origin of a refund request — distinguishes independently-managed refunds
+    from those the withdraw orchestrator auto-files.
+
+    Used by ``cancel_withdrawal``/rollback (``reject_open_refunds_for_profile``):
+    only ``withdrawal``-sourced refunds are auto-rejected when a pending
+    withdrawal is reverted. A pre-existing ``manual`` (finance-created) or
+    ``overpayment`` refund is left untouched — it is not part of the withdrawal.
+    """
+    withdrawal = "withdrawal"    # Auto-filed by the withdraw orchestrator
+    manual = "manual"            # Created by a finance user (POST /api/refunds)
+    overpayment = "overpayment"  # Filed to return a tracked overpayment
+
+
 class RefundRequest(Base):
     """
     Refund request record.
@@ -54,6 +68,10 @@ class RefundRequest(Base):
         CheckConstraint(
             "status IN ('pending', 'approved', 'rejected', 'refunded')",
             name='chk_refund_request_status_valid'
+        ),
+        CheckConstraint(
+            "source IN ('withdrawal', 'manual', 'overpayment')",
+            name='chk_refund_request_source_valid'
         ),
     )
 
@@ -87,6 +105,16 @@ class RefundRequest(Base):
         server_default="pending",
         index=True,
         comment="Status: pending|approved|rejected|refunded"
+    )
+
+    # Origin — drives whether cancel-withdrawal auto-rejects this refund.
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=RefundSourceEnum.manual.value,
+        server_default="manual",
+        index=True,
+        comment="Origin: withdrawal|manual|overpayment",
     )
 
     # Lifecycle timestamps
