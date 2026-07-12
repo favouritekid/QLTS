@@ -207,7 +207,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
     >
       {/* Header - Mobile Optimized, Full Width Rows */}
       {/* Note: pr-10 to avoid Sheet close button overlap */}
-      <div className="bg-background shrink-0 border-b p-3 pr-10 space-y-2">
+      <div className="bg-background shrink-0 border-b p-3 pr-12 space-y-2">
         {/* Row 1: Avatar + Name + Assignment Status */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
