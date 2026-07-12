@@ -24,6 +24,7 @@ import {
   CardTime,
   CardActions,
 } from "@/components/ui/base-card";
+import { SwipeToCall } from "@/components/common/SwipeToCall";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -71,6 +72,7 @@ export function MobileLeadCard({
   };
 
   return (
+    <SwipeToCall phone={lead.phone} label={lead.full_name}>
     <BaseCard
       selected={isSelected || isChecked}
       onSelect={(checked) => onCheck?.(checked)}
@@ -190,6 +192,7 @@ export function MobileLeadCard({
         </MobileActionSheet.Item>
       </MobileActionSheet>
     </BaseCard>
+    </SwipeToCall>
   );
 }
 
