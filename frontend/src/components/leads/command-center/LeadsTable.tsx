@@ -66,7 +66,7 @@ import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { LeadActionMenu } from "./LeadActionMenu";
 import type { Lead } from "@/types/lead.types";
-import { getLeadSourceLabel, getLeadScoreTextColor } from "@/constants";
+import { getLeadSourceLabel, getLeadScoreTextColor, getDegreeLevelAbbr } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -355,6 +355,32 @@ export function LeadsTable({
           />
         ),
         size: 120,
+      }),
+
+      // Ngành column — đồng bộ với card list (trình độ viết tắt CĐ/TC + tên ngành)
+      columnHelper.accessor("offering", {
+        id: "offering",
+        header: "Ngành",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const offering = row.original.offering;
+          const major = offering?.program?.name || offering?.offering_type;
+          if (!major) return <span className="text-muted-foreground">—</span>;
+          const degreeShort = getDegreeLevelAbbr(offering?.program?.degree_level);
+          return (
+            <span className="flex items-center gap-1.5 text-sm">
+              {degreeShort && (
+                <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+                  {degreeShort}
+                </span>
+              )}
+              <span className="truncate" title={major}>
+                {major}
+              </span>
+            </span>
+          );
+        },
+        size: 180,
       }),
 
       // Source column
@@ -714,7 +740,7 @@ export function LeadsTable({
             {selectedLeads.length > 0 ? (
               <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
             ) : (
-              `${totalCount.toLocaleString()} lead`
+              `${totalCount.toLocaleString("vi-VN")} lead`
             )}
           </span>
         </div>
@@ -948,7 +974,7 @@ export function LeadsTable({
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-t px-4 py-2">
         <div className="text-muted-foreground text-sm tabular-nums">
           Hiển thị {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-
-          {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString()} lead
+          {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString("vi-VN")} lead
         </div>
         <div className="flex items-center gap-2">
           <Button

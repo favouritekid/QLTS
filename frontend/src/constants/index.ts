@@ -24,6 +24,7 @@ export {
   getLeadScoreLabel,
   getLeadScoreLabelShort,
   getEducationLevelLabel,
+  getDegreeLevelAbbr,
   isComplexStatus,
   isSchedulableStatus,
 } from "./lead.constants";

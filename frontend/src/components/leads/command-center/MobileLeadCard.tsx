@@ -21,15 +21,7 @@ import { LeadActionMenu } from "./LeadActionMenu";
 import { SwipeToCall } from "@/components/common/SwipeToCall";
 import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
-import { getLeadSourceLabel } from "@/constants";
-
-// Viết tắt trình độ ngành cho gọn mặt card (fallback nhãn đầy nếu gặp giá trị lạ).
-const DEGREE_ABBR: Record<string, string> = {
-  "Đại học": "ĐH",
-  "Cao đẳng": "CĐ",
-  "Trung cấp": "TC",
-  "Sơ cấp": "SC",
-};
+import { getLeadSourceLabel, getDegreeLevelAbbr } from "@/constants";
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -71,11 +63,25 @@ export function MobileLeadCard({
   // — đã là nhãn VN sẵn) + tên ngành. Lấy từ offering nên lead có chọn ngành là có
   // (KHÁC education_level của lead — gần như trống). Ghép bằng " " đọc tự nhiên
   // ("Cao đẳng Công nghệ ô tô"); rỗng cả hai → "Chưa chọn ngành".
-  const degreeLevel = lead.offering?.program?.degree_level || null;
-  const degreeShort = degreeLevel ? DEGREE_ABBR[degreeLevel] ?? degreeLevel : null;
+  const degreeShort = getDegreeLevelAbbr(lead.offering?.program?.degree_level);
   const eduMajor = [degreeShort, major].filter(Boolean).join(" ") || "Chưa chọn ngành";
   // Overdue tính client theo next_activity_at (cache is_overdue có thể trễ ~14h).
   const overdue = isLeadOverdue({ next_activity_at: lead.next_activity_at ?? null });
+  // "Thời gian" gộp thành 1 span suppressed (text + class). Trang /leads SSR với
+  // initialData nên card render trên SERVER; overdue/relative-time phụ thuộc "now"
+  // → server≠client. suppressHydrationWarning trên 1 span duy nhất phủ CẢ text LẪN
+  // className, nên dù nhánh overdue lật giữa SSR↔hydrate vẫn không mismatch.
+  const when = overdue
+    ? { text: "Quá hạn", cls: "font-medium text-error-600 dark:text-error-500" }
+    : lead.last_consultation_at
+      ? {
+          text: formatDistanceToNowStrict(new Date(lead.last_consultation_at), {
+            addSuffix: true,
+            locale: vi,
+          }),
+          cls: "tabular-nums",
+        }
+      : { text: "Chưa liên hệ", cls: "text-muted-foreground/60" };
   const selected = isSelected || isChecked;
 
   return (
@@ -138,23 +144,9 @@ export function MobileLeadCard({
               <span className="truncate text-foreground/90">{eduMajor}</span>
             </span>
             <span className="text-muted-foreground/40">·</span>
-            {overdue ? (
-              <span
-                className="shrink-0 font-medium text-error-600 dark:text-error-500"
-                suppressHydrationWarning
-              >
-                Quá hạn
-              </span>
-            ) : lead.last_consultation_at ? (
-              <span className="shrink-0 tabular-nums" suppressHydrationWarning>
-                {formatDistanceToNowStrict(new Date(lead.last_consultation_at), {
-                  addSuffix: true,
-                  locale: vi,
-                })}
-              </span>
-            ) : (
-              <span className="shrink-0 text-muted-foreground/60">Chưa liên hệ</span>
-            )}
+            <span className={cn("shrink-0", when.cls)} suppressHydrationWarning>
+              {when.text}
+            </span>
             <span className="text-muted-foreground/40">·</span>
             <span className="shrink-0 text-muted-foreground/80">
               {getLeadSourceLabel(lead.source)}
