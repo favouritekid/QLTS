@@ -735,7 +735,9 @@ export function QuickConsultationSectionV2({
       {/* STEP 2: Choose Result                                           */}
       {/* ================================================================ */}
       <div className="border-t pt-4 space-y-3">
-        <div className="flex items-center gap-2">
+        {/* Mobile: xếp DỌC (tiêu đề trên, gợi ý dưới) để không chật/wrap xấu;
+            ngang từ sm+. */}
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
           <Label className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
             Bước 2: Kết quả tư vấn
           </Label>
