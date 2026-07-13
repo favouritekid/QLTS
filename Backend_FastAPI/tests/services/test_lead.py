@@ -3203,3 +3203,94 @@ class TestNextActivityAggregation:
         assert sent == keep
         assert result["sent"] == 3
 
+
+class TestMyAppointmentsScope:
+    """Khóa regression P1 (/code-review): ``get_my_appointments`` PHẢI scope
+    theo role — admin TOÀN BỘ, manager theo ĐƠN VỊ của mình (KHÔNG xem chéo
+    unit khác), officer/accountant/user chỉ của mình.
+
+    Trước fix, manager rơi vào all-scope như admin (officer_ids=None, không
+    filter unit) → thấy lịch hẹn (kèm tên + SĐT lead + tên NV phụ trách) của
+    MỌI đơn vị, phá vỡ manager unit-scope/IDOR contract của lead listing.
+    """
+
+    async def _lead_with_appt(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+        *,
+        unit_id: int,
+        officer_id: Optional[int],
+        phone: str,
+        email: str,
+        when: datetime,
+    ) -> models.Lead:
+        lead = models.Lead(
+            full_name="Appt Scope Lead",
+            phone=phone,
+            email=email,
+            source="Website",
+            unit_id=unit_id,
+            status=seeded_dependencies["initial_status_id"],
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+            assigned_officer_id=officer_id,
+            assigned_at=datetime.now(timezone.utc),
+            next_activity_at=when,
+        )
+        db.add(lead)
+        await db.flush()
+        await db.refresh(lead)
+        return lead
+
+    async def test_manager_scoped_to_own_unit_not_cross_unit(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+        manager_user: models.User,
+        officer_user: models.User,
+        admin_user: models.User,
+    ):
+        now = datetime.now(timezone.utc)
+        soon = now + timedelta(hours=2)  # trong cửa sổ [now-7d, now+24h]
+
+        # Đơn vị thứ 2 — KHÁC đơn vị của manager (manager thuộc seeded unit).
+        other_unit = models.OrganizationUnit(
+            id=1002, name="Other Unit", type="department"
+        )
+        db.add(other_unit)
+        await db.flush()
+
+        my_unit_id = seeded_dependencies["unit_id"]
+        assert manager_user.unit_id == my_unit_id  # tiền đề: manager ở unit này
+
+        lead_mine = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=my_unit_id, officer_id=officer_user.id,
+            phone="0900000001", email="appt_mine@test.com", when=soon,
+        )
+        lead_other = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=other_unit.id, officer_id=None,
+            phone="0900000002", email="appt_other@test.com", when=soon,
+        )
+
+        # MANAGER: chỉ lịch hẹn của ĐƠN VỊ mình, KHÔNG lộ unit khác.
+        res_mgr = await lead_service.get_my_appointments(db, manager_user)
+        mgr_ids = {a.lead_id for a in res_mgr.appointments}
+        assert lead_mine.id in mgr_ids
+        assert lead_other.id not in mgr_ids  # P1: chống xem chéo đơn vị
+        assert res_mgr.scope == "all"  # giữ label FE "Toàn đơn vị" (không đổi contract)
+
+        # ADMIN: thấy CẢ HAI đơn vị (không regression all-scope).
+        res_admin = await lead_service.get_my_appointments(db, admin_user)
+        admin_ids = {a.lead_id for a in res_admin.appointments}
+        assert {lead_mine.id, lead_other.id} <= admin_ids
+
+        # OFFICER: chỉ lead được giao cho mình.
+        res_off = await lead_service.get_my_appointments(db, officer_user)
+        off_ids = {a.lead_id for a in res_off.appointments}
+        assert lead_mine.id in off_ids
+        assert lead_other.id not in off_ids
+        assert res_off.scope == "own"
+

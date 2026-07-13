@@ -94,6 +94,7 @@ async def get_my_reassign_quota(
     return quota
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/my/appointments", response_model=schemas.MyAppointmentsResponse)
 async def get_my_appointments(
     request: Request,

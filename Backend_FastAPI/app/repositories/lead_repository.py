@@ -1476,12 +1476,16 @@ class LeadRepository(BaseRepository[models.Lead]):
         officer_ids: Optional[List[int]],
         since: datetime,
         until: datetime,
+        unit_id: Optional[int] = None,
         limit: int = 60,
     ) -> List[models.Lead]:
         """
         Lead có lịch gọi lại (next_activity_at) trong [since, until].
 
-        officer_ids=None → TOÀN BỘ (admin/manager); [id] → của officer đó (own).
+        Scope (mirror LeadListFilter — cùng nguồn quy tắc với lead listing):
+          - officer_ids=None + unit_id=None → TOÀN BỘ (admin).
+          - officer_ids=None + unit_id=X    → theo ĐƠN VỊ (manager, Lead.unit_id==X).
+          - officer_ids=[id]                → của officer đó (own).
         next_activity_at = MIN(scheduled_at) các consultation follow-up còn sống →
         query theo nó tự lọc "hẹn còn hiệu lực", khỏi join consultation_status.
         Eager-load offering→program (trình độ/ngành) + assigned_officer (tên NV,
@@ -1505,6 +1509,8 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         if officer_ids is not None:
             query = query.where(models.Lead.assigned_officer_id.in_(officer_ids))
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
         query = query.order_by(models.Lead.next_activity_at.asc()).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())

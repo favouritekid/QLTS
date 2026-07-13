@@ -3313,14 +3313,28 @@ async def get_my_appointments(
     since = now - timedelta(days=overdue_days)
     until = now + timedelta(hours=upcoming_hours)
 
-    # Scope theo role: admin/manager thấy TOÀN BỘ lịch hẹn; officer chỉ của mình.
+    # Scope theo role — KHỚP LeadListFilter (deps.get_lead_list_filter):
+    #   - admin  : TOÀN BỘ (không giới hạn)
+    #   - manager: theo ĐƠN VỊ của mình (Lead.unit_id == current_user.unit_id) —
+    #              KHÔNG phải all-scope như admin, chống xem chéo đơn vị (IDOR).
+    #   - officer / accountant / user: chỉ lead được giao cho mình.
+    # is_privileged (admin+manager) chỉ quyết định có đính kèm officer_name hay
+    # không; KHÔNG dùng để mở all-scope cho manager nữa.
     is_privileged = current_user.role in (UserRole.ADMIN, UserRole.MANAGER)
-    officer_ids = None if is_privileged else [current_user.id]
+    if current_user.role == UserRole.ADMIN:
+        officer_ids = None
+        unit_scope_id = None
+    elif current_user.role == UserRole.MANAGER:
+        officer_ids = None
+        unit_scope_id = current_user.unit_id
+    else:
+        officer_ids = [current_user.id]
+        unit_scope_id = None
     scope = "all" if is_privileged else "own"
 
     repo = LeadRepository(db)
     leads = await repo.get_my_appointments(
-        officer_ids=officer_ids, since=since, until=until
+        officer_ids=officer_ids, since=since, until=until, unit_id=unit_scope_id
     )
 
     items: List[MyAppointmentItem] = []
