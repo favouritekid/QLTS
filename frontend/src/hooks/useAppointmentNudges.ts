@@ -57,6 +57,7 @@ export function useAppointmentNudges(
   appointments: MyAppointmentItem[] | undefined,
   serverNow: number,
   enabled: boolean,
+  panelOpen: boolean,
 ): UseAppointmentNudges {
   const [active, setActiveState] = React.useState<MyAppointmentItem | null>(null);
   const activeRef = React.useRef<MyAppointmentItem | null>(null);
@@ -70,7 +71,11 @@ export function useAppointmentNudges(
   const calledRef = React.useRef<Set<string>>(new Set()); // đã gọi → loại
   const snoozeRef = React.useRef<Map<string, number>>(new Map()); // khóa → mốc hết hoãn
   const queueRef = React.useRef<string[]>([]);
-  const readyRef = React.useRef(false); // bỏ qua lần dò đầu (serverNow có thể chưa hiệu chỉnh skew)
+
+  const openRef = React.useRef(panelOpen); // panel đang mở? (gate chuông)
+  React.useEffect(() => {
+    openRef.current = panelOpen;
+  }, [panelOpen]);
 
   // ── Prefs (đọc localStorage trong effect → SSR-safe) ──
   const [soundOn, setSoundOn] = React.useState(false);
@@ -110,14 +115,9 @@ export function useAppointmentNudges(
     }
     // Chặn NaN (server_time hỏng): NaN<=0 là false nên guard cũ lọt → engine chết
     // thầm + render "NaN". Number.isFinite chặn cả NaN lẫn giá trị chưa load (0).
+    // (serverNow lúc mount = server_time đã hiệu chỉnh skew ngay từ init, KHÔNG cần
+    // bỏ pass đầu — bỏ pass đầu chỉ tạo cửa-sổ-chết cho hẹn chạm giờ trong ~1s đầu.)
     if (!Number.isFinite(serverNow) || serverNow <= 0) return;
-    // Bỏ qua lần dò ĐẦU: serverNow lúc mount có thể lấy từ cache server_time cũ,
-    // chưa hiệu chỉnh skew (useServerNow set giá trị chuẩn trong effect ngay sau).
-    // Bỏ pass này → arm/seed đều chạy trên đồng hồ đã chuẩn.
-    if (!readyRef.current) {
-      readyRef.current = true;
-      return;
-    }
 
     // Hẹn đang mở nhưng khóa đã biến mất (dời lịch / xử lý nơi khác) → đóng toast.
     if (activeRef.current && !byKey.has(keyOf(activeRef.current))) setActive(null);
@@ -164,7 +164,11 @@ export function useAppointmentNudges(
   const activeKey = active ? keyOf(active) : null;
   React.useEffect(() => {
     if (!activeKey || !active) return;
-    if (soundOnRef.current) playNotificationSound(); // dùng chung AudioContext của @/lib/sound
+    // Chuông: dùng chung AudioContext của @/lib/sound. KHÔNG kêu khi tab đang hiện
+    // VÀ panel đang mở (toast bị ẩn để tránh chồng → một "ping" không toast sẽ khó
+    // hiểu); vẫn kêu khi tab ẩn (cảnh báo âm thanh có ích).
+    const hidden = typeof document !== "undefined" && document.hidden;
+    if (soundOnRef.current && (hidden || !openRef.current)) playNotificationSound();
     // OS notification: chỉ khi bật + đã cấp quyền + tab đang ẩn (tránh trùng toast).
     // Giữ inline (không dùng showBrowserNotification) để có onclick → focus.
     if (
@@ -236,16 +240,20 @@ export function useAppointmentNudges(
       return;
     }
     if (!notifySupported()) return;
-    void requestNotificationPermission().then((perm) => {
-      const ok = perm === "granted";
-      notifyOnRef.current = ok;
-      setNotifyOn(ok);
-      try {
-        localStorage.setItem(LS_NOTIFY, ok ? "1" : "0");
-      } catch {
-        /* noop */
-      }
-    });
+    void requestNotificationPermission()
+      .then((perm) => {
+        const ok = perm === "granted";
+        notifyOnRef.current = ok;
+        setNotifyOn(ok);
+        try {
+          localStorage.setItem(LS_NOTIFY, ok ? "1" : "0");
+        } catch {
+          /* noop */
+        }
+      })
+      .catch(() => {
+        /* requestPermission bị từ chối/không hỗ trợ → giữ tắt */
+      });
   }, []);
 
   return {

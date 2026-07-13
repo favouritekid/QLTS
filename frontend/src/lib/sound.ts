@@ -24,6 +24,13 @@ export function playNotificationSound(): void {
   try {
     const context = getAudioContext();
 
+    // Chrome autoplay policy: context tạo lazy ngoài user-gesture (vd khi bật
+    // âm được KHÔI PHỤC từ localStorage lúc tải trang) sẽ ở trạng thái
+    // "suspended" → âm phát ra câm. Resume để chuông thật sự kêu.
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+
     // Create oscillator for the notification sound
     const oscillator = context.createOscillator();
     const gainNode = context.createGain();

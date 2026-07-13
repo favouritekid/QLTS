@@ -211,7 +211,7 @@ export function AppointmentAssistant() {
   // Chỉ chạy nhịp đồng hồ 1s khi thật cần: officer (dò nudge) HOẶC panel đang mở
   // (đếm sống). Admin/manager đóng panel → không tick mỗi giây suốt phiên.
   const serverNow = useServerNow(data?.server_time, enabled || open);
-  const nudges = useAppointmentNudges(data?.appointments, serverNow, enabled);
+  const nudges = useAppointmentNudges(data?.appointments, serverNow, enabled, open);
 
   const close = React.useCallback(() => setOpen(false), []);
 

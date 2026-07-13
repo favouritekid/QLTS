@@ -25,6 +25,7 @@ import { useMyAppointments } from "@/hooks/useMyAppointments";
 import { useServerNow } from "@/hooks/useServerNow";
 import {
   STATE_STYLE,
+  apptDelta,
   formatDelta,
   hhmm,
   hhmmFromMs,
@@ -164,8 +165,10 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
   const rest = appts.slice(1);
   // vị trí hàng KHÔNG-quá-hạn đầu tiên trong TOÀN danh sách (kể cả hero) → chèn
   // đường BÂY GIỜ ngay TRƯỚC nó. Nếu hero đã là sắp-tới (không có hẹn trễ), đường
-  // nằm TRÊN hero — tránh việc một hẹn tương lai đứng trên đường "bây giờ".
-  const firstUpcomingIdx = appts.findIndex((a) => !a.is_overdue);
+  // nằm TRÊN hero — tránh việc một hẹn tương lai đứng trên đường "bây giờ". Dùng
+  // đồng hồ LIVE (serverNow) — khớp màu overdue/upcoming của Hero/ApptRow (stateOf),
+  // không lệ thuộc is_overdue snapshot lúc fetch (lệch tới ~60s trong cửa refetch).
+  const firstUpcomingIdx = appts.findIndex((a) => apptDelta(a.scheduled_at, serverNow) >= 0);
 
   return (
     <div className="flex flex-col">
@@ -232,8 +235,9 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
                   <ApptRow item={item} serverNow={serverNow} />
                 </React.Fragment>
               ))}
-              {/* nếu toàn bộ đều quá hạn → đường BÂY GIỜ ở cuối để nhấn "chưa có hẹn sắp tới" */}
-              {rest.length > 0 && firstUpcomingIdx === -1 && <NowLine serverNow={serverNow} />}
+              {/* toàn bộ đều quá hạn (kể cả khi chỉ có 1 hẹn) → đường BÂY GIỜ ở cuối
+                  để nhấn "chưa có hẹn sắp tới" */}
+              {firstUpcomingIdx === -1 && <NowLine serverNow={serverNow} />}
             </>
           )}
         </div>

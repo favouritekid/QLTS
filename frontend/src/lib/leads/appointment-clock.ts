@@ -25,8 +25,10 @@ const VN_HHMM = new Intl.DateTimeFormat("en-GB", {
   hourCycle: "h23",
 });
 
-/** "HH:MM" theo giờ VN từ một mốc epoch-ms. */
+/** "HH:MM" theo giờ VN từ một mốc epoch-ms; ms không hợp lệ → "--:--"
+ *  (Intl.format(new Date(NaN)) THROW RangeError — phải chặn trước khi render). */
 export function hhmmFromMs(ms: number): string {
+  if (!Number.isFinite(ms)) return "--:--";
   return VN_HHMM.format(new Date(ms));
 }
 
