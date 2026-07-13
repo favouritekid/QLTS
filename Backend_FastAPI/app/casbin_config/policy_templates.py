@@ -129,6 +129,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{id}/insights", "action": "GET"},  # Lead insights
         {"subject": "{role}", "object": "/api/leads/{id}/audit-logs", "action": "GET"},  # Lead audit log history
         {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
+        {"subject": "{role}", "object": "/api/leads/my/appointments", "action": "GET"},  # Nhịp hẹn — lịch hẹn gọi lại của tôi
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
         # SMS consult officer (P2-3 §16.7) — tạo link tư vấn + xem interest ngành của lead.
