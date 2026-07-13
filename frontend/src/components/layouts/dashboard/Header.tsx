@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { NotificationDropdown } from "@/components/notifications/NotificationDropdown";
+import { AppointmentReminder } from "@/components/leads/AppointmentReminder";
 import { useCommandPalette } from "@/hooks/useCommandPalette";
 import { useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "@/components/layouts/SecurityBanner";
 import { useAuth } from "@/hooks/useAuth";
@@ -112,6 +113,9 @@ export function Header() {
 
         {/* Theme Toggle */}
         <ThemeToggle />
+
+        {/* Nhắc lịch hẹn ("Nhịp hẹn") */}
+        <AppointmentReminder />
 
         {/* Notification Dropdown */}
         <NotificationDropdown />

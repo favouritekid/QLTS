@@ -1471,6 +1471,42 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(stmt)
         return result.rowcount
 
+    async def get_my_appointments(
+        self,
+        officer_id: int,
+        since: datetime,
+        until: datetime,
+        limit: int = 40,
+    ) -> List[models.Lead]:
+        """
+        Lead của officer có lịch gọi lại (next_activity_at) trong [since, until].
+
+        next_activity_at = MIN(scheduled_at) các consultation follow-up còn sống →
+        query theo nó tự lọc "hẹn còn hiệu lực", khỏi join consultation_status.
+        Eager-load offering→program để hiện trình độ/ngành. Order ASC theo
+        next_activity_at (quá hạn giờ nhỏ hơn now tự đứng trước). Dùng index
+        ix_lead_officer_status_deleted_activity.
+        """
+        query = (
+            select(models.Lead)
+            .options(
+                selectinload(models.Lead.offering).selectinload(
+                    models.ProgramOffering.program
+                ),
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.next_activity_at.isnot(None),
+                models.Lead.next_activity_at >= since,
+                models.Lead.next_activity_at <= until,
+                models.Lead.deleted_at.is_(None),
+            )
+            .order_by(models.Lead.next_activity_at.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def get_leads_by_referrer(
         self,
         referrer_id: int,

@@ -3290,6 +3290,70 @@ async def check_reassign_quota(db: AsyncSession, officer_id: int) -> dict:
     }
 
 
+async def get_my_appointments(
+    db: AsyncSession,
+    current_user: models.User,
+    overdue_days: int = 7,
+    upcoming_hours: int = 24,
+):
+    """
+    Lịch hẹn gọi lại của officer đang login ("Nhịp hẹn").
+
+    Trả các lead có next_activity_at (giờ hẹn còn sống) trong cửa sổ
+    [now - overdue_days, now + upcoming_hours], kèm cờ is_overdue realtime
+    (= next_activity_at < now, đồng bộ isLeadOverdue FE) + server_time để FE
+    đếm giờ chính xác. Repo sort ASC theo next_activity_at → quá hạn tự đứng
+    trước sắp tới. Chỉ đọc, không mutation.
+    """
+    from datetime import timedelta
+    from app.repositories.lead_repository import LeadRepository
+    from app.schemas.lead import MyAppointmentItem, MyAppointmentsResponse
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=overdue_days)
+    until = now + timedelta(hours=upcoming_hours)
+
+    repo = LeadRepository(db)
+    leads = await repo.get_my_appointments(
+        officer_id=current_user.id, since=since, until=until
+    )
+
+    items: List[MyAppointmentItem] = []
+    overdue_count = 0
+    upcoming_count = 0
+    for lead in leads:
+        sched = lead.next_activity_at
+        is_overdue = sched < now
+        if is_overdue:
+            overdue_count += 1
+        else:
+            upcoming_count += 1
+        prog = (
+            lead.offering.program
+            if (lead.offering and lead.offering.program)
+            else None
+        )
+        items.append(
+            MyAppointmentItem(
+                lead_id=lead.id,
+                lead_name=lead.full_name,
+                phone=lead.phone,
+                source=lead.source,
+                scheduled_at=sched,
+                is_overdue=is_overdue,
+                degree_level=prog.degree_level if prog else None,
+                major=prog.name if prog else None,
+            )
+        )
+
+    return MyAppointmentsResponse(
+        server_time=now,
+        overdue_count=overdue_count,
+        upcoming_count=upcoming_count,
+        appointments=items,
+    )
+
+
 async def process_officer_action(
     db: AsyncSession, lead_id: int, officer: models.User, action: str, reason: str
 ) -> models.Lead:

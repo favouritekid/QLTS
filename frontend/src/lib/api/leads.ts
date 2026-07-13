@@ -149,6 +149,31 @@ export async function getReassignQuota(): Promise<ReassignQuota> {
   return response.data
 }
 
+// ── Nhịp hẹn — bảng nhắc lịch hẹn cho tư vấn viên ─────────────────────────
+export interface MyAppointmentItem {
+  lead_id: number
+  lead_name: string
+  phone: string
+  source: string
+  scheduled_at: string // ISO — giờ hẹn gọi lại (lead.next_activity_at)
+  is_overdue: boolean // BE tính realtime = scheduled_at < server_time
+  degree_level: string | null // trình độ ngành → getDegreeLevelAbbr
+  major: string | null
+}
+
+export interface MyAppointmentsResponse {
+  server_time: string // ISO — mốc để FE đếm giờ chính xác (khỏi lệ thuộc đồng hồ client)
+  overdue_count: number
+  upcoming_count: number
+  appointments: MyAppointmentItem[] // ASC theo scheduled_at: quá hạn trước, sắp tới sau
+}
+
+/** Lịch hẹn gọi lại của officer đang login ("Nhịp hẹn"). */
+export async function getMyAppointments(): Promise<MyAppointmentsResponse> {
+  const response = await api.get<MyAppointmentsResponse>('/api/leads/my/appointments')
+  return response.data
+}
+
 /**
  * Bulk assign leads to a specific officer
  * Sends officer_id as query param, lead_ids in request body

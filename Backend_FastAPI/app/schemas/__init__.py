@@ -137,6 +137,8 @@ from .lead import (
     LeadImportResult,
     LeadInsights,
     LeadsPage,
+    MyAppointmentItem,  # ✅ Nhịp hẹn: 1 lịch gọi lại của officer
+    MyAppointmentsResponse,  # ✅ Nhịp hẹn: bucket overdue/upcoming + server_time
     LeadUpdate,
     LeadStatusUpdate,  # ✅ FSM v3.0: Status update schema
     BulkStageSkippedItem,

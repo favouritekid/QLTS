@@ -577,6 +577,32 @@ class LeadsPage(BaseModel):
     consultation_status_counts: Optional[Dict[str, int]] = None
 
 
+# =========================================================================
+# My Appointments — bảng nhắc lịch hẹn cho tư vấn viên ("Nhịp hẹn")
+# Nguồn: Lead có next_activity_at (MIN scheduled_at của consultation còn sống).
+# =========================================================================
+class MyAppointmentItem(BaseModel):
+    """Một lịch gọi lại của officer (1 lead = 1 hẹn kế tiếp còn sống)."""
+    lead_id: int
+    lead_name: str
+    phone: str
+    source: str
+    scheduled_at: datetime          # = lead.next_activity_at (giờ hẹn gọi lại gần nhất)
+    is_overdue: bool                # scheduled_at < server_time (realtime, đồng bộ isLeadOverdue FE)
+    degree_level: Optional[str] = None   # trình độ ngành (Cao đẳng/Đại học…) → FE getDegreeLevelAbbr
+    major: Optional[str] = None          # tên ngành
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MyAppointmentsResponse(BaseModel):
+    """Lịch hẹn của tôi, đã bucket theo giờ máy chủ (thin-client: BE là nguồn thật)."""
+    server_time: datetime           # để FE đếm giờ chính xác (khỏi lệ thuộc đồng hồ client)
+    overdue_count: int
+    upcoming_count: int
+    # order: repo sort ASC theo scheduled_at → quá hạn (giờ < now) tự đứng trước, rồi sắp tới.
+    appointments: List[MyAppointmentItem]
+
+
 class BulkAssignLeadsSchema(BaseModel):
     lead_ids: List[int] = Field(..., min_length=1)
 
