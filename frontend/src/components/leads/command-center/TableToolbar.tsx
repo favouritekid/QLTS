@@ -46,23 +46,17 @@ export type DensityMode = 'condensed' | 'regular' | 'relaxed';
 interface TableToolbarProps {
   densityMode: DensityMode;
   onDensityChange: (mode: DensityMode) => void;
+  /**
+   * Cột ẩn/hiện được — DẪN XUẤT từ bảng thật (`getCanHide()`) ở LeadsTable,
+   * KHÔNG hardcode ở đây để tránh lệch id/thiếu cột. `id` phải khớp column id
+   * TanStack; `label` là nhãn tiếng Việt.
+   */
+  columns: { id: string; label: string }[];
   columnVisibility: VisibilityState;
   onColumnVisibilityChange: (columnId: string, isVisible: boolean) => void;
   /** Đặt lại bề rộng + thứ tự cột về mặc định (bảng desktop). */
   onResetColumns?: () => void;
 }
-
-// Column config - order matters for display
-const COLUMNS_CONFIG = [
-  { id: "full_name", label: "Tên Lead" },
-  { id: "phone", label: "Số điện thoại" },
-  { id: "source", label: "Nguồn" },
-  { id: "pipeline_stage", label: "Giai đoạn" },
-  { id: "consultation_status", label: "Trạng thái TĐ" },
-  { id: "assigned_officer", label: "Cán bộ" },
-  { id: "lead_score", label: "Điểm" },
-  { id: "created_at", label: "Hoạt động" },
-];
 
 const DENSITY_OPTIONS: { value: DensityMode; label: string; icon: React.ElementType }[] = [
   { value: 'condensed', label: 'Thu gọn', icon: Minus },
@@ -77,12 +71,13 @@ const DENSITY_OPTIONS: { value: DensityMode; label: string; icon: React.ElementT
 export function TableToolbar({
   densityMode,
   onDensityChange,
+  columns,
   columnVisibility,
   onColumnVisibilityChange,
   onResetColumns,
 }: TableToolbarProps) {
   // Count visible columns (default to visible if not in state)
-  const visibleCount = COLUMNS_CONFIG.filter(
+  const visibleCount = columns.filter(
     (col) => columnVisibility[col.id] !== false
   ).length;
 
@@ -135,7 +130,7 @@ export function TableToolbar({
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuLabel>Hiển thị cột</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {COLUMNS_CONFIG.map((col) => {
+            {columns.map((col) => {
               // Default to visible (true) if not in state
               const isVisible = columnVisibility[col.id] !== false;
               return (

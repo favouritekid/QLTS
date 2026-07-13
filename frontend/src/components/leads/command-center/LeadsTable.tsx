@@ -220,6 +220,25 @@ const DEFAULT_COLUMN_ORDER: ColumnOrderState = [
   "actions",
 ];
 
+// Nhãn hiển thị cho menu ẩn/hiện cột — key = column id (khớp DEFAULT_COLUMN_ORDER).
+// KHÔNG hardcode LẠI danh sách cột nào ẩn/hiện được ở TableToolbar (dễ lệch
+// contract): TableToolbar nhận thẳng list dẫn xuất từ `table.getAllLeafColumns()`
+// đã lọc `getCanHide()`. Map này chỉ cấp NHÃN; thiếu nhãn → fallback về id (lộ
+// ra ngay, không im lặng). `select`/`actions` `enableHiding:false` nên không vào
+// menu → không cần nhãn.
+const COLUMN_LABELS: Record<string, string> = {
+  full_name: "Tên Lead",
+  phone: "Số điện thoại",
+  offering: "Ngành",
+  source: "Nguồn",
+  pipeline_stage: "Giai đoạn",
+  consultation_status: "Trạng thái TĐ",
+  assigned_officer: "Cán bộ",
+  lead_score: "Điểm",
+  activity: "Hoạt động",
+  cached_urgency_score: "Độ khẩn cấp",
+};
+
 // =============================================================================
 // DRAGGABLE HEADER — kéo grip đổi thứ tự (dnd-kit) · mép phải resize ·
 // double-click mép = auto-fit. Grip / sort-button / resize-handle tách vùng
@@ -850,6 +869,18 @@ export function LeadsTable({
         { actual, expected: DEFAULT_COLUMN_ORDER },
       );
     }
+    // Mọi cột ẩn/hiện được PHẢI có nhãn trong COLUMN_LABELS, nếu không menu
+    // ẩn/hiện cột sẽ hiện id thô (vd "cached_urgency_score"). Fail-loud khi dev.
+    const missingLabels = table
+      .getAllLeafColumns()
+      .filter((c) => c.getCanHide() && !COLUMN_LABELS[c.id])
+      .map((c) => c.id);
+    if (missingLabels.length) {
+      console.error(
+        "[LeadsTable] Cột ẩn/hiện được thiếu nhãn COLUMN_LABELS — bổ sung nhãn.",
+        { missingLabels },
+      );
+    }
   }, [table]);
 
   // Get all rows for virtualization
@@ -861,6 +892,20 @@ export function LeadsTable({
   const sortableColumnIds = React.useMemo(
     () => columnOrder.filter((id) => columnVisibility[id] !== false),
     [columnOrder, columnVisibility],
+  );
+
+  // Danh sách cột cho menu ẩn/hiện — SINGLE SOURCE OF TRUTH từ chính bảng:
+  // lấy cột lá lọc `getCanHide()` (loại select/actions enableHiding:false),
+  // theo thứ tự định nghĩa (= DEFAULT_COLUMN_ORDER). Không hardcode lại ở
+  // TableToolbar để khỏi lệch id/thiếu cột. `table` là ref ổn định của
+  // react-table nên memo tính 1 lần (tập cột tĩnh theo runtime).
+  const hideableColumns = React.useMemo(
+    () =>
+      table
+        .getAllLeafColumns()
+        .filter((col) => col.getCanHide())
+        .map((col) => ({ id: col.id, label: COLUMN_LABELS[col.id] ?? col.id })),
+    [table],
   );
 
   // ✅ Option A: Virtualization setup
@@ -1169,6 +1214,7 @@ export function LeadsTable({
         <TableToolbar
           densityMode={densityMode}
           onDensityChange={setDensityMode}
+          columns={hideableColumns}
           columnVisibility={columnVisibility}
           onColumnVisibilityChange={(columnId, isVisible) => {
             setColumnVisibility((prev) => ({
