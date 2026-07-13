@@ -3313,9 +3313,14 @@ async def get_my_appointments(
     since = now - timedelta(days=overdue_days)
     until = now + timedelta(hours=upcoming_hours)
 
+    # Scope theo role: admin/manager thấy TOÀN BỘ lịch hẹn; officer chỉ của mình.
+    is_privileged = current_user.role in (UserRole.ADMIN, UserRole.MANAGER)
+    officer_ids = None if is_privileged else [current_user.id]
+    scope = "all" if is_privileged else "own"
+
     repo = LeadRepository(db)
     leads = await repo.get_my_appointments(
-        officer_id=current_user.id, since=since, until=until
+        officer_ids=officer_ids, since=since, until=until
     )
 
     items: List[MyAppointmentItem] = []
@@ -3343,11 +3348,18 @@ async def get_my_appointments(
                 is_overdue=is_overdue,
                 degree_level=prog.degree_level if prog else None,
                 major=prog.name if prog else None,
+                # NV phụ trách — chỉ đính kèm khi xem toàn bộ (admin/manager)
+                officer_name=(
+                    lead.assigned_officer.full_name
+                    if (is_privileged and lead.assigned_officer)
+                    else None
+                ),
             )
         )
 
     return MyAppointmentsResponse(
         server_time=now,
+        scope=scope,
         overdue_count=overdue_count,
         upcoming_count=upcoming_count,
         appointments=items,

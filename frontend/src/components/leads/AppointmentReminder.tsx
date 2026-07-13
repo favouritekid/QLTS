@@ -107,6 +107,11 @@ function eduLine(item: MyAppointmentItem): string {
   return parts.length ? parts.join(" ") : "Chưa chọn ngành";
 }
 
+/** Dòng phụ: ngành · NV phụ trách (tên NV chỉ có khi admin/manager xem toàn bộ). */
+function metaLine(item: MyAppointmentItem): string {
+  return item.officer_name ? `${eduLine(item)} · ${item.officer_name}` : eduLine(item);
+}
+
 // ── Hero: việc cần làm bây giờ ────────────────────────────────────────────────
 function Hero({ item, serverNow }: { item: MyAppointmentItem; serverNow: number }) {
   const st = stateOf(item, serverNow);
@@ -136,7 +141,7 @@ function Hero({ item, serverNow }: { item: MyAppointmentItem; serverNow: number 
       <div className="mt-2 truncate text-lg font-bold font-display leading-tight">
         {item.lead_name}
       </div>
-      <div className="mt-0.5 truncate text-xs text-muted-foreground">{eduLine(item)}</div>
+      <div className="mt-0.5 truncate text-xs text-muted-foreground">{metaLine(item)}</div>
 
       <div className="mt-3 flex items-center gap-3">
         <div className={cn("font-mono text-3xl font-bold leading-none tabular-nums", style.text)}>
@@ -191,7 +196,7 @@ function ApptRow({ item, serverNow }: { item: MyAppointmentItem; serverNow: numb
       <div className={cn("h-9 w-[3px] shrink-0 rounded-full", style.bar)} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-semibold font-display leading-tight">{item.lead_name}</div>
-        <div className="truncate text-xs text-muted-foreground">{eduLine(item)}</div>
+        <div className="truncate text-xs text-muted-foreground">{metaLine(item)}</div>
       </div>
       <div className={cn("shrink-0 rounded-md px-2 py-1 font-mono text-xs font-semibold tabular-nums", style.pill)}>
         {st === "overdue" ? "trễ " : "còn "}
@@ -237,9 +242,11 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
       <div className="flex items-start justify-between border-b p-4">
         <div>
           <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Việc cần làm bây giờ
+            {data?.scope === "all" ? "Toàn đơn vị · hôm nay" : "Việc cần làm bây giờ"}
           </div>
-          <h2 className="font-display text-lg font-bold">Lịch hẹn của bạn</h2>
+          <h2 className="font-display text-lg font-bold">
+            {data?.scope === "all" ? "Lịch hẹn tư vấn" : "Lịch hẹn của bạn"}
+          </h2>
         </div>
         <div className="text-right">
           <div className="font-mono text-lg font-bold tabular-nums" suppressHydrationWarning>

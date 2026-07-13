@@ -591,12 +591,14 @@ class MyAppointmentItem(BaseModel):
     is_overdue: bool                # scheduled_at < server_time (realtime, đồng bộ isLeadOverdue FE)
     degree_level: Optional[str] = None   # trình độ ngành (Cao đẳng/Đại học…) → FE getDegreeLevelAbbr
     major: Optional[str] = None          # tên ngành
+    officer_name: Optional[str] = None   # NV phụ trách — hiện khi admin/manager xem toàn bộ
     model_config = ConfigDict(from_attributes=True)
 
 
 class MyAppointmentsResponse(BaseModel):
-    """Lịch hẹn của tôi, đã bucket theo giờ máy chủ (thin-client: BE là nguồn thật)."""
+    """Lịch hẹn (theo scope role), đã bucket theo giờ máy chủ (thin-client: BE là nguồn thật)."""
     server_time: datetime           # để FE đếm giờ chính xác (khỏi lệ thuộc đồng hồ client)
+    scope: str                      # "own" (officer, của mình) | "all" (admin/manager, toàn bộ)
     overdue_count: int
     upcoming_count: int
     # order: repo sort ASC theo scheduled_at → quá hạn (giờ < now) tự đứng trước, rồi sắp tới.

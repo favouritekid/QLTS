@@ -1473,19 +1473,20 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def get_my_appointments(
         self,
-        officer_id: int,
+        officer_ids: Optional[List[int]],
         since: datetime,
         until: datetime,
-        limit: int = 40,
+        limit: int = 60,
     ) -> List[models.Lead]:
         """
-        Lead của officer có lịch gọi lại (next_activity_at) trong [since, until].
+        Lead có lịch gọi lại (next_activity_at) trong [since, until].
 
+        officer_ids=None → TOÀN BỘ (admin/manager); [id] → của officer đó (own).
         next_activity_at = MIN(scheduled_at) các consultation follow-up còn sống →
         query theo nó tự lọc "hẹn còn hiệu lực", khỏi join consultation_status.
-        Eager-load offering→program để hiện trình độ/ngành. Order ASC theo
-        next_activity_at (quá hạn giờ nhỏ hơn now tự đứng trước). Dùng index
-        ix_lead_officer_status_deleted_activity.
+        Eager-load offering→program (trình độ/ngành) + assigned_officer (tên NV,
+        hiện khi admin/manager xem toàn bộ). Order ASC theo next_activity_at (quá
+        hạn giờ nhỏ hơn now tự đứng trước). Dùng index ix_lead_officer_status_deleted_activity.
         """
         query = (
             select(models.Lead)
@@ -1493,17 +1494,18 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.offering).selectinload(
                     models.ProgramOffering.program
                 ),
+                selectinload(models.Lead.assigned_officer),
             )
             .where(
-                models.Lead.assigned_officer_id == officer_id,
                 models.Lead.next_activity_at.isnot(None),
                 models.Lead.next_activity_at >= since,
                 models.Lead.next_activity_at <= until,
                 models.Lead.deleted_at.is_(None),
             )
-            .order_by(models.Lead.next_activity_at.asc())
-            .limit(limit)
         )
+        if officer_ids is not None:
+            query = query.where(models.Lead.assigned_officer_id.in_(officer_ids))
+        query = query.order_by(models.Lead.next_activity_at.asc()).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

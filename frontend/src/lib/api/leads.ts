@@ -159,10 +159,12 @@ export interface MyAppointmentItem {
   is_overdue: boolean // BE tính realtime = scheduled_at < server_time
   degree_level: string | null // trình độ ngành → getDegreeLevelAbbr
   major: string | null
+  officer_name: string | null // NV phụ trách — có khi admin/manager xem toàn bộ
 }
 
 export interface MyAppointmentsResponse {
   server_time: string // ISO — mốc để FE đếm giờ chính xác (khỏi lệ thuộc đồng hồ client)
+  scope: "own" | "all" // own = officer (của mình) · all = admin/manager (toàn bộ)
   overdue_count: number
   upcoming_count: number
   appointments: MyAppointmentItem[] // ASC theo scheduled_at: quá hạn trước, sắp tới sau

@@ -17,6 +17,7 @@ function withData() {
   return {
     data: {
       server_time: NOW,
+      scope: "all", // admin/manager xem toàn bộ → có officer_name
       overdue_count: 2,
       upcoming_count: 1,
       appointments: [
@@ -29,6 +30,7 @@ function withData() {
           is_overdue: true,
           degree_level: "Cao đẳng",
           major: "Điều dưỡng",
+          officer_name: "Trần Quản Lý",
         },
         {
           lead_id: 2,
@@ -39,6 +41,7 @@ function withData() {
           is_overdue: true,
           degree_level: "Trung cấp",
           major: "Kế toán",
+          officer_name: "Lê Tư Vấn",
         },
         {
           lead_id: 3,
@@ -49,6 +52,7 @@ function withData() {
           is_overdue: false,
           degree_level: "Đại học",
           major: "Công nghệ thông tin",
+          officer_name: "Phạm Officer",
         },
       ],
     },
@@ -74,13 +78,15 @@ describe("AppointmentReminder / ReminderBody", () => {
     // Gọi ngay = tel: của hero
     const call = screen.getByText("Gọi ngay").closest("a");
     expect(call).toHaveAttribute("href", "tel:0900000001");
-    // trình độ viết tắt (getDegreeLevelAbbr): "Cao đẳng" → "CĐ"
-    expect(screen.getByText(/CĐ Điều dưỡng/)).toBeInTheDocument();
+    // trình độ viết tắt (getDegreeLevelAbbr): "Cao đẳng" → "CĐ" + tên NV (scope=all)
+    expect(screen.getByText(/CĐ Điều dưỡng · Trần Quản Lý/)).toBeInTheDocument();
+    // scope=all (admin/manager) → tiêu đề "Lịch hẹn tư vấn" (không phải "của bạn")
+    expect(screen.getByText("Lịch hẹn tư vấn")).toBeInTheDocument();
   });
 
   it("empty state khi không có lịch hẹn", () => {
     mockUse.mockReturnValue({
-      data: { server_time: NOW, overdue_count: 0, upcoming_count: 0, appointments: [] },
+      data: { server_time: NOW, scope: "own", overdue_count: 0, upcoming_count: 0, appointments: [] },
       isLoading: false,
       isError: false,
     });
