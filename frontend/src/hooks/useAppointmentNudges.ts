@@ -5,7 +5,11 @@ import * as React from "react";
 
 import type { MyAppointmentItem } from "@/lib/api/leads";
 import { apptDelta, eduLine, hhmm } from "@/lib/leads/appointment-clock";
-import { playNotificationSound, requestNotificationPermission } from "@/lib/sound";
+import {
+  installAudioUnlockOnce,
+  playNotificationSound,
+  requestNotificationPermission,
+} from "@/lib/sound";
 
 // =============================================================================
 // Engine "nudge" cho Trợ lý nhắc hẹn (lớp B) + tùy chọn chuông/thông báo (lớp C).
@@ -49,6 +53,8 @@ export interface UseAppointmentNudges {
   soundOn: boolean;
   notifyOn: boolean;
   notifySupported: boolean;
+  /** OS đã CHẶN quyền thông báo (denied) → bật không có tác dụng, cần báo user. */
+  notifyBlocked: boolean;
   toggleSound: () => void;
   toggleNotify: () => void;
 }
@@ -80,8 +86,15 @@ export function useAppointmentNudges(
   // ── Prefs (đọc localStorage trong effect → SSR-safe) ──
   const [soundOn, setSoundOn] = React.useState(false);
   const [notifyOn, setNotifyOn] = React.useState(false);
+  const [notifyBlocked, setNotifyBlocked] = React.useState(false);
   const soundOnRef = React.useRef(false);
   const notifyOnRef = React.useRef(false);
+
+  // Mở khóa AudioContext ở gesture đầu (officer) → chuông LS-restore kêu được
+  // dù bung từ timer (không phải user-gesture). Xem @/lib/sound.
+  React.useEffect(() => {
+    if (enabled) installAudioUnlockOnce();
+  }, [enabled]);
   React.useEffect(() => {
     soundOnRef.current = soundOn;
   }, [soundOn]);
@@ -107,6 +120,24 @@ export function useAppointmentNudges(
     [appointments],
   );
 
+  // Dọn khóa không còn trong feed mỗi refetch: (1) chống Set/Map phình vô hạn
+  // suốt phiên dài; (2) fix latent — dời lịch khỏi mốc T rồi dời VỀ đúng T sẽ
+  // sinh lại khóa cũ; nếu khóa còn trong firedRef → bị chặn nhắc vĩnh viễn. Prune
+  // theo khóa-đang-sống → khóa quay lại được arm/nhắc lại đúng.
+  React.useEffect(() => {
+    const live = byKey;
+    const prune = (s: Set<string>) => {
+      for (const k of s) if (!live.has(k)) s.delete(k);
+    };
+    prune(armedRef.current);
+    prune(firedRef.current);
+    prune(calledRef.current);
+    for (const k of Array.from(snoozeRef.current.keys())) {
+      if (!live.has(k)) snoozeRef.current.delete(k);
+    }
+    queueRef.current = queueRef.current.filter((k) => live.has(k));
+  }, [byKey]);
+
   // ── Vòng dò nudge: chạy mỗi tick server_now ──
   React.useEffect(() => {
     if (!enabled) {
@@ -119,8 +150,15 @@ export function useAppointmentNudges(
     // bỏ pass đầu — bỏ pass đầu chỉ tạo cửa-sổ-chết cho hẹn chạm giờ trong ~1s đầu.)
     if (!Number.isFinite(serverNow) || serverNow <= 0) return;
 
-    // Hẹn đang mở nhưng khóa đã biến mất (dời lịch / xử lý nơi khác) → đóng toast.
-    if (activeRef.current && !byKey.has(keyOf(activeRef.current))) setActive(null);
+    // Hẹn đang mở: khóa biến mất (dời lịch / xử lý nơi khác) → đóng toast; còn
+    // khóa nhưng object đổi (refetch cập nhật tên/SĐT/ngành cùng mốc) → đồng bộ
+    // lại để toast + tel: không hiện dữ liệu cũ.
+    if (activeRef.current) {
+      const ak = keyOf(activeRef.current);
+      const fresh = byKey.get(ak);
+      if (!fresh) setActive(null);
+      else if (fresh !== activeRef.current) setActive(fresh);
+    }
 
     // Phát hiện hẹn vừa chạm giờ (arm-based).
     for (const a of byKey.values()) {
@@ -245,6 +283,9 @@ export function useAppointmentNudges(
         const ok = perm === "granted";
         notifyOnRef.current = ok;
         setNotifyOn(ok);
+        // denied = OS đã CHẶN (browser không hỏi lại) → báo user chỉnh trong cài
+        // đặt trình duyệt, tránh nút "im lặng không tác dụng" trông như hỏng.
+        setNotifyBlocked(perm === "denied");
         try {
           localStorage.setItem(LS_NOTIFY, ok ? "1" : "0");
         } catch {
@@ -264,6 +305,7 @@ export function useAppointmentNudges(
     soundOn,
     notifyOn,
     notifySupported: notifySupported(),
+    notifyBlocked,
     toggleSound,
     toggleNotify,
   };

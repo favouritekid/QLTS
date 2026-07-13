@@ -25,10 +25,12 @@ const VN_HHMM = new Intl.DateTimeFormat("en-GB", {
   hourCycle: "h23",
 });
 
-/** "HH:MM" theo giờ VN từ một mốc epoch-ms; ms không hợp lệ → "--:--"
- *  (Intl.format(new Date(NaN)) THROW RangeError — phải chặn trước khi render). */
+/** "HH:MM" theo giờ VN từ một mốc epoch-ms; ms không hợp lệ HOẶC ≤0 → "--:--".
+ *  ms≤0 = sentinel "chưa load" của useServerNow (0) → tránh render nhầm '07:00'
+ *  (giờ VN của epoch 1970). Intl.format(new Date(NaN)) THROW RangeError nên phải
+ *  chặn trước; mọi mốc thật (scheduled_at/server_time) luôn >0 nên không ảnh hưởng. */
 export function hhmmFromMs(ms: number): string {
-  if (!Number.isFinite(ms)) return "--:--";
+  if (!Number.isFinite(ms) || ms <= 0) return "--:--";
   return VN_HHMM.format(new Date(ms));
 }
 

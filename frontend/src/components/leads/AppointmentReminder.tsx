@@ -21,7 +21,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useMediaQuery";
-import { useMyAppointments } from "@/hooks/useMyAppointments";
+import { useMyAppointments, isForbiddenError } from "@/hooks/useMyAppointments";
 import { useServerNow } from "@/hooks/useServerNow";
 import {
   STATE_STYLE,
@@ -157,8 +157,10 @@ function NowLine({ serverNow }: { serverNow: number }) {
 
 // ── Nội dung popup (dùng chung dropdown & sheet) ─────────────────────────────
 export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
-  const { data, isLoading, isError } = useMyAppointments();
-  const serverNow = useServerNow(data?.server_time);
+  const { data, isLoading, isError, dataUpdatedAt } = useMyAppointments();
+  // dataUpdatedAt = mốc client nhận server_time → skew đúng tuổi snapshot (khỏi
+  // lệch ~30s khi remount panel với data đã cache).
+  const serverNow = useServerNow(data?.server_time, true, dataUpdatedAt);
 
   const appts = data?.appointments ?? [];
   const hero = appts[0];
@@ -260,8 +262,13 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
 export function AppointmentReminder() {
   const [open, setOpen] = React.useState(false);
   const isMobile = useIsMobile();
-  const { data } = useMyAppointments();
+  const { data, error } = useMyAppointments();
   const overdue = data?.overdue_count ?? 0;
+
+  // Role bị Casbin deny (accountant/user) → 403 → ẩn hẳn widget (không hiện icon
+  // lỗi + query tự ngừng poll qua useMyAppointments). Dựa vào RESPONSE, KHÔNG
+  // check user.role (thin-client).
+  if (isForbiddenError(error)) return null;
 
   const trigger = (
     <Button

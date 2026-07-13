@@ -94,8 +94,9 @@ async def get_my_reassign_quota(
     return quota
 
 
-@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/my/appointments", response_model=schemas.MyAppointmentsResponse)
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour — @router TRÊN @limiter (thứ tự
+# slowapi ĐÚNG: limiter phải bọc endpoint; đảo lại = decorator bị bỏ = no-op)
 async def get_my_appointments(
     request: Request,
     db: AsyncSession = Depends(database.get_db),

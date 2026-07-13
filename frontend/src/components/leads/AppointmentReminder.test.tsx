@@ -6,6 +6,7 @@ import { ReminderBody } from "./AppointmentReminder";
 // Mock hook dữ liệu — cô lập component khỏi React Query / network.
 vi.mock("@/hooks/useMyAppointments", () => ({
   useMyAppointments: vi.fn(),
+  isForbiddenError: () => false, // mặc định không bị 403 → widget render
 }));
 import { useMyAppointments } from "@/hooks/useMyAppointments";
 

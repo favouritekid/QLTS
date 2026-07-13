@@ -188,11 +188,24 @@ class TestApplyTemplateEmits4Field:
             "Accountant lost core state-machine deny(s) from PLAN §3.3.b: "
             f"{sorted(missing)}"
         )
-        # Separation-of-duties: lead appointments feed carries name/phone PII →
-        # accountant MUST stay denied (finding /code-review, apptacctdeny20260713).
-        assert ("/api/leads/my/appointments", "GET") in deny_paths, (
-            "Accountant deny for /api/leads/my/appointments GET missing — "
-            "finance staff would read lead PII via officer inheritance."
+        # Separation-of-duties: các endpoint mang PII lead/thí sinh (tên/SĐT) mà
+        # accountant kế thừa qua g,role:accountant→role:officer PHẢI giữ deny.
+        # Pin lại (thay cho exact-count cũ đã stale) để 1 PR sau không âm thầm gỡ.
+        pii_separation_of_duties = {
+            ("/api/leads", "GET"),                       # list 391 lead + SĐT
+            ("/api/leads/{id}", "GET"),                  # chi tiết lead
+            ("/api/leads/{id}/timeline", "GET"),
+            ("/api/leads/{id}/consultations", "GET"),
+            ("/api/leads/export", "GET"),                # xuất PII
+            ("/api/leads/my/appointments", "GET"),       # feed Nhịp hẹn (name/phone)
+            ("/api/admissions", "GET"),                  # list hồ sơ
+            ("/api/admissions/{id}", "GET"),
+            ("/api/admissions/pending-diploma", "GET"),  # nợ bằng (name/phone)
+        }
+        missing_pii = pii_separation_of_duties - deny_paths
+        assert not missing_pii, (
+            "Accountant lost PII separation-of-duties deny(s) — finance staff "
+            f"would read lead/thí sinh PII via officer inheritance: {sorted(missing_pii)}"
         )
 
     def test_accountant_deny_rules_all_target_role_accountant(self):

@@ -12,7 +12,7 @@ import {
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useMediaQuery";
-import { useMyAppointments } from "@/hooks/useMyAppointments";
+import { useMyAppointments, isForbiddenError } from "@/hooks/useMyAppointments";
 import { useServerNow } from "@/hooks/useServerNow";
 import { useAppointmentNudges } from "@/hooks/useAppointmentNudges";
 import {
@@ -156,12 +156,14 @@ function NudgePrefsBar({
   soundOn,
   notifyOn,
   notifySupported,
+  notifyBlocked,
   onToggleSound,
   onToggleNotify,
 }: {
   soundOn: boolean;
   notifyOn: boolean;
   notifySupported: boolean;
+  notifyBlocked: boolean;
   onToggleSound: () => void;
   onToggleNotify: () => void;
 }) {
@@ -173,7 +175,7 @@ function NudgePrefsBar({
         : "border-border text-muted-foreground hover:text-foreground",
     );
   return (
-    <div className="flex items-center gap-2 border-t px-3 py-2">
+    <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
       <span className="text-[11px] font-medium text-muted-foreground">Nhắc bằng</span>
       <button
         type="button"
@@ -196,6 +198,11 @@ function NudgePrefsBar({
           Thông báo
         </button>
       )}
+      {notifyBlocked && (
+        <span className="w-full text-[10px] leading-tight text-amber-600 dark:text-amber-400">
+          Thông báo đang bị chặn — hãy bật lại trong cài đặt trình duyệt cho trang này.
+        </span>
+      )}
     </div>
   );
 }
@@ -204,16 +211,21 @@ function NudgePrefsBar({
 export function AppointmentAssistant() {
   const isMobile = useIsMobile();
   const [open, setOpen] = React.useState(false);
-  const { data } = useMyAppointments();
+  const { data, error, dataUpdatedAt } = useMyAppointments();
 
   const overdue = data?.overdue_count ?? 0;
   const enabled = data?.scope === "own"; // nudge chỉ cho tư vấn viên
   // Chỉ chạy nhịp đồng hồ 1s khi thật cần: officer (dò nudge) HOẶC panel đang mở
   // (đếm sống). Admin/manager đóng panel → không tick mỗi giây suốt phiên.
-  const serverNow = useServerNow(data?.server_time, enabled || open);
+  // dataUpdatedAt → skew đúng tuổi snapshot server_time (khỏi lệch ~30s).
+  const serverNow = useServerNow(data?.server_time, enabled || open, dataUpdatedAt);
   const nudges = useAppointmentNudges(data?.appointments, serverNow, enabled, open);
 
   const close = React.useCallback(() => setOpen(false), []);
+
+  // Role bị Casbin deny (accountant/user) → 403 → ẩn hẳn trợ lý (query tự ngừng
+  // poll). Sau MỌI hook để giữ thứ tự hook ổn định (thin-client: theo response).
+  if (isForbiddenError(error)) return null;
 
   const panel = (
     <div className="flex flex-col overflow-hidden">
@@ -223,6 +235,7 @@ export function AppointmentAssistant() {
           soundOn={nudges.soundOn}
           notifyOn={nudges.notifyOn}
           notifySupported={nudges.notifySupported}
+          notifyBlocked={nudges.notifyBlocked}
           onToggleSound={nudges.toggleSound}
           onToggleNotify={nudges.toggleNotify}
         />

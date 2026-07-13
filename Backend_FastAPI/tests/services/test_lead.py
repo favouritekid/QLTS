@@ -3252,7 +3252,7 @@ class TestMyAppointmentsScope:
         admin_user: models.User,
     ):
         now = datetime.now(timezone.utc)
-        soon = now + timedelta(hours=2)  # trong cửa sổ [now-7d, now+24h]
+        soon = now + timedelta(hours=2)  # trong cửa sổ (≤ now+24h)
 
         # Đơn vị thứ 2 — KHÁC đơn vị của manager (manager thuộc seeded unit).
         other_unit = models.OrganizationUnit(
@@ -3293,4 +3293,77 @@ class TestMyAppointmentsScope:
         assert lead_mine.id in off_ids
         assert lead_other.id not in off_ids
         assert res_off.scope == "own"
+
+    async def test_manager_without_unit_does_not_leak_cross_unit(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+        manager_user: models.User,
+        officer_user: models.User,
+    ):
+        """Khóa P1 (/code-review): manager có unit_id=None (User.unit_id nullable)
+        KHÔNG được rơi vào all-scope → chỉ thấy lead của mình, KHÔNG leak unit khác."""
+        now = datetime.now(timezone.utc)
+        soon = now + timedelta(hours=2)
+
+        other_unit = models.OrganizationUnit(
+            id=1002, name="Other Unit", type="department"
+        )
+        db.add(other_unit)
+        await db.flush()
+
+        my_unit_id = seeded_dependencies["unit_id"]
+        lead_my_unit = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=my_unit_id, officer_id=officer_user.id,
+            phone="0900000011", email="appt_u1@test.com", when=soon,
+        )
+        lead_other = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=other_unit.id, officer_id=None,
+            phone="0900000012", email="appt_u2@test.com", when=soon,
+        )
+
+        # Manager MẤT đơn vị (unit_id=None) — tài khoản manager chưa gán đơn vị.
+        manager_user.unit_id = None
+        await db.flush()
+
+        res = await lead_service.get_my_appointments(db, manager_user)
+        ids = {a.lead_id for a in res.appointments}
+        assert res.scope == "own"  # KHÔNG all-scope
+        assert lead_my_unit.id not in ids  # không assigned cho manager → không thấy
+        assert lead_other.id not in ids  # P1: KHÔNG leak unit khác
+
+    async def test_overdue_beyond_lookback_shown_and_counts_are_totals(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+        officer_user: models.User,
+    ):
+        """Khóa #15+#4: hẹn quá hạn >7d KHÔNG bị ẩn (bỏ chặn dưới); overdue_count/
+        upcoming_count là TỔNG THẬT (count query), không suy từ list cap-60."""
+        now = datetime.now(timezone.utc)
+        old_overdue = now - timedelta(days=10)  # quá hạn 10 ngày (cũ hơn 7d)
+        soon = now + timedelta(hours=1)
+
+        my_unit_id = seeded_dependencies["unit_id"]
+        lead_old = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=my_unit_id, officer_id=officer_user.id,
+            phone="0900000021", email="appt_old@test.com", when=old_overdue,
+        )
+        lead_soon = await self._lead_with_appt(
+            db, seeded_dependencies,
+            unit_id=my_unit_id, officer_id=officer_user.id,
+            phone="0900000022", email="appt_soon@test.com", when=soon,
+        )
+
+        res = await lead_service.get_my_appointments(db, officer_user)
+        ids = {a.lead_id for a in res.appointments}
+        assert lead_old.id in ids  # #15: quá hạn >7d VẪN hiện (không bị chặn dưới)
+        assert lead_soon.id in ids
+        assert res.overdue_count == 1  # #4: đếm đúng tổng (1 quá hạn)
+        assert res.upcoming_count == 1  # 1 sắp tới
+        # order ASC theo scheduled_at → quá hạn (cũ) đứng trước
+        assert res.appointments[0].lead_id == lead_old.id
 

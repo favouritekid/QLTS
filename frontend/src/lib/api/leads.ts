@@ -156,7 +156,7 @@ export interface MyAppointmentItem {
   phone: string
   source: string
   scheduled_at: string // ISO — giờ hẹn gọi lại (lead.next_activity_at)
-  is_overdue: boolean // BE tính realtime = scheduled_at < server_time
+  // (bỏ is_overdue: FE tự tính overdue realtime từ server_time — xem appointment-clock.stateOf)
   degree_level: string | null // trình độ ngành → getDegreeLevelAbbr
   major: string | null
   officer_name: string | null // NV phụ trách — có khi admin/manager xem toàn bộ

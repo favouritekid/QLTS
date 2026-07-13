@@ -588,7 +588,8 @@ class MyAppointmentItem(BaseModel):
     phone: str
     source: str
     scheduled_at: datetime          # = lead.next_activity_at (giờ hẹn gọi lại gần nhất)
-    is_overdue: bool                # scheduled_at < server_time (realtime, đồng bộ isLeadOverdue FE)
+    # (bỏ is_overdue: FE tự tính realtime từ server_time — field snapshot lệch tới
+    #  ~60s trong cửa refetch, KHÔNG consumer nào đọc → không ship nữa)
     degree_level: Optional[str] = None   # trình độ ngành (Cao đẳng/Đại học…) → FE getDegreeLevelAbbr
     major: Optional[str] = None          # tên ngành
     officer_name: Optional[str] = None   # NV phụ trách — hiện khi admin/manager xem toàn bộ

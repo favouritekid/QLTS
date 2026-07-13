@@ -7,8 +7,9 @@ import { AppointmentAssistant } from "./AppointmentAssistant";
 // useAppointmentNudges chạy THẬT để kiểm hành vi nudge theo thời gian.
 vi.mock("@/hooks/useMyAppointments", () => ({
   useMyAppointments: vi.fn(),
+  isForbiddenError: vi.fn(() => false),
 }));
-import { useMyAppointments } from "@/hooks/useMyAppointments";
+import { useMyAppointments, isForbiddenError } from "@/hooks/useMyAppointments";
 
 const mockUse = useMyAppointments as unknown as ReturnType<typeof vi.fn>;
 
@@ -74,6 +75,7 @@ describe("AppointmentAssistant — trợ lý nhắc hẹn", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(BASE);
+    vi.mocked(isForbiddenError).mockReturnValue(false); // reset (clearAllMocks giữ impl)
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -115,6 +117,22 @@ describe("AppointmentAssistant — trợ lý nhắc hẹn", () => {
     render(<AppointmentAssistant />);
     tick(4);
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("ẩn HẲN trợ lý khi role bị Casbin deny (403) — không hiện bong bóng", () => {
+    // accountant/user: endpoint trả 403 → isForbiddenError=true → widget null.
+    vi.mocked(isForbiddenError).mockReturnValue(true);
+    mockUse.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { response: { status: 403 } },
+    });
+    const { container } = render(<AppointmentAssistant />);
+    expect(container).toBeEmptyDOMElement();
+    expect(
+      screen.queryByRole("button", { name: /Trợ lý nhắc hẹn/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("dời lịch → nudge LẠI đúng giờ mới (khóa dedupe lead@scheduled_at)", () => {
