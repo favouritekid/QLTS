@@ -5,61 +5,45 @@ import * as React from "react";
 
 import type { MyAppointmentItem } from "@/lib/api/leads";
 import { apptDelta, eduLine, hhmm } from "@/lib/leads/appointment-clock";
+import { playNotificationSound, requestNotificationPermission } from "@/lib/sound";
 
 // =============================================================================
 // Engine "nudge" cho Trợ lý nhắc hẹn (lớp B) + tùy chọn chuông/thông báo (lớp C).
 //
-// Nudge = tự bung khi một hẹn CHẠM giờ (scheduled_at ≤ server_now) LẦN ĐẦU trong
-// phiên. Hẹn đã quá giờ ngay lúc tải = "đã lỡ" → KHÔNG bung dồn (chỉ seed baseline).
-// Mỗi hẹn nhắc 1 lần (dedupe); "Hoãn 5'" cho phép nhắc lại sau 5 phút; "Gọi ngay"
-// loại khỏi nhắc trong phiên. Chỉ bật cho tư vấn viên (enabled = scope==='own');
-// admin/manager xem toàn đơn vị 30+ hẹn → nudge quá ồn.
+// Nudge bung khi một hẹn CHUYỂN từ "còn tương lai" sang "chạm giờ": chỉ khi đã
+// từng thấy nó còn-tương-lai (ARM) rồi delta≤0 mới bung. Hẹn LẦN ĐẦU đã thấy quá
+// giờ (đã lỡ lúc tải, hoặc lead mới gán đã trễ tới sau) → chỉ ghi nhận, KHÔNG bung.
 //
-// Đồng hồ căn server_now (KHÔNG dùng đồng hồ máy client). react-compiler: mọi
-// thao tác thời-gian nằm trong effect, không có trong render.
+// Khóa dedupe = `lead_id@scheduled_at` → dời lịch (đổi scheduled_at) sinh khóa
+// MỚI ⇒ arm lại và nhắc đúng giờ mới (cũ chỉ theo lead_id nên dời lịch bị chặn
+// vĩnh viễn). "Hoãn 5'" cho nhắc lại sau 5 phút; "Gọi ngay" loại theo khóa (dời
+// lịch sau đó vẫn nhắc). Chỉ bật cho tư vấn viên (enabled = scope==='own');
+// admin/manager 30+ hẹn → quá ồn.
+//
+// Chuông + Notification tái dùng @/lib/sound (một AudioContext chung toàn app).
+// react-compiler: mọi thao tác thời-gian nằm trong effect, không có trong render.
+// ⚠️ Giới hạn nền tảng: dựa trên setInterval 1s (useServerNow); tab ẩn bị trình
+// duyệt throttle timer → thông báo có thể trễ vài chục giây — cần server push để
+// chính xác tuyệt đối.
 // =============================================================================
 
 const SNOOZE_MS = 5 * 60 * 1000;
 const LS_SOUND = "qlts.appt.sound";
 const LS_NOTIFY = "qlts.appt.notify";
 
-/** Chuông ngắn 2 nốt bằng WebAudio (không cần asset ngoài). */
-function playChime(ctxRef: React.MutableRefObject<AudioContext | null>) {
-  try {
-    const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AC) return;
-    const ctx = (ctxRef.current ??= new AC());
-    if (ctx.state === "suspended") void ctx.resume();
-    const t0 = ctx.currentTime;
-    [880, 1174.66].forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      const t = t0 + i * 0.13;
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(0.12, t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      osc.start(t);
-      osc.stop(t + 0.3);
-    });
-  } catch {
-    /* trình duyệt chặn audio → im lặng */
-  }
-}
+/** Khóa dedupe theo lead + đúng mốc hẹn → dời lịch = khóa mới. */
+const keyOf = (a: MyAppointmentItem) => `${a.lead_id}@${a.scheduled_at}`;
 
 const notifySupported = () => typeof window !== "undefined" && "Notification" in window;
 
 export interface UseAppointmentNudges {
   /** Hẹn đang được nhắc (null = không có nudge nào đang mở). */
   active: MyAppointmentItem | null;
-  /** Đóng nudge, không nhắc lại hẹn này. */
+  /** Đóng nudge, không nhắc lại hẹn này (mốc hiện tại). */
   dismiss: () => void;
   /** Hoãn 5 phút — sẽ nhắc lại. */
   snooze: () => void;
-  /** Đã bấm gọi — loại hẹn khỏi nhắc trong phiên. */
+  /** Đã bấm gọi — loại hẹn (mốc hiện tại) khỏi nhắc trong phiên. */
   markCalled: () => void;
   // ── Lớp C: tùy chọn ──
   soundOn: boolean;
@@ -81,13 +65,12 @@ export function useAppointmentNudges(
     setActiveState(a);
   }, []);
 
-  const firedRef = React.useRef<Set<number>>(new Set()); // đã nhắc (dedupe)
-  const calledRef = React.useRef<Set<number>>(new Set()); // đã gọi → loại
-  const snoozeRef = React.useRef<Map<number, number>>(new Map()); // id → mốc hết hoãn
-  const queueRef = React.useRef<number[]>([]);
-  const seededRef = React.useRef(false);
-
-  const audioCtxRef = React.useRef<AudioContext | null>(null);
+  const armedRef = React.useRef<Set<string>>(new Set()); // đã thấy còn-tương-lai → đủ điều kiện bung
+  const firedRef = React.useRef<Set<string>>(new Set()); // đã nhắc / đã ghi nhận (dedupe)
+  const calledRef = React.useRef<Set<string>>(new Set()); // đã gọi → loại
+  const snoozeRef = React.useRef<Map<string, number>>(new Map()); // khóa → mốc hết hoãn
+  const queueRef = React.useRef<string[]>([]);
+  const readyRef = React.useRef(false); // bỏ qua lần dò đầu (serverNow có thể chưa hiệu chỉnh skew)
 
   // ── Prefs (đọc localStorage trong effect → SSR-safe) ──
   const [soundOn, setSoundOn] = React.useState(false);
@@ -113,66 +96,77 @@ export function useAppointmentNudges(
     }
   }, []);
 
+  // Chỉ mục theo khóa — dựng lại 1 lần mỗi refetch (60s), KHÔNG mỗi tick 1s.
+  const byKey = React.useMemo(
+    () => new Map((appointments ?? []).map((a) => [keyOf(a), a] as const)),
+    [appointments],
+  );
+
   // ── Vòng dò nudge: chạy mỗi tick server_now ──
   React.useEffect(() => {
     if (!enabled) {
       if (activeRef.current) setActive(null);
       return;
     }
-    if (serverNow <= 0) return;
-    const list = appointments ?? [];
-    const byId = new Map(list.map((a) => [a.lead_id, a]));
-
-    // Seed baseline 1 lần: hẹn đã quá giờ lúc tải = "đã lỡ", không bung dồn.
-    if (!seededRef.current) {
-      list.forEach((a) => {
-        if (apptDelta(a.scheduled_at, serverNow) <= 0) firedRef.current.add(a.lead_id);
-      });
-      seededRef.current = true;
+    // Chặn NaN (server_time hỏng): NaN<=0 là false nên guard cũ lọt → engine chết
+    // thầm + render "NaN". Number.isFinite chặn cả NaN lẫn giá trị chưa load (0).
+    if (!Number.isFinite(serverNow) || serverNow <= 0) return;
+    // Bỏ qua lần dò ĐẦU: serverNow lúc mount có thể lấy từ cache server_time cũ,
+    // chưa hiệu chỉnh skew (useServerNow set giá trị chuẩn trong effect ngay sau).
+    // Bỏ pass này → arm/seed đều chạy trên đồng hồ đã chuẩn.
+    if (!readyRef.current) {
+      readyRef.current = true;
       return;
     }
 
-    // Hẹn đang mở nhưng đã biến mất khỏi danh sách (xử lý nơi khác) → đóng.
-    if (activeRef.current && !byId.has(activeRef.current.lead_id)) {
-      setActive(null);
-    }
+    // Hẹn đang mở nhưng khóa đã biến mất (dời lịch / xử lý nơi khác) → đóng toast.
+    if (activeRef.current && !byKey.has(keyOf(activeRef.current))) setActive(null);
 
-    // Phát hiện hẹn vừa chạm giờ.
-    list.forEach((a) => {
-      const id = a.lead_id;
-      if (calledRef.current.has(id)) return;
-      const until = snoozeRef.current.get(id);
+    // Phát hiện hẹn vừa chạm giờ (arm-based).
+    for (const a of byKey.values()) {
+      const k = keyOf(a);
+      if (calledRef.current.has(k)) continue;
+      const until = snoozeRef.current.get(k);
       if (until != null) {
-        if (serverNow < until) return; // còn trong thời gian hoãn
-        snoozeRef.current.delete(id); // hết hoãn → đủ điều kiện nhắc lại
+        if (serverNow < until) continue; // còn trong thời gian hoãn
+        snoozeRef.current.delete(k); // hết hoãn → đủ điều kiện nhắc lại
       }
-      if (firedRef.current.has(id)) return;
-      if (apptDelta(a.scheduled_at, serverNow) <= 0) {
-        firedRef.current.add(id);
-        if (!queueRef.current.includes(id)) queueRef.current.push(id);
+      if (firedRef.current.has(k)) continue;
+      const delta = apptDelta(a.scheduled_at, serverNow);
+      if (delta > 0) {
+        armedRef.current.add(k); // còn tương lai → arm để chờ khoảnh khắc tới giờ
+        continue;
       }
-    });
+      // delta ≤ 0 (đã chạm giờ)
+      if (armedRef.current.has(k)) {
+        firedRef.current.add(k); // đã thấy tương lai trước đó → CHÍNH khoảnh khắc tới giờ → bung
+        if (!queueRef.current.includes(k)) queueRef.current.push(k);
+      } else {
+        firedRef.current.add(k); // lần đầu đã thấy quá giờ (đã lỡ) → ghi nhận, KHÔNG bung
+      }
+    }
 
     // Trống chỗ → đưa hẹn kế trong hàng chờ lên.
     if (!activeRef.current) {
       while (queueRef.current.length) {
-        const id = queueRef.current.shift();
-        if (id == null) break;
-        const a = byId.get(id);
-        if (a && !calledRef.current.has(id)) {
+        const k = queueRef.current.shift();
+        if (k == null) break;
+        const a = byKey.get(k);
+        if (a && !calledRef.current.has(k)) {
           setActive(a);
           break;
         }
       }
     }
-  }, [appointments, serverNow, enabled, setActive]);
+  }, [byKey, serverNow, enabled, setActive]);
 
   // ── Side-effect khi một nudge xuất hiện: chuông + thông báo hệ thống ──
-  const activeId = active?.lead_id ?? null;
+  const activeKey = active ? keyOf(active) : null;
   React.useEffect(() => {
-    if (activeId == null || !active) return;
-    if (soundOnRef.current) playChime(audioCtxRef);
+    if (!activeKey || !active) return;
+    if (soundOnRef.current) playNotificationSound(); // dùng chung AudioContext của @/lib/sound
     // OS notification: chỉ khi bật + đã cấp quyền + tab đang ẩn (tránh trùng toast).
+    // Giữ inline (không dùng showBrowserNotification) để có onclick → focus.
     if (
       notifyOnRef.current &&
       notifySupported() &&
@@ -194,7 +188,7 @@ export function useAppointmentNudges(
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
+  }, [activeKey]);
 
   const dismiss = React.useCallback(() => {
     setActive(null);
@@ -203,33 +197,36 @@ export function useAppointmentNudges(
   const snooze = React.useCallback(() => {
     const a = activeRef.current;
     if (a) {
-      snoozeRef.current.set(a.lead_id, serverNow + SNOOZE_MS);
-      firedRef.current.delete(a.lead_id); // cho phép nhắc lại sau khi hết hoãn
+      const k = keyOf(a);
+      snoozeRef.current.set(k, serverNow + SNOOZE_MS);
+      firedRef.current.delete(k); // cho nhắc lại (armedRef GIỮ nguyên → sẽ bung lại)
     }
     setActive(null);
   }, [serverNow, setActive]);
 
   const markCalled = React.useCallback(() => {
     const a = activeRef.current;
-    if (a) calledRef.current.add(a.lead_id);
+    if (a) calledRef.current.add(keyOf(a));
     setActive(null);
   }, [setActive]);
 
+  // Side-effect (chuông + ghi localStorage) NGOÀI updater setState — updater phải
+  // thuần (React 19 StrictMode gọi updater 2 lần → 2 chuông + 2 lần ghi).
   const toggleSound = React.useCallback(() => {
-    setSoundOn((v) => {
-      const next = !v;
-      try {
-        localStorage.setItem(LS_SOUND, next ? "1" : "0");
-      } catch {
-        /* noop */
-      }
-      if (next) playChime(audioCtxRef); // vừa xác nhận vừa mở khóa AudioContext (user gesture)
-      return next;
-    });
+    const next = !soundOnRef.current;
+    soundOnRef.current = next;
+    setSoundOn(next);
+    try {
+      localStorage.setItem(LS_SOUND, next ? "1" : "0");
+    } catch {
+      /* noop */
+    }
+    if (next) playNotificationSound(); // vừa xác nhận vừa mở khóa AudioContext (user gesture)
   }, []);
 
   const toggleNotify = React.useCallback(() => {
     if (notifyOnRef.current) {
+      notifyOnRef.current = false;
       setNotifyOn(false);
       try {
         localStorage.setItem(LS_NOTIFY, "0");
@@ -239,20 +236,16 @@ export function useAppointmentNudges(
       return;
     }
     if (!notifySupported()) return;
-    const apply = (perm: NotificationPermission) => {
+    void requestNotificationPermission().then((perm) => {
       const ok = perm === "granted";
+      notifyOnRef.current = ok;
       setNotifyOn(ok);
       try {
         localStorage.setItem(LS_NOTIFY, ok ? "1" : "0");
       } catch {
         /* noop */
       }
-    };
-    if (Notification.permission === "default") {
-      void Notification.requestPermission().then(apply).catch(() => apply("denied"));
-    } else {
-      apply(Notification.permission);
-    }
+    });
   }, []);
 
   return {

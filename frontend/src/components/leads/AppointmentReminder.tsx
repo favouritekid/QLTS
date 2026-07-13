@@ -27,8 +27,8 @@ import {
   STATE_STYLE,
   formatDelta,
   hhmm,
+  hhmmFromMs,
   metaLine,
-  pad,
   stateOf,
 } from "@/lib/leads/appointment-clock";
 import type { MyAppointmentItem } from "@/lib/api/leads";
@@ -139,7 +139,6 @@ function ApptRow({ item, serverNow }: { item: MyAppointmentItem; serverNow: numb
 }
 
 function NowLine({ serverNow }: { serverNow: number }) {
-  const d = new Date(serverNow);
   return (
     <div className="my-2 flex items-center gap-2.5 text-muted-foreground">
       <span className="h-px flex-1 bg-gradient-to-r from-transparent to-border" />
@@ -147,7 +146,7 @@ function NowLine({ serverNow }: { serverNow: number }) {
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px] shadow-emerald-500/60" />
         BÂY GIỜ ·{" "}
         <span className="font-mono text-emerald-600 dark:text-emerald-400">
-          {pad(d.getHours())}:{pad(d.getMinutes())}
+          {hhmmFromMs(serverNow)}
         </span>
       </span>
       <span className="h-px flex-1 bg-gradient-to-l from-transparent to-border" />
@@ -163,10 +162,10 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
   const appts = data?.appointments ?? [];
   const hero = appts[0];
   const rest = appts.slice(1);
-  // chỉ số hàng đầu tiên KHÔNG quá hạn trong `rest` → chèn đường BÂY GIỜ trước nó
-  const firstUpcomingIdx = rest.findIndex((a) => !a.is_overdue);
-
-  const clock = new Date(serverNow);
+  // vị trí hàng KHÔNG-quá-hạn đầu tiên trong TOÀN danh sách (kể cả hero) → chèn
+  // đường BÂY GIỜ ngay TRƯỚC nó. Nếu hero đã là sắp-tới (không có hẹn trễ), đường
+  // nằm TRÊN hero — tránh việc một hẹn tương lai đứng trên đường "bây giờ".
+  const firstUpcomingIdx = appts.findIndex((a) => !a.is_overdue);
 
   return (
     <div className="flex flex-col">
@@ -182,7 +181,7 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
         </div>
         <div className="text-right">
           <div className="font-mono text-lg font-bold tabular-nums" suppressHydrationWarning>
-            {pad(clock.getHours())}:{pad(clock.getMinutes())}
+            {hhmmFromMs(serverNow)}
           </div>
           {data && (
             <div className="mt-0.5 flex justify-end gap-1.5 text-[11px] font-semibold">
@@ -224,10 +223,12 @@ export function ReminderBody({ onNavigate }: { onNavigate?: () => void }) {
             </div>
           ) : (
             <>
+              {/* hero chính là hẹn sắp-tới đầu tiên → đường BÂY GIỜ nằm trên hero */}
+              {firstUpcomingIdx === 0 && <NowLine serverNow={serverNow} />}
               <Hero item={hero} serverNow={serverNow} />
               {rest.map((item, idx) => (
                 <React.Fragment key={item.lead_id}>
-                  {idx === firstUpcomingIdx && <NowLine serverNow={serverNow} />}
+                  {idx + 1 === firstUpcomingIdx && <NowLine serverNow={serverNow} />}
                   <ApptRow item={item} serverNow={serverNow} />
                 </React.Fragment>
               ))}

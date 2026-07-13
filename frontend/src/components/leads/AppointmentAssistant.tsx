@@ -25,8 +25,9 @@ import type { MyAppointmentItem } from "@/lib/api/leads";
 import { ReminderBody } from "./AppointmentReminder";
 
 // =============================================================================
-// Trợ lý nhắc hẹn (#3) — nâng cấp "Nhịp hẹn" từ icon-header thụ động thành trợ lý
-// chủ động ở góc màn:
+// Trợ lý nhắc hẹn (#3) — trợ lý CHỦ ĐỘNG ở góc màn, BỔ SUNG (không thay thế) icon
+// "Nhịp hẹn" thụ động trên header: icon header = lối tra cứu nhanh, trợ lý = nhắc
+// chủ động. Cả hai mở cùng bảng ReminderBody một cách có chủ đích.
 //   (A) Bong bóng nổi góc dưới-phải — badge số hẹn trễ + pulse đỏ; bấm → bung
 //       bảng Nhịp hẹn (tái dùng ReminderBody).
 //   (B) Nudge tự bung khi tới giờ — toast [Gọi ngay]/[Hoãn 5'], chỉ tư vấn viên.
@@ -202,12 +203,14 @@ function NudgePrefsBar({
 // ── Trợ lý (bong bóng + panel + nudge) ───────────────────────────────────────
 export function AppointmentAssistant() {
   const isMobile = useIsMobile();
-  const { data } = useMyAppointments();
-  const serverNow = useServerNow(data?.server_time);
   const [open, setOpen] = React.useState(false);
+  const { data } = useMyAppointments();
 
   const overdue = data?.overdue_count ?? 0;
   const enabled = data?.scope === "own"; // nudge chỉ cho tư vấn viên
+  // Chỉ chạy nhịp đồng hồ 1s khi thật cần: officer (dò nudge) HOẶC panel đang mở
+  // (đếm sống). Admin/manager đóng panel → không tick mỗi giây suốt phiên.
+  const serverNow = useServerNow(data?.server_time, enabled || open);
   const nudges = useAppointmentNudges(data?.appointments, serverNow, enabled);
 
   const close = React.useCallback(() => setOpen(false), []);
