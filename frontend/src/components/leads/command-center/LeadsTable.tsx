@@ -255,27 +255,34 @@ function DraggableHeader({
       ref={setNodeRef}
       data-column-id={columnId}
       style={style}
-      className={cn("group/lh relative overflow-hidden whitespace-nowrap", headerHeightClass)}
+      className={cn(
+        "group/lh relative overflow-hidden whitespace-nowrap",
+        // gutter TRÁI cho grip (chỉ cột kéo được) → grip nằm trong padding, KHÔNG
+        // chồng lên nút sort → click sort không bị grip nuốt; nội dung cắt gọn sau.
+        reorderable && "pl-4",
+        headerHeightClass,
+      )}
     >
-      {/* Nội dung header chiếm TRỌN bề rộng (không bị grip đẩy) → caret sort không
-          bị cắt ở cột hẹp. Grip là overlay hiện-khi-hover, KHÔNG chiếm chỗ flow. */}
       <div className="truncate">
         {header.isPlaceholder
           ? null
           : flexRender(header.column.columnDef.header, header.getContext())}
       </div>
       {reorderable && (
+        // Overlay grip trong gutter, hiện-khi-hover. pointer-events-none khi ẩn →
+        // không chặn hit-test; tabIndex=-1 → không là tab-stop no-op (đã bỏ KeyboardSensor).
         <button
           type="button"
           className={cn(
             "absolute left-0 top-0 z-[1] flex h-full w-4 items-center justify-center",
-            "bg-gradient-to-r from-muted via-muted/80 to-transparent",
-            "text-muted-foreground/60 hover:text-foreground cursor-grab touch-none",
-            "opacity-0 transition-opacity group-hover/lh:opacity-100 active:cursor-grabbing",
+            "text-muted-foreground/50 hover:text-foreground cursor-grab touch-none",
+            "pointer-events-none opacity-0 transition-opacity",
+            "group-hover/lh:pointer-events-auto group-hover/lh:opacity-100 active:cursor-grabbing",
           )}
           aria-label="Kéo để đổi thứ tự cột"
           {...attributes}
           {...listeners}
+          tabIndex={-1}
         >
           <GripVertical className="h-3.5 w-3.5" />
         </button>
@@ -354,9 +361,14 @@ export function LeadsTable({
   const [columnSizing, setColumnSizing] = React.useState<ColumnSizingState>({});
   // Trạng thái đang-kéo-resize (isResizingColumn) → chỉ persist khi kéo XONG,
   // tránh spam localStorage.setItem mỗi tick pointer-move.
-  const [columnSizingInfo, setColumnSizingInfo] = React.useState<ColumnSizingInfoState>(
-    {} as ColumnSizingInfoState,
-  );
+  const [columnSizingInfo, setColumnSizingInfo] = React.useState<ColumnSizingInfoState>({
+    startOffset: null,
+    startSize: null,
+    deltaOffset: null,
+    deltaPercentage: null,
+    isResizingColumn: false,
+    columnSizingStart: [],
+  });
   const [columnOrder, setColumnOrder] = React.useState<ColumnOrderState>(DEFAULT_COLUMN_ORDER);
   const [isHydrated, setIsHydrated] = React.useState(false);
 
@@ -843,6 +855,14 @@ export function LeadsTable({
   // Get all rows for virtualization
   const rows = table.getRowModel().rows;
 
+  // ID cột HIỆN (theo order + visibility) cho SortableContext — memo hóa để không
+  // tạo mảng mới mỗi render (SortableContext re-derive item-map mỗi drag-move).
+  // Derive trực tiếp từ columnOrder + columnVisibility (khớp header đang render).
+  const sortableColumnIds = React.useMemo(
+    () => columnOrder.filter((id) => columnVisibility[id] !== false),
+    [columnOrder, columnVisibility],
+  );
+
   // ✅ Option A: Virtualization setup
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
@@ -906,11 +926,19 @@ export function LeadsTable({
       document.body.appendChild(probe);
       let maxContent = 0;
       try {
-        // ô/header có 1 con nội dung trực tiếp (div.truncate / span.flex / Badge…)
+        // `:first-child` = phần nội dung của ô (div.truncate / span.flex / Badge…);
+        // KHÔNG dính grip/resize-handle (là các con sau) → không cần loại theo label.
         root
-          .querySelectorAll<HTMLElement>(`[data-column-id="${columnId}"] > *:not([aria-label="Kéo để đổi thứ tự cột"])`)
+          .querySelectorAll<HTMLElement>(`[data-column-id="${columnId}"] > :first-child`)
           .forEach((content) => {
             const clone = content.cloneNode(true) as HTMLElement;
+            // Copy font THẬT (clone rời khỏi ngữ cảnh table → mất inherited text-sm/
+            // font-medium → đo sai). Áp computed-font để đo đúng cỡ/đậm chữ.
+            const cs = getComputedStyle(content);
+            clone.style.fontSize = cs.fontSize;
+            clone.style.fontWeight = cs.fontWeight;
+            clone.style.fontFamily = cs.fontFamily;
+            clone.style.letterSpacing = cs.letterSpacing;
             const strip = (el: HTMLElement) => {
               el.style.maxWidth = "none";
               el.style.width = "auto";
@@ -1177,12 +1205,9 @@ export function LeadsTable({
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
-                {/* items = đúng các header ĐANG render (cột hiện), không gồm cột
-                    ẩn như phone → tránh lệch animation shift khi kéo. */}
-                <SortableContext
-                  items={headerGroup.headers.map((h) => h.column.id)}
-                  strategy={horizontalListSortingStrategy}
-                >
+                {/* items = cột HIỆN (memo hóa) — không gồm cột ẩn như phone → tránh
+                    lệch animation shift + không tạo mảng mới mỗi render. */}
+                <SortableContext items={sortableColumnIds} strategy={horizontalListSortingStrategy}>
                   {headerGroup.headers.map((header) => (
                     <DraggableHeader
                       key={header.id}
