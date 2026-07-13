@@ -459,8 +459,8 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
       {isDesktop ? (
         // Desktop: Split View with Independent Scroll
         <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
-          {/* Left: Data Table (75%) */}
-          <ResizablePanel defaultSize={75} minSize={45} maxSize={80}>
+          {/* Left: Data Table (75%) — min/max khớp detail (detail 22–50 ⇒ table 50–78) */}
+          <ResizablePanel defaultSize={75} minSize={50} maxSize={78}>
             <div className="flex h-full flex-col overflow-y-auto">
               {isLoading ? (
                 <div className="space-y-2 p-4">
