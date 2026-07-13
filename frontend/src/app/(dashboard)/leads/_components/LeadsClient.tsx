@@ -41,7 +41,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { useMediaQueryState } from "@/hooks/useMediaQuery";
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
 
@@ -89,8 +89,14 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
   // ✅ Phase 1: Query client for prefetching
   const queryClient = useQueryClient();
 
-  // ✅ Mobile responsiveness: Detect desktop vs mobile
-  const isDesktop = useMediaQuery("(min-width: 1024px)");
+  // ✅ Mobile responsiveness: Detect desktop vs mobile.
+  // `layoutResolved` = đã đo viewport thật chưa. Nhánh desktop (master-detail
+  // split) vs mobile (card list) là 2 CÂY ELEMENT khác hẳn nhau; render trước
+  // khi resolved → hard-load nháy card-mobile → bảng-desktop (data SSR-prefetch
+  // nên nháy CARD THẬT, không phải skeleton). Hoãn nhánh tới khi resolved.
+  const { matches: isDesktop, resolved: layoutResolved } = useMediaQueryState(
+    "(min-width: 1024px)"
+  );
 
   // Mobile detail sheet state
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
@@ -355,7 +361,35 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
     ? `${totalLeadCount.toLocaleString("vi-VN")} lead • Phạm vi: ${effectiveScopeLabel}${effectiveScopeSuffix}`
     : `${totalLeadCount.toLocaleString("vi-VN")} lead`;
   const hasDashboardContext = dashboardContext !== null;
-  
+
+  // Trạng thái dùng chung cho cả 3 nhánh (chưa-resolved / desktop / mobile) —
+  // 1 nguồn duy nhất, tránh 2 khối skeleton lệch nhau.
+  const loadingSkeleton = (
+    <div className="space-y-2 p-4">
+      {Array.from({ length: 10 }).map((_, i) => (
+        <motion.div
+          key={i}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: i * 0.05, duration: 0.2 }}
+        >
+          <Skeleton className="h-12 w-full" />
+        </motion.div>
+      ))}
+    </div>
+  );
+
+  const errorState = (
+    <div className="flex h-40 items-center justify-center">
+      <div className="text-center">
+        <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
+        <p className="text-muted-foreground mt-1 text-xs">
+          {error?.message || "Lỗi không xác định"}
+        </p>
+      </div>
+    </div>
+  );
+
   return (
     // Mobile (<lg): document-flow — cuộn qua `Main` (single-scroll), bỏ app-shell
     // h-full/overflow-hidden để khỏi lồng scroll (đứt momentum "tê"). Desktop giữ
@@ -454,36 +488,24 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
       />
 
       {/* Main Content - Responsive Layout */}
+      {/* Chưa đo xong viewport (hard-load) → skeleton trung tính, KHÔNG commit
+          mobile/desktop để không nháy card-mobile → bảng-desktop (data
+          SSR-prefetch nên nháy CARD THẬT). Resolved xong mới chọn nhánh —
+          client-side nav resolved trước paint nên không thêm frame skeleton. */}
       {/* Desktop (lg+): Split View with ResizablePanel */}
       {/* Mobile (<lg): Full-width table + Sheet for detail */}
-      {isDesktop ? (
+      {!layoutResolved ? (
+        <div className="min-w-0">{loadingSkeleton}</div>
+      ) : isDesktop ? (
         // Desktop: Split View with Independent Scroll
         <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
           {/* Left: Data Table (75%) — min/max khớp detail (detail 22–50 ⇒ table 50–78) */}
           <ResizablePanel defaultSize={75} minSize={50} maxSize={78}>
             <div className="flex h-full flex-col overflow-y-auto">
               {isLoading ? (
-                <div className="space-y-2 p-4">
-                  {Array.from({ length: 10 }).map((_, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.05, duration: 0.2 }}
-                    >
-                      <Skeleton className="h-12 w-full" />
-                    </motion.div>
-                  ))}
-                </div>
+                loadingSkeleton
               ) : isError ? (
-                <div className="flex h-40 items-center justify-center">
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
-                    <p className="text-muted-foreground mt-1 text-xs">
-                      {error?.message || "Lỗi không xác định"}
-                    </p>
-                  </div>
-                </div>
+                errorState
               ) : (
                 <LeadsTable
                   leads={filteredLeads}
@@ -533,27 +555,9 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
         // theo trang, cuộn qua `Main` (single-scroll).
         <div className="min-w-0">
           {isLoading ? (
-            <div className="space-y-2 p-4">
-              {Array.from({ length: 10 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.05, duration: 0.2 }}
-                >
-                  <Skeleton className="h-12 w-full" />
-                </motion.div>
-              ))}
-            </div>
+            loadingSkeleton
           ) : isError ? (
-            <div className="flex h-40 items-center justify-center">
-              <div className="text-center">
-                <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
-                <p className="text-muted-foreground mt-1 text-xs">
-                  {error?.message || "Lỗi không xác định"}
-                </p>
-              </div>
-            </div>
+            errorState
           ) : (
             <LeadsTable
               leads={filteredLeads}
