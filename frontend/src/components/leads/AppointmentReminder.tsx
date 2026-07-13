@@ -20,9 +20,17 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { getDegreeLevelAbbr } from "@/constants";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { useMyAppointments } from "@/hooks/useMyAppointments";
+import { useServerNow } from "@/hooks/useServerNow";
+import {
+  STATE_STYLE,
+  formatDelta,
+  hhmm,
+  metaLine,
+  pad,
+  stateOf,
+} from "@/lib/leads/appointment-clock";
 import type { MyAppointmentItem } from "@/lib/api/leads";
 
 // =============================================================================
@@ -30,91 +38,15 @@ import type { MyAppointmentItem } from "@/lib/api/leads";
 // Hero = việc cần làm bây giờ (hẹn khẩn nhất) + đồng hồ đếm sống; đường "BÂY GIỜ"
 // chia quá hạn / sắp tới. Đếm giờ đồng bộ theo server_time (khỏi lệ thuộc đồng
 // hồ máy client). Desktop = dropdown; mobile = bottom sheet.
+//
+// Helper thuần (stateOf/formatDelta/hhmm/metaLine/STATE_STYLE) + hook đồng hồ
+// (useServerNow) tách sang lib/leads/appointment-clock + hooks/useServerNow để
+// dùng chung với AppointmentAssistant (bong bóng + nudge).
 // =============================================================================
-
-const DUE_SOON_MS = 10 * 60 * 1000; // ≤10 phút tới = "đến giờ" (hổ phách)
-
-type ApptState = "overdue" | "due" | "soon";
-
-function stateOf(item: MyAppointmentItem, serverNow: number): ApptState {
-  const delta = new Date(item.scheduled_at).getTime() - serverNow;
-  if (delta < 0) return "overdue";
-  if (delta <= DUE_SOON_MS) return "due";
-  return "soon";
-}
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** Định dạng khoảng cách tới giờ hẹn: ngày → H:MM:SS → MM:SS (đếm sống). */
-function formatDelta(ms: number): string {
-  const s = Math.abs(Math.floor(ms / 1000));
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (d >= 1) return `${d} ngày${h ? ` ${h}h` : ""}`;
-  if (h >= 1) return `${h}:${pad(m)}:${pad(sec)}`;
-  return `${pad(m)}:${pad(sec)}`;
-}
-
-function hhmm(iso: string): string {
-  const d = new Date(iso);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-/**
- * Đồng hồ tick 1s, căn theo server_time (bù lệch đồng hồ client).
- * `now` giữ ở state — KHÔNG gọi Date.now() trong render (react-compiler cấm
- * impure trong render). Init từ server_time (parse chuỗi cố định = pure);
- * Date.now() chỉ dùng trong effect (được phép).
- */
-function useServerNow(serverTimeIso?: string): number {
-  const skew = React.useRef(0);
-  const [now, setNow] = React.useState<number>(() =>
-    serverTimeIso ? new Date(serverTimeIso).getTime() : 0,
-  );
-  React.useEffect(() => {
-    if (!serverTimeIso) return;
-    skew.current = new Date(serverTimeIso).getTime() - Date.now();
-    setNow(Date.now() + skew.current);
-    const id = setInterval(() => setNow(Date.now() + skew.current), 1000);
-    return () => clearInterval(id);
-  }, [serverTimeIso]);
-  return now;
-}
-
-const STATE_STYLE: Record<ApptState, { text: string; bar: string; pill: string }> = {
-  overdue: {
-    text: "text-red-600 dark:text-red-400",
-    bar: "bg-red-500",
-    pill: "text-red-600 dark:text-red-300 bg-red-500/10",
-  },
-  due: {
-    text: "text-amber-600 dark:text-amber-400",
-    bar: "bg-amber-500",
-    pill: "text-amber-700 dark:text-amber-300 bg-amber-500/10",
-  },
-  soon: {
-    text: "text-blue-600 dark:text-blue-400",
-    bar: "bg-blue-500",
-    pill: "text-blue-600 dark:text-blue-300 bg-blue-500/10",
-  },
-};
-
-function eduLine(item: MyAppointmentItem): string {
-  const deg = getDegreeLevelAbbr(item.degree_level ?? undefined);
-  const parts = [deg, item.major].filter(Boolean);
-  return parts.length ? parts.join(" ") : "Chưa chọn ngành";
-}
-
-/** Dòng phụ: ngành · NV phụ trách (tên NV chỉ có khi admin/manager xem toàn bộ). */
-function metaLine(item: MyAppointmentItem): string {
-  return item.officer_name ? `${eduLine(item)} · ${item.officer_name}` : eduLine(item);
-}
 
 // ── Hero: việc cần làm bây giờ ────────────────────────────────────────────────
 function Hero({ item, serverNow }: { item: MyAppointmentItem; serverNow: number }) {
-  const st = stateOf(item, serverNow);
+  const st = stateOf(item.scheduled_at, serverNow);
   const style = STATE_STYLE[st];
   const delta = new Date(item.scheduled_at).getTime() - serverNow;
   const label =
@@ -182,7 +114,7 @@ function Hero({ item, serverNow }: { item: MyAppointmentItem; serverNow: number 
 
 // ── Hàng trong danh sách ──────────────────────────────────────────────────────
 function ApptRow({ item, serverNow }: { item: MyAppointmentItem; serverNow: number }) {
-  const st = stateOf(item, serverNow);
+  const st = stateOf(item.scheduled_at, serverNow);
   const style = STATE_STYLE[st];
   const delta = new Date(item.scheduled_at).getTime() - serverNow;
   return (
