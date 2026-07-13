@@ -533,6 +533,14 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/check-duplicate",     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import",              "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import/template",     "action": "GET",  "eft": "deny"},
+        # Feature "Nhịp hẹn" (#3) — GET /api/leads/my/appointments granted to
+        # officer (OFFICER_TEMPLATE) so accountant inherits it via
+        # `g, role:accountant, role:officer`. Response carries lead name/phone +
+        # assigned-officer name → PII + separation-of-duties: finance staff have
+        # no business viewing consultation follow-up schedules. Explicit deny
+        # bounces the inherited allow (mirror the /api/leads deny above).
+        # Migration: apptacctdeny20260713.
+        {"subject": "{role}", "object": "/api/leads/my/appointments",     "action": "GET",  "eft": "deny"},
         # PR #324 Commit 5 — mirror OFFICER_TEMPLATE block above for the
         # 4 lead static routes. Separation-of-duties: finance staff never
         # operate the lead distribution / export / bulk-assign / bulk-delete
