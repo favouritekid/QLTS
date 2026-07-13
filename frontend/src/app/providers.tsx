@@ -2,16 +2,12 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import dynamic from "next/dynamic";
 import { useState, useEffect } from "react";
 import { Toaster } from "sonner";
 import { AxiosError } from "axios"; // <<< THÊM IMPORT NÀY
 
-// ✅ PERF: Lazy-load DevTools - chỉ dùng trong development
-const ReactQueryDevtools = dynamic(
-  () => import("@tanstack/react-query-devtools").then(m => ({ default: m.ReactQueryDevtools })),
-  { ssr: false }
-);
+// RQ Devtools đã tắt: nút floating của nó nằm góc dưới-phải, đè bong bóng
+// "Trợ lý nhắc hẹn" (AppointmentAssistant). Cần debug query thì bật lại tạm.
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -85,7 +81,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
           },
         }}
       />
-      <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>
   );
 }
