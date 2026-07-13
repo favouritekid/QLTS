@@ -16,6 +16,7 @@ import {
   Minus,
   Equal,
   Menu,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -47,6 +48,8 @@ interface TableToolbarProps {
   onDensityChange: (mode: DensityMode) => void;
   columnVisibility: VisibilityState;
   onColumnVisibilityChange: (columnId: string, isVisible: boolean) => void;
+  /** Đặt lại bề rộng + thứ tự cột về mặc định (bảng desktop). */
+  onResetColumns?: () => void;
 }
 
 // Column config - order matters for display
@@ -76,6 +79,7 @@ export function TableToolbar({
   onDensityChange,
   columnVisibility,
   onColumnVisibilityChange,
+  onResetColumns,
 }: TableToolbarProps) {
   // Count visible columns (default to visible if not in state)
   const visibleCount = COLUMNS_CONFIG.filter(
@@ -149,6 +153,24 @@ export function TableToolbar({
             })}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Đặt lại bề rộng + thứ tự cột */}
+        {onResetColumns && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={onResetColumns}
+                aria-label="Đặt lại bề rộng và thứ tự cột"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Đặt lại cột (bề rộng &amp; thứ tự)</TooltipContent>
+          </Tooltip>
+        )}
 
         {/* ✅ Option C: Keyboard Shortcuts Help */}
         <KeyboardShortcutsHelp className="h-8 w-8 p-0" />
