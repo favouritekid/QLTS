@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { copyToClipboard } from "@/lib/clipboard";
 import { toast } from "sonner";
 
 // =============================================================================
@@ -64,18 +65,17 @@ export function CopyableCell({
       
       if (!value) return;
 
-      try {
-        await navigator.clipboard.writeText(value);
+      // copyToClipboard tự fallback execCommand khi HTTP/insecure (LAN/phone).
+      const ok = await copyToClipboard(value);
+      if (ok) {
         setCopied(true);
         toast.success(`Đã sao chép ${label}`, {
           description: value,
           duration: 2000,
         });
-        
         // Reset copied state after animation
         setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        console.error("Failed to copy:", err);
+      } else {
         toast.error("Không thể sao chép");
       }
     },

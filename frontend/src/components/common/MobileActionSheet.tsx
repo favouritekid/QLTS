@@ -68,6 +68,10 @@ interface ActionItemProps {
   disabled?: boolean;
   /** Variant */
   variant?: "default" | "destructive";
+  /** Render as a real anchor (tel:/mailto:/https) instead of a button. */
+  href?: string;
+  /** Anchor target (e.g. "_blank" for external links). Only with href. */
+  target?: string;
   /** Additional class name */
   className?: string;
 }
@@ -142,32 +146,31 @@ function ActionItem({
   onClick,
   disabled,
   variant = "default",
+  href,
+  target,
   className,
 }: ActionItemProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        // Base styles
-        "w-full flex items-center gap-3 px-4 py-3 rounded-lg",
-        "text-left text-sm font-medium",
-        "transition-colors",
-        // Touch target
-        "min-h-[48px]",
-        // States
-        "hover:bg-accent active:bg-accent/80",
-        "disabled:opacity-50 disabled:cursor-not-allowed",
-        // Variants
-        variant === "destructive" && [
-          "text-destructive",
-          "hover:bg-destructive/10",
-          "active:bg-destructive/20",
-        ],
-        className
-      )}
-    >
+  const itemClass = cn(
+    // Base styles
+    "w-full flex items-center gap-3 px-4 py-3 rounded-lg",
+    "text-left text-sm font-medium",
+    "transition-colors",
+    // Touch target
+    "min-h-[48px]",
+    // States
+    "hover:bg-accent active:bg-accent/80",
+    "disabled:opacity-50 disabled:cursor-not-allowed",
+    // Variants
+    variant === "destructive" && [
+      "text-destructive",
+      "hover:bg-destructive/10",
+      "active:bg-destructive/20",
+    ],
+    className
+  );
+
+  const inner = (
+    <>
       {Icon && (
         <Icon
           className={cn(
@@ -177,6 +180,29 @@ function ActionItem({
         />
       )}
       <span className="flex-1">{children}</span>
+    </>
+  );
+
+  // href → anchor thật (tel:/mailto:/https) theo link semantics, tránh
+  // window.open('tel:', '_blank') mở tab trắng trên mobile. onClick vẫn chạy
+  // (đóng sheet) trước khi trình duyệt xử lý href.
+  if (href) {
+    return (
+      <a
+        href={href}
+        target={target}
+        rel={target === "_blank" ? "noopener noreferrer" : undefined}
+        onClick={onClick}
+        className={itemClass}
+      >
+        {inner}
+      </a>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={itemClass}>
+      {inner}
     </button>
   );
 }

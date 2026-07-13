@@ -2,7 +2,6 @@
 "use client";
 
 import React, { useRef, useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,49 +11,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
-  Edit,
-  Trash2,
   UserPlus,
   Phone,
   Mail,
   MapPin,
   GraduationCap,
-  Building,
-  Calendar,
   User,
   Zap,
   History,
   ExternalLink,
   RefreshCcw,
-  MoreVertical,
+  FileText,
+  ArrowRight,
+  AlertCircle,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useMediaQuery";
-import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
-import { useAuth } from "@/hooks/useAuth";
-import { isManagerOrAbove } from "@/lib/utils/permissions";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSectionV2 } from "@/components/leads/QuickConsultationSectionV2";
-import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
+import { LeadActionMenu } from "@/components/leads/command-center/LeadActionMenu";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { getEducationLevelLabel } from "@/constants";
+import { getStatusConfig, getStatusDotColor } from "@/lib/status-config";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
 import type { Lead } from "@/types/lead.types";
 
@@ -106,13 +87,9 @@ const getInitials = (name: string) => {
 };
 
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
-  const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
-  const { user } = useAuth();
-  const hasManagerAccess = isManagerOrAbove(user);
+  const { data: lead, isLoading, isError, refetch } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [reassignOpen, setReassignOpen] = useState(false);
-  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+  // 1 instance duy nhất (panel không phải list) → chọn sheet/dropdown cho menu.
   const isMobile = useIsMobile();
 
   // ✅ FIX: Calculate days since contact in useEffect to avoid impure Date.now() in render
@@ -161,8 +138,32 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </div>
           <div>
             <p className="text-muted-foreground font-medium">Chọn lead để xem chi tiết</p>
-            <p className="text-muted-foreground/70 text-sm">Click vào lead trong danh sách</p>
+            <p className="text-muted-foreground/70 text-sm">Chọn lead trong danh sách</p>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state — fetch lỗi (network/403/404). Tránh kẹt skeleton vĩnh viễn:
+  // báo rõ + cho thử lại (mẫu như trang /leads/[id]).
+  if (isError) {
+    return (
+      <div className="flex h-full items-center justify-center p-4">
+        <div className="max-w-xs space-y-3 text-center">
+          <div className="bg-error-50 dark:bg-error-950/40 mx-auto flex h-12 w-12 items-center justify-center rounded-full">
+            <AlertCircle className="text-error-500 h-6 w-6" />
+          </div>
+          <div>
+            <p className="text-foreground font-medium">Không tải được thông tin lead</p>
+            <p className="text-muted-foreground text-sm">
+              Có thể do mất mạng hoặc bạn không có quyền xem lead này.
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+            Thử lại
+          </Button>
         </div>
       </div>
     );
@@ -192,7 +193,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
     >
       {/* Header - Mobile Optimized, Full Width Rows */}
       {/* Note: pr-10 to avoid Sheet close button overlap */}
-      <div className="bg-background shrink-0 border-b p-3 pr-10 space-y-2">
+      <div className="bg-background shrink-0 border-b p-3 pr-12 space-y-2">
         {/* Row 1: Avatar + Name + Assignment Status */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -201,7 +202,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 {getInitials(lead.full_name)}
               </AvatarFallback>
             </Avatar>
-            <h2 className="truncate text-sm font-semibold font-display">
+            <h2 className="truncate text-base font-semibold font-display">
               {lead.full_name}
             </h2>
           </div>
@@ -253,165 +254,88 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 Xem
               </Link>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-11 sm:h-7 px-2 text-xs"
-              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-            >
-              <Phone className="h-3.5 w-3.5 mr-1" />
-              Gọi
+            <Button variant="outline" size="sm" className="h-11 sm:h-7 px-2 text-xs" asChild>
+              <a href={`tel:${lead.phone}`}>
+                <Phone className="h-3.5 w-3.5 mr-1" />
+                Gọi
+              </a>
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-11 sm:h-7 px-2 text-xs"
-              onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
-            >
-              <span className="font-bold mr-1">Z</span>
-              Zalo
+            <Button variant="outline" size="sm" className="h-11 sm:h-7 px-2 text-xs" asChild>
+              <a
+                href={`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="font-bold mr-1">Z</span>
+                Zalo
+              </a>
             </Button>
           </div>
 
-          {/* More Actions - Mobile: ActionSheet, Desktop: Dropdown */}
-          {isMobile ? (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-11 w-11 sm:h-7 sm:w-7 p-0"
-                onClick={() => setActionSheetOpen(true)}
-                aria-label="Mở menu thao tác"
-              >
-                <MoreVertical className="h-4 w-4" />
-              </Button>
-              <MobileActionSheet
-                open={actionSheetOpen}
-                onOpenChange={setActionSheetOpen}
-                title="Thao tác"
-              >
-                <MobileActionSheet.Item
-                  icon={Edit}
-                  onClick={() => {
-                    setActionSheetOpen(false);
-                    onEdit(lead);
-                  }}
-                >
-                  Chỉnh sửa
-                </MobileActionSheet.Item>
-                {lead.email && (
-                  <MobileActionSheet.Item
-                    icon={Mail}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      window.open(`mailto:${lead.email}`, "_blank");
-                    }}
-                  >
-                    Gửi email
-                  </MobileActionSheet.Item>
-                )}
-                <MobileActionSheet.Divider />
-                {!lead.assigned_officer && (
-                  <MobileActionSheet.Item
-                    icon={UserPlus}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      onAssign(lead);
-                    }}
-                  >
-                    Gán cho cán bộ
-                  </MobileActionSheet.Item>
-                )}
-                {lead.assigned_officer && hasManagerAccess && (
-                  <MobileActionSheet.Item
-                    icon={UserPlus}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      setAssignOpen(true);
-                    }}
-                  >
-                    Chuyển giao lead
-                  </MobileActionSheet.Item>
-                )}
-                {lead.assigned_officer && !hasManagerAccess && (
-                  <MobileActionSheet.Item
-                    icon={RefreshCcw}
-                    onClick={() => {
-                      setActionSheetOpen(false);
-                      setReassignOpen(true);
-                    }}
-                  >
-                    Yêu cầu đổi người phụ trách
-                  </MobileActionSheet.Item>
-                )}
-                <MobileActionSheet.Divider />
-                <MobileActionSheet.Item
-                  icon={Trash2}
-                  variant="destructive"
-                  onClick={() => {
-                    setActionSheetOpen(false);
-                    onDelete(lead);
-                  }}
-                >
-                  Xóa lead
-                </MobileActionSheet.Item>
-                <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
-              </MobileActionSheet>
-            </>
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="h-11 w-11 sm:h-7 sm:w-7 p-0" aria-label="Mở menu thao tác">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={() => onEdit(lead)}>
-                  <Edit className="mr-2 h-4 w-4" />
-                  Chỉnh sửa
-                </DropdownMenuItem>
-                {lead.email && (
-                  <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
-                    <Mail className="mr-2 h-4 w-4" />
-                    Gửi email
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                {!lead.assigned_officer && (
-                  <DropdownMenuItem onClick={() => onAssign(lead)}>
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Gán cho cán bộ
-                  </DropdownMenuItem>
-                )}
-                {lead.assigned_officer && hasManagerAccess && (
-                  <DropdownMenuItem onClick={() => setAssignOpen(true)}>
-                    <UserPlus className="mr-2 h-4 w-4" />
-                    Chuyển giao lead
-                  </DropdownMenuItem>
-                )}
-                {lead.assigned_officer && !hasManagerAccess && (
-                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-                    <RefreshCcw className="mr-2 h-4 w-4" />
-                    Yêu cầu đổi người phụ trách
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={() => onDelete(lead)}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Xóa lead
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {/* Menu thao tác — dùng chung LeadActionMenu (khớp card + hàng bảng) */}
+          <LeadActionMenu
+            lead={lead}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onAssign={onAssign}
+            variant={isMobile ? "sheet" : "dropdown"}
+            sheetTitle="Thao tác"
+          />
         </div>
       </div>
 
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
         <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
+          {/* ================================================== */}
+          {/* CỬA VÀO HỒ SƠ — 1 chạm sang /admissions khi đã có hồ sơ */}
+          {/* Đặt trên cùng: khi lead đã có hồ sơ thì hồ sơ là ưu tiên. */}
+          {/* Thin-client: label/màu lấy từ getStatusConfig('admission'). */}
+          {/* ================================================== */}
+          {(() => {
+            const profile = lead.admission_profiles?.[0];
+            if (!profile) return null;
+            const cfg = getStatusConfig(profile.status, "admission");
+            const extraCount = (lead.admission_profiles?.length ?? 1) - 1;
+            return (
+              <Link
+                href={`/admissions/${profile.id}`}
+                aria-label={`Xem hồ sơ tuyển sinh #${profile.id} — ${cfg.label}`}
+                className="group relative flex min-h-14 items-center gap-3 overflow-hidden rounded-xl border bg-card p-2.5 pl-3 shadow-sm transition-colors hover:border-primary/40 active:scale-[0.995]"
+              >
+                {/* Vạch màu trạng thái (viền-trái) */}
+                <span className={cn("absolute inset-y-0 left-0 w-1", getStatusDotColor(profile.status))} />
+                {/* Chip nhận diện hồ sơ, tô theo trạng thái */}
+                <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-lg", cfg.badgeColor)}>
+                  <FileText className="h-[18px] w-[18px]" />
+                </span>
+                {/* Nội dung: eyebrow + trạng thái + mã SV */}
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Hồ sơ tuyển sinh
+                    <span className="font-mono font-semibold tracking-tight text-muted-foreground/80">#{profile.id}</span>
+                    {extraCount > 0 && (
+                      <span className="font-sans font-medium normal-case text-muted-foreground/70">· +{extraCount} hồ sơ</span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 flex items-baseline gap-1.5 truncate text-[15px] font-semibold leading-tight text-foreground">
+                    {cfg.label}
+                    {profile.student_code && (
+                      <span className="truncate font-mono text-[11px] font-medium tracking-tight text-muted-foreground">
+                        · Mã SV {profile.student_code}
+                      </span>
+                    )}
+                  </span>
+                </span>
+                {/* Lối vào — chevron trỏ sang module tuyển sinh */}
+                <span className="flex shrink-0 items-center gap-1 pr-0.5 text-xs font-semibold text-muted-foreground transition-colors group-hover:text-primary">
+                  Xem
+                  <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transition-none" />
+                </span>
+              </Link>
+            );
+          })()}
+
           {/* ================================================== */}
           {/* SECTION 1: Thông tin học viên (Combined) */}
           {/* ================================================== */}
@@ -481,9 +405,9 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                       size="sm"
                       variant="outline"
                       className="h-11 sm:h-5 px-2 text-xs sm:text-[10px] border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
-                      onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                      asChild
                     >
-                      Gọi ngay
+                      <a href={`tel:${lead.phone}`}>Gọi ngay</a>
                     </Button>
                   </div>
                 </div>
@@ -543,7 +467,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
 
                   {/* Days in Stage */}
                   <div className="flex items-center justify-between h-5">
-                    <span className="text-muted-foreground">Ngày trong stage:</span>
+                    <span className="text-muted-foreground">Ngày trong giai đoạn:</span>
                     <span className="font-semibold">{lead.days_in_stage ?? 0}</span>
                   </div>
 
@@ -622,19 +546,6 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </Card>
         </div>
       </ScrollArea>
-      
-      {/* Assign Dialog (Manager/Admin: direct reassign) */}
-      <AssignLeadDialog
-        open={assignOpen}
-        onOpenChange={setAssignOpen}
-        lead={lead}
-      />
-      {/* Reassign Dialog (Officer: request reassign) */}
-      <ReassignLeadDialog
-        open={reassignOpen}
-        onOpenChange={setReassignOpen}
-        lead={lead}
-      />
     </div>
   );
 }

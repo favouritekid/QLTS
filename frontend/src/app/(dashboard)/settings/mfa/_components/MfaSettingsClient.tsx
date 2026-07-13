@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import { toast } from "sonner";
+import { copyToClipboard } from "@/lib/clipboard";
 import { ShieldCheck, ShieldOff, Copy, RefreshCw } from "lucide-react";
 
 import { api } from "@/lib/api/client";
@@ -150,9 +151,12 @@ export function MfaSettingsClient() {
     },
   });
 
-  function copyBackupCodes() {
-    navigator.clipboard.writeText(backupCodes.join("\n"));
-    toast.success("Đã sao chép mã dự phòng.");
+  async function copyBackupCodes() {
+    if (await copyToClipboard(backupCodes.join("\n"))) {
+      toast.success("Đã sao chép mã dự phòng.");
+    } else {
+      toast.error("Không sao chép được.");
+    }
   }
 
   if (isStatusLoading) {

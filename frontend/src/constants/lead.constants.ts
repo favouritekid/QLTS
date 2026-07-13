@@ -231,6 +231,20 @@ export const getEducationLevelLabel = (level: EducationLevel | string | null | u
   return EDUCATION_LEVEL_LABELS[level] || level;
 };
 
+// Viết tắt TRÌNH ĐỘ CỦA NGÀNH (program.degree_level đã lưu nhãn VN đầy đủ:
+// "Cao đẳng"/"Trung cấp"...). Dùng chung cho card lead + bảng lead để đồng bộ.
+// Gặp giá trị lạ → trả nguyên nhãn (không mất thông tin).
+export const DEGREE_LEVEL_ABBR: Record<string, string> = {
+  "Đại học": "ĐH",
+  "Cao đẳng": "CĐ",
+  "Trung cấp": "TC",
+  "Sơ cấp": "SC",
+};
+
+export const getDegreeLevelAbbr = (
+  degree: string | null | undefined
+): string | null => (degree ? DEGREE_LEVEL_ABBR[degree] ?? degree : null);
+
 // =============================================================================
 // LEAD VALIDITY OPTIONS (CTV System)
 // =============================================================================

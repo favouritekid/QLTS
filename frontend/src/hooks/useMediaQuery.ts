@@ -5,34 +5,36 @@
  * Usage:
  * const isMobile = useMediaQuery("(max-width: 768px)");
  * const isDesktop = useMediaQuery("(min-width: 1024px)");
+ *
+ * SSR-safe + KHÔNG flash: giá trị khởi tạo = false (khớp SSR → không hydration
+ * mismatch), rồi được set về giá trị THẬT trong useLayoutEffect — chạy đồng bộ
+ * SAU hydrate nhưng TRƯỚC khi trình duyệt paint. Nhờ vậy màn desktop paint thẳng
+ * layout desktop, KHÔNG nháy mobile→desktop như khi dùng useSyncExternalStore
+ * (re-sync của nó xảy ra sau paint → nháy). Mobile giữ nguyên (false → false).
  */
 
-import { useSyncExternalStore, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
+
+// useLayoutEffect chỉ chạy ở client; trên server React cảnh báo "does nothing on
+// the server" → fallback useEffect ở server để im lặng (effect không chạy SSR).
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export function useMediaQuery(query: string): boolean {
-  // Subscribe function for useSyncExternalStore
-  const subscribe = useCallback(
-    (callback: () => void) => {
-      const mediaQuery = window.matchMedia(query);
-      mediaQuery.addEventListener("change", callback);
-      return () => {
-        mediaQuery.removeEventListener("change", callback);
-      };
-    },
-    [query]
-  );
+  // false ở SSR + lần render client đầu (hydrate) → khớp, không mismatch.
+  const [matches, setMatches] = useState(false);
 
-  // Get current snapshot
-  const getSnapshot = useCallback(() => {
-    return window.matchMedia(query).matches;
+  useIsomorphicLayoutEffect(() => {
+    const mediaQuery = window.matchMedia(query);
+    // Set giá trị THẬT trước paint đầu tiên → không flash.
+    setMatches(mediaQuery.matches);
+
+    const onChange = () => setMatches(mediaQuery.matches);
+    mediaQuery.addEventListener("change", onChange);
+    return () => mediaQuery.removeEventListener("change", onChange);
   }, [query]);
 
-  // Server snapshot (SSR safe - default to false)
-  const getServerSnapshot = useCallback(() => {
-    return false;
-  }, []);
-
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return matches;
 }
 
 // Convenience hooks for common breakpoints (Tailwind defaults)

@@ -36,22 +36,11 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
 
   // Allow cross-origin requests from devices on local network during development
-  // This enables testing from mobile devices when dev server runs on desktop
-  // Note: Next.js requires both with/without port for proper matching
+  // (test từ điện thoại khi dev server chạy trên desktop). Next.js so khớp theo
+  // HOSTNAME — KHÔNG kèm protocol/port; khai full-URL sẽ không match → dev-server
+  // chặn /_next/* (403) → RSC/hydrate vỡ trên thiết bị LAN.
   allowedDevOrigins: isDev
-    ? [
-        // Common mobile device testing IPs
-        "http://192.168.88.125", // Without port
-        "http://192.168.88.125:80", // With port 80 (nginx/proxy)
-        "http://192.168.88.125:3000", // With port 3000
-        "http://192.168.88.125:3001", // With port 3001
-
-        // Additional device IP from previous setup
-        "http://192.168.0.120",
-        "http://192.168.0.120:80",
-        "http://192.168.0.120:3000",
-        "http://192.168.0.120:3001",
-      ]
+    ? ["192.168.88.125", "192.168.0.120"]
     : [],
 
   // ✅ Security Headers

@@ -491,6 +491,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
                   onSelectLead={handleLeadSelect}
                   onEditLead={handleEdit}
                   onDeleteLead={handleDelete}
+                  onAssignLead={handleAssign}
                   page={filterState.page}
                   pageSize={filterState.pageSize}
                   totalCount={leadsPage?.total_count || 0}
@@ -560,6 +561,7 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
               onSelectLead={handleLeadSelect}
               onEditLead={handleEdit}
               onDeleteLead={handleDelete}
+              onAssignLead={handleAssign}
               page={filterState.page}
               pageSize={filterState.pageSize}
               totalCount={leadsPage?.total_count || 0}
@@ -585,7 +587,9 @@ export function LeadsClient({ initialData, initialQueryParams }: LeadsClientProp
           <SheetHeader className="sr-only">
             <SheetTitle>Chi tiết Lead</SheetTitle>
           </SheetHeader>
-          <div className="h-full overflow-y-auto">
+          {/* Chỉ 1 tầng cuộn: LeadDetailPanel tự có ScrollArea (như desktop).
+              Wrapper KHÔNG overflow-y-auto để tránh cuộn lồng gây giật. */}
+          <div className="h-full">
             <LeadDetailPanel
               leadId={selectedLeadId}
               onEdit={(lead) => {

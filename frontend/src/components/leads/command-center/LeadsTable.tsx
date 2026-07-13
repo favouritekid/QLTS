@@ -37,14 +37,11 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  MoreHorizontal,
   ChevronLeft,
   SearchX,
   ChevronRight,
   GripVertical,
   Zap,
-  Edit,
-  Trash2,
 } from "lucide-react";
 import {
   Table,
@@ -57,12 +54,6 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -73,9 +64,9 @@ import {
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
-import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+import { LeadActionMenu } from "./LeadActionMenu";
 import type { Lead } from "@/types/lead.types";
-import { LEAD_SOURCE_OPTIONS, getLeadScoreTextColor } from "@/constants";
+import { getLeadSourceLabel, getLeadScoreTextColor, getDegreeLevelAbbr } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
@@ -95,6 +86,8 @@ interface LeadsTableProps {
   onSelectLead: (lead: Lead) => void;
   onEditLead: (lead: Lead) => void;
   onDeleteLead: (lead: Lead) => void;
+  /** "Gán cho cán bộ" cho lead chưa phân công (mở dialog gán ở parent). */
+  onAssignLead: (lead: Lead) => void;
   isLoading?: boolean;
   // Pagination props
   page?: number;
@@ -160,93 +153,31 @@ const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: stri
 
 const columnHelper = createColumnHelper<Lead>();
 
-const getSourceLabel = (value: string) =>
-  LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
-
 // =============================================================================
-// ROW ACTIONS COMPONENT - Responsive (mobile: action sheet, desktop: dropdown)
+// ROW ACTIONS COMPONENT — dùng chung LeadActionMenu (khớp card + panel)
 // =============================================================================
 
 interface RowActionsProps {
   lead: Lead;
   onEdit: (lead: Lead) => void;
   onDelete: (lead: Lead) => void;
+  onAssign: (lead: Lead) => void;
 }
 
-function RowActions({ lead, onEdit, onDelete }: RowActionsProps) {
-  const isMobile = useIsMobile();
-  const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
-
-  if (isMobile) {
-    return (
-      <>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 w-8 p-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            setActionSheetOpen(true);
-          }}
-          aria-label="Mở menu thao tác"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
-        <MobileActionSheet
-          open={actionSheetOpen}
-          onOpenChange={setActionSheetOpen}
-          title={lead.full_name}
-        >
-          <MobileActionSheet.Item
-            icon={Edit}
-            onClick={() => {
-              setActionSheetOpen(false);
-              onEdit(lead);
-            }}
-          >
-            Chỉnh sửa
-          </MobileActionSheet.Item>
-          <MobileActionSheet.Item
-            icon={Trash2}
-            variant="destructive"
-            onClick={() => {
-              setActionSheetOpen(false);
-              onDelete(lead);
-            }}
-          >
-            Xóa
-          </MobileActionSheet.Item>
-          <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
-        </MobileActionSheet>
-      </>
-    );
-  }
-
+function RowActions({ lead, onEdit, onDelete, onAssign }: RowActionsProps) {
+  // stopPropagation: hàng có onClick chọn lead → không cho click menu chọn hàng.
+  // triggerClassName h-8 giữ chiều cao hàng bảng ổn định.
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 w-8 p-0"
-          onClick={(e) => e.stopPropagation()}
-          aria-label="Mở menu thao tác"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => onEdit(lead)}>
-          Chỉnh sửa
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onClick={() => onDelete(lead)}
-          className="text-destructive"
-        >
-          Xóa
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <LeadActionMenu
+      lead={lead}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onAssign={onAssign}
+      variant="dropdown"
+      sheetTitle={lead.full_name}
+      triggerClassName="h-8 w-8 sm:h-8 sm:w-8"
+      stopPropagation
+    />
   );
 }
 
@@ -260,6 +191,7 @@ export function LeadsTable({
   onSelectLead,
   onEditLead,
   onDeleteLead,
+  onAssignLead,
   isLoading = false,
   page = 1,
   pageSize = 50,
@@ -425,6 +357,32 @@ export function LeadsTable({
         size: 120,
       }),
 
+      // Ngành column — đồng bộ với card list (trình độ viết tắt CĐ/TC + tên ngành)
+      columnHelper.accessor("offering", {
+        id: "offering",
+        header: "Ngành",
+        enableSorting: false,
+        cell: ({ row }) => {
+          const offering = row.original.offering;
+          const major = offering?.program?.name || offering?.offering_type;
+          if (!major) return <span className="text-muted-foreground">—</span>;
+          const degreeShort = getDegreeLevelAbbr(offering?.program?.degree_level);
+          return (
+            <span className="flex items-center gap-1.5 text-sm">
+              {degreeShort && (
+                <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+                  {degreeShort}
+                </span>
+              )}
+              <span className="truncate" title={major}>
+                {major}
+              </span>
+            </span>
+          );
+        },
+        size: 180,
+      }),
+
       // Source column
       columnHelper.accessor("source", {
         header: "Nguồn",
@@ -433,7 +391,7 @@ export function LeadsTable({
           if (!source) return <span className="text-muted-foreground">—</span>;
           return (
             <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal">
-              {getSourceLabel(source)}
+              {getLeadSourceLabel(source)}
             </Badge>
           );
         },
@@ -599,6 +557,7 @@ export function LeadsTable({
             lead={row.original}
             onEdit={onEditLead}
             onDelete={onDeleteLead}
+            onAssign={onAssignLead}
           />
         ),
         size: 50,
@@ -606,7 +565,7 @@ export function LeadsTable({
         enableHiding: false,
       }),
     ],
-    [onEditLead, onDeleteLead]
+    [onEditLead, onDeleteLead, onAssignLead]
   );
 
   // Table instance
@@ -781,7 +740,7 @@ export function LeadsTable({
             {selectedLeads.length > 0 ? (
               <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
             ) : (
-              `${totalCount.toLocaleString()} lead`
+              `${totalCount.toLocaleString("vi-VN")} lead`
             )}
           </span>
         </div>
@@ -805,6 +764,7 @@ export function LeadsTable({
               onSelectLead={onSelectLead}
               onEditLead={onEditLead}
               onDeleteLead={onDeleteLead}
+              onAssignLead={onAssignLead}
             />
           )}
         </div>
@@ -1014,7 +974,7 @@ export function LeadsTable({
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-t px-4 py-2">
         <div className="text-muted-foreground text-sm tabular-nums">
           Hiển thị {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-
-          {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString()} lead
+          {Math.min(page * pageSize, totalCount)} / {totalCount.toLocaleString("vi-VN")} lead
         </div>
         <div className="flex items-center gap-2">
           <Button

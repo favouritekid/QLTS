@@ -14,7 +14,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+  SheetHeader,
+  SheetTitle,
+  SheetFooter,
+  SheetClose,
+} from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -123,7 +133,7 @@ function TimeColumn({ values, selectedValue, onChange, formatFn, label }: TimeCo
       <div className="text-xs font-medium text-center py-1 text-muted-foreground border-b">
         {label}
       </div>
-      <ScrollArea className="h-[200px]">
+      <ScrollArea className="h-[168px] sm:h-[200px]">
         <div className="flex flex-col p-1">
           {values.map((value) => {
             const isSelected = value === selectedValue;
@@ -178,6 +188,10 @@ export function DateTimePicker({
 }: DateTimePickerProps) {
   const [internalOpen, setInternalOpen] = React.useState(false);
   const triggerId = React.useId();
+  // Mobile (≤767px): render picker trong bottom Sheet thay vì Popover neo-trigger.
+  // Popover bị giới hạn chiều cao theo vị trí trigger → lịch+giờ (~660px) không đủ
+  // chỗ, khối giờ tụt dưới mép cuộn. Bottom Sheet cao ~92vh chứa đủ cả hai.
+  const isMobile = useIsMobile();
 
   // Use controlled state if provided, otherwise use internal state
   const isControlled = controlledOpen !== undefined;
@@ -340,6 +354,136 @@ export function DateTimePicker({
     [minDate, maxDate]
   );
 
+  // Nút trigger (dùng chung Popover desktop & Sheet mobile). Khi hideTrigger →
+  // sr-only, open điều khiển từ ngoài (vd QuickConsultationSectionV2).
+  const triggerButton = (
+    <Button
+      id={triggerId}
+      variant="outline"
+      role="combobox"
+      aria-expanded={open}
+      disabled={disabled}
+      className={cn(
+        "w-full justify-start text-left font-normal",
+        !value && "text-muted-foreground",
+        hasError && "border-destructive focus-visible:ring-destructive",
+        hideTrigger && "sr-only",
+        className
+      )}
+    >
+      <CalendarIcon className="mr-2 h-4 w-4" />
+      {displayValue || placeholder}
+
+      {/* Clear button */}
+      {clearable && value && !disabled && (
+        <span
+          className="ml-auto"
+          onClick={handleClear}
+          role="button"
+          aria-label="Xóa"
+        >
+          <X className="h-4 w-4 text-muted-foreground hover:text-foreground" />
+        </span>
+      )}
+    </Button>
+  );
+
+  // Thân picker (lịch + giờ) — dùng chung cho Popover & Sheet.
+  const pickerBody = (
+    <>
+      {/* Input display */}
+      <div className="p-3 border-b">
+        <Input
+          value={displayValue}
+          readOnly
+          className="text-center font-medium"
+          placeholder={placeholder}
+        />
+      </div>
+
+      {/* Xếp DỌC trên mobile (calendar trên, giờ dưới) để không tràn màn ~390px;
+          NGANG (side-by-side) từ sm trở lên. */}
+      <div className="flex flex-col sm:flex-row">
+        {/* Calendar */}
+        <div className="border-b sm:border-b-0 sm:border-r">
+          <Calendar
+            mode="single"
+            selected={value || undefined}
+            onSelect={handleDateSelect}
+            disabled={disabledDatesFn}
+            locale={vi}
+            initialFocus
+          />
+          {/* Today & Clear buttons */}
+          <div className="flex justify-between px-3 pb-3 gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClear}
+              className="text-destructive hover:text-destructive"
+            >
+              Xóa
+            </Button>
+            <Button variant="ghost" size="sm" onClick={handleToday}>
+              Hôm nay
+            </Button>
+          </div>
+        </div>
+
+        {/* Time picker columns — trên mobile mỗi cột flex-1 trải đều bằng bề
+            rộng calendar cho cân đối; desktop giữ bề rộng tự nhiên. */}
+        <div className="flex divide-x [&>div]:flex-1 sm:[&>div]:flex-none">
+          {use12Hour ? (
+            <>
+              {/* Hour (12-hour) */}
+              <TimeColumn
+                values={HOURS_12}
+                selectedValue={hour12}
+                onChange={handleHour12Change}
+                formatFn={(v) => formatTwoDigits(v as number)}
+                label="Giờ"
+              />
+              {/* Minute */}
+              <TimeColumn
+                values={MINUTES}
+                selectedValue={minute}
+                onChange={handleMinuteChange}
+                formatFn={(v) => formatTwoDigits(v as number)}
+                label="Phút"
+              />
+              {/* Period (SA/CH) */}
+              <TimeColumn
+                values={[...PERIODS]}
+                selectedValue={period}
+                onChange={handlePeriodChange}
+                label=""
+              />
+            </>
+          ) : (
+            <>
+              {/* Hour (24-hour) */}
+              <TimeColumn
+                values={HOURS_24}
+                selectedValue={hour24}
+                onChange={handleHour24Change}
+                formatFn={(v) => formatTwoDigits(v as number)}
+                label="Giờ"
+              />
+              {/* Minute */}
+              <TimeColumn
+                values={MINUTES}
+                selectedValue={minute}
+                onChange={handleMinuteChange}
+                formatFn={(v) => formatTwoDigits(v as number)}
+                label="Phút"
+              />
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <div className={cn("space-y-2", containerClassName)}>
       {/* Label */}
@@ -353,133 +497,44 @@ export function DateTimePicker({
         </Label>
       )}
 
-      {/* DateTime picker */}
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            id={triggerId}
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            disabled={disabled}
-            className={cn(
-              "w-full justify-start text-left font-normal",
-              !value && "text-muted-foreground",
-              hasError && "border-destructive focus-visible:ring-destructive",
-              hideTrigger && "sr-only",
-              className
-            )}
+      {/* MOBILE: bottom Sheet — chiều cao kiểm soát được, hiển thị đủ lịch+giờ. */}
+      {isMobile ? (
+        <Sheet open={open} onOpenChange={setOpen}>
+          <SheetTrigger asChild>{triggerButton}</SheetTrigger>
+          <SheetContent
+            side="bottom"
+            aria-describedby={undefined}
+            className="flex max-h-[92vh] flex-col gap-0 overflow-y-auto p-0"
           >
-            <CalendarIcon className="mr-2 h-4 w-4" />
-            {displayValue || placeholder}
-
-            {/* Clear button */}
-            {clearable && value && !disabled && (
-              <span
-                className="ml-auto"
-                onClick={handleClear}
-                role="button"
-                aria-label="Xóa"
-              >
-                <X className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-              </span>
-            )}
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-auto p-0" align="start">
-          {/* Input display */}
-          <div className="p-3 border-b">
-            <Input
-              value={displayValue}
-              readOnly
-              className="text-center font-medium"
-              placeholder={placeholder}
-            />
-          </div>
-
-          <div className="flex">
-            {/* Calendar */}
-            <div className="border-r">
-              <Calendar
-                mode="single"
-                selected={value || undefined}
-                onSelect={handleDateSelect}
-                disabled={disabledDatesFn}
-                locale={vi}
-                initialFocus
-              />
-              {/* Today & Clear buttons */}
-              <div className="flex justify-between px-3 pb-3 gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClear}
-                  className="text-destructive hover:text-destructive"
-                >
-                  Xóa
+            <SheetHeader className="border-b px-4 py-3 pr-14 text-left">
+              <SheetTitle className="text-base">
+                {label || "Chọn ngày giờ"}
+              </SheetTitle>
+            </SheetHeader>
+            {pickerBody}
+            <SheetFooter className="border-t p-3">
+              <SheetClose asChild>
+                <Button type="button" className="w-full">
+                  Xong
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleToday}
-                >
-                  Hôm nay
-                </Button>
-              </div>
-            </div>
-
-            {/* Time picker columns */}
-            <div className="flex divide-x">
-              {use12Hour ? (
-                <>
-                  {/* Hour (12-hour) */}
-                  <TimeColumn
-                    values={HOURS_12}
-                    selectedValue={hour12}
-                    onChange={handleHour12Change}
-                    formatFn={(v) => formatTwoDigits(v as number)}
-                    label="Giờ"
-                  />
-                  {/* Minute */}
-                  <TimeColumn
-                    values={MINUTES}
-                    selectedValue={minute}
-                    onChange={handleMinuteChange}
-                    formatFn={(v) => formatTwoDigits(v as number)}
-                    label="Phút"
-                  />
-                  {/* Period (SA/CH) */}
-                  <TimeColumn
-                    values={[...PERIODS]}
-                    selectedValue={period}
-                    onChange={handlePeriodChange}
-                    label=""
-                  />
-                </>
-              ) : (
-                <>
-                  {/* Hour (24-hour) */}
-                  <TimeColumn
-                    values={HOURS_24}
-                    selectedValue={hour24}
-                    onChange={handleHour24Change}
-                    formatFn={(v) => formatTwoDigits(v as number)}
-                    label="Giờ"
-                  />
-                  {/* Minute */}
-                  <TimeColumn
-                    values={MINUTES}
-                    selectedValue={minute}
-                    onChange={handleMinuteChange}
-                    formatFn={(v) => formatTwoDigits(v as number)}
-                    label="Phút"
-                  />
-                </>
-              )}
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
+              </SheetClose>
+            </SheetFooter>
+          </SheetContent>
+        </Sheet>
+      ) : (
+        /* DESKTOP: Popover neo trigger. */
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>{triggerButton}</PopoverTrigger>
+          <PopoverContent
+            // max-h theo không gian còn lại của viewport (Radix var) + cuộn nội bộ.
+            className="max-h-[var(--radix-popover-content-available-height)] w-auto max-w-[calc(100vw-1rem)] overflow-auto p-0"
+            align="start"
+            collisionPadding={8}
+          >
+            {pickerBody}
+          </PopoverContent>
+        </Popover>
+      )}
 
       {/* Description */}
       {description && !error && (

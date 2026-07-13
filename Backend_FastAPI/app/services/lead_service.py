@@ -720,6 +720,7 @@ async def get_leads(
     is_hot: Optional[bool] = None,
     consultation_status_id: Optional[str] = None,
     include_summary: bool = True,
+    current_user: Optional[models.User] = None,
 ) -> Tuple[int, List[models.Lead], Optional[dict]]:
     """
     Lấy danh sách Leads (List View) + optional summary stats.
@@ -759,6 +760,14 @@ async def get_leads(
         order=order,
         **filter_kwargs,
     )
+
+    # Thin-client: gắn cờ hành động query-free cho từng lead (can_assign_lead /
+    # can_transfer_lead / can_request_reassign) để menu card/hàng khớp panel mà
+    # KHỎI fetch chi tiết từng dòng. Chỉ khi có current_user — caller export
+    # truyền None nên bỏ qua. Không truy vấn DB thêm (đọc role + assigned_officer_id).
+    if current_user is not None:
+        for _lead in leads:
+            _lead.permissions = compute_lead_action_permissions(_lead, current_user)
 
     return total_count, leads, summary
 
@@ -4767,6 +4776,52 @@ async def restore_lead(
 # Thin-client gate fields for LeadDetail response (GET /leads/{id})
 # =============================================================================
 
+def _lead_role_context(
+    lead: models.Lead,
+    current_user: models.User,
+) -> tuple[bool, bool, bool]:
+    """(is_manager_admin, is_officer_assigned, lead_assigned) — nguồn DUY NHẤT cho
+    predicate role/ownership, dùng chung bởi compute_lead_action_permissions() và
+    các gate reopen trong _populate_lead_detail_fields (khỏi định nghĩa 2 nơi rồi
+    lệch nhau khi đổi luật)."""
+    is_manager_admin = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    is_officer_assigned = (
+        current_user.role == UserRole.OFFICER
+        and lead.assigned_officer_id == current_user.id
+    )
+    lead_assigned = lead.assigned_officer_id is not None
+    return is_manager_admin, is_officer_assigned, lead_assigned
+
+
+def compute_lead_action_permissions(
+    lead: models.Lead,
+    current_user: Optional[models.User],
+) -> dict[str, bool]:
+    """Query-free lead action flags (transfer / reassign) from role + assignment
+    state only.
+
+    Shared by the ``LeadDetail`` populate path (GET /leads/{id}) AND the paginated
+    list serializer (GET /leads) so the mobile card / desktop row menu can gate
+    "Chuyển giao lead" / "Yêu cầu đổi người phụ trách" WITHOUT a per-row detail
+    fetch — and WITHOUT the FE reading ``user.role`` (thin-client rule). No DB
+    access → safe to call per list item. Returns ``{}`` for system contexts.
+    """
+    if current_user is None:
+        return {}
+    is_manager_admin, is_officer_assigned, lead_assigned = _lead_role_context(
+        lead, current_user
+    )
+    return {
+        # manager/admin gán lead CHƯA có người phụ trách (endpoint /assign =
+        # "Admin/Manager only") → thin-client gate nút "Gán cho cán bộ".
+        "can_assign_lead": is_manager_admin,
+        # manager/admin đổi trực tiếp; chỉ khi lead đã có người phụ trách
+        "can_transfer_lead": is_manager_admin and lead_assigned,
+        # officer ĐƯỢC GIAO lead → xin đổi
+        "can_request_reassign": is_officer_assigned,
+    }
+
+
 async def _populate_lead_detail_fields(
     db: AsyncSession,
     lead: models.Lead,
@@ -4811,7 +4866,8 @@ async def _populate_lead_detail_fields(
     # FE hiện nút "Mở lại tư vấn" THUẦN theo cờ này (KHÔNG đọc user.role ở FE). Backend
     # là nơi role-gate. Blocker: not_terminal (lead chưa ở trạng thái cuối tư vấn) /
     # forbidden (đúng trạng thái nhưng user không phải manager/admin).
-    is_manager_admin = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    # Single source role/ownership (reopen + compute_lead_action_permissions).
+    is_manager_admin, is_officer_assigned, _ = _lead_role_context(lead, current_user)
     cs_terminal = False
     if lead.consultation_status_id:
         _cs = await db.get(models.ConsultationStatus, lead.consultation_status_id)
@@ -4823,10 +4879,7 @@ async def _populate_lead_detail_fields(
 
     # Phase B: officer assigned XIN mở lại (chờ manager/admin duyệt). Manager/admin
     # dùng can_reopen (mở trực tiếp), nên can_request_reopen chỉ bật cho officer.
-    is_officer_assigned = (
-        current_user.role == UserRole.OFFICER
-        and lead.assigned_officer_id == current_user.id
-    )
+    # is_officer_assigned lấy từ _lead_role_context ở trên (single source).
     can_request_reopen = is_officer_assigned and cs_terminal
     pending_exists = False
     if can_request_reopen:
@@ -4851,6 +4904,14 @@ async def _populate_lead_detail_fields(
             if pending_exists
             else ("not_terminal" if not cs_terminal else "forbidden")
         )
+
+    # ✅ Reassign/Transfer (P0 thin-client): FE gate nút "Chuyển giao lead"
+    # (manager/admin — đổi trực tiếp) vs "Yêu cầu đổi người phụ trách" (officer
+    # ĐƯỢC GIAO lead — xin đổi) THUẦN theo cờ này thay vì đọc user.role ở FE.
+    # Backend là nơi role-gate duy nhất. Chỉ áp khi lead đã có người phụ trách;
+    # lead chưa gán dùng luồng "Gán cho cán bộ" riêng. Cùng nguồn với list
+    # serializer qua compute_lead_action_permissions() (single source of truth).
+    permissions.update(compute_lead_action_permissions(lead, current_user))
 
     lead.permissions = permissions
     lead.available_actions = [k for k, v in permissions.items() if v]

@@ -1580,6 +1580,42 @@ async def test_can_request_reopen_flag(db: AsyncSession):
     assert lead.action_blockers["can_request_reopen"] == "pending_exists"
 
 
+async def test_can_transfer_and_request_reassign_flags(db: AsyncSession):
+    """P0 thin-client: can_transfer_lead=True cho manager/admin trên lead ĐÃ GÁN;
+    can_request_reassign=True cho officer ĐƯỢC GIAO; officer khác / lead chưa gán → False.
+    FE gate nút "Chuyển giao" vs "Yêu cầu đổi" theo cờ này thay vì đọc user.role."""
+    from app.services.lead_service import _populate_lead_detail_fields
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    officer = await _make_officer(db, unit.id, cap=10)
+    other = await _make_officer(db, unit.id, cap=10)
+    assigned_lead = await _make_lead(db, unit.id, officer_id=officer.id)
+    unassigned_lead = await _make_lead(db, unit.id, status="new")
+
+    # Manager trên lead đã gán → chuyển giao trực tiếp, không "xin đổi".
+    await _populate_lead_detail_fields(db, assigned_lead, manager)
+    assert assigned_lead.permissions["can_transfer_lead"] is True
+    assert assigned_lead.permissions["can_request_reassign"] is False
+    assert "can_transfer_lead" in assigned_lead.available_actions
+
+    # Officer được giao → xin đổi, không chuyển giao trực tiếp.
+    await _populate_lead_detail_fields(db, assigned_lead, officer)
+    assert assigned_lead.permissions["can_transfer_lead"] is False
+    assert assigned_lead.permissions["can_request_reassign"] is True
+
+    # Officer KHÔNG được giao → cả hai False (không thao tác lead người khác).
+    await _populate_lead_detail_fields(db, assigned_lead, other)
+    assert assigned_lead.permissions["can_transfer_lead"] is False
+    assert assigned_lead.permissions["can_request_reassign"] is False
+
+    # Lead CHƯA gán → manager không "chuyển giao" (dùng luồng "Gán cho cán bộ").
+    await _populate_lead_detail_fields(db, unassigned_lead, manager)
+    assert unassigned_lead.permissions["can_transfer_lead"] is False
+    assert unassigned_lead.permissions["can_request_reassign"] is False
+
+
 async def test_reopen_lead_auto_resolves_pending_request(db: AsyncSession):
     """#1: lead mở lại TRỰC TIẾP (Phase A reopen_lead) khi đang có pending request →
     request được AUTO-approved (không mồ côi 'Chờ duyệt' mãi)."""

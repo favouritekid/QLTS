@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { copyToClipboard } from "@/lib/clipboard";
 import {
   BookOpen,
   Users,
@@ -108,10 +109,11 @@ function InfoBox({
 function CodeBlock({ code, language = "tsx" }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    if (await copyToClipboard(code)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   return (

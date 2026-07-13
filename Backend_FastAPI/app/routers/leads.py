@@ -349,6 +349,7 @@ async def get_all_leads(
         no_consultation=no_consultation,
         is_hot=is_hot,
         consultation_status_id=consultation_status_id,
+        current_user=current_user,  # → service gắn cờ hành động thin-client per-lead
     )
 
     # Scope-only counts for the "Giai đoạn" filter tree (static navigation map).

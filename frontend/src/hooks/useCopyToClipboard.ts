@@ -2,6 +2,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { copyToClipboard } from "@/lib/clipboard"
 
 /**
  * Copy-to-clipboard với trạng thái `copied` tự tắt sau `resetMs` — gom pattern
@@ -22,15 +23,14 @@ export function useCopyToClipboard(resetMs = 2000) {
 
   const copy = useCallback(
     async (text: string): Promise<boolean> => {
-      try {
-        await navigator.clipboard.writeText(text)
+      // copyToClipboard tự fallback execCommand khi HTTP/insecure (không throw).
+      const ok = await copyToClipboard(text)
+      if (ok) {
         setCopied(true)
         if (timer.current) clearTimeout(timer.current)
         timer.current = setTimeout(() => setCopied(false), resetMs)
-        return true
-      } catch {
-        return false
       }
+      return ok
     },
     [resetMs],
   )

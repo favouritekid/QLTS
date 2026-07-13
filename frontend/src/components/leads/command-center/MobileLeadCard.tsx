@@ -1,32 +1,27 @@
 // src/components/leads/command-center/MobileLeadCard.tsx
 /**
- * MobileLeadCard - Card-based lead display for mobile devices
- *
- * Uses BaseCard System for consistent layout.
- * Provides a touch-friendly interface for viewing and interacting with leads.
+ * MobileLeadCard — thẻ lead mobile, 3 tầng gọn:
+ *   1. Tên lead (đầy chiều rộng → đỡ bị cắt) + menu ⋮
+ *   2. 🎓 Trình độ · Ngành học · Thời gian · Nguồn
+ *   3. ● Trạng thái · Người tư vấn
+ * Tầng 2 & 3 CÙNG cỡ chữ (text-xs). Màu consultation_status dồn vào CHẤM ●
+ * (chữ để foreground vì nhiều color_code sáng như #FACC15 khó đọc). Giữ
+ * SwipeToCall + LeadActionMenu + chạm mở panel. (SĐT bỏ khỏi mặt card — vẫn gọi
+ * được qua vuốt-để-gọi / menu / chi tiết.)
  */
 "use client";
 
 import React from "react";
-import { Phone, MoreVertical, Zap, Edit, Trash2, UserPlus, ArrowRightLeft } from "lucide-react";
-import { sanitizeColorCode } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
-import { UrgencyBadge } from "@/components/common/UrgencyBadge";
-import { MobileActionSheet } from "@/components/common/MobileActionSheet";
-import {
-  BaseCard,
-  CardHeader,
-  CardBody,
-  CardField,
-  CardMeta,
-  CardTime,
-  CardActions,
-} from "@/components/ui/base-card";
+import { GraduationCap, User, UserPlus } from "lucide-react";
+import { formatDistanceToNowStrict } from "date-fns";
+import { vi } from "date-fns/locale";
+import { cn, sanitizeColorCode } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
+import { LeadActionMenu } from "./LeadActionMenu";
+import { SwipeToCall } from "@/components/common/SwipeToCall";
+import { isLeadOverdue } from "@/lib/leads/overdue";
 import type { Lead } from "@/types/lead.types";
-import { LEAD_SOURCE_OPTIONS } from "@/constants";
-import { STAGE_COLORS } from "@/types/pipeline.types";
+import { getLeadSourceLabel, getDegreeLevelAbbr } from "@/constants";
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -36,15 +31,16 @@ interface MobileLeadCardProps {
   onCheck?: (checked: boolean) => void;
   onEdit: (lead: Lead) => void;
   onDelete: (lead: Lead) => void;
-  onAssign?: (lead: Lead) => void;
-  onChangeStage?: (lead: Lead) => void;
+  /** "Gán cho cán bộ" khi lead chưa phân công (mở dialog gán ở parent). */
+  onAssign: (lead: Lead) => void;
   showCheckbox?: boolean;
 }
 
-const getSourceLabel = (value: string) =>
-  LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
-
-export function MobileLeadCard({
+// React.memo: list mobile không virtualize nên mỗi lần chọn lead (setSelectedLeadId
+// ở LeadsClient) re-render CẢ danh sách. leads array ref ổn định (React Query
+// structural sharing) → memo bỏ qua card không đổi, tránh chạy lại format ngày /
+// isLeadOverdue / subtree framer-motion cho từng card.
+export const MobileLeadCard = React.memo(function MobileLeadCard({
   lead,
   isSelected,
   isChecked,
@@ -53,145 +49,148 @@ export function MobileLeadCard({
   onEdit,
   onDelete,
   onAssign,
-  onChangeStage,
   showCheckbox = false,
 }: MobileLeadCardProps) {
-  const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
+  // Bấm card → mở panel chi tiết. LeadActionMenu/checkbox tự stopPropagation
+  // nên không kích hoạt onSelect khi thao tác chúng.
+  const handleCardClick = () => onSelect(lead);
 
-  // Get stage color
-  const stageColor = sanitizeColorCode(lead.pipeline_stage?.color_code) ||
-    STAGE_COLORS[lead.pipeline_stage?.id || ""] ||
-    "#6B7280";
-
-  // Handle card click - only trigger if action sheet is closed
-  const handleCardClick = () => {
-    if (!actionSheetOpen) {
-      onSelect(lead);
-    }
-  };
+  // Màu trạng thái tư vấn dồn vào CHẤM ● (chữ để foreground cho dễ đọc — nhiều
+  // color_code rất sáng như #FACC15/#FBBF24 sẽ không đọc được nếu làm màu chữ).
+  // fallback "" (KHÔNG mặc định #6B7280) để nhánh dot trung tính theo-theme sống.
+  const statusColor = sanitizeColorCode(lead.consultation_status?.color_code, "");
+  const statusName = lead.consultation_status?.name ?? "Chưa tư vấn";
+  const owner = lead.assigned_officer?.full_name;
+  const major =
+    lead.offering?.program?.name || lead.offering?.offering_type || null;
+  // "Trình độ Ngành học" = trình độ của NGÀNH (degree_level: "Cao đẳng"/"Trung cấp"
+  // — đã là nhãn VN sẵn) + tên ngành. Lấy từ offering nên lead có chọn ngành là có
+  // (KHÁC education_level của lead — gần như trống). Ghép bằng " " đọc tự nhiên
+  // ("Cao đẳng Công nghệ ô tô"); rỗng cả hai → "Chưa chọn ngành".
+  const degreeShort = getDegreeLevelAbbr(lead.offering?.program?.degree_level);
+  const eduMajor = [degreeShort, major].filter(Boolean).join(" ") || "Chưa chọn ngành";
+  // Overdue tính client theo next_activity_at (cache is_overdue có thể trễ ~14h).
+  const overdue = isLeadOverdue({ next_activity_at: lead.next_activity_at ?? null });
+  // "Thời gian" gộp thành 1 span suppressed (text + class). Trang /leads SSR với
+  // initialData nên card render trên SERVER; overdue/relative-time phụ thuộc "now"
+  // → server≠client. suppressHydrationWarning trên 1 span duy nhất phủ CẢ text LẪN
+  // className, nên dù nhánh overdue lật giữa SSR↔hydrate vẫn không mismatch.
+  const when = overdue
+    ? { text: "Quá hạn", cls: "font-medium text-error-600 dark:text-error-500" }
+    : lead.last_consultation_at
+      ? {
+          text: formatDistanceToNowStrict(new Date(lead.last_consultation_at), {
+            addSuffix: true,
+            locale: vi,
+          }),
+          cls: "tabular-nums",
+        }
+      : { text: "Chưa liên hệ", cls: "text-muted-foreground/60" };
+  const selected = isSelected || isChecked;
 
   return (
-    <BaseCard
-      selected={isSelected || isChecked}
-      onSelect={(checked) => onCheck?.(checked)}
-      showCheckbox={showCheckbox}
-      onClick={handleCardClick}
-      className="touch-manipulation virtual-card active:bg-muted/50"
-    >
-      {/* Header: Name + Urgency Badge */}
-      <CardHeader
-        title={lead.full_name}
-        badge={
-          lead.cached_urgency_score !== undefined && lead.cached_urgency_score > 0 ? (
-            <UrgencyBadge score={lead.cached_urgency_score} compact />
-          ) : undefined
-        }
-      />
-
-      {/* Body: Phone number */}
-      <CardBody>
-        <CardField
-          icon={<Phone className="h-3 w-3" />}
-          label="SĐT"
-          value={lead.phone || "Chưa có"}
-        />
-      </CardBody>
-
-      {/* Meta: Stage + Source + Score + Last activity */}
-      <CardMeta>
-        {/* Stage badge */}
-        {lead.pipeline_stage && (
-          <DynamicColorBadge color={stageColor}>
-            {lead.pipeline_stage.name}
-          </DynamicColorBadge>
+    <SwipeToCall phone={lead.phone} label={lead.full_name}>
+      <div
+        onClick={handleCardClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          // Chỉ act khi CHÍNH card được focus — không nuốt Enter/Space của nút
+          // menu ⋮ / checkbox con (chúng bubble lên đây; guard target tránh
+          // preventDefault chặn kích hoạt của chúng).
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect(lead);
+          }
+        }}
+        className={cn(
+          "virtual-card relative flex gap-2.5 rounded-xl border bg-card p-3 shadow-sm",
+          "cursor-pointer touch-manipulation transition-colors active:bg-muted/50",
+          selected
+            ? "border-primary/50 ring-1 ring-primary/20"
+            : "hover:border-border hover:bg-accent/40"
         )}
-
-        {/* Source */}
-        <Badge variant="outline">
-          {getSourceLabel(lead.source)}
-        </Badge>
-
-        {/* Lead score (if high) */}
-        {lead.lead_score > 70 && (
-          <Badge
-            variant="secondary"
-            className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-          >
-            <Zap className="h-2.5 w-2.5 mr-0.5" />
-            {lead.lead_score}
-          </Badge>
-        )}
-
-        {/* Last activity */}
-        {lead.last_consultation_at && (
-          <CardTime date={lead.last_consultation_at} format="date" className="ml-auto" />
-        )}
-      </CardMeta>
-
-      {/* Actions */}
-      <CardActions>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-11 w-11"
-          onClick={() => setActionSheetOpen(true)}
-          aria-label="Mở menu hành động"
-        >
-          <MoreVertical className="h-4 w-4" />
-        </Button>
-      </CardActions>
-
-      {/* Action Sheet */}
-      <MobileActionSheet
-        open={actionSheetOpen}
-        onOpenChange={setActionSheetOpen}
-        title={lead.full_name}
       >
-        <MobileActionSheet.Item
-          icon={Edit}
-          onClick={() => {
-            setActionSheetOpen(false);
-            onEdit(lead);
-          }}
-        >
-          Chỉnh sửa
-        </MobileActionSheet.Item>
-        {onAssign && (
-          <MobileActionSheet.Item
-            icon={UserPlus}
-            onClick={() => {
-              setActionSheetOpen(false);
-              onAssign(lead);
-            }}
+        {/* Checkbox bulk-select (hiếm khi bật trên mobile) */}
+        {showCheckbox && (
+          <div
+            className="shrink-0 pt-0.5"
+            data-swipe-ignore
+            onClick={(e) => e.stopPropagation()}
           >
-            Gán cán bộ
-          </MobileActionSheet.Item>
+            <Checkbox
+              checked={isChecked}
+              onCheckedChange={(c) => onCheck?.(c === true)}
+              aria-label="Chọn lead"
+            />
+          </div>
         )}
-        {onChangeStage && (
-          <MobileActionSheet.Item
-            icon={ArrowRightLeft}
-            onClick={() => {
-              setActionSheetOpen(false);
-              onChangeStage(lead);
-            }}
-          >
-            Đổi giai đoạn
-          </MobileActionSheet.Item>
-        )}
-        <MobileActionSheet.Item
-          icon={Trash2}
-          variant="destructive"
-          onClick={() => {
-            setActionSheetOpen(false);
-            onDelete(lead);
-          }}
-        >
-          Xóa lead
-        </MobileActionSheet.Item>
-      </MobileActionSheet>
-    </BaseCard>
+
+        <div className="min-w-0 flex-1 space-y-1.5">
+          {/* Tầng 1: tên lead (đầy chiều rộng) + menu */}
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-tight">
+              {lead.full_name}
+            </span>
+            <LeadActionMenu
+              lead={lead}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onAssign={onAssign}
+              variant="sheet"
+              sheetTitle={lead.full_name}
+              triggerClassName="h-11 w-11 sm:h-11 sm:w-11 -my-2 -mr-2"
+              stopPropagation
+            />
+          </div>
+
+          {/* Tầng 2: 🎓 Trình độ · Ngành học · Thời gian · Nguồn */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex min-w-0 flex-1 items-center gap-1.5">
+              <GraduationCap className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+              <span className="truncate text-foreground/90">{eduMajor}</span>
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+            <span className={cn("shrink-0", when.cls)} suppressHydrationWarning>
+              {when.text}
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+            <span className="shrink-0 text-muted-foreground/80">
+              {getLeadSourceLabel(lead.source)}
+            </span>
+          </div>
+
+          {/* Tầng 3: ● Trạng thái · Người tư vấn (cùng cỡ chữ tầng 2) */}
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <span
+                className={cn(
+                  "h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-inset ring-black/10 dark:ring-white/15",
+                  !statusColor && "bg-muted-foreground/40"
+                )}
+                style={statusColor ? { backgroundColor: statusColor } : undefined}
+              />
+              <span className="truncate font-medium text-foreground/90">{statusName}</span>
+            </span>
+            <span className="shrink-0 text-muted-foreground/40">·</span>
+            {owner ? (
+              <span className="inline-flex min-w-0 flex-1 items-center gap-1">
+                <User className="h-3 w-3 shrink-0 opacity-70" />
+                <span className="truncate">{owner}</span>
+              </span>
+            ) : (
+              <span className="inline-flex shrink-0 items-center gap-1 font-medium text-amber-600 dark:text-amber-500">
+                <UserPlus className="h-3 w-3" />
+                Chưa phân công
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </SwipeToCall>
   );
-}
+});
 
 // =============================================================================
 // MOBILE LEAD LIST - Container for card list with bulk selection
@@ -203,8 +202,7 @@ interface MobileLeadListProps {
   onSelectLead: (lead: Lead) => void;
   onEditLead: (lead: Lead) => void;
   onDeleteLead: (lead: Lead) => void;
-  onAssignLead?: (lead: Lead) => void;
-  onChangeStage?: (lead: Lead) => void;
+  onAssignLead: (lead: Lead) => void;
   // Bulk selection
   selectedLeads?: Lead[];
   onSelectionChange?: (leads: Lead[]) => void;
@@ -218,7 +216,6 @@ export function MobileLeadList({
   onEditLead,
   onDeleteLead,
   onAssignLead,
-  onChangeStage,
   selectedLeads = [],
   onSelectionChange,
   showBulkSelect = false,
@@ -252,7 +249,6 @@ export function MobileLeadList({
           onEdit={onEditLead}
           onDelete={onDeleteLead}
           onAssign={onAssignLead}
-          onChangeStage={onChangeStage}
           showCheckbox={showBulkSelect}
         />
       ))}

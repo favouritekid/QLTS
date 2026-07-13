@@ -18,6 +18,7 @@ import {
   ChevronDown,
   Check,
   AlertTriangle,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -700,14 +701,31 @@ export function QuickConsultationSectionV2({
                 </div>
               )}
 
-              {scheduleOption !== "none" && (
-                <div className="flex items-center gap-2 rounded-md border border-primary/10 bg-primary/5 px-3 py-2">
-                  <CalendarClock className="h-4 w-4 flex-shrink-0 text-primary" />
-                  <span className="text-sm font-medium text-primary">
-                    {getSchedulePreviewText(scheduleOption, customDateTime)}
-                  </span>
-                </div>
-              )}
+              {scheduleOption !== "none" &&
+                (scheduleOption === "custom" ? (
+                  // Custom: box preview = nút MỞ LẠI picker để chỉnh ngày giờ
+                  // (picker hideTrigger + chỉ auto-mở khi ĐỔI toggle sang custom →
+                  // sau khi bấm Xong không còn đường mở lại; box này là trigger).
+                  <button
+                    type="button"
+                    onClick={() => setIsDatePickerOpen(true)}
+                    aria-label="Chỉnh sửa ngày giờ hẹn"
+                    className="flex min-h-11 w-full items-center gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-left transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 sm:min-h-0"
+                  >
+                    <CalendarClock className="h-4 w-4 flex-shrink-0 text-primary" />
+                    <span className="flex-1 text-sm font-medium text-primary">
+                      {getSchedulePreviewText(scheduleOption, customDateTime)}
+                    </span>
+                    <Pencil className="h-3.5 w-3.5 flex-shrink-0 text-primary/60" aria-hidden="true" />
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-md border border-primary/10 bg-primary/5 px-3 py-2">
+                    <CalendarClock className="h-4 w-4 flex-shrink-0 text-primary" />
+                    <span className="text-sm font-medium text-primary">
+                      {getSchedulePreviewText(scheduleOption, customDateTime)}
+                    </span>
+                  </div>
+                ))}
             </div>
           )}
         </div>
@@ -717,7 +735,9 @@ export function QuickConsultationSectionV2({
       {/* STEP 2: Choose Result                                           */}
       {/* ================================================================ */}
       <div className="border-t pt-4 space-y-3">
-        <div className="flex items-center gap-2">
+        {/* Mobile: xếp DỌC (tiêu đề trên, gợi ý dưới) để không chật/wrap xấu;
+            ngang từ sm+. */}
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
           <Label className="text-muted-foreground text-xs font-medium uppercase tracking-wider">
             Bước 2: Kết quả tư vấn
           </Label>

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { copyToClipboard } from "@/lib/clipboard";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -188,11 +189,10 @@ export function NotificationSettingsClient({
   };
 
   const handleCopyCode = async (code: string) => {
-    try {
-      await navigator.clipboard.writeText(code);
+    if (await copyToClipboard(code)) {
       toast.success("Đã sao chép mã.");
-    } catch {
-      // Clipboard may be denied (insecure context, browser policy).
+    } else {
+      // Copy bị chặn (insecure/policy) → hiện mã để copy tay.
       toast.info(`Mã: ${code}`);
     }
   };

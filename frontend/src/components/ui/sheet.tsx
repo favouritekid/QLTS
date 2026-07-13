@@ -64,12 +64,15 @@ const SheetContent = React.forwardRef<
       className={cn(sheetVariants({ side }), className)}
       {...props}
     >
-      {/* 44px touch target (Apple HIG) — the icon stays 16px but the hit
-          area is padded out so it's tappable on mobile. inline-flex
-          centers the icon; -m-2 keeps the visual position aligned with
-          the original right-4/top-4 inset. */}
-      <SheetPrimitive.Close className="absolute right-4 top-4 -m-2 inline-flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
-        <X className="h-4 w-4" aria-hidden="true" />
+      {/* 44px touch target (Apple HIG) — hit area is padded out so it's
+          tappable on mobile; -m-2 keeps alignment with the right-4/top-4 inset.
+          The X sits on a translucent, blurred pill (bg-background/70 +
+          backdrop-blur) with a hairline border + shadow so it stays clearly
+          readable over ANY content scrolled behind the sheet edge. */}
+      <SheetPrimitive.Close className="group absolute right-4 top-4 -m-2 inline-flex h-11 w-11 items-center justify-center rounded-full ring-offset-background transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background/70 text-foreground/80 shadow-sm backdrop-blur-md transition-colors group-hover:bg-background group-hover:text-foreground">
+          <X className="h-4 w-4" aria-hidden="true" />
+        </span>
         <span className="sr-only">Đóng</span>
       </SheetPrimitive.Close>
       {children}

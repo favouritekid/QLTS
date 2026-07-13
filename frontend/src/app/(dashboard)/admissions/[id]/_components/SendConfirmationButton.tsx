@@ -3,6 +3,7 @@
 
 import { useState } from "react"
 import { toast } from "sonner"
+import { copyToClipboard } from "@/lib/clipboard"
 import { Copy, Mail, Loader2, Send, Check } from "lucide-react"
 import type { AxiosError } from "axios"
 
@@ -69,12 +70,11 @@ export function SendConfirmationButton({ profileId }: Props) {
 
   const handleCopy = async () => {
     if (!result?.confirm_url) return
-    try {
-      await navigator.clipboard.writeText(result.confirm_url)
+    if (await copyToClipboard(result.confirm_url)) {
       setCopied(true)
       toast.success("Đã sao chép liên kết")
       setTimeout(() => setCopied(false), 2000)
-    } catch {
+    } else {
       toast.error("Không sao chép được. Vui lòng sao thủ công.")
     }
   }
