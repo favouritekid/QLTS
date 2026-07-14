@@ -1471,6 +1471,74 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(stmt)
         return result.rowcount
 
+    def _my_appointments_scope(self, officer_ids, until, unit_id):
+        """Predicate dùng chung cho get_/count_my_appointments — MỘT nguồn để
+        list và count KHÔNG lệch scope. KHÔNG chặn dưới: mọi hẹn quá hạn đều
+        tính (hẹn quá hạn lâu nhất = cần gọi gấp nhất)."""
+        conds = [
+            models.Lead.next_activity_at.isnot(None),
+            models.Lead.next_activity_at <= until,
+            models.Lead.deleted_at.is_(None),
+        ]
+        if officer_ids is not None:
+            conds.append(models.Lead.assigned_officer_id.in_(officer_ids))
+        if unit_id is not None:
+            conds.append(models.Lead.unit_id == unit_id)
+        return conds
+
+    async def get_my_appointments(
+        self,
+        officer_ids: Optional[List[int]],
+        until: datetime,
+        unit_id: Optional[int] = None,
+        limit: int = 60,
+    ) -> List[models.Lead]:
+        """
+        Lead có lịch gọi lại (next_activity_at) ≤ until, KHÔNG chặn dưới.
+
+        Scope (mirror LeadListFilter — cùng nguồn quy tắc với lead listing):
+          - officer_ids=None + unit_id=None → TOÀN BỘ (admin).
+          - officer_ids=None + unit_id=X    → theo ĐƠN VỊ (manager, Lead.unit_id==X).
+          - officer_ids=[id]                → của officer đó (own).
+        next_activity_at = MIN(scheduled_at) các consultation follow-up còn sống →
+        query theo nó tự lọc "hẹn còn hiệu lực", khỏi join consultation_status.
+        Eager-load offering→program (trình độ/ngành) + assigned_officer (tên NV,
+        hiện khi admin/manager xem toàn bộ). Order ASC theo next_activity_at (quá
+        hạn giờ nhỏ hơn now tự đứng trước). Dùng index ix_lead_officer_status_deleted_activity.
+        """
+        query = (
+            select(models.Lead)
+            .options(
+                selectinload(models.Lead.offering).selectinload(
+                    models.ProgramOffering.program
+                ),
+                selectinload(models.Lead.assigned_officer),
+            )
+            .where(*self._my_appointments_scope(officer_ids, until, unit_id))
+            .order_by(models.Lead.next_activity_at.asc())
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def count_my_appointments(
+        self,
+        officer_ids: Optional[List[int]],
+        now: datetime,
+        until: datetime,
+        unit_id: Optional[int] = None,
+    ) -> Tuple[int, int]:
+        """(overdue_count, upcoming_count) TỔNG THẬT trên toàn tập khớp scope —
+        KHÔNG bị cap limit như get_my_appointments. overdue = next_activity_at <
+        now; upcoming = ≥ now (đều ≤ until). Dùng count(*) FILTER 1 query."""
+        conds = self._my_appointments_scope(officer_ids, until, unit_id)
+        query = select(
+            func.count().filter(models.Lead.next_activity_at < now),
+            func.count().filter(models.Lead.next_activity_at >= now),
+        ).where(*conds)
+        row = (await self.db.execute(query)).one()
+        return int(row[0]), int(row[1])
+
     async def get_leads_by_referrer(
         self,
         referrer_id: int,

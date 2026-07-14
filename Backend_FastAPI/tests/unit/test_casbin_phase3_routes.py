@@ -250,6 +250,21 @@ def test_payment_queue_read_enforce(enforcer):
     assert enforcer.enforce("role:manager", "/api/payments/42", "GET") is True
 
 
+def test_appointments_accountant_deny_officer_manager_allow(enforcer):
+    """/code-review finding — GET /api/leads/my/appointments returns lead
+    name/phone + assigned-officer name. Officer (intended user) and manager
+    (inherits officer, unit-scoped at service layer) may read; accountant —
+    despite inheriting officer via `g, role:accountant, role:officer` — is
+    BOUNCED by the explicit ACCOUNTANT_TEMPLATE deny (mirror the /api/leads
+    accountant denies). Locks separation-of-duties for finance staff
+    (migration apptacctdeny20260713).
+    """
+    route = "/api/leads/my/appointments"
+    assert enforcer.enforce("role:officer", route, "GET") is True
+    assert enforcer.enforce("role:manager", route, "GET") is True
+    assert enforcer.enforce("role:accountant", route, "GET") is False
+
+
 # ----------------------------------------------------------------------
 # T17 admin-rollback — Casbin DENY for ALL roles via diamond inheritance
 # ----------------------------------------------------------------------

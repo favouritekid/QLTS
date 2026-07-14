@@ -48,6 +48,9 @@ vi.mock("@/components/ui/theme-toggle", () => ({
 vi.mock("@/components/notifications/NotificationDropdown", () => ({
   NotificationDropdown: () => <div data-testid="notification-dropdown" />,
 }));
+vi.mock("@/components/leads/AppointmentReminder", () => ({
+  AppointmentReminder: () => <div data-testid="appointment-reminder" />,
+}));
 
 // ── Helpers ────────────────────────────────────────────────────────
 

@@ -94,6 +94,21 @@ async def get_my_reassign_quota(
     return quota
 
 
+@router.get("/my/appointments", response_model=schemas.MyAppointmentsResponse)
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour — @router TRÊN @limiter (thứ tự
+# slowapi ĐÚNG: limiter phải bọc endpoint; đảo lại = decorator bị bỏ = no-op)
+async def get_my_appointments(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Lịch hẹn gọi lại của tôi ("Nhịp hẹn") — lead có giờ hẹn còn sống, bucket
+    quá hạn / sắp tới, kèm server_time cho đồng hồ đếm phía FE. Chỉ đọc.
+    """
+    return await lead_service.get_my_appointments(db, current_user)
+
+
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/distribution-preview",
