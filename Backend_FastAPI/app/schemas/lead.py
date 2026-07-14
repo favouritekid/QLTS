@@ -191,56 +191,11 @@ class LeadBase(BaseModel):
             return None
         return v
 
-    @field_validator("phone", "phone2", mode="before")
-    @classmethod
-    def normalize_and_validate_phone(cls, v, info):
-        """
-        Normalize and validate Vietnam phone numbers.
-        
-        - Normalizes +84/84 prefix to 0
-        - Validates against Vietnam phone regex: ^0(3|5|7|8|9|2)\\d{8,9}$
-        - Allows None/empty for phone2 (optional field)
-        """
-        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
-        
-        # Allow None for optional fields (phone2)
-        if v is None:
-            return None
-        
-        # Allow empty string for phone2, convert to None
-        if isinstance(v, str) and v.strip() == "":
-            if info.field_name == "phone2":
-                return None
-            # phone is required, empty string will fail min_length validation
-            return v
-        
-        # Normalize the phone number
-        normalized = normalize_vietnam_phone(v)
-        if normalized is None:
-            return v  # Let min_length validation handle it
-        
-        # Validate against Vietnam format
-        if not validate_vietnam_phone(normalized, normalize=False):
-            raise ValueError(
-                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
-                f"(VD: 0901234567, +84901234567)"
-            )
-        
-        return normalized
-
-    @field_validator("phone2", mode="after")
-    @classmethod
-    def phone2_must_differ_from_phone(cls, v, info):
-        """Ensure phone2 is different from phone."""
-        if v is None:
-            return v
-        
-        # Access phone from data (already validated)
-        phone = info.data.get("phone")
-        if phone and v == phone:
-            raise ValueError("Số điện thoại phụ phải khác số điện thoại chính")
-        
-        return v
+    # ⚠️ Validator SĐT (normalize + phone2≠phone) đặt ở LeadCreate (write) — KHÔNG
+    # ở LeadBase. Nếu ở base thì response Lead(LeadBase)/LeadListItem/LeadDetail kế
+    # thừa → serialize lead LEGACY (phone sai format hoặc phone2==phone) sẽ raise
+    # ResponseValidationError → HTTP 500 (sập list/search). LeadUpdate đã có validator
+    # write riêng. Bài học: pydantic-validator-on-base-hits-response-schema.
 
 
 class LeadCreate(LeadBase):
@@ -271,6 +226,58 @@ class LeadCreate(LeadBase):
     location_proximity: int = Field(0, ge=0, le=2, description="0=Xa, 1=Lân cận, 2=Gần")
     occupation_relevance: int = Field(0, ge=0, le=2, description="0=Không liên quan, 1=Gián tiếp, 2=Trực tiếp")
     academic_performance: int = Field(0, ge=0, le=3, description="0=Yếu, 1=TB, 2=Khá, 3=Giỏi")
+
+    # Validator SĐT write-side (dời từ LeadBase — xem ghi chú ở LeadBase).
+    @field_validator("phone", "phone2", mode="before")
+    @classmethod
+    def normalize_and_validate_phone(cls, v, info):
+        """
+        Normalize and validate Vietnam phone numbers.
+
+        - Normalizes +84/84 prefix to 0
+        - Validates against Vietnam phone regex: ^0(3|5|7|8|9|2)\\d{8,9}$
+        - Allows None/empty for phone2 (optional field)
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+
+        # Allow None for optional fields (phone2)
+        if v is None:
+            return None
+
+        # Allow empty string for phone2, convert to None
+        if isinstance(v, str) and v.strip() == "":
+            if info.field_name == "phone2":
+                return None
+            # phone is required, empty string will fail min_length validation
+            return v
+
+        # Normalize the phone number
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return v  # Let min_length validation handle it
+
+        # Validate against Vietnam format
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
+
+        return normalized
+
+    @field_validator("phone2", mode="after")
+    @classmethod
+    def phone2_must_differ_from_phone(cls, v, info):
+        """Ensure phone2 is different from phone."""
+        if v is None:
+            return v
+
+        # Access phone from data (already validated)
+        phone = info.data.get("phone")
+        if phone and v == phone:
+            raise ValueError("Số điện thoại phụ phải khác số điện thoại chính")
+
+        return v
 
 
 class LeadUpdate(BaseModel):
@@ -388,6 +395,17 @@ class LeadStatusUpdate(BaseModel):
 
 
 class Lead(LeadBase):
+    # ── READ-TOLERANCE: response đọc THẲNG từ DB (nguồn thật) nên KHÔNG được
+    # re-validate ràng buộc WRITE của LeadBase (EmailStr / min_length / required-
+    # non-null). Data legacy xấu (email không hợp RFC, phone/full_name rỗng, source
+    # NULL) sẽ raise ResponseValidationError → HTTP 500 khi serialize ở GET /leads
+    # (list) và /leads/{id} (detail). Override sang kiểu lenient; strict validation
+    # GIỮ NGUYÊN ở LeadCreate / LeadUpdate (write). Cùng lớp bug với validator phone
+    # đã dời — ref pydantic-validator-on-base-hits-response-schema.
+    full_name: str = ""
+    email: Optional[str] = None       # KHÔNG EmailStr ở response
+    phone: str = ""
+    source: Optional[str] = None
     id: int
     status: str
     # Assignment workflow status: pending, assigned, failed, reassign_pending

@@ -257,7 +257,7 @@ async def get_all_leads(
         None, description="Filter by source (comma-separated)"
     ),
     search: Optional[str] = Query(
-        None, description="Search term for name, email, phone"
+        None, description="Search term for name, email, phone, phone2"
     ),
     sort_by: Literal[
         "created_at", "updated_at", "full_name", "email", "phone",
@@ -416,7 +416,7 @@ async def export_leads(
         None, description="Filter by source (comma-separated)"
     ),
     search: Optional[str] = Query(
-        None, description="Search term for name, email, phone"
+        None, description="Search term for name, email, phone, phone2"
     ),
     sort_by: Literal[
         "created_at", "updated_at", "full_name", "email", "phone",

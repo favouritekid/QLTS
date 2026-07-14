@@ -258,7 +258,9 @@ class LeadRepository(BaseRepository[models.Lead]):
         # ✅ FIX: Normalize Unicode to NFC format for Vietnamese diacritics
         # Windows/browsers may send NFD (decomposed) but DB stores NFC (composed)
         # Example: "Hùng" NFD = "Hu" + combining accent vs NFC = single char "ù"
-        if search:
+        # `.strip()` trong điều kiện: search chỉ toàn khoảng trắng → search_term
+        # thành "%%" → ilike match MỌI row (trả cả tập lead theo RBAC). Bỏ qua.
+        if search and search.strip():
             normalized_search = unicodedata.normalize('NFC', search.strip())
             # Escape LIKE wildcards so a literal % / _ typed by the user matches
             # literally instead of acting as a wildcard (mirror vn_school_service
@@ -279,6 +281,9 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 models.Lead.email.ilike(search_term),
                 models.Lead.phone.ilike(search_term),
+                # Số phụ cũng tìm được (nhất quán với get_by_phone/check_phone_conflict
+                # vốn đã cross-slot). phone2 lưu đã normalize giống phone.
+                models.Lead.phone2.ilike(search_term),
             )
             filters.append(search_conditions)
 
