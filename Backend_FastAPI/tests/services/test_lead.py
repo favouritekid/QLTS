@@ -136,7 +136,39 @@ class TestGetLeads:
         # Assert
         assert total_count >= 5  # At least our 5 seeded leads
         assert len(leads) == 3  # Respects limit
-    
+
+    async def test_get_leads_search_matches_phone2(
+        self,
+        db: AsyncSession,
+        seeded_dependencies: dict,
+        officer_user: models.User,
+    ):
+        """Hotfix: search PHẢI tìm được lead theo SỐ PHỤ (phone2), không chỉ phone."""
+        lead = models.Lead(
+            full_name="Search Phone2 Lead",
+            phone="0900000055",
+            phone2="0988887766",  # số phụ distinctive
+            email="search_phone2@test.com",
+            source="Website",
+            unit_id=seeded_dependencies["unit_id"],
+            status=seeded_dependencies["initial_status_id"],
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+            assigned_officer_id=officer_user.id,
+            assigned_at=datetime.now(timezone.utc),
+        )
+        db.add(lead)
+        await db.flush()
+        await db.refresh(lead)
+
+        # Tìm theo SỐ PHỤ → phải ra (trước fix: sót vì OR-clause thiếu phone2)
+        _, by_phone2, _ = await lead_service.get_leads(db, search="0988887766")
+        assert lead.id in {ld.id for ld in by_phone2}
+
+        # Số chính vẫn tìm được (không regression)
+        _, by_phone, _ = await lead_service.get_leads(db, search="0900000055")
+        assert lead.id in {ld.id for ld in by_phone}
+
     async def test_get_leads_with_skip(
         self, 
         db: AsyncSession, 
