@@ -3290,6 +3290,99 @@ async def check_reassign_quota(db: AsyncSession, officer_id: int) -> dict:
     }
 
 
+def _resolve_appointment_scope(
+    user: models.User,
+) -> Tuple[Optional[List[int]], Optional[int]]:
+    """(officer_ids, unit_id) cho feed "Nhịp hẹn" theo role.
+
+    KHỚP quy tắc gốc của ``LeadListFilter`` (deps.get_lead_list_filter):
+      - admin                       → (None, None)  = TOÀN BỘ.
+      - manager CÓ đơn vị            → (None, unit)  = theo ĐƠN VỊ mình.
+      - manager CHƯA gán đơn vị      → ([id], None)  = CHỈ của mình — KHÔNG mở
+        all-scope (chống leo thang xem chéo lead PII khi unit_id NULL).
+      - officer / accountant / user  → ([id], None)  = của mình.
+
+    ``officer_ids is None`` ⇒ đang xem toàn bộ/đơn vị ⇒ caller đính kèm
+    officer_name + scope="all"; ngược lại "own".
+    """
+    role = user.role
+    if role == UserRole.ADMIN:
+        return None, None
+    if role == UserRole.MANAGER and user.unit_id is not None:
+        return None, user.unit_id
+    # manager-không-đơn-vị + officer/accountant/user → chỉ của mình
+    return [user.id], None
+
+
+async def get_my_appointments(
+    db: AsyncSession,
+    current_user: models.User,
+    upcoming_hours: int = 24,
+):
+    """
+    Lịch hẹn gọi lại của officer đang login ("Nhịp hẹn").
+
+    Trả các lead có next_activity_at (giờ hẹn còn sống) tới +upcoming_hours —
+    KHÔNG chặn dưới: mọi hẹn QUÁ HẠN (bất kể lâu bao nhiêu) đều hiện, vì hẹn
+    quá hạn lâu nhất chính là việc cần gọi lại gấp nhất (danh sách sort ASC nên
+    quá hạn đứng trước, cap 60 để không tràn UI). overdue_count/upcoming_count
+    là TỔNG THẬT (count query, KHÔNG suy từ 60 dòng đã cắt). Trạng thái overdue
+    do FE tự tính realtime từ server_time. Chỉ đọc, không mutation.
+    """
+    from datetime import timedelta
+    from app.repositories.lead_repository import LeadRepository
+    from app.schemas.lead import MyAppointmentItem, MyAppointmentsResponse
+
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(hours=upcoming_hours)
+
+    officer_ids, unit_scope_id = _resolve_appointment_scope(current_user)
+    is_privileged = officer_ids is None  # xem toàn bộ/đơn vị → kèm officer_name
+    scope = "all" if is_privileged else "own"
+
+    repo = LeadRepository(db)
+    leads = await repo.get_my_appointments(
+        officer_ids=officer_ids, until=until, unit_id=unit_scope_id
+    )
+    # Đếm TỔNG THẬT (không bị cap 60) để badge/summary FE không báo thiếu.
+    overdue_count, upcoming_count = await repo.count_my_appointments(
+        officer_ids=officer_ids, now=now, until=until, unit_id=unit_scope_id
+    )
+
+    items: List[MyAppointmentItem] = []
+    for lead in leads:
+        prog = (
+            lead.offering.program
+            if (lead.offering and lead.offering.program)
+            else None
+        )
+        items.append(
+            MyAppointmentItem(
+                lead_id=lead.id,
+                lead_name=lead.full_name,
+                phone=lead.phone,
+                source=lead.source,
+                scheduled_at=lead.next_activity_at,
+                degree_level=prog.degree_level if prog else None,
+                major=prog.name if prog else None,
+                # NV phụ trách — chỉ đính kèm khi xem toàn bộ (admin/manager)
+                officer_name=(
+                    lead.assigned_officer.full_name
+                    if (is_privileged and lead.assigned_officer)
+                    else None
+                ),
+            )
+        )
+
+    return MyAppointmentsResponse(
+        server_time=now,
+        scope=scope,
+        overdue_count=overdue_count,
+        upcoming_count=upcoming_count,
+        appointments=items,
+    )
+
+
 async def process_officer_action(
     db: AsyncSession, lead_id: int, officer: models.User, action: str, reason: str
 ) -> models.Lead:

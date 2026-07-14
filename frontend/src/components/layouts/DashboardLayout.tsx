@@ -39,6 +39,16 @@ const CommandPalette = dynamic(
   { ssr: false }
 );
 
+// Trợ lý nhắc hẹn (#3): bong bóng góc màn + nudge tự bung khi tới giờ. Lazy
+// client-only (như CommandPalette) — UI phụ, tránh SSR/hydrate + không chặn tải.
+const AppointmentAssistant = dynamic(
+  () =>
+    import("@/components/leads/AppointmentAssistant").then(m => ({
+      default: m.AppointmentAssistant,
+    })),
+  { ssr: false }
+);
+
 function SidebarSkeleton() {
   return (
     <div className="hidden lg:flex fixed inset-y-0 left-0 z-50 w-[var(--sidebar-width-collapsed)] flex-col border-r bg-background">
@@ -230,6 +240,9 @@ export function DashboardLayout({
         <Suspense fallback={<MobileBottomNavSkeleton />}>
           <MobileBottomNav />
         </Suspense>
+
+        {/* Trợ lý nhắc hẹn — bong bóng góc màn + nudge tự bung khi tới giờ */}
+        <AppointmentAssistant />
       </div>
     </>
   );

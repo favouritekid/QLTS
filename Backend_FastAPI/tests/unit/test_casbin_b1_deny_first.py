@@ -159,17 +159,23 @@ class TestApplyTemplateEmits4Field:
         for r in rules:
             assert r["subject"] == "role:test", r
 
-    def test_accountant_template_has_six_explicit_deny_rules(self):
-        """Lock the deny set so a future PR cannot quietly add or drop
-        accountant deny rules without touching this test."""
+    def test_accountant_core_state_machine_denies_preserved(self):
+        """Lock the CORE admission state-machine deny set (PLAN §3.3.b) as a
+        MUST-CONTAIN subset, so a future PR cannot silently DROP any of the 6
+        original guards.
+
+        NOTE: the accountant deny set has since grown well beyond these 6
+        (F8/F9 2026-05-16 lead + admission list denies, PR #324 lead static
+        routes, Q9 #07 priority denies, Nhịp hẹn appointments) — so this test
+        no longer pins an EXACT count (that assertion was stale: 6 vs 47). It
+        pins that the state-machine guards remain AND that the appointments
+        separation-of-duties deny is present.
+        """
         rules = apply_template("accountant", "role:accountant")
-        deny_rules = [r for r in rules if r["eft"] == "deny"]
-        assert len(deny_rules) == 6, (
-            f"Accountant deny rule count must equal 6 (PLAN §3.3.b); "
-            f"got {len(deny_rules)}"
-        )
-        deny_paths = {(r["object"], r["action"]) for r in deny_rules}
-        expected = {
+        deny_paths = {
+            (r["object"], r["action"]) for r in rules if r["eft"] == "deny"
+        }
+        core_state_machine = {
             ("/api/v2/admissions/*/claim",            "POST"),
             ("/api/v2/admissions/*/request-revision", "POST"),
             ("/api/v2/admissions/*/publish-result",   "POST"),
@@ -177,9 +183,29 @@ class TestApplyTemplateEmits4Field:
             ("/api/v2/admissions/*/waitlist-reject",  "POST"),
             ("/api/v2/admissions/*/admin-rollback",   "POST"),
         }
-        assert deny_paths == expected, (
-            "Accountant deny route set drifted from PLAN §3.3.b. "
-            f"Expected: {sorted(expected)}; got: {sorted(deny_paths)}"
+        missing = core_state_machine - deny_paths
+        assert not missing, (
+            "Accountant lost core state-machine deny(s) from PLAN §3.3.b: "
+            f"{sorted(missing)}"
+        )
+        # Separation-of-duties: các endpoint mang PII lead/thí sinh (tên/SĐT) mà
+        # accountant kế thừa qua g,role:accountant→role:officer PHẢI giữ deny.
+        # Pin lại (thay cho exact-count cũ đã stale) để 1 PR sau không âm thầm gỡ.
+        pii_separation_of_duties = {
+            ("/api/leads", "GET"),                       # list 391 lead + SĐT
+            ("/api/leads/{id}", "GET"),                  # chi tiết lead
+            ("/api/leads/{id}/timeline", "GET"),
+            ("/api/leads/{id}/consultations", "GET"),
+            ("/api/leads/export", "GET"),                # xuất PII
+            ("/api/leads/my/appointments", "GET"),       # feed Nhịp hẹn (name/phone)
+            ("/api/admissions", "GET"),                  # list hồ sơ
+            ("/api/admissions/{id}", "GET"),
+            ("/api/admissions/pending-diploma", "GET"),  # nợ bằng (name/phone)
+        }
+        missing_pii = pii_separation_of_duties - deny_paths
+        assert not missing_pii, (
+            "Accountant lost PII separation-of-duties deny(s) — finance staff "
+            f"would read lead/thí sinh PII via officer inheritance: {sorted(missing_pii)}"
         )
 
     def test_accountant_deny_rules_all_target_role_accountant(self):

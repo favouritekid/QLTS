@@ -4,6 +4,7 @@
  */
 
 let audioContext: AudioContext | null = null;
+let unlockInstalled = false;
 
 /**
  * Initialize audio context (required for some browsers)
@@ -17,12 +18,48 @@ function getAudioContext(): AudioContext {
 }
 
 /**
+ * Mở khóa AudioContext ở user-gesture ĐẦU TIÊN (một lần cho cả phiên).
+ *
+ * Chrome autoplay policy: AudioContext tạo NGOÀI user-gesture (vd chuông được
+ * KHÔI PHỤC từ localStorage rồi kêu từ timer nudge) ở trạng thái "suspended" —
+ * resume() từ timer bị bỏ qua → chuông câm cả phiên. Đăng ký listener 1-lần cho
+ * pointerdown/keydown/touchstart để resume() context trong ngữ cảnh gesture hợp
+ * lệ; sau đó gỡ listener. Gọi khi bật tính năng nhắc (officer) để chuông LS-restore
+ * kêu được ở lần tương tác đầu.
+ */
+export function installAudioUnlockOnce(): void {
+  if (unlockInstalled || typeof window === "undefined") return;
+  unlockInstalled = true;
+  const unlock = () => {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") void ctx.resume();
+    } catch {
+      /* AudioContext không khả dụng → bỏ qua */
+    }
+    window.removeEventListener("pointerdown", unlock);
+    window.removeEventListener("keydown", unlock);
+    window.removeEventListener("touchstart", unlock);
+  };
+  window.addEventListener("pointerdown", unlock);
+  window.addEventListener("keydown", unlock);
+  window.addEventListener("touchstart", unlock);
+}
+
+/**
  * Play a notification sound using Web Audio API
  * Creates a pleasant notification tone programmatically
  */
 export function playNotificationSound(): void {
   try {
     const context = getAudioContext();
+
+    // Chrome autoplay policy: context tạo lazy ngoài user-gesture (vd khi bật
+    // âm được KHÔI PHỤC từ localStorage lúc tải trang) sẽ ở trạng thái
+    // "suspended" → âm phát ra câm. Resume để chuông thật sự kêu.
+    if (context.state === "suspended") {
+      void context.resume();
+    }
 
     // Create oscillator for the notification sound
     const oscillator = context.createOscillator();
