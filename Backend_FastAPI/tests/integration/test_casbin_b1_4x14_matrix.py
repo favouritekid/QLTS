@@ -484,6 +484,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/leads/bulk-assign",                             "POST"),
             ("/api/leads/bulk-delete",                             "POST"),
             ("/api/leads/distribution-preview",                    "GET"),
+            # Nhịp hẹn (#3, 2026-07-13) — GET /api/leads/my/appointments trả
+            # lead name/phone (PII); accountant kế thừa officer allow → deny
+            # (separation-of-duties). Migration `apptacctdeny20260713`.
+            ("/api/leads/my/appointments",                         "GET"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "
