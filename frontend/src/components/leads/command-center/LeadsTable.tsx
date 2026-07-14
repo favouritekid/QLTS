@@ -30,15 +30,31 @@ import {
   type RowSelectionState,
   type ColumnResizeMode,
   type VisibilityState,
+  type ColumnSizingState,
+  type ColumnSizingInfoState,
+  type ColumnOrderState,
+  type Header,
 } from "@tanstack/react-table";
-import { format } from "date-fns";
-import { vi } from "date-fns/locale";
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
   ChevronLeft,
-  SearchX,
   ChevronRight,
   GripVertical,
   Zap,
@@ -127,6 +143,12 @@ interface LeadsTableProps {
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
 const DENSITY_MODE_STORAGE_KEY = "leads_table_density";
+const COLUMN_SIZING_STORAGE_KEY = "leads_table_sizing";
+const COLUMN_ORDER_STORAGE_KEY = "leads_table_order";
+
+/** Cột tiện ích cố định 2 đầu (không kéo đổi thứ tự, không resize). */
+const PINNED_START = "select";
+const PINNED_END = "actions";
 
 // Mapping between TanStack column IDs and backend sort_by field names
 const COLUMN_TO_BACKEND_SORT: Record<string, string> = {
@@ -178,6 +200,127 @@ function RowActions({ lead, onEdit, onDelete, onAssign }: RowActionsProps) {
       triggerClassName="h-8 w-8 sm:h-8 sm:w-8"
       stopPropagation
     />
+  );
+}
+
+// Thứ tự cột mặc định (khớp định nghĩa `columns` bên dưới). Dùng cho khởi tạo
+// columnOrder (SSR-safe: server + client render cùng thứ tự) + nút "Đặt lại".
+const DEFAULT_COLUMN_ORDER: ColumnOrderState = [
+  "select",
+  "full_name",
+  "phone",
+  "offering",
+  "source",
+  "pipeline_stage",
+  "consultation_status",
+  "assigned_officer",
+  "lead_score",
+  "activity",
+  "cached_urgency_score",
+  "actions",
+];
+
+// Nhãn hiển thị cho menu ẩn/hiện cột — key = column id (khớp DEFAULT_COLUMN_ORDER).
+// KHÔNG hardcode LẠI danh sách cột nào ẩn/hiện được ở TableToolbar (dễ lệch
+// contract): TableToolbar nhận thẳng list dẫn xuất từ `table.getAllLeafColumns()`
+// đã lọc `getCanHide()`. Map này chỉ cấp NHÃN; thiếu nhãn → fallback về id (lộ
+// ra ngay, không im lặng). `select`/`actions` `enableHiding:false` nên không vào
+// menu → không cần nhãn.
+const COLUMN_LABELS: Record<string, string> = {
+  full_name: "Tên Lead",
+  phone: "Số điện thoại",
+  offering: "Ngành",
+  source: "Nguồn",
+  pipeline_stage: "Giai đoạn",
+  consultation_status: "Trạng thái TĐ",
+  assigned_officer: "Cán bộ",
+  lead_score: "Điểm",
+  activity: "Hoạt động",
+  cached_urgency_score: "Độ khẩn cấp",
+};
+
+// =============================================================================
+// DRAGGABLE HEADER — kéo grip đổi thứ tự (dnd-kit) · mép phải resize ·
+// double-click mép = auto-fit. Grip / sort-button / resize-handle tách vùng
+// tương tác nên KHÔNG xung đột nhau.
+// =============================================================================
+
+function DraggableHeader({
+  header,
+  headerHeightClass,
+  onAutoFit,
+}: {
+  header: Header<Lead, unknown>;
+  headerHeightClass: string;
+  onAutoFit: (columnId: string) => void;
+}) {
+  const columnId = header.column.id;
+  const reorderable = columnId !== PINNED_START && columnId !== PINNED_END;
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({
+    id: columnId,
+    disabled: !reorderable,
+  });
+
+  const style: React.CSSProperties = {
+    width: header.getSize(),
+    transform: CSS.Translate.toString(transform),
+    transition: isDragging ? "transform 0s" : "transform 150ms ease",
+    opacity: isDragging ? 0.65 : 1,
+    zIndex: isDragging ? 5 : undefined,
+  };
+
+  return (
+    <TableHead
+      ref={setNodeRef}
+      data-column-id={columnId}
+      style={style}
+      className={cn(
+        "group/lh relative overflow-hidden whitespace-nowrap",
+        // gutter TRÁI cho grip (chỉ cột kéo được) → grip nằm trong padding, KHÔNG
+        // chồng lên nút sort → click sort không bị grip nuốt; nội dung cắt gọn sau.
+        reorderable && "pl-4",
+        headerHeightClass,
+      )}
+    >
+      <div className="truncate">
+        {header.isPlaceholder
+          ? null
+          : flexRender(header.column.columnDef.header, header.getContext())}
+      </div>
+      {reorderable && (
+        // Overlay grip trong gutter, hiện-khi-hover. pointer-events-none khi ẩn →
+        // không chặn hit-test; tabIndex=-1 → không là tab-stop no-op (đã bỏ KeyboardSensor).
+        <button
+          type="button"
+          className={cn(
+            "absolute left-0 top-0 z-[1] flex h-full w-4 items-center justify-center",
+            "text-muted-foreground/50 hover:text-foreground cursor-grab touch-none",
+            "pointer-events-none opacity-0 transition-opacity",
+            "group-hover/lh:pointer-events-auto group-hover/lh:opacity-100 active:cursor-grabbing",
+          )}
+          aria-label="Kéo để đổi thứ tự cột"
+          {...attributes}
+          {...listeners}
+          tabIndex={-1}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      )}
+      {/* Resize handle — double-click = auto-fit theo nội dung */}
+      {header.column.getCanResize() && (
+        <div
+          onMouseDown={header.getResizeHandler()}
+          onTouchStart={header.getResizeHandler()}
+          onDoubleClick={() => onAutoFit(columnId)}
+          title="Kéo để đổi rộng · double-click auto-fit"
+          className={cn(
+            "absolute top-0 right-0 h-full w-1.5 cursor-col-resize touch-none select-none",
+            "hover:bg-primary/50 active:bg-primary",
+            header.column.getIsResizing() && "bg-primary"
+          )}
+        />
+      )}
+    </TableHead>
   );
 }
 
@@ -233,7 +376,28 @@ export function LeadsTable({
   const [densityMode, setDensityMode] = React.useState<DensityMode>('regular');
   // Default: hide phone column for privacy protection
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({ phone: false });
+  // Bề rộng cột do người dùng kéo (persist) + thứ tự cột (kéo grip đổi chỗ).
+  const [columnSizing, setColumnSizing] = React.useState<ColumnSizingState>({});
+  // Trạng thái đang-kéo-resize (isResizingColumn) → chỉ persist khi kéo XONG,
+  // tránh spam localStorage.setItem mỗi tick pointer-move.
+  const [columnSizingInfo, setColumnSizingInfo] = React.useState<ColumnSizingInfoState>({
+    startOffset: null,
+    startSize: null,
+    deltaOffset: null,
+    deltaPercentage: null,
+    isResizingColumn: false,
+    columnSizingStart: [],
+  });
+  const [columnOrder, setColumnOrder] = React.useState<ColumnOrderState>(DEFAULT_COLUMN_ORDER);
   const [isHydrated, setIsHydrated] = React.useState(false);
+
+  // dnd-kit: kéo grip tiêu đề đổi thứ tự cột. PointerSensor có ngưỡng 6px →
+  // click thường (sort/resize) KHÔNG kích hoạt drag. (KHÔNG dùng KeyboardSensor:
+  // thiếu coordinateGetter nên arrow-reorder không chạy + đụng keydown-nav toàn
+  // cục — bỏ để tránh dead-weight/glitch.)
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   // Hydrate from localStorage after mount to avoid SSR mismatch
   useEffect(() => {
@@ -248,6 +412,45 @@ export function LeadsTable({
         const parsed = JSON.parse(savedVisibility);
         // Merge with defaults (user preferences override defaults)
         setColumnVisibility({ phone: false, ...parsed });
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
+    try {
+      const savedSizing = localStorage.getItem(COLUMN_SIZING_STORAGE_KEY);
+      if (savedSizing) {
+        const parsed = JSON.parse(savedSizing);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          // CHỈ nhận entry là số hữu-hạn dương (giá trị phi-số như "180px" →
+          // getSize() ra NaN → width NaN → sập layout).
+          const clean: ColumnSizingState = {};
+          for (const [k, v] of Object.entries(parsed)) {
+            if (typeof v === "number" && Number.isFinite(v) && v > 0) clean[k] = v;
+          }
+          setColumnSizing(clean);
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
+    try {
+      const savedOrder = localStorage.getItem(COLUMN_ORDER_STORAGE_KEY);
+      if (savedOrder) {
+        const parsed = JSON.parse(savedOrder);
+        // Chỉ nhận khi ĐÚNG tập cột hiện tại (chống order cũ/hỏng thiếu-thừa cột)
+        // VÀ giữ pin-invariant (select đầu / actions cuối) — permutation lạ để
+        // select ra giữa bảng sẽ bị từ chối.
+        if (
+          Array.isArray(parsed) &&
+          parsed.length === DEFAULT_COLUMN_ORDER.length &&
+          DEFAULT_COLUMN_ORDER.every((id) => parsed.includes(id)) &&
+          parsed[0] === PINNED_START &&
+          parsed[parsed.length - 1] === PINNED_END
+        ) {
+          setColumnOrder(parsed);
+        }
       }
     } catch {
       // Ignore parse errors
@@ -272,6 +475,26 @@ export function LeadsTable({
       localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
     }
   }, [columnVisibility, isHydrated]);
+
+  // Persist column sizing (only after hydration) — CHỜ kéo resize XONG
+  // (isResizingColumn falsy) để không ghi localStorage mỗi tick pointer-move.
+  useEffect(() => {
+    if (!isHydrated || columnSizingInfo.isResizingColumn) return;
+    try {
+      localStorage.setItem(COLUMN_SIZING_STORAGE_KEY, JSON.stringify(columnSizing));
+    } catch {
+      /* ignore quota/serialize errors */
+    }
+  }, [columnSizing, columnSizingInfo.isResizingColumn, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    try {
+      localStorage.setItem(COLUMN_ORDER_STORAGE_KEY, JSON.stringify(columnOrder));
+    } catch {
+      /* ignore quota/serialize errors */
+    }
+  }, [columnOrder, isHydrated]);
 
   // Reset row selection when resetSelectionKey changes (after bulk actions)
   useEffect(() => {
@@ -316,6 +539,7 @@ export function LeadsTable({
           />
         ),
         size: 40,
+        minSize: 40, // ghi đè defaultColumn.minSize=60 (cột checkbox tiện ích)
         enableResizing: false,
         enableHiding: false,
       }),
@@ -339,9 +563,13 @@ export function LeadsTable({
           </Button>
         ),
         cell: ({ row }) => (
-          <div className="text-sm font-medium">{row.original.full_name || "—"}</div>
+          <div className="truncate text-sm font-medium" title={row.original.full_name || undefined}>
+            {row.original.full_name || "—"}
+          </div>
         ),
         size: 180,
+        minSize: 110,
+        maxSize: 340,
       }),
 
       // Phone column - with copy to clipboard
@@ -355,6 +583,8 @@ export function LeadsTable({
           />
         ),
         size: 120,
+        minSize: 90,
+        maxSize: 180,
       }),
 
       // Ngành column — đồng bộ với card list (trình độ viết tắt CĐ/TC + tên ngành)
@@ -368,19 +598,19 @@ export function LeadsTable({
           if (!major) return <span className="text-muted-foreground">—</span>;
           const degreeShort = getDegreeLevelAbbr(offering?.program?.degree_level);
           return (
-            <span className="flex items-center gap-1.5 text-sm">
+            <span className="flex min-w-0 items-center gap-1.5 text-sm" title={major}>
               {degreeShort && (
                 <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold">
                   {degreeShort}
                 </span>
               )}
-              <span className="truncate" title={major}>
-                {major}
-              </span>
+              <span className="min-w-0 flex-1 truncate">{major}</span>
             </span>
           );
         },
         size: 180,
+        minSize: 110,
+        maxSize: 360,
       }),
 
       // Source column
@@ -390,12 +620,14 @@ export function LeadsTable({
           const source = row.original.source;
           if (!source) return <span className="text-muted-foreground">—</span>;
           return (
-            <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal">
+            <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal whitespace-nowrap">
               {getLeadSourceLabel(source)}
             </Badge>
           );
         },
         size: 90,
+        minSize: 72,
+        maxSize: 160,
       }),
 
       // Pipeline Stage column
@@ -408,18 +640,21 @@ export function LeadsTable({
           const color = sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id] || "#6B7280";
           return (
             <Badge
-              className="text-[10px] h-5 px-2 font-normal whitespace-nowrap"
+              title={stage.name}
+              className="text-[10px] h-5 px-2 font-normal max-w-full min-w-0"
               style={{
                 backgroundColor: `${color}20`,
                 color: color,
                 borderColor: color,
               }}
             >
-              {stage.name}
+              <span className="truncate">{stage.name}</span>
             </Badge>
           );
         },
         size: 110,
+        minSize: 84,
+        maxSize: 220,
       }),
 
       // Consultation Status column - using DynamicColorBadge
@@ -433,13 +668,15 @@ export function LeadsTable({
               color={status.color || status.color_code}
               variant="subtle"
               size="sm"
-              className="text-[10px] h-5 px-2 whitespace-nowrap"
+              className="text-[10px] h-5 px-2 max-w-full min-w-0"
             >
               {status.name}
             </DynamicColorBadge>
           );
         },
         size: 110,
+        minSize: 84,
+        maxSize: 260,
       }),
 
       // Officer column
@@ -449,10 +686,12 @@ export function LeadsTable({
           const officer = row.original.assigned_officer;
           if (!officer) return <span className="text-muted-foreground text-sm">Chưa gán</span>;
           return (
-            <div className="text-sm">{officer.full_name}</div>
+            <div className="truncate text-sm" title={officer.full_name}>{officer.full_name}</div>
           );
         },
         size: 140,
+        minSize: 90,
+        maxSize: 280,
       }),
 
       // Lead Score column - ✅ Now sortable
@@ -482,6 +721,8 @@ export function LeadsTable({
           );
         },
         size: 80,
+        minSize: 56,
+        maxSize: 120,
       }),
 
       // Activity column - ✅ FIX: Sort by last_consultation_at || created_at (same as display)
@@ -517,6 +758,8 @@ export function LeadsTable({
             return dateA - dateB;
           },
           size: 100,
+          minSize: 80,
+          maxSize: 180,
         }
       ),
 
@@ -547,6 +790,8 @@ export function LeadsTable({
           <UrgencyBadge score={row.original.cached_urgency_score} showLabel={false} />
         ),
         size: 50,
+        minSize: 44,
+        maxSize: 90,
       }),
 
       // Actions column - Responsive (mobile: action sheet, desktop: dropdown)
@@ -561,6 +806,7 @@ export function LeadsTable({
           />
         ),
         size: 50,
+        minSize: 48, // ghi đè defaultColumn.minSize=60 (cột hành động tiện ích)
         enableResizing: false,
         enableHiding: false,
       }),
@@ -579,10 +825,17 @@ export function LeadsTable({
       sorting,
       rowSelection,
       columnVisibility,
+      columnSizing,
+      columnSizingInfo,
+      columnOrder,
     },
+    defaultColumn: { minSize: 60, maxSize: 400 },
     enableRowSelection: true,
     enableColumnResizing: true,
     columnResizeMode,
+    onColumnSizingChange: setColumnSizing,
+    onColumnSizingInfoChange: setColumnSizingInfo,
+    onColumnOrderChange: setColumnOrder,
     manualSorting: true,
     onSortingChange: (updater) => {
       const newSorting = typeof updater === "function" ? updater(sorting) : updater;
@@ -601,8 +854,59 @@ export function LeadsTable({
     getCoreRowModel: getCoreRowModel(),
   });
 
+  // Dev-assert: DEFAULT_COLUMN_ORDER phải khớp tập cột thật (const module-level cho
+  // SSR-stable nên không derive được từ table). Thêm/xoá/đổi-tên cột mà quên list
+  // này → columnOrder lệch + guard hydration reject → fail-loud khi dev.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const actual = table.getAllLeafColumns().map((c) => c.id);
+    const drift =
+      actual.length !== DEFAULT_COLUMN_ORDER.length ||
+      actual.some((id) => !DEFAULT_COLUMN_ORDER.includes(id));
+    if (drift) {
+      console.error(
+        "[LeadsTable] DEFAULT_COLUMN_ORDER lệch với columns — cập nhật hằng.",
+        { actual, expected: DEFAULT_COLUMN_ORDER },
+      );
+    }
+    // Mọi cột ẩn/hiện được PHẢI có nhãn trong COLUMN_LABELS, nếu không menu
+    // ẩn/hiện cột sẽ hiện id thô (vd "cached_urgency_score"). Fail-loud khi dev.
+    const missingLabels = table
+      .getAllLeafColumns()
+      .filter((c) => c.getCanHide() && !COLUMN_LABELS[c.id])
+      .map((c) => c.id);
+    if (missingLabels.length) {
+      console.error(
+        "[LeadsTable] Cột ẩn/hiện được thiếu nhãn COLUMN_LABELS — bổ sung nhãn.",
+        { missingLabels },
+      );
+    }
+  }, [table]);
+
   // Get all rows for virtualization
   const rows = table.getRowModel().rows;
+
+  // ID cột HIỆN (theo order + visibility) cho SortableContext — memo hóa để không
+  // tạo mảng mới mỗi render (SortableContext re-derive item-map mỗi drag-move).
+  // Derive trực tiếp từ columnOrder + columnVisibility (khớp header đang render).
+  const sortableColumnIds = React.useMemo(
+    () => columnOrder.filter((id) => columnVisibility[id] !== false),
+    [columnOrder, columnVisibility],
+  );
+
+  // Danh sách cột cho menu ẩn/hiện — SINGLE SOURCE OF TRUTH từ chính bảng:
+  // lấy cột lá lọc `getCanHide()` (loại select/actions enableHiding:false),
+  // theo thứ tự định nghĩa (= DEFAULT_COLUMN_ORDER). Không hardcode lại ở
+  // TableToolbar để khỏi lệch id/thiếu cột. `table` là ref ổn định của
+  // react-table nên memo tính 1 lần (tập cột tĩnh theo runtime).
+  const hideableColumns = React.useMemo(
+    () =>
+      table
+        .getAllLeafColumns()
+        .filter((col) => col.getCanHide())
+        .map((col) => ({ id: col.id, label: COLUMN_LABELS[col.id] ?? col.id })),
+    [table],
+  );
 
   // ✅ Option A: Virtualization setup
   const tableScrollRef = useRef<HTMLDivElement>(null);
@@ -632,6 +936,85 @@ export function LeadsTable({
   // Clear selection
   const handleClearSelection = useCallback(() => {
     setRowSelection({});
+  }, []);
+
+  // ── Cột: kéo grip đổi thứ tự (giữ select đầu / actions cuối) ──
+  const handleColumnDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setColumnOrder((prev) => {
+      const base = prev.length ? prev : DEFAULT_COLUMN_ORDER;
+      const oldIndex = base.indexOf(String(active.id));
+      const newIndex = base.indexOf(String(over.id));
+      if (oldIndex < 0 || newIndex < 0) return base;
+      const moved = arrayMove(base, oldIndex, newIndex).filter(
+        (id) => id !== PINNED_START && id !== PINNED_END,
+      );
+      return [PINNED_START, ...moved, PINNED_END];
+    });
+  }, []);
+
+  // ── Double-click mép cột = auto-fit theo nội dung ──
+  // Đo bề rộng TỰ NHIÊN: các ô đã `overflow-hidden`+`truncate` nên đo `scrollWidth`
+  // của chính ô = bề-rộng-ĐÃ-CLIP (chỉ nhích ~6px). Thay bằng clone phần nội dung
+  // vào probe đã GỠ overflow/truncate (white-space:nowrap, width:auto) → scrollWidth
+  // là bề rộng nội dung thật. (Chỉ đo các hàng đang render — virtualized.)
+  const autoFitColumn = useCallback(
+    (columnId: string) => {
+      const col = table.getColumn(columnId);
+      if (!col?.getCanResize()) return;
+      const root = tableScrollRef.current;
+      if (!root) return;
+      const probe = document.createElement("div");
+      probe.style.cssText =
+        "position:absolute;left:-9999px;top:-9999px;white-space:nowrap;pointer-events:none;";
+      document.body.appendChild(probe);
+      let maxContent = 0;
+      try {
+        // `:first-child` = phần nội dung của ô (div.truncate / span.flex / Badge…);
+        // KHÔNG dính grip/resize-handle (là các con sau) → không cần loại theo label.
+        root
+          .querySelectorAll<HTMLElement>(`[data-column-id="${columnId}"] > :first-child`)
+          .forEach((content) => {
+            const clone = content.cloneNode(true) as HTMLElement;
+            // Copy font THẬT (clone rời khỏi ngữ cảnh table → mất inherited text-sm/
+            // font-medium → đo sai). Áp computed-font để đo đúng cỡ/đậm chữ.
+            const cs = getComputedStyle(content);
+            clone.style.fontSize = cs.fontSize;
+            clone.style.fontWeight = cs.fontWeight;
+            clone.style.fontFamily = cs.fontFamily;
+            clone.style.letterSpacing = cs.letterSpacing;
+            const strip = (el: HTMLElement) => {
+              el.style.maxWidth = "none";
+              el.style.width = "auto";
+              el.style.overflow = "visible";
+              el.style.textOverflow = "clip";
+              el.style.whiteSpace = "nowrap";
+            };
+            strip(clone);
+            clone.querySelectorAll<HTMLElement>("*").forEach(strip);
+            probe.appendChild(clone);
+            maxContent = Math.max(maxContent, clone.scrollWidth);
+            probe.removeChild(clone);
+          });
+      } finally {
+        document.body.removeChild(probe);
+      }
+      if (maxContent <= 0) return;
+      const min = col.columnDef.minSize ?? 60;
+      const max = col.columnDef.maxSize ?? 400;
+      // + padding ô (px-2 = 16) + đệm nhỏ cho grip/handle
+      const target = Math.max(min, Math.min(max, Math.round(maxContent) + 22));
+      setColumnSizing((prev) => ({ ...prev, [columnId]: target }));
+    },
+    [table],
+  );
+
+  // ── Đặt lại bề rộng + thứ tự cột về mặc định ──
+  // (setState kích persist-effect ghi lại '{}'/default ngay → không cần removeItem.)
+  const resetColumnLayout = useCallback(() => {
+    setColumnSizing({});
+    setColumnOrder(DEFAULT_COLUMN_ORDER);
   }, []);
 
   // Keyboard navigation
@@ -831,6 +1214,7 @@ export function LeadsTable({
         <TableToolbar
           densityMode={densityMode}
           onDensityChange={setDensityMode}
+          columns={hideableColumns}
           columnVisibility={columnVisibility}
           onColumnVisibilityChange={(columnId, isVisible) => {
             setColumnVisibility((prev) => ({
@@ -838,6 +1222,7 @@ export function LeadsTable({
               [columnId]: isVisible,
             }));
           }}
+          onResetColumns={resetColumnLayout}
         />
       </div>
 
@@ -846,42 +1231,38 @@ export function LeadsTable({
         ref={tableScrollRef}
         className="flex-1 overflow-x-auto overflow-y-auto"
       >
-        {/* ✅ Phase 3: ARIA improvements for accessibility */}
-        <Table 
-          className="w-full"
+        {/* DnD kéo grip tiêu đề đổi thứ tự cột. Chỉ header là sortable item;
+            ô body tự theo columnOrder qua getVisibleCells → không cần bọc. */}
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleColumnDragEnd}
+        >
+        {/* ✅ Phase 3: ARIA improvements for accessibility.
+            table-layout: fixed + width = getTotalSize() → bề rộng cột do người
+            dùng kiểm soát (resize/auto-fit thật), nội dung dài CẮT GỌN thay vì
+            nong cột; minWidth 100% để lấp đầy khi tổng < khung. */}
+        <Table
           role="grid"
           aria-label="Danh sách lead"
           aria-rowcount={totalCount}
+          style={{ width: table.getTotalSize(), minWidth: "100%", tableLayout: "fixed" }}
         >
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    style={{ width: header.getSize() }}
-                    className={cn(
-                      "relative whitespace-nowrap",
-                      densityConfig.headerHeight
-                    )}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(header.column.columnDef.header, header.getContext())}
-                    {/* Resize handle */}
-                    {header.column.getCanResize() && (
-                      <div
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        className={cn(
-                          "absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none",
-                          "hover:bg-primary/50 active:bg-primary",
-                          header.column.getIsResizing() && "bg-primary"
-                        )}
-                      />
-                    )}
-                  </TableHead>
-                ))}
+                {/* items = cột HIỆN (memo hóa) — không gồm cột ẩn như phone → tránh
+                    lệch animation shift + không tạo mảng mới mỗi render. */}
+                <SortableContext items={sortableColumnIds} strategy={horizontalListSortingStrategy}>
+                  {headerGroup.headers.map((header) => (
+                    <DraggableHeader
+                      key={header.id}
+                      header={header}
+                      headerHeightClass={densityConfig.headerHeight}
+                      onAutoFit={autoFitColumn}
+                    />
+                  ))}
+                </SortableContext>
               </TableRow>
             ))}
           </TableHeader>
@@ -951,8 +1332,9 @@ export function LeadsTable({
                       {row.getVisibleCells().map((cell) => (
                         <TableCell
                           key={cell.id}
+                          data-column-id={cell.column.id}
                           style={{ width: cell.column.getSize() }}
-                          className={densityConfig.cellPadding}
+                          className={cn(densityConfig.cellPadding, "overflow-hidden")}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </TableCell>
@@ -968,6 +1350,7 @@ export function LeadsTable({
             )}
           </TableBody>
         </Table>
+        </DndContext>
       </div>
 
       {/* Footer with Pagination */}
