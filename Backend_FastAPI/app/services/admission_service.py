@@ -5178,24 +5178,28 @@ async def update_profile(
             from app.utils.exceptions import ValidationError as _ValidationError
             raise _ValidationError(str(exc))
 
-    # ✅ Sync with Lead: Full Name
+    # Set identity fields TRÊN PROFILE (bản ghi riêng). Chiều đẩy xuống Lead
+    # KHÔNG còn ghi thẳng ``profile.lead.* = ...`` (đường cũ bỏ qua normalize /
+    # check_phone_conflict / update_phone_identities / phone2≠phone / bump
+    # version / audit → gốc sự cố leads list/search 500 do ``phone2 == phone`` +
+    # drift bảng ``lead_phone_identity``). Nay đi qua ``sync_lead_from_profile``
+    # với ĐẦY ĐỦ guard (parity với ``lead_service.update_lead``).
     if "full_name" in data and data["full_name"] is not None:
         profile.full_name = data["full_name"]
-        if profile.lead and data["full_name"].strip():
-            profile.lead.full_name = data["full_name"]
 
-    # ✅ Sync with Lead: Phone
     if "phone" in data and data["phone"] is not None:
         profile.phone = data["phone"]
-        if profile.lead and data["phone"].strip():
-            profile.lead.phone = data["phone"]
 
-    # ✅ Sync with Lead: Email
     if "email" in data and data["email"] is not None:
         profile.email = data["email"]
-        if profile.lead:
-            profile.lead.email = data["email"]
-    
+
+    # Lưu ý: chiều đẩy identity xuống Lead (sync_lead_from_profile) đặt SAU
+    # db.flush() + handler IntegrityError citizen_id bên dưới — để lỗi unique
+    # citizen_id của CHÍNH profile được map ConflictError 409 tại đó. Vì session
+    # autoflush=False, flush ĐẦU TIÊN là savepoint bên trong helper; nếu gọi
+    # helper Ở ĐÂY, một IntegrityError citizen_id (race TOCTOU) sẽ bị savepoint
+    # nuốt rồi _handle_lead_integrity_error re-raise THÔ → 500 thay vì 409.
+
     # Other fields
     if "dob" in data and data["dob"] is not None:
         profile.dob = data["dob"]
@@ -5335,7 +5339,24 @@ async def update_profile(
             raise ConflictError("Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)")
         else:
             raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
-    
+
+    # ── Đẩy identity (full_name/phone/email) xuống Lead qua module chung có
+    # guard (parity update_lead). Đặt SAU flush profile ở trên: citizen_id của
+    # profile đã flush + map 409 nếu trùng; helper chỉ còn lo ghi Lead/identity
+    # trong savepoint riêng của nó (map race unique phone/email sạch).
+    identity_changed = [
+        f for f in ("full_name", "phone", "email")
+        if f in data and data[f] is not None
+    ]
+    if identity_changed and profile.lead:
+        from .lead_profile_sync import sync_lead_from_profile
+        await sync_lead_from_profile(
+            db,
+            profile,
+            changed_fields=identity_changed,
+            changed_by_user_id=current_user.id,
+        )
+
     # ✅ Fix: Fetch fresh scores but do NOT assign to profile.subject_scores (avoid SA error)
     fresh_scores = await admission_repo.get_profile_scores(profile.id)
 

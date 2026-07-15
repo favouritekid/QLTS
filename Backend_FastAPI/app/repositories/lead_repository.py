@@ -1752,3 +1752,42 @@ class LeadRepository(BaseRepository[models.Lead]):
         # Insert new identity rows
         await self.register_phone_identities(lead_id, phone, phone2)
 
+    async def update_phone_slot_identity(
+        self,
+        lead_id: int,
+        phone: Optional[str],
+    ) -> None:
+        """
+        Replace ONLY the ``slot='phone'`` identity row(s) for a lead, leaving
+        the ``slot='phone2'`` row untouched.
+
+        Dùng khi CHỈ số chính đổi (vd đường sửa-hồ-sơ Profile→Lead) — KHÔNG
+        rewrite slot ``phone2`` bằng ``lead.phone2`` có thể đã STALE (lead
+        eager-loaded, không lock/refresh) → tránh clobber một thay đổi phone2
+        đồng thời của đường sửa-lead. Ràng buộc phone2 == phone vẫn được index
+        toàn cục ``uq_lead_phone_active`` bắt ở INSERT (fail-safe).
+
+        Args:
+            lead_id: Lead ID
+            phone: New primary phone (normalized)
+        """
+        from sqlalchemy import delete
+        from app.utils.phone_helpers import normalize_vietnam_phone
+
+        await self.db.execute(
+            delete(models.LeadPhoneIdentity).where(
+                models.LeadPhoneIdentity.lead_id == lead_id,
+                models.LeadPhoneIdentity.slot == "phone",
+            )
+        )
+        if phone:
+            normalized = normalize_vietnam_phone(phone) or phone
+            self.db.add(
+                models.LeadPhoneIdentity(
+                    lead_id=lead_id,
+                    phone_normalized=normalized,
+                    slot="phone",
+                    deleted_at=None,
+                )
+            )
+

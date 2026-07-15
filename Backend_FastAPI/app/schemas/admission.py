@@ -707,9 +707,15 @@ class AdmissionProfileUpdate(BaseModel):
     # Personal Info Fields
     full_name: Optional[str] = Field(None, max_length=255)
     phone: Optional[str] = Field(
-        None, 
-        pattern=r"^0\d{9,10}$",
-        description="Phone number (10-11 digits starting with 0)"
+        None,
+        # MIRROR CHÍNH XÁC VIETNAM_PHONE_REGEX (phone_helpers.py) để chặn số
+        # 04x/06x/01x ngay ở 422 thay vì lọt xuống service rồi 400.
+        # ⚠ Dùng [0-9] ASCII, KHÔNG \d: Pydantic \d khớp cả Unicode digit
+        # (full-width ０-９) → '090１２３４５６７' lọt schema nhưng service reject
+        # → vẫn "422-miss → 400". Đầu số hợp lệ: 03/05/07/08/09/02 (gồm cố định
+        # 02x — KHÔNG mobile-only, khớp validate_vietnam_phone).
+        pattern=r"^0(3|5|7|8|9|2)[0-9]{8,9}$",
+        description="Số điện thoại Việt Nam hợp lệ (VD: 0901234567)"
     )
     email: Optional[EmailStr] = Field(None, max_length=255)
     dob: Optional[date] = Field(None, description="Date of birth")
