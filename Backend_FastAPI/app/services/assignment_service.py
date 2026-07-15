@@ -8,7 +8,7 @@ This ensures notifications are persisted to database AND sent via Socket.IO/Emai
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,25 @@ def _non_final_status_filter():
         (models.ConsultationStatus.is_final == False) |  # noqa: E712
         (models.ConsultationStatus.is_final.is_(None))
     )
+
+
+# Non-final tuition fee statuses (stg05 "Xử lý học phí" — tuition-hold). Khách
+# đã chuyển đổi, đang chờ đóng đủ / xác nhận nhập học ⇒ KHÔNG còn là tải tư vấn.
+# Được GIẢM TRỪ khỏi cơ sở sắp xếp + cổng quá tải + referral fast-path khi
+# ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` ON. Excludes sts18 (TUITION_REFUNDED,
+# is_final) — trạng thái final KHÔNG BAO GIỜ tính tải nên không cần liệt kê.
+# ⚠️ Hardcode có chủ đích (KHÔNG derive theo stage_id='stg05') để sts18 không
+# lọt vào; ghim bởi test_tuition_hold_status_ids_documented.
+TUITION_HOLD_STATUS_IDS = ("sts14", "sts10")
+
+
+def _tuition_hold_filter():
+    """SQL condition: lead ở trạng thái học phí non-final (``TUITION_HOLD_STATUS_IDS``).
+
+    Dùng làm FILTER aggregate trong workload_stmt (và referral fast-path) để đếm
+    riêng phần tải học phí — chỉ khi ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` ON.
+    """
+    return models.ConsultationStatus.id.in_(TUITION_HOLD_STATUS_IDS)
 
 
 # _ASSIGNMENT_SOURCE_METHODS = method của SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ
@@ -177,8 +196,21 @@ async def is_officer_at_threshold(
     đó fallback sang auto-assign cân bằng. Giữ cùng định nghĩa workload với thuật
     toán né officer, nên kết luận ở đây khớp với việc officer có bị auto-assign né.
     """
+    from ..config import settings
+
+    finance_on = settings.ENABLE_FINANCE_WORKLOAD_DISCOUNT
+    _cols = [func.count(models.Lead.id).label("workload")]
+    if finance_on:
+        # Đếm riêng tải HỌC PHÍ để GIẢM TRỪ khỏi ngưỡng referral (Option A) —
+        # cùng discount với auto-assign, tránh referral fast-path né officer mà
+        # balancer đã coi là KHÔNG quá tải (chỉ thêm cột khi cờ ON ⇒ OFF y hệt).
+        _cols.append(
+            func.count(models.Lead.id)
+            .filter(_tuition_hold_filter())
+            .label("tuition_cnt")
+        )
     workload_stmt = (
-        select(func.count(models.Lead.id))
+        select(*_cols)
         .join(
             models.ConsultationStatus,
             models.Lead.consultation_status_id == models.ConsultationStatus.id,
@@ -190,9 +222,28 @@ async def is_officer_at_threshold(
             _non_final_status_filter(),
         )
     )
-    workload = (await db.execute(workload_stmt)).scalar_one() or 0
+    # COUNT không GROUP BY ⇒ luôn đúng 1 dòng (kể cả khi 0) → .one() an toàn,
+    # giữ nguyên kết quả với path .scalar_one() cũ khi cờ OFF.
+    row = (await db.execute(workload_stmt)).one()
+    workload = row.workload or 0
+    tuition_cnt = (row.tuition_cnt or 0) if finance_on else 0
+    cap = _safe_capacity(officer)
 
-    return (workload / _safe_capacity(officer)) >= threshold
+    # ⚠️ TRẦN CỨNG cho referral fast-path: đường referral (lead_service, gán
+    # THẲNG cho managing officer) CHỈ có guard duy nhất là hàm này — KHÔNG có gate
+    # `workload < capacity` riêng như auto-assign BƯỚC 4. Nếu chỉ trả theo tải
+    # HIỆU DỤNG (đã trừ học phí), officer đầy toàn lead học phí (raw workload ≥
+    # cap) sẽ "thoát ngưỡng" → bị bơm thêm referral → VƯỢT capacity, phá bất biến
+    # config "không ôm quá capacity". Vì thế: khi cờ ON, raw workload ≥ cap LUÔN
+    # coi là quá tải (chặn referral), discount chỉ áp KHI CÒN dưới trần.
+    # finance_on=False ⇒ nhánh này no-op (raw ≥ cap ⇒ raw/cap ≥ 1 ≥ threshold vẫn
+    # True) → OFF y hệt hôm nay.
+    if finance_on and workload >= cap:
+        return True
+
+    # Option A: ngưỡng referral theo TẢI HIỆU DỤNG (trừ học phí) khi cờ ON.
+    # tuition_cnt ⊆ workload ⇒ (workload - tuition_cnt) ≥ 0.
+    return ((workload - tuition_cnt) / cap) >= threshold
 
 
 async def _log_assignment_decision(
@@ -371,6 +422,11 @@ async def automatically_assign_lead(
                     settings.ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED
                     and (member_on or fairness_on)
                 )
+                # Option A finance discount (cờ ĐỘC LẬP — KHÔNG gate theo member/
+                # fairness vì overloaded/threshold áp mọi chế độ). Khi ON: lead học
+                # phí non-final giảm trừ khỏi dist_load (eff_util) + cổng overloaded.
+                # OFF ⇒ 0 aggregate phụ + audit-shape y hệt hôm nay.
+                finance_on = settings.ENABLE_FINANCE_WORKLOAD_DISCOUNT
 
                 officer_ids = [o.id for o in available_officers]
                 _wl_cols = [
@@ -382,6 +438,34 @@ async def automatically_assign_lead(
                         func.count(models.Lead.id)
                         .filter(_self_sourced_subquery())
                         .label("self_cnt")
+                    )
+                if finance_on:
+                    # Tải HỌC PHÍ (sts14/sts10) — giảm trừ ở dist_load + overloaded.
+                    _wl_cols.append(
+                        func.count(models.Lead.id)
+                        .filter(_tuition_hold_filter())
+                        .label("tuition_cnt")
+                    )
+                if exclude_active and finance_on:
+                    # Phần GIAO self-tuyển ∩ học phí — chống trừ HAI LẦN khi tính
+                    # dist_load = workload − |self ∪ tuition|.
+                    # ⚠️ EFFICIENCY (chấp nhận có chủ đích): filter này nhúng LẠI
+                    # `_self_sourced_subquery()` (correlated LIMIT-1 trên
+                    # assignment_log) nên khi CẢ HAI cờ ON, subquery chạy 2 lần/dòng
+                    # (self_cnt + đây). KHÔNG refactor thành 1 cột `is_self` chung ở
+                    # đây vì sẽ đụng path self-sourced HIỆN CÓ (MockWorkloadRow +
+                    # test_assignment_self_sourced đã ghim self_cnt). Chỉ phát sinh
+                    # khi member/fairness + finance đều ON; auto-assign không siêu
+                    # nóng (chạy lúc tạo lead) ⇒ chi phí chấp nhận được.
+                    _wl_cols.append(
+                        func.count(models.Lead.id)
+                        .filter(
+                            and_(
+                                _self_sourced_subquery(),
+                                _tuition_hold_filter(),
+                            )
+                        )
+                        .label("self_and_tuition_cnt")
                     )
                 workload_stmt = (
                     select(*_wl_cols)
@@ -401,13 +485,27 @@ async def automatically_assign_lead(
                 )
                 workload_map: dict = {}
                 self_map: dict = {}
+                tuition_map: dict = {}
+                self_and_tuition_map: dict = {}
                 for row in await db.execute(workload_stmt):
                     workload_map[row.assigned_officer_id] = row.workload
                     if exclude_active:
                         self_map[row.assigned_officer_id] = row.self_cnt
-                log.debug(
-                    f"[Lead ID: {lead_id}] Workloads={workload_map} self-sourced={self_map}"
+                    if finance_on:
+                        tuition_map[row.assigned_officer_id] = row.tuition_cnt
+                    if exclude_active and finance_on:
+                        self_and_tuition_map[row.assigned_officer_id] = (
+                            row.self_and_tuition_cnt
+                        )
+                # ⚠️ Parity khi OFF: hậu tố tuition-hold CHỈ nối khi finance_on ⇒
+                # cờ OFF giữ nguyên chuỗi log cũ (byte-identical, không chỉ audit).
+                _dbg_load = (
+                    f"[Lead ID: {lead_id}] Workloads={workload_map} "
+                    f"self-sourced={self_map}"
                 )
+                if finance_on:
+                    _dbg_load += f" tuition-hold={tuition_map}"
+                log.debug(_dbg_load)
 
                 # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
                 officer_loads = []
@@ -421,16 +519,25 @@ async def automatically_assign_lead(
                     # self-tuyển/weight KHÔNG BAO GIỜ nới trần này.
                     if workload < capacity:
                         weight = _safe_weight(officer)
-                        # balance_load = CƠ SỞ SẮP XẾP. Khi exclude_active, trừ phần
-                        # officer tự tuyển ⇒ lead tự tuyển không làm giảm suất nhận
-                        # lead-chia. self_cnt = COUNT FILTER trên cùng tập dòng ⇒
-                        # self_cnt ≤ workload (bất biến CẤU TRÚC) ⇒ balance_load ≥ 0,
-                        # KHÔNG cần max(0).
-                        balance_load = (
-                            workload - self_map.get(officer.id, 0)
-                            if exclude_active
-                            else workload
+                        # balance_load = CƠ SỞ SẮP XẾP = workload − |self ∪ tuition|.
+                        # - self (exclude_active): lead tự tuyển không làm giảm suất.
+                        # - tuition (finance_on): khách HỌC PHÍ đã chuyển đổi, không
+                        #   còn là tải tư vấn (Option A).
+                        # Mỗi phần = 0 khi cờ tương ứng OFF; trừ `overlap` (self ∩
+                        # tuition) để KHÔNG trừ hai lần. Cả hai ⊆ workload ⇒
+                        # balance_load ≥ 0 (khỏi max(0)).
+                        self_cnt = (
+                            self_map.get(officer.id, 0) if exclude_active else 0
                         )
+                        tuition_cnt = (
+                            tuition_map.get(officer.id, 0) if finance_on else 0
+                        )
+                        overlap = (
+                            self_and_tuition_map.get(officer.id, 0)
+                            if (exclude_active and finance_on)
+                            else 0
+                        )
+                        balance_load = workload - self_cnt - tuition_cnt + overlap
                         # real_util/eff_util tính trên balance_load (đầu vào SẮP
                         # XẾP ở BƯỚC 5). eff_util có nhân weight: weight cao ⇒
                         # eff_util thấp ⇒ officer "được coi là vơi hơn" ⇒ nhận
@@ -445,10 +552,17 @@ async def automatically_assign_lead(
                                 "real_util": real_util,
                                 "eff_util": eff_util,
                                 "weight": weight,
-                                # ⚠️ Cổng an toàn theo TỔNG tải (workload/capacity),
-                                # TÁCH khỏi real_util (dist-based khi exclude_active).
-                                # weight/self-tuyển KHÔNG phá trần. Đặt sẵn ở đây.
-                                "overloaded": (workload / capacity) >= SAFETY_THRESHOLD,
+                                # ⚠️ Cổng an toàn TÁCH khỏi real_util (dist-based khi
+                                # exclude_active). weight/self-tuyển KHÔNG phá trần.
+                                # Option A: chỉ trừ HỌC PHÍ (tuition_cnt) khi
+                                # finance_on — self KHÔNG trừ ở cổng này (giữ như hôm
+                                # nay). tuition_cnt ⊆ workload ⇒ ≥ 0.
+                                "overloaded": (
+                                    (workload - tuition_cnt) / capacity
+                                )
+                                >= SAFETY_THRESHOLD,
+                                # tải học phí (audit; chỉ emit vào snapshot khi ON).
+                                "tuition_hold": tuition_cnt,
                                 # score = giá trị dùng để SẮP XẾP; mặc định real_util,
                                 # các nhánh weighted ở BƯỚC 5 ghi đè. Ở nhánh legacy/
                                 # fallback score GIỮ real_util nhưng KHÔNG quyết định thứ
@@ -497,8 +611,15 @@ async def automatically_assign_lead(
                         eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
                         channel="auto", reason="at_capacity",
                         capacity_snapshot={
-                            str(o.id): {"current": workload_map.get(o.id, 0),
-                                        "max": o.max_capacity or 100}
+                            str(o.id): {
+                                "current": workload_map.get(o.id, 0),
+                                "max": o.max_capacity or 100,
+                                **(
+                                    {"tuition_hold": tuition_map.get(o.id, 0)}
+                                    if finance_on
+                                    else {}
+                                ),
+                            }
                             for o in available_officers
                         }, log=log,
                     )
@@ -659,6 +780,13 @@ async def automatically_assign_lead(
                                 "eff_util": round(ol["eff_util"], 4),
                                 "weight": ol["weight"],
                                 "score": round(ol["score"], 4),
+                                # Option A: chỉ thêm khi finance_on ⇒ OFF giữ nguyên
+                                # audit-shape (byte-identical).
+                                **(
+                                    {"tuition_hold": ol["tuition_hold"]}
+                                    if finance_on
+                                    else {}
+                                ),
                             }
                             for ol in officer_loads
                         }
@@ -667,6 +795,11 @@ async def automatically_assign_lead(
                         str(ol["officer"].id): {
                             "current": ol["workload"],
                             "max": ol["officer"].max_capacity or 100,
+                            **(
+                                {"tuition_hold": ol["tuition_hold"]}
+                                if finance_on
+                                else {}
+                            ),
                         }
                         for ol in officer_loads
                     }, log=log,
