@@ -387,6 +387,113 @@ async def test_matrix_member_on_safety_gate_not_bent(
     assert _decision_log(mock_db_session).reason == "member_weighted"
 
 
+# =====================================================================
+# Finance workload discount (ENABLE_FINANCE_WORKLOAD_DISCOUNT — Option A)
+# Drive the discount END-TO-END qua automatically_assign_lead (không phải query
+# viết tay): ranking flip, cổng overloaded, dedup union, và audit-shape khi OFF.
+# =====================================================================
+@pytest.mark.asyncio
+async def test_finance_discount_on_flips_ranking_and_adds_audit_key(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """member ON + finance ON: officer_1 tải TỔNG cao hơn (8) nhưng 6/8 là lead
+    HỌC PHÍ (sts14/sts10) ⇒ dist_load 8−6=2 < officer_2 (4) ⇒ officer_1 THẮNG
+    (đảo thứ hạng). Cổng overloaded officer_1 = (8−6)/10=0.2 < 0.8 (KHÔNG bị đẩy
+    sau dù raw 0.8). scores_snapshot thêm key 'tuition_hold'."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([
+            MockWorkloadRow(101, 8, tuition_cnt=6),
+            MockWorkloadRow(102, 4, tuition_cnt=0),
+        ]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_1.id
+    decision = _decision_log(mock_db_session)
+    assert decision.reason == "member_weighted"
+    snap = decision.scores_snapshot
+    assert snap["101"]["tuition_hold"] == 6
+    assert snap["102"]["tuition_hold"] == 0
+    # dist_load = workload − tuition (exclude_active OFF ⇒ self=0)
+    assert snap["101"]["dist_load"] == 2
+    assert snap["102"]["dist_load"] == 4
+
+
+@pytest.mark.asyncio
+async def test_finance_discount_off_no_flip_and_no_audit_key(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """CÙNG tải như test ON nhưng finance OFF: officer_1 raw 8/10=0.8 ⇒ overloaded
+    ⇒ bị đẩy sau ⇒ officer_2 THẮNG (không đảo). scores_snapshot KHÔNG có key
+    'tuition_hold' — chốt audit-shape byte-identical khi cờ OFF."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", False)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([
+            MockWorkloadRow(101, 8, tuition_cnt=6),
+            MockWorkloadRow(102, 4, tuition_cnt=0),
+        ]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    assert lead_new.assigned_officer_id == officer_2.id
+    snap = _decision_log(mock_db_session).scores_snapshot
+    assert "tuition_hold" not in snap["101"]
+    assert "tuition_hold" not in snap["102"]
+
+
+@pytest.mark.asyncio
+async def test_finance_discount_union_dedup_through_service(
+    monkeypatch, mock_db_session, lead_new, officer_1, officer_2
+):
+    """exclude_active + finance ON: dist_load = workload − |self ∪ tuition|.
+    officer_1: workload 8, self 3, tuition 6, giao 2 ⇒ 8−3−6+2 = 1 (phần giao chỉ
+    trừ 1 LẦN). Kiểm dedup CHẠY QUA service (BƯỚC 3-4), không phải query viết tay."""
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", True)
+    officer_1.assignment_weight = 1
+    officer_2.assignment_weight = 1
+
+    mock_db_session.execute.side_effect = [
+        _lead_result(lead_new),
+        _officers_result([officer_1, officer_2]),
+        _workload_result([
+            MockWorkloadRow(
+                101, 8, self_cnt=3, tuition_cnt=6, self_and_tuition_cnt=2
+            ),
+            MockWorkloadRow(102, 5),
+        ]),
+    ]
+
+    await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
+
+    snap = _decision_log(mock_db_session).scores_snapshot
+    # union-dedup: 8 − 3 − 6 + 2 = 1 (giao trừ 1 lần); officer_2 = 5.
+    assert snap["101"]["dist_load"] == 1
+    assert snap["101"]["tuition_hold"] == 6
+    assert snap["102"]["dist_load"] == 5
+    # officer_1 dist_load 1 < officer_2 5 ⇒ officer_1 thắng.
+    assert lead_new.assigned_officer_id == officer_1.id
+
+
 @pytest.mark.asyncio
 async def test_matrix_fairness_on_member_off_raw_share(
     monkeypatch, mock_db_session, lead_new, officer_1, officer_2

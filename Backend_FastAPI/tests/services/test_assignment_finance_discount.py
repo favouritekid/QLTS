@@ -38,8 +38,12 @@ pytestmark = pytest.mark.integration
 
 
 async def _ensure_status(db, sid, is_final):
-    """get-or-create ConsultationStatus (test DB không seed sẵn sts14/10/18/06;
-    get-or-create để idempotent giữa các test cùng schema)."""
+    """create-if-absent ConsultationStatus (test DB không seed sẵn sts14/10/18/06).
+
+    ⚠️ KHÔNG ghi đè ``is_final`` của row ĐÃ tồn tại: đây là row lookup dùng chung,
+    ghi đè sẽ rewrite semantics cho test khác trong cùng session. Nếu gặp seed sẵn
+    mâu thuẫn → FAIL rõ ràng thay vì âm thầm sửa bảng tra cứu.
+    """
     st = await db.get(models.ConsultationStatus, sid)
     if st is None:
         db.add(
@@ -50,9 +54,12 @@ async def _ensure_status(db, sid, is_final):
                 is_final=is_final,
             )
         )
-    else:
-        st.is_final = is_final
-    await db.flush()
+        await db.flush()
+    elif st.is_final != is_final:
+        pytest.fail(
+            f"ConsultationStatus {sid} đã tồn tại với is_final={st.is_final}, "
+            f"test cần {is_final} — KHÔNG ghi đè row lookup dùng chung."
+        )
 
 
 async def _mk_officer(db, unit_id, tag, cap=100):
@@ -106,10 +113,19 @@ async def _self_log(db, lead, officer):
 
 
 def test_tuition_hold_status_ids_documented():
-    """Ghim danh sách trạng thái học phí non-final được giảm trừ. Hardcode CÓ CHỦ
-    ĐÍCH (KHÔNG derive theo stage_id='stg05') để sts18 (TUITION_REFUNDED, final)
-    không lọt vào discount."""
+    """Ghim danh sách trạng thái học phí non-final được giảm trừ + NEO vào nguồn
+    taxonomy chính ``phase_manager.PHASE_STATUSES[FEE]`` để BẮT DRIFT: thêm/đổi
+    trạng thái fee mà quên cập nhật đây → test gãy. Hardcode CÓ CHỦ ĐÍCH (KHÔNG
+    derive theo stage_id='stg05') để sts18 (TUITION_REFUNDED, final) không lọt."""
+    from app.services.phase_manager import LeadPhase, PHASE_STATUSES
+
     assert TUITION_HOLD_STATUS_IDS == ("sts14", "sts10")
+    fee = PHASE_STATUSES[LeadPhase.FEE]
+    # Là tập con của nhóm FEE chính thức, và đúng bằng FEE trừ sts18 (fee status
+    # FINAL duy nhất, bị loại có chủ đích khỏi discount tải).
+    assert set(TUITION_HOLD_STATUS_IDS) <= fee
+    assert set(TUITION_HOLD_STATUS_IDS) == fee - {"sts18"}
+    assert "sts18" in fee  # neo: nếu sts18 rời nhóm FEE, xem lại giả định loại trừ
 
 
 async def test_tuition_hold_filter_and_union_dedup(db, seeded_dependencies):

@@ -227,10 +227,23 @@ async def is_officer_at_threshold(
     row = (await db.execute(workload_stmt)).one()
     workload = row.workload or 0
     tuition_cnt = (row.tuition_cnt or 0) if finance_on else 0
+    cap = _safe_capacity(officer)
+
+    # ⚠️ TRẦN CỨNG cho referral fast-path: đường referral (lead_service, gán
+    # THẲNG cho managing officer) CHỈ có guard duy nhất là hàm này — KHÔNG có gate
+    # `workload < capacity` riêng như auto-assign BƯỚC 4. Nếu chỉ trả theo tải
+    # HIỆU DỤNG (đã trừ học phí), officer đầy toàn lead học phí (raw workload ≥
+    # cap) sẽ "thoát ngưỡng" → bị bơm thêm referral → VƯỢT capacity, phá bất biến
+    # config "không ôm quá capacity". Vì thế: khi cờ ON, raw workload ≥ cap LUÔN
+    # coi là quá tải (chặn referral), discount chỉ áp KHI CÒN dưới trần.
+    # finance_on=False ⇒ nhánh này no-op (raw ≥ cap ⇒ raw/cap ≥ 1 ≥ threshold vẫn
+    # True) → OFF y hệt hôm nay.
+    if finance_on and workload >= cap:
+        return True
 
     # Option A: ngưỡng referral theo TẢI HIỆU DỤNG (trừ học phí) khi cờ ON.
     # tuition_cnt ⊆ workload ⇒ (workload - tuition_cnt) ≥ 0.
-    return ((workload - tuition_cnt) / _safe_capacity(officer)) >= threshold
+    return ((workload - tuition_cnt) / cap) >= threshold
 
 
 async def _log_assignment_decision(
@@ -436,6 +449,14 @@ async def automatically_assign_lead(
                 if exclude_active and finance_on:
                     # Phần GIAO self-tuyển ∩ học phí — chống trừ HAI LẦN khi tính
                     # dist_load = workload − |self ∪ tuition|.
+                    # ⚠️ EFFICIENCY (chấp nhận có chủ đích): filter này nhúng LẠI
+                    # `_self_sourced_subquery()` (correlated LIMIT-1 trên
+                    # assignment_log) nên khi CẢ HAI cờ ON, subquery chạy 2 lần/dòng
+                    # (self_cnt + đây). KHÔNG refactor thành 1 cột `is_self` chung ở
+                    # đây vì sẽ đụng path self-sourced HIỆN CÓ (MockWorkloadRow +
+                    # test_assignment_self_sourced đã ghim self_cnt). Chỉ phát sinh
+                    # khi member/fairness + finance đều ON; auto-assign không siêu
+                    # nóng (chạy lúc tạo lead) ⇒ chi phí chấp nhận được.
                     _wl_cols.append(
                         func.count(models.Lead.id)
                         .filter(
@@ -476,10 +497,15 @@ async def automatically_assign_lead(
                         self_and_tuition_map[row.assigned_officer_id] = (
                             row.self_and_tuition_cnt
                         )
-                log.debug(
+                # ⚠️ Parity khi OFF: hậu tố tuition-hold CHỈ nối khi finance_on ⇒
+                # cờ OFF giữ nguyên chuỗi log cũ (byte-identical, không chỉ audit).
+                _dbg_load = (
                     f"[Lead ID: {lead_id}] Workloads={workload_map} "
-                    f"self-sourced={self_map} tuition-hold={tuition_map}"
+                    f"self-sourced={self_map}"
                 )
+                if finance_on:
+                    _dbg_load += f" tuition-hold={tuition_map}"
+                log.debug(_dbg_load)
 
                 # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
                 officer_loads = []

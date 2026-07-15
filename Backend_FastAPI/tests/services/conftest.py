@@ -618,13 +618,24 @@ async def deleted_lead_with_phone(
 
 class MockWorkloadRow:
     """Row shape returned by the BƯỚC 3 workload GROUP BY query. ``self_cnt`` chỉ
-    có mặt khi exclude_active (COUNT FILTER tự-tuyển gộp vào cùng query); default 0
-    để test không dùng exclude giữ nguyên."""
+    có mặt khi exclude_active; ``tuition_cnt`` chỉ khi finance_on;
+    ``self_and_tuition_cnt`` chỉ khi CẢ HAI (COUNT FILTER gộp vào cùng query).
+    Default 0 ⇒ test không bật cờ tương ứng giữ nguyên (service chỉ đọc cột khi
+    cờ đã ON, xem BƯỚC 3)."""
 
-    def __init__(self, assigned_officer_id, workload, self_cnt=0):
+    def __init__(
+        self,
+        assigned_officer_id,
+        workload,
+        self_cnt=0,
+        tuition_cnt=0,
+        self_and_tuition_cnt=0,
+    ):
         self.assigned_officer_id = assigned_officer_id
         self.workload = workload
         self.self_cnt = self_cnt
+        self.tuition_cnt = tuition_cnt
+        self.self_and_tuition_cnt = self_and_tuition_cnt
 
 
 @pytest.fixture
