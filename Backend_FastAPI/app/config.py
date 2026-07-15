@@ -586,6 +586,17 @@ class Settings(BaseSettings):
     # is_officer_at_threshold (referral fast-path) VẪN dùng TỔNG workload —
     # self-tuyển không phá trần quá tải thật. Default False ⇒ 0 đổi hành vi + 0
     # query phụ cho tới khi bật.
+    ENABLE_FINANCE_WORKLOAD_DISCOUNT: bool = Field(
+        default=False,
+        validation_alias="ENABLE_FINANCE_WORKLOAD_DISCOUNT",
+    )  # Khi ON: lead ở giai đoạn HỌC PHÍ non-final (sts14 Chưa hoàn tất học phí +
+    # sts10 Đã hoàn tất học phí — xem TUITION_HOLD_STATUS_IDS) được GIẢM TRỪ khỏi
+    # cơ sở sắp xếp (eff_util/dist_load), khỏi cổng `overloaded`, VÀ khỏi
+    # is_officer_at_threshold (referral fast-path) — vì đây là khách đã chuyển đổi
+    # đang chờ xác nhận nhập học, không còn là tải tư vấn. Gate cứng
+    # `workload < capacity` VẪN theo TỔNG workload (không ôm quá capacity học sinh
+    # thật). Loại trừ sts18 (TUITION_REFUNDED, is_final). Default False ⇒ 0 đổi
+    # hành vi + 0 aggregate/audit-shape phụ cho tới khi bật.
 
     # -- Lead Lifecycle SLA: auto-close stale rejected consultations --
     # A lead in sts04 (CONSULT_REJECTED, is_final=false for re-engagement) that
