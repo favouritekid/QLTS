@@ -11,13 +11,18 @@ Architecture Philosophy (V3.0):
 
 Sync Rules Matrix:
 ------------------
-| Profile Status | Lead → Profile | Profile → Lead | Lead Identity Edit |
-|----------------|----------------|----------------|-------------------|
-| draft          | ✅ Sync        | ✅ Sync        | ✅ Allowed        |
-| submitted      | ✅ Sync        | ❌ Can't edit  | ✅ Allowed        |
-| rejected       | ❌ Snapshot    | ✅ Sync (fix)  | ✅ Allowed        |
-| approved       | ❌ Snapshot    | ❌ Locked      | ❌ BLOCKED        |
-| enrolled       | ❌ Snapshot    | ❌ Locked      | ❌ BLOCKED        |
+| Profile Status     | Lead → Profile | Profile → Lead | Lead Identity Edit |
+|--------------------|----------------|----------------|--------------------|
+| draft              | ✅ Sync        | ✅ Sync (guard)| ✅ Allowed         |
+| submitted          | ✅ Sync        | ❌ Can't edit  | ✅ Allowed         |
+| rejected           | ❌ Snapshot    | ✅ Sync (guard)| ✅ Allowed         |
+| revision_requested | ❌ Snapshot    | ✅ Sync (guard)| ✅ Allowed         |
+| approved           | ❌ Snapshot    | ❌ Locked      | ❌ BLOCKED         |
+| enrolled           | ❌ Snapshot    | ❌ Locked      | ❌ BLOCKED         |
+
+Note: chiều Profile → Lead nay đi qua ``sync_lead_from_profile`` với ĐẦY ĐỦ
+guard (identity-lock + terminal-lock + normalize/validate phone + phone2≠phone +
+phone/email conflict + identity-registry + version + audit). "Sync (guard)".
 
 Why Conditional Sync?
 ---------------------
@@ -97,8 +102,13 @@ SYNCABLE_FIELDS: List[str] = list(IDENTITY_FIELDS)
 EDITABLE_PROFILE_STATUSES: Set[str] = frozenset({"draft", "submitted"})
 
 # AdmissionProfile statuses that allow Profile UPDATE (and Profile → Lead sync)
-# Note: "submitted" cannot be edited (waiting for decision), only draft/rejected
-PROFILE_UPDATE_ALLOWED_STATUSES: Set[str] = frozenset({"draft", "rejected"})
+# Note: "submitted" cannot be edited (waiting for decision). Must mirror the
+# function-level gate in admission_service.update_profile
+# ({draft, rejected, revision_requested}); nếu lệch, profile
+# ``revision_requested`` sẽ sửa được nhưng KHÔNG sync xuống Lead → drift.
+PROFILE_UPDATE_ALLOWED_STATUSES: Set[str] = frozenset(
+    {"draft", "rejected", "revision_requested"}
+)
 
 # AdmissionProfile statuses that LOCK identity fields on Lead
 # These are "legal snapshots" - data is frozen for official records.
@@ -289,6 +299,24 @@ async def sync_profile_from_lead(
 # SYNC: ADMISSION PROFILE → LEAD (Conditional)
 # =============================================================================
 
+def _format_lead_conflict_detail(dup: models.Lead, kind: str) -> str:
+    """Message xung đột phone/email — GIỮ CÙNG format với ``lead_service.
+    update_lead`` để 2 đường sửa identity không trả câu lỗi khác nhau."""
+    officer_name = (
+        dup.assigned_officer.full_name if dup.assigned_officer else "Chưa phân công"
+    )
+    if kind == "email":
+        return (
+            f"Email này đã được sử dụng. Lead: {dup.full_name} "
+            f"(SĐT: {dup.phone}) - Đang được quản lý bởi: {officer_name}"
+        )
+    unit_name = dup.unit.name if getattr(dup, "unit", None) else "N/A"
+    return (
+        f"Số điện thoại này đã được sử dụng. Lead: {dup.full_name} "
+        f"(SĐT: {dup.phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
+    )
+
+
 async def sync_lead_from_profile(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -296,60 +324,80 @@ async def sync_lead_from_profile(
     changed_by_user_id: Optional[int] = None,
 ) -> bool:
     """
-    Sync personal info from AdmissionProfile back to its Lead (CONDITIONAL).
+    Sync identity info (full_name/phone/email) from AdmissionProfile → Lead.
 
-    ⚠️ IMPORTANT: Only syncs when profile is in EDITABLE state (draft/submitted).
-    When profile is LOCKED (approved/rejected/enrolled), sync is BLOCKED to
-    preserve the Lead's operational data integrity.
+    Đây là ĐƯỜNG DUY NHẤT hợp lệ cho chiều Profile → Lead — thay thế việc ghi
+    thẳng ``profile.lead.<field> = ...`` trong admission_service.update_profile
+    (đã bỏ qua toàn bộ guard, là nguyên nhân gốc sự cố list/search 500 do
+    ``phone2 == phone`` + drift bảng ``lead_phone_identity``).
 
-    Use Case:
-        - Lead created with partial name: "anh A"
-        - Officer creates Profile with full name: "Nguyễn Văn A"
-        - Sync updates Lead so officer sees correct name in Lead list
-
-    Security:
-        - draft/submitted: ✅ Sync allowed (data entry phase)
-        - approved/rejected/enrolled: ❌ Sync blocked (legal snapshot)
+    Áp CÙNG guard với ``lead_service.update_lead`` (parity đầy đủ):
+      1. Status gate: chỉ profile ∈ PROFILE_UPDATE_ALLOWED_STATUSES.
+      2. Identity-lock: chặn nếu Lead có profile khác ở trạng thái locked
+         (approved/admitted/enrolled) — ``check_lead_identity_update_allowed``.
+      3. phone: normalize → VALIDATE (normalize KHÔNG phải validator) →
+         terminal-lock (không đổi số khi lead đã ngừng tư vấn) → phone2 ≠ phone
+         → ``check_phone_conflict`` (global).
+      4. email: ``check_email_conflict`` (scope theo unit — KHÁC phone global).
+      5. Ghi Lead + ``update_phone_identities`` + bump version, bọc trong
+         ``begin_nested()`` để race unique (``uq_lead_phone_active`` /
+         ``uq_lead_email_unit_active``) được map sạch qua
+         ``_handle_lead_integrity_error`` mà KHÔNG poison outer transaction của
+         update_profile (vốn không dùng savepoint riêng). Cuối cùng audit "Lead".
 
     Args:
         db: Database session (same transaction as caller)
-        profile: AdmissionProfile model with updated personal info
-        changed_fields: List of field names that changed (optional, syncs all if None)
-        changed_by_user_id: User who triggered the change (for audit)
+        profile: AdmissionProfile với identity đã set (full_name/phone/email)
+        changed_fields: Field đã đổi (mặc định SYNCABLE_FIELDS)
+        changed_by_user_id: User trigger (audit)
 
     Returns:
-        bool: True if sync was performed, False if skipped/blocked
+        bool: True nếu có ghi xuống Lead, False nếu skip.
+
+    Raises:
+        BusinessRuleViolation: identity-lock / terminal-lock.
+        ValidationError: phone sai format sau normalize / phone2 == phone.
+        DuplicateResourceError: phone (global) hoặc email (cùng unit) trùng lead khác.
     """
-    # Check if profile is in updatable state (draft or rejected)
-    # Note: "submitted" profiles can't be edited (waiting for decision)
+    from sqlalchemy.exc import IntegrityError
+
+    from app.repositories.lead_repository import LeadRepository
+    from app.utils.phone_helpers import (
+        normalize_vietnam_phone,
+        validate_vietnam_phone,
+    )
+    from app.core.status_mapping import is_consultation_terminal_status
+    from app.utils.exceptions import (
+        BusinessRuleViolation,
+        DuplicateResourceError,
+        ValidationError,
+    )
+    from . import audit_service
+    from .lead_service import _get_lead_audit_state, _handle_lead_integrity_error
+
+    # ── Status gate ──────────────────────────────────────────────────────────
     if profile.status not in PROFILE_UPDATE_ALLOWED_STATUSES:
         log.info(
             "sync_lead_from_profile: Blocked - Profile in locked state",
             profile_id=profile.id,
             profile_status=profile.status,
             lead_id=profile.lead_id,
-            message="Profile → Lead sync blocked for locked profiles to preserve data integrity",
         )
         return False
 
-    fields_to_sync = changed_fields or SYNCABLE_FIELDS
-
-    # Filter to only syncable fields
-    fields_to_sync = [f for f in fields_to_sync if f in SYNCABLE_FIELDS]
-
+    fields_to_sync = [
+        f for f in (changed_fields or SYNCABLE_FIELDS) if f in SYNCABLE_FIELDS
+    ]
     if not fields_to_sync:
         return False
 
     # Ensure lead is loaded
     lead = profile.lead
     if not lead:
-        # Try to load lead
         result = await db.execute(
-            select(models.Lead)
-            .where(models.Lead.id == profile.lead_id)
+            select(models.Lead).where(models.Lead.id == profile.lead_id)
         )
         lead = result.scalar_one_or_none()
-
         if not lead:
             log.warning(
                 "sync_lead_from_profile: Lead not found",
@@ -358,37 +406,177 @@ async def sync_lead_from_profile(
             )
             return False
 
-    changes_made = False
+    repo = LeadRepository(db)
 
-    for field in fields_to_sync:
-        profile_value = getattr(profile, field, None)
-        lead_value = getattr(lead, field, None)
+    # ── Phòng tuyến 1: xác định DELTA thật (field identity ĐỔI so với lead),
+    # rồi identity-lock + validate + conflict CHỈ áp cho field đổi. Tính delta
+    # TRƯỚC guard để tránh chặn oan khi FE echo lại identity không đổi (vd chỉ
+    # sửa dob nhưng gửi kèm full_name/phone/email cũ). Chạy NGOÀI savepoint.
+    new_full_name = None
+    new_email = None
+    new_phone = None
 
-        if profile_value != lead_value:
-            setattr(lead, field, profile_value)
-            changes_made = True
+    _pf_phone = profile.phone
+    if "phone" in fields_to_sync and _pf_phone is not None and str(_pf_phone).strip():
+        normalized = normalize_vietnam_phone(_pf_phone)
+        # Đồng nhất profile.phone về dạng chuẩn (nếu parse được) để 2 bảng khớp.
+        if normalized is not None:
+            profile.phone = normalized
+        # So delta trên GIÁ TRỊ ĐÃ NORMALIZE CẢ 2 PHÍA: lead.phone legacy có thể
+        # chưa chuẩn hóa (vd '84…') — so với raw sẽ báo "đổi" oan cho số echo
+        # không đổi, kích terminal-lock/conflict/version-churn thừa (giống lỗi
+        # phone2 đã vá bên dưới). CHỈ coi là đổi (và validate) khi khác thật.
+        existing_phone = normalize_vietnam_phone(lead.phone) if lead.phone else lead.phone
+        if normalized != existing_phone:
+            if normalized is None or not validate_vietnam_phone(
+                normalized, normalize=False
+            ):
+                raise ValidationError(
+                    detail=(
+                        "Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại "
+                        "Việt Nam (VD: 0901234567)."
+                    )
+                )
+            new_phone = normalized
 
-            log.info(
-                "sync_lead_from_profile: Field synced",
-                profile_id=profile.id,
-                lead_id=lead.id,
-                field=field,
-                old_value=lead_value,
-                new_value=profile_value,
+    if "email" in fields_to_sync and profile.email:
+        if not lead.email or profile.email.lower() != lead.email.lower():
+            new_email = profile.email
+
+    if (
+        "full_name" in fields_to_sync
+        and profile.full_name is not None
+        and str(profile.full_name).strip()
+        and profile.full_name != lead.full_name
+    ):
+        new_full_name = profile.full_name
+
+    changed_fields = [
+        name for name, val in (
+            ("full_name", new_full_name),
+            ("email", new_email),
+            ("phone", new_phone),
+        ) if val is not None
+    ]
+    if not changed_fields:
+        return False
+
+    # ── GUARD: identity-lock — Lead có profile khác ở trạng thái locked
+    # (approved/admitted/enrolled) → identity là snapshot pháp lý. KHÁC
+    # update_lead (raise 400 chặn): ở đường SỬA-HỒ-SƠ ta SKIP đẩy identity xuống
+    # Lead (hồ sơ vẫn lưu các field khác, Lead giữ snapshot) thay vì abort toàn
+    # bộ edit — tránh khóa cứng luồng returning-student. Chỉ xét field THẬT đổi.
+    allowed, block_reason, _ = await check_lead_identity_update_allowed(
+        db=db, lead_id=lead.id, fields_to_update=changed_fields
+    )
+    if not allowed:
+        log.info(
+            "sync_lead_from_profile: identity locked — SKIP Lead sync "
+            "(hồ sơ giữ giá trị, Lead giữ snapshot)",
+            lead_id=lead.id,
+            profile_id=profile.id,
+            changed_fields=changed_fields,
+            reason=block_reason,
+        )
+        return False
+
+    # Snapshot audit state TRƯỚC mọi mutation lead (khớp pattern update_lead).
+    old_audit_state = _get_lead_audit_state(lead)
+
+    if new_phone is not None:
+        # Terminal-lock: không đổi SĐT khi lead đã ngừng tư vấn (mirror §9.1 B-2).
+        if lead.consultation_status_id:
+            term_cs = await db.get(
+                models.ConsultationStatus, lead.consultation_status_id
+            )
+            if is_consultation_terminal_status(term_cs):
+                raise BusinessRuleViolation(
+                    detail=(
+                        "Lead đang ở trạng thái đã ngừng tư vấn — không thể đổi "
+                        "số điện thoại. Vui lòng mở lại tư vấn (reopen) trước khi "
+                        "chỉnh sửa."
+                    )
+                )
+        # phone2 ≠ phone — NORMALIZE lead.phone2 trước khi so (phone2 legacy có
+        # thể chưa chuẩn hóa, vd '84…' — so raw sẽ lọt guard rồi đụng unique).
+        existing_phone2 = normalize_vietnam_phone(lead.phone2) if lead.phone2 else None
+        if existing_phone2 and new_phone == existing_phone2:
+            raise ValidationError(
+                detail="Số điện thoại phụ không thể trùng với số điện thoại chính."
+            )
+        # Conflict GLOBAL (cross-slot).
+        dup = await repo.check_phone_conflict(
+            phone=new_phone, phone2=lead.phone2, exclude_id=lead.id
+        )
+        if dup:
+            raise DuplicateResourceError(
+                detail=_format_lead_conflict_detail(dup, "phone")
             )
 
-    if changes_made:
-        await db.flush()
+    if new_email is not None:
+        # Conflict scope theo UNIT (khác phone global) — mirror update_lead.
+        dup = await repo.check_email_conflict(
+            email=new_email, unit_id=lead.unit_id, exclude_id=lead.id
+        )
+        if dup:
+            raise DuplicateResourceError(
+                detail=_format_lead_conflict_detail(dup, "email")
+            )
 
-        log.info(
-            "sync_lead_from_profile: Sync completed",
-            profile_id=profile.id,
-            lead_id=lead.id,
-            fields=fields_to_sync,
-            changed_by_user_id=changed_by_user_id,
+    # ── Write: Lead + phone-identity, bọc savepoint để map race unique sạch ──
+    # Chỉ phần này nằm trong savepoint (KHÔNG phải mọi write của update_profile).
+    # Mục tiêu: Lead/identity write + IntegrityError (uq_lead_phone_active /
+    # uq_lead_email_unit_active) được map thành domain error mà không poison
+    # outer transaction. Phòng tuyến 1 ở trên đã chặn phần lớn xung đột.
+    try:
+        async with db.begin_nested():
+            if new_full_name is not None:
+                lead.full_name = new_full_name
+            if new_email is not None:
+                lead.email = new_email
+            if new_phone is not None:
+                lead.phone = new_phone  # đã normalized
+                # CHỈ thay slot 'phone' (đường này KHÔNG đổi phone2). KHÔNG
+                # rewrite slot phone2 bằng lead.phone2 có thể STALE (lead
+                # eager-loaded, không lock) → tránh clobber thay đổi phone2 đồng
+                # thời của update_lead. phone2==phone vẫn được uq_lead_phone_active
+                # bắt ở INSERT. (Tránh lock lead → không gây deadlock lock-order.)
+                await repo.update_phone_slot_identity(
+                    lead_id=lead.id, phone=lead.phone
+                )
+            # Optimistic-lock: bump version của Lead (đường inline cũ đã bỏ sót).
+            lead.version = (lead.version or 1) + 1
+            await db.flush()
+    except IntegrityError as exc:
+        # Map uq_lead_phone_active → SĐT, uq_lead_email_unit_active → email;
+        # re-raise constraint lạ. Savepoint đã rollback → session sạch.
+        _handle_lead_integrity_error(exc)
+
+    # Audit "Lead" (khớp pattern update_lead; đường inline cũ KHÔNG audit).
+    audit_changes = audit_service.detect_changes(
+        old_audit_state,
+        _get_lead_audit_state(lead),
+        exclude_fields=["_sa_instance_state", "updated_at", "created_at"],
+    )
+    if audit_changes:
+        await audit_service.log_changes(
+            db,
+            entity_type="Lead",
+            entity_id=lead.id,
+            action="updated",
+            changes=audit_changes,
+            actor_user_id=changed_by_user_id,
+            source="api",
         )
 
-    return changes_made
+    log.info(
+        "sync_lead_from_profile: Sync completed (guarded)",
+        profile_id=profile.id,
+        lead_id=lead.id,
+        changed_fields=changed_fields,
+        changed_by_user_id=changed_by_user_id,
+    )
+    return True
 
 
 # =============================================================================
