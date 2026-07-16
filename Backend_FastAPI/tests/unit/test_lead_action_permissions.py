@@ -74,7 +74,9 @@ def test_terminal_lead_disables_transfer_and_assign_for_manager():
     # Lead đã đóng → manager/admin KHÔNG được gán/đổi trực tiếp; đường hợp lệ
     # duy nhất là reopen (cờ can_reopen tính ở _populate_lead_detail_fields).
     p = compute_lead_action_permissions(
-        _lead(assigned_officer_id=5), _user(UserRole.MANAGER), is_terminal=True
+        _lead(assigned_officer_id=5),
+        _user(UserRole.MANAGER),
+        is_consultation_terminal=True,
     )
     assert p["can_transfer_lead"] is False
     assert p["can_assign_lead"] is False
@@ -85,7 +87,7 @@ def test_terminal_lead_disables_request_reassign_for_officer():
     p = compute_lead_action_permissions(
         _lead(assigned_officer_id=7),
         _user(UserRole.OFFICER, uid=7),
-        is_terminal=True,
+        is_consultation_terminal=True,
     )
     assert p["can_request_reassign"] is False
     assert p["can_transfer_lead"] is False

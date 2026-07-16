@@ -34,7 +34,7 @@ import structlog
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-    from ..models import ConsultationStatus
+    from ..models import ConsultationStatus, Lead
 
 log = structlog.get_logger(__name__)
 
@@ -75,6 +75,24 @@ def is_consultation_terminal_status(cs: "Optional[ConsultationStatus]") -> bool:
     (sts16/sts08/...). Xem Documents/LEAD_REOPEN_WORKFLOW_PLAN.md.
     """
     return cs is not None and bool(cs.is_final) and cs.phase == "consultation"
+
+
+async def is_lead_consultation_terminal(
+    db: "AsyncSession", lead: "Lead"
+) -> bool:
+    """Async: nạp ConsultationStatus của lead rồi kiểm tra consultation-terminal
+    (sts20). Dùng cho guard chỉ có sẵn ``lead`` + ``db`` (chưa load status). Dùng
+    ``db.get`` theo PK (identity-map friendly), KHÔNG chạm lazy relationship
+    (tránh MissingGreenlet). Trả False nếu lead chưa có consultation status.
+
+    Nơi ĐÃ có status load sẵn (vd ``TerminalGuardResult.current_status``) gọi
+    thẳng ``is_consultation_terminal_status`` để khỏi nạp lại.
+    """
+    if not lead.consultation_status_id:
+        return False
+    from .. import models  # local: giữ module import-light + tránh vòng import
+    cs = await db.get(models.ConsultationStatus, lead.consultation_status_id)
+    return is_consultation_terminal_status(cs)
 
 
 # =============================================================================

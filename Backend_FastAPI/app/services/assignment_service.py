@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models
 from ..core.constants import UserRole
 from ..core.events import SystemEvents
-from ..core.status_mapping import is_consultation_terminal_status
+from ..core.status_mapping import is_lead_consultation_terminal
 from ..core.task_constants import AssignmentResult, AssignmentFailureReason
 from ..utils.exceptions import LockContentionError
 from .assignment_reason import SELF_SOURCED_REASON_TOKEN
@@ -340,14 +340,7 @@ async def automatically_assign_lead(
                 # terminal = no-op có log (KHÔNG raise). sts20 vốn đã bị
                 # _non_final_status_filter loại khỏi khâu QUÉT workload, nhưng
                 # auto-assign per-id vẫn tới đây nếu bị enqueue → chặn tại đây.
-                _cs = (
-                    await db.get(
-                        models.ConsultationStatus, lead.consultation_status_id
-                    )
-                    if lead.consultation_status_id
-                    else None
-                )
-                if is_consultation_terminal_status(_cs):
+                if await is_lead_consultation_terminal(db, lead):
                     log.info(
                         f"[Lead ID: {lead_id}] Lead consultation-terminal (đã "
                         f"đóng), skip auto-assign."
