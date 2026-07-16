@@ -380,7 +380,12 @@ async def restore_deleted_consultation(
     )
     await db.commit()
 
-    # Re-fetch with eager loading to avoid lazy load issues
+    # Re-fetch with eager loading to avoid lazy load issues.
+    # ``officer`` PHẢI eager-load: response_model schemas.Consultation có
+    # ``officer: Optional[User]``; khi người restore KHÁC officer tạo
+    # consultation (vd manager restore cuộc do officer ghi — đúng ca S1 mở),
+    # officer không nằm sẵn identity-map → serialize lazy-load → MissingGreenlet
+    # (500). Trước đây lọt vì không test nào chạy success-path này.
     result = await db.execute(
         select(models.Consultation)
         .where(models.Consultation.id == consultation_id)
@@ -388,6 +393,7 @@ async def restore_deleted_consultation(
             selectinload(models.Consultation.consultation_status)
             .selectinload(models.ConsultationStatus.stage),
             selectinload(models.Consultation.lead),
+            selectinload(models.Consultation.officer),
         )
     )
     restored = result.scalar_one()

@@ -214,6 +214,7 @@ jobs:
           tests/security/test_ratelimit_order_guard.py
           tests/security/test_ip_rate_limit.py
           tests/security/test_ratelimit_per_user_key.py
+          tests/api/test_consultation_security.py
           -q --tb=short --timeout=60
 
       # =====================================================================
