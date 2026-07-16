@@ -45,6 +45,10 @@ def _lead_consult_url(lead_id: int, consultation_id: int) -> str:
     return f"/api/leads/{lead_id}/consultations/{consultation_id}"
 
 
+def _restore_via_leads_route(lead_id: int, consultation_id: int) -> str:
+    return f"/api/leads/{lead_id}/consultations/{consultation_id}/restore"
+
+
 # ===========================================================================
 # FIXTURES
 # ===========================================================================
@@ -207,6 +211,50 @@ async def consultation_cross_lead_dataset(
             data = {
                 "lead_a": lead_a.id, "lead_b": lead_b.id,
                 "consult_b": consult_b.id,
+            }
+    return data
+
+
+@pytest_asyncio.fixture(scope="function")
+async def officer_authored_deleted_consultation(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+) -> dict:
+    """Lead còn sống + 1 consultation ĐÃ XÓA do OFFICER (≠ admin) tạo.
+
+    Cho route admin-only leads.py restore: người restore (admin) KHÁC officer
+    tạo cuộc → officer không nằm sẵn identity-map → serialize officer phải
+    eager-load, nếu không → MissingGreenlet 500.
+    """
+    unit1 = seed_lead_dependencies["unit_id"]
+    status_id = seed_lead_dependencies["initial_status_id"]
+    officer_id = officer_user_in_db["id"]
+    now = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            lead = models.Lead(
+                full_name="Officer Authored Lead", phone="0900000021",
+                email="officerauthored@test.com", source="website",
+                unit_id=unit1, assigned_officer_id=officer_id,
+                consultation_status_id=status_id, consultation_count=0,
+                status="new",
+            )
+            session.add(lead)
+            await session.flush()
+
+            consult = models.Consultation(
+                lead_id=lead.id, officer_id=officer_id,
+                consultation_date=now, method="phone",
+                notes="created by officer, soft-deleted",
+                consultation_status_id=status_id, deleted_at=now,
+            )
+            session.add(consult)
+            await session.flush()
+
+            data = {
+                "lead_id": lead.id, "consult_id": consult.id,
+                "officer_id": officer_id,
             }
     return data
 
@@ -407,3 +455,30 @@ async def test_s3_delete_consultation_correct_lead_still_works(
         _lead_consult_url(lead_b, consult_b), headers=admin_token_headers
     )
     assert r.status_code == 204, r.text
+
+
+# ===========================================================================
+# Route anh em leads.py restore — officer eager-load (chống 500 MissingGreenlet)
+# ===========================================================================
+
+
+async def test_leads_route_restore_officer_authored_consultation_no_500(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_authored_deleted_consultation: dict,
+):
+    """POST /api/leads/{id}/consultations/{cid}/restore (admin-only): admin
+    restore cuộc do OFFICER tạo → 200, KHÔNG 500 MissingGreenlet.
+
+    Route dùng response_model schemas.Consultation (có ``officer``); khi người
+    restore ≠ officer tạo cuộc, officer phải được eager-load ở re-fetch.
+    """
+    lead_id = officer_authored_deleted_consultation["lead_id"]
+    cid = officer_authored_deleted_consultation["consult_id"]
+    r = await client.post(
+        _restore_via_leads_route(lead_id, cid), headers=admin_token_headers
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == cid
+    assert body["officer_id"] == officer_authored_deleted_consultation["officer_id"]

@@ -1266,7 +1266,11 @@ async def restore_a_consultation(
     # Commit the transaction
     await db.commit()
 
-    # Re-fetch with eager loading to avoid lazy load issues
+    # Re-fetch with eager loading to avoid lazy load issues.
+    # ``officer`` PHẢI eager-load: response_model schemas.Consultation có
+    # ``officer: Optional[User]``; admin restore cuộc do officer KHÁC tạo →
+    # officer không nằm sẵn identity-map → serialize lazy-load →
+    # MissingGreenlet (500). Song song với fix ở deleted_items.restore.
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
@@ -1277,6 +1281,7 @@ async def restore_a_consultation(
             selectinload(models.Consultation.consultation_status)
             .selectinload(models.ConsultationStatus.stage),
             selectinload(models.Consultation.lead),
+            selectinload(models.Consultation.officer),
         )
     )
     consultation = result.scalar_one()

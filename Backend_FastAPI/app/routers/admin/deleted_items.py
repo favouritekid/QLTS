@@ -17,7 +17,6 @@ from fastapi import (
     Depends,
     Request,
     Query,
-    status,
 )
 from pydantic import BaseModel
 from sqlalchemy import select, func
