@@ -104,11 +104,18 @@ async def _apply_reopen(
 
     now = datetime.now(timezone.utc)
     await StatusHelper.sync_lead_status(lead, target_cs)
+    # Reset đồng hồ SLA: close_stale đọc GREATEST(consultation_reengaged_at,
+    # last_consultation_at) nên CHỈ cần set mốc re-engage này.
+    #
+    # KHÔNG ghi lead.last_consultation_at ở đây (trước đây có). Field đó là
+    # cache DẪN XUẤT từ MAX(consultation_date), do update_lead_cache sở hữu và
+    # ghi đè VÔ ĐIỀU KIỆN — recalculate_lead_caches_task quét mọi lead lúc
+    # 00:05 nên mốc reset thủ công bị xóa sau đúng một đêm, rồi beat 03:30 đóng
+    # lại lead vừa reopen. Ghi mốc thủ công vào field cache là sai chủ sở hữu;
+    # consultation_reengaged_at mới là nơi đúng (không job nào đụng).
     lead.consultation_reengaged_at = now
     lead.updated_at = now
-    # Reset đồng hồ SLA (close_stale dùng coalesce(last_consultation_at,...)) + bump
-    # version (optimistic-lock — mọi thay đổi trạng thái phải tăng version).
-    lead.last_consultation_at = now
+    # Bump version (optimistic-lock — mọi thay đổi trạng thái phải tăng version).
     lead.version = (lead.version or 1) + 1
 
     new_state = _get_current_lead_state(lead)

@@ -7,9 +7,13 @@ non-destructive; run THIS script deliberately — once the reopen workflow /
 observation window is ready — to close existing stale rejections.
 
 Predicate matches the daily beat exactly: consultation_status_id='sts04',
-deleted_at IS NULL, COALESCE(last_consultation_at, updated_at, created_at) older
-than SLA_CONSULT_GIVEUP_DAYS. Idempotent: a re-run matches zero rows because
+deleted_at IS NULL, COALESCE(GREATEST(consultation_reengaged_at,
+last_consultation_at), updated_at, created_at) older than
+SLA_CONSULT_GIVEUP_DAYS. Idempotent: a re-run matches zero rows because
 moved leads are no longer in sts04.
+
+Phải giữ ĐỒNG BỘ với ``sla_tasks._stale_predicate`` — lệch nhau thì dry-run
+đếm một tập, beat đóng một tập khác.
 
 Usage:
     python scripts/backfill_sts20_giveup.py            # DRY-RUN (count only)
@@ -29,10 +33,14 @@ from app.config import settings  # noqa: E402
 from app.database import AsyncSessionLocal  # noqa: E402
 
 # Strict SLA predicate (same rows as the runtime beat). :days bound at call time.
+# GREATEST (không phải COALESCE) giữa mốc re-engage thủ công và recency tư vấn —
+# xem giải thích đầy đủ ở ``sla_tasks._stale_predicate``. Hai nơi PHẢI khớp nhau.
 _STALE_STS04_PREDICATE = (
     "consultation_status_id = 'sts04' "
     "AND deleted_at IS NULL "
-    "AND COALESCE(last_consultation_at, updated_at, created_at) "
+    "AND COALESCE("
+    "      GREATEST(consultation_reengaged_at, last_consultation_at), "
+    "      updated_at, created_at) "
     "    < NOW() - (:days * INTERVAL '1 day')"
 )
 

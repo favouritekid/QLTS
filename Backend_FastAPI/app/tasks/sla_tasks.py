@@ -61,11 +61,29 @@ async def close_stale_rejected_leads(
     result = {"checked": 0, "transitioned": 0, "skipped": 0, "errors": 0}
 
     def _stale_predicate(stmt):
+        # Mốc "còn sống" = hoạt động MUỘN NHẤT giữa:
+        #   - consultation_reengaged_at: mốc re-engage THỦ CÔNG (reopen sts20→
+        #     sts04) — không ai ghi đè, kể cả recalc cache nightly;
+        #   - last_consultation_at: recency tư vấn, do update_lead_cache dẫn
+        #     xuất từ MAX(consultation_date).
+        #
+        # GREATEST chứ KHÔNG phải COALESCE: COALESCE lấy giá trị non-null ĐẦU
+        # TIÊN, nên reengaged (cố định tại lúc reopen) sẽ luôn thắng
+        # last_consultation_at mới hơn → lead được reopen rồi tư vấn tích cực
+        # vẫn bị đóng sau đúng `days` kể từ ngày reopen. GREATEST bỏ qua NULL
+        # (Postgres) nên mọi tổ hợp NULL đều đúng:
+        #   chưa reopen        -> GREATEST(NULL, last) = last  (hồi quy: y hệt cũ)
+        #   reopen, chưa tư vấn -> GREATEST(reengaged, NULL) = reengaged
+        #   reopen rồi tư vấn   -> mốc muộn hơn thắng
+        #   cả hai NULL        -> NULL -> COALESCE rơi về updated_at/created_at
         return stmt.where(
             models.Lead.consultation_status_id == "sts04",
             models.Lead.deleted_at.is_(None),
             func.coalesce(
-                models.Lead.last_consultation_at,
+                func.greatest(
+                    models.Lead.consultation_reengaged_at,
+                    models.Lead.last_consultation_at,
+                ),
                 models.Lead.updated_at,
                 models.Lead.created_at,
             ) < cutoff,

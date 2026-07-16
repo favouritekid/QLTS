@@ -1045,10 +1045,12 @@ async def test_reopen_sts20_to_sts04_sets_reengaged_and_history(db: AsyncSession
     # status suy từ sts04 qua sync_lead_status (Rule 4: stg02 non-final) -> 'contacted'.
     assert reopened.status == "contacted"
     assert reopened.status != "rejected"  # đã rời khỏi trạng thái give-up
+    # #1: reopen reset đồng hồ SLA bằng CHÍNH consultation_reengaged_at — beat
+    # đọc GREATEST(reengaged, last_consultation_at) nên không cần (và không
+    # được) ghi vào last_consultation_at: đó là cache dẫn xuất do
+    # update_lead_cache sở hữu, ghi vào sẽ bị recalc nightly xóa sau 1 đêm.
     assert reopened.consultation_reengaged_at is not None
-    # #1: reopen reset đồng hồ SLA (last_consultation_at = now == reengaged_at) để beat
-    # KHÔNG đóng lại ngay.
-    assert reopened.last_consultation_at == reopened.consultation_reengaged_at
+    assert reopened.last_consultation_at is None  # reopen KHÔNG đụng field cache
     # #3: bump version (optimistic-lock) — mọi thay đổi trạng thái phải tăng version.
     assert reopened.version == (v_before or 1) + 1
     # assigned_officer giữ nguyên (reopen KHÔNG đụng assignment) — C1.
@@ -1147,8 +1149,11 @@ async def test_reopen_then_beat_can_close_again(db: AsyncSession):
     assert reopened.consultation_status_id == "sts04"
     assert reopened.consultation_reengaged_at is not None
 
-    # Reopen reset last_consultation_at = now (#1). Mô phỏng officer tư vấn lại rồi im
-    # lặng tiếp quá SLA: đẩy last_consultation_at về quá khứ SAU reopen -> stale LẠI.
+    # Mô phỏng officer tư vấn lại rồi im lặng tiếp quá SLA -> stale LẠI.
+    # Beat đọc GREATEST(consultation_reengaged_at, last_consultation_at) nên
+    # phải đẩy CẢ HAI mốc về quá khứ; chỉ đẩy last là chưa đủ (reengaged ~ now
+    # vừa set lúc reopen sẽ thắng và giữ lead sống — đúng như thiết kế).
+    lead.consultation_reengaged_at = now - timedelta(days=40)
     lead.last_consultation_at = now - timedelta(days=40)
     await db.flush()
 
@@ -1193,13 +1198,177 @@ async def test_reopen_resets_sla_clock_so_beat_does_not_immediately_reclose(
     if cb:
         await cb()
 
-    # Beat chạy NGAY (cutoff 30d). Vì last_consultation_at đã = now, lead KHÔNG stale.
+    # Beat chạy NGAY (cutoff 30d). GREATEST(reengaged=now, last=-40d) = now
+    # -> lead KHÔNG stale.
     cutoff = now - timedelta(days=30)
     result = await close_stale_rejected_leads(db, cutoff=cutoff, days=15)
     assert result["checked"] == 0  # không khớp stale-predicate
     assert result["transitioned"] == 0
     await db.refresh(lead)
     assert lead.consultation_status_id == "sts04"  # vẫn mở, không bị đóng lại
+
+
+async def test_reopen_survives_nightly_cache_recalc_then_beat(db: AsyncSession):
+    """🔴 HỒI QUY cho bug PROD: reopen bị recalc cache 00:05 vô hiệu hoá.
+
+    Chuỗi hỏng có thật (prod 16-07: SLA_AUTO_GIVEUP_ENABLED=true, DAYS=5 —
+    13 lead từng reopen, 5 nằm sts20, 0 còn sống ở sts04; 4/5 bị đóng lại khi
+    officer chưa gọi được cuộc nào, 3 ca chết < 1 ngày):
+
+      1. beat auto-close lead -> tạo Consultation(method='system', date=D)
+      2. D+20 manager reopen (trước đây: last_consultation_at = now)
+      3. 00:05 recalculate_lead_caches_task quét MỌI lead, update_lead_cache
+         ghi đè last_consultation_at = MAX(consultation_date) = D  <-- lùi 20 ngày
+      4. 03:30 beat: coalesce(D,...) < cutoff -> ĐÓNG LẠI
+
+    Không test nào từng phủ giao thoa reopen × update_lead_cache, nên suite cũ
+    xanh dù chuỗi trên hỏng. Test này khoá đúng điểm đó: chạy recalc THẬT giữa
+    reopen và beat.
+    """
+    from app.services.lead_cache_service import update_lead_cache
+
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    now = datetime.now(timezone.utc)
+    d_close = now - timedelta(days=20)  # ngày lead bị auto-close lần đầu
+
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id, last_consultation_at=d_close,
+    )
+    # Consultation 'system' mà beat tạo lúc auto-close — chính nó ghim
+    # MAX(consultation_date) ở mốc cũ (sla_tasks.py: method="system").
+    db.add(models.Consultation(
+        lead_id=lead.id, officer_id=officer.id, method="system",
+        consultation_status_id="sts20", consultation_date=d_close,
+        notes="auto-close SLA",
+    ))
+    await db.flush()
+
+    reopened, cb = await reopen_lead(
+        db, lead.id, reviewer=manager, reason="khách quay lại",
+    )
+    if cb:
+        await cb()
+    assert reopened.consultation_status_id == "sts04"
+
+    # ⚡ Nightly recalc chạy giữa reopen và beat — ĐÂY là bước giết reopen
+    # trước khi vá. Nó ghi đè last_consultation_at = MAX(date) = d_close.
+    await update_lead_cache(db, lead.id)
+    await db.flush()
+    await db.refresh(lead)
+    assert lead.last_consultation_at == d_close  # recalc VẪN ghi đè (đúng vai trò)
+
+    # Beat 03:30 cùng đêm. Mốc re-engage KHÔNG bị recalc đụng nên lead sống.
+    result = await close_stale_rejected_leads(
+        db, cutoff=now - timedelta(days=5), days=5,
+    )
+    assert result["checked"] == 0, "recalc vẫn giết được reopen -> bug còn sống"
+    assert result["transitioned"] == 0
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts04"
+
+
+async def test_reopen_without_human_consultation_is_not_closed(db: AsyncSession):
+    """Ca owner chốt: lead reopen mà SAU ĐÓ không có tư vấn thật nào.
+
+    Đây là hình dạng của 4/5 lead bị hại trên prod (tư vấn thật sau reopen = 0).
+    last_consultation_at rất cũ (hoặc NULL sau khi B8b loại 'system'), nhưng mốc
+    re-engage phải giữ lead sống trọn cửa sổ SLA.
+    """
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    now = datetime.now(timezone.utc)
+
+    for last_at in (now - timedelta(days=90), None):  # 'system' rất cũ | NULL
+        lead = await _make_lead(
+            db, unit.id, consultation_status_id="sts20", status="rejected",
+            officer_id=officer.id, last_consultation_at=last_at,
+        )
+        _, cb = await reopen_lead(
+            db, lead.id, reviewer=manager, reason="khách quay lại",
+        )
+        if cb:
+            await cb()
+        await db.flush()
+
+        result = await close_stale_rejected_leads(
+            db, cutoff=now - timedelta(days=5), days=5,
+        )
+        assert result["transitioned"] == 0, f"đóng nhầm lead (last={last_at})"
+        await db.refresh(lead)
+        assert lead.consultation_status_id == "sts04"
+
+
+async def test_reopen_then_active_consulting_is_not_closed(db: AsyncSession):
+    """🔴 Chống REGRESSION NGƯỢC: COALESCE thay GREATEST -> đóng nhầm lead active.
+
+    COALESCE lấy giá trị non-null ĐẦU TIÊN, nên consultation_reengaged_at (cố
+    định tại lúc reopen) sẽ luôn thắng last_consultation_at mới hơn -> lead được
+    reopen rồi tư vấn tích cực vẫn bị đóng sau đúng `days` kể từ NGÀY REOPEN.
+    GREATEST lấy mốc muộn nhất -> tư vấn thật gia hạn được đồng hồ.
+    """
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    manager = await _make_manager(db, unit.id)
+    now = datetime.now(timezone.utc)
+
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id, last_consultation_at=now - timedelta(days=90),
+    )
+    _, cb = await reopen_lead(db, lead.id, reviewer=manager, reason="quay lại")
+    if cb:
+        await cb()
+
+    # Reopen 10 ngày trước; officer tư vấn thật HÔM QUA -> lead rõ ràng đang sống.
+    lead.consultation_reengaged_at = now - timedelta(days=10)
+    lead.last_consultation_at = now - timedelta(days=1)
+    await db.flush()
+
+    result = await close_stale_rejected_leads(
+        db, cutoff=now - timedelta(days=5), days=5,
+    )
+    assert result["transitioned"] == 0, "COALESCE-bug: đóng nhầm lead vừa được tư vấn"
+    await db.refresh(lead)
+    assert lead.consultation_status_id == "sts04"
+
+
+async def test_never_reopened_lead_sla_behaviour_unchanged(db: AsyncSession):
+    """Hồi quy: lead CHƯA từng reopen (reengaged NULL) phải hành xử y hệt trước.
+
+    GREATEST(NULL, last) = last (Postgres bỏ qua NULL) -> predicate không đổi.
+    """
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    officer = await _make_officer(db, unit.id, cap=10)
+    now = datetime.now(timezone.utc)
+
+    stale = await _make_lead(
+        db, unit.id, consultation_status_id="sts04", status="contacted",
+        officer_id=officer.id, last_consultation_at=now - timedelta(days=40),
+    )
+    fresh = await _make_lead(
+        db, unit.id, consultation_status_id="sts04", status="contacted",
+        officer_id=officer.id, last_consultation_at=now - timedelta(days=1),
+    )
+    await db.flush()
+    assert stale.consultation_reengaged_at is None
+    assert fresh.consultation_reengaged_at is None
+
+    result = await close_stale_rejected_leads(
+        db, cutoff=now - timedelta(days=5), days=5,
+    )
+    assert result["transitioned"] == 1  # chỉ lead cũ bị đóng
+    await db.refresh(stale)
+    await db.refresh(fresh)
+    assert stale.consultation_status_id == "sts20"
+    assert fresh.consultation_status_id == "sts04"
 
 
 async def test_can_reopen_flag_thin_client(db: AsyncSession):
