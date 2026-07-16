@@ -83,6 +83,21 @@ async def main() -> int:
             print("❌ sts20 not found — run 'alembic upgrade head' first.")
             return 1
 
+        # Guard: the predicate reads consultation_reengaged_at, added by a LATER
+        # revision (leadreopen_a_20260609) than the one seeding sts20. Standing
+        # at the sts20 revision — the runbook's "downgrade -1" rollback point —
+        # the query would die with an opaque UndefinedColumn instead of this.
+        has_col = (await db.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'lead' AND column_name = 'consultation_reengaged_at'"
+        ))).scalar()
+        if not has_col:
+            print(
+                "❌ lead.consultation_reengaged_at not found — run "
+                "'alembic upgrade head' first (revision leadreopen_a_20260609)."
+            )
+            return 1
+
         n = await count_stale_sts04(db, days)
         print(f"Stale sts04 leads (≥ {days} days): {n}")
 
