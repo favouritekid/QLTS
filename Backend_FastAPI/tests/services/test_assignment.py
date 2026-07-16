@@ -16,7 +16,8 @@ independent flags on ``settings``:
     ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT  → add historical-share fairness term
 """
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -245,6 +246,28 @@ async def test_assign_skip_lead_already_assigned(mock_db_session, lead_new):
     await assignment_service.automatically_assign_lead(lead_new.id, mock_db_session)
 
     assert lead_new.assigned_officer_id == 999
+    assert mock_db_session.add.call_count == 0
+    assert mock_db_session.add_all.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_assign_skip_lead_consultation_terminal(mock_db_session, lead_new):
+    """R1: lead consultation-terminal (đã đóng, vd sts20) chưa gán ⇒ auto-assign
+    SKIPPED (no-op), KHÔNG chọn officer, KHÔNG add gì. Đường hợp lệ = reopen
+    trước rồi mới assign."""
+    lead_new.consultation_status_id = "sts20"
+    mock_db_session.execute.side_effect = [_lead_result(lead_new)]
+    # db.get(ConsultationStatus, ...) trả status terminal (is_final + phase tư vấn)
+    mock_db_session.get = AsyncMock(
+        return_value=SimpleNamespace(is_final=True, phase="consultation")
+    )
+
+    result, _ = await assignment_service.automatically_assign_lead(
+        lead_new.id, mock_db_session
+    )
+
+    assert result["reason"] == AssignmentFailureReason.LEAD_TERMINAL
+    assert lead_new.assigned_officer_id is None
     assert mock_db_session.add.call_count == 0
     assert mock_db_session.add_all.call_count == 0
 
