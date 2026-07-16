@@ -2541,10 +2541,16 @@ async def delete_consultation(
             # Lấy Consultation cần xóa với row-level lock
             # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
             # ✅ FIX: Filter out already soft-deleted consultations
+            # ✅ SECURITY: lead_id nằm TRONG WHERE — "không tồn tại" và "thuộc
+            # lead khác" phải cùng trả 404. Tách 2 nhánh (404 vs 400) biến
+            # endpoint thành oracle: caller chỉ cần 1 lead hợp lệ của mình rồi
+            # dò consultation_id toàn hệ thống (400 = tồn tại, 404 = không).
+            # Noi theo restore_consultation vốn đã lọc đúng.
             consultation_result = await db.execute(
                 select(models.Consultation)
                 .where(
                     models.Consultation.id == consultation_id,
+                    models.Consultation.lead_id == lead_id,
                     models.Consultation.deleted_at.is_(None),  # Not already deleted
                 )
                 .with_for_update()
@@ -2553,11 +2559,6 @@ async def delete_consultation(
             if not consultation:
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
-                )
-            # Kiểm tra consultation thuộc đúng Lead
-            if consultation.lead_id != lead_id:
-                raise BadRequest(
-                    detail="Consultation does not belong to the specified lead."
                 )
 
             # Kiểm tra quyền
@@ -2742,9 +2743,18 @@ async def restore_consultation(
     """
     Restore a soft-deleted consultation and update Lead status accordingly.
 
-    Permission Rules:
-    - Admin/Manager: Can restore any consultation
-    - Officer: Can only restore if assigned to the lead
+    Permission Rules (contract THẬT, đã đối chiếu Casbin + routes):
+    - Admin: đường duy nhất còn sống.
+        * POST /api/leads/{id}/consultations/{cid}/restore — gác CasbinAuth,
+          và KHÔNG template nào cấp allow cho path này (keyMatch4 không match
+          thêm segment /restore). Chỉ admin lọt qua wildcard ADMIN_TEMPLATE.
+        * POST /api/admin/deleted-items/consultations/{cid}/restore — gác
+          require_admin_or_manager + get_lead_for_user (unit-scope).
+    - Manager: CHỈ qua đường /api/admin/deleted-items/... ở trên, và chỉ trong
+      cây đơn vị của mình. Bị Casbin chặn ở route /api/leads/... .
+    - Officer: KHÔNG có đường nào — nhánh officer bên dưới là DEAD CODE
+      (fail-closed ở tầng Casbin trước khi tới đây). Giữ lại làm defense in
+      depth; ĐỪNG suy ra cờ quyền `can_restore` từ nó, sẽ sai.
 
     Business Logic:
     - Clears deleted_at timestamp to restore the consultation
@@ -2927,7 +2937,18 @@ async def update_consultation(
                 raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
             # Lấy Consultation cần update
-            consultation = await db.get(models.Consultation, consultation_id)
+            # ✅ SECURITY: lead_id nằm TRONG WHERE thay vì db.get() theo PK rồi
+            # so lead_id sau — "không tồn tại" và "thuộc lead khác" phải cùng
+            # trả 404. Tách 2 nhánh (404 vs 400) biến endpoint thành oracle:
+            # caller chỉ cần 1 lead hợp lệ của mình rồi dò consultation_id toàn
+            # hệ thống (400 = tồn tại, 404 = không).
+            consultation_result = await db.execute(
+                select(models.Consultation).where(
+                    models.Consultation.id == consultation_id,
+                    models.Consultation.lead_id == lead_id,
+                )
+            )
+            consultation = consultation_result.scalar_one_or_none()
             if not consultation:
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found."
@@ -2936,11 +2957,6 @@ async def update_consultation(
             if consultation.deleted_at is not None:
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
-                )
-            # Kiểm tra consultation thuộc đúng Lead
-            if consultation.lead_id != lead_id:
-                raise BadRequest(
-                    detail="Consultation does not belong to the specified lead."
                 )
 
             # ✅ FIX: Single check for latest consultation (eliminates TOCTOU vulnerability)

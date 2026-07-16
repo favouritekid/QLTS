@@ -1247,9 +1247,13 @@ async def restore_a_consultation(
     """
     Restore a soft-deleted consultation.
 
-    Permission Rules:
-    - Admin/Manager: Can restore any consultation
-    - Officer: Can only restore if assigned to the lead
+    Permission Rules (contract THẬT):
+    - ADMIN ONLY. Route gác CasbinAuth và KHÔNG template nào cấp allow cho
+      path này — keyMatch4 không match segment /restore thêm vào sau
+      /api/leads/{id}/consultations/{consultation_id}. Chỉ admin đi lọt nhờ
+      wildcard ADMIN_TEMPLATE.
+    - Manager/Officer: 403 tại Casbin gateway. Manager muốn restore thì dùng
+      POST /api/admin/deleted-items/consultations/{cid}/restore (có unit-scope).
 
     Business Logic:
     - Restores the consultation by clearing deleted_at
@@ -1262,7 +1266,11 @@ async def restore_a_consultation(
     # Commit the transaction
     await db.commit()
 
-    # Re-fetch with eager loading to avoid lazy load issues
+    # Re-fetch with eager loading to avoid lazy load issues.
+    # ``officer`` PHẢI eager-load: response_model schemas.Consultation có
+    # ``officer: Optional[User]``; admin restore cuộc do officer KHÁC tạo →
+    # officer không nằm sẵn identity-map → serialize lazy-load →
+    # MissingGreenlet (500). Song song với fix ở deleted_items.restore.
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
@@ -1273,6 +1281,7 @@ async def restore_a_consultation(
             selectinload(models.Consultation.consultation_status)
             .selectinload(models.ConsultationStatus.stage),
             selectinload(models.Consultation.lead),
+            selectinload(models.Consultation.officer),
         )
     )
     consultation = result.scalar_one()
