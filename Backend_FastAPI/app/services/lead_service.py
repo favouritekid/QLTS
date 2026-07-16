@@ -2553,10 +2553,14 @@ async def _resolve_revert_target(
 
     - Có ≥1 consultation ``updates_pipeline=True`` → ``(status, status.stage_id)``
       của cái GẦN NHẤT trong số đó → caller set status/stage + sync.
-    - Toàn bộ universal (``updates_pipeline=False``) → ``(None, None)`` — **KHÔNG
-      phải lỗi**. Caller KHÔNG được động ``consultation_status_id`` /
-      ``pipeline_stage_id`` / ``sync`` (universal có ``stage_id=NULL`` → set vào =
-      NULL-hoá stage = defect B1/B2). Giữ nguyên pipeline hiện tại của lead.
+    - CÒN consultation NHƯNG KHÔNG cái nào có ``updates_pipeline=True`` hợp lệ —
+      gồm CẢ (a) toàn universal (``updates_pipeline=False``) LẪN (b)
+      ``consultation_status_id`` NULL / không resolve được status → ``(None,
+      None)``. Nói gọn: **không có pipeline-updating status hợp lệ trong chuỗi còn
+      lại → giữ nguyên state**. Helper CỐ Ý KHÔNG phân biệt (a) và (b) — cả hai
+      đều "không đủ dữ liệu để đặt pipeline". **KHÔNG phải lỗi.** Caller KHÔNG
+      được động ``consultation_status_id`` / ``pipeline_stage_id`` / ``sync``
+      (universal có ``stage_id=NULL`` → set vào = NULL-hoá stage = defect B1/B2).
     - Rỗng (không còn consultation nào) → ``(initial_status, initial.stage_id)``.
     """
     # Nhánh 1: consultation có updates_pipeline=True, gần nhất.

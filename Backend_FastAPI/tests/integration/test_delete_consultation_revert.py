@@ -180,6 +180,33 @@ async def test_all_universal_remaining_keeps_current_state(
     assert lead.pipeline_stage_id is not None
 
 
+async def test_remaining_null_status_consultation_keeps_current_state(
+    db, seeded_dependencies, revert_statuses, manager_user
+):
+    """Contract rõ (caveat Hard Check Slice1): còn consultation nhưng
+    ``consultation_status_id=NULL`` (không resolve được pipeline status) → helper
+    gộp CHUNG nhánh với all-universal → (None, None) → GIỮ NGUYÊN state (KHÔNG
+    phải lỗi, KHÔNG NULL-hoá). Cố định trước khi reuse helper ở B2/B2b."""
+    off = manager_user.id
+    lead = await _make_lead(db, seeded_dependencies, off, "RV_PIPE_A", "STG_A")
+    c_a = await _add_consult(db, lead.id, off, "RV_PIPE_A", 10)
+    # Consultation còn lại với consultation_status_id = NULL (nullable=True).
+    c_null = models.Consultation(
+        lead_id=lead.id,
+        officer_id=off,
+        consultation_date=_BASE + timedelta(minutes=20),
+        method="phone",
+        consultation_status_id=None,
+    )
+    db.add(c_null)
+    await db.flush()
+
+    lead = await _delete_and_reload(db, lead.id, c_a.id, manager_user)
+    assert lead.consultation_status_id == "RV_PIPE_A"
+    assert lead.pipeline_stage_id == "STG_A"
+    assert lead.pipeline_stage_id is not None
+
+
 # ===========================================================================
 # Nhánh 3 — rỗng → về initial
 # ===========================================================================
