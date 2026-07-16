@@ -23,6 +23,50 @@ from .utils import task_db_session, run_async_task
 _default_log = logging.getLogger(__name__)
 
 
+def stale_sts04_predicate(stmt, cutoff: datetime):
+    """NGUỒN SỰ THẬT DUY NHẤT của "lead sts04 đã stale" — beat + test dùng CHUNG.
+
+    Module-level (không phải closure trong close_stale_rejected_leads) để test
+    import được thay vì chép tay lại điều kiện: hai bản chép đã từng lệch khỏi
+    production mà suite vẫn xanh.
+
+    Mốc "còn sống" = hoạt động MUỘN NHẤT giữa:
+      - consultation_reengaged_at: mốc re-engage THỦ CÔNG (reopen sts20→sts04)
+        — không ai ghi đè, kể cả recalc cache nightly;
+      - last_consultation_at: recency tư vấn, do update_lead_cache dẫn xuất từ
+        MAX(consultation_date).
+
+    GREATEST chứ KHÔNG phải COALESCE: COALESCE lấy giá trị non-null ĐẦU TIÊN,
+    nên reengaged (cố định tại lúc reopen) sẽ luôn thắng last_consultation_at
+    mới hơn → lead được reopen rồi tư vấn tích cực vẫn bị đóng sau đúng `days`
+    kể từ ngày reopen. GREATEST bỏ qua NULL (Postgres):
+      chưa reopen         -> GREATEST(NULL, last) = last  (hồi quy: y hệt cũ)
+      reopen, chưa tư vấn -> GREATEST(reengaged, NULL) = reengaged
+      reopen rồi tư vấn   -> mốc muộn hơn thắng
+
+    ⚠️ Fallback updated_at/created_at CHỈ với lead CHƯA từng reopen. Khi
+    consultation_reengaged_at non-NULL (write-once, không ai clear) thì GREATEST
+    luôn non-NULL nên COALESCE dừng ngay và KHÔNG bao giờ đọc updated_at nữa —
+    có chủ đích: sửa vu vơ một field của lead không phải "hoạt động tư vấn" nên
+    không được gia hạn SLA. Khoá bởi test_reopened_lead_ignores_updated_at_bump.
+    """
+    from sqlalchemy import func
+    from .. import models
+
+    return stmt.where(
+        models.Lead.consultation_status_id == "sts04",
+        models.Lead.deleted_at.is_(None),
+        func.coalesce(
+            func.greatest(
+                models.Lead.consultation_reengaged_at,
+                models.Lead.last_consultation_at,
+            ),
+            models.Lead.updated_at,
+            models.Lead.created_at,
+        ) < cutoff,
+    )
+
+
 async def close_stale_rejected_leads(
     session,
     *,
@@ -54,22 +98,16 @@ async def close_stale_rejected_leads(
     Returns {checked, transitioned, skipped, errors} with the invariant
     checked == transitioned + skipped + errors.
     """
-    from sqlalchemy import select, func
+    from sqlalchemy import select
     from .. import models
     from ..services.fsm_engine import execute_system_transition
 
     result = {"checked": 0, "transitioned": 0, "skipped": 0, "errors": 0}
 
     def _stale_predicate(stmt):
-        return stmt.where(
-            models.Lead.consultation_status_id == "sts04",
-            models.Lead.deleted_at.is_(None),
-            func.coalesce(
-                models.Lead.last_consultation_at,
-                models.Lead.updated_at,
-                models.Lead.created_at,
-            ) < cutoff,
-        )
+        # Delegate: giữ shim này để 2 call site dưới khỏi phải truyền cutoff.
+        # Logic THẬT ở module-level stale_sts04_predicate (test import trực tiếp).
+        return stale_sts04_predicate(stmt, cutoff)
 
     ids_result = await session.execute(
         _stale_predicate(select(models.Lead.id)).order_by(models.Lead.id)

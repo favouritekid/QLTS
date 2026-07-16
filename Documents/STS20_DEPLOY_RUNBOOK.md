@@ -81,6 +81,13 @@ có thể phát triển song song.
 - Lead sts20 = terminal: chưa có đường mở lại tới khi ship
   `Documents/LEAD_REOPEN_WORKFLOW_PLAN.md`. Vì vậy backfill + bật beat nên SAU khi
   reopen lên (hoặc chấp nhận tường minh).
-- Quy mô: predicate backfill/beat seq-scan trên `lead` (~vài chục–trăm row hiện
-  tại). Nếu bảng lead lớn về sau, cân nhắc partial index
-  `(consultation_status_id, last_consultation_at) WHERE deleted_at IS NULL`.
+- Quy mô: predicate backfill/beat **KHÔNG seq-scan** — `EXPLAIN` (2026-07-16,
+  2013 row) cho Bitmap Index Scan qua `ix_lead_consultation_status_id` rồi mới
+  apply biểu thức thời gian làm Filter. Đừng thêm index
+  `(consultation_status_id, last_consultation_at)`: vế thời gian bị bọc trong
+  `COALESCE(GREATEST(consultation_reengaged_at, last_consultation_at), ...)` nên
+  index thường trên cột đó **không bao giờ** được planner chọn (bản COALESCE cũ
+  cũng vậy — index `ix_lead_last_consultation_at` chưa từng phục vụ query này).
+  Nếu bảng lead lớn về sau và Filter trở thành nút cổ chai, cách đúng là
+  **expression index** khớp đúng biểu thức, hoặc partial index chỉ trên
+  `consultation_status_id WHERE deleted_at IS NULL`.
