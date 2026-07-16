@@ -25,9 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import database, models, schemas
-from app.core.deps import CasbinAuth, require_admin_or_manager
+from app.core.constants import UserRole
+from app.core.deps import get_lead_for_user, require_admin_or_manager
 from app.core.events import SystemEvents
 from app.core.rate_limits import limiter, RateLimits
+from app.repositories.organization_repository import OrganizationRepository
 from app.services import lead_service
 from app.services.notification_dispatcher import rooms_for_lead, safe_dispatch
 from app.services.notification_payloads import EventPayload
@@ -35,6 +37,29 @@ from app.services.notification_payloads import EventPayload
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Admin - Deleted Items"])
+
+
+async def _resolve_deleted_items_unit_scope(
+    db: AsyncSession,
+    current_user: models.User,
+) -> Optional[List[int]]:
+    """Đơn vị mà user được phép thấy trong màn "Deleted Items".
+
+    Returns:
+        None  -> toàn hệ thống (admin).
+        list  -> giới hạn theo cây đơn vị (manager). Rỗng = không thấy gì.
+
+    Manager chưa gán đơn vị (``unit_id`` NULL) trả ``[]`` — fail-closed, cùng
+    hướng với ``get_lead_for_user`` (deps.py: manager không unit_id -> 404).
+    """
+    if current_user.role == UserRole.ADMIN:
+        return None
+
+    if current_user.unit_id is None:
+        return []
+
+    org_repo = OrganizationRepository(db)
+    return await org_repo.get_descendant_unit_ids(current_user.unit_id)
 
 
 # ============================================================================
@@ -99,10 +124,32 @@ async def list_deleted_items(
     """
     List all soft-deleted leads and consultations.
 
-    Admin/Manager only. Returns most recently deleted items first.
+    Admin: toàn hệ thống. Manager: CHỈ trong cây đơn vị của mình.
+
+    Unit-scope phải áp cho MỌI phần (rows + counts + search) — lọc rows mà
+    bỏ counts thì manager vẫn suy ra được SỐ LƯỢNG lead/consultation của
+    đơn vị khác.
     """
+    allowed_unit_ids = await _resolve_deleted_items_unit_scope(db, current_user)
+
+    def _scope_leads(stmt):
+        """Giới hạn theo unit của Lead. None = admin, không giới hạn."""
+        if allowed_unit_ids is None:
+            return stmt
+        return stmt.where(models.Lead.unit_id.in_(allowed_unit_ids))
+
+    def _scope_consultations(stmt):
+        """Giới hạn theo unit của Lead mà consultation thuộc về."""
+        if allowed_unit_ids is None:
+            return stmt
+        return stmt.where(
+            models.Consultation.lead.has(
+                models.Lead.unit_id.in_(allowed_unit_ids)
+            )
+        )
+
     # ========== DELETED LEADS ==========
-    leads_query = (
+    leads_query = _scope_leads(
         select(models.Lead)
         .where(models.Lead.deleted_at.isnot(None))
         .order_by(models.Lead.deleted_at.desc())
@@ -122,7 +169,10 @@ async def list_deleted_items(
 
     # Count total deleted leads
     total_leads_result = await db.execute(
-        select(func.count(models.Lead.id)).where(models.Lead.deleted_at.isnot(None))
+        _scope_leads(
+            select(func.count(models.Lead.id))
+            .where(models.Lead.deleted_at.isnot(None))
+        )
     )
     total_leads = total_leads_result.scalar() or 0
 
@@ -147,7 +197,7 @@ async def list_deleted_items(
         ))
 
     # ========== DELETED CONSULTATIONS ==========
-    consultations_query = (
+    consultations_query = _scope_consultations(
         select(models.Consultation)
         .options(
             selectinload(models.Consultation.lead),
@@ -174,10 +224,12 @@ async def list_deleted_items(
 
     # Count total deleted consultations (from active leads only)
     total_consultations_result = await db.execute(
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.deleted_at.isnot(None),
-            models.Consultation.lead.has(models.Lead.deleted_at.is_(None)),
+        _scope_consultations(
+            select(func.count(models.Consultation.id))
+            .where(
+                models.Consultation.deleted_at.isnot(None),
+                models.Consultation.lead.has(models.Lead.deleted_at.is_(None)),
+            )
         )
     )
     total_consultations = total_consultations_result.scalar() or 0
@@ -286,7 +338,16 @@ async def restore_deleted_consultation(
     """
     Restore a soft-deleted consultation.
 
-    Admin/Manager only. Updates lead status if restored consultation is the most recent.
+    Admin: mọi consultation. Manager: CHỈ trong cây đơn vị của mình.
+
+    Updates lead status if restored consultation is the most recent.
+
+    Thu hẹp có chủ đích: consultation thuộc lead ĐÃ BỊ XÓA nay trả 404
+    (get_lead_for_user bỏ qua lead soft-deleted) — trước đây admin restore
+    được. Không luồng nào vỡ: list ở trên chỉ trả consultation của lead còn
+    sống, nên UI không có đường dẫn tới chúng; và restore lẻ một consultation
+    của lead đã xóa là vô nghĩa vì lead vẫn ẩn. Đường đúng để khôi phục là
+    restore LEAD — nó tự kéo consultation theo (lead_service.restore_lead).
     """
     # First find the consultation to get lead_id
     consultation_result = await db.execute(
@@ -305,6 +366,13 @@ async def restore_deleted_consultation(
         )
 
     lead_id = consultation.lead_id
+
+    # Ép unit-scope: lead_id lấy TỪ CHÍNH row người gọi chỉ định, nên filter
+    # lead_id bên trong restore_consultation luôn khớp và không cản được gì.
+    # get_lead_for_user là chốt IDOR duy nhất ở đây (manager ngoài cây đơn vị
+    # -> 404; manager chưa gán đơn vị -> fail-closed 404).
+    # Phải gọi bằng KEYWORD: các tham số có Path()/Depends() làm default.
+    await get_lead_for_user(lead_id=lead_id, db=db, current_user=current_user)
 
     # Restore it
     await lead_service.restore_consultation(
