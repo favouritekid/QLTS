@@ -456,6 +456,14 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/leads/{id}/insights",              "GET"),
             ("/api/leads/{id}/audit-logs",            "GET"),
             ("/api/leads/{id}/consultations",         "GET"),
+            # PR consultation-security (2026-07-16) — accountant inherits the
+            # officer consultation WRITE grants; only GET was denied, so finance
+            # staff could create/edit/delete consultations (and thereby move lead
+            # status) while unable to read the list. Migration
+            # `consultacctdeny20260716` seeds these 3.
+            ("/api/leads/{id}/consultations",         "POST"),
+            ("/api/leads/{id}/consultations/{consultation_id}", "PUT"),
+            ("/api/leads/{id}/consultations/{consultation_id}", "DELETE"),
             ("/api/leads/check-duplicate",            "GET"),
             ("/api/leads/import",                     "POST"),
             ("/api/leads/import/template",            "GET"),

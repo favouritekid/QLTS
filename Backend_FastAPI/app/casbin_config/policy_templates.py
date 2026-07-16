@@ -530,6 +530,16 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{id}/insights",       "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/{id}/audit-logs",     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/{id}/consultations",  "action": "GET",  "eft": "deny"},
+        # Consultation WRITE paths — OFFICER_TEMPLATE grants POST/PUT/DELETE
+        # (see the consultations block above) and accountant inherits them via
+        # `g, role:accountant, role:officer`. The GET deny right above was the
+        # only one seeded, leaving accountant able to CREATE/EDIT/DELETE
+        # consultations while unable to read the list — an asymmetry, not a
+        # policy. Same separation-of-duties rationale as /api/leads PUT/POST.
+        # Migration: consultacctdeny20260716.
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations",  "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations/{consultation_id}", "action": "PUT",    "eft": "deny"},
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations/{consultation_id}", "action": "DELETE", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/check-duplicate",     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import",              "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/import/template",     "action": "GET",  "eft": "deny"},
