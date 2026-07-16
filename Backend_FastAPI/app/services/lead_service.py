@@ -2539,6 +2539,73 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
     return timeline_items
 
 
+async def _resolve_revert_target(
+    db: AsyncSession,
+    lead_id: int,
+    exclude_consultation_id: Optional[int] = None,
+) -> Tuple[Optional[models.ConsultationStatus], Optional[str]]:
+    """Dò NGƯỢC chuỗi consultation còn sống của lead tìm mốc revert pipeline sau
+    khi xóa/khôi phục 1 consultation. Order ``consultation_date DESC, id DESC``
+    (cùng định nghĩa 'latest' với ``get_latest_consultation``), bỏ
+    ``deleted_at IS NOT NULL``, bỏ ``exclude_consultation_id`` (cuộc đang xử lý).
+
+    Hợp đồng 3 nhánh (owner chốt v3) — caller PHẢI phân biệt rõ:
+
+    - Có ≥1 consultation ``updates_pipeline=True`` → ``(status, status.stage_id)``
+      của cái GẦN NHẤT trong số đó → caller set status/stage + sync.
+    - Toàn bộ universal (``updates_pipeline=False``) → ``(None, None)`` — **KHÔNG
+      phải lỗi**. Caller KHÔNG được động ``consultation_status_id`` /
+      ``pipeline_stage_id`` / ``sync`` (universal có ``stage_id=NULL`` → set vào =
+      NULL-hoá stage = defect B1/B2). Giữ nguyên pipeline hiện tại của lead.
+    - Rỗng (không còn consultation nào) → ``(initial_status, initial.stage_id)``.
+    """
+    # Nhánh 1: consultation có updates_pipeline=True, gần nhất.
+    q = (
+        select(models.ConsultationStatus)
+        .join(
+            models.Consultation,
+            models.Consultation.consultation_status_id
+            == models.ConsultationStatus.id,
+        )
+        .where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.deleted_at.is_(None),
+            models.ConsultationStatus.updates_pipeline.is_(True),
+        )
+        .order_by(
+            models.Consultation.consultation_date.desc(),
+            models.Consultation.id.desc(),
+        )
+        .limit(1)
+    )
+    if exclude_consultation_id is not None:
+        q = q.where(models.Consultation.id != exclude_consultation_id)
+    status_obj = (await db.execute(q)).scalars().first()
+    if status_obj is not None:
+        return status_obj, status_obj.stage_id
+
+    # Phân biệt nhánh 2 (toàn universal) vs 3 (rỗng): còn consultation nào không?
+    any_q = (
+        select(models.Consultation.id)
+        .where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if exclude_consultation_id is not None:
+        any_q = any_q.where(models.Consultation.id != exclude_consultation_id)
+    has_remaining = (
+        await db.execute(any_q)
+    ).scalar_one_or_none() is not None
+    if has_remaining:
+        return None, None  # toàn universal → giữ nguyên (KHÔNG động state)
+
+    # Rỗng → initial.
+    initial = await StatusHelper.get_initial_status(db)
+    return initial, (initial.stage_id if initial else None)
+
+
 async def delete_consultation(
     db: AsyncSession, lead_id: int, consultation_id: int, current_user: models.User
 ):
@@ -2572,8 +2639,10 @@ async def delete_consultation(
                     detail=terminal_guard.reason
                 )
 
-            # Soft terminal: allow deletion but skip status revert
-            skip_status_revert = terminal_guard.is_terminal
+            # B5: KHÔNG skip revert theo terminal HIỆN TẠI. Xóa cuộc gây terminal
+            # (sts20) → lead phải thoát terminal về mốc pipeline hợp lệ còn lại
+            # (tính bằng _resolve_revert_target bên dưới). Chỉ 'enrolled' bị
+            # hard-block ở trên. (Trước đây skip_status_revert làm lead KẸT sts20.)
 
             # Lấy Consultation cần xóa với row-level lock
             # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
@@ -2638,66 +2707,31 @@ async def delete_consultation(
                 deleted_at=consultation.deleted_at.isoformat(),
             )
 
-            # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
-            # ✅ REFACTORED: Use LeadRepository
-            latest_remaining = await repo.get_latest_consultation(lead_id)
-
-            new_status_id = None
-            new_stage_id = None
-            revert_status_obj = None  # ConsultationStatus object for sync
-
-            # Nếu còn consultation khác
-            if latest_remaining and latest_remaining.consultation_status_id:
-                latest_status = await db.get(
-                    models.ConsultationStatus, latest_remaining.consultation_status_id
-                )
-                if latest_status:
-                    new_status_id = latest_status.id
-                    new_stage_id = latest_status.stage_id
-                    revert_status_obj = latest_status
-                    log.info(
-                        f"Reverting lead status to latest remaining consultation's status: {new_status_id}",
-                        lead_id=lead_id,
-                    )
-                else:
-                    log.warning(
-                        f"Status '{latest_remaining.consultation_status_id}' not found for latest consultation {latest_remaining.id}",
-                        lead_id=lead_id,
-                    )
-            # Nếu không còn consultation nào, revert về trạng thái ban đầu
-            else:
-                initial_status = await StatusHelper.get_initial_status(db)
-                if initial_status:
-                    new_status_id = initial_status.id
-                    new_stage_id = initial_status.stage_id
-                    revert_status_obj = initial_status
-                    log.info(
-                        "Reverting lead status to initial status",
-                        lead_id=lead_id,
-                        status_id=new_status_id,
-                    )
-                else:
-                    log.warning(
-                        "Initial status not found when reverting lead status.",
-                        lead_id=lead_id,
-                    )
-                    # Gán giá trị an toàn nếu không tìm thấy status ban đầu
-                    new_status_id = None
-                    new_stage_id = None
-
-            if not skip_status_revert:
-                # Cập nhật trạng thái Lead
-                lead.consultation_status_id = new_status_id
+            # B1+B5: revert pipeline theo cuộc updates_pipeline=True GẦN NHẤT còn
+            # lại (helper 3-nhánh). Đã soft-delete + flush ở trên nên cuộc bị xóa
+            # tự loại khỏi query (exclude_consultation_id là phòng thủ thêm).
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id, exclude_consultation_id=consultation_id
+            )
+            if revert_status_obj is not None:
+                # Có mốc pipeline hợp lệ → revert status + stage + sync.
+                lead.consultation_status_id = revert_status_obj.id
                 lead.pipeline_stage_id = new_stage_id
-                # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-                if revert_status_obj:
-                    sync_lead_status_from_consultation(lead, revert_status_obj)
-                else:
-                    # Fallback khi không tìm thấy status object
-                    lead.status = "new"
+                sync_lead_status_from_consultation(lead, revert_status_obj)
+                log.info(
+                    "Reverted lead pipeline to latest remaining pipeline "
+                    "consultation after delete",
+                    lead_id=lead_id,
+                    new_status_id=revert_status_obj.id,
+                    new_stage_id=new_stage_id,
+                )
             else:
-                log.warning(
-                    "Terminal guard SOFT BLOCK: skipping lead status revert on consultation delete",
+                # (None, None): chuỗi còn lại TOÀN universal → GIỮ NGUYÊN pipeline
+                # hiện tại (KHÔNG NULL-hoá stage). Accepted risk: nếu current đang
+                # terminal và chỉ còn universal thì lead giữ terminal — test cố định.
+                log.info(
+                    "Delete consultation: remaining chain all-universal, keeping "
+                    "current lead pipeline state (no status/stage/sync change)",
                     lead_id=lead_id,
                     current_status_id=lead.consultation_status_id,
                 )
@@ -2748,7 +2782,8 @@ async def delete_consultation(
             _lead_id = lead_id
             _consultation_id = consultation_id
             _officer_id = lead.assigned_officer_id
-            _new_status_id = new_status_id
+            # Status THẬT sau revert (revert-target hoặc giữ nguyên khi all-universal)
+            _new_status_id = lead.consultation_status_id
 
         except Exception as e:
             # Rollback tự động by begin_nested context
