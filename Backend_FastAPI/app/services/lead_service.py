@@ -767,7 +767,15 @@ async def get_leads(
     # truyền None nên bỏ qua. Không truy vấn DB thêm (đọc role + assigned_officer_id).
     if current_user is not None:
         for _lead in leads:
-            _lead.permissions = compute_lead_action_permissions(_lead, current_user)
+            # R1: cờ terminal lấy từ consultation_status (get_filtered eager-load
+            # sẵn → không query thêm) để tắt giao/đổi officer trên lead đã đóng.
+            _lead.permissions = compute_lead_action_permissions(
+                _lead,
+                current_user,
+                is_terminal=is_consultation_terminal_status(
+                    _lead.consultation_status
+                ),
+            )
 
     return total_count, leads, summary
 
@@ -2310,6 +2318,21 @@ async def assign_lead_manually(
             # ✅ FIX: Explicit deleted check (get_lead_by_id may not always exclude)
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot assign a deleted lead.")
+
+            # ✅ R1: Lead đã đóng (consultation-terminal, vd sts20) KHÔNG được
+            # giao/đổi officer bằng đường thủ công (kể cả bulk, đi qua đây) — phải
+            # reopen trước. Chặn CỨNG (check_terminal_status_guard chỉ hard-block
+            # 'enrolled', để soft cho sts20 nên không đủ ở đây).
+            current_cs = (
+                await db.get(models.ConsultationStatus, lead.consultation_status_id)
+                if lead.consultation_status_id
+                else None
+            )
+            if is_consultation_terminal_status(current_cs):
+                raise BusinessRuleViolation(
+                    detail="Lead đã đóng (ngừng tư vấn) — cần mở lại trước khi "
+                    "giao cho người khác."
+                )
             
             officer = await db.get(models.User, officer_id)
 
@@ -3443,6 +3466,22 @@ async def process_officer_action(
             terminal_guard = await check_terminal_status_guard(db, lead)
             if terminal_guard.hard_block:
                 raise BusinessRuleViolation(detail=terminal_guard.reason)
+
+            # ✅ R1: reassign trên lead consultation-terminal (sts20) — chặn CỨNG.
+            # check_terminal_status_guard chỉ hard-block 'enrolled' (soft cho
+            # sts20) nên officer/manager vẫn nhả được officer → lead ping-pong né
+            # reopen. Phải reopen trước. (reject vẫn cho qua — chỉ khóa đổi người.)
+            if action == "reassign":
+                _reassign_cs = (
+                    await db.get(models.ConsultationStatus, lead.consultation_status_id)
+                    if lead.consultation_status_id
+                    else None
+                )
+                if is_consultation_terminal_status(_reassign_cs):
+                    raise BusinessRuleViolation(
+                        detail="Lead đã đóng (ngừng tư vấn) — cần mở lại trước khi "
+                        "đổi người phụ trách."
+                    )
 
             # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
             if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
@@ -4905,6 +4944,7 @@ def _lead_role_context(
 def compute_lead_action_permissions(
     lead: models.Lead,
     current_user: Optional[models.User],
+    is_terminal: bool = False,
 ) -> dict[str, bool]:
     """Query-free lead action flags (transfer / reassign) from role + assignment
     state only.
@@ -4914,6 +4954,13 @@ def compute_lead_action_permissions(
     "Chuyển giao lead" / "Yêu cầu đổi người phụ trách" WITHOUT a per-row detail
     fetch — and WITHOUT the FE reading ``user.role`` (thin-client rule). No DB
     access → safe to call per list item. Returns ``{}`` for system contexts.
+
+    ``is_terminal`` (R1): lead consultation-terminal (đã đóng, vd sts20) KHÔNG
+    được giao/đổi/xin-đổi officer — phải reopen trước (khớp guard BE ở
+    ``assign_lead_manually`` / ``process_officer_action``). Caller tính từ
+    consultation status đã eager-load (list) hoặc ``cs_terminal`` (detail) rồi
+    truyền vào để giữ hàm pure-sync. Nút hợp lệ còn lại trên lead đóng chỉ là
+    ``can_reopen``.
     """
     if current_user is None:
         return {}
@@ -4923,11 +4970,11 @@ def compute_lead_action_permissions(
     return {
         # manager/admin gán lead CHƯA có người phụ trách (endpoint /assign =
         # "Admin/Manager only") → thin-client gate nút "Gán cho cán bộ".
-        "can_assign_lead": is_manager_admin,
+        "can_assign_lead": is_manager_admin and not is_terminal,
         # manager/admin đổi trực tiếp; chỉ khi lead đã có người phụ trách
-        "can_transfer_lead": is_manager_admin and lead_assigned,
+        "can_transfer_lead": is_manager_admin and lead_assigned and not is_terminal,
         # officer ĐƯỢC GIAO lead → xin đổi
-        "can_request_reassign": is_officer_assigned,
+        "can_request_reassign": is_officer_assigned and not is_terminal,
     }
 
 
@@ -5020,7 +5067,9 @@ async def _populate_lead_detail_fields(
     # Backend là nơi role-gate duy nhất. Chỉ áp khi lead đã có người phụ trách;
     # lead chưa gán dùng luồng "Gán cho cán bộ" riêng. Cùng nguồn với list
     # serializer qua compute_lead_action_permissions() (single source of truth).
-    permissions.update(compute_lead_action_permissions(lead, current_user))
+    permissions.update(
+        compute_lead_action_permissions(lead, current_user, is_terminal=cs_terminal)
+    )
 
     lead.permissions = permissions
     lead.available_actions = [k for k, v in permissions.items() if v]

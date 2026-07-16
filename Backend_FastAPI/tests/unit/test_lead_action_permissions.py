@@ -65,3 +65,37 @@ def test_officer_not_assigned_no_flags():
 
 def test_system_context_none_user_returns_empty():
     assert compute_lead_action_permissions(_lead(assigned_officer_id=5), None) == {}
+
+
+# --- R1: lead consultation-terminal (đã đóng) tắt mọi cờ giao/đổi officer ---
+
+
+def test_terminal_lead_disables_transfer_and_assign_for_manager():
+    # Lead đã đóng → manager/admin KHÔNG được gán/đổi trực tiếp; đường hợp lệ
+    # duy nhất là reopen (cờ can_reopen tính ở _populate_lead_detail_fields).
+    p = compute_lead_action_permissions(
+        _lead(assigned_officer_id=5), _user(UserRole.MANAGER), is_terminal=True
+    )
+    assert p["can_transfer_lead"] is False
+    assert p["can_assign_lead"] is False
+    assert p["can_request_reassign"] is False
+
+
+def test_terminal_lead_disables_request_reassign_for_officer():
+    p = compute_lead_action_permissions(
+        _lead(assigned_officer_id=7),
+        _user(UserRole.OFFICER, uid=7),
+        is_terminal=True,
+    )
+    assert p["can_request_reassign"] is False
+    assert p["can_transfer_lead"] is False
+    assert p["can_assign_lead"] is False
+
+
+def test_is_terminal_defaults_false_preserves_prior_behavior():
+    # Không truyền is_terminal → hành vi cũ giữ nguyên (không hồi quy).
+    p = compute_lead_action_permissions(
+        _lead(assigned_officer_id=5), _user(UserRole.MANAGER)
+    )
+    assert p["can_transfer_lead"] is True
+    assert p["can_assign_lead"] is True

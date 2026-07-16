@@ -19,6 +19,9 @@ class AssignmentFailureReason:
     LEAD_NOT_FOUND = "lead_not_found"
     LEAD_DELETED = "lead_deleted"
     ALREADY_ASSIGNED = "already_assigned"
+    # R1: lead consultation-terminal (đã đóng, vd sts20) — auto-assign KHÔNG
+    # BAO GIỜ vớ lead đóng; phải reopen trước.
+    LEAD_TERMINAL = "lead_terminal"
 
 
 class AssignmentSkipReason:
