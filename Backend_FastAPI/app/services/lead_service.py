@@ -2834,8 +2834,11 @@ async def restore_consultation(
 
     Business Logic:
     - Clears deleted_at timestamp to restore the consultation
-    - Updates lead's consultation_status_id to the restored consultation's status
-      (only if restored consultation is the most recent by consultation_date)
+    - B3: Hard-block khi lead đang 'enrolled' (terminal guard) — không cho khôi
+      phục consultation lên lead đã nhập học.
+    - B2: Revert pipeline lead về cuộc updates_pipeline=True gần nhất trong chuỗi
+      CÒN SỐNG (gồm cả cuộc vừa restore) qua _resolve_revert_target — KHÔNG gán
+      thẳng stage của cuộc restore (universal có stage_id=NULL sẽ NULL-hoá stage).
     - Logs the change in LeadStatusHistory
 
     Args:
@@ -2863,6 +2866,18 @@ async def restore_consultation(
             # Check if lead is deleted
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot restore consultations for a deleted lead.")
+
+            # B3: TERMINAL STATUS GUARD — restore là đường ÍT QUYỀN NHẤT để bypass
+            # terminal (officer chỉ cần assigned, không cần latest/author/24h) và
+            # ghi đè lead KHÔNG đi qua lead_admission_sync. Hard-block 'enrolled':
+            # khôi phục consultation lên lead đã nhập học sẽ đảo pipeline ngược,
+            # lệch AdmissionProfile (sole source of truth). Soft-terminal (sts20):
+            # KHÔNG skip revert theo status HIỆN TẠI (bài học B5 — skip làm lead
+            # KẸT terminal); để _resolve_revert_target bên dưới tính lại mốc
+            # pipeline hợp lệ từ chuỗi còn sống.
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                raise BusinessRuleViolation(detail=terminal_guard.reason)
 
             # Fetch the deleted consultation
             consultation_result = await db.execute(
@@ -2908,28 +2923,43 @@ async def restore_consultation(
                 restored_by=current_user.id,
             )
 
-            # Determine if we need to update lead status
-            # Get the latest consultation (including the just-restored one)
-            latest_consultation = await repo.get_latest_consultation(lead_id)
+            # B2: revert pipeline theo cuộc updates_pipeline=True GẦN NHẤT trong
+            # chuỗi CÒN SỐNG (helper 3-nhánh, cùng cơ chế delete B1). Cuộc vừa
+            # restore đã hết deleted_at + flush ở trên → ĐÃ nằm trong chuỗi, nên
+            # KHÔNG truyền exclude (khác delete). Bug cũ: gán thẳng
+            # lead.pipeline_stage_id = new_status.stage_id — nếu status của cuộc
+            # restore là universal (stage_id=NULL) thì NULL-hoá stage của lead
+            # (đẩy lead ra ngoài phễu) = defect B2. Helper tự dò về cuộc pipeline
+            # gần nhất nên universal-mới-nhất không còn phá stage.
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id
+            )
+            if revert_status_obj is not None:
+                lead.consultation_status_id = revert_status_obj.id
+                lead.pipeline_stage_id = new_stage_id
+                sync_lead_status_from_consultation(lead, revert_status_obj)
+                log.info(
+                    "Reverted lead pipeline to latest live pipeline "
+                    "consultation after restore",
+                    lead_id=lead_id,
+                    new_status_id=revert_status_obj.id,
+                    new_stage_id=new_stage_id,
+                )
+            else:
+                # (None, None): chuỗi còn sống TOÀN universal → GIỮ NGUYÊN pipeline
+                # hiện tại (KHÔNG NULL-hoá stage). Nhánh 'rỗng' của helper không
+                # xảy ra ở restore (vừa có ≥1 cuộc vừa được khôi phục).
+                log.info(
+                    "Restore consultation: live chain all-universal, keeping "
+                    "current lead pipeline state (no status/stage/sync change)",
+                    lead_id=lead_id,
+                    current_status_id=lead.consultation_status_id,
+                )
 
-            # If restored consultation is now the latest, update lead status
-            if latest_consultation and latest_consultation.id == consultation_id:
-                if consultation.consultation_status_id:
-                    new_status = await db.get(
-                        models.ConsultationStatus, consultation.consultation_status_id
-                    )
-                    if new_status:
-                        lead.consultation_status_id = new_status.id
-                        lead.pipeline_stage_id = new_status.stage_id
-                        sync_lead_status_from_consultation(lead, new_status)
-                        lead.version = (lead.version or 1) + 1
-                        db.add(lead)
-
-                        log.info(
-                            "Lead status updated to restored consultation's status",
-                            lead_id=lead_id,
-                            new_status_id=new_status.id,
-                        )
+            # Restore là data-change (consultation deleted→live) → luôn bump
+            # version cho optimistic-lock, đối xứng delete_consultation.
+            lead.version = (lead.version or 1) + 1
+            db.add(lead)
 
             # Get new state and log change
             new_state = _get_current_lead_state(lead)
