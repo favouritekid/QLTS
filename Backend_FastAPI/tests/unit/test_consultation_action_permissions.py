@@ -10,7 +10,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.constants import UserRole
-from app.services.lead_service import compute_consultation_action_permissions
+from app.services.lead_service import (
+    _as_utc,
+    compute_consultation_action_permissions,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -125,3 +128,56 @@ def test_reschedule_false_when_cannot_edit():
 def test_other_role_all_false():
     p = _perm(_consult(), _lead(5), _user(UserRole.ACCOUNTANT, 3))
     assert not p["can_edit"] and not p["can_delete"] and not p["can_reschedule"]
+
+
+# --- tz-safety: datetime NAIVE không được raise TypeError (blocker review) ---
+# now aware trừ created_at/consultation_date naive (row legacy / object chưa
+# round-trip DB) trước đây TypeError → 500 cả /timeline. Helper phải _as_utc.
+_RECENT_NAIVE = _RECENT.replace(tzinfo=None)
+_OLD_NAIVE = _OLD.replace(tzinfo=None)
+
+
+def test_naive_created_at_recent_no_crash():
+    c = SimpleNamespace(
+        method="phone", officer_id=2,
+        created_at=_RECENT_NAIVE, consultation_date=_RECENT_NAIVE,
+    )
+    p = _perm(c, _lead(2), _user(UserRole.OFFICER, 2))
+    assert p["can_edit"]  # trong 24h, KHÔNG TypeError
+
+
+def test_naive_created_at_old_expired():
+    c = SimpleNamespace(
+        method="phone", officer_id=2,
+        created_at=_OLD_NAIVE, consultation_date=_OLD_NAIVE,
+    )
+    p = _perm(c, _lead(2), _user(UserRole.OFFICER, 2))
+    assert not p["can_edit"] and p["edit_blocker"] == "expired_24h"
+
+
+def test_naive_consultation_date_fallback_no_crash():
+    """created_at None → fallback consultation_date NAIVE vẫn tính được 24h."""
+    c = SimpleNamespace(
+        method="phone", officer_id=2,
+        created_at=None, consultation_date=_RECENT_NAIVE,
+    )
+    p = _perm(c, _lead(2), _user(UserRole.OFFICER, 2))
+    assert p["can_edit"]
+
+
+def test_naive_now_arg_no_crash():
+    """now naive truyền vào cũng được chuẩn hoá (không TypeError)."""
+    c = _consult(officer_id=2, anchor=_RECENT_NAIVE)
+    p = compute_consultation_action_permissions(
+        c, _lead(2), _user(UserRole.OFFICER, 2),
+        is_latest=True, is_active_appointment=True, now=_NOW.replace(tzinfo=None),
+    )
+    assert p["can_edit"]
+
+
+def test_as_utc_helper():
+    assert _as_utc(None) is None
+    naive = datetime(2026, 7, 17, 8, 0, 0)
+    assert _as_utc(naive).tzinfo is timezone.utc
+    aware = datetime(2026, 7, 17, 8, 0, 0, tzinfo=timezone.utc)
+    assert _as_utc(aware) is aware  # aware giữ nguyên

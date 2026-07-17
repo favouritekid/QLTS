@@ -59,6 +59,17 @@ def _phase_label(phase) -> str:
     return _PHASE_LABELS.get(str(phase.value) if hasattr(phase, "value") else str(phase), str(phase))
 
 
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Chuẩn hoá naive→UTC (coi naive là UTC) để so sánh / số học datetime an
+    toàn khi trộn tz-naive và tz-aware. Giữ ĐÚNG chuẩn đã dùng ở B4
+    add_consultation: row legacy hoặc object chưa round-trip DB có thể tz-naive
+    dù cột DateTime(timezone=True); trộn với now aware sẽ raise TypeError. None
+    giữ None."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
 def _handle_lead_integrity_error(exc: IntegrityError) -> None:
     """Convert DB IntegrityError from lead unique indexes into DuplicateResourceError."""
     detail = str(exc.orig) if exc.orig else str(exc)
@@ -2603,14 +2614,16 @@ async def get_lead_timeline(
         c for c in (lead.consultations or []) if c.deleted_at is None
     ]
     now = datetime.now(timezone.utc)
+    # _as_utc trong key: consultation_date row legacy có thể tz-naive → so sánh
+    # trực tiếp với row aware trong max() raise TypeError (làm 500 cả /timeline).
     latest_id = (
-        max(live_consults, key=lambda c: (c.consultation_date, c.id)).id
+        max(live_consults, key=lambda c: (_as_utc(c.consultation_date), c.id)).id
         if live_consults
         else None
     )
     appt_consults = [c for c in live_consults if c.scheduled_at is not None]
     active_appointment_id = (
-        max(appt_consults, key=lambda c: (c.consultation_date, c.id)).id
+        max(appt_consults, key=lambda c: (_as_utc(c.consultation_date), c.id)).id
         if appt_consults
         else None
     )
@@ -5267,11 +5280,14 @@ def compute_consultation_action_permissions(
     is_author = consultation.officer_id == current_user.id
     # 24h anchor = created_at CÓ FALLBACK consultation_date (khớp
     # update_consultation:3201 — nếu không replicate fallback sẽ drift trên row
-    # created_at NULL).
-    anchor = consultation.created_at or consultation.consultation_date
+    # created_at NULL). _as_utc CẢ 2 vế: anchor (created_at/consultation_date) có
+    # thể tz-naive (row legacy / object chưa round-trip DB) → trừ với now aware
+    # raise TypeError (chuẩn B4). now cũng normalize phòng caller truyền naive.
+    _now = _as_utc(now)
+    anchor = _as_utc(consultation.created_at or consultation.consultation_date)
     within_24h = (
         anchor is not None
-        and (now - anchor).total_seconds() <= 24 * 60 * 60
+        and (_now - anchor).total_seconds() <= 24 * 60 * 60
     )
 
     def _verdict(check_24h: bool) -> tuple[bool, Optional[str]]:
