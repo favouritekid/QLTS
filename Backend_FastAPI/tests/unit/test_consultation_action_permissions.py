@@ -118,10 +118,34 @@ def test_reschedule_requires_active_appointment():
 
 
 def test_reschedule_false_when_cannot_edit():
-    """Officer không phải tác giả → can_edit False → can_reschedule False dù
-    is_active_appointment."""
+    """Officer không phải tác giả → can_delete False → can_reschedule False dù
+    is_active_appointment (can_reschedule = is_active AND can_delete)."""
     p = _perm(_consult(officer_id=77), _lead(2), _user(UserRole.OFFICER, 2), is_active=True)
     assert not p["can_reschedule"]
+
+
+def test_officer_can_reschedule_own_appointment_beyond_24h():
+    """#6: cuộc QUÁ 24h → can_edit False (không sửa nội dung) NHƯNG can_reschedule
+    True — officer dời/hủy lịch hẹn tương lai của CHÍNH MÌNH bất kể cuộc tạo bao
+    lâu (can_reschedule dùng verdict no-24h = can_delete, không phải can_edit)."""
+    p = _perm(_consult(officer_id=2, anchor=_OLD), _lead(2), _user(UserRole.OFFICER, 2), is_active=True)
+    assert not p["can_edit"] and p["edit_blocker"] == "expired_24h"
+    assert p["can_delete"]        # xóa không áp 24h
+    assert p["can_reschedule"]    # #6: dời/hủy không áp 24h
+
+
+# --- #1: hard-terminal (enrolled) → MỌI cờ False kể cả admin ---
+def test_hard_terminal_all_false_even_admin():
+    """#1: lead enrolled (hard-terminal) → can_edit/delete/reschedule đều False,
+    blocker 'hard_terminal' — khớp hard-block BE (hết hiện nút rồi ăn 400)."""
+    p = compute_consultation_action_permissions(
+        _consult(), _lead(5), _user(UserRole.ADMIN),
+        is_latest=True, is_active_appointment=True, now=_NOW,
+        is_hard_terminal=True,
+    )
+    assert not p["can_edit"] and not p["can_delete"] and not p["can_reschedule"]
+    assert p["edit_blocker"] == "hard_terminal"
+    assert p["delete_blocker"] == "hard_terminal"
 
 
 # --- vai trò khác (accountant) → mọi cờ False ---

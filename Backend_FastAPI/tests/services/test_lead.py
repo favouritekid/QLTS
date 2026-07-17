@@ -1392,6 +1392,49 @@ class TestConsultation:
         assert seeded_lead.pipeline_stage_id == stage_id               # ✅ stage GIỮ NGUYÊN
         assert seeded_lead.consultation_status_id == "sts_pipe_cxl"    # ✅ status lead giữ nguyên
 
+    async def test_officer_reschedule_own_appointment_beyond_24h_succeeds(
+        self,
+        db: AsyncSession,
+        seeded_lead: models.Lead,
+        officer_user: models.User,
+        seeded_dependencies: dict,
+    ):
+        """#6 (review): officer DỜI lịch hẹn (chỉ scheduled_at) của CHÍNH MÌNH dù
+        cuộc tạo >24h → THÀNH CÔNG. Trước fix: guard 24h chặn 'Ngoài giờ'. Cửa sổ
+        24h chỉ chặn sửa NỘI DUNG, không chặn quản lý lịch hẹn tương lai
+        (is_appointment_mgmt → check_24h=False)."""
+        stage_id = seeded_dependencies["stage_id"]
+        seeded_lead.assigned_officer_id = officer_user.id
+        seeded_lead.pipeline_stage_id = stage_id
+        db.add(seeded_lead)
+        old = datetime.now(timezone.utc) - timedelta(hours=30)  # >24h
+        c = models.Consultation(
+            lead_id=seeded_lead.id, officer_id=officer_user.id,
+            consultation_date=old, created_at=old,  # cuộc tạo >24h trước
+            scheduled_at=datetime.now(timezone.utc) + timedelta(days=2),
+            method="phone",
+            consultation_status_id=seeded_lead.consultation_status_id,
+        )
+        db.add(c)
+        await db.flush()
+
+        new_time = datetime.now(timezone.utc) + timedelta(days=5)
+
+        class _Resched:
+            def model_dump(self, **kwargs):
+                return {"scheduled_at": new_time}
+
+        with patch(
+            "app.services.lead_cache_service.update_lead_cache",
+            new_callable=AsyncMock,
+        ):
+            updated = await lead_service.update_consultation(
+                db, seeded_lead.id, c.id, _Resched(), officer_user
+            )
+            await db.flush()
+
+        assert updated.scheduled_at == new_time  # ✅ dời thành công dù cuộc >24h
+
     async def test_reschedule_consultation_changes_scheduled_at_only(
         self,
         db: AsyncSession,

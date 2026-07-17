@@ -222,20 +222,27 @@ async def test_restore_on_enrolled_lead_hard_blocked(
     assert reloaded_c.deleted_at is not None
 
 
-async def test_restore_on_soft_terminal_not_blocked_and_escapes(
+async def test_restore_on_soft_terminal_unrelated_keeps_terminal(
     db, seeded_dependencies, restore_statuses, manager_user
 ):
-    """Lead sts20-like (soft terminal). C1=PIPE_A (live). C2=PIPE_B (deleted, mới
-    hơn). Restore C2 → KHÔNG bị chặn (soft), helper thấy PIPE_B là latest pipeline
-    → lead THOÁT terminal về PIPE_B (bài học B5: không skip theo current-terminal)."""
+    """#4 (review): Lead soft-terminal (RS_TERM set TRỰC TIẾP trên lead — mô phỏng
+    auto-close SLA, KHÔNG có cuộc RS_TERM nào trong chuỗi). C1=PIPE_A (live).
+    C2=PIPE_B (deleted, mới hơn). Restore C2 (cuộc KHÔNG mang trạng thái terminal)
+    → KHÔNG bị chặn (soft) NHƯNG KHÔNG kéo lead ra khỏi terminal: thoát terminal
+    do auto-close PHẢI qua reopen, không qua khôi phục một cuộc lẻ. Lead GIỮ
+    RS_TERM. (Trước fix #4: lead sai lầm THOÁT về PIPE_B.)
+
+    Đối xứng: xóa/khôi phục ĐÚNG cuộc mang trạng thái terminal (== lead.status) thì
+    VẪN thoát được — xem test_restore_soft_terminal_still_latest_stays_terminal +
+    các test delete B5 (block_terminal_escape=False khi cuộc thao tác là definer)."""
     off = manager_user.id
     lead = await _make_lead(db, seeded_dependencies, off, "RS_TERM", "RS_STG_TERM")
     await _add_consult(db, lead.id, off, "RS_PIPE_A", 10)
     c_b = await _add_consult(db, lead.id, off, "RS_PIPE_B", 20, deleted=True)
 
     lead = await _restore_and_reload(db, lead.id, c_b.id, manager_user)
-    assert lead.consultation_status_id == "RS_PIPE_B"
-    assert lead.pipeline_stage_id == "RS_STG_B"
+    assert lead.consultation_status_id == "RS_TERM"
+    assert lead.pipeline_stage_id == "RS_STG_TERM"
 
 
 async def test_restore_soft_terminal_still_latest_stays_terminal(

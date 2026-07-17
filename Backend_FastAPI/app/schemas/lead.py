@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from ..core.constants import SYSTEM_CONSULTATION_METHOD
+from ..utils.tz import ensure_aware
 from .collaborator import CollaboratorShallow
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -71,7 +72,7 @@ class ConsultationCreate(ConsultationBase):
         if v is None:
             return v
         now = datetime.now(timezone.utc)
-        v_cmp = v if v.tzinfo is not None else v.replace(tzinfo=timezone.utc)
+        v_cmp = ensure_aware(v)  # #13: chuẩn naive→UTC dùng chung
         if v_cmp > now + timedelta(minutes=5):
             raise ValueError("Ngày tư vấn không được ở tương lai.")
         return v

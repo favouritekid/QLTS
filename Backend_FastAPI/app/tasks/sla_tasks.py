@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..celery_app import celery_app
 from ..config import settings
+from ..core.constants import SYSTEM_CONSULTATION_METHOD
 from .utils import task_db_session, run_async_task
 
 _default_log = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ async def close_stale_rejected_leads(
                             lead_id=lead.id,
                             officer_id=lead.assigned_officer_id,
                             consultation_status_id="sts20",
-                            method="system",
+                            method=SYSTEM_CONSULTATION_METHOD,
                             notes=(
                                 f"Hệ thống tự đóng: lead tồn ≥{days} ngày "
                                 "không phản hồi (Đã ngừng tư vấn)."

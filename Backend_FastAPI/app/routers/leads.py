@@ -1036,9 +1036,16 @@ async def get_lead_insights(
     request: Request,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
 ):
-    """Lấy các chỉ số insight 360 độ của một Lead (Đã xác thực quyền)."""
-    timeline = await lead_service.get_lead_timeline(db, lead.id)
+    """Lấy các chỉ số insight 360 độ của một Lead (Đã xác thực quyền).
+
+    #7: truyền current_user để 2 builder timeline (/timeline + /insights) đồng bộ
+    contract (cùng gắn cờ quyền). insights_service chỉ dùng dữ liệu cuộc, không
+    đọc cờ nên KHÔNG đổi output — vá lệch contract cho tương lai."""
+    timeline = await lead_service.get_lead_timeline(
+        db, lead.id, current_user=current_user
+    )
     return await insights_service.get_lead_insights(db, lead, timeline)
 
 

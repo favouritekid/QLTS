@@ -44,7 +44,7 @@ from ..core.admission_correction_constants import (
     HARD_DENY_FIELDS,
 )
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
-from ..core.constants import UserRole
+from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .admission_state_service import transition as state_transition
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
@@ -3626,7 +3626,7 @@ async def _create_admission_milestone_consultation(
         officer_id=officer_id,
         consultation_status_id=projection.consultation_status_id,
         consultation_date=datetime.now(timezone.utc),
-        method="system",  # ✅ Special marker for auto-generated records
+        method=SYSTEM_CONSULTATION_METHOD,  # ✅ Special marker for auto-generated records
         notes=note,
         duration_minutes=0,  # System consultations have no duration
     )
@@ -10972,7 +10972,7 @@ async def delete_profile(
         officer_id=current_user.id,
         consultation_status_id=_status_at_delete,
         consultation_date=datetime.now(timezone.utc),
-        method="system",
+        method=SYSTEM_CONSULTATION_METHOD,
         notes=_deletion_note,
         duration_minutes=0,
     )

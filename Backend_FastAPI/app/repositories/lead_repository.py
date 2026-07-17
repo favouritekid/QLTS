@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
 from app.repositories.base import BaseRepository
 
 
@@ -867,7 +868,9 @@ class LeadRepository(BaseRepository[models.Lead]):
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
-            models.Consultation.method.is_distinct_from("system"),  # B7 + B8b
+            models.Consultation.method.is_distinct_from(
+                SYSTEM_CONSULTATION_METHOD
+            ),  # B7 + B8b
         )
 
         stats_result = await self.db.execute(stats_query)
@@ -1202,13 +1205,21 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def get_latest_consultation(
         self,
-        lead_id: int
+        lead_id: int,
+        exclude_system: bool = True,
     ) -> Optional[models.Consultation]:
         """
         Get the most recent consultation for a lead.
 
         Args:
             lead_id: Lead ID
+            exclude_system: bỏ cuộc ``method='system'`` (auto-close / reopen do hệ
+                thống chèn). Mặc định True vì "latest" ở đây phục vụ QUYỀN SỬA/XÓA
+                của officer (chain-integrity) + phát hiện backdate (B4) — cuộc
+                system KHÔNG phải mắt xích tư vấn của officer. Nếu tính là latest
+                thì sau mỗi lần reopen (chèn cuộc system sts04 date=now) officer
+                MẤT quyền sửa/xóa chính cuộc thật của mình (review #2). Đối xứng
+                B7/B8: system bị loại khỏi mọi metric dẫn xuất.
 
         Returns:
             Most recent Consultation or None (excludes soft-deleted)
@@ -1225,6 +1236,13 @@ class LeadRepository(BaseRepository[models.Lead]):
             )
             .limit(1)
         )
+        if exclude_system:
+            # is_distinct_from = NULL-safe (method NULL vẫn tính là cuộc thật).
+            query = query.where(
+                models.Consultation.method.is_distinct_from(
+                    SYSTEM_CONSULTATION_METHOD
+                )
+            )
         result = await self.db.execute(query)
         return result.scalars().first()
 

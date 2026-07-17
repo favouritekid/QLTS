@@ -261,3 +261,28 @@ async def test_terminal_causing_delete_only_universal_keeps_terminal(
     # Accepted risk: toàn universal → giữ nguyên state → lead vẫn terminal.
     assert lead.consultation_status_id == "RV_TERM"
     assert lead.pipeline_stage_id == "STG_TERM"
+
+
+# ===========================================================================
+# #4 (review) — lead pinned terminal (auto-close trực tiếp, KHÔNG có cuộc TERM
+# trong chuỗi) + xóa cuộc KHÔNG mang trạng thái terminal → GIỮ terminal (thoát
+# phải qua reopen). Đối lập B5 (xóa ĐÚNG cuộc TERM vẫn thoát).
+# ===========================================================================
+
+
+async def test_delete_unrelated_on_pinned_terminal_keeps_terminal(
+    db, seeded_dependencies, revert_statuses, manager_user
+):
+    """#4: Lead pinned TERM (set trực tiếp, mô phỏng auto-close SLA — KHÔNG có cuộc
+    RV_TERM trong chuỗi). C1=PIPE_A (10). C2=PIPE_B (20, mới hơn — cuộc active
+    'soft-blocked'). Xóa C1 (cuộc KHÔNG mang trạng thái terminal) → chuỗi còn PIPE_B
+    (non-terminal, mới nhất) NHƯNG lead KHÔNG bị kéo ra khỏi terminal: thoát terminal
+    do auto-close PHẢI qua reopen. Lead GIỮ TERM. (Trước fix #4: revert sai về PIPE_B.)"""
+    off = manager_user.id
+    lead = await _make_lead(db, seeded_dependencies, off, "RV_TERM", "STG_TERM")
+    c_a = await _add_consult(db, lead.id, off, "RV_PIPE_A", 10)
+    await _add_consult(db, lead.id, off, "RV_PIPE_B", 20)  # active, mới hơn
+
+    lead = await _delete_and_reload(db, lead.id, c_a.id, manager_user)
+    assert lead.consultation_status_id == "RV_TERM"
+    assert lead.pipeline_stage_id == "STG_TERM"
