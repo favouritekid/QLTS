@@ -41,6 +41,12 @@ from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
 
+# F1: method của consultation do hệ thống tạo (auto-close SLA, reopen, …). Các
+# ghi nhận này BẤT BIẾN — không vai trò nào (kể cả admin) được sửa/xóa/khôi
+# phục. Hằng gom lại thay cho chuỗi "system" hardcode rải rác (officer_repository,
+# kpi_planning_service, drilldown_service, historical_metrics_service).
+SYSTEM_CONSULTATION_METHOD = "system"
+
 # Phase labels for user-facing error messages
 _PHASE_LABELS = {
     "consultation": "Tư vấn",
@@ -2731,6 +2737,14 @@ async def delete_consultation(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
                 )
 
+            # F1: consultation do hệ thống tạo (method='system') là BẤT BIẾN —
+            # chặn TRƯỚC nhánh role để mọi vai trò (kể cả admin) đều không xóa
+            # được. Fail-fast, không giữ lock lâu.
+            if consultation.method == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail="Không thể sửa/xóa ghi nhận do hệ thống tạo."
+                )
+
             # Kiểm tra quyền
             if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
                 # ✅ FIX: Admin và Manager có quyền xóa bất kỳ consultation nào
@@ -2956,6 +2970,14 @@ async def restore_consultation(
                     detail=f"Deleted consultation with id {consultation_id} not found."
                 )
 
+            # F1: consultation do hệ thống tạo (method='system') là BẤT BIẾN —
+            # chặn TRƯỚC nhánh role để mọi vai trò (kể cả admin) đều không khôi
+            # phục được.
+            if consultation.method == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail="Không thể khôi phục ghi nhận do hệ thống tạo."
+                )
+
             # Permission check
             if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
                 pass  # Admin/Manager can restore any
@@ -3123,6 +3145,14 @@ async def update_consultation(
             if consultation.deleted_at is not None:
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
+                )
+
+            # F1: consultation do hệ thống tạo (method='system') là BẤT BIẾN —
+            # chặn TRƯỚC get_latest_consultation (tiết kiệm 1 query) và TRƯỚC
+            # nhánh role để mọi vai trò (kể cả admin) đều không sửa được.
+            if consultation.method == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail="Không thể sửa/xóa ghi nhận do hệ thống tạo."
                 )
 
             # ✅ FIX: Single check for latest consultation (eliminates TOCTOU vulnerability)
