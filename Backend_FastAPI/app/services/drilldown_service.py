@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app import models
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
 
 
 def _parse_iso_date(value: Optional[str]) -> Optional[date_type]:
@@ -178,9 +179,11 @@ async def get_consultations_drilldown(
     if loss_reason_code:
         conditions.append(models.Consultation.loss_reason_code == loss_reason_code)
     if effective_kind == "human":
-        conditions.append(models.Consultation.method.is_distinct_from("system"))
+        conditions.append(
+            models.Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD)
+        )
     elif effective_kind == "system":
-        conditions.append(models.Consultation.method == "system")
+        conditions.append(models.Consultation.method == SYSTEM_CONSULTATION_METHOD)
     if response_breach_only:
         conditions.extend([
             models.Lead.assigned_at.isnot(None),

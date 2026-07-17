@@ -276,6 +276,15 @@ export interface Consultation {
   loss_reason_code?: string | null;
   loss_reason_note?: string | null;
 
+  // Nhóm 4: cờ quyền thin-client do BE tính (get_lead_timeline). FE gate nút
+  // Sửa/Xóa/Dời-Hủy THUẦN theo cờ, KHÔNG đọc user.role. Optional → thiếu (vd
+  // response create/update trần) coi như false → ẩn nút (fail-safe).
+  can_edit?: boolean;
+  can_delete?: boolean;
+  can_reschedule?: boolean;
+  edit_blocker?: string | null;
+  delete_blocker?: string | null;
+
   // Relationships
   officer?: User | null;
   consultation_status?: ConsultationStatus | null;

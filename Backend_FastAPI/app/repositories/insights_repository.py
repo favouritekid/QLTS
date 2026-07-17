@@ -13,6 +13,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
 from app.repositories.base import BaseRepository
 from app.config import settings
 
@@ -91,6 +92,10 @@ class InsightsRepository(BaseRepository[models.Lead]):
             models.Consultation.lead_id == lead_id,
             models.Consultation.consultation_date <= now,
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+            # B7b: loại cuộc do hệ thống tạo khỏi engagement (count + recency).
+            # Recency ở đây feed insights_service, KHÔNG phải cache SLA nên lọc
+            # cả WHERE an toàn. Lead chỉ có cuộc system → total_count=0 → trả None.
+            models.Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD),
         )
         
         result = await self.db.execute(stmt)

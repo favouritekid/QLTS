@@ -1011,27 +1011,46 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         lead_id: int
     ) -> Optional[models.Consultation]:
         """
-        Get the latest consultation for a lead (by consultation_date).
+        Get the latest consultation for a lead (by consultation_date) — DÙNG CHO
+        ADMISSION ELIGIBILITY (admission_service.py:1662).
 
         ✅ EDGE CASE #9 FIX: Validate consultation completeness before admission.
+
+        🔴 review#2 fix#4 — PARITY VỚI LeadRepository.get_latest_consultation LÀ CÓ
+        CHỦ ĐÍCH KHÁC NHAU, KHÔNG PHẢI BUG:
+          - ORDERING đồng nhất (consultation_date DESC, id DESC) — tie-break B4b.
+          - SYSTEM-FILTER KHÁC: hàm này CỐ Ý GỒM cuộc method='system' (reopen/
+            auto-close/milestone), còn LeadRepository.get_latest_consultation
+            (exclude_system=True mặc định) LOẠI chúng. Vì eligibility nhập học
+            (decision ②) VẪN tính cuộc system (nó luôn có status → nới lỏng check
+            'no_consultation'/'consultation_missing_status', chỉ chặn nếu status
+            is_universal). Nếu sau muốn eligibility bỏ system → đổi nghiệp vụ MỚI,
+            phải mở lại decision ②, KHÔNG âm thầm ở đây.
 
         Args:
             lead_id: Lead ID
 
         Returns:
-            Latest Consultation with status loaded, or None if no consultations
+            Latest Consultation (GỒM system) with status loaded, or None
         """
         stmt = (
             select(models.Consultation)
             .where(
                 models.Consultation.lead_id == lead_id,
                 models.Consultation.deleted_at.is_(None)  # Exclude soft-deleted
+                # (GỒM system — xem docstring #4)
             )
             .options(
                 joinedload(models.Consultation.consultation_status),
                 joinedload(models.Consultation.officer),
             )
-            .order_by(models.Consultation.consultation_date.desc())
+            # B4b: tie-break id.desc() (ORDERING đồng nhất LeadRepository +
+            # _resolve_revert_target). Cùng consultation_date (add dùng now()) mà
+            # thiếu tie-break → thứ tự do Postgres quyết định.
+            .order_by(
+                models.Consultation.consultation_date.desc(),
+                models.Consultation.id.desc(),
+            )
             .limit(1)
         )
         result = await self.db.execute(stmt)

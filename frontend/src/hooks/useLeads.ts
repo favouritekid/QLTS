@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { leadsApi } from "@/lib/api/leads";
 import { api } from "@/lib/api/client";
 import { workflowContextKeys } from "@/hooks/useWorkflowContext";
+import { myAppointmentsKey } from "@/hooks/useMyAppointments";
 import type { ApiErrorResponse } from "@/types/api.types";
 import type { ReopenRequestItem } from "@/lib/api/leads";
 import type {
@@ -99,6 +100,58 @@ const invalidateLeadQueries = (
 
   return Promise.all(invalidations);
 };
+
+/**
+ * Invalidate + AWAIT mọi query mà một mutation consultation có thể ảnh hưởng.
+ *
+ * FE6/FE7 (consultation-hardening): các hook consultation trước đây (a) BỎ SÓT
+ * `myAppointmentsKey` → widget "Nhịp hẹn" của officer stale tới 60s sau khi
+ * thêm/sửa/dời lịch hẹn, và (b) chỉ `await` mỗi lần invalidate detail, phần còn
+ * lại fire-and-forget → dễ đọc snapshot cũ ngay sau mutation
+ * ([[react-stale-snapshot-and-await-invalidate]]). Gom về một chỗ để await-all
+ * mang tính cấu trúc.
+ *
+ * @param statusChanged - mutation có làm lead ĐỔI giai đoạn tư vấn không. false
+ *   (sửa ghi chú / chỉ dời lịch) → vẫn refresh lists + Nhịp hẹn (thẻ lead + lịch
+ *   hẹn đổi) nhưng BỎ QUA pipeline board + workflow-context (nặng, không đổi).
+ */
+async function invalidateAfterConsultationMutation(
+  queryClient: ReturnType<typeof useQueryClient>,
+  leadId: number,
+  { statusChanged }: { statusChanged: boolean }
+) {
+  const invalidations: Promise<void>[] = [
+    queryClient.invalidateQueries({
+      queryKey: leadsKeys.detail(leadId),
+      exact: true,
+      refetchType: "active",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: leadsKeys.timeline(leadId),
+      exact: true,
+      refetchType: "active",
+    }),
+    // Thẻ lead trong list mang last_consultation_at / consultation_count / chip
+    // trạng thái; widget "Nhịp hẹn" re-bucket khi có/đổi lịch hẹn. myAppointmentsKey
+    // KHÔNG nằm dưới leadsKeys.lists() nên phải invalidate riêng.
+    queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: "active" }),
+    queryClient.invalidateQueries({ queryKey: myAppointmentsKey, refetchType: "active" }),
+  ];
+
+  if (statusChanged) {
+    // ["pipeline"] trần phủ CẢ board LẪN ["pipeline","allowedNextStatuses"].
+    invalidations.push(
+      queryClient.invalidateQueries({ queryKey: ["pipeline"], refetchType: "active" }),
+      queryClient.invalidateQueries({
+        queryKey: workflowContextKeys.byLead(leadId),
+        exact: true,
+        refetchType: "active",
+      })
+    );
+  }
+
+  await Promise.all(invalidations);
+}
 
 // =====================================================================
 // QUERIES (READ) - LEADS
@@ -802,39 +855,11 @@ export function useAddConsultation() {
         toast.warning(result.terminal_guard_reason, { duration: 6000 });
       }
 
-      // ✅ FIX: Invalidate queries with exact: true to prevent cascade
-      // Using invalidateQueries instead of refetchQueries to let React Query
-      // handle deduplication and prevent multiple refetches
-      await queryClient.invalidateQueries({
-        queryKey: leadsKeys.detail(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      // Invalidate timeline separately (different query key structure)
-      queryClient.invalidateQueries({
-        queryKey: leadsKeys.timeline(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      // Invalidate lists (background refresh)
-      queryClient.invalidateQueries({
-        queryKey: leadsKeys.lists(),
-        refetchType: 'active'
-      });
-
-      // ✅ FIX: Only invalidate allowedNextStatuses for this specific lead
-      queryClient.invalidateQueries({
-        queryKey: ["pipeline", "allowedNextStatuses"],
-        refetchType: 'active'
-      });
-
-      // ✅ FIX BUG-17: Invalidate workflow context so current_phase/allowed_statuses refresh
-      queryClient.invalidateQueries({
-        queryKey: workflowContextKeys.byLead(leadId),
-        exact: true,
-        refetchType: 'active'
+      // FE6/FE7: refresh + await tất cả query bị ảnh hưởng (gồm widget "Nhịp
+      // hẹn"). Chỉ đụng pipeline/workflow khi lead THỰC SỰ đổi giai đoạn
+      // (result.status_updated = nguồn sự thật từ BE — thin-client).
+      await invalidateAfterConsultationMutation(queryClient, leadId, {
+        statusChanged: result.status_updated,
       });
     },
 
@@ -1063,32 +1088,12 @@ export function useUpdateConsultation() {
     onSuccess: async (_consultation, { leadId, data }) => {
       toast.success("Cập nhật tư vấn thành công!");
 
-      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
-      await queryClient.invalidateQueries({
-        queryKey: leadsKeys.detail(leadId),
-        exact: true,
-        refetchType: 'active'
+      // FE6/FE7: luôn refresh detail+timeline+lists+Nhịp hẹn (dời lịch / sửa ghi
+      // chú vẫn đổi thẻ lead + lịch hẹn); chỉ đụng pipeline/workflow khi ĐỔI
+      // trạng thái. data.status_id chỉ có mặt khi khác trạng thái hiện tại (FE5).
+      await invalidateAfterConsultationMutation(queryClient, leadId, {
+        statusChanged: !!data.status_id,
       });
-
-      queryClient.invalidateQueries({
-        queryKey: leadsKeys.timeline(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      // ✅ OPTIMIZED: Only invalidate pipeline if status was updated
-      const statusChanged = !!data.status_id;
-      if (statusChanged) {
-        queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-        queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
-
-        // ✅ FIX BUG-17: Invalidate workflow context when status changes
-        queryClient.invalidateQueries({
-          queryKey: workflowContextKeys.byLead(leadId),
-          exact: true,
-          refetchType: 'active'
-        });
-      }
     },
 
     onError: (error) => {
@@ -1128,34 +1133,19 @@ export function useDeleteConsultation() {
     },
 
     onSuccess: async (_, { leadId, consultationId }) => {
-      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
-      await queryClient.invalidateQueries({
-        queryKey: leadsKeys.detail(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      queryClient.invalidateQueries({
-        queryKey: leadsKeys.timeline(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      // Invalidate lists and pipeline
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
-
-      // ✅ FIX BUG-17: Invalidate workflow context (delete may change workflow state)
-      queryClient.invalidateQueries({
-        queryKey: workflowContextKeys.byLead(leadId),
-        exact: true,
-        refetchType: 'active'
+      // FE6/FE7: xóa cuộc mới nhất có thể revert giai đoạn lead (B1/B2 BE) →
+      // statusChanged=true để refresh cả pipeline/workflow.
+      await invalidateAfterConsultationMutation(queryClient, leadId, {
+        statusChanged: true,
       });
 
       // ✅ UNDO TOAST: Show toast with undo button for 10 seconds
       toast.success("Đã xóa ghi nhận tư vấn", {
         description: "Bấm Hoàn tác để khôi phục",
         duration: 10000, // 10 seconds
+        // #7 (review-2): pointer-events:auto cho nút "Hoàn tác" giờ đặt GLOBAL ở
+        // providers.tsx (toastOptions.classNames.actionButton) — nhất quán với
+        // mọi action toast khác, không còn className lẻ trên cả toast.
         action: {
           label: "Hoàn tác",
           onClick: async () => {
@@ -1163,15 +1153,9 @@ export function useDeleteConsultation() {
               await leadsApi.restoreConsultation(leadId, consultationId);
               toast.success("Đã khôi phục ghi nhận tư vấn");
               // Refresh data after restore
-              await queryClient.invalidateQueries({
-                queryKey: leadsKeys.detail(leadId),
-                exact: true,
-                refetchType: 'active'
+              await invalidateAfterConsultationMutation(queryClient, leadId, {
+                statusChanged: true,
               });
-              queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
-              queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-              queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
-              queryClient.invalidateQueries({ queryKey: workflowContextKeys.byLead(leadId), exact: true, refetchType: 'active' });
             } catch {
               toast.error("Không thể khôi phục", {
                 description: "Vui lòng thử lại hoặc liên hệ admin",
@@ -1219,22 +1203,10 @@ export function useRestoreConsultation() {
     onSuccess: async (_, { leadId }) => {
       toast.success("Đã khôi phục ghi nhận tư vấn");
 
-      // ✅ FIX: Use invalidateQueries with exact: true to prevent cascade
-      await queryClient.invalidateQueries({
-        queryKey: leadsKeys.detail(leadId),
-        exact: true,
-        refetchType: 'active'
-      });
-
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId), exact: true, refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
-      queryClient.invalidateQueries({ queryKey: ["pipeline", "allowedNextStatuses"], refetchType: 'active' });
-
-      // ✅ FIX BUG-17: Invalidate workflow context (restore may change workflow state)
-      queryClient.invalidateQueries({
-        queryKey: workflowContextKeys.byLead(leadId),
-        exact: true,
-        refetchType: 'active'
+      // FE6/FE7: khôi phục cuộc có thể đổi lại giai đoạn lead (B2 BE) →
+      // statusChanged=true.
+      await invalidateAfterConsultationMutation(queryClient, leadId, {
+        statusChanged: true,
       });
     },
 

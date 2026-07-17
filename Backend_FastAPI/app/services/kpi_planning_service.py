@@ -18,6 +18,7 @@ import structlog
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
 from app.models.config import KpiPlan, KpiPlanMonth
 from app.services.calendar_service import count_working_days, get_working_days_override
 from app.utils.exceptions import BusinessRuleViolation, ResourceNotFoundError, DuplicateResourceError
@@ -1749,7 +1750,7 @@ async def fill_month_actuals(
         .join(Lead, Consultation.lead_id == Lead.id)
         .where(
             Consultation.deleted_at.is_(None),
-            Consultation.method.is_distinct_from("system"),
+            Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD),
             Consultation.consultation_date >= month_start,
             Consultation.consultation_date < month_end,
             Lead.unit_id == unit_id,
@@ -1793,7 +1794,7 @@ async def fill_month_actuals(
             Lead.updated_at >= month_start, Lead.updated_at < month_end,
             PipelineStage.is_final_stage == True,  # noqa: E712
             Consultation.deleted_at.is_(None),
-            Consultation.method.is_distinct_from("system"),
+            Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD),
         )
     )).scalar_one()
     pm.actual_consultation_effectiveness = (
@@ -1820,7 +1821,7 @@ async def fill_month_actuals(
                 Lead.assigned_at >= month_start, Lead.assigned_at < month_end,
                 Lead.assigned_officer_id.isnot(None),
                 Consultation.deleted_at.is_(None),
-                Consultation.method.is_distinct_from("system"),
+                Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD),
                 # First consultation must be AFTER assignment AND within SLA window
                 Consultation.consultation_date >= Lead.assigned_at,
                 Consultation.consultation_date <= Lead.assigned_at + func.make_interval(

@@ -1,9 +1,11 @@
 # app/schemas/lead.py
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from ..core.constants import SYSTEM_CONSULTATION_METHOD
+from ..utils.tz import ensure_aware
 from .collaborator import CollaboratorShallow
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -16,8 +18,28 @@ from .user import User
 # -----------------
 
 
+def _reject_system_method(cls, v: Optional[str]) -> Optional[str]:
+    """🔴 SECURITY (sentinel reservation): cấm client đặt method = giá trị dành
+    riêng cho hệ thống. Cuộc 'system' bất biến (F1) + ẩn khỏi metrics (B7/B8) →
+    spoof = tạo/biến row thành bất biến, ẩn KPI, kẹt cả admin. Dùng chung cho
+    ConsultationCreate (create-spoof) và ConsultationUpdate (normal→system).
+    Chỉ đặt trên write-schema — response Consultation.method KHÔNG dính
+    (memory pydantic-validator-on-base-hits-response-schema)."""
+    if v is not None and v == SYSTEM_CONSULTATION_METHOD:
+        raise ValueError(
+            f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị dành riêng cho "
+            "hệ thống, không được đặt."
+        )
+    return v
+
+
 class ConsultationBase(BaseModel):
-    method: Optional[str] = "phone"  # Default to phone
+    # B6a: max_length=50 khớp cột DB Consultation.method = String(50) (trước đây
+    # > 50 ký tự lọt Pydantic → chết ở DB/500). KHÔNG thêm min_length: schema này
+    # là base của response Consultation, min_length=1 sẽ 500 nếu có row legacy
+    # method rỗng (memory pydantic-validator-on-base-hits-response-schema).
+    # max_length an toàn vì cột String(50) nên response luôn ≤ 50.
+    method: Optional[str] = Field("phone", max_length=50)  # Default to phone
     notes: Optional[str] = Field(None, strip_whitespace=True)
     duration_minutes: Optional[int] = None
 
@@ -38,13 +60,33 @@ class ConsultationCreate(ConsultationBase):
         description="Additional note for loss reason"
     )
 
+    @field_validator("consultation_date")
+    @classmethod
+    def _consultation_date_not_future(
+        cls, v: Optional[datetime]
+    ) -> Optional[datetime]:
+        """B6b: cấm ngày tư vấn ở tương lai. Cho lệch nhỏ (clock skew client) để
+        không chặn oan; chỉ chặn tương lai rõ rệt. Chỉ đặt trên write-schema
+        (ConsultationCreate) — response Consultation.consultation_date không dính
+        (memory pydantic-validator-on-base-hits-response-schema)."""
+        if v is None:
+            return v
+        now = datetime.now(timezone.utc)
+        v_cmp = ensure_aware(v)  # #13: chuẩn naive→UTC dùng chung
+        if v_cmp > now + timedelta(minutes=5):
+            raise ValueError("Ngày tư vấn không được ở tương lai.")
+        return v
+
+    _method_not_reserved = field_validator("method")(_reject_system_method)
+
 
 class ConsultationUpdate(BaseModel):
     """
     Schema for updating a consultation.
     All fields are optional - only provided fields will be updated.
     """
-    method: Optional[str] = None
+    # B6a: max_length=50 khớp cột DB (write-only schema, không phải response).
+    method: Optional[str] = Field(None, max_length=50)
     notes: Optional[str] = Field(None, strip_whitespace=True)
     duration_minutes: Optional[int] = None
     status_id: Optional[str] = None
@@ -61,6 +103,8 @@ class ConsultationUpdate(BaseModel):
         description="Additional note for loss reason"
     )
 
+    _method_not_reserved = field_validator("method")(_reject_system_method)
+
 
 class Consultation(ConsultationBase):
     id: int
@@ -73,6 +117,15 @@ class Consultation(ConsultationBase):
     # Loss reason — stored directly on Consultation (source of truth)
     loss_reason_code: Optional[str] = None
     loss_reason_note: Optional[str] = None
+    # Nhóm 4: cờ quyền thin-client — BE tính (compute_consultation_action_
+    # permissions), FE gate nút Sửa/Xóa/Dời-Hủy THUẦN theo cờ, KHÔNG đọc
+    # user.role. Mặc định False/None (fail-safe: model_validate ORM trần mà quên
+    # set → FE ẩn nút). get_lead_timeline set per-cuộc khi có current_user.
+    can_edit: bool = False
+    can_delete: bool = False
+    can_reschedule: bool = False
+    edit_blocker: Optional[str] = None
+    delete_blocker: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

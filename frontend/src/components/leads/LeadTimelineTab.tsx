@@ -28,7 +28,6 @@ import {
 } from "lucide-react";
 import { useLeadTimeline, useDeleteConsultation, useUpdateConsultation } from "@/hooks/useLeads";
 import { useConsultationStatuses } from "@/hooks/usePipeline";
-import { useAuthStore } from "@/lib/stores/auth.store";
 import { useClientNow } from "@/hooks/useClientNow";
 import { DateTimePicker } from "@/components/common/form";
 import {
@@ -226,7 +225,6 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   const effectiveLimit = limit ?? maxItems;
   const deleteMutation = useDeleteConsultation();
   const updateMutation = useUpdateConsultation();
-  const { user } = useAuthStore();
   const { data: allStatuses = [] } = useConsultationStatuses();
   // Hydration-safe client time (null khi SSR) — gate hiển thị action theo "hẹn tương lai".
   const now = useClientNow();
@@ -418,29 +416,14 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
   const visibleTimeline = hasLimit ? sortedTimeline.slice(0, maxItems) : sortedTimeline;
   const remainingItems = Math.max(0, totalItems - visibleTimeline.length);
 
-  // Quyền thao tác lịch hẹn: officer chỉ sửa được consultation MỚI NHẤT (khớp
-  // BE leads.py:1091 → tránh bấm rồi ăn 403); manager/admin sửa bất kỳ.
-  const userRole = user?.role;
-  const isPrivilegedActor = userRole === "admin" || userRole === "manager";
   // Status "Đã hủy lịch hẹn" (sts19) — không hardcode, lấy động từ catalog.
   const cancelStatusId = allStatuses.find(
     (s) => s.id === "sts19" || s.name === "Đã hủy lịch hẹn",
   )?.id;
-  // Consultation mới nhất của lead (theo consultation_date) — để gate officer.
-  const latestConsultationId = (() => {
-    let best: { id: number; t: number } | null = null;
-    for (const ev of timeline as TimelineItem[]) {
-      const et = ev.type || "";
-      const d = ev.data as Consultation | undefined;
-      const isConsult =
-        et === "consultation" || et === "consultation_added" || et === "consultation_updated";
-      if (isConsult && d?.id && d?.consultation_date) {
-        const ms = new Date(d.consultation_date).getTime();
-        if (!best || ms > best.t) best = { id: d.id, t: ms };
-      }
-    }
-    return best?.id ?? null;
-  })();
+  // Nhóm 6 (thin-client): nút Sửa/Xóa/Dời-Hủy gate THUẦN theo cờ BE
+  // (consultData.can_edit / can_delete / can_reschedule). Đã bỏ role-check
+  // (isPrivilegedActor) + latestConsultationId client-side: cờ BE đã mã hoá
+  // method≠system / is_latest / author / 24h / active-appointment.
 
   // Relative "time ago" — hydration-safe: absolute on SSR (now===null), relative
   // on client. Tabular mono rendering keeps the time column aligned like a log.
@@ -588,12 +571,12 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           const itemKey = `${event.type}-${event.timestamp}-${itemId ?? index}`;
           const isLast = index === visibleTimeline.length - 1;
 
-          // Lịch hẹn: chỉ cho thao tác khi hẹn ở TƯƠNG LAI (client-time) + có quyền.
+          // Lịch hẹn: isFutureAppt CHỈ để highlight pill (hẹn tương lai) — KHÔNG
+          // còn gate nút. Nút Dời/Hủy gate thuần theo cờ can_reschedule (BE).
           const schedMs = consultData?.scheduled_at
             ? new Date(consultData.scheduled_at).getTime()
             : null;
           const isFutureAppt = now !== null && schedMs !== null && schedMs > now;
-          const canActOnAppt = isPrivilegedActor || consultData?.id === latestConsultationId;
 
           const durationMin =
             consultData?.duration_minutes && consultData.duration_minutes > 0
@@ -654,8 +637,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     {formatWhen(event.timestamp || "")}
                   </time>
 
-                  {/* Overflow menu: Sửa / Xóa (lịch hẹn có control riêng bên dưới) */}
-                  {isConsultation && consultData?.id && (
+                  {/* Overflow menu: Sửa / Xóa — gate THUẦN theo cờ BE (thin-client).
+                      Cuộc system / không đủ quyền → cờ false → ẩn cả menu. */}
+                  {isConsultation && consultData?.id &&
+                    (consultData.can_edit || consultData.can_delete) && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -667,17 +652,21 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleEditConsultation(consultData)}>
-                          <Edit className="mr-2 h-4 w-4" />
-                          Sửa
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => handleDeleteConsultation(consultData.id)}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Xóa
-                        </DropdownMenuItem>
+                        {consultData.can_edit && (
+                          <DropdownMenuItem onClick={() => handleEditConsultation(consultData)}>
+                            <Edit className="mr-2 h-4 w-4" />
+                            Sửa
+                          </DropdownMenuItem>
+                        )}
+                        {consultData.can_delete && (
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => handleDeleteConsultation(consultData.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Xóa
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
@@ -760,7 +749,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                         Hẹn {format(parseISO(consultData.scheduled_at), "HH:mm dd/MM")}
                       </span>
                     </span>
-                    {isFutureAppt && canActOnAppt && consultData?.id && (
+                    {consultData?.can_reschedule && consultData?.id && (
                       <span className="ml-auto flex gap-1.5">
                         <button
                           type="button"
@@ -815,9 +804,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
+              disabled={deleteMutation.isPending}
               className="bg-error-600 hover:bg-error-700"
             >
-              Xóa
+              {deleteMutation.isPending ? "Đang xóa…" : "Xóa"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -837,10 +827,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             <AlertDialogCancel>Không</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmCancelAppointment}
-              disabled={!cancelStatusId}
+              disabled={!cancelStatusId || updateMutation.isPending}
               className="bg-error-600 hover:bg-error-700"
             >
-              Hủy lịch hẹn
+              {updateMutation.isPending ? "Đang hủy…" : "Hủy lịch hẹn"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -880,8 +870,11 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             >
               Hủy
             </Button>
-            <Button onClick={confirmReschedule} disabled={!rescheduleDate}>
-              Lưu
+            <Button
+              onClick={confirmReschedule}
+              disabled={!rescheduleDate || updateMutation.isPending}
+            >
+              {updateMutation.isPending ? "Đang lưu…" : "Lưu"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -18,6 +18,7 @@ import structlog
 from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
 from app.models.lead import Consultation, Lead
 from app.models.pipeline import ConsultationStatus, PipelineStage
 
@@ -118,7 +119,7 @@ async def get_historical_k_factor(
             Consultation.consultation_date >= start,
             Consultation.consultation_date < end,
             Consultation.deleted_at.is_(None),
-            Consultation.method.is_distinct_from("system"),
+            Consultation.method.is_distinct_from(SYSTEM_CONSULTATION_METHOD),
         ]
         if officer_id is not None:
             consult_filters.append(Consultation.officer_id == officer_id)

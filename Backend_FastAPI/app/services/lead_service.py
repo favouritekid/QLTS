@@ -28,7 +28,8 @@ from ..core.status_mapping import (
     is_consultation_terminal_status,
     is_lead_consultation_terminal,
 )
-from ..core.constants import UserRole
+from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
+from ..utils.tz import ensure_aware
 from .status_helper import StatusHelper, AssignmentStatus
 from .assignment_reason import build_assignment_reason
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
@@ -40,6 +41,10 @@ from .notification_dispatcher import dispatch
 from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
+
+# SYSTEM_CONSULTATION_METHOD nay ở app.core.constants (nguồn dùng chung schema +
+# service; xem docstring ở đó). Re-export qua import trên để lead_reopen_service
+# và các module cũ `from .lead_service import SYSTEM_CONSULTATION_METHOD` không vỡ.
 
 # Phase labels for user-facing error messages
 _PHASE_LABELS = {
@@ -53,6 +58,48 @@ _PHASE_LABELS = {
 def _phase_label(phase) -> str:
     """Return Vietnamese label for a LeadPhase enum value."""
     return _PHASE_LABELS.get(str(phase.value) if hasattr(phase, "value") else str(phase), str(phase))
+
+
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Chuẩn hoá naive→UTC (coi naive là UTC) để so sánh / số học datetime an
+    toàn khi trộn tz-naive và tz-aware. Giữ ĐÚNG chuẩn đã dùng ở B4
+    add_consultation: row legacy hoặc object chưa round-trip DB có thể tz-naive
+    dù cột DateTime(timezone=True); trộn với now aware sẽ raise TypeError.
+
+    #13: mỏng hoá quanh ``utils.tz.ensure_aware`` (thân byte-identical) + thêm
+    None-guard — MỘT nguồn chuẩn naive→UTC, hết bản sao rải rác."""
+    return None if dt is None else ensure_aware(dt)
+
+
+def _pick_active_appointment_id(
+    consultations: List[models.Consultation],
+) -> Optional[int]:
+    """ID hẹn PENDING SỚM NHẤT (MIN scheduled_at) — cuộc DUY NHẤT được Dời/Hủy.
+    Pending = còn sống (deleted_at None) + có ``scheduled_at`` + status non-final +
+    KHÔNG phải cancel (sts19). Tie-break ``(consultation_date, id)`` khớp
+    ``next_activity_at`` / ``_earliest_pending_scheduled`` (đều MIN).
+
+    NGUỒN DUY NHẤT của 'active appointment' — dùng chung bởi ``get_lead_timeline``
+    (cờ ``can_reschedule``) VÀ ``update_consultation`` (gate miễn cửa sổ 24h #6) →
+    cờ FE và guard KHÔNG drift. YÊU CẦU ``consultation_status`` đã eager-load."""
+    from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
+
+    pending = [
+        c
+        for c in consultations
+        if c.deleted_at is None
+        and c.scheduled_at is not None
+        and not (
+            c.consultation_status is not None and c.consultation_status.is_final
+        )
+        and c.consultation_status_id not in CANCELLED_FOLLOWUP_STATUS_IDS
+    ]
+    if not pending:
+        return None
+    return min(
+        pending,
+        key=lambda c: (_as_utc(c.scheduled_at), _as_utc(c.consultation_date), c.id),
+    ).id
 
 
 def _handle_lead_integrity_error(exc: IntegrityError) -> None:
@@ -1996,10 +2043,16 @@ async def add_consultation(
     CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
     when multiple requests try to update the same lead's pipeline_stage.
 
+    B4: chỉ consultation MỚI NHẤT (theo consultation_date, tie-break id) mới ghi
+    đè lead.status/pipeline. Consultation BACKDATE (date < cuộc mới nhất hiện có)
+    chỉ được ghi vào lịch sử — bỏ validate transition + không mutate lead + trả
+    status_updated=False (đối xứng update/delete vốn đã kiểm is_latest).
+
     Returns:
         tuple: (consultation, status_updated, terminal_guard_reason)
         - consultation: The created Consultation object
-        - status_updated: Whether the lead status was actually updated
+        - status_updated: Whether the lead status was actually updated (False cho
+          backdate hoặc soft-terminal guard)
         - terminal_guard_reason: Reason status was not updated (soft-terminal guard), or None
     """
     async with db.begin_nested():
@@ -2014,7 +2067,19 @@ async def add_consultation(
             # ✅ FIX: Check if lead is deleted
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot add consultation to a deleted lead.")
-            
+
+            # 🔴 SECURITY (sentinel reservation): cấm tạo cuộc với method dành
+            # riêng cho hệ thống. Cuộc 'system' bất biến (F1) + ẩn khỏi metrics
+            # (B7/B8) → spoof = row bất biến, ẩn KPI, kẹt cả admin. Schema đã
+            # chặn (422); guard này phòng thủ tầng service (caller nội bộ gọi
+            # thẳng service). Internal reopen/auto-close dùng models.Consultation
+            # trực tiếp, KHÔNG qua đây → không bị chặn.
+            if data.method == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail=f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị "
+                    "dành riêng cho hệ thống, không được đặt."
+                )
+
             # Note: Relations are not eagerly loaded here. If accessed, explicit refresh needed.
             
             # Lấy Officer
@@ -2055,10 +2120,46 @@ async def add_consultation(
             # SOFT BLOCK flag - sẽ sử dụng ở bước update lead status
             skip_status_update = terminal_guard.is_terminal
 
+            # B4: xác định consultation mới có phải "mới nhất" không (theo
+            # consultation_date, tie-break id sau flush). CHỈ cuộc mới nhất mới
+            # được ghi đè lead.status/pipeline — đối xứng update_consultation
+            # (:3071) và delete_consultation vốn đã kiểm is_latest; add là chỗ
+            # DUY NHẤT còn thiếu → backdate ghi đè vô điều kiện làm lead.status
+            # lệch với cuộc tư vấn thật mới nhất và bị đóng băng. Cuộc BACKDATE
+            # (date < cuộc mới nhất hiện có) chỉ được ghi vào lịch sử, KHÔNG chạm
+            # state lead. Chuẩn hoá naive→UTC cả 2 vế để so an toàn với cột
+            # DateTime(timezone=True) (legacy row có thể tz-naive).
+            # #13: chuẩn hoá tz qua _as_utc (hết inline replace(tzinfo)).
+            consultation_date = _as_utc(
+                data.consultation_date or datetime.now(timezone.utc)
+            )
+            # review#2 fix#1: will_be_latest quyết định GHI pipeline → so với latest
+            # THẬT SỰ, GỒM cuộc system (reopen sts04 / milestone mang trạng thái
+            # pipeline). exclude_system=False (mặc định True chỉ cho kiểm QUYỀN
+            # officer). Nếu cuộc system mới hơn thì cuộc mới thêm KHÔNG được coi là
+            # latest → không ghi đè trạng thái do reopen giữ.
+            latest_existing = await repo.get_latest_consultation(
+                lead_id, exclude_system=False
+            )
+            latest_existing_date = _as_utc(
+                latest_existing.consultation_date if latest_existing else None
+            )
+            will_be_latest = (
+                latest_existing_date is None
+                or consultation_date >= latest_existing_date
+            )
+
             # ✅ NEW: Validate workflow transition (following update_lead pattern)
-            # Chỉ validate nếu lead đã có status và status thực sự thay đổi
+            # Chỉ validate nếu lead đã có status, status thực sự thay đổi, VÀ cuộc
+            # này sẽ là mới nhất (B4: backdate không tạo "transition" nên bỏ
+            # validate — status cũ trong lịch sử có thể vi phạm allowed_transitions
+            # so với hiện tại một cách hợp lệ).
             current_status_id = lead.consultation_status_id
-            if current_status_id and current_status_id != data.status_id:
+            if (
+                will_be_latest
+                and current_status_id
+                and current_status_id != data.status_id
+            ):
                 # ✅ PHASE-BASED WORKFLOW: Validate phase before transition
                 from app.services.phase_manager import (
                     derive_phase_from_admission,
@@ -2155,6 +2256,22 @@ async def add_consultation(
                 )
                 # Still create consultation record for history, but don't update lead status
                 # Continue to consultation creation below without status update
+            elif not will_be_latest:
+                # B4: cuộc BACKDATE — chỉ ghi nhận vào lịch sử, KHÔNG ghi đè
+                # pipeline (đã bỏ validate transition ở trên). Cuộc tư vấn mới nhất
+                # theo consultation_date vẫn giữ quyền quyết định lead.status.
+                log.info(
+                    "Backdated consultation - không update pipeline (không phải "
+                    "cuộc mới nhất theo consultation_date)",
+                    lead_id=lead_id,
+                    status_id=new_status.id,
+                    new_consultation_date=consultation_date.isoformat(),
+                    latest_existing_date=(
+                        latest_existing_date.isoformat()
+                        if latest_existing_date
+                        else None
+                    ),
+                )
             # ✅ Chỉ cập nhật pipeline nếu status.updates_pipeline = True
             elif new_status.updates_pipeline:
                 # Cập nhật trạng thái Lead theo status mới của consultation
@@ -2185,7 +2302,7 @@ async def add_consultation(
             # Include: loss_reason_code/loss_reason_note (now stored on Consultation)
             create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
 
-            consultation_date = data.consultation_date or datetime.now(timezone.utc)
+            # consultation_date đã tính + chuẩn hoá tz ở trên (B4 will_be_latest).
 
             # Clear loss_reason if not negative outcome
             if new_status.outcome_type != "negative":
@@ -2270,8 +2387,11 @@ async def add_consultation(
                 officer_id=officer_id,
             )
             # Return consultation + terminal guard diagnostics
-            # status_updated = actual lead-state mutation (compare before/after)
-            status_updated = old_state != new_state
+            # status_updated = actual lead-state mutation (compare before/after).
+            # B4: ép False cho backdate — cuộc không-mới-nhất đã bỏ mutation nên
+            # old==new, nhưng gate tường minh để router/notification KHÔNG bắn sự
+            # kiện "đổi trạng thái" sai cho consultation quá khứ.
+            status_updated = will_be_latest and (old_state != new_state)
             terminal_reason = terminal_guard.reason if skip_status_update else None
             return new_consultation, status_updated, terminal_reason
 
@@ -2486,8 +2606,17 @@ async def assign_lead_manually(
     return result_lead, _post_commit
 
 
-async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
-    """Lấy timeline tổng hợp của Lead (consultations và assignment logs)."""
+async def get_lead_timeline(
+    db: AsyncSession,
+    lead_id: int,
+    current_user: Optional[models.User] = None,
+) -> List[dict]:
+    """Lấy timeline tổng hợp của Lead (consultations và assignment logs).
+
+    Nhóm 4: khi có ``current_user``, mỗi consultation được gắn cờ quyền
+    (can_edit / can_delete / can_reschedule + blocker) qua
+    ``compute_consultation_action_permissions`` để FE gate nút THUẦN theo cờ.
+    ``current_user=None`` (vd callsite /insights) → cờ giữ mặc định False."""
 
     # 1. ✅ GỌI HÀM ĐÃ TỐI ƯU HÓA EAGER LOADING (từ dòng 104)
     # Hàm này đã load sẵn:
@@ -2509,18 +2638,63 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
 
     timeline_items = []
 
+    # Nhóm 4: tính 1 LẦN (không per-row) mốc "latest" + "active appointment" +
+    # hard-terminal để gắn cờ quyền. Tất cả loại soft-deleted.
+    live_consults = [
+        c for c in (lead.consultations or []) if c.deleted_at is None
+    ]
+    now = datetime.now(timezone.utc)
+    # #2: "latest" để gắn cờ Sửa/Xóa PHẢI loại cuộc system (auto-close/reopen) —
+    # khớp get_latest_consultation (đã loại) → officer KHÔNG mất quyền sửa cuộc
+    # THẬT của mình sau reopen (cuộc system sts04 không được coi là latest).
+    # _as_utc trong key: consultation_date row legacy có thể tz-naive → so trực
+    # tiếp với row aware trong max() raise TypeError (làm 500 cả /timeline).
+    real_consults = [
+        c for c in live_consults if c.method != SYSTEM_CONSULTATION_METHOD
+    ]
+    latest_id = (
+        max(real_consults, key=lambda c: (_as_utc(c.consultation_date), c.id)).id
+        if real_consults
+        else None
+    )
+    # #5 + review#2 fix#3 + P2: "active appointment" (cuộc được Dời/Hủy) = hẹn
+    # PENDING SỚM NHẤT (MIN scheduled_at), khớp next_activity_at / widget "Nhịp
+    # hẹn". Định nghĩa DÙNG CHUNG với update_consultation (gate miễn 24h) qua
+    # _pick_active_appointment_id → cờ can_reschedule và guard KHÔNG drift.
+    active_appointment_id = _pick_active_appointment_id(live_consults)
+    # #1: hard-terminal (enrolled) 1 query → cờ can_edit/delete/reschedule=False
+    # (khớp hard-block trong update/delete_consultation → hết hiện nút rồi ăn 400).
+    # review#2 cleanup: cờ chỉ được đọc trong compute_consultation_action_permissions,
+    # mà hàm đó no-op (trả {}) khi current_user=None → BỎ query lãng phí ở callsite
+    # /insights (current_user=None).
+    is_hard_terminal = False
+    if current_user is not None:
+        terminal_guard = await check_terminal_status_guard(db, lead)
+        is_hard_terminal = terminal_guard.hard_block
+
     # 3. Xử lý consultations — loss_reason now stored directly on Consultation
-    if lead.consultations:
-        for c in lead.consultations:
-            if c.deleted_at is not None:
-                continue
-            timeline_items.append(
-                schemas.TimelineItem(
-                    type="consultation",
-                    data=schemas.Consultation.model_validate(c),
-                    timestamp=c.consultation_date,
-                ).model_dump()
-            )
+    for c in live_consults:
+        consult_schema = schemas.Consultation.model_validate(c)
+        flags = compute_consultation_action_permissions(
+            c,
+            lead,
+            current_user,
+            is_latest=(c.id == latest_id),
+            is_active_appointment=(
+                c.scheduled_at is not None and c.id == active_appointment_id
+            ),
+            now=now,
+            is_hard_terminal=is_hard_terminal,
+        )
+        for _flag, _val in flags.items():
+            setattr(consult_schema, _flag, _val)
+        timeline_items.append(
+            schemas.TimelineItem(
+                type="consultation",
+                data=consult_schema,
+                timestamp=c.consultation_date,
+            ).model_dump()
+        )
 
     # 4. Xử lý assignment logs (Dữ liệu đã có sẵn)
     if lead.assignment_logs:
@@ -2537,6 +2711,171 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
     # Sắp xếp timeline theo timestamp giảm dần (mới nhất trước)
     timeline_items.sort(key=lambda x: x["timestamp"], reverse=True)
     return timeline_items
+
+
+async def _resolve_revert_target(
+    db: AsyncSession,
+    lead_id: int,
+    exclude_consultation_id: Optional[int] = None,
+) -> Tuple[Optional[models.ConsultationStatus], Optional[str]]:
+    """Dò NGƯỢC chuỗi consultation còn sống của lead tìm mốc revert pipeline sau
+    khi xóa/khôi phục 1 consultation. Order ``consultation_date DESC, id DESC``
+    (cùng định nghĩa 'latest' với ``get_latest_consultation``), bỏ
+    ``deleted_at IS NOT NULL``, bỏ ``exclude_consultation_id`` (cuộc đang xử lý).
+
+    Hợp đồng 3 nhánh (owner chốt v3) — caller PHẢI phân biệt rõ:
+
+    - Có ≥1 consultation ``updates_pipeline=True`` → ``(status, status.stage_id)``
+      của cái GẦN NHẤT trong số đó → caller set status/stage + sync.
+    - CÒN consultation NHƯNG KHÔNG cái nào có ``updates_pipeline=True`` hợp lệ —
+      gồm CẢ (a) toàn universal (``updates_pipeline=False``) LẪN (b)
+      ``consultation_status_id`` NULL / không resolve được status → ``(None,
+      None)``. Nói gọn: **không có pipeline-updating status hợp lệ trong chuỗi còn
+      lại → giữ nguyên state**. Helper CỐ Ý KHÔNG phân biệt (a) và (b) — cả hai
+      đều "không đủ dữ liệu để đặt pipeline". **KHÔNG phải lỗi.** Caller KHÔNG
+      được động ``consultation_status_id`` / ``pipeline_stage_id`` / ``sync``
+      (universal có ``stage_id=NULL`` → set vào = NULL-hoá stage = defect B1/B2).
+    - Rỗng (không còn consultation nào) → ``(initial_status, initial.stage_id)``.
+    """
+    # Nhánh 1: consultation có updates_pipeline=True, gần nhất.
+    q = (
+        select(models.ConsultationStatus)
+        .join(
+            models.Consultation,
+            models.Consultation.consultation_status_id
+            == models.ConsultationStatus.id,
+        )
+        .where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.deleted_at.is_(None),
+            models.ConsultationStatus.updates_pipeline.is_(True),
+        )
+        .order_by(
+            models.Consultation.consultation_date.desc(),
+            models.Consultation.id.desc(),
+        )
+        .limit(1)
+    )
+    if exclude_consultation_id is not None:
+        q = q.where(models.Consultation.id != exclude_consultation_id)
+    status_obj = (await db.execute(q)).scalars().first()
+    if status_obj is not None:
+        return status_obj, status_obj.stage_id
+
+    # Phân biệt nhánh 2 (toàn universal) vs 3 (rỗng): còn consultation nào không?
+    any_q = (
+        select(models.Consultation.id)
+        .where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.deleted_at.is_(None),
+        )
+        .limit(1)
+    )
+    if exclude_consultation_id is not None:
+        any_q = any_q.where(models.Consultation.id != exclude_consultation_id)
+    has_remaining = (
+        await db.execute(any_q)
+    ).scalar_one_or_none() is not None
+    if has_remaining:
+        return None, None  # toàn universal → giữ nguyên (KHÔNG động state)
+
+    # Rỗng → initial.
+    initial = await StatusHelper.get_initial_status(db)
+    return initial, (initial.stage_id if initial else None)
+
+
+def _apply_revert_target(
+    lead: models.Lead,
+    revert_status_obj: Optional[models.ConsultationStatus],
+    new_stage_id: Optional[str],
+    *,
+    log_context: str,
+    block_terminal_escape: bool = False,
+) -> None:
+    """#14: áp kết quả ``_resolve_revert_target`` lên lead — dùng CHUNG cho
+    delete / restore_consultation / restore_lead (trước lặp 3× y hệt). Không phải
+    None → set status/stage + sync; None (chuỗi còn lại toàn universal / thiếu dữ
+    liệu) → GIỮ NGUYÊN pipeline hiện tại, KHÔNG NULL-hoá stage (defect B1/B2).
+
+    #4: ``block_terminal_escape`` — caller đặt True khi lead đang SOFT-TERMINAL
+    (sts20…) VÀ cuộc bị xóa/khôi phục KHÔNG phải cuộc định nghĩa terminal hiện
+    tại. Khi đó revert-target NON-terminal (``not is_final``) bị BỎ QUA: thoát
+    terminal PHẢI qua reopen, không được để một cuộc lẻ (auto-close soft-blocked
+    hay cuộc cũ) vô tình kéo lead ra khỏi terminal. Xóa ĐÚNG cuộc terminal
+    (status == lead.status) → caller đặt False → vẫn thoát được (B5)."""
+    if revert_status_obj is not None:
+        if block_terminal_escape and not revert_status_obj.is_final:
+            log.info(
+                "#4: giữ terminal — không revert lead ra khỏi terminal qua cuộc "
+                "không định nghĩa terminal (thoát terminal phải qua reopen)",
+                lead_id=lead.id,
+                context=log_context,
+                kept_status_id=lead.consultation_status_id,
+                blocked_target_status_id=revert_status_obj.id,
+            )
+            return
+        lead.consultation_status_id = revert_status_obj.id
+        lead.pipeline_stage_id = new_stage_id
+        sync_lead_status_from_consultation(lead, revert_status_obj)
+        log.info(
+            "Reverted lead pipeline to latest remaining pipeline consultation",
+            lead_id=lead.id,
+            context=log_context,
+            new_status_id=revert_status_obj.id,
+            new_stage_id=new_stage_id,
+        )
+    else:
+        log.info(
+            "Revert target all-universal/empty — keeping current lead pipeline "
+            "state (no status/stage/sync change)",
+            lead_id=lead.id,
+            context=log_context,
+            current_status_id=lead.consultation_status_id,
+        )
+
+
+def _should_block_terminal_escape(
+    terminal_guard: TerminalGuardResult,
+    consultation: models.Consultation,
+    lead: models.Lead,
+) -> bool:
+    """#4 (review#2 cleanup — gộp bản sao delete/restore_consultation): lead đang
+    SOFT-TERMINAL (sts20…) VÀ cuộc bị xóa/khôi phục KHÔNG mang trạng thái terminal
+    hiện tại → chặn revert kéo lead ra khỏi terminal (thoát terminal phải qua
+    reopen). Xóa/khôi phục ĐÚNG cuộc định nghĩa terminal (status == lead.status)
+    → trả False → vẫn thoát được (B5)."""
+    return (
+        terminal_guard.is_terminal
+        and consultation.consultation_status_id != lead.consultation_status_id
+    )
+
+
+def _assert_consultation_mutable(
+    consultation: models.Consultation,
+    detail: str = "Không thể sửa/xóa ghi nhận do hệ thống tạo.",
+) -> None:
+    """#14 + F1: cuộc do hệ thống tạo (method='system') là BẤT BIẾN — chặn TRƯỚC
+    nhánh role trong delete / update / restore để MỌI vai trò (kể cả admin) đều
+    không sửa/xóa/khôi phục được. Fail-fast, không giữ lock lâu."""
+    if consultation.method == SYSTEM_CONSULTATION_METHOD:
+        raise BusinessRuleViolation(detail=detail)
+
+
+# #11: message theo từng operation cho blocker của _consultation_mutation_verdict
+# (giữ NGUYÊN text guard cũ — delete/update khác nhau ở "xóa" vs "chỉnh sửa").
+_DELETE_BLOCKER_MESSAGES = {
+    "not_latest": "Officers can only delete the most recent consultation to maintain consultation chain integrity.",
+    "not_assigned": "You are not assigned to this lead.",
+    "not_author": "Bạn chỉ có thể xóa consultation do chính mình tạo.",
+    "no_role": "You don't have permission to delete consultations.",
+}
+_UPDATE_BLOCKER_MESSAGES = {
+    "not_latest": "Officers can only update the most recent consultation to maintain consultation chain integrity.",
+    "not_assigned": "You are not assigned to this lead.",
+    "not_author": "Bạn chỉ có thể chỉnh sửa consultation do chính mình tạo.",
+    "expired_24h": "Ngoài giờ không được chỉnh sửa, hãy liên hệ admin hoặc manager để nhờ hỗ trợ.",
+    "no_role": "You don't have permission to update consultations.",
+}
 
 
 async def delete_consultation(
@@ -2572,8 +2911,10 @@ async def delete_consultation(
                     detail=terminal_guard.reason
                 )
 
-            # Soft terminal: allow deletion but skip status revert
-            skip_status_revert = terminal_guard.is_terminal
+            # B5: KHÔNG skip revert theo terminal HIỆN TẠI. Xóa cuộc gây terminal
+            # (sts20) → lead phải thoát terminal về mốc pipeline hợp lệ còn lại
+            # (tính bằng _resolve_revert_target bên dưới). Chỉ 'enrolled' bị
+            # hard-block ở trên. (Trước đây skip_status_revert làm lead KẸT sts20.)
 
             # Lấy Consultation cần xóa với row-level lock
             # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
@@ -2598,30 +2939,34 @@ async def delete_consultation(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
                 )
 
-            # Kiểm tra quyền
-            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
-                # ✅ FIX: Admin và Manager có quyền xóa bất kỳ consultation nào
-                pass
-            elif current_user.role == UserRole.OFFICER:
-                # Officer chỉ được xóa consultation mới nhất
-                # Tìm consultation mới nhất của Lead này
-                # Officer chỉ được xóa consultation mới nhất
-                # ✅ REFACTORED: Use LeadRepository
+            # F1 (#14 helper): cuộc system BẤT BIẾN — chặn trước nhánh role.
+            _assert_consultation_mutable(consultation)
+
+            # Kiểm tra quyền qua predicate CHUNG (#11) — cờ FE (compute_...) &
+            # guard KHÔNG drift. is_latest dùng get_latest_consultation (đã loại
+            # system #2 → officer xóa được cuộc THẬT mới nhất kể cả sau reopen);
+            # chỉ cần cho officer (admin/manager short-circuit True). check_24h=
+            # False (xóa không áp 24h). hard-terminal enrolled đã guard riêng ở
+            # trên → truyền False.
+            if current_user.role == UserRole.OFFICER:
                 latest_consultation = await repo.get_latest_consultation(lead_id)
-
-                if not latest_consultation or latest_consultation.id != consultation_id:
-                    raise PermissionDeniedError(
-                        detail="Officers can only delete the most recent consultation to maintain consultation chain integrity."
-                    )
-
-                # Kiểm tra officer có được gán cho Lead này không
-                if lead.assigned_officer_id != current_user.id:
-                    raise PermissionDeniedError(
-                        detail="You are not assigned to this lead."
-                    )
+                is_latest = bool(
+                    latest_consultation
+                    and latest_consultation.id == consultation_id
+                )
             else:
-                # Các role khác không có quyền xóa consultation
-                raise PermissionDeniedError(detail="You don't have permission to delete consultations.")
+                is_latest = False  # bỏ qua cho admin/manager (predicate True trước)
+            allowed, blocker = _consultation_mutation_verdict(
+                consultation, lead, current_user,
+                is_latest=is_latest, within_24h=True,
+                check_24h=False, is_hard_terminal=False,
+            )
+            if not allowed:
+                raise PermissionDeniedError(
+                    detail=_DELETE_BLOCKER_MESSAGES.get(
+                        blocker, "You don't have permission to delete consultations."
+                    )
+                )
 
             # Lưu trạng thái cũ của Lead trước khi xóa consultation
             old_state = _get_current_lead_state(lead)
@@ -2638,69 +2983,24 @@ async def delete_consultation(
                 deleted_at=consultation.deleted_at.isoformat(),
             )
 
-            # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
-            # ✅ REFACTORED: Use LeadRepository
-            latest_remaining = await repo.get_latest_consultation(lead_id)
-
-            new_status_id = None
-            new_stage_id = None
-            revert_status_obj = None  # ConsultationStatus object for sync
-
-            # Nếu còn consultation khác
-            if latest_remaining and latest_remaining.consultation_status_id:
-                latest_status = await db.get(
-                    models.ConsultationStatus, latest_remaining.consultation_status_id
-                )
-                if latest_status:
-                    new_status_id = latest_status.id
-                    new_stage_id = latest_status.stage_id
-                    revert_status_obj = latest_status
-                    log.info(
-                        f"Reverting lead status to latest remaining consultation's status: {new_status_id}",
-                        lead_id=lead_id,
-                    )
-                else:
-                    log.warning(
-                        f"Status '{latest_remaining.consultation_status_id}' not found for latest consultation {latest_remaining.id}",
-                        lead_id=lead_id,
-                    )
-            # Nếu không còn consultation nào, revert về trạng thái ban đầu
-            else:
-                initial_status = await StatusHelper.get_initial_status(db)
-                if initial_status:
-                    new_status_id = initial_status.id
-                    new_stage_id = initial_status.stage_id
-                    revert_status_obj = initial_status
-                    log.info(
-                        "Reverting lead status to initial status",
-                        lead_id=lead_id,
-                        status_id=new_status_id,
-                    )
-                else:
-                    log.warning(
-                        "Initial status not found when reverting lead status.",
-                        lead_id=lead_id,
-                    )
-                    # Gán giá trị an toàn nếu không tìm thấy status ban đầu
-                    new_status_id = None
-                    new_stage_id = None
-
-            if not skip_status_revert:
-                # Cập nhật trạng thái Lead
-                lead.consultation_status_id = new_status_id
-                lead.pipeline_stage_id = new_stage_id
-                # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-                if revert_status_obj:
-                    sync_lead_status_from_consultation(lead, revert_status_obj)
-                else:
-                    # Fallback khi không tìm thấy status object
-                    lead.status = "new"
-            else:
-                log.warning(
-                    "Terminal guard SOFT BLOCK: skipping lead status revert on consultation delete",
-                    lead_id=lead_id,
-                    current_status_id=lead.consultation_status_id,
-                )
+            # B1+B5: revert pipeline theo cuộc updates_pipeline=True GẦN NHẤT còn
+            # lại (helper 3-nhánh). Đã soft-delete + flush ở trên nên cuộc bị xóa
+            # tự loại khỏi query (exclude_consultation_id là phòng thủ thêm).
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id, exclude_consultation_id=consultation_id
+            )
+            # #4: terminal_guard tính ở đầu hàm (trước soft-delete). Helper chung
+            # với restore_consultation.
+            block_terminal_escape = _should_block_terminal_escape(
+                terminal_guard, consultation, lead
+            )
+            # B1+B5 (#14 helper): áp revert-target (None → giữ nguyên, không
+            # NULL-hoá stage).
+            _apply_revert_target(
+                lead, revert_status_obj, new_stage_id,
+                log_context="delete_consultation",
+                block_terminal_escape=block_terminal_escape,
+            )
 
             # ✅ Always increment version when consultation is deleted (data changed)
             lead.version = (lead.version or 1) + 1
@@ -2748,7 +3048,8 @@ async def delete_consultation(
             _lead_id = lead_id
             _consultation_id = consultation_id
             _officer_id = lead.assigned_officer_id
-            _new_status_id = new_status_id
+            # Status THẬT sau revert (revert-target hoặc giữ nguyên khi all-universal)
+            _new_status_id = lead.consultation_status_id
 
         except Exception as e:
             # Rollback tự động by begin_nested context
@@ -2795,8 +3096,11 @@ async def restore_consultation(
 
     Business Logic:
     - Clears deleted_at timestamp to restore the consultation
-    - Updates lead's consultation_status_id to the restored consultation's status
-      (only if restored consultation is the most recent by consultation_date)
+    - B3: Hard-block khi lead đang 'enrolled' (terminal guard) — không cho khôi
+      phục consultation lên lead đã nhập học.
+    - B2: Revert pipeline lead về cuộc updates_pipeline=True gần nhất trong chuỗi
+      CÒN SỐNG (gồm cả cuộc vừa restore) qua _resolve_revert_target — KHÔNG gán
+      thẳng stage của cuộc restore (universal có stage_id=NULL sẽ NULL-hoá stage).
     - Logs the change in LeadStatusHistory
 
     Args:
@@ -2825,6 +3129,18 @@ async def restore_consultation(
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot restore consultations for a deleted lead.")
 
+            # B3: TERMINAL STATUS GUARD — restore là đường ÍT QUYỀN NHẤT để bypass
+            # terminal (officer chỉ cần assigned, không cần latest/author/24h) và
+            # ghi đè lead KHÔNG đi qua lead_admission_sync. Hard-block 'enrolled':
+            # khôi phục consultation lên lead đã nhập học sẽ đảo pipeline ngược,
+            # lệch AdmissionProfile (sole source of truth). Soft-terminal (sts20):
+            # KHÔNG skip revert theo status HIỆN TẠI (bài học B5 — skip làm lead
+            # KẸT terminal); để _resolve_revert_target bên dưới tính lại mốc
+            # pipeline hợp lệ từ chuỗi còn sống.
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                raise BusinessRuleViolation(detail=terminal_guard.reason)
+
             # Fetch the deleted consultation
             consultation_result = await db.execute(
                 select(models.Consultation)
@@ -2841,6 +3157,12 @@ async def restore_consultation(
                 raise ResourceNotFoundError(
                     detail=f"Deleted consultation with id {consultation_id} not found."
                 )
+
+            # F1 (#14 helper): cuộc system BẤT BIẾN — chặn trước nhánh role.
+            _assert_consultation_mutable(
+                consultation,
+                detail="Không thể khôi phục ghi nhận do hệ thống tạo.",
+            )
 
             # Permission check
             if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
@@ -2869,28 +3191,34 @@ async def restore_consultation(
                 restored_by=current_user.id,
             )
 
-            # Determine if we need to update lead status
-            # Get the latest consultation (including the just-restored one)
-            latest_consultation = await repo.get_latest_consultation(lead_id)
+            # B2: revert pipeline theo cuộc updates_pipeline=True GẦN NHẤT trong
+            # chuỗi CÒN SỐNG (helper 3-nhánh, cùng cơ chế delete B1). Cuộc vừa
+            # restore đã hết deleted_at + flush ở trên → ĐÃ nằm trong chuỗi, nên
+            # KHÔNG truyền exclude (khác delete). Bug cũ: gán thẳng
+            # lead.pipeline_stage_id = new_status.stage_id — nếu status của cuộc
+            # restore là universal (stage_id=NULL) thì NULL-hoá stage của lead
+            # (đẩy lead ra ngoài phễu) = defect B2. Helper tự dò về cuộc pipeline
+            # gần nhất nên universal-mới-nhất không còn phá stage.
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id
+            )
+            # #4: khôi phục cuộc cũ không được un-terminal; thoát phải qua reopen.
+            # Helper chung với delete_consultation.
+            block_terminal_escape = _should_block_terminal_escape(
+                terminal_guard, consultation, lead
+            )
+            # B2 (#14 helper): áp revert-target (None → giữ nguyên, không NULL-hoá
+            # stage). Nhánh 'rỗng' không xảy ra ở restore (vừa có ≥1 cuộc restore).
+            _apply_revert_target(
+                lead, revert_status_obj, new_stage_id,
+                log_context="restore_consultation",
+                block_terminal_escape=block_terminal_escape,
+            )
 
-            # If restored consultation is now the latest, update lead status
-            if latest_consultation and latest_consultation.id == consultation_id:
-                if consultation.consultation_status_id:
-                    new_status = await db.get(
-                        models.ConsultationStatus, consultation.consultation_status_id
-                    )
-                    if new_status:
-                        lead.consultation_status_id = new_status.id
-                        lead.pipeline_stage_id = new_status.stage_id
-                        sync_lead_status_from_consultation(lead, new_status)
-                        lead.version = (lead.version or 1) + 1
-                        db.add(lead)
-
-                        log.info(
-                            "Lead status updated to restored consultation's status",
-                            lead_id=lead_id,
-                            new_status_id=new_status.id,
-                        )
+            # Restore là data-change (consultation deleted→live) → luôn bump
+            # version cho optimistic-lock, đối xứng delete_consultation.
+            lead.version = (lead.version or 1) + 1
+            db.add(lead)
 
             # Get new state and log change
             new_state = _get_current_lead_state(lead)
@@ -2996,61 +3324,115 @@ async def update_consultation(
                     detail=f"Consultation with id {consultation_id} not found or already deleted."
                 )
 
-            # ✅ FIX: Single check for latest consultation (eliminates TOCTOU vulnerability)
-            # Query once and reuse the result for both permission check and status update
-            # ✅ REFACTORED: Use LeadRepository
+            # F1 (#14 helper): cuộc system BẤT BIẾN — chặn trước nhánh role.
+            _assert_consultation_mutable(consultation)
+
+            # update_data tính SỚM (trước guard role) để #6 nhận diện "quản lý
+            # lịch hẹn": update CHỈ đụng scheduled_at (dời) và/hoặc status→sts19
+            # (hủy lịch), KHÔNG sửa nội dung (notes/method/loss_reason/duration)
+            # → officer được làm BẤT KỂ 24h. Cửa sổ 24h chỉ chặn sửa NỘI DUNG cuộc
+            # cũ, không chặn quản lý lịch hẹn tương lai.
+            update_data = consultation_in.model_dump(exclude_unset=True)
+            from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
+
+            # review#2 P2: miễn cửa sổ 24h CHỈ khi đây ĐÚNG là hẹn ACTIVE (PENDING
+            # sớm nhất) — dùng CHUNG định nghĩa với cờ can_reschedule qua
+            # _pick_active_appointment_id → guard và cờ FE KHÔNG drift. Nếu không có
+            # check này, một PATCH chỉ {scheduled_at} / {status_id: sts19} qua API
+            # TRỰC TIẾP có thể gắn-lịch/hủy cuộc mới-nhất >24h dù cuộc đó KHÔNG phải
+            # active appt (cờ FE đã ẩn nút) → né cửa sổ 24h. (Chỉ officer bị 24h;
+            # admin/manager within_24h=True nên check này vô hại với họ.)
+            live_consultations = (
+                await db.execute(
+                    select(models.Consultation)
+                    .options(
+                        selectinload(models.Consultation.consultation_status)
+                    )
+                    .where(
+                        models.Consultation.lead_id == lead_id,
+                        models.Consultation.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            is_active_appointment = (
+                consultation.id
+                == _pick_active_appointment_id(live_consultations)
+            )
+            is_appointment_mgmt = (
+                bool(update_data)
+                and set(update_data.keys()) <= {"scheduled_at", "status_id"}
+                and update_data.get("status_id")
+                in (None, *CANCELLED_FOLLOWUP_STATUS_IDS)
+                and is_active_appointment
+            )
+
+            # ✅ Single check for latest consultation (anti-TOCTOU).
+            # review#2 fix#1: TÁCH 2 mục đích của "latest":
+            #  - is_latest_consultation (exclude_system=True): kiểm QUYỀN officer
+            #    (chain-integrity) — officer sửa được cuộc THẬT mới nhất kể cả sau
+            #    reopen (#2).
+            #  - is_latest_for_pipeline (exclude_system=False): quyết định GHI trạng
+            #    thái LEAD — GỒM cuộc system (reopen/milestone mang trạng thái
+            #    pipeline thật). Nếu cuộc system mới hơn thì sửa status cuộc thật cũ
+            #    KHÔNG được ghi đè pipeline do reopen đang giữ.
             latest_consultation = await repo.get_latest_consultation(lead_id)
             is_latest_consultation = (
                 latest_consultation and latest_consultation.id == consultation_id
             )
+            latest_incl_system = await repo.get_latest_consultation(
+                lead_id, exclude_system=False
+            )
+            is_latest_for_pipeline = (
+                latest_incl_system and latest_incl_system.id == consultation_id
+            )
 
-            # Kiểm tra quyền
-            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
-                # Admin và Manager có quyền update bất kỳ consultation nào
-                pass
-            elif current_user.role == UserRole.OFFICER:
-                # === BUSINESS RULES FOR OFFICER ===
-                # 1. Phải là consultation mới nhất (chain integrity)
-                if not is_latest_consultation:
-                    raise PermissionDeniedError(
-                        detail="Officers can only update the most recent consultation to maintain consultation chain integrity."
-                    )
-
-                # 2. Phải được gán cho Lead này
-                if lead.assigned_officer_id != current_user.id:
-                    raise PermissionDeniedError(
-                        detail="You are not assigned to this lead."
-                    )
-
-                # 3. Phải là người tạo consultation
-                if consultation.officer_id != current_user.id:
-                    raise PermissionDeniedError(
-                        detail="Bạn chỉ có thể chỉnh sửa consultation do chính mình tạo."
-                    )
-
-                # 4. Phải trong vòng 24 giờ kể từ khi tạo
-                edit_window_anchor = consultation.created_at or consultation.consultation_date
-                if not edit_window_anchor:
-                    raise PermissionDeniedError(
-                        detail="Không thể xác định thời gian tạo consultation, liên hệ admin."
-                    )
-                consultation_age = datetime.now(timezone.utc) - edit_window_anchor
-                if consultation_age.total_seconds() > 24 * 60 * 60:  # 24 hours in seconds
-                    raise PermissionDeniedError(
-                        detail="Ngoài giờ không được chỉnh sửa, hãy liên hệ admin hoặc manager để nhờ hỗ trợ."
-                    )
-            else:
-                # Các role khác không có quyền update consultation
-                raise PermissionDeniedError(
-                    detail="You don't have permission to update consultations."
+            # Kiểm tra quyền qua predicate CHUNG (#11) — cờ FE (compute_...) &
+            # guard KHÔNG drift. #6: is_appointment_mgmt → officer bỏ cửa sổ 24h.
+            # hard-terminal (enrolled) xử lý riêng ở nhánh status_id bên dưới (khớp:
+            # note-only edit KHÔNG bị terminal chặn) → truyền False ở đây.
+            if current_user.role == UserRole.OFFICER:
+                within_24h = _consultation_within_24h(
+                    consultation, datetime.now(timezone.utc)
                 )
+            else:
+                within_24h = True  # bỏ qua cho admin/manager
+            allowed, blocker = _consultation_mutation_verdict(
+                consultation, lead, current_user,
+                is_latest=bool(is_latest_consultation),
+                within_24h=within_24h,
+                check_24h=not is_appointment_mgmt,
+                is_hard_terminal=False,
+            )
+            if not allowed:
+                raise PermissionDeniedError(
+                    detail=_UPDATE_BLOCKER_MESSAGES.get(
+                        blocker, "You don't have permission to update consultations."
+                    )
+                )
+
+            # review#2 fix#5: hard-terminal (enrolled) chặn MỌI sửa đổi cuộc (đối
+            # xứng delete_consultation + khớp cờ compute_...(is_hard_terminal) chặn
+            # cả can_edit/delete/reschedule). Trước đây chỉ hard-block TRONG nhánh
+            # status_id → note-edit / dời-lịch (scheduled_at-only) lọt → cờ FE ẩn nút
+            # nhưng BE cho qua = drift #11. terminal_guard tính 1 LẦN, reuse cho
+            # skip_status_update (soft-terminal) ở nhánh status_id.
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                raise BusinessRuleViolation(detail=terminal_guard.reason)
 
             # Lưu trạng thái cũ của Lead trước khi update
             old_state = _get_current_lead_state(lead)
             old_consultation_status_id = consultation.consultation_status_id
 
-            # Update các trường được cung cấp
-            update_data = consultation_in.model_dump(exclude_unset=True)
+            # 🔴 SECURITY (sentinel reservation): cấm đổi method thường → 'system'.
+            # F1 (:3153) chỉ chặn khi ROW ĐÃ là system; đây chặn spoof
+            # normal→system (biến cuộc thường thành bất biến + ẩn khỏi metrics).
+            # Schema đã chặn (422); guard này phòng thủ tầng service.
+            if update_data.get("method") == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail=f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị "
+                    "dành riêng cho hệ thống, không được đặt."
+                )
 
             # ✅ SECURITY FIX: Validate status_id BEFORE modifying consultation
             # Prevents creating consultation with invalid/nonexistent status
@@ -3064,23 +3446,10 @@ async def update_consultation(
                         detail=f"Consultation status '{new_status_id}' not found. Cannot update consultation."
                     )
 
-                # ✅ TERMINAL STATUS GUARD (Issue #3 fix)
-                # Check if lead is in terminal state BEFORE workflow validation
-                terminal_guard = await check_terminal_status_guard(db, lead)
-                if terminal_guard.hard_block:
-                    # HARD BLOCK: Lead đã nhập học - không cho thay đổi consultation status
-                    log.warning(
-                        "Terminal guard HARD BLOCK: cannot change consultation status for enrolled lead",
-                        lead_id=lead_id,
-                        consultation_id=consultation_id,
-                        current_status_id=lead.consultation_status_id,
-                        current_status_name=terminal_guard.current_status.name if terminal_guard.current_status else None,
-                        attempted_status=new_status_id,
-                        user_id=current_user.id,
-                    )
-                    raise BusinessRuleViolation(
-                        detail=terminal_guard.reason
-                    )
+                # ✅ TERMINAL STATUS GUARD: reuse terminal_guard tính ở trên (sau
+                # verdict quyền, review#2 fix#5 — hard-block enrolled đã raise từ
+                # đó). Ở đây chỉ lấy soft-terminal (sts20…) để SKIP ghi lead status
+                # (vẫn cho đổi consultation row).
                 skip_status_update = terminal_guard.is_terminal
 
                 # ✅ FIX: Validate workflow transition (consistent with add_consultation)
@@ -3140,11 +3509,13 @@ async def update_consultation(
                 elif field not in {"loss_reason_code", "loss_reason_note"}:
                     setattr(consultation, field, value)
 
-            # Nếu status_id thay đổi và đây là consultation mới nhất
-            # Cập nhật trạng thái Lead (reuse is_latest_consultation from above)
+            # Nếu status_id thay đổi và đây là consultation mới nhất THẬT SỰ
+            # (is_latest_for_pipeline — gồm cuộc system) thì cập nhật trạng thái Lead.
+            # review#2 fix#1: KHÔNG dùng is_latest_consultation (loại system) ở đây —
+            # nếu cuộc system reopen mới hơn, sửa cuộc thật cũ không ghi đè pipeline.
             status_changed = False
             if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
-                if is_latest_consultation:
+                if is_latest_for_pipeline:
                     # ✅ TERMINAL STATUS GUARD (Issue #3) - Using check result from earlier
                     # skip_status_update flag was set by check_terminal_status_guard() above
                     if skip_status_update:
@@ -4849,32 +5220,30 @@ async def restore_lead(
             # IntegrityError will be caught by the outer except block
             await repo.restore_phone_identities(lead_id)
 
-            # ✅ H5: Restore status from latest non-deleted consultation (no hardcode "new")
-            latest_consultation = await repo.get_latest_consultation(lead_id)
-            if latest_consultation and latest_consultation.consultation_status_id:
-                latest_status = await db.get(
-                    models.ConsultationStatus, latest_consultation.consultation_status_id
-                )
-                if latest_status:
-                    lead.consultation_status_id = latest_status.id
-                    lead.pipeline_stage_id = latest_status.stage_id
-                    sync_lead_status_from_consultation(lead, latest_status)
-                else:
-                    initial_status = await StatusHelper.get_initial_status(db)
-                    if initial_status:
-                        lead.consultation_status_id = initial_status.id
-                        lead.pipeline_stage_id = initial_status.stage_id
-                        sync_lead_status_from_consultation(lead, initial_status)
-                    else:
-                        lead.status = "new"
-            else:
-                initial_status = await StatusHelper.get_initial_status(db)
-                if initial_status:
-                    lead.consultation_status_id = initial_status.id
-                    lead.pipeline_stage_id = initial_status.stage_id
-                    sync_lead_status_from_consultation(lead, initial_status)
-                else:
-                    lead.status = "new"
+            # B2b: khôi phục pipeline theo cuộc updates_pipeline=True GẦN NHẤT
+            # trong chuỗi CÒN SỐNG sau khi bulk-restore consultation ở trên (helper
+            # 3-nhánh, cùng cơ chế delete B1 / restore B2). Mọi consultation liên
+            # quan đã hết deleted_at + flush ở :4912 nên ĐÃ nằm trong chuỗi → KHÔNG
+            # truyền exclude. Bug cũ (H5): gán thẳng lead.pipeline_stage_id =
+            # latest_status.stage_id — nếu cuộc mới nhất là universal (stage_id=
+            # NULL) thì NULL-hoá stage của lead (đẩy ra ngoài phễu) = defect B2b.
+            # Helper tự dò về cuộc pipeline gần nhất + gộp nhánh initial (chuỗi
+            # rỗng) nên bỏ được toàn bộ fallback thủ công cũ.
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id
+            )
+            # B2b (#14 helper): áp revert-target (None → giữ nguyên pipeline
+            # pre-deletion, không NULL-hoá stage; nhánh 'rỗng' đã trả initial).
+            # review#2 #8 (CHỦ ĐÍCH — KHÔNG truyền block_terminal_escape, KHÁC
+            # delete/restore_consultation): đây là khôi phục CẢ LEAD đã xoá mềm →
+            # pipeline được TÍNH LẠI TỪ ĐẦU theo TOÀN chuỗi consultation vừa sống
+            # lại (nguồn sự thật), KHÔNG phải thao tác 1 cuộc trên lead đang sống.
+            # Không có "terminal escape" để chặn: kết quả recompute chính là vị trí
+            # pipeline thật của lead. ĐỪNG thêm block_terminal_escape ở đây.
+            _apply_revert_target(
+                lead, revert_status_obj, new_stage_id,
+                log_context="restore_lead",
+            )
 
             # Mark as modified
             db.add(lead)
@@ -4994,6 +5363,120 @@ def compute_lead_action_permissions(
         ),
         # officer ĐƯỢC GIAO lead → xin đổi
         "can_request_reassign": is_officer_assigned and not is_consultation_terminal,
+    }
+
+
+def _consultation_mutation_verdict(
+    consultation: models.Consultation,
+    lead: models.Lead,
+    current_user: models.User,
+    *,
+    is_latest: bool,
+    within_24h: bool,
+    check_24h: bool,
+    is_hard_terminal: bool,
+) -> Tuple[bool, Optional[str]]:
+    """#11: MỘT predicate 'ai được sửa/xóa 1 consultation' — nguồn sự thật DUY
+    NHẤT dùng chung cho cờ FE (``compute_consultation_action_permissions``) VÀ
+    guard THẬT (``update_consultation`` / ``delete_consultation``). Gộp về đây để
+    cờ và guard KHÔNG BAO GIỜ drift (trước đây phải retrofit F3 author-check vào
+    delete + gap #1 enrolled vì 2 bản chép tay).
+
+    Trả ``(allowed, blocker)``. blocker ∈ {system, hard_terminal, not_latest,
+    not_assigned, not_author, expired_24h, no_role} hoặc None.
+
+    - ``check_24h``: áp cửa sổ 24h cho officer (sửa NỘI DUNG). False = bỏ (xóa;
+      hoặc dời/hủy lịch hẹn — #6, officer quản lý lịch hẹn tương lai bất kể 24h).
+    - ``is_hard_terminal``: lead ở terminal CỨNG (enrolled) → chặn MỌI vai trò
+      (#1 — khớp hard-block trong 2 guard; trước đây cờ bỏ sót → hiện nút rồi
+      ăn 400). Soft-terminal (sts20) KHÔNG chặn ở đây (guard chỉ soft-block).
+    - THỨ TỰ officer ladder GIỮ ĐÚNG guard BE: is_latest → assigned → author → 24h.
+    """
+    if consultation.method == SYSTEM_CONSULTATION_METHOD:
+        return False, "system"
+    if is_hard_terminal:
+        return False, "hard_terminal"
+    if current_user.role in (UserRole.MANAGER, UserRole.ADMIN):
+        return True, None
+    if current_user.role == UserRole.OFFICER:
+        if not is_latest:
+            return False, "not_latest"
+        if lead.assigned_officer_id != current_user.id:
+            return False, "not_assigned"
+        if consultation.officer_id != current_user.id:
+            return False, "not_author"
+        if check_24h and not within_24h:
+            return False, "expired_24h"
+        return True, None
+    return False, "no_role"  # vai trò khác không có quyền (không tới timeline)
+
+
+def _consultation_within_24h(
+    consultation: models.Consultation, now: datetime
+) -> bool:
+    """Cửa sổ 24h edit của officer, anchor = created_at CÓ FALLBACK
+    consultation_date (khớp update_consultation — row created_at NULL không được
+    coi là quá hạn oan). _as_utc CẢ 2 vế: anchor có thể tz-naive (row legacy /
+    object chưa round-trip DB) → trừ với now aware raise TypeError (chuẩn B4)."""
+    _now = _as_utc(now)
+    anchor = _as_utc(consultation.created_at or consultation.consultation_date)
+    return (
+        anchor is not None
+        and (_now - anchor).total_seconds() <= 24 * 60 * 60
+    )
+
+
+def compute_consultation_action_permissions(
+    consultation: models.Consultation,
+    lead: models.Lead,
+    current_user: Optional[models.User],
+    is_latest: bool,
+    is_active_appointment: bool,
+    now: datetime,
+    is_hard_terminal: bool = False,
+) -> dict:
+    """Query-free consultation action flags (edit / delete / reschedule) từ role
+    + ownership + vị trí trong chuỗi + terminal. Mirror guard THẬT qua predicate
+    CHUNG ``_consultation_mutation_verdict`` (#11) để FE gate nút Sửa/Xóa/Dời-Hủy
+    THUẦN theo cờ (KHÔNG đọc user.role — thin-client) và KHÔNG bấm-rồi-ăn-400.
+    Pure sync (không db/await) → an toàn gọi per-row trong get_lead_timeline.
+    Trả {} khi current_user None.
+
+    - can_edit: predicate check_24h=True (sửa nội dung).
+    - can_delete: predicate check_24h=False (khớp delete + F3 author-check).
+    - can_reschedule: is_active_appointment AND predicate-no-24h (= can_delete).
+      #6: dời/hủy lịch hẹn KHÔNG áp 24h → officer quản lý lịch hẹn tương lai của
+      chính mình bất kể cuộc tạo bao lâu (khớp guard update relaxed). CHỈ cuộc có
+      scheduled_at mới nhất (is_active_appointment) mới Dời/Hủy → vá bug nút hiện
+      trên cuộc CŨ (17-07); hẹn quá hạn (chưa bị cuộc mới thay) vẫn dời được.
+    - #1: is_hard_terminal (enrolled) → cả 3 cờ False (blocker 'hard_terminal').
+    - blocker: 'system'/'hard_terminal'/'not_latest'/'not_assigned'/'not_author'/
+      'expired_24h'. admin/manager không có blocker (trừ system/hard_terminal).
+    """
+    if current_user is None:
+        return {}
+
+    within_24h = _consultation_within_24h(consultation, now)
+
+    can_edit, edit_blocker = _consultation_mutation_verdict(
+        consultation, lead, current_user,
+        is_latest=is_latest, within_24h=within_24h,
+        check_24h=True, is_hard_terminal=is_hard_terminal,
+    )
+    can_delete, delete_blocker = _consultation_mutation_verdict(
+        consultation, lead, current_user,
+        is_latest=is_latest, within_24h=within_24h,
+        check_24h=False, is_hard_terminal=is_hard_terminal,
+    )
+    # #6: dời/hủy = quyền như xóa (no-24h) + phải là lịch hẹn đang hiệu lực.
+    can_reschedule = is_active_appointment and can_delete
+
+    return {
+        "can_edit": can_edit,
+        "can_delete": can_delete,
+        "can_reschedule": can_reschedule,
+        "edit_blocker": edit_blocker,
+        "delete_blocker": delete_blocker,
     }
 
 
