@@ -189,8 +189,12 @@ export function ConsultationDialog({
           : undefined,
         status_id: consultation.consultation_status_id || "",
         notes: consultation.notes || "",
-        // "system" is the auto-close wire method, never user-selectable — coerce
-        // it to a real method if a system consultation is ever opened for edit.
+        // FE4: nhánh !== "system" ở đây CHỈ để thu hẹp kiểu — field form `method`
+        // cố tình loại "system" (ConsultationMethod gồm "system", không cho chọn),
+        // nên phải xử lý case đó khi gán. KHÔNG phải coerce nghiệp vụ: cuộc system
+        // đã bị Nhóm 6 ẩn nút "Sửa" (can_edit=false) → dialog không mở cho system,
+        // và BE reserve sentinel 'system' ở input (schema 422 + service 400). Method
+        // thật (phone/email/…) luôn được giữ nguyên, không bị đổi thầm.
         method:
           consultation.method && consultation.method !== "system"
             ? consultation.method
@@ -278,7 +282,13 @@ export function ConsultationDialog({
       } else {
         updateData.scheduled_at = null;
       }
-      if (data.status_id) updateData.status_id = data.status_id;
+      // FE5: form seed status_id = giá trị hiện tại nên LUÔN truthy → nếu gửi
+      // vô điều kiện thì sửa mỗi ghi chú vẫn PATCH kèm status_id cũ (BE nhận
+      // "transition về chính nó" + FE invalidate lists/pipeline thừa). Chỉ gửi
+      // khi khác status hiện tại của consultation.
+      if (data.status_id && data.status_id !== consultation.consultation_status_id) {
+        updateData.status_id = data.status_id;
+      }
       if (data.notes !== undefined) updateData.notes = data.notes;
       if (data.method) updateData.method = data.method;
       if (data.duration_minutes !== undefined) updateData.duration_minutes = data.duration_minutes;
