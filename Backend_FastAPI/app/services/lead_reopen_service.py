@@ -42,7 +42,11 @@ from ..utils.exceptions import (
 from ..repositories import LeadRepository
 from ..core.status_mapping import is_consultation_terminal_status
 from .status_helper import StatusHelper
-from .lead_service import _get_current_lead_state, _log_lead_state_change
+from .lead_service import (
+    _get_current_lead_state,
+    _log_lead_state_change,
+    SYSTEM_CONSULTATION_METHOD,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -117,6 +121,24 @@ async def _apply_reopen(
     lead.updated_at = now
     # Bump version (optimistic-lock — mọi thay đổi trạng thái phải tăng version).
     lead.version = (lead.version or 1) + 1
+
+    # B9: tạo Consultation(method='system') ĐỐI XỨNG auto-close để reopen HIỆN
+    # trong "Lịch sử tư vấn" (get_lead_timeline render consultations, KHÔNG đọc
+    # LeadStatusHistory) — trước đây reopen vô hình, tab chỉ thấy auto-close 2 lần
+    # liên tiếp, hành động cứu của manager bị xoá khỏi câu chuyện. officer_id =
+    # reviewer (cột NOT NULL; reviewer luôn có). status = sts04 (mốc re-engage).
+    # Sau B8b (loại method='system' khỏi MAX/COUNT) cuộc này KHÔNG thổi
+    # last_consultation_at / consultation_count → không lệch "hoạt động gần
+    # nhất"/KPI, và KHÔNG tính là tư vấn thật. (reason đầy đủ vẫn ở
+    # LeadStatusHistory + audit_log; đây chỉ để SURFACE ra timeline.)
+    db.add(models.Consultation(
+        lead_id=lead.id,
+        officer_id=reviewer.id,
+        consultation_status_id=REOPEN_TARGET_STATUS_ID,
+        method=SYSTEM_CONSULTATION_METHOD,
+        consultation_date=now,
+        notes=f"Mở lại tư vấn: {reason_text}",
+    ))
 
     new_state = _get_current_lead_state(lead)
     await _log_lead_state_change(

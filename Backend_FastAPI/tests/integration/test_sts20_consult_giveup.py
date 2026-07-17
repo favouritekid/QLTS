@@ -36,6 +36,8 @@ from app.services.lead_reopen_service import (
     request_reopen,
 )
 from app.tasks.sla_tasks import close_stale_rejected_leads, stale_sts04_predicate
+from app.services import lead_service
+from app.repositories.lead_repository import LeadRepository
 
 pytestmark = pytest.mark.asyncio
 
@@ -1070,6 +1072,66 @@ async def test_reopen_sts20_to_sts04_sets_reengaged_and_history(db: AsyncSession
     assert "reopen:" in (hist[0].reason or "")
 
 
+async def test_reopen_creates_visible_system_consultation_b9(db: AsyncSession):
+    """B9: reopen tạo Consultation(method='system', sts04, notes='Mở lại tư vấn:')
+    ĐỐI XỨNG auto-close → HIỆN trong get_lead_timeline (tab Lịch sử tư vấn), hết
+    cảnh reopen vô hình. B8b: cuộc system này KHÔNG thổi consultation_count /
+    last_consultation_at (aggregate loại method='system')."""
+    await _seed_fsm(db)
+    unit = await _make_unit(db)
+    manager = await _make_manager(db, unit.id)
+    officer = await _make_officer(db, unit.id, cap=10)
+    lead = await _make_lead(
+        db, unit.id, consultation_status_id="sts20", status="rejected",
+        officer_id=officer.id,
+    )
+    # 1 cuộc human THẬT (mốc so sánh B8b — reopen system dated now không được vượt).
+    human_date = datetime.now(timezone.utc) - timedelta(days=100)
+    db.add(models.Consultation(
+        lead_id=lead.id, officer_id=officer.id,
+        consultation_status_id="sts04", method="phone",
+        consultation_date=human_date,
+    ))
+    await db.flush()
+
+    reopened, cb = await reopen_lead(
+        db, lead.id, reviewer=manager, reason="Con đã quyết định nhập học",
+    )
+    if cb:
+        await cb()
+    await db.flush()
+
+    # B9: đúng 1 consultation system 'Mở lại tư vấn' — status sts04, officer=reviewer.
+    reopen_consults = (await db.execute(
+        select(models.Consultation).where(
+            models.Consultation.lead_id == lead.id,
+            models.Consultation.method == "system",
+        )
+    )).scalars().all()
+    assert len(reopen_consults) == 1
+    rc = reopen_consults[0]
+    assert rc.consultation_status_id == "sts04"
+    assert rc.officer_id == manager.id
+    assert rc.notes.startswith("Mở lại tư vấn")
+    assert "Con đã quyết định nhập học" in rc.notes
+
+    # B9: HIỆN trong timeline (render consultations).
+    timeline = await lead_service.get_lead_timeline(db, lead.id)
+    reopen_items = [
+        it for it in timeline
+        if it["type"] == "consultation"
+        and it["data"].get("method") == "system"
+        and (it["data"].get("notes") or "").startswith("Mở lại tư vấn")
+    ]
+    assert len(reopen_items) == 1
+
+    # B8b: aggregate loại system → count=1 (chỉ human), last=human_date (reopen
+    # system dated now KHÔNG thổi MAX).
+    agg = await LeadRepository(db).get_consultation_aggregates(lead.id)
+    assert agg["consultation_count"] == 1
+    assert agg["last_consultation_at"] == human_date
+
+
 async def test_reopen_rejects_non_terminal_lead(db: AsyncSession):
     """Lead KHÔNG ở trạng thái cuối phase tư vấn (sts04) → BusinessRuleViolation."""
     from app.utils.exceptions import BusinessRuleViolation
@@ -1260,7 +1322,12 @@ async def test_reopen_survives_nightly_cache_recalc_then_beat(db: AsyncSession):
     await update_lead_cache(db, lead.id)
     await db.flush()
     await db.refresh(lead)
-    assert lead.last_consultation_at == d_close  # recalc VẪN ghi đè (đúng vai trò)
+    # B8b: cuộc auto-close (d_close) + cuộc reopen (B9) đều method='system' →
+    # get_consultation_aggregates loại khỏi MAX → recalc ghi đè
+    # last_consultation_at = NULL (lead không còn cuộc HUMAN nào). Trước B8b là
+    # d_close. Mốc re-engage (consultation_reengaged_at) mới là thứ CỨU lead khỏi
+    # beat, KHÔNG phải last_consultation_at — đó chính là điểm B8a.
+    assert lead.last_consultation_at is None
 
     # Beat 03:30 cùng đêm. Mốc re-engage KHÔNG bị recalc đụng nên lead sống.
     result = await close_stale_rejected_leads(
@@ -1322,7 +1389,10 @@ async def test_reopen_without_human_consultation_is_not_closed(db: AsyncSession)
     await db.flush()
 
     await db.refresh(lead_a)
-    assert lead_a.last_consultation_at == d_old  # recalc kéo mốc về quá khứ
+    # B8b: cuộc auto-close (d_old) + cuộc reopen (B9) đều system → loại khỏi MAX →
+    # recalc set last=NULL (trước B8b là d_old). Ca A và B nay hội tụ cùng NULL;
+    # điều CỨU lead vẫn là consultation_reengaged_at (B8a).
+    assert lead_a.last_consultation_at is None
     await db.refresh(lead_b)
     assert lead_b.last_consultation_at is None
 

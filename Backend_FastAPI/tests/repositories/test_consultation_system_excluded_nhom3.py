@@ -63,15 +63,16 @@ async def _add_consult(db, lead_id, officer_id, method, minutes, status_id):
 
 
 # ===========================================================================
-# B7 — consultation_count loại system; last_consultation_at (MAX) GIỮ system
+# B7 + B8b — count VÀ last_consultation_at (MAX) cùng loại system
 # ===========================================================================
 
 
-async def test_count_excludes_system_but_last_at_keeps_it(
+async def test_count_and_last_at_exclude_system(
     db, seeded_dependencies, officer_user_in_db, seeded_lead
 ):
-    """2 cuộc human + 1 cuộc system (mới nhất). count=2 (loại system) NHƯNG
-    last_consultation_at = mốc system (B8b hoãn — MAX chưa loại system)."""
+    """B7+B8b: 2 cuộc human (+10,+20) + 1 cuộc system (+30, mới nhất). count=2 VÀ
+    last_consultation_at = mốc HUMAN gần nhất (+20) — cuộc system KHÔNG tính vào
+    MAX (đối xứng count). Trước B8b last=+30 (system); nay đã loại."""
     off = officer_user_in_db["id"]
     st = seeded_dependencies["initial_status_id"]
     await _add_consult(db, seeded_lead.id, off, "phone", 10, st)
@@ -80,7 +81,21 @@ async def test_count_excludes_system_but_last_at_keeps_it(
 
     agg = await LeadRepository(db).get_consultation_aggregates(seeded_lead.id)
     assert agg["consultation_count"] == 2
-    assert agg["last_consultation_at"] == _BASE + timedelta(minutes=30)
+    assert agg["last_consultation_at"] == _BASE + timedelta(minutes=20)
+
+
+async def test_system_only_lead_count_zero_and_last_null(
+    db, seeded_dependencies, officer_user_in_db, seeded_lead
+):
+    """B8b: lead CHỈ có cuộc system → count=0 VÀ last_consultation_at=NULL →
+    lọt filter 'chưa tư vấn'."""
+    off = officer_user_in_db["id"]
+    st = seeded_dependencies["initial_status_id"]
+    await _add_consult(db, seeded_lead.id, off, "system", 10, st)
+
+    agg = await LeadRepository(db).get_consultation_aggregates(seeded_lead.id)
+    assert agg["consultation_count"] == 0
+    assert agg["last_consultation_at"] is None
 
 
 # ===========================================================================

@@ -850,22 +850,24 @@ class LeadRepository(BaseRepository[models.Lead]):
                        update_next_activity)
         """
         # Query 1: Get consultation stats (exclude soft-deleted)
-        # B7: consultation_count loại cuộc do hệ thống tạo (method='system', vd
-        # auto-close SLA / reopen) — chỉ đếm tương tác THẬT của officer. Dùng
-        # FILTER per-aggregate để loại system KHỎI COUNT nhưng GIỮ NGUYÊN MAX
-        # (last_consultation_at): MAX là B8b — phải đi cùng B9 + §Runbook B8
-        # (recalc) + release note, và SLA vẫn đọc last_consultation_at (qua
-        # GREATEST sau B8a) nên đổi MAX ở đây phải có runbook riêng. ⚠️ Khi làm
-        # B8b: thêm is_distinct_from("system") cho MAX (hoặc chuyển cả 2 xuống
-        # WHERE và bỏ FILTER này để khỏi lọc 2 lần).
+        # B7 + B8b: loại cuộc do hệ thống tạo (method='system', vd auto-close SLA
+        # / reopen) khỏi CẢ consultation_count VÀ last_consultation_at (MAX) — chỉ
+        # phản ánh tương tác THẬT của officer. Lead chỉ có cuộc system → count=0,
+        # last_consultation_at=NULL, lọt filter "chưa tư vấn".
+        # An toàn sau B8a: SLA đọc GREATEST(consultation_reengaged_at,
+        # last_consultation_at) nên reopen (set consultation_reengaged_at) KHÔNG
+        # phụ thuộc MAX bị cuộc system thổi lên ngày auto-close.
+        # 🔴 DEPLOY: last_consultation_at/count là cache DẪN XUẤT (do
+        # update_lead_cache ghi) → BẮT BUỘC §Runbook B8 (dry-run report + recalc
+        # NGAY sau deploy + canh mốc SLA 03:30) mới cập nhật giá trị đã cache;
+        # không recalc thì lead cũ vẫn giữ count/last cũ tới 00:05.
         stats_query = select(
             func.max(models.Consultation.consultation_date).label("last_consultation_at"),
-            func.count(models.Consultation.id)
-            .filter(models.Consultation.method.is_distinct_from("system"))
-            .label("consultation_count"),
+            func.count(models.Consultation.id).label("consultation_count"),
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            models.Consultation.method.is_distinct_from("system"),  # B7 + B8b
         )
 
         stats_result = await self.db.execute(stats_query)
