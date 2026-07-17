@@ -1822,6 +1822,11 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id == officer_id,
                 models.Consultation.deleted_at.is_(None),
+                # review#2: loại cuộc system (auto-close) khỏi first-consultation
+                # → response-time không bị thổi phồng, SLA-compliance không lệch.
+                models.Consultation.method.is_distinct_from(
+                    SYSTEM_CONSULTATION_METHOD
+                ),
             )
             .group_by(models.Consultation.lead_id)
         ).subquery()
@@ -1878,6 +1883,11 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id.in_(officer_ids),
                 models.Consultation.deleted_at.is_(None),
+                # review#2: loại cuộc system khỏi first-consultation (response-time
+                # + SLA-compliance).
+                models.Consultation.method.is_distinct_from(
+                    SYSTEM_CONSULTATION_METHOD
+                ),
             )
             .group_by(models.Consultation.lead_id)
         ).subquery()
@@ -1946,6 +1956,11 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id == officer_id,
                 models.Consultation.deleted_at.is_(None),
+                # review#2: loại cuộc system (auto-close) khỏi first-consultation
+                # → response-time không bị thổi phồng, SLA-compliance không lệch.
+                models.Consultation.method.is_distinct_from(
+                    SYSTEM_CONSULTATION_METHOD
+                ),
             )
             .group_by(models.Consultation.lead_id)
         ).subquery()
@@ -2035,6 +2050,11 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id.in_(officer_ids),
                 models.Consultation.deleted_at.is_(None),
+                # review#2: loại cuộc system khỏi first-consultation (response-time
+                # + SLA-compliance).
+                models.Consultation.method.is_distinct_from(
+                    SYSTEM_CONSULTATION_METHOD
+                ),
             )
             .group_by(models.Consultation.lead_id)
         ).subquery()

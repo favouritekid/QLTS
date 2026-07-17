@@ -79,6 +79,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
           style: {
             maxWidth: '400px', // Giới hạn chiều rộng toast
           },
+          // #7 (review-2): chỉ NÚT ACTION mới pointer-events:auto — KHÔNG đặt
+          // trên cả toast (bug #8 cũ: cả toast click-capturing nuốt click nhắm
+          // overlay khi modal mở). Radix AlertDialog set body pointer-events:none
+          // khi mở → nếu không có dòng này, MỌI toast có action button (Hoàn tác,
+          // Làm mới, Tải lại, Xem Lead, Xem chi tiết) không bấm được khi có modal.
+          classNames: {
+            actionButton: "pointer-events-auto",
+          },
         }}
       />
     </QueryClientProvider>

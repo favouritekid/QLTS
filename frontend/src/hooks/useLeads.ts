@@ -1143,11 +1143,9 @@ export function useDeleteConsultation() {
       toast.success("Đã xóa ghi nhận tư vấn", {
         description: "Bấm Hoàn tác để khôi phục",
         duration: 10000, // 10 seconds
-        // #8: khoanh vùng pointer-events cho RIÊNG toast có nút "Hoàn tác" (trước
-        // đây đặt global trên toastOptions → MỌI toast click-capturing, có thể
-        // nuốt click nhắm overlay khi modal mở). Radix AlertDialog set
-        // pointer-events:none lên body khi mở → nút undo cần auto để bấm được.
-        className: "pointer-events-auto",
+        // #7 (review-2): pointer-events:auto cho nút "Hoàn tác" giờ đặt GLOBAL ở
+        // providers.tsx (toastOptions.classNames.actionButton) — nhất quán với
+        // mọi action toast khác, không còn className lẻ trên cả toast.
         action: {
           label: "Hoàn tác",
           onClick: async () => {

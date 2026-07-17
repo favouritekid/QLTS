@@ -20,6 +20,8 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 _BASE = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 _APPT = _BASE + timedelta(days=7)  # giá trị scheduled_at (future/past không quan trọng)
+_APPT_SOON = _BASE + timedelta(days=1)   # hẹn SỚM (MIN scheduled_at)
+_APPT_FAR = _BASE + timedelta(days=14)   # hẹn XA
 
 
 @pytest_asyncio.fixture
@@ -73,13 +75,16 @@ def _by_id(timeline):
 async def test_timeline_admin_flags_and_active_appointment(
     db, seeded_dependencies, tl_status, admin_user, officer_user
 ):
-    """Admin sửa/xóa mọi cuộc non-system; nhưng can_reschedule CHỈ bật trên
-    lịch hẹn đang hiệu lực (c_new), KHÔNG bật trên hẹn cũ (c_old) — vá bug 17-07.
-    Cuộc system → mọi cờ False."""
+    """Admin sửa/xóa mọi cuộc non-system; nhưng can_reschedule CHỈ bật trên hẹn
+    SỚM NHẤT đang hiệu lực (review#2 fix#3 = MIN scheduled_at, khớp next_activity_at
+    / widget Nhịp hẹn), KHÔNG bật trên hẹn XA hơn — kể cả khi hẹn xa nằm ở cuộc
+    MỚI HƠN. Đây là scenario fix: trước dùng MAX → nút Dời/Hủy nhảy lên hẹn 2 tuần,
+    officer không dời được hẹn NGÀY MAI. Cuộc system → mọi cờ False."""
     off = officer_user.id
     lead = await _make_lead(db, seeded_dependencies, off)
-    c_old = await _add_consult(db, lead.id, off, "phone", 10, scheduled_at=_APPT)
-    c_new = await _add_consult(db, lead.id, off, "phone", 20, scheduled_at=_APPT)
+    # c_old = cuộc CŨ hơn nhưng hẹn SỚM (ngày mai); c_new = cuộc MỚI hơn, hẹn XA.
+    c_old = await _add_consult(db, lead.id, off, "phone", 10, scheduled_at=_APPT_SOON)
+    c_new = await _add_consult(db, lead.id, off, "phone", 20, scheduled_at=_APPT_FAR)
     c_sys = await _add_consult(db, lead.id, off, "system", 5)  # older, no appt
 
     tl = await lead_service.get_lead_timeline(db, lead.id, current_user=admin_user)
@@ -91,25 +96,28 @@ async def test_timeline_admin_flags_and_active_appointment(
     # System → bất biến.
     assert not d[c_sys.id]["can_edit"] and d[c_sys.id]["edit_blocker"] == "system"
     assert not d[c_sys.id]["can_reschedule"]
-    # 🎯 Active appointment = c_new (cuộc-có-hẹn mới nhất) → CHỈ nó reschedule được.
-    assert d[c_new.id]["can_reschedule"] is True
-    assert d[c_old.id]["can_reschedule"] is False  # hẹn CŨ không dời/hủy được
+    # 🎯 Active appointment = c_old (hẹn SỚM NHẤT) → CHỈ nó reschedule được, dù
+    # nằm ở cuộc CŨ hơn. c_new (hẹn XA, cuộc mới) KHÔNG dời/hủy được.
+    assert d[c_old.id]["can_reschedule"] is True
+    assert d[c_new.id]["can_reschedule"] is False
 
 
 async def test_timeline_officer_latest_only(
     db, seeded_dependencies, tl_status, officer_user
 ):
-    """Officer chỉ sửa/xóa/dời cuộc MỚI NHẤT của mình; cuộc cũ → not_latest."""
+    """Officer chỉ sửa/xóa/dời cuộc MỚI NHẤT của mình; cuộc cũ → not_latest.
+    Cuộc mới nhất mang hẹn SỚM NHẤT (active) → officer dời được; cuộc cũ (hẹn xa)
+    vừa not_latest vừa không-active → không dời."""
     off = officer_user
     lead = await _make_lead(db, seeded_dependencies, off.id)
-    c_old = await _add_consult(db, lead.id, off.id, "phone", 10, scheduled_at=_APPT)
-    c_new = await _add_consult(db, lead.id, off.id, "phone", 20, scheduled_at=_APPT)
+    c_old = await _add_consult(db, lead.id, off.id, "phone", 10, scheduled_at=_APPT_FAR)
+    c_new = await _add_consult(db, lead.id, off.id, "phone", 20, scheduled_at=_APPT_SOON)
 
     tl = await lead_service.get_lead_timeline(db, lead.id, current_user=off)
     d = _by_id(tl)
 
     assert d[c_new.id]["can_edit"] and d[c_new.id]["can_delete"]
-    assert d[c_new.id]["can_reschedule"]  # latest + active + own + recent
+    assert d[c_new.id]["can_reschedule"]  # latest + active (hẹn sớm nhất) + own + recent
     assert not d[c_old.id]["can_edit"] and d[c_old.id]["edit_blocker"] == "not_latest"
     assert not d[c_old.id]["can_reschedule"]
 
