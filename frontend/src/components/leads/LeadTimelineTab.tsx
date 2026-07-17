@@ -804,9 +804,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
+              disabled={deleteMutation.isPending}
               className="bg-error-600 hover:bg-error-700"
             >
-              Xóa
+              {deleteMutation.isPending ? "Đang xóa…" : "Xóa"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -826,10 +827,10 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             <AlertDialogCancel>Không</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmCancelAppointment}
-              disabled={!cancelStatusId}
+              disabled={!cancelStatusId || updateMutation.isPending}
               className="bg-error-600 hover:bg-error-700"
             >
-              Hủy lịch hẹn
+              {updateMutation.isPending ? "Đang hủy…" : "Hủy lịch hẹn"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -869,8 +870,11 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             >
               Hủy
             </Button>
-            <Button onClick={confirmReschedule} disabled={!rescheduleDate}>
-              Lưu
+            <Button
+              onClick={confirmReschedule}
+              disabled={!rescheduleDate || updateMutation.isPending}
+            >
+              {updateMutation.isPending ? "Đang lưu…" : "Lưu"}
             </Button>
           </DialogFooter>
         </DialogContent>
