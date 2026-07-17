@@ -1243,6 +1243,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
                 models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+                # B7c: loại cuộc do hệ thống tạo khỏi bảng xếp hạng.
+                models.Consultation.method.is_distinct_from("system"),
             )
             .group_by(models.User.id, models.User.username, models.User.full_name)
             .order_by(func.count(models.Consultation.id).desc())
@@ -1250,7 +1252,7 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         result = await self.db.execute(query)
         return result.fetchall()
-    
+
     async def get_officer_rank(
         self,
         officer_id: int,
@@ -1268,6 +1270,9 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
                 models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+                # B7c: loại cuộc system (đồng bộ my_count bên dưới — nếu lệch,
+                # officer thấy hạng khác vị trí thật trên bảng).
+                models.Consultation.method.is_distinct_from("system"),
             )
             .group_by(models.Consultation.officer_id)
         ).subquery()
@@ -1280,6 +1285,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
                 models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+                # B7c: loại cuộc system (đồng bộ subq trên).
+                models.Consultation.method.is_distinct_from("system"),
             )
         )
         my_count = (await self.db.execute(my_count_query)).scalar() or 0
@@ -1343,6 +1350,8 @@ class OfficerRepository(BaseRepository[models.User]):
             func.date(models.Consultation.consultation_date) <= end_date,
             models.Lead.deleted_at.is_(None),  # Exclude consultations of deleted leads
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+            # B7c: loại cuộc system khỏi trung bình tải/năng suất team.
+            models.Consultation.method.is_distinct_from("system"),
         ]
         
         # Ensure numerator and denominator use the exact same officer set.
@@ -1709,6 +1718,9 @@ class OfficerRepository(BaseRepository[models.User]):
                     func.date(models.Consultation.consultation_date) >= start_date,
                     func.date(models.Consultation.consultation_date) <= end_date,
                     models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                    # B7c: loại cuộc system. Filter nằm TRONG ON của outerjoin
+                    # (không phải WHERE) để officer 0 cuộc thật vẫn xuất hiện.
+                    models.Consultation.method.is_distinct_from("system"),
                 )
             )
             .where(models.User.id.in_(officer_ids))
@@ -1758,6 +1770,8 @@ class OfficerRepository(BaseRepository[models.User]):
                     func.date(models.Consultation.consultation_date) >= week_start,
                     func.date(models.Consultation.consultation_date) <= week_end,
                     models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
+                    # B7c: loại cuộc system (ON của outerjoin — giữ officer 0 cuộc).
+                    models.Consultation.method.is_distinct_from("system"),
                 )
             )
             .where(
@@ -2115,6 +2129,10 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id == officer_id,
                 models.Consultation.deleted_at.is_(None),
+                # B7c: lead chỉ tính "đã tư vấn" nếu có cuộc THẬT (non-system) —
+                # cuộc system (auto-close/reopen) không được phình mẫu số
+                # effectiveness.
+                models.Consultation.method.is_distinct_from("system"),
             )
             .distinct()
         ).subquery()
@@ -2185,6 +2203,8 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 models.Consultation.officer_id.in_(officer_ids),
                 models.Consultation.deleted_at.is_(None),
+                # B7c: chỉ lead có cuộc THẬT (non-system) mới tính mẫu số.
+                models.Consultation.method.is_distinct_from("system"),
             )
             .distinct()
         ).subquery()

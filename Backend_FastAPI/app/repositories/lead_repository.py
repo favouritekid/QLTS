@@ -850,9 +850,19 @@ class LeadRepository(BaseRepository[models.Lead]):
                        update_next_activity)
         """
         # Query 1: Get consultation stats (exclude soft-deleted)
+        # B7: consultation_count loại cuộc do hệ thống tạo (method='system', vd
+        # auto-close SLA / reopen) — chỉ đếm tương tác THẬT của officer. Dùng
+        # FILTER per-aggregate để loại system KHỎI COUNT nhưng GIỮ NGUYÊN MAX
+        # (last_consultation_at): MAX là B8b — phải đi cùng B9 + §Runbook B8
+        # (recalc) + release note, và SLA vẫn đọc last_consultation_at (qua
+        # GREATEST sau B8a) nên đổi MAX ở đây phải có runbook riêng. ⚠️ Khi làm
+        # B8b: thêm is_distinct_from("system") cho MAX (hoặc chuyển cả 2 xuống
+        # WHERE và bỏ FILTER này để khỏi lọc 2 lần).
         stats_query = select(
             func.max(models.Consultation.consultation_date).label("last_consultation_at"),
-            func.count(models.Consultation.id).label("consultation_count"),
+            func.count(models.Consultation.id)
+            .filter(models.Consultation.method.is_distinct_from("system"))
+            .label("consultation_count"),
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted

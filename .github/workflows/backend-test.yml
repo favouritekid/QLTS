@@ -261,6 +261,7 @@ jobs:
           tests/integration/test_add_restore_consultation_latest.py
           tests/integration/test_consultation_system_immutable.py
           tests/unit/test_consultation_schema_validation.py
+          tests/repositories/test_consultation_system_excluded_nhom3.py
           tests/services/test_assignment_self_sourced.py
           tests/unit/test_admission_state_machine.py
           tests/unit/test_b2_1_admission_milestone_events.py
