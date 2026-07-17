@@ -1996,10 +1996,16 @@ async def add_consultation(
     CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
     when multiple requests try to update the same lead's pipeline_stage.
 
+    B4: chỉ consultation MỚI NHẤT (theo consultation_date, tie-break id) mới ghi
+    đè lead.status/pipeline. Consultation BACKDATE (date < cuộc mới nhất hiện có)
+    chỉ được ghi vào lịch sử — bỏ validate transition + không mutate lead + trả
+    status_updated=False (đối xứng update/delete vốn đã kiểm is_latest).
+
     Returns:
         tuple: (consultation, status_updated, terminal_guard_reason)
         - consultation: The created Consultation object
-        - status_updated: Whether the lead status was actually updated
+        - status_updated: Whether the lead status was actually updated (False cho
+          backdate hoặc soft-terminal guard)
         - terminal_guard_reason: Reason status was not updated (soft-terminal guard), or None
     """
     async with db.begin_nested():
@@ -2055,10 +2061,45 @@ async def add_consultation(
             # SOFT BLOCK flag - sẽ sử dụng ở bước update lead status
             skip_status_update = terminal_guard.is_terminal
 
+            # B4: xác định consultation mới có phải "mới nhất" không (theo
+            # consultation_date, tie-break id sau flush). CHỈ cuộc mới nhất mới
+            # được ghi đè lead.status/pipeline — đối xứng update_consultation
+            # (:3071) và delete_consultation vốn đã kiểm is_latest; add là chỗ
+            # DUY NHẤT còn thiếu → backdate ghi đè vô điều kiện làm lead.status
+            # lệch với cuộc tư vấn thật mới nhất và bị đóng băng. Cuộc BACKDATE
+            # (date < cuộc mới nhất hiện có) chỉ được ghi vào lịch sử, KHÔNG chạm
+            # state lead. Chuẩn hoá naive→UTC cả 2 vế để so an toàn với cột
+            # DateTime(timezone=True) (legacy row có thể tz-naive).
+            consultation_date = data.consultation_date or datetime.now(timezone.utc)
+            if consultation_date.tzinfo is None:
+                consultation_date = consultation_date.replace(tzinfo=timezone.utc)
+            latest_existing = await repo.get_latest_consultation(lead_id)
+            latest_existing_date = (
+                latest_existing.consultation_date if latest_existing else None
+            )
+            if (
+                latest_existing_date is not None
+                and latest_existing_date.tzinfo is None
+            ):
+                latest_existing_date = latest_existing_date.replace(
+                    tzinfo=timezone.utc
+                )
+            will_be_latest = (
+                latest_existing_date is None
+                or consultation_date >= latest_existing_date
+            )
+
             # ✅ NEW: Validate workflow transition (following update_lead pattern)
-            # Chỉ validate nếu lead đã có status và status thực sự thay đổi
+            # Chỉ validate nếu lead đã có status, status thực sự thay đổi, VÀ cuộc
+            # này sẽ là mới nhất (B4: backdate không tạo "transition" nên bỏ
+            # validate — status cũ trong lịch sử có thể vi phạm allowed_transitions
+            # so với hiện tại một cách hợp lệ).
             current_status_id = lead.consultation_status_id
-            if current_status_id and current_status_id != data.status_id:
+            if (
+                will_be_latest
+                and current_status_id
+                and current_status_id != data.status_id
+            ):
                 # ✅ PHASE-BASED WORKFLOW: Validate phase before transition
                 from app.services.phase_manager import (
                     derive_phase_from_admission,
@@ -2155,6 +2196,22 @@ async def add_consultation(
                 )
                 # Still create consultation record for history, but don't update lead status
                 # Continue to consultation creation below without status update
+            elif not will_be_latest:
+                # B4: cuộc BACKDATE — chỉ ghi nhận vào lịch sử, KHÔNG ghi đè
+                # pipeline (đã bỏ validate transition ở trên). Cuộc tư vấn mới nhất
+                # theo consultation_date vẫn giữ quyền quyết định lead.status.
+                log.info(
+                    "Backdated consultation - không update pipeline (không phải "
+                    "cuộc mới nhất theo consultation_date)",
+                    lead_id=lead_id,
+                    status_id=new_status.id,
+                    new_consultation_date=consultation_date.isoformat(),
+                    latest_existing_date=(
+                        latest_existing_date.isoformat()
+                        if latest_existing_date
+                        else None
+                    ),
+                )
             # ✅ Chỉ cập nhật pipeline nếu status.updates_pipeline = True
             elif new_status.updates_pipeline:
                 # Cập nhật trạng thái Lead theo status mới của consultation
@@ -2185,7 +2242,7 @@ async def add_consultation(
             # Include: loss_reason_code/loss_reason_note (now stored on Consultation)
             create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
 
-            consultation_date = data.consultation_date or datetime.now(timezone.utc)
+            # consultation_date đã tính + chuẩn hoá tz ở trên (B4 will_be_latest).
 
             # Clear loss_reason if not negative outcome
             if new_status.outcome_type != "negative":
@@ -2270,8 +2327,11 @@ async def add_consultation(
                 officer_id=officer_id,
             )
             # Return consultation + terminal guard diagnostics
-            # status_updated = actual lead-state mutation (compare before/after)
-            status_updated = old_state != new_state
+            # status_updated = actual lead-state mutation (compare before/after).
+            # B4: ép False cho backdate — cuộc không-mới-nhất đã bỏ mutation nên
+            # old==new, nhưng gate tường minh để router/notification KHÔNG bắn sự
+            # kiện "đổi trạng thái" sai cho consultation quá khứ.
+            status_updated = will_be_latest and (old_state != new_state)
             terminal_reason = terminal_guard.reason if skip_status_update else None
             return new_consultation, status_updated, terminal_reason
 
@@ -4918,32 +4978,33 @@ async def restore_lead(
             # IntegrityError will be caught by the outer except block
             await repo.restore_phone_identities(lead_id)
 
-            # ✅ H5: Restore status from latest non-deleted consultation (no hardcode "new")
-            latest_consultation = await repo.get_latest_consultation(lead_id)
-            if latest_consultation and latest_consultation.consultation_status_id:
-                latest_status = await db.get(
-                    models.ConsultationStatus, latest_consultation.consultation_status_id
-                )
-                if latest_status:
-                    lead.consultation_status_id = latest_status.id
-                    lead.pipeline_stage_id = latest_status.stage_id
-                    sync_lead_status_from_consultation(lead, latest_status)
-                else:
-                    initial_status = await StatusHelper.get_initial_status(db)
-                    if initial_status:
-                        lead.consultation_status_id = initial_status.id
-                        lead.pipeline_stage_id = initial_status.stage_id
-                        sync_lead_status_from_consultation(lead, initial_status)
-                    else:
-                        lead.status = "new"
+            # B2b: khôi phục pipeline theo cuộc updates_pipeline=True GẦN NHẤT
+            # trong chuỗi CÒN SỐNG sau khi bulk-restore consultation ở trên (helper
+            # 3-nhánh, cùng cơ chế delete B1 / restore B2). Mọi consultation liên
+            # quan đã hết deleted_at + flush ở :4912 nên ĐÃ nằm trong chuỗi → KHÔNG
+            # truyền exclude. Bug cũ (H5): gán thẳng lead.pipeline_stage_id =
+            # latest_status.stage_id — nếu cuộc mới nhất là universal (stage_id=
+            # NULL) thì NULL-hoá stage của lead (đẩy ra ngoài phễu) = defect B2b.
+            # Helper tự dò về cuộc pipeline gần nhất + gộp nhánh initial (chuỗi
+            # rỗng) nên bỏ được toàn bộ fallback thủ công cũ.
+            revert_status_obj, new_stage_id = await _resolve_revert_target(
+                db, lead_id
+            )
+            if revert_status_obj is not None:
+                lead.consultation_status_id = revert_status_obj.id
+                lead.pipeline_stage_id = new_stage_id
+                sync_lead_status_from_consultation(lead, revert_status_obj)
             else:
-                initial_status = await StatusHelper.get_initial_status(db)
-                if initial_status:
-                    lead.consultation_status_id = initial_status.id
-                    lead.pipeline_stage_id = initial_status.stage_id
-                    sync_lead_status_from_consultation(lead, initial_status)
-                else:
-                    lead.status = "new"
+                # (None, None): CÒN consultation nhưng chuỗi TOÀN universal → GIỮ
+                # NGUYÊN pipeline pre-deletion của lead (soft-delete không xoá
+                # status) — KHÔNG NULL-hoá stage. Nhánh 'rỗng' (không consultation
+                # nào) đã được helper trả về initial_status ở trên.
+                log.info(
+                    "Restore lead: live chain all-universal, keeping current "
+                    "lead pipeline state (no status/stage/sync change)",
+                    lead_id=lead_id,
+                    current_status_id=lead.consultation_status_id,
+                )
 
             # Mark as modified
             db.add(lead)

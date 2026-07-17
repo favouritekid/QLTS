@@ -1031,7 +1031,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 joinedload(models.Consultation.consultation_status),
                 joinedload(models.Consultation.officer),
             )
-            .order_by(models.Consultation.consultation_date.desc())
+            # B4b: tie-break id.desc() để "latest" đồng nhất với
+            # LeadRepository.get_latest_consultation (lead_repository.py:1210-1213)
+            # và _resolve_revert_target. Cùng consultation_date (rất dễ xảy ra vì
+            # add_consultation dùng datetime.now()) mà thiếu tie-break → 2 repo
+            # trả 2 row khác nhau, thứ tự do Postgres quyết định.
+            .order_by(
+                models.Consultation.consultation_date.desc(),
+                models.Consultation.id.desc(),
+            )
             .limit(1)
         )
         result = await self.db.execute(stmt)
