@@ -76,10 +76,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
         visibleToasts={3}      // Tối đa 3 toast hiển thị cùng lúc
         gap={8}                // Khoảng cách giữa các toast (px)
         toastOptions={{
-          // F2: nút "Hoàn tác" trên toast không bấm được khi toast render lúc
-          // Radix AlertDialog modal còn mở (Radix set pointer-events:none lên
-          // body). pointer-events-auto trả lại khả năng bấm cho toast.
-          className: "pointer-events-auto",
           style: {
             maxWidth: '400px', // Giới hạn chiều rộng toast
           },
