@@ -87,3 +87,26 @@ def test_create_naive_future_date_rejected():
 def test_create_date_none_ok():
     c = ConsultationCreate(status_id="sts01", consultation_date=None)
     assert c.consultation_date is None
+
+
+# ===========================================================================
+# SECURITY — method='system' là sentinel dành riêng cho hệ thống (reserved)
+# ===========================================================================
+
+
+def test_create_method_system_rejected():
+    """Create-spoof: client KHÔNG được tạo cuộc method='system' (bất biến F1 +
+    ẩn khỏi metrics B7/B8)."""
+    with pytest.raises(ValidationError):
+        ConsultationCreate(status_id="sts01", method="system")
+
+
+def test_update_method_system_rejected():
+    """Update normal→system: KHÔNG được đổi method thường thành 'system'."""
+    with pytest.raises(ValidationError):
+        ConsultationUpdate(method="system")
+
+
+def test_normal_method_still_accepted_alongside_reserved_guard():
+    assert ConsultationCreate(status_id="sts01", method="phone").method == "phone"
+    assert ConsultationUpdate(method="call").method == "call"

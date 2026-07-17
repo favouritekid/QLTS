@@ -163,3 +163,43 @@ async def test_delete_normal_consultation_not_blocked_by_f1(
 
     reloaded = await db.get(models.Consultation, c.id)
     assert reloaded.deleted_at is not None
+
+
+# ===========================================================================
+# Sentinel reservation — guard tầng SERVICE (defense-in-depth, bypass schema)
+# ===========================================================================
+
+
+async def test_add_consultation_service_rejects_system_method(
+    db, seeded_dependencies, f1_status, officer_user
+):
+    """Dù bypass schema (model_construct), add_consultation vẫn chặn tạo cuộc
+    method='system' → không spoof được row bất biến/ẩn KPI."""
+    lead = await _make_lead(db, seeded_dependencies, officer_user.id)
+    data = schemas.ConsultationCreate.model_construct(
+        status_id="F1_PIPE", method="system",
+    )
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await lead_service.add_consultation(db, lead.id, officer_user.id, data)
+    assert "hệ thống" in str(exc.value.detail).lower()
+
+
+async def test_update_consultation_service_rejects_normal_to_system(
+    db, seeded_dependencies, f1_status, admin_user, officer_user
+):
+    """Bypass schema (model_construct): đổi cuộc THƯỜNG → method='system' vẫn bị
+    service chặn (F1 chỉ chặn row ĐÃ là system, không chặn spoof normal→system)."""
+    lead = await _make_lead(db, seeded_dependencies, officer_user.id)
+    c = await _add_consult(db, lead.id, officer_user.id, "phone", 10)
+    data = schemas.ConsultationUpdate.model_construct(method="system")
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await lead_service.update_consultation(
+            db=db, lead_id=lead.id, consultation_id=c.id,
+            consultation_in=data, current_user=admin_user,
+        )
+    assert "hệ thống" in str(exc.value.detail).lower()
+
+    # Không bị đổi thành system.
+    reloaded = await db.get(models.Consultation, c.id)
+    assert reloaded.method == "phone"

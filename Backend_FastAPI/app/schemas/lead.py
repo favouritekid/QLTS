@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from ..core.constants import SYSTEM_CONSULTATION_METHOD
 from .collaborator import CollaboratorShallow
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -14,6 +15,21 @@ from .user import User
 # -----------------
 # SCHEMAS HÀNH ĐỘNG VÀ DỮ LIỆU PHỤ
 # -----------------
+
+
+def _reject_system_method(cls, v: Optional[str]) -> Optional[str]:
+    """🔴 SECURITY (sentinel reservation): cấm client đặt method = giá trị dành
+    riêng cho hệ thống. Cuộc 'system' bất biến (F1) + ẩn khỏi metrics (B7/B8) →
+    spoof = tạo/biến row thành bất biến, ẩn KPI, kẹt cả admin. Dùng chung cho
+    ConsultationCreate (create-spoof) và ConsultationUpdate (normal→system).
+    Chỉ đặt trên write-schema — response Consultation.method KHÔNG dính
+    (memory pydantic-validator-on-base-hits-response-schema)."""
+    if v is not None and v == SYSTEM_CONSULTATION_METHOD:
+        raise ValueError(
+            f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị dành riêng cho "
+            "hệ thống, không được đặt."
+        )
+    return v
 
 
 class ConsultationBase(BaseModel):
@@ -60,6 +76,8 @@ class ConsultationCreate(ConsultationBase):
             raise ValueError("Ngày tư vấn không được ở tương lai.")
         return v
 
+    _method_not_reserved = field_validator("method")(_reject_system_method)
+
 
 class ConsultationUpdate(BaseModel):
     """
@@ -83,6 +101,8 @@ class ConsultationUpdate(BaseModel):
         max_length=200,
         description="Additional note for loss reason"
     )
+
+    _method_not_reserved = field_validator("method")(_reject_system_method)
 
 
 class Consultation(ConsultationBase):

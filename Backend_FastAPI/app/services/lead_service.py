@@ -28,7 +28,7 @@ from ..core.status_mapping import (
     is_consultation_terminal_status,
     is_lead_consultation_terminal,
 )
-from ..core.constants import UserRole
+from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .status_helper import StatusHelper, AssignmentStatus
 from .assignment_reason import build_assignment_reason
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
@@ -41,11 +41,9 @@ from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
 
-# F1: method của consultation do hệ thống tạo (auto-close SLA, reopen, …). Các
-# ghi nhận này BẤT BIẾN — không vai trò nào (kể cả admin) được sửa/xóa/khôi
-# phục. Hằng gom lại thay cho chuỗi "system" hardcode rải rác (officer_repository,
-# kpi_planning_service, drilldown_service, historical_metrics_service).
-SYSTEM_CONSULTATION_METHOD = "system"
+# SYSTEM_CONSULTATION_METHOD nay ở app.core.constants (nguồn dùng chung schema +
+# service; xem docstring ở đó). Re-export qua import trên để lead_reopen_service
+# và các module cũ `from .lead_service import SYSTEM_CONSULTATION_METHOD` không vỡ.
 
 # Phase labels for user-facing error messages
 _PHASE_LABELS = {
@@ -2026,7 +2024,19 @@ async def add_consultation(
             # ✅ FIX: Check if lead is deleted
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot add consultation to a deleted lead.")
-            
+
+            # 🔴 SECURITY (sentinel reservation): cấm tạo cuộc với method dành
+            # riêng cho hệ thống. Cuộc 'system' bất biến (F1) + ẩn khỏi metrics
+            # (B7/B8) → spoof = row bất biến, ẩn KPI, kẹt cả admin. Schema đã
+            # chặn (422); guard này phòng thủ tầng service (caller nội bộ gọi
+            # thẳng service). Internal reopen/auto-close dùng models.Consultation
+            # trực tiếp, KHÔNG qua đây → không bị chặn.
+            if data.method == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail=f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị "
+                    "dành riêng cho hệ thống, không được đặt."
+                )
+
             # Note: Relations are not eagerly loaded here. If accessed, explicit refresh needed.
             
             # Lấy Officer
@@ -3210,6 +3220,16 @@ async def update_consultation(
 
             # Update các trường được cung cấp
             update_data = consultation_in.model_dump(exclude_unset=True)
+
+            # 🔴 SECURITY (sentinel reservation): cấm đổi method thường → 'system'.
+            # F1 (:3153) chỉ chặn khi ROW ĐÃ là system; đây chặn spoof
+            # normal→system (biến cuộc thường thành bất biến + ẩn khỏi metrics).
+            # Schema đã chặn (422); guard này phòng thủ tầng service.
+            if update_data.get("method") == SYSTEM_CONSULTATION_METHOD:
+                raise BusinessRuleViolation(
+                    detail=f"method '{SYSTEM_CONSULTATION_METHOD}' là giá trị "
+                    "dành riêng cho hệ thống, không được đặt."
+                )
 
             # ✅ SECURITY FIX: Validate status_id BEFORE modifying consultation
             # Prevents creating consultation with invalid/nonexistent status
