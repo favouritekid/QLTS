@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter, require_admin, require_admin_or_manager  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, LeadListFilter, get_current_active_user, get_lead_for_user, get_lead_list_filter, require_admin, require_admin_or_manager  # ✅ Phase 2.2
 from ..schemas.collaborator import LeadValidityUpdate
 from ..services import distribution_service, insights_service, lead_service
 from ..utils.csv_helpers import sanitize_csv_cell
@@ -1021,9 +1021,13 @@ async def get_lead_timeline(
     request: Request,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
 ):
-    """Lấy lịch sử tổng hợp (timeline) của một Lead (Đã xác thực quyền)."""
-    return await lead_service.get_lead_timeline(db, lead.id)
+    """Lấy lịch sử tổng hợp (timeline) của một Lead (Đã xác thực quyền).
+
+    Nhóm 4: truyền current_user để BE gắn cờ quyền per-consultation (FE gate nút
+    Sửa/Xóa/Dời-Hủy thuần theo cờ). LeadAccessDep giữ IDOR 404 như cũ."""
+    return await lead_service.get_lead_timeline(db, lead.id, current_user=current_user)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour

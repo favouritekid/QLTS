@@ -2562,8 +2562,17 @@ async def assign_lead_manually(
     return result_lead, _post_commit
 
 
-async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
-    """Lấy timeline tổng hợp của Lead (consultations và assignment logs)."""
+async def get_lead_timeline(
+    db: AsyncSession,
+    lead_id: int,
+    current_user: Optional[models.User] = None,
+) -> List[dict]:
+    """Lấy timeline tổng hợp của Lead (consultations và assignment logs).
+
+    Nhóm 4: khi có ``current_user``, mỗi consultation được gắn cờ quyền
+    (can_edit / can_delete / can_reschedule + blocker) qua
+    ``compute_consultation_action_permissions`` để FE gate nút THUẦN theo cờ.
+    ``current_user=None`` (vd callsite /insights) → cờ giữ mặc định False."""
 
     # 1. ✅ GỌI HÀM ĐÃ TỐI ƯU HÓA EAGER LOADING (từ dòng 104)
     # Hàm này đã load sẵn:
@@ -2585,15 +2594,49 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
 
     timeline_items = []
 
+    # Nhóm 4: tính 1 LẦN (không per-row) mốc "latest" + "active appointment" để
+    # gắn cờ quyền. latest = cuộc mới nhất theo (consultation_date, id) — cùng
+    # định nghĩa get_latest_consultation. active appointment = cuộc CÓ scheduled_at
+    # mới nhất theo (consultation_date, id): chỉ cuộc-có-hẹn mới nhất mới Dời/Hủy
+    # được (cuộc mới không đặt lịch KHÔNG mồ côi hẹn cũ). Cả 2 loại soft-deleted.
+    live_consults = [
+        c for c in (lead.consultations or []) if c.deleted_at is None
+    ]
+    now = datetime.now(timezone.utc)
+    latest_id = (
+        max(live_consults, key=lambda c: (c.consultation_date, c.id)).id
+        if live_consults
+        else None
+    )
+    appt_consults = [c for c in live_consults if c.scheduled_at is not None]
+    active_appointment_id = (
+        max(appt_consults, key=lambda c: (c.consultation_date, c.id)).id
+        if appt_consults
+        else None
+    )
+
     # 3. Xử lý consultations — loss_reason now stored directly on Consultation
     if lead.consultations:
         for c in lead.consultations:
             if c.deleted_at is not None:
                 continue
+            consult_schema = schemas.Consultation.model_validate(c)
+            flags = compute_consultation_action_permissions(
+                c,
+                lead,
+                current_user,
+                is_latest=(c.id == latest_id),
+                is_active_appointment=(
+                    c.scheduled_at is not None and c.id == active_appointment_id
+                ),
+                now=now,
+            )
+            for _flag, _val in flags.items():
+                setattr(consult_schema, _flag, _val)
             timeline_items.append(
                 schemas.TimelineItem(
                     type="consultation",
-                    data=schemas.Consultation.model_validate(c),
+                    data=consult_schema,
                     timestamp=c.consultation_date,
                 ).model_dump()
             )
@@ -2775,6 +2818,15 @@ async def delete_consultation(
                 if lead.assigned_officer_id != current_user.id:
                     raise PermissionDeniedError(
                         detail="You are not assigned to this lead."
+                    )
+
+                # F3: Officer chỉ được xóa consultation do CHÍNH MÌNH tạo (đối
+                # xứng update_consultation author-check). Trước đây delete thiếu
+                # check này → officer assigned xóa được cuộc của người KHÁC (rộng
+                # hơn update). Cần cho cờ can_delete (Nhóm 4) khớp BE 1-1.
+                if consultation.officer_id != current_user.id:
+                    raise PermissionDeniedError(
+                        detail="Bạn chỉ có thể xóa consultation do chính mình tạo."
                     )
             else:
                 # Các role khác không có quyền xóa consultation
@@ -5174,6 +5226,82 @@ def compute_lead_action_permissions(
         ),
         # officer ĐƯỢC GIAO lead → xin đổi
         "can_request_reassign": is_officer_assigned and not is_consultation_terminal,
+    }
+
+
+def compute_consultation_action_permissions(
+    consultation: models.Consultation,
+    lead: models.Lead,
+    current_user: Optional[models.User],
+    is_latest: bool,
+    is_active_appointment: bool,
+    now: datetime,
+) -> dict:
+    """Query-free consultation action flags (edit / delete / reschedule) từ role
+    + ownership + vị trí trong chuỗi. Mirror guard THẬT ở update_consultation /
+    delete_consultation để FE gate nút Sửa/Xóa/Dời-Hủy THUẦN theo cờ (KHÔNG đọc
+    user.role — thin-client) và KHÔNG bấm-rồi-ăn-403. Pure sync (không db/await)
+    → an toàn gọi per-row trong get_lead_timeline. Trả {} khi current_user None.
+
+    - can_edit: method≠system AND (admin/manager HOẶC officer assigned + is_latest
+      + là tác giả + trong 24h theo created_at ?? consultation_date). Khớp
+      update_consultation.
+    - can_delete: như can_edit nhưng BỎ 24h (khớp delete_consultation + F3
+      author-check thêm cùng slice này).
+    - can_reschedule: is_active_appointment AND can_edit — CHỈ lịch hẹn ĐANG HIỆU
+      LỰC (cuộc có scheduled_at, mới nhất theo consultation_date) mới Dời/Hủy
+      được, áp MỌI vai trò KỂ CẢ admin → vá bug nút hiện trên cuộc CŨ (17-07).
+      KHÔNG đòi scheduled_at tương lai → hẹn QUÁ HẠN (chưa bị cuộc mới thay) vẫn
+      dời/hủy được (FE2). Caller tính is_active_appointment = có scheduled_at AND
+      là cuộc-có-hẹn mới nhất.
+    - blocker (lý do cờ False): 'system' / 'not_latest' / 'not_assigned' /
+      'not_author' / 'expired_24h'. admin/manager không có blocker (trừ system).
+    """
+    if current_user is None:
+        return {}
+
+    is_system = consultation.method == SYSTEM_CONSULTATION_METHOD
+    is_manager_admin = current_user.role in (UserRole.MANAGER, UserRole.ADMIN)
+    is_officer = current_user.role == UserRole.OFFICER
+    is_assigned = lead.assigned_officer_id == current_user.id
+    is_author = consultation.officer_id == current_user.id
+    # 24h anchor = created_at CÓ FALLBACK consultation_date (khớp
+    # update_consultation:3201 — nếu không replicate fallback sẽ drift trên row
+    # created_at NULL).
+    anchor = consultation.created_at or consultation.consultation_date
+    within_24h = (
+        anchor is not None
+        and (now - anchor).total_seconds() <= 24 * 60 * 60
+    )
+
+    def _verdict(check_24h: bool) -> tuple[bool, Optional[str]]:
+        if is_system:
+            return False, "system"
+        if is_manager_admin:
+            return True, None
+        if is_officer:
+            # Cùng THỨ TỰ với guard BE: is_latest → assigned → author → 24h.
+            if not is_latest:
+                return False, "not_latest"
+            if not is_assigned:
+                return False, "not_assigned"
+            if not is_author:
+                return False, "not_author"
+            if check_24h and not within_24h:
+                return False, "expired_24h"
+            return True, None
+        return False, None  # vai trò khác không có quyền (không tới timeline)
+
+    can_edit, edit_blocker = _verdict(check_24h=True)
+    can_delete, delete_blocker = _verdict(check_24h=False)
+    can_reschedule = is_active_appointment and can_edit
+
+    return {
+        "can_edit": can_edit,
+        "can_delete": can_delete,
+        "can_reschedule": can_reschedule,
+        "edit_blocker": edit_blocker,
+        "delete_blocker": delete_blocker,
     }
 
 

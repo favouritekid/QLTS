@@ -116,6 +116,15 @@ class Consultation(ConsultationBase):
     # Loss reason — stored directly on Consultation (source of truth)
     loss_reason_code: Optional[str] = None
     loss_reason_note: Optional[str] = None
+    # Nhóm 4: cờ quyền thin-client — BE tính (compute_consultation_action_
+    # permissions), FE gate nút Sửa/Xóa/Dời-Hủy THUẦN theo cờ, KHÔNG đọc
+    # user.role. Mặc định False/None (fail-safe: model_validate ORM trần mà quên
+    # set → FE ẩn nút). get_lead_timeline set per-cuộc khi có current_user.
+    can_edit: bool = False
+    can_delete: bool = False
+    can_reschedule: bool = False
+    edit_blocker: Optional[str] = None
+    delete_blocker: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
