@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.services import lead_service
-from app.utils.exceptions import BusinessRuleViolation
+from app.utils.exceptions import BusinessRuleViolation, PermissionDeniedError
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
@@ -78,12 +78,19 @@ async def _make_lead(db, deps, officer_id, status_id, stage_id="R2_STG_C"):
     return lead
 
 
-async def _add_consult(db, lead_id, officer_id, method, minutes, status_id):
+async def _add_consult(
+    db, lead_id, officer_id, method, minutes, status_id,
+    *, created_at=None, scheduled_at=None,
+):
     c = models.Consultation(
         lead_id=lead_id, officer_id=officer_id,
         consultation_date=_BASE + timedelta(minutes=minutes),
         method=method, consultation_status_id=status_id,
+        scheduled_at=scheduled_at,
     )
+    if created_at is not None:
+        # created_at có server_default=now() → set tường minh để giả cuộc >24h.
+        c.created_at = created_at
     db.add(c)
     await db.flush()
     await db.refresh(c)
@@ -185,3 +192,60 @@ async def test_update_note_only_on_non_terminal_lead_ok(
 
     reloaded = await db.get(models.Consultation, c.id)
     assert reloaded.notes == "ghi chú mới"
+
+
+# ===========================================================================
+# P2 — miễn cửa sổ 24h CHỈ cho hẹn ACTIVE (không theo hình dạng payload)
+# ===========================================================================
+
+
+async def test_officer_cannot_bypass_24h_on_non_appointment_via_scheduled_at(
+    db, seeded_dependencies, r2_statuses, officer_user
+):
+    """P2 (bug đã vá): officer; cuộc mới-nhất của MÌNH là cuộc NỘI DUNG cũ (>24h,
+    KHÔNG có scheduled_at). PATCH chỉ {scheduled_at} — trước đây is_appointment_mgmt
+    chỉ xét hình dạng payload → miễn 24h → gắn được lịch vào cuộc cũ (né 24h). Nay
+    is_active_appointment=False (cuộc không phải hẹn active) → 24h ÁP LẠI → chặn."""
+    off = officer_user.id
+    old_created = datetime.now(timezone.utc) - timedelta(hours=48)
+    lead = await _make_lead(db, seeded_dependencies, off, "sts05")
+    c = await _add_consult(
+        db, lead.id, off, "phone", 10, "sts05", created_at=old_created,
+    )  # cuộc nội dung, KHÔNG scheduled_at
+
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    with pytest.raises(PermissionDeniedError):
+        await lead_service.update_consultation(
+            db=db, lead_id=lead.id, consultation_id=c.id,
+            consultation_in=schemas.ConsultationUpdate(scheduled_at=future),
+            current_user=officer_user,
+        )
+
+    reloaded = await db.get(models.Consultation, c.id)
+    assert reloaded.scheduled_at is None  # KHÔNG gắn được lịch qua bypass
+
+
+async def test_officer_can_reschedule_active_appointment_beyond_24h(
+    db, seeded_dependencies, r2_statuses, officer_user
+):
+    """Control P2: officer dời hẹn ACTIVE (created >24h) VẪN được — is_active_
+    appointment=True → miễn 24h đúng chủ đích (#6), không hồi quy luồng dời lịch."""
+    off = officer_user.id
+    old_created = datetime.now(timezone.utc) - timedelta(hours=48)
+    appt_at = datetime.now(timezone.utc) + timedelta(days=1)
+    lead = await _make_lead(db, seeded_dependencies, off, "sts05")
+    c = await _add_consult(
+        db, lead.id, off, "phone", 10, "sts05",
+        created_at=old_created, scheduled_at=appt_at,
+    )  # cuộc CÓ hẹn = active appointment (duy nhất)
+
+    new_appt = datetime.now(timezone.utc) + timedelta(days=2)
+    await lead_service.update_consultation(
+        db=db, lead_id=lead.id, consultation_id=c.id,
+        consultation_in=schemas.ConsultationUpdate(scheduled_at=new_appt),
+        current_user=officer_user,
+    )
+
+    reloaded = await db.get(models.Consultation, c.id)
+    assert reloaded.scheduled_at is not None  # dời thành công (miễn 24h)
+    assert abs((reloaded.scheduled_at - new_appt).total_seconds()) < 2

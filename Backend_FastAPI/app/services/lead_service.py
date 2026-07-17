@@ -71,6 +71,37 @@ def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return None if dt is None else ensure_aware(dt)
 
 
+def _pick_active_appointment_id(
+    consultations: List[models.Consultation],
+) -> Optional[int]:
+    """ID hẹn PENDING SỚM NHẤT (MIN scheduled_at) — cuộc DUY NHẤT được Dời/Hủy.
+    Pending = còn sống (deleted_at None) + có ``scheduled_at`` + status non-final +
+    KHÔNG phải cancel (sts19). Tie-break ``(consultation_date, id)`` khớp
+    ``next_activity_at`` / ``_earliest_pending_scheduled`` (đều MIN).
+
+    NGUỒN DUY NHẤT của 'active appointment' — dùng chung bởi ``get_lead_timeline``
+    (cờ ``can_reschedule``) VÀ ``update_consultation`` (gate miễn cửa sổ 24h #6) →
+    cờ FE và guard KHÔNG drift. YÊU CẦU ``consultation_status`` đã eager-load."""
+    from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
+
+    pending = [
+        c
+        for c in consultations
+        if c.deleted_at is None
+        and c.scheduled_at is not None
+        and not (
+            c.consultation_status is not None and c.consultation_status.is_final
+        )
+        and c.consultation_status_id not in CANCELLED_FOLLOWUP_STATUS_IDS
+    ]
+    if not pending:
+        return None
+    return min(
+        pending,
+        key=lambda c: (_as_utc(c.scheduled_at), _as_utc(c.consultation_date), c.id),
+    ).id
+
+
 def _handle_lead_integrity_error(exc: IntegrityError) -> None:
     """Convert DB IntegrityError from lead unique indexes into DuplicateResourceError."""
     detail = str(exc.orig) if exc.orig else str(exc)
@@ -2609,7 +2640,6 @@ async def get_lead_timeline(
 
     # Nhóm 4: tính 1 LẦN (không per-row) mốc "latest" + "active appointment" +
     # hard-terminal để gắn cờ quyền. Tất cả loại soft-deleted.
-    from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
     live_consults = [
         c for c in (lead.consultations or []) if c.deleted_at is None
     ]
@@ -2627,34 +2657,11 @@ async def get_lead_timeline(
         if real_consults
         else None
     )
-    # #5 + review#2 fix#3: "active appointment" (cuộc được Dời/Hủy) = hẹn PENDING
-    # SẮP TỚI = MIN(scheduled_at), KHỚP next_activity_at / widget "Nhịp hẹn"
-    # (lead_repository._earliest_pending_scheduled dùng MIN). Trước đây MAX chọn hẹn
-    # XA NHẤT → lead 2 hẹn (mai + 2 tuần) đặt nút Dời/Hủy lên hẹn 2 tuần, officer
-    # KHÔNG dời/hủy được hẹn NGÀY MAI. Pending = non-final AND không phải sts19 (đã
-    # hủy lịch — loại khỏi appt). KHÔNG lọc theo future → hẹn QUÁ HẠN vẫn dời được
-    # (FE2, khớp next_activity_at không filter thời gian). system không có
-    # scheduled_at nên tự loại.
-    pending_appts = [
-        c for c in live_consults
-        if c.scheduled_at is not None
-        and not (
-            c.consultation_status is not None and c.consultation_status.is_final
-        )
-        and c.consultation_status_id not in CANCELLED_FOLLOWUP_STATUS_IDS
-    ]
-    active_appointment_id = (
-        min(
-            pending_appts,
-            key=lambda c: (
-                _as_utc(c.scheduled_at),
-                _as_utc(c.consultation_date),
-                c.id,
-            ),
-        ).id
-        if pending_appts
-        else None
-    )
+    # #5 + review#2 fix#3 + P2: "active appointment" (cuộc được Dời/Hủy) = hẹn
+    # PENDING SỚM NHẤT (MIN scheduled_at), khớp next_activity_at / widget "Nhịp
+    # hẹn". Định nghĩa DÙNG CHUNG với update_consultation (gate miễn 24h) qua
+    # _pick_active_appointment_id → cờ can_reschedule và guard KHÔNG drift.
+    active_appointment_id = _pick_active_appointment_id(live_consults)
     # #1: hard-terminal (enrolled) 1 query → cờ can_edit/delete/reschedule=False
     # (khớp hard-block trong update/delete_consultation → hết hiện nút rồi ăn 400).
     # review#2 cleanup: cờ chỉ được đọc trong compute_consultation_action_permissions,
@@ -3327,19 +3334,37 @@ async def update_consultation(
             # cũ, không chặn quản lý lịch hẹn tương lai.
             update_data = consultation_in.model_dump(exclude_unset=True)
             from app.services.phase_manager import CANCELLED_FOLLOWUP_STATUS_IDS
+
+            # review#2 P2: miễn cửa sổ 24h CHỈ khi đây ĐÚNG là hẹn ACTIVE (PENDING
+            # sớm nhất) — dùng CHUNG định nghĩa với cờ can_reschedule qua
+            # _pick_active_appointment_id → guard và cờ FE KHÔNG drift. Nếu không có
+            # check này, một PATCH chỉ {scheduled_at} / {status_id: sts19} qua API
+            # TRỰC TIẾP có thể gắn-lịch/hủy cuộc mới-nhất >24h dù cuộc đó KHÔNG phải
+            # active appt (cờ FE đã ẩn nút) → né cửa sổ 24h. (Chỉ officer bị 24h;
+            # admin/manager within_24h=True nên check này vô hại với họ.)
+            live_consultations = (
+                await db.execute(
+                    select(models.Consultation)
+                    .options(
+                        selectinload(models.Consultation.consultation_status)
+                    )
+                    .where(
+                        models.Consultation.lead_id == lead_id,
+                        models.Consultation.deleted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            is_active_appointment = (
+                consultation.id
+                == _pick_active_appointment_id(live_consultations)
+            )
             is_appointment_mgmt = (
                 bool(update_data)
                 and set(update_data.keys()) <= {"scheduled_at", "status_id"}
                 and update_data.get("status_id")
                 in (None, *CANCELLED_FOLLOWUP_STATUS_IDS)
+                and is_active_appointment
             )
-            # review#2 #6 (LOW, scope prod=0) — GIỚI HẠN heuristic đã biết & CHẤP
-            # NHẬN: (a) payload chỉ {status_id: None} hoặc {scheduled_at: None} vẫn
-            # tính là appt-mgmt → bỏ cửa sổ 24h, nhưng đó là no-op / xoá lịch, KHÔNG
-            # sửa nội dung nên vô hại; (b) heuristic dựa trên FIELDS gửi lên, không
-            # phân biệt "dời lịch" vs "xoá lịch". Cả hai đều là quản lý lịch hẹn
-            # tương lai → cùng miễn 24h là ĐÚNG chủ đích. Nếu sau muốn siết (vd chỉ
-            # cho dời tới tương lai) → thêm rule ở nhánh status_id bên dưới.
 
             # ✅ Single check for latest consultation (anti-TOCTOU).
             # review#2 fix#1: TÁCH 2 mục đích của "latest":
