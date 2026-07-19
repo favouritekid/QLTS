@@ -188,6 +188,43 @@ def is_fee_eligible(profile: "AdmissionProfile") -> bool:
     return False
 
 
+def is_enrollment_letter_eligible(profile: "AdmissionProfile") -> bool:
+    """True iff an OFFICIAL "Giấy báo nhập học" may be issued for ``profile``.
+
+    Trạng thái cho phép: ``submitted`` (gồm cả ``resubmitted`` — cùng canonical
+    qua ``effective_status``) và các mốc sau đó: admitted-like (legacy
+    ``approved`` / ``overridden`` + choice-engine ``admitted``), ``confirmed``,
+    ``enrolled``. ``draft`` KHÔNG được (hồ sơ chưa nộp).
+
+    ⚠️ MỞ TỚI ``submitted`` LÀ QUYẾT ĐỊNH NGHIỆP VỤ (user chốt 19-07), không
+    phải mặc định an toàn — hãy đọc kỹ trước khi siết/nới lại:
+      * Giấy in nguyên văn "Đã trúng tuyển ngành: X". Với hồ sơ mới nộp và
+        CHƯA qua bước duyệt trong hệ thống, đó là tuyên bố nhà trường đưa ra
+        TRƯỚC khi máy kiểm tra điều kiện. Nghiệp vụ xét học bạ của trường chấp
+        nhận điều này (nộp đủ hồ sơ ⇒ trúng tuyển); phần mềm chỉ phản ánh lại.
+      * Hàng rào còn lại là DỮ LIỆU: ``build_letter_data`` vẫn bắt buộc có họ
+        tên, ngày sinh, địa chỉ thường trú và một Fee HK1 ACTIVE gắn ngành —
+        thiếu bất kỳ thứ nào thì không phát được giấy. Đừng nới tiếp phần này.
+      * Nhóm ``submitted`` chính là nhóm hay đóng trước (prepay/giữ chỗ), nên
+        khối học phí PHẢI trừ ``paid_amount``/``waived_amount`` — xem
+        ``enrollment_letter_service.build_letter_data``.
+
+    ``is_dropped`` phải kiểm TƯỜNG MINH: ``drop_profile`` cố ý GIỮ
+    ``status='enrolled'`` (side-channel), nên sinh viên đã bỏ học vẫn lọt mọi
+    gate dựa trên status. Cờ quyền phía FE đã chặn riêng ca này, nhưng gọi
+    thẳng API thì không — và giấy báo nhập học cho người đã nghỉ là văn bản
+    chính thức sai sự thật.
+    """
+    if getattr(profile, "is_dropped", False):
+        return False
+    return effective_status(profile) in (
+        "submitted",
+        "admitted",
+        "confirmed",
+        "enrolled",
+    )
+
+
 def is_confirmation_eligible(profile: "AdmissionProfile") -> bool:
     """True iff the profile is eligible to issue / redeem a magic-link
     confirmation token.

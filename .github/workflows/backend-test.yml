@@ -180,6 +180,8 @@ jobs:
           tests/unit/test_admission_path_service_field_drift.py
           tests/integration/test_admission_path_method_filter_and_activator.py
           tests/unit/test_delete_profile_file_cleanup.py
+          tests/unit/test_enrollment_letter_pdf.py
+          tests/unit/test_enrollment_letter_cleanup.py
           -q --tb=short --timeout=60
 
       # =====================================================================
@@ -215,6 +217,8 @@ jobs:
           tests/security/test_ip_rate_limit.py
           tests/security/test_ratelimit_per_user_key.py
           tests/api/test_consultation_security.py
+          tests/unit/test_casbin_enrollment_letter_routes.py
+          tests/api/test_enrollment_letter_api.py
           -q --tb=short --timeout=60
 
       # =====================================================================

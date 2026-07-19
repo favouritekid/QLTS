@@ -62,6 +62,7 @@ from ..utils.admission_status import (
     effective_status,
     is_admitted_like,
     is_confirmation_eligible,
+    is_enrollment_letter_eligible,
     is_fee_eligible,
 )
 from ..utils.exceptions import (
@@ -2126,6 +2127,12 @@ def _compute_frontend_fields(
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
+        # Issue the official "Giấy báo nhập học" PDF. Post-decision only
+        # (admitted-like / confirmed / enrolled — mirrors the server gate in
+        # ``enrollment_letter_service``) and same staff scope as the other
+        # per-profile actions (assigned officer / unit manager / admin).
+        "issue_enrollment_letter": is_enrollment_letter_eligible(profile)
+        and (is_owner or is_manager or is_admin),
         # Send/resend magic-link confirmation email. Mirrors the real route
         # contract for POST /admissions/{id}/send-confirmation:
         #   - Casbin policy grants this to every role (officer/manager/admin)

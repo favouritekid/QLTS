@@ -281,6 +281,22 @@ class Settings(BaseSettings):
         default=14, ge=1, le=365,
         validation_alias="SMS_EXPORT_RETENTION_DAYS",
     )  # re-download tới expires_at; cleanup job xoá file + set purged_at
+    # -- Giấy báo nhập học PDF (official issuance artifact) --
+    ENROLLMENT_LETTER_STORAGE_DIR: str = Field(
+        default="/app/private_exports/letters",
+        validation_alias="ENROLLMENT_LETTER_STORAGE_DIR",
+    )  # NGOÀI webroot — PDF chứa PII (tên/địa chỉ/ngành/tiền); chỉ tải qua
+    # endpoint có auth + IDOR, KHÔNG khai báo nginx location public
+    ENROLLMENT_LETTER_RETENTION_DAYS: int = Field(
+        default=90, ge=1, le=3650,
+        validation_alias="ENROLLMENT_LETTER_RETENTION_DAYS",
+    )  # re-download tới expires_at; sau đó cleanup xoá FILE và SCRUB phần PII
+    # trong data_snapshot (tên/ngày sinh/địa chỉ/điện thoại). Row Ở LẠI vĩnh
+    # viễn làm dấu vết phát hành (ai phát, lúc nào, cho hồ sơ nào, sha256 của
+    # bản đã phát) + phần phi-PII đã in (ngành, học phí, năm học, mức đợt 1,
+    # tài khoản, người ký). ⚠️ SAU retention KHÔNG re-render lại được nguyên
+    # văn — đó là đánh đổi CÓ CHỦ Ý giữa data-minimization và tái lập. Cần lưu
+    # lâu hơn thì nâng số ngày này, đừng bỏ bước scrub.
     # -- Landing page công khai /lp/{code} (PR-5) --
     SMS_LANDING_SCHOOL_NAME: str = Field(
         default="Cao đẳng Bách khoa Tây Nguyên",

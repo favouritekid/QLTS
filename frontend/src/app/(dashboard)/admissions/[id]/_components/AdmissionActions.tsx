@@ -6,6 +6,8 @@
  * Render TỐI THIỂU theo BE permission flags:
  *   - Navigation: Quay lại / Tiếp tục (step 1-7) / Save / Kiểm tra toàn bộ (step 8)
  *   - Outbound communication: 4 send_* buttons (mutex per state)
+ *   - Document export: Xuất giấy báo nhập học (self-gates on
+ *     `issue_enrollment_letter`; post-decision profiles only)
  *
  * KHÔNG còn:
  *   - Decision actions (Submit/Resubmit/Approve/Reject/RequestRevision/
@@ -26,6 +28,7 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
 import { SendMagicLinkButton } from "./SendMagicLinkButton"
 import { WithdrawActionButton } from "./WithdrawActionButton"
+import { EnrollmentLetterButton } from "./EnrollmentLetterButton"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
@@ -126,6 +129,9 @@ export function AdmissionActions({
               mode="cancel"
             />
           )}
+          {/* Official "Giấy báo nhập học" PDF — self-gates on the BE flag
+              `issue_enrollment_letter` (post-decision profiles only). */}
+          <EnrollmentLetterButton profile={profile} />
         </div>
       </div>
     </div>

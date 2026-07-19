@@ -51,6 +51,7 @@ from .sms_tasks import (
     cleanup_sms_export_files_task,
     cleanup_sms_interest_events_task,
 )
+from .enrollment_letter_tasks import cleanup_enrollment_letter_files_task
 
 __all__ = [
     # Email tasks
@@ -86,4 +87,6 @@ __all__ = [
     # SMS Marketing export cleanup (PR-4)
     "cleanup_sms_export_files_task",
     "cleanup_sms_interest_events_task",
+    # Enrollment-letter PDF retention cleanup
+    "cleanup_enrollment_letter_files_task",
 ]

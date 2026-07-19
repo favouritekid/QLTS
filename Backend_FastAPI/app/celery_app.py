@@ -168,6 +168,12 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=4, minute=15),
         "options": {"queue": "default"},
     },
+    # --- Giấy báo nhập học PDF retention (xoá file hết hạn + orphan) ---
+    "cleanup-enrollment-letter-files-daily": {
+        "task": "cleanup_enrollment_letter_files_task",
+        "schedule": crontab(hour=4, minute=45),  # 04:45 — staggered slot
+        "options": {"queue": "default"},
+    },
 
     # --- KPI Plan Daily Actuals Sync (P4) ---
     "sync-kpi-plan-actuals-daily": {

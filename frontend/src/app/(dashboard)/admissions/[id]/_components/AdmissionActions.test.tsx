@@ -32,6 +32,17 @@ vi.mock("./SendConfirmationButton", () => ({
   ),
 }));
 
+// Same reason as SendConfirmationButton: EnrollmentLetterButton self-gates on
+// permissions, so AdmissionActions renders it UNCONDITIONALLY — and its
+// useIssueEnrollmentLetter → useQueryClient() would throw "No QueryClient set"
+// in every test here. Its own behaviour is covered by
+// EnrollmentLetterButton.test.tsx.
+vi.mock("./EnrollmentLetterButton", () => ({
+  EnrollmentLetterButton: () => (
+    <button data-testid="enrollment-letter-button">Xuất giấy báo nhập học</button>
+  ),
+}));
+
 // Mock alert-dialog to pass-through (no Radix portal needed)
 vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children }: { children: React.ReactNode }) => <>{children}</>,
