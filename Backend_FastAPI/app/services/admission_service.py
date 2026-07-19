@@ -2128,7 +2128,7 @@ def _compute_frontend_fields(
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "enroll": status in ["confirmed", "overridden"] and (is_owner or is_manager or is_admin),
         # Issue the official "Giấy báo nhập học" PDF. Post-decision only
-        # (admitted-like / confirmed / enrolled — mirrors the server gate in
+        # (submitted trở đi, loại hồ sơ đã thôi học — mirrors the server gate in
         # ``enrollment_letter_service``) and same staff scope as the other
         # per-profile actions (assigned officer / unit manager / admin).
         "issue_enrollment_letter": is_enrollment_letter_eligible(profile)

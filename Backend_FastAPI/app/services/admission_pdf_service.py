@@ -449,9 +449,14 @@ def _build_body(data: dict, st: dict) -> list[Any]:
     # nguồn tin cậy.
     full_name = _esc(data.get("full_name"))
     address = _esc(data.get("permanent_address"))
-    # MajorProgram.name ĐÃ mang trình độ (vd "Cao đẳng Dược") — KHÔNG ghép
-    # degree_level lần nữa (sẽ in hai lần).
+    # Ngành và TRÌNH ĐỘ là hai trường riêng, phải in CẢ HAI: dữ liệu thật có
+    # ngành trùng tên giữa hai trình độ (Kế toán, Công nghệ ô tô, Y sỹ đa khoa,
+    # Chăn nuôi - Thú y, Công nghệ thông tin), nên chỉ ghi tên ngành là câu chưa
+    # xác định — thí sinh không biết mình đỗ Cao đẳng hay Trung cấp.
+    # (Comment cũ ở đây khẳng định MajorProgram.name đã gồm trình độ dạng
+    # "Cao đẳng Dược" — SAI: kiểm dữ liệu 19-07, tên ngành là "Dược" trần.)
     major = _esc(data.get("major_name"))
+    degree = _esc(data.get("degree_level"))
     offering = _esc(data.get("offering_type") or C.DEFAULT_OFFERING_TYPE)
     start_str = _fmt_date(data.get("enrollment_start_date"))
     end_str = _fmt_date(data.get("enrollment_end_date"))
@@ -471,9 +476,10 @@ def _build_body(data: dict, st: dict) -> list[Any]:
         Paragraph(f"Địa chỉ thường trú: {address}", st["body"]),
         _two_col(
             f"Đã trúng tuyển ngành: <b>{major}</b>",
-            f"Hệ đào tạo: {offering}",
+            (f"Trình độ: <b>{degree}</b>" if degree else ""),
             st,
         ),
+        Paragraph(f"Hệ đào tạo: {offering}", st["body"]),
         Spacer(1, 1.2 * mm),
         Paragraph(
             "Để hoàn tất thủ tục nhập học, đề nghị thí sinh có mặt tại trường "

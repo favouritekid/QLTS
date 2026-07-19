@@ -9,6 +9,12 @@
 
 import { api } from "./client"
 import { filenameFromDisposition } from "@/lib/utils/download-blob"
+import {
+  enrollmentLetterListSchema,
+  type EnrollmentLetterSummary,
+} from "@/lib/zod/enrollment-letter"
+
+export type { EnrollmentLetterSummary }
 
 export interface IssueEnrollmentLetterInput {
   /** ISO date (YYYY-MM-DD). */
@@ -20,17 +26,6 @@ export interface IssueEnrollmentLetterInput {
 export interface EnrollmentLetterBlob {
   blob: Blob
   filename: string
-}
-
-export interface EnrollmentLetterSummary {
-  id: number
-  profile_id: number
-  enrollment_start_date: string
-  enrollment_end_date: string
-  generated_by_id: number | null
-  generated_at: string
-  file_size: number
-  expires_at: string | null
 }
 
 function toBlob(res: { data: Blob; headers: Record<string, unknown> }, profileId: number): EnrollmentLetterBlob {
@@ -61,10 +56,10 @@ export async function issueEnrollmentLetter(
 export async function listEnrollmentLetters(
   profileId: number,
 ): Promise<EnrollmentLetterSummary[]> {
-  const res = await api.get<EnrollmentLetterSummary[]>(
-    `/api/admissions/${profileId}/enrollment-letters`,
-  )
-  return res.data
+  const res = await api.get(`/api/admissions/${profileId}/enrollment-letters`)
+  // Parse (không phải cast): field thiếu/đổi kiểu phải NỔ ở đây, thay vì lặng
+  // lẽ render `undefined` trên danh sách văn bản chính thức.
+  return enrollmentLetterListSchema.parse(res.data)
 }
 
 /** Re-download a previously issued letter by id. */

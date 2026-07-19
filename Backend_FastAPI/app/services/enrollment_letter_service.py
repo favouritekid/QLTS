@@ -2,17 +2,18 @@
 """
 Service for issuing the official "Giấy báo nhập học" PDF.
 
-Flow: gather + VALIDATE the data (post-decision gate + required fields + the
+Flow: gather + VALIDATE the data (gate trạng thái + required fields + the
 profile's active HK1 tuition Fee), render the PDF off the event loop, persist
 the bytes to disk (atomic + sha256 + retention) and record an ``EnrollmentLetter``
 issuance row. The router commits; this service only flushes (arch rule).
 
-Fee/ngành is bound to the profile's ACTIVE HK1 tuition ``Fee`` (final_amount +
-resolved_major snapshot) — never recomputed from a live resolver — so the printed
-HK1 tuition matches the real charge. (The gift/discount lines rendered under it
-are literal placeholders from ``constants.enrollment_letter`` per the product
-decision, NOT the finance ledger.) Missing that Fee (or any required field)
-fails with a "thiếu dữ liệu" error rather than an incomplete letter.
+SỐ TIỀN bám ACTIVE HK1 tuition ``Fee`` của hồ sơ (final_amount, trừ đã nộp /
+được miễn) — không bao giờ tính lại — nên học phí in ra khớp khoản thu thật.
+NGÀNH + TRÌNH ĐỘ thì resolve theo NGUYỆN VỌNG rồi ĐỐI CHIẾU với ngành mà tiền
+đã tính theo (xem ``_resolve_admitted_major``): giấy ghi "Đã trúng tuyển ngành
+X" nên X phải là nguyện vọng, và lệch giữa hai nguồn thì KHÔNG phát giấy.
+Thiếu Fee (hoặc bất kỳ trường bắt buộc nào) → lỗi "thiếu dữ liệu" thay vì phát
+ra một tờ giấy khuyết.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
+import structlog
 from anyio import to_thread
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -39,8 +42,6 @@ from app.utils.exceptions import (
     ValidationError,
 )
 from app.utils.sms_export import STAGING_PREFIX, sha256_file
-
-import structlog
 
 log = structlog.get_logger(__name__)
 
@@ -66,6 +67,95 @@ async def _get_active_hk1_tuition_fee(db, profile_id: int):
     return (await db.execute(stmt)).scalars().first()
 
 
+async def _resolve_admitted_major(db, profile, fee):
+    """Ngành + trình độ IN LÊN GIẤY, lấy theo NGUYỆN VỌNG (không phải cột
+    snapshot trên Fee).
+
+    Giấy in nguyên văn "Đã trúng tuyển ngành: X" nên X phải là nguyện vọng, và
+    học phí phải được tính theo ĐÚNG nguyện vọng đó. ``resolve_fee_academic_info``
+    là single-source-of-truth cho luật này (dùng chung với fees/invoices):
+
+      * đã công bố kết quả ⇒ NV có ``decision='admitted'`` — có thể KHÔNG phải
+        NV1, và in NV1 lúc đó là sai sự thật;
+      * chưa công bố + đúng 1 NV ⇒ chính NV đó (= NV1, đường prepay/giữ chỗ ở
+        ``submitted`` mà gate phát giấy đang mở);
+      * ≥2 NV còn pending, hoặc 0 NV ⇒ fail-closed.
+
+    Vì sao KHÔNG đọc thẳng ``fee.resolved_major``: cột đó chỉ được ghi lại khi
+    resnapshot chạy, nên có thể trỏ ngành CŨ nếu cấu hình đổi sau lúc tính phí —
+    repo đã biết trước rủi ro này và log ``fee_resolved_major_drift``
+    (``fee_calculation_service.py``). Ở đây ta resolve LẠI từ nguyện vọng rồi
+    ĐỐI CHIẾU với ngành mà tiền đã tính theo; lệch nhau thì KHÔNG phát giấy, vì
+    một tờ giấy ghi ngành A kèm học phí của ngành B là văn bản tự mâu thuẫn.
+
+    Trả về ``(major_name, degree_level)``. Ném ``ValidationError`` với lý do đọc
+    được nếu không xác định được ngành hoặc phát hiện lệch.
+    """
+    from sqlalchemy import select as _select
+
+    from app.services.fee_calculation_service import resolve_fee_academic_info
+    from app.utils.exceptions import BadRequest
+
+    # --- Nguồn 1 (ưu tiên): nguyện vọng ---
+    live: tuple[int, str, str | None] | None = None
+    try:
+        academic_info = await resolve_fee_academic_info(db, profile)
+    except BadRequest:
+        # Hồ sơ legacy thiếu offering_admission_config / applied_rules, hoặc
+        # multi-NV chưa công bố: KHÔNG chặn phát giấy ở đây — còn snapshot trên
+        # Fee (nguồn 2) là ngành mà TIỀN thực sự đã tính theo.
+        academic_info = None
+
+    if academic_info is not None:
+        row = (
+            await db.execute(
+                _select(models.MajorProgram.id, models.MajorProgram.name,
+                        models.MajorProgram.degree_level)
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == academic_info.id)
+            )
+        ).first()
+        if row is not None and row[1]:
+            live = (row[0], row[1], row[2])
+
+    # --- Nguồn 2 (đối chứng / dự phòng): snapshot đã đóng băng trên Fee ---
+    snap_major = fee.resolved_major if fee is not None else None
+    snap = (
+        (snap_major.id, snap_major.name, fee.resolved_degree_level)
+        if snap_major and snap_major.name
+        else None
+    )
+
+    if live is None and snap is None:
+        raise ValidationError(
+            "Không thể tạo giấy báo nhập học — chưa xác định được ngành trúng "
+            "tuyển (hồ sơ chưa chọn nguyện vọng, hoặc học phí chưa gắn ngành). "
+            "Hãy tính lại học phí trước khi phát giấy."
+        )
+
+    # Cả hai cùng có nhưng LỆCH ⇒ tiền và ngành đang nói hai chuyện khác nhau.
+    # Một tờ giấy ghi ngành A kèm học phí của ngành B là văn bản tự mâu thuẫn,
+    # nên fail-closed thay vì chọn bừa một bên.
+    if live and snap and live[0] != snap[0]:
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — nguyện vọng trúng tuyển là "
+            f"'{live[1]}' nhưng học phí đang tính theo ngành '{snap[1]}'. "
+            f"Hãy tính lại học phí cho đúng ngành trước khi phát giấy."
+        )
+
+    _, major_name, degree_level = live or snap
+    return major_name, degree_level
+
+
 def _school_year_label(fee) -> str:
     """Nhãn năm học "2026-2027" dẫn xuất từ ``fee.academic_year``.
 
@@ -82,15 +172,15 @@ def _school_year_label(fee) -> str:
 async def build_letter_data(db, profile) -> dict:
     """Gather + validate the data snapshot rendered onto the letter.
 
-    Raises ``BusinessRuleViolation`` if the profile is not post-decision, or
+    Raises ``BusinessRuleViolation`` if the profile is not letter-eligible, or
     ``ValidationError`` listing every missing required field. The returned dict
     is BOTH the render input and the persisted ``data_snapshot`` (JSON-safe:
     dates as ISO strings, amounts as int).
     """
     if not is_enrollment_letter_eligible(profile):
         raise BusinessRuleViolation(
-            "Chỉ phát giấy báo nhập học cho hồ sơ đã trúng tuyển "
-            "(đã duyệt / xác nhận / nhập học)."
+            "Chỉ phát giấy báo nhập học cho hồ sơ đã nộp trở đi "
+            "(đã nộp / đã duyệt / xác nhận / nhập học) và chưa thôi học."
         )
 
     missing: list[str] = []
@@ -108,15 +198,8 @@ async def build_letter_data(db, profile) -> dict:
         missing.append("địa chỉ thường trú")
 
     fee = await _get_active_hk1_tuition_fee(db, profile.id)
-    major_name = None
-    degree_level = None
     if fee is None:
         missing.append("phí học kỳ 1 (HK1) — hãy tính học phí trước")
-    else:
-        major_name = fee.resolved_major.name if fee.resolved_major else None
-        degree_level = fee.resolved_degree_level
-        if not major_name:
-            missing.append("ngành trúng tuyển (fee chưa gắn ngành)")
 
     if missing:
         raise ValidationError(
@@ -125,10 +208,20 @@ async def build_letter_data(db, profile) -> dict:
             + "."
         )
 
+    # Ngành + trình độ resolve LẠI từ nguyện vọng và đối chiếu với ngành mà học
+    # phí đã tính theo (xem ``_resolve_admitted_major``). Chạy SAU khối
+    # ``missing`` vì nó cần fee, và nó tự ném ValidationError với lý do riêng
+    # thay vì gộp vào danh sách "thiếu dữ liệu".
+    major_name, degree_level = await _resolve_admitted_major(db, profile, fee)
+
     return {
         "full_name": full_name,
         "dob": dob.isoformat(),
         "permanent_address": address,
+        # Ngành + trình độ theo nguyện vọng. TRÌNH ĐỘ LÀ BẮT BUỘC trên giấy:
+        # dữ liệu thật có ngành TRÙNG TÊN giữa hai trình độ (Kế toán, Công nghệ
+        # ô tô, Y sỹ đa khoa, Chăn nuôi - Thú y, Công nghệ thông tin), nên
+        # "Đã trúng tuyển ngành: Kế toán" một mình là câu chưa xác định.
         "major_name": major_name,
         "degree_level": degree_level,
         # MVP: offering_type is not snapshotted on Fee; live-resolving the
@@ -235,6 +328,38 @@ async def issue_enrollment_letter(
         settings.ENROLLMENT_LETTER_STORAGE_DIR, str(profile.id), f"{uuid4().hex}.pdf"
     )
     sha, size = await to_thread.run_sync(_write_pdf_atomic, pdf_bytes, final_path)
+
+    # KHOÁ MUỘN: chỉ giữ SELECT FOR UPDATE từ đây tới lúc router commit, thay vì
+    # từ đầu request. Lấy khoá ở dependency (như bản trước) nghĩa là giữ khoá
+    # ghi trên hồ sơ suốt cả quá trình render ReportLab + fsync — mọi thao tác
+    # song song trên đúng hồ sơ đó (duyệt, ghi nhận thanh toán, rút hồ sơ) phải
+    # xếp hàng sau, và trên volume mạng chậm thì đủ lâu để chúng timeout.
+    #
+    # Đổi lại phải KIỂM TRA LẠI gate sau khi có khoá: trong lúc render, hồ sơ có
+    # thể đã bị rollback về draft / rút / thôi học. Không kiểm lại thì ta vừa
+    # đánh mất đúng thứ mà cái khoá sinh ra để bảo vệ.
+    # Chỉ SELECT 2 cột cần cho gate: ``select(models.AdmissionProfile)`` sẽ kéo
+    # theo eager-join sang ``lead`` và Postgres từ chối FOR UPDATE trên nhánh
+    # nullable của outer join (đúng cảnh báo trong deps.py). Khoá theo cột vẫn
+    # khoá đúng row.
+    locked = (
+        await db.execute(
+            select(
+                models.AdmissionProfile.status,
+                models.AdmissionProfile.is_dropped,
+            )
+            .where(models.AdmissionProfile.id == profile.id)
+            .with_for_update()
+        )
+    ).first()
+    if locked is None or not is_enrollment_letter_eligible(
+        SimpleNamespace(status=locked[0], is_dropped=locked[1])
+    ):
+        await to_thread.run_sync(_best_effort_delete, final_path)
+        raise BusinessRuleViolation(
+            "Hồ sơ đã đổi trạng thái trong lúc tạo giấy báo — không phát hành. "
+            "Hãy tải lại trang và kiểm tra trạng thái hồ sơ."
+        )
 
     expires_at = datetime.now(timezone.utc) + timedelta(
         days=settings.ENROLLMENT_LETTER_RETENTION_DAYS

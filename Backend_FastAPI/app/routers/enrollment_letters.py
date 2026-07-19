@@ -12,12 +12,10 @@ contract, F10):
      Policy: officer ALLOW the 3 routes (manager/admin inherit); accountant
      explicit DENY; user default-deny.
   2. IDOR scope 3 tầng (admin: all; manager: unit; officer: assigned + in-unit),
-     fake-404 khi ngoài phạm vi. POST dùng biến thể CÓ KHOÁ
-     (``get_admission_for_user`` → SELECT FOR UPDATE) vì phát giấy là MUTATION:
-     cửa sổ giữa lúc đọc gate và lúc ghi row rất rộng (render ReportLab off-
-     thread + ghi file + fsync), nên nếu không khoá, một admin-rollback
-     approved→draft có thể commit giữa chừng và ta vẫn phát ra giấy "đã trúng
-     tuyển" cho hồ sơ vừa quay về nháp. GET dùng biến thể đọc.
+     fake-404 khi ngoài phạm vi. Cả 3 route dùng biến thể ĐỌC: phát giấy vẫn là
+     MUTATION, nhưng khoá được lấy MUỘN trong service (ngay trước khi ghi row,
+     kèm kiểm tra lại gate) thay vì giữ suốt quá trình render + fsync — xem
+     ``enrollment_letter_service.issue_enrollment_letter``.
 
 POST issues an OFFICIAL letter and returns the PDF immediately. GET re-downloads
 a prior issuance by id and records a 'downloaded' access-audit row.
@@ -31,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import database, models
 from ..core import deps
 from ..core.client_ip import get_client_ip
-from ..core.deps import get_admission_for_user, get_admission_for_user_read
+from ..core.deps import get_admission_for_user_read
 from ..core.rate_limits import RateLimits, limiter
 from ..schemas.enrollment_letter import (
     EnrollmentLetterIssueRequest,
@@ -67,16 +65,19 @@ async def issue_enrollment_letter(
     request: Request,
     payload: EnrollmentLetterIssueRequest,
     current_user: models.User = deps.CasbinAuth,
-    # Biến thể CÓ KHOÁ (SELECT FOR UPDATE): xem docstring module — phát giấy là
-    # mutation, phải serialize với các chuyển trạng thái song song.
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    # Biến thể ĐỌC: khoá lấy muộn trong service (xem docstring module) để không
+    # giữ khoá ghi trên hồ sơ suốt lúc render PDF.
+    profile: models.AdmissionProfile = Depends(get_admission_for_user_read),
     db: AsyncSession = Depends(database.get_db),
 ):
     """Render + persist an official admission letter, then stream the PDF.
 
-    Gate: only post-decision profiles (admitted / confirmed / enrolled). Domain
-    errors (not eligible / missing HK1 fee / missing field) propagate to the
-    global handler as 400 with an ``error_code``.
+    Gate: hồ sơ ĐÃ NỘP trở đi (submitted/resubmitted · admitted-like ·
+    confirmed · enrolled) và chưa thôi học — xem
+    ``admission_status.is_enrollment_letter_eligible`` để biết vì sao mở tới
+    submitted. Domain errors (không đủ điều kiện / thiếu Fee HK1 / thiếu trường
+    / ngành lệch tiền) propagate to the global handler as 400 với
+    ``error_code``.
     """
     letter, pdf_bytes = await enrollment_letter_service.issue_enrollment_letter(
         db,

@@ -3,7 +3,7 @@
 EnrollmentLetter — official "Giấy báo nhập học" issuance record.
 
 Each row is one OFFICIAL admission letter issued for an AdmissionProfile that
-is post-decision (admitted-like / confirmed / enrolled — see
+đã nộp trở đi (submitted · admitted-like · confirmed · enrolled — see
 ``utils.admission_status.is_enrollment_letter_eligible``). Issuance is a
 mutation: it snapshots the input dates + the rendered data, persists the PDF to
 disk (path + sha256 + size + retention) and records who/when. Re-issue creates

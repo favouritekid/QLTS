@@ -57,6 +57,7 @@ def letter_storage_tmp(tmp_path, monkeypatch):
         settings, "ENROLLMENT_LETTER_STORAGE_DIR", str(tmp_path / "letters")
     )
 
+
 _ACCOUNTANT = {
     "username": "el_accountant",
     "email": "el_accountant@example.com",
@@ -356,3 +357,97 @@ async def test_download_filename_has_no_citizen_id(
     disposition = resp.headers.get("content-disposition", "")
     assert citizen not in disposition
     assert f"letter-{lid}" in disposition  # ids, not PII
+
+
+# --------------------------------------------------------------------------- #
+# build_letter_data — hàng rào cuối trước khi in văn bản có chữ ký Hiệu trưởng
+# --------------------------------------------------------------------------- #
+
+
+async def test_build_letter_data_binds_major_degree_and_real_fee(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Snapshot phải bám ĐÚNG Fee đang hoạt động: tổng học phí, phần đã nộp,
+    nhãn năm học dẫn từ ``fee.academic_year``, và ngành + TRÌNH ĐỘ.
+
+    Trình độ là bắt buộc: dữ liệu thật có ngành trùng tên giữa Cao đẳng và
+    Trung cấp, nên chỉ tên ngành là câu chưa xác định.
+    """
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"bld{uuid.uuid4().hex[:9]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        data = await build_letter_data(session, profile)
+
+    assert data["hk1_fee_amount"] == 9_200_000
+    assert data["hk1_paid_amount"] == 0
+    assert data["hk1_waived_amount"] == 0
+    assert data["school_year"] == "2026-2027"  # từ fee.academic_year, không hằng
+    assert data["major_name"]
+    assert data["degree_level"]
+    # Literal đã in được chụp lại để còn đối chiếu sau khi retention scrub PII.
+    assert data["first_installment"] > 0
+    assert data["bank_account_number"]
+    assert data["signatory_name"]
+
+
+async def test_build_letter_data_rejects_profile_without_fee(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Không có Fee HK1 ⇒ KHÔNG phát giấy (thà không có giấy còn hơn giấy
+    khuyết số tiền), và lỗi phải nói rõ thiếu gì."""
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nofee{uuid.uuid4().hex[:7]}",
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    assert "học phí" in str(exc.value).lower()
+
+
+async def test_build_letter_data_rejects_dropped_profile(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """``drop_profile`` giữ status='enrolled', nên gate theo status không bắt
+    được — phải chặn tường minh, nếu không sinh viên đã thôi học vẫn nhận giấy
+    báo nhập học."""
+    from app.utils.exceptions import BusinessRuleViolation
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"drop{uuid.uuid4().hex[:8]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            profile = await session.get(models.AdmissionProfile, profile_id)
+            profile.status = "enrolled"
+            profile.is_dropped = True
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(BusinessRuleViolation):
+            await build_letter_data(session, profile)

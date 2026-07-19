@@ -7,6 +7,8 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 const hoisted = vi.hoisted(() => ({
   issueEnrollmentLetter: vi.fn(),
+  listEnrollmentLetters: vi.fn(),
+  downloadEnrollmentLetter: vi.fn(),
   downloadBlob: vi.fn(),
   blobErrorMessage: vi.fn(),
   toastSuccess: vi.fn(),
@@ -15,6 +17,8 @@ const hoisted = vi.hoisted(() => ({
 
 vi.mock("@/lib/api/enrollment-letter", () => ({
   issueEnrollmentLetter: hoisted.issueEnrollmentLetter,
+  listEnrollmentLetters: hoisted.listEnrollmentLetters,
+  downloadEnrollmentLetter: hoisted.downloadEnrollmentLetter,
 }))
 vi.mock("@/lib/utils/download-blob", () => ({
   downloadBlob: hoisted.downloadBlob,
@@ -35,6 +39,8 @@ const SUBMIT = /Xuất PDF/
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Mặc định: chưa phát bản nào → dialog không hiện khối "Tải lại".
+  hoisted.listEnrollmentLetters.mockResolvedValue([])
 })
 
 async function openDialog(permissions = { issue_enrollment_letter: true }) {
@@ -118,5 +124,45 @@ describe("EnrollmentLetterButton — issue flow", () => {
       expect(hoisted.toastError).toHaveBeenCalledWith("Thiếu dữ liệu HK1"),
     )
     expect(hoisted.downloadBlob).not.toHaveBeenCalled()
+  })
+})
+
+describe("EnrollmentLetterButton — tải lại bản đã phát", () => {
+  const ISSUED = [
+    {
+      id: 7,
+      profile_id: 42,
+      enrollment_start_date: "2026-07-28",
+      enrollment_end_date: "2026-08-05",
+      generated_by_id: 15,
+      generated_at: "2026-07-19T07:19:00Z",
+      file_size: 253000,
+      expires_at: "2026-10-17T07:19:00Z",
+    },
+  ]
+
+  it("liệt kê bản đã phát và tải lại thay vì phát bản mới", async () => {
+    hoisted.listEnrollmentLetters.mockResolvedValue(ISSUED)
+    hoisted.downloadEnrollmentLetter.mockResolvedValue({
+      blob: new Blob(["%PDF"]),
+      filename: "giay-bao-nhap-hoc-profile-42-letter-7.pdf",
+    })
+
+    await openDialog()
+
+    const reload = await screen.findByRole("button", { name: /Tải lại/ })
+    fireEvent.click(reload)
+
+    await waitFor(() =>
+      expect(hoisted.downloadEnrollmentLetter).toHaveBeenCalledWith(42, 7),
+    )
+    // Điểm mấu chốt: tải lại KHÔNG được phát hành thêm một bản chính thức.
+    expect(hoisted.issueEnrollmentLetter).not.toHaveBeenCalled()
+    expect(hoisted.downloadBlob).toHaveBeenCalled()
+  })
+
+  it("không hiện khối tải lại khi chưa phát bản nào", async () => {
+    await openDialog()
+    expect(screen.queryByRole("button", { name: /Tải lại/ })).toBeNull()
   })
 })
