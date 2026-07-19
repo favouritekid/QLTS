@@ -38,6 +38,25 @@ pytestmark = pytest.mark.asyncio
 # Fixtures
 # --------------------------------------------------------------------------- #
 
+
+@pytest.fixture(autouse=True)
+def letter_storage_tmp(tmp_path, monkeypatch):
+    """Trỏ thư mục lưu PDF sang tmp của test.
+
+    ``ENROLLMENT_LETTER_STORAGE_DIR`` mặc định là ``/app/private_exports/letters``
+    — đường dẫn TUYỆT ĐỐI bên trong container. Chạy local qua ``docker compose``
+    thì có thật, nhưng CI chạy pytest TRỰC TIẾP trên runner (không container):
+    ``/app`` không tồn tại và không tạo được ⇒ ``os.makedirs`` ném
+    ``PermissionError: [Errno 13] Permission denied: '/app'`` ngay khi phát giấy.
+
+    Autouse để cả đường phát hành (service tự dựng path) lẫn ``_seed_letter_row``
+    dùng chung một thư mục tạm, và mỗi test được dọn sạch — không test nào thấy
+    file của test khác.
+    """
+    monkeypatch.setattr(
+        settings, "ENROLLMENT_LETTER_STORAGE_DIR", str(tmp_path / "letters")
+    )
+
 _ACCOUNTANT = {
     "username": "el_accountant",
     "email": "el_accountant@example.com",

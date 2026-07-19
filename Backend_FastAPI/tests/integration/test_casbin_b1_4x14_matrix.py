@@ -447,6 +447,12 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             ("/api/admissions/academic-years",        "GET"),
             # PR #13.7 — nợ bằng reminder list carries candidate PII → accountant deny.
             ("/api/admissions/pending-diploma",       "GET"),
+            # Giấy báo nhập học (2026-07-19) — separation of duties: finance
+            # never issues the official admission letter, và bản PDF chứa PII
+            # thí sinh (tên/ngày sinh/địa chỉ/học phí) nên cả 3 route deny.
+            ("/api/admissions/{id}/enrollment-letter", "POST"),
+            ("/api/admissions/{id}/enrollment-letter/{lid}/download", "GET"),
+            ("/api/admissions/{id}/enrollment-letters", "GET"),
             # Wave 4 — lead legacy routes deny (10 rows)
             ("/api/leads",                            "GET"),
             ("/api/leads",                            "POST"),
