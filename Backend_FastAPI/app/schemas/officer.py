@@ -437,6 +437,10 @@ class OfficerDistributionEntry(BaseModel):
     full_name: str
     unit_id: Optional[int] = None
     unit_name: Optional[str] = None
+    # Chế độ chấm điểm engine áp cho ĐƠN VỊ của dòng này (per-unit, vì ngưỡng
+    # history fairness tính riêng từng đơn vị). Đây mới là giá trị chính xác;
+    # trường cùng tên ở cấp panel chỉ là tóm tắt.
+    scoring_mode: Optional[str] = None
 
     # --- Số liệu tải (nguyên bản từ engine) ---
     workload: int                  # Lead đang giữ (tổng non-final)
@@ -469,7 +473,11 @@ class OfficerDistributionPanel(BaseModel):
     """Bảng điểm bận của (các) đơn vị trong phạm vi người xem."""
     unit_id: Optional[int] = None
     total_officers: int
-    scoring_mode: Optional[str] = None      # legacy | member | fairness | member_fairness
+    # legacy | member | fairness | member_fairness | "mixed" | None.
+    # ⚠️ Chỉ là TÓM TẮT: chấm điểm chạy per-unit, nên khi phạm vi trải nhiều đơn
+    # vị có mode khác nhau giá trị này = "mixed"; muốn chính xác đọc
+    # ``entries[].scoring_mode``. None = không đơn vị nào có pool chấm điểm.
+    scoring_mode: Optional[str] = None
     flags_snapshot: Dict[str, bool]
     entries: List[OfficerDistributionEntry]
 

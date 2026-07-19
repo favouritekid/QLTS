@@ -1884,6 +1884,7 @@ def _map_load_to_entry(
     unit_name,
     requesting_user_id: int,
     finance_on: bool,
+    scoring_mode,
 ) -> Dict[str, Any]:
     """Đổi 1 OfficerLoad của engine thành 1 dòng bảng (KHÔNG tính lại số nào)."""
     officer = load["officer"]
@@ -1901,6 +1902,8 @@ def _map_load_to_entry(
         "full_name": officer.full_name or officer.username,
         "unit_id": unit_id,
         "unit_name": unit_name,
+        # Chế độ chấm điểm là PER-UNIT ⇒ gắn vào từng dòng mới chính xác.
+        "scoring_mode": scoring_mode,
         "workload": workload,
         "max_capacity": capacity,
         "weight": load["weight"],
@@ -1970,7 +1973,7 @@ async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any
 
     requesting_user_id = ctx.requesting_user.id
     entries: List[Dict[str, Any]] = []
-    scoring_mode = None
+    modes_seen = set()
 
     for unit_id, unit_officers in by_unit.items():
         # Pool CHẤM ĐIỂM = đúng tập engine sẽ xét (đang sẵn sàng). Người còn lại
@@ -1986,8 +1989,7 @@ async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any
             lead_unit_id=unit_id,
             flags=flags,
         )
-        if scoring_mode is None:
-            scoring_mode = res.scoring
+        modes_seen.add(res.scoring)
         # res.loads đã sort: nhóm eligible (thứ tự ưu tiên nhận của engine) trước.
         for rank, load in enumerate(res.loads, 1):
             entries.append(
@@ -1998,13 +2000,27 @@ async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any
                     unit_name=unit_name_map.get(unit_id),
                     requesting_user_id=requesting_user_id,
                     finance_on=flags.finance_on,
+                    scoring_mode=res.scoring,
                 )
             )
+
+    # ⚠️ Chế độ chấm điểm là PER-UNIT (ngưỡng history fairness tính riêng từng
+    # đơn vị). Manager/admin có thể trải NHIỀU đơn vị ⇒ giá trị top-level chỉ có
+    # nghĩa khi mọi đơn vị cùng mode; khác nhau ⇒ "mixed" (đọc mode chính xác ở
+    # ``entries[].scoring_mode``). Không bao giờ lấy mode của unit đầu tiên làm
+    # đại diện — sẽ giải thích SAI cho phần entries còn lại.
+    real_modes = {m for m in modes_seen if m is not None}
+    if len(real_modes) == 1:
+        panel_mode = next(iter(real_modes))
+    elif len(real_modes) > 1:
+        panel_mode = "mixed"
+    else:
+        panel_mode = None
 
     return {
         "unit_id": ctx.effective_unit_root_id,
         "total_officers": len(entries),
-        "scoring_mode": scoring_mode,
+        "scoring_mode": panel_mode,
         "flags_snapshot": flags_snapshot,
         "entries": entries,
     }

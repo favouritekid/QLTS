@@ -1123,3 +1123,95 @@ class TestDistributionPanelScope:
                 e["dist_load"] / (e["max_capacity"] * e["weight"]) * 100, 1
             )
             assert e["eff_util_pct"] == expected_eff
+
+
+# --- Bổ sung sau review: accountant deny + manager ngoài scope + scoring_mode ---
+ACCOUNTANT_DIST_DATA = {
+    "username": "accountant_dist",
+    "email": "accountant_dist@example.com",
+    "password": "AccountantDist!321",
+    "role": "accountant",
+    "status": "active",
+}
+
+
+@pytest_asyncio.fixture
+async def accountant_in_unit1(seed_lead_dependencies):
+    """Accountant cùng UNIT_1 — dùng để ghim Casbin DENY của endpoint này."""
+    return await _create_user_and_role(
+        ACCOUNTANT_DIST_DATA, "role:accountant", unit_id=1
+    )
+
+
+class TestDistributionPanelDenies:
+    """Các nhánh CHẶN + ngữ nghĩa scoring_mode (bổ sung sau review)."""
+
+    @pytest.mark.asyncio
+    async def test_accountant_denied(
+        self, client: AsyncClient, accountant_in_unit1,
+    ):
+        """Accountant kế thừa role:officer nhưng PHẢI bị DENY tường minh.
+
+        Endpoint lộ tên + tải của cả phòng tư vấn ⇒ ngoài phạm vi kế toán.
+        Nếu row deny trong ACCOUNTANT_TEMPLATE bị mất, test này đỏ.
+        """
+        headers = await _get_token_headers(client, ACCOUNTANT_DIST_DATA)
+        resp = await client.get(DISTRIBUTION_URL, headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_manager_other_unit_denied(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers,
+        unrelated_unit,
+    ):
+        """Manager trỏ unit ngoài phạm vi ⇒ CHẶN.
+
+        ⚠️ Ghi nhận hành vi THẬT: nhánh manager/admin ủy quyền nguyên vẹn cho
+        ``get_officer_dashboard_scope`` nên trả **403** (PermissionDeniedError),
+        khác nhánh officer (404). Cố ý giữ nguyên để một nguồn sự thật cho cả họ
+        endpoint dashboard — test ghim đúng hành vi này, không ghim theo mong muốn.
+        """
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"unit_id": unrelated_unit},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_manager_out_of_scope_officer_404(
+        self, client: AsyncClient, manager_token_headers, officer_in_unrelated_unit,
+    ):
+        """Drill-down sang officer ngoài phạm vi manager ⇒ 404 (không lộ tồn tại)."""
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"officer_id": officer_in_unrelated_unit["id"]},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_scoring_mode_is_per_unit_not_first_unit(
+        self, client: AsyncClient, officer_token_headers, officer2_in_unit1,
+    ):
+        """scoring_mode top-level PHẢI là tóm tắt đúng của các entry.
+
+        Chấm điểm chạy per-unit; lấy mode của đơn vị ĐẦU TIÊN làm đại diện sẽ
+        giải thích sai cho phần entries còn lại khi phạm vi trải nhiều đơn vị.
+        Ghim: mọi entry có trường riêng, và top-level = mode chung / "mixed" / None.
+        """
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        entries = body["entries"]
+
+        for e in entries:
+            assert "scoring_mode" in e
+
+        real_modes = {e["scoring_mode"] for e in entries if e["scoring_mode"]}
+        if len(real_modes) > 1:
+            assert body["scoring_mode"] == "mixed"
+        elif len(real_modes) == 1:
+            assert body["scoring_mode"] == next(iter(real_modes))
+        else:
+            assert body["scoring_mode"] is None

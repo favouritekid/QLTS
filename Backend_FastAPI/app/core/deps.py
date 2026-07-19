@@ -975,6 +975,13 @@ async def get_officer_distribution_scope(
     - ``unit_id`` / ``officer_id`` khác của mình ⇒ **404** (không lộ tồn tại).
     - Đơn vị LUÔN lấy từ ``current_user.unit_id`` (không nhận từ query).
     - KHÔNG mở rộng sang đơn vị con (khác manager).
+
+    ⚠️ Manager/admin KẾ THỪA nguyên hành vi của ``get_officer_dashboard_scope``,
+    KHÔNG đồng nhất với nhánh officer ở trên: manager truyền ``unit_id`` ngoài
+    đơn vị mình nhận **403** (``PermissionDeniedError``), còn drill-down
+    ``officer_id`` ngoài phạm vi mới là 404 (qua ``_validate_officer_target``).
+    Đây là hành vi sẵn có của cả họ endpoint dashboard — cố ý giữ nguyên để một
+    nguồn sự thật, KHÔNG bịa 404 riêng cho endpoint này.
     """
     from ..repositories.officer_repository import OfficerRepository
 
