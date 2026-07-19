@@ -1,4 +1,13 @@
 import { api } from "./client";
+import {
+  officerDistributionPanelSchema,
+  type OfficerDistributionPanel,
+} from "@/lib/zod/officer";
+
+export interface DistributionFilters {
+  scope?: "personal" | "unit" | "organization";
+  unitId?: number | null;
+}
 
 export interface LeaderboardEntry {
   rank: number;
@@ -67,6 +76,27 @@ export interface AvailabilityPayload {
  * Handles all officer dashboard related endpoints
  */
 export const officerApi = {
+  /**
+   * Bảng "điểm bận" — giải trình engine chia lead cho cả đơn vị.
+   *
+   * ⚠️ CỐ Ý không gửi `officer_id`: backend hiểu tham số đó là drill-down một
+   * người, sẽ thu bảng còn đúng 1 dòng và mất ý nghĩa so sánh cả phòng.
+   * Parse bằng zod để lệch contract nổ ngay tại đây thay vì render số sai.
+   */
+  getDistributionPanel: async (
+    filters?: DistributionFilters
+  ): Promise<OfficerDistributionPanel> => {
+    const params = new URLSearchParams();
+    if (filters?.scope) params.append("scope", filters.scope);
+    if (filters?.unitId) params.append("unit_id", filters.unitId.toString());
+
+    const url = `/api/officer/distribution-panel${
+      params.toString() ? `?${params.toString()}` : ""
+    }`;
+    const response = await api.get(url);
+    return officerDistributionPanelSchema.parse(response.data);
+  },
+
   getLeaderboard: async (filters?: LeaderboardFilters) => {
     const params = new URLSearchParams();
     if (filters?.startDate) params.append("start_date", filters.startDate);

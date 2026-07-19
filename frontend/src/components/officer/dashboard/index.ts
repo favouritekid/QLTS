@@ -9,6 +9,7 @@ export { PriorityActionCard, type PriorityAction } from "./PriorityActionCard";
 export { PriorityActionsPanel } from "./PriorityActionsPanel";
 export { ActionInsightsPanel } from "./ActionInsightsPanel";
 export { WeeklyLeaderboard } from "./WeeklyLeaderboard";
+export { OfficerDistributionPanel } from "./OfficerDistributionPanel";
 export { SmartHeader } from "./SmartHeader";
 export { RecommendationsPanel } from "./RecommendationsPanel";
 export { AnnualProgressCard, type AnnualProgressInfo } from "./AnnualProgressCard";

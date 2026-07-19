@@ -38,6 +38,7 @@ import {
   KPICardsGrid,
   ActionInsightsPanel,
   WeeklyLeaderboard,
+  OfficerDistributionPanel,
   SmartHeader,
   AnnualProgressCard,
   MonthlyBreakdownCard,
@@ -599,6 +600,11 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
       {/* Row 5: Leaderboard (supplementary) */}
       <WeeklyLeaderboard scope={scope} unitId={effectiveUnitId} officerId={selectedOfficerId} />
+
+      {/* Row 6: Giải trình phân phối lead ("điểm bận").
+          CỐ Ý không truyền officerId — bảng này so sánh cả đơn vị, truyền
+          drill-down sẽ thu còn 1 dòng. Scope do backend suy theo role. */}
+      <OfficerDistributionPanel unitId={effectiveUnitId} />
     </div>
   );
 }
