@@ -1,8 +1,9 @@
+import logging as _logging
+
 import structlog
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Any, Callable, Tuple
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -1772,6 +1773,10 @@ async def get_officer_kpi_plan(
 # dùng để chọn người. Service này CHỈ diễn giải (nhãn/câu chữ), TUYỆT ĐỐI không
 # tự tính lại workload/dist_load/eff_util (sẽ lệch khi engine đổi công thức).
 
+# Logger riêng cho đường ĐỌC. Dùng chung logger của assignment_service sẽ khiến
+# log của dashboard trông y hệt log của một quyết định phân công thật.
+_panel_log = _logging.getLogger("app.services.officer_distribution_panel")
+
 
 def classify_archetype(load: Dict[str, Any], finance_on: bool) -> Dict[str, str]:
     """Nhãn kiểu officer, suy ra từ tỉ lệ các đòn bẩy tải. Hàm THUẦN."""
@@ -1793,15 +1798,24 @@ def classify_archetype(load: Dict[str, Any], finance_on: bool) -> Dict[str, str]
     return {"key": "balanced", "label": "Cân bằng"}
 
 
-def build_diagnosis(load: Dict[str, Any], archetype_key: str) -> str:
-    """Câu chẩn đoán 1 dòng, điền số thật. Hàm THUẦN (dùng nhãn đã chốt)."""
+def build_diagnosis(
+    load: Dict[str, Any], archetype_key: str, *, fill_pct: float
+) -> str:
+    """Câu chẩn đoán 1 dòng, điền số thật. Hàm THUẦN (dùng nhãn đã chốt).
+
+    ⚠️ NGÔI THỨ BA: chuỗi này render trên MỌI dòng, kể cả dòng đồng nghiệp —
+    tuyệt đối không xưng "bạn" (chỉ ``build_boost`` mới được, vì nó chỉ gắn cho
+    chính người xem).
+    ⚠️ ``fill_pct`` nhận từ caller, KHÔNG tự tính lại: dùng ``round()`` không
+    ndigits sẽ ra banker's rounding (round(80.5) == 80) và mâu thuẫn với
+    ``fill_pct`` in ngay cạnh trong cùng tooltip.
+    """
     workload = load["workload"]
     capacity = load["capacity"]
     dist = load["dist_load"]
     self_cnt = load["self_cnt"]
     tuition = load["tuition_hold"]
     deducted = workload - dist
-    fill = round(workload / capacity * 100) if capacity else 0
 
     if archetype_key == "paused":
         return (
@@ -1810,7 +1824,7 @@ def build_diagnosis(load: Dict[str, Any], archetype_key: str) -> str:
         )
     if archetype_key == "overloaded":
         return (
-            f"Đang giữ {workload}/{capacity} lead ({fill}% khả năng nhận) — "
+            f"Đang giữ {workload}/{capacity} lead ({fill_pct}% khả năng nhận) — "
             f"chạm ngưỡng tạm dừng nên hệ thống ưu tiên người khác."
         )
     if archetype_key == "available":
@@ -1820,7 +1834,7 @@ def build_diagnosis(load: Dict[str, Any], archetype_key: str) -> str:
         )
     if archetype_key == "self_driven":
         return (
-            f"{self_cnt}/{workload} lead là bạn tự tìm nên không bị tính; "
+            f"{self_cnt}/{workload} lead là tự tìm nên không bị tính; "
             f"hệ thống chỉ tính {dist} lead."
         )
     if archetype_key == "tuition_heavy":
@@ -1864,11 +1878,19 @@ def build_boost(load: Dict[str, Any], archetype_key: str) -> str:
         )
     if dist == 0:
         return "Hệ thống đang thấy bạn hoàn toàn rảnh — bạn được ưu tiên chia trước."
-    if (self_cnt + tuition) > dist:
+    deducted = workload - dist
+    if deducted > dist:
+        # ⚠️ KHÔNG viết "{self} tự tìm và {tuition} đã đóng tiền" như một phép
+        # cộng: phần giao (lead vừa tự tìm vừa đã đóng tiền) chỉ được trừ MỘT
+        # lần, nên self + tuition > deducted. Nêu tổng thật, rồi mới tách chi tiết.
+        overlap = load.get("overlap", 0)
+        detail = f"{self_cnt} lead tự tìm và {tuition} hồ sơ đã đóng tiền"
+        if overlap:
+            detail += f" (trong đó {overlap} lead thuộc cả hai)"
         return (
-            f"Điểm bận thấp của bạn đến từ {self_cnt} lead tự tìm và {tuition} "
-            f"hồ sơ đã đóng tiền (không bị tính). Phần bạn chủ động giảm được là "
-            f"{dist} lead hệ thống đang tính."
+            f"Điểm bận thấp của bạn nhờ {deducted} lead không bị tính — gồm "
+            f"{detail}. Phần bạn chủ động giảm được là {dist} lead hệ thống "
+            f"đang tính."
         )
     return (
         f"Muốn được chia thêm: giảm {dist} lead hệ thống đang tính bằng cách "
@@ -1894,12 +1916,15 @@ def _map_load_to_entry(
     tuition = load["tuition_hold"]
     archetype = classify_archetype(load, finance_on)
     is_me = officer.id == requesting_user_id
+    fill_pct = round(workload / capacity * 100, 1) if capacity else 0.0
 
     return {
         "rank": rank,
         "user_id": officer.id,
-        "username": officer.username,
-        "full_name": officer.full_name or officer.username,
+        # ⚠️ KHÔNG trả `username`: đây là endpoint duy nhất lộ cả roster đơn vị,
+        # FE chỉ render `full_name`, nên đưa login-id của đồng nghiệp lên wire là
+        # bề mặt PII không đổi lấy gì.
+        "full_name": officer.full_name or f"NV #{officer.id}",
         "unit_id": unit_id,
         "unit_name": unit_name,
         # Chế độ chấm điểm là PER-UNIT ⇒ gắn vào từng dòng mới chính xác.
@@ -1909,10 +1934,14 @@ def _map_load_to_entry(
         "weight": load["weight"],
         "self_sourced": load["self_cnt"],
         "tuition_hold": tuition,
+        # Phần GIAO self ∩ tuition. BẮT BUỘC có trên wire: thiếu nó thì
+        # self_sourced + tuition_hold ≠ deducted và mọi UI hiển thị chung sẽ
+        # trình bày một phép cộng không đúng tổng của chính nó.
+        "overlap": load.get("overlap", 0),
         "dist_load": dist,
         "deducted": workload - dist,
         "real_util_pct": round(load["real_util"] * 100, 1),
-        "fill_pct": round(workload / capacity * 100, 1) if capacity else 0.0,
+        "fill_pct": fill_pct,
         "eff_util_pct": round(load["eff_util"] * 100, 1),
         "score": round(load["score"], 4),
         "overload_gate_pct": (
@@ -1923,7 +1952,7 @@ def _map_load_to_entry(
         "eligible_for_assignment": load["eligible_for_assignment"],
         "availability_status": officer.availability_status or "offline",
         "archetype": archetype,
-        "diagnosis": build_diagnosis(load, archetype["key"]),
+        "diagnosis": build_diagnosis(load, archetype["key"], fill_pct=fill_pct),
         # 🔒 Lời khuyên CHỈ hiện trên dòng của chính người đang xem.
         "boost": build_boost(load, archetype["key"]) if is_me else None,
         "is_current_user": is_me,
@@ -1962,14 +1991,14 @@ async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any
     for officer in officers:
         by_unit.setdefault(officer.unit_id, []).append(officer)
 
-    unit_name_map: Dict[int, str] = {}
-    real_unit_ids = [uid for uid in by_unit if uid is not None]
-    if real_unit_ids:
-        rows = await db.execute(
-            select(models.OrganizationUnit.id, models.OrganizationUnit.name)
-            .where(models.OrganizationUnit.id.in_(real_unit_ids))
-        )
-        unit_name_map = {row.id: row.name for row in rows}
+    # Tên đơn vị lấy từ quan hệ đã eager-load (`selectinload(User.unit)` trong
+    # repo) — KHÔNG query rời trong service (giữ đúng Repository pattern và bớt
+    # một round-trip).
+    unit_name_map: Dict[int, str] = {
+        o.unit_id: o.unit.name
+        for o in officers
+        if o.unit_id is not None and o.unit is not None
+    }
 
     requesting_user_id = ctx.requesting_user.id
     entries: List[Dict[str, Any]] = []
@@ -1988,6 +2017,11 @@ async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any
             eligible_officer_ids=eligible_ids,
             lead_unit_id=unit_id,
             flags=flags,
+            # ⚠️ Logger RIÊNG: nếu để mặc định, mỗi lần poll dashboard sẽ ghi
+            # "Using <mode> scoring" ở mức INFO vào logger của assignment_service
+            # — trước đây một dòng như thế nghĩa là ĐÚNG MỘT lead vừa được gán,
+            # nên mọi audit đếm quyết định phân công theo log sẽ bị thổi phồng.
+            log=_panel_log,
         )
         modes_seen.add(res.scoring)
         # res.loads đã sort: nhóm eligible (thứ tự ưu tiên nhận của engine) trước.

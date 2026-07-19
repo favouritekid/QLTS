@@ -16,7 +16,7 @@ export const officerArchetypeSchema = z.object({
 export const officerDistributionEntrySchema = z.object({
   rank: z.number().int(),
   user_id: z.number().int(),
-  username: z.string(),
+  // Backend CỐ Ý không trả `username` (login-id đồng nghiệp = PII vô ích ở đây).
   full_name: z.string(),
   unit_id: z.number().int().nullable().optional(),
   unit_name: z.string().nullable().optional(),
@@ -29,8 +29,11 @@ export const officerDistributionEntrySchema = z.object({
   weight: z.number().int(), // Ưu tiên kỳ cựu (×N)
   self_sourced: z.number().int(), // Lead tự tìm
   tuition_hold: z.number().int(), // Hồ sơ đã đóng tiền
+  /** Phần GIAO tự-tìm ∩ đã-đóng-tiền — chỉ bị trừ MỘT lần. */
+  overlap: z.number().int(),
   dist_load: z.number().int(), // Lead hệ thống tính
-  deducted: z.number().int(), // Không tính = workload - dist_load
+  /** = self_sourced + tuition_hold − overlap (KHÔNG phải phép cộng đơn thuần). */
+  deducted: z.number().int(),
   real_util_pct: z.number(), // dist_load/cap  (%)
   fill_pct: z.number(), // workload/cap   (%) — chỗ đầy thật
   eff_util_pct: z.number(), // ĐIỂM BẬN = dist/(cap*weight) (%)

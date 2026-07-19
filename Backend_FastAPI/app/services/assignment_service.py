@@ -466,6 +466,10 @@ async def compute_unit_officer_loads(
                 # goi lai helper => khong the lech mau so voi engine.
                 "capacity": capacity,
                 "self_cnt": self_cnt,
+                # BAT BUOC surface: deducted = self + tuition - overlap. Neu chi
+                # tra self/tuition, moi UI hien thi chung se ngam hieu la phep
+                # CONG va sai bang dung phan giao (lead vua tu tim vua da dong tien).
+                "overlap": overlap,
                 "at_capacity": at_capacity,
                 "eligible_for_assignment": (
                     officer.id in eligible_set and not at_capacity
@@ -478,11 +482,16 @@ async def compute_unit_officer_loads(
 
     scoring_pool = [ol for ol in loads if ol["eligible_for_assignment"]]
     others = [ol for ol in loads if not ol["eligible_for_assignment"]]
+    # ``others`` KHONG BAO GIO di qua khau cham diem, nen phai co thu tu on dinh
+    # RIENG. Neu de nguyen thu tu DB, caller (dashboard) enumerate ra `rank` se
+    # xuat ban mot thu tu tuy y duoi dang bang xep hang.
+    others.sort(key=lambda x: (x["at_capacity"], x["eff_util"], x["officer"].id))
     if not scoring_pool:
         # Khong ai du dieu kien => BO QUA han khau cham diem (giu dung hanh vi
         # cu: engine return som o nhanh at_capacity, KHONG query lich su).
+        # Van tra ve theo thu tu on dinh (khong phai thu tu DB).
         return UnitOfficerLoads(
-            loads=loads, scoring=None, assign_reason=None, flags=flags
+            loads=others, scoring=None, assign_reason=None, flags=flags
         )
 
     # --- Lich su phan cong (chi khi fairness bat) ---

@@ -433,7 +433,8 @@ class OfficerDistributionEntry(BaseModel):
     """
     rank: int
     user_id: int
-    username: str
+    # ⚠️ KHÔNG expose `username`: endpoint này trả cả roster đơn vị, FE chỉ render
+    # `full_name` — đưa login-id đồng nghiệp lên wire là bề mặt PII vô ích.
     full_name: str
     unit_id: Optional[int] = None
     unit_name: Optional[str] = None
@@ -448,8 +449,12 @@ class OfficerDistributionEntry(BaseModel):
     weight: int                    # Ưu tiên kỳ cựu (×N)
     self_sourced: int              # Lead tự tìm
     tuition_hold: int              # Hồ sơ đã đóng tiền
+    # Phần GIAO (vừa tự tìm vừa đã đóng tiền) — chỉ bị trừ MỘT lần.
+    # ⚠️ deducted = self_sourced + tuition_hold − overlap. Thiếu trường này thì
+    # client sẽ trình bày self+tuition như một phép cộng KHÔNG bằng deducted.
+    overlap: int = 0
     dist_load: int                 # Lead hệ thống tính
-    deducted: int                  # Không tính = workload - dist_load
+    deducted: int                  # Không tính = self + tuition − overlap
     real_util_pct: float           # dist_load/cap  (cơ sở sắp xếp, %)
     fill_pct: float                # workload/cap   (chỗ đầy thật, %)
     eff_util_pct: float            # ĐIỂM BẬN = dist_load/(cap*weight), %

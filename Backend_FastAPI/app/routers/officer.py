@@ -156,12 +156,18 @@ async def get_leaderboard(
 # Distribution Panel ("Điểm bận") — giải trình phân phối lead
 # =============================================================================
 
-@limiter.limit(RateLimits.DATA_READ)
+# ⚠️ THỨ TỰ DECORATOR: @router.get PHẢI ở TRÊN @limiter.limit.
+# Decorator áp từ dưới lên — nếu đảo lại, router đăng ký hàm CHƯA bọc và
+# limiter chỉ bọc một tham chiếu không ai dùng ⇒ rate limit vô hiệu. Endpoint
+# này là read đắt nhất router và trả cả roster đơn vị nên bắt buộc có trần.
+# (Các endpoint còn lại trong file vẫn sai thứ tự — nợ
+#  `slowapi-limiter-decorator-order-debt`.)
 @router.get(
     "/distribution-panel",
     response_model=schemas.OfficerDistributionPanel,
     summary="Bảng điểm bận — giải trình engine chia lead cho cả đơn vị",
 )
+@limiter.limit(RateLimits.DATA_READ)
 async def get_distribution_panel(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],

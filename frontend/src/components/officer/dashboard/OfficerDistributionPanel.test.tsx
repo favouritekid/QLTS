@@ -8,18 +8,17 @@ vi.mock("@/hooks/officer/useOfficerDistribution", () => ({
     mockUseOfficerDistribution(...args),
 }));
 
-// ⚠️ CỐ Ý KHÔNG mock @/components/ui/tooltip: lời khuyên (`boost`) nằm TRONG
+// ⚠️ CỐ Ý KHÔNG mock @/components/ui/popover: lời khuyên (`boost`) nằm TRONG
 // TooltipContent nên phải mở tooltip bằng tương tác THẬT mới assert được. Mock
 // tooltip sẽ render sẵn nội dung và test mất hết giá trị.
 import {
-  EntryTooltip,
+  EntryDetails,
   OfficerDistributionPanel,
 } from "./OfficerDistributionPanel";
 
 const ME = {
   rank: 1,
   user_id: 18,
-  username: "hien",
   full_name: "Hiền",
   unit_id: 14,
   unit_name: "Phòng Tuyển sinh",
@@ -27,13 +26,14 @@ const ME = {
   workload: 248,
   max_capacity: 400,
   weight: 2,
-  self_sourced: 34,
+  self_sourced: 54,
   tuition_hold: 100,
+  overlap: 20,
   dist_load: 114,
   deducted: 134,
   real_util_pct: 28.5,
   fill_pct: 62.0,
-  eff_util_pct: 14.3,
+  eff_util_pct: 14.2,
   score: 0.1425,
   overload_gate_pct: 37.0,
   overloaded: false,
@@ -50,7 +50,6 @@ const PEER = {
   ...ME,
   rank: 2,
   user_id: 25,
-  username: "kien",
   full_name: "Kiên",
   eff_util_pct: 23.0,
   archetype: { key: "balanced", label: "Cân bằng" },
@@ -63,7 +62,6 @@ const OFFLINE = {
   ...PEER,
   rank: 3,
   user_id: 99,
-  username: "quocduy",
   full_name: "Quốc Duy",
   eligible_for_assignment: false,
   availability_status: "offline",
@@ -95,7 +93,7 @@ describe("OfficerDistributionPanel", () => {
 
     expect(screen.getByText("Hiền")).toBeInTheDocument();
     expect(screen.getByText("Kiên")).toBeInTheDocument();
-    expect(screen.getByText("14.3")).toBeInTheDocument();
+    expect(screen.getByText("14.2")).toBeInTheDocument();
     expect(screen.getByText("23")).toBeInTheDocument();
     expect(screen.getByText("BẠN")).toBeInTheDocument();
   });
@@ -121,13 +119,13 @@ describe("OfficerDistributionPanel", () => {
   // jsdom không drive được tương tác mở của Radix (dự án cũng theo cách này ở
   // `dialog.test.tsx` — render Radix mở sẵn). Hover thật verify bằng smoke trình duyệt.
   it("nội dung tooltip dòng của MÌNH: có phép tính + lời khuyên riêng", () => {
-    render(<EntryTooltip e={ME} />);
+    render(<EntryDetails e={ME} />);
 
     expect(screen.getByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")).toBeInTheDocument();
     expect(screen.getByText(/Dành riêng cho bạn/)).toBeInTheDocument();
     // phép tính hiện bằng số thật (không phải FE tự tính)
     expect(
-      screen.getByText(/Điểm bận = 114 ÷ \(400×2\) ×100 = 14\.3/)
+      screen.getByText(/Điểm bận = 114 ÷ \(400×2\) ×100 = 14\.2/)
     ).toBeInTheDocument();
     expect(screen.getByText(/Chỗ đầy thật = 248\/400 = 62%/)).toBeInTheDocument();
     expect(
@@ -136,7 +134,7 @@ describe("OfficerDistributionPanel", () => {
   });
 
   it("nội dung tooltip ĐỒNG NGHIỆP: có chẩn đoán nhưng KHÔNG có lời khuyên", () => {
-    render(<EntryTooltip e={PEER} />);
+    render(<EntryDetails e={PEER} />);
 
     expect(
       screen.getByText("Tải chủ yếu là lead hệ thống chia.")
@@ -152,7 +150,7 @@ describe("OfficerDistributionPanel", () => {
     // Giả lập backend rò rỉ: entry của người khác lại kèm boost.
     // UI phải câm vì điều kiện render là is_current_user && boost.
     const leaky = { ...PEER, boost: "RÒ RỈ KHÔNG ĐƯỢC HIỆN" };
-    render(<EntryTooltip e={leaky} />);
+    render(<EntryDetails e={leaky} />);
 
     expect(screen.queryByText("RÒ RỈ KHÔNG ĐƯỢC HIỆN")).not.toBeInTheDocument();
     expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
@@ -200,7 +198,7 @@ describe("OfficerDistributionPanel", () => {
     const widths = Array.from(
       container.querySelectorAll<HTMLElement>("span.h-full")
     ).map((el) => el.style.width);
-    expect(widths).toEqual(["14.3%", "14.2%", "33.5%"]);
+    expect(widths).toEqual(["14.2%", "14.3%", "33.5%"]);
   });
 
   it("hiện skeleton khi đang tải và thông báo khi lỗi", () => {
@@ -221,5 +219,49 @@ describe("OfficerDistributionPanel", () => {
     expect(
       screen.getByText(/Không tải được bảng điểm bận/)
     ).toBeInTheDocument();
+  });
+
+  it("nhãn 'không tính' KHÔNG trình bày như phép cộng khi có phần giao", () => {
+    // deducted = self + tuition − overlap. Nếu in "54 + 100" cạnh "−134",
+    // người đọc thấy một phép cộng không bằng tổng của chính nó.
+    render(<EntryDetails e={ME} />);
+    expect(
+      screen.getByText(/tự tìm 54, đã đóng tiền 100, trùng 20/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/tự tìm 54 \+ đã đóng tiền 100/)).not.toBeInTheDocument();
+  });
+
+  it("không có phần giao thì vẫn dùng dấu + cho dễ đọc", () => {
+    render(<EntryDetails e={{ ...ME, overlap: 0, self_sourced: 34, deducted: 134 }} />);
+    expect(
+      screen.getByText(/tự tìm 34 \+ đã đóng tiền 100/)
+    ).toBeInTheDocument();
+  });
+
+  it("CHẠM/BẤM mở được bảng chi tiết — đường dùng trên điện thoại", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    mockPanel([ME]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Hiền/ }));
+    expect(await screen.findByText(/Dành riêng cho bạn/)).toBeInTheDocument();
+  });
+
+  it("một đơn vị vẫn nói rõ cách xếp (legacy không được hiện điểm bận trơ)", () => {
+    mockUseOfficerDistribution.mockReturnValue({
+      data: {
+        unit_id: 14,
+        total_officers: 1,
+        scoring_mode: "legacy",
+        flags_snapshot: {},
+        entries: [{ ...ME, scoring_mode: "legacy" }],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<OfficerDistributionPanel />);
+    expect(screen.getByText(/Cách xếp của đơn vị/)).toBeInTheDocument();
+    expect(screen.getByText(/xếp theo lượt/)).toBeInTheDocument();
   });
 });

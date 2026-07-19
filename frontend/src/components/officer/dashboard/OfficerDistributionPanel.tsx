@@ -9,17 +9,18 @@
  *
  * Cách đọc thanh (trục chung 0–100% khả năng nhận, mọi người thẳng hàng):
  *   [ điểm bận ][ ưu tiên kỳ cựu ][ không tính ] …trống… ┊80%
- *   mép phải đoạn xanh dương = ĐIỂM BẬN · vạch cam = chỗ đầy thật
+ *   mép phải đoạn xanh dương = ĐIỂM BẬN · vạch cam = mức đem so vạch 80%
  */
+
+import { useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { useOfficerDistribution } from "@/hooks/officer/useOfficerDistribution";
 import type { OfficerDistributionEntry } from "@/lib/zod/officer";
 import { cn } from "@/lib/utils";
@@ -34,12 +35,34 @@ interface OfficerDistributionPanelProps {
 const clamp = (n: number) =>
   Math.round(Math.max(0, Math.min(100, n)) * 100) / 100;
 
-/** Ba đoạn của thanh, tính THUẦN từ số backend trả (không suy diễn thêm). */
+/**
+ * Ba đoạn của thanh, tính THUẦN từ số backend trả (không suy diễn thêm).
+ *
+ * ⚠️ Phải chặn TỔNG, không chỉ từng đoạn: `sys + weight + skip === fill_pct`,
+ * mà `fill_pct` CÓ THỂ > 100 (officer giữ nhiều hơn sức chứa — xảy ra khi admin
+ * hạ `max_capacity` hoặc gán tay). Các đoạn là flex item nên nếu tổng vượt 100%
+ * trình duyệt sẽ CO ĐỀU thay vì để `overflow-hidden` cắt, khiến mép đoạn chàm
+ * (thứ người dùng được dạy đọc là ĐIỂM BẬN) không còn khớp con số in bên cạnh.
+ */
 function segmentsOf(e: OfficerDistributionEntry) {
   const sys = clamp(e.eff_util_pct);
-  const weight = clamp(Math.max(0, e.real_util_pct - e.eff_util_pct));
-  const skip = clamp(Math.max(0, e.fill_pct - e.real_util_pct));
-  return { sys, weight, skip, fill: clamp(e.fill_pct) };
+  const weight = clamp(
+    Math.min(Math.max(0, e.real_util_pct - e.eff_util_pct), 100 - sys)
+  );
+  const skip = clamp(
+    Math.min(Math.max(0, e.fill_pct - e.real_util_pct), 100 - sys - weight)
+  );
+  return {
+    sys,
+    weight,
+    skip,
+    // Mốc so với vạch 80%: PHẢI là đại lượng engine thực sự gate
+    // ((workload − đã đóng tiền)/sức chứa), KHÔNG phải `fill_pct`. Vẽ fill_pct
+    // ở đây từng khiến "cam vượt vạch đứt" bị đọc là quá tải trong khi engine
+    // vẫn đang chia lead cho người đó.
+    gate: clamp(e.overload_gate_pct),
+    overCapacity: e.fill_pct > 100,
+  };
 }
 
 function LedgerRow({
@@ -62,14 +85,11 @@ function LedgerRow({
 }
 
 /**
- * Nội dung tooltip: phép tính bằng số thật + công thức + lời khuyên riêng.
+ * Bảng chi tiết: phép tính bằng số thật + công thức + lời khuyên riêng.
  *
- * Export để test trực tiếp: Radix render phần này vào portal và chỉ khi mở, mà
- * jsdom không drive được tương tác mở của Radix (xem `dialog.test.tsx` — dự án
- * cũng render Radix ở trạng thái mở sẵn thay vì mô phỏng tương tác). Tương tác
- * hover/focus thật được verify bằng smoke trên trình duyệt.
+ * Export để test trực tiếp nội dung mà không phụ thuộc cơ chế mở của Radix.
  */
-export function EntryTooltip({ e }: { e: OfficerDistributionEntry }) {
+export function EntryDetails({ e }: { e: OfficerDistributionEntry }) {
   return (
     <div className="space-y-2 text-xs">
       <div>
@@ -79,8 +99,15 @@ export function EntryTooltip({ e }: { e: OfficerDistributionEntry }) {
 
       <div className="space-y-1">
         <LedgerRow label="Lead đang giữ" value={String(e.workload)} />
+        {/* ⚠️ KHÔNG viết "X + Y" khi có phần giao: lead vừa tự tìm vừa đã đóng
+            tiền chỉ được trừ MỘT lần, nên self + tuition > deducted và người
+            đọc sẽ thấy một phép cộng không bằng tổng của chính nó. */}
         <LedgerRow
-          label={`− Không tính (tự tìm ${e.self_sourced} + đã đóng tiền ${e.tuition_hold})`}
+          label={
+            e.overlap > 0
+              ? `− Không tính (tự tìm ${e.self_sourced}, đã đóng tiền ${e.tuition_hold}, trùng ${e.overlap})`
+              : `− Không tính (tự tìm ${e.self_sourced} + đã đóng tiền ${e.tuition_hold})`
+          }
           value={`−${e.deducted}`}
           muted
         />
@@ -130,12 +157,18 @@ export function EntryTooltip({ e }: { e: OfficerDistributionEntry }) {
 function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
   const seg = segmentsOf(e);
   const dimmed = !e.eligible_for_assignment;
+  // ⚠️ Dùng Popover, KHÔNG dùng Tooltip: Radix Tooltip bỏ qua pointerType
+  // 'touch' và đóng ngay ở onPointerDown, nên trên điện thoại — đúng đường dùng
+  // thực địa của officer — toàn bộ nội dung sẽ không bao giờ mở được. Popover
+  // mở bằng bấm/chạm/bàn phím, phủ mọi thiết bị bằng MỘT đường duy nhất.
+  const [open, setOpen] = useState(false);
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
         <button
           type="button"
+          aria-expanded={open}
           aria-label={`${e.full_name}: điểm bận ${e.eff_util_pct} trên 100, đang giữ ${e.workload} trên ${e.max_capacity} lead`}
           className={cn(
             "grid w-full grid-cols-[minmax(96px,140px)_1fr_36px] items-center gap-3 rounded-md px-1 py-2 text-left",
@@ -163,16 +196,17 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
           {/* Thanh đo — trục chung 0–100% khả năng nhận */}
           <span className="relative block h-6 rounded border bg-muted">
             <span className="absolute inset-0 flex overflow-hidden rounded">
+              {/* shrink-0: không cho flex co đoạn khi tổng chạm trần */}
               <span
-                className="h-full bg-primary"
+                className="h-full shrink-0 bg-primary"
                 style={{ width: `${seg.sys}%` }}
               />
               <span
-                className="h-full bg-info-500"
+                className="h-full shrink-0 bg-info-500"
                 style={{ width: `${seg.weight}%` }}
               />
               <span
-                className="h-full bg-success-500"
+                className="h-full shrink-0 bg-success-500"
                 style={{ width: `${seg.skip}%` }}
               />
             </span>
@@ -182,11 +216,11 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
               className="absolute -top-0.5 -bottom-0.5 border-l-2 border-dashed border-error-500"
               style={{ left: "80%" }}
             />
-            {/* Chỗ đầy thật */}
+            {/* Mốc dùng để SO với vạch 80% — đại lượng engine thật sự gate */}
             <span
               aria-hidden="true"
               className="absolute -top-1 -bottom-1 w-0.5 rounded bg-warning-500"
-              style={{ left: `${seg.fill}%` }}
+              style={{ left: `${seg.gate}%` }}
             />
           </span>
 
@@ -195,11 +229,17 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
             {e.eff_util_pct}
           </span>
         </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-[320px]">
-        <EntryTooltip e={e} />
-      </TooltipContent>
-    </Tooltip>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="max-w-[340px] text-xs"
+        // Nội dung chỉ để ĐỌC — đừng cướp focus khỏi hàng vừa bấm.
+        onOpenAutoFocus={(ev) => ev.preventDefault()}
+      >
+        <EntryDetails e={e} />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -303,17 +343,17 @@ export function OfficerDistributionPanel({
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Vì sao bạn được chia lead</CardTitle>
         <p className="text-xs text-muted-foreground">
-          Điểm bận (0–100): càng thấp càng được chia nhiều. Di chuột / chạm vào
-          từng người để xem phép tính.
+          Điểm bận (0–100): càng thấp càng được chia nhiều. Bấm vào từng người để
+          xem phép tính đầy đủ.
         </p>
         <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
           <LegendSwatch className="bg-primary" label="Điểm bận" />
           <LegendSwatch className="bg-info-500" label="Ưu tiên kỳ cựu" />
           <LegendSwatch className="bg-success-500" label="Không tính" />
-          <LegendSwatch className="bg-warning-500" label="Chỗ đầy thật" />
+          <LegendSwatch className="bg-warning-500" label="Mức so ngưỡng" />
           <LegendSwatch
             className="border-l-2 border-dashed border-error-500 bg-transparent"
-            label="Ngưỡng 80%"
+            label="Ngưỡng tạm dừng 80%"
           />
         </div>
       </CardHeader>
@@ -340,7 +380,7 @@ export function OfficerDistributionPanel({
         )}
 
         {!isLoading && !error && data && data.entries.length > 0 && (
-          <TooltipProvider delayDuration={150}>
+          <>
             {/* Trục chung — thẳng hàng với vùng thanh của mọi dòng */}
             <div
               aria-hidden="true"
@@ -363,11 +403,32 @@ export function OfficerDistributionPanel({
               const multiUnit = groups.length > 1;
               return (
                 <>
-                  {multiUnit && (
+                  {multiUnit ? (
                     <p className="px-1 pb-2 text-[11px] text-muted-foreground">
                       Phạm vi gồm {groups.length} đơn vị — điểm bận và thứ hạng
                       tính <b>riêng trong từng đơn vị</b>, không so chéo được.
                     </p>
+                  ) : (
+                    // Một đơn vị vẫn PHẢI nói rõ cách xếp: ở chế độ `legacy`
+                    // engine sắp theo (quá tải, lâu chưa nhận) và KHÔNG đọc điểm
+                    // bận — hiện con số to mà không chú thích sẽ khiến người xem
+                    // tưởng đó là lý do phân phối.
+                    groups[0]?.scoringMode && (
+                      <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+                        Cách xếp của đơn vị:{" "}
+                        <b>
+                          {SCORING_LABEL[groups[0].scoringMode] ??
+                            groups[0].scoringMode}
+                        </b>
+                        {groups[0].scoringMode === "legacy" && (
+                          <>
+                            {" "}
+                            — chế độ này xếp theo lượt (lâu chưa nhận trước),
+                            điểm bận chỉ để tham khảo.
+                          </>
+                        )}
+                      </p>
+                    )
                   )}
                   {groups.map((g) => (
                     <div key={g.key} className={multiUnit ? "mt-4 first:mt-0" : undefined}>
@@ -393,7 +454,7 @@ export function OfficerDistributionPanel({
                 </>
               );
             })()}
-          </TooltipProvider>
+          </>
         )}
       </CardContent>
     </Card>

@@ -88,7 +88,9 @@ export const officerApi = {
   ): Promise<OfficerDistributionPanel> => {
     const params = new URLSearchParams();
     if (filters?.scope) params.append("scope", filters.scope);
-    if (filters?.unitId) params.append("unit_id", filters.unitId.toString());
+    // `!= null` chứ không phải truthiness: unitId = 0 là id hợp lệ về mặt kiểu,
+    // dùng `if (unitId)` sẽ âm thầm nuốt mất và rơi về phạm vi rộng hơn.
+    if (filters?.unitId != null) params.append("unit_id", filters.unitId.toString());
 
     const url = `/api/officer/distribution-panel${
       params.toString() ? `?${params.toString()}` : ""

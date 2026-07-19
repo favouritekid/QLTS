@@ -1215,3 +1215,100 @@ class TestDistributionPanelDenies:
             assert body["scoring_mode"] == next(iter(real_modes))
         else:
             assert body["scoring_mode"] is None
+
+
+# ===========================================================================
+# Distribution Panel — CHẾ ĐỘ ĐANG CHẠY PROD (cờ BẬT)
+# ===========================================================================
+# ⚠️ `.env.test` không set cờ nào ⇒ mặc định TẮT HẾT. Khi tắt thì
+# self_sourced = tuition_hold = deducted = 0, dist_load == workload, weight == 1,
+# và eff_util_pct == real_util_pct == fill_pct — nghĩa là mọi assert về số liệu
+# trở thành hằng đúng (0 == 0, x == x) và TOÀN BỘ chủ đề của tính năng (giảm
+# trừ, trọng số, "điểm bận vs chỗ đầy") KHÔNG được test. Prod unit 14 đang chạy
+# member + exclude-self + finance ⇒ phải test đúng cấu hình đó.
+
+
+@pytest.fixture
+def prod_flags(monkeypatch):
+    """Bật đúng bộ cờ đang chạy prod cho các test dưới đây."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", True)
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    return settings
+
+
+class TestDistributionPanelProdFlags:
+    """Ghim bộ số ở ĐÚNG cấu hình prod — nơi các phép trừ/trọng số mới có tác dụng."""
+
+    @pytest.mark.asyncio
+    async def test_scoring_mode_is_member_when_flags_on(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        # Với cờ TẮT giá trị này là "legacy" — assert dưới đây chỉ đúng khi cờ BẬT,
+        # nên nó cũng là canary phát hiện test lại rơi về chế độ mặc định.
+        assert body["scoring_mode"] == "member"
+        for e in body["entries"]:
+            assert e["scoring_mode"] == "member"
+
+    @pytest.mark.asyncio
+    async def test_deducted_equals_self_plus_tuition_minus_overlap(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Bất biến then chốt: overlap PHẢI có trên wire và khớp phép trừ.
+
+        Thiếu `overlap`, client sẽ trình bày `self + tuition` như một phép cộng
+        không bằng `deducted` (phần giao bị trừ hai lần trong đầu người đọc).
+        """
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            assert "overlap" in e
+            assert e["deducted"] == e["self_sourced"] + e["tuition_hold"] - e["overlap"]
+            assert e["overlap"] <= min(e["self_sourced"], e["tuition_hold"])
+            assert e["dist_load"] == e["workload"] - e["deducted"]
+
+    @pytest.mark.asyncio
+    async def test_weight_actually_divides_eff_util(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Với cờ TẮT thì weight luôn = 1 nên phép chia này vô nghĩa."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            expected = round(
+                e["dist_load"] / (e["max_capacity"] * e["weight"]) * 100, 1
+            )
+            assert e["eff_util_pct"] == expected
+            # real_util_pct KHÔNG chia trọng số
+            assert e["real_util_pct"] == round(
+                e["dist_load"] / e["max_capacity"] * 100, 1
+            )
+
+    @pytest.mark.asyncio
+    async def test_username_not_exposed(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Endpoint trả cả roster đơn vị ⇒ không được kèm login-id đồng nghiệp."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            assert "username" not in e
+            assert "email" not in e
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_never_addresses_reader_on_peer_rows(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers,
+        officer2_in_unit1, prod_flags,
+    ):
+        """`diagnosis` render ở MỌI dòng nên không được xưng "bạn"."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            if e["user_id"] != officer_user_in_db["id"]:
+                assert "bạn" not in e["diagnosis"].lower(), e["diagnosis"]

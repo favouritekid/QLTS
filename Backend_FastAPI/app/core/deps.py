@@ -1013,6 +1013,37 @@ async def get_officer_distribution_scope(
             requesting_user=current_user,
         )
 
+    # ⚠️ officer_id ở endpoint này nghĩa là "TIÊU ĐIỂM", KHÔNG phải "thu hẹp".
+    # Nếu chuyển thẳng xuống resolver chung, nó thu `effective_officer_ids` còn
+    # [officer_id] ⇒ panel chấm điểm trên pool MỘT NGƯỜI: ở chế độ
+    # member_fairness thì actual_share == target_share ⇒ thành phần fairness ≡ 0,
+    # và `scoring_mode` bị quyết bởi ngưỡng history ≥10 của riêng người đó. Kết
+    # quả là API trả `score`/`scoring_mode` mà engine KHÔNG BAO GIỜ sinh ra, dưới
+    # danh nghĩa "điểm sắp xếp thực tế của engine". Vì vậy: xác thực quyền xem
+    # người đó (404 nếu ngoài phạm vi) rồi MỞ RỘNG ra đơn vị của họ.
+    if officer_id is not None and user_role in (UserRole.MANAGER, UserRole.ADMIN):
+        target = await _validate_officer_target(db, officer_id, current_user)
+        if target.unit_id is None:
+            raise BusinessRuleViolation(
+                detail="Nhân viên này chưa được gán đơn vị nên không có bảng so sánh"
+            )
+        officer_repo = OfficerRepository(db)
+        pool = await officer_repo.get_active_officer_ids(
+            scope="unit", unit_id=target.unit_id
+        )
+        return DashboardScopeContext(
+            scope_kind="unit",
+            requested_officer_id=officer_id,
+            requested_unit_id=target.unit_id,
+            effective_officer_ids=pool,
+            effective_unit_root_id=target.unit_id,
+            effective_unit_ids=[target.unit_id],
+            includes_descendants=False,
+            forced_by_role=False,
+            label=f"Đơn vị của {target.full_name or officer_id}",
+            requesting_user=current_user,
+        )
+
     # Manager → 'unit', admin → 'organization'; role khác rơi vào fail-close
     # của get_officer_dashboard_scope (accountant/user bị chặn).
     if scope is None:
@@ -1020,7 +1051,7 @@ async def get_officer_distribution_scope(
 
     return await get_officer_dashboard_scope(
         scope=scope,
-        officer_id=officer_id,
+        officer_id=None,
         unit_id=unit_id,
         db=db,
         current_user=current_user,
