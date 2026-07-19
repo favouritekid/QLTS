@@ -1435,6 +1435,22 @@ class OfficerRepository(BaseRepository[models.User]):
         result = await self.db.execute(query)
         return [row[0] for row in result.fetchall()]
 
+    async def get_officers_by_ids(self, officer_ids: List[int]) -> List[models.User]:
+        """Load full User rows cho danh sách officer id (KHÔNG lock).
+
+        Dùng cho distribution panel: cần ``max_capacity`` / ``assignment_weight`` /
+        ``last_assigned_at`` / ``availability_status`` để tính tải.
+        ⚠️ CỐ Ý KHÔNG lọc ``availability_status`` — officer đang offline/busy vẫn
+        phải hiển thị trên bảng (được đánh dấu không eligible), việc lọc pool
+        chấm điểm do caller quyết định.
+        """
+        if not officer_ids:
+            return []
+        result = await self.db.execute(
+            select(models.User).where(models.User.id.in_(officer_ids))
+        )
+        return list(result.scalars().all())
+
     async def get_officers_total_capacity(self, officer_ids: List[int]) -> int:
         """Sum actual max_capacity for given officers. NULL defaults to 100."""
         if not officer_ids:

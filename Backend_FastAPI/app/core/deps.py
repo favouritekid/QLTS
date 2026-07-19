@@ -49,6 +49,7 @@ __all__ = [
     "get_kpi_plan_for_user",  # Phase A6: KPI Planning IDOR
     "get_kpi_plan_month_for_user",  # Phase A6: KPI Planning IDOR
     "get_officer_dashboard_scope",
+    "get_officer_distribution_scope",
     "get_criteria_access",
     "get_config_filter",
     "get_lead_list_filter",  # Phase 2.1
@@ -948,6 +949,74 @@ async def get_officer_dashboard_scope(
     # =====================================================================
     raise PermissionDeniedError(
         detail="Your role is not allowed to access officer dashboard"
+    )
+
+
+async def get_officer_distribution_scope(
+    scope: str | None = None,
+    officer_id: int | None = None,
+    unit_id: int | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> DashboardScopeContext:
+    """Scope resolver cho bảng "điểm bận" (`GET /api/officer/distribution-panel`).
+
+    KHÁC DUY NHẤT so với :func:`get_officer_dashboard_scope`: **officer được xem
+    TOÀN BỘ đơn vị của chính mình** (không chỉ personal), vì bảng này có mục đích
+    giải trình minh bạch cách engine chia lead cho cả phòng. Lời khuyên cá nhân
+    (``boost``) vẫn chỉ hiện trên dòng của chính người xem — do service quyết định.
+
+    Manager / admin / mọi role khác **ủy quyền nguyên vẹn** cho
+    :func:`get_officer_dashboard_scope` (một nguồn sự thật cho IDOR + fail-close,
+    tránh nhân bản logic descendants). Chỉ mặc định ``scope`` theo role để caller
+    không phải truyền.
+
+    Bảo mật nhánh officer:
+    - ``unit_id`` / ``officer_id`` khác của mình ⇒ **404** (không lộ tồn tại).
+    - Đơn vị LUÔN lấy từ ``current_user.unit_id`` (không nhận từ query).
+    - KHÔNG mở rộng sang đơn vị con (khác manager).
+    """
+    from ..repositories.officer_repository import OfficerRepository
+
+    user_role = current_user.role
+
+    if user_role == UserRole.OFFICER:
+        # IDOR: officer không được trỏ sang người/đơn vị khác.
+        if officer_id is not None and officer_id != current_user.id:
+            raise ResourceNotFoundError(detail="Officer not found")
+        if unit_id is not None and unit_id != current_user.unit_id:
+            raise ResourceNotFoundError(detail="Unit not found")
+        if current_user.unit_id is None:
+            raise BusinessRuleViolation(detail="Officer chưa được gán đơn vị")
+
+        officer_repo = OfficerRepository(db)
+        pool = await officer_repo.get_active_officer_ids(
+            scope="unit", unit_id=current_user.unit_id
+        )
+        return DashboardScopeContext(
+            scope_kind="unit",
+            requested_officer_id=None,
+            requested_unit_id=current_user.unit_id,
+            effective_officer_ids=pool,
+            effective_unit_root_id=current_user.unit_id,
+            effective_unit_ids=[current_user.unit_id],
+            includes_descendants=False,
+            forced_by_role=True,
+            label="Đơn vị của tôi",
+            requesting_user=current_user,
+        )
+
+    # Manager → 'unit', admin → 'organization'; role khác rơi vào fail-close
+    # của get_officer_dashboard_scope (accountant/user bị chặn).
+    if scope is None:
+        scope = "unit" if user_role == UserRole.MANAGER else "organization"
+
+    return await get_officer_dashboard_scope(
+        scope=scope,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        db=db,
+        current_user=current_user,
     )
 
 

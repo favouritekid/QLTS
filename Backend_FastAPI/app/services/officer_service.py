@@ -2,6 +2,7 @@ import structlog
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Any, Callable, Tuple
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -1760,4 +1761,250 @@ async def get_officer_kpi_plan(
         "progress_pct": round(progress_pct, 1),
         "months": month_summaries,
         "source": source,
+    }
+
+
+# =============================================================================
+# Distribution Panel ("Điểm bận") — giải trình phân phối lead của đơn vị
+# =============================================================================
+# ⚠️ MỌI con số tải ở đây đến TRỰC TIẾP từ
+# ``assignment_service.compute_unit_officer_loads`` — đúng hàm engine chia lead
+# dùng để chọn người. Service này CHỈ diễn giải (nhãn/câu chữ), TUYỆT ĐỐI không
+# tự tính lại workload/dist_load/eff_util (sẽ lệch khi engine đổi công thức).
+
+
+def classify_archetype(load: Dict[str, Any], finance_on: bool) -> Dict[str, str]:
+    """Nhãn kiểu officer, suy ra từ tỉ lệ các đòn bẩy tải. Hàm THUẦN."""
+    officer = load["officer"]
+    workload = load["workload"]
+    capacity = load["capacity"]
+    fill = workload / capacity if capacity else 0.0
+
+    if (officer.availability_status or "offline") != "available":
+        return {"key": "paused", "label": "Đang tắt nhận lead"}
+    if load["at_capacity"] or load["overloaded"]:
+        return {"key": "overloaded", "label": "Quá tải"}
+    if fill < 0.30:
+        return {"key": "available", "label": "Còn nhiều chỗ trống"}
+    if workload > 0 and load["self_cnt"] / workload >= 0.50:
+        return {"key": "self_driven", "label": "Tự tìm khách là chính"}
+    if finance_on and workload > 0 and load["tuition_hold"] / workload >= 0.50:
+        return {"key": "tuition_heavy", "label": "Chủ yếu chờ học phí"}
+    return {"key": "balanced", "label": "Cân bằng"}
+
+
+def build_diagnosis(load: Dict[str, Any], archetype_key: str) -> str:
+    """Câu chẩn đoán 1 dòng, điền số thật. Hàm THUẦN (dùng nhãn đã chốt)."""
+    workload = load["workload"]
+    capacity = load["capacity"]
+    dist = load["dist_load"]
+    self_cnt = load["self_cnt"]
+    tuition = load["tuition_hold"]
+    deducted = workload - dist
+    fill = round(workload / capacity * 100) if capacity else 0
+
+    if archetype_key == "paused":
+        return (
+            f"Đang tắt sẵn sàng nên hệ thống không chia lead mới; "
+            f"vẫn giữ {workload} lead."
+        )
+    if archetype_key == "overloaded":
+        return (
+            f"Đang giữ {workload}/{capacity} lead ({fill}% khả năng nhận) — "
+            f"chạm ngưỡng tạm dừng nên hệ thống ưu tiên người khác."
+        )
+    if archetype_key == "available":
+        return (
+            f"Mới dùng {workload}/{capacity} khả năng nhận — "
+            f"hệ thống thấy còn rất rảnh nên ưu tiên chia thêm."
+        )
+    if archetype_key == "self_driven":
+        return (
+            f"{self_cnt}/{workload} lead là bạn tự tìm nên không bị tính; "
+            f"hệ thống chỉ tính {dist} lead."
+        )
+    if archetype_key == "tuition_heavy":
+        return (
+            f"{tuition}/{workload} lead đã đóng tiền nên không bị tính; "
+            f"hệ thống chỉ tính {dist} lead."
+        )
+    if deducted > 0:
+        return (
+            f"Giữ {workload} lead, được trừ {deducted} (tự tìm + đã đóng tiền) "
+            f"nên hệ thống tính {dist}."
+        )
+    return (
+        f"Gần như toàn bộ {workload} lead là do hệ thống chia — "
+        f"không có phần được trừ."
+    )
+
+
+def build_boost(load: Dict[str, Any], archetype_key: str) -> str:
+    """Lời khuyên hành động. 🔒 Chỉ gắn cho CHÍNH người đang xem (caller gate).
+
+    Bám đúng cơ chế engine: chỉ ``dist_load`` (lead hệ thống tính) mới kéo điểm
+    bận xuống. Lead tự tìm / hồ sơ đã đóng tiền ĐÃ được trừ sẵn nên xử lý chúng
+    KHÔNG làm được chia thêm — tuyệt đối không khuyên sai điều này.
+    """
+    workload = load["workload"]
+    capacity = load["capacity"]
+    dist = load["dist_load"]
+    self_cnt = load["self_cnt"]
+    tuition = load["tuition_hold"]
+
+    if archetype_key == "paused":
+        return (
+            "Bạn đang tắt sẵn sàng nên hệ thống bỏ qua khi chia. "
+            "Bật lại khi muốn nhận tiếp."
+        )
+    if archetype_key == "overloaded":
+        return (
+            f"Bạn đang giữ {workload}/{capacity} lead nên hệ thống tạm giảm chia. "
+            f"Chốt bớt lead đang mở để hạ điểm bận."
+        )
+    if dist == 0:
+        return "Hệ thống đang thấy bạn hoàn toàn rảnh — bạn được ưu tiên chia trước."
+    if (self_cnt + tuition) > dist:
+        return (
+            f"Điểm bận thấp của bạn đến từ {self_cnt} lead tự tìm và {tuition} "
+            f"hồ sơ đã đóng tiền (không bị tính). Phần bạn chủ động giảm được là "
+            f"{dist} lead hệ thống đang tính."
+        )
+    return (
+        f"Muốn được chia thêm: giảm {dist} lead hệ thống đang tính bằng cách "
+        f"chốt bớt lead đang mở — điểm bận sẽ hạ xuống."
+    )
+
+
+def _map_load_to_entry(
+    load: Dict[str, Any],
+    *,
+    rank: int,
+    unit_id,
+    unit_name,
+    requesting_user_id: int,
+    finance_on: bool,
+) -> Dict[str, Any]:
+    """Đổi 1 OfficerLoad của engine thành 1 dòng bảng (KHÔNG tính lại số nào)."""
+    officer = load["officer"]
+    workload = load["workload"]
+    capacity = load["capacity"]
+    dist = load["dist_load"]
+    tuition = load["tuition_hold"]
+    archetype = classify_archetype(load, finance_on)
+    is_me = officer.id == requesting_user_id
+
+    return {
+        "rank": rank,
+        "user_id": officer.id,
+        "username": officer.username,
+        "full_name": officer.full_name or officer.username,
+        "unit_id": unit_id,
+        "unit_name": unit_name,
+        "workload": workload,
+        "max_capacity": capacity,
+        "weight": load["weight"],
+        "self_sourced": load["self_cnt"],
+        "tuition_hold": tuition,
+        "dist_load": dist,
+        "deducted": workload - dist,
+        "real_util_pct": round(load["real_util"] * 100, 1),
+        "fill_pct": round(workload / capacity * 100, 1) if capacity else 0.0,
+        "eff_util_pct": round(load["eff_util"] * 100, 1),
+        "score": round(load["score"], 4),
+        "overload_gate_pct": (
+            round((workload - tuition) / capacity * 100, 1) if capacity else 0.0
+        ),
+        "overloaded": load["overloaded"],
+        "at_capacity": load["at_capacity"],
+        "eligible_for_assignment": load["eligible_for_assignment"],
+        "availability_status": officer.availability_status or "offline",
+        "archetype": archetype,
+        "diagnosis": build_diagnosis(load, archetype["key"]),
+        # 🔒 Lời khuyên CHỈ hiện trên dòng của chính người đang xem.
+        "boost": build_boost(load, archetype["key"]) if is_me else None,
+        "is_current_user": is_me,
+    }
+
+
+async def get_officer_distribution_panel(db: AsyncSession, ctx) -> Dict[str, Any]:
+    """Bảng "điểm bận" — giải trình engine chia lead cho từng officer.
+
+    Chấm điểm THEO TỪNG ĐƠN VỊ (giống engine, vì pool fairness là per-unit).
+    Officer offline/busy vẫn được tính metric để hiển thị nhưng KHÔNG vào pool
+    chấm điểm ⇒ điểm của người eligible y hệt con số engine dùng.
+    """
+    from . import assignment_service
+
+    repo = OfficerRepository(db)
+    flags = assignment_service.read_assignment_flags()
+    flags_snapshot = {
+        "member_weighted": flags.member_on,
+        "fairness_weighted": flags.fairness_on,
+        "exclude_self_sourced": flags.exclude_active,
+        "finance_discount": flags.finance_on,
+    }
+
+    officers = await repo.get_officers_by_ids(ctx.effective_officer_ids)
+    if not officers:
+        return {
+            "unit_id": ctx.effective_unit_root_id,
+            "total_officers": 0,
+            "scoring_mode": None,
+            "flags_snapshot": flags_snapshot,
+            "entries": [],
+        }
+
+    by_unit: Dict[Any, List[Any]] = {}
+    for officer in officers:
+        by_unit.setdefault(officer.unit_id, []).append(officer)
+
+    unit_name_map: Dict[int, str] = {}
+    real_unit_ids = [uid for uid in by_unit if uid is not None]
+    if real_unit_ids:
+        rows = await db.execute(
+            select(models.OrganizationUnit.id, models.OrganizationUnit.name)
+            .where(models.OrganizationUnit.id.in_(real_unit_ids))
+        )
+        unit_name_map = {row.id: row.name for row in rows}
+
+    requesting_user_id = ctx.requesting_user.id
+    entries: List[Dict[str, Any]] = []
+    scoring_mode = None
+
+    for unit_id, unit_officers in by_unit.items():
+        # Pool CHẤM ĐIỂM = đúng tập engine sẽ xét (đang sẵn sàng). Người còn lại
+        # vẫn có metric hiển thị nhưng đứng ngoài luồng chia.
+        eligible_ids = {
+            o.id for o in unit_officers if o.availability_status == "available"
+        }
+        res = await assignment_service.compute_unit_officer_loads(
+            db,
+            unit_officers,
+            include_at_capacity=True,
+            eligible_officer_ids=eligible_ids,
+            lead_unit_id=unit_id,
+            flags=flags,
+        )
+        if scoring_mode is None:
+            scoring_mode = res.scoring
+        # res.loads đã sort: nhóm eligible (thứ tự ưu tiên nhận của engine) trước.
+        for rank, load in enumerate(res.loads, 1):
+            entries.append(
+                _map_load_to_entry(
+                    load,
+                    rank=rank,
+                    unit_id=unit_id,
+                    unit_name=unit_name_map.get(unit_id),
+                    requesting_user_id=requesting_user_id,
+                    finance_on=flags.finance_on,
+                )
+            )
+
+    return {
+        "unit_id": ctx.effective_unit_root_id,
+        "total_officers": len(entries),
+        "scoring_mode": scoring_mode,
+        "flags_snapshot": flags_snapshot,
+        "entries": entries,
     }

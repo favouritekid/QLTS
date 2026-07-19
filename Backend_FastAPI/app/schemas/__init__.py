@@ -425,6 +425,10 @@ from .officer import (
     # Phase 4: Leaderboard
     LeaderboardEntry,
     WeeklyLeaderboard,
+    # Distribution panel ("điểm bận")
+    OfficerArchetype,
+    OfficerDistributionEntry,
+    OfficerDistributionPanel,
     # Phase 6: Team Stats + Annual Progress
     TeamStats,
     AnnualProgressInfo,

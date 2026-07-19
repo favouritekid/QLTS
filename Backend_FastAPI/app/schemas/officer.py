@@ -416,6 +416,65 @@ class WeeklyLeaderboard(BaseModel):
 
 
 # =============================================================================
+# Distribution Panel ("Điểm bận") — giải trình phân phối lead của đơn vị
+# =============================================================================
+
+class OfficerArchetype(BaseModel):
+    """Nhãn kiểu officer suy ra từ tỉ lệ các đòn bẩy tải."""
+    key: str
+    label: str
+
+
+class OfficerDistributionEntry(BaseModel):
+    """Một dòng trong bảng điểm bận.
+
+    Mọi con số tải đến TRỰC TIẾP từ ``assignment_service.compute_unit_officer_loads``
+    — cùng hàm engine chia lead dùng, nên KHÔNG thể lệch.
+    """
+    rank: int
+    user_id: int
+    username: str
+    full_name: str
+    unit_id: Optional[int] = None
+    unit_name: Optional[str] = None
+
+    # --- Số liệu tải (nguyên bản từ engine) ---
+    workload: int                  # Lead đang giữ (tổng non-final)
+    max_capacity: int              # Khả năng nhận
+    weight: int                    # Ưu tiên kỳ cựu (×N)
+    self_sourced: int              # Lead tự tìm
+    tuition_hold: int              # Hồ sơ đã đóng tiền
+    dist_load: int                 # Lead hệ thống tính
+    deducted: int                  # Không tính = workload - dist_load
+    real_util_pct: float           # dist_load/cap  (cơ sở sắp xếp, %)
+    fill_pct: float                # workload/cap   (chỗ đầy thật, %)
+    eff_util_pct: float            # ĐIỂM BẬN = dist_load/(cap*weight), %
+    score: float                   # điểm sắp xếp thực tế của engine
+    overload_gate_pct: float       # (workload-tuition)/cap, ngưỡng dừng 80%
+
+    # --- Cờ trạng thái ---
+    overloaded: bool
+    at_capacity: bool
+    eligible_for_assignment: bool  # False = offline/busy/đầy tải ⇒ ngoài luồng chia
+    availability_status: str
+
+    # --- Diễn giải (backend tính, thin-client) ---
+    archetype: OfficerArchetype
+    diagnosis: str
+    boost: Optional[str] = None    # 🔒 CHỈ set cho chính người đang xem
+    is_current_user: bool = False
+
+
+class OfficerDistributionPanel(BaseModel):
+    """Bảng điểm bận của (các) đơn vị trong phạm vi người xem."""
+    unit_id: Optional[int] = None
+    total_officers: int
+    scoring_mode: Optional[str] = None      # legacy | member | fairness | member_fairness
+    flags_snapshot: Dict[str, bool]
+    entries: List[OfficerDistributionEntry]
+
+
+# =============================================================================
 # PHASE 6: Team Stats for Performance Comparison
 # =============================================================================
 

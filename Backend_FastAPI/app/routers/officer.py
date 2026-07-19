@@ -8,6 +8,7 @@ from ..core.deps import (
     CasbinAuth,
     DashboardScopeContext,
     get_officer_dashboard_scope,
+    get_officer_distribution_scope,
     resolve_kpi_plan_officer_id,
 )
 from ..services import officer_service
@@ -149,6 +150,34 @@ async def get_leaderboard(
         end_date=parsed_end,
     )
     return leaderboard
+
+
+# =============================================================================
+# Distribution Panel ("Điểm bận") — giải trình phân phối lead
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/distribution-panel",
+    response_model=schemas.OfficerDistributionPanel,
+    summary="Bảng điểm bận — giải trình engine chia lead cho cả đơn vị",
+)
+async def get_distribution_panel(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, CasbinAuth],
+    ctx: Annotated[
+        DashboardScopeContext, Depends(get_officer_distribution_scope)
+    ],
+):
+    """Bảng điểm bận của đơn vị.
+
+    Khác các widget officer khác: **officer xem được cả đơn vị của mình** (minh
+    bạch cách chia lead), nên gate 2 lớp — Casbin cho path + scope dependency
+    resolve pool. Lời khuyên cá nhân (``boost``) chỉ trả cho chính người xem.
+    GET thuần đọc ⇒ KHÔNG commit.
+    """
+    return await officer_service.get_officer_distribution_panel(db=db, ctx=ctx)
 
 
 # =============================================================================
