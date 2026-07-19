@@ -148,6 +148,50 @@ describe("OfficerDistributionPanel", () => {
     expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
   });
 
+  it("🔒 FAIL-CLOSED: peer lỡ có boost vẫn KHÔNG được lộ", () => {
+    // Giả lập backend rò rỉ: entry của người khác lại kèm boost.
+    // UI phải câm vì điều kiện render là is_current_user && boost.
+    const leaky = { ...PEER, boost: "RÒ RỈ KHÔNG ĐƯỢC HIỆN" };
+    render(<EntryTooltip e={leaky} />);
+
+    expect(screen.queryByText("RÒ RỈ KHÔNG ĐƯỢC HIỆN")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    // nhưng phần công khai vẫn render bình thường
+    expect(
+      screen.getByText("Tải chủ yếu là lead hệ thống chia.")
+    ).toBeInTheDocument();
+  });
+
+  it("gom nhóm theo ĐƠN VỊ khi phạm vi trải nhiều đơn vị", () => {
+    const otherUnit = {
+      ...PEER,
+      rank: 1, // rank đánh RIÊNG từng đơn vị ⇒ trùng số với dòng đơn vị khác
+      user_id: 77,
+      full_name: "Phạm Thu",
+      unit_id: 15,
+      unit_name: "Phòng Đào tạo",
+      scoring_mode: "legacy",
+    };
+    mockPanel([ME, PEER, otherUnit]);
+    render(<OfficerDistributionPanel />);
+
+    // Có header đơn vị cho từng nhóm + cảnh báo không so chéo được
+    expect(screen.getByText("Phòng Tuyển sinh")).toBeInTheDocument();
+    expect(screen.getByText("Phòng Đào tạo")).toBeInTheDocument();
+    expect(screen.getByText(/riêng trong từng đơn vị/)).toBeInTheDocument();
+    // nhãn chế độ xếp hạng hiển thị bằng lời thường
+    expect(screen.getByText(/cách xếp: theo điểm bận/)).toBeInTheDocument();
+    expect(screen.getByText(/cách xếp: luân phiên/)).toBeInTheDocument();
+  });
+
+  it("KHÔNG hiện header đơn vị khi chỉ có một đơn vị", () => {
+    mockPanel([ME, PEER]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.queryByText("Phòng Tuyển sinh")).not.toBeInTheDocument();
+    expect(screen.queryByText(/riêng trong từng đơn vị/)).not.toBeInTheDocument();
+  });
+
   it("thanh đo dựng đúng 3 đoạn từ số backend (không tự tính lại)", () => {
     mockPanel([ME]);
     const { container } = render(<OfficerDistributionPanel />);

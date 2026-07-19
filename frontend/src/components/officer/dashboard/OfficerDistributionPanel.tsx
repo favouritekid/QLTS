@@ -112,7 +112,10 @@ export function EntryTooltip({ e }: { e: OfficerDistributionEntry }) {
 
       <p className="border-t pt-1.5 leading-relaxed">{e.diagnosis}</p>
 
-      {e.boost && (
+      {/* 🔒 FAIL-CLOSED: phải THOẢ CẢ HAI. Backend hiện chỉ set `boost` cho
+          chính người xem, nhưng FE không được phụ thuộc DUY NHẤT vào điều đó —
+          nếu backend lỡ rò `boost` của người khác, UI vẫn phải câm. */}
+      {e.is_current_user && e.boost && (
         <div className="border-t pt-1.5">
           <p className="mb-0.5 font-semibold uppercase tracking-wide">
             💡 Dành riêng cho bạn · 🔒 chỉ bạn thấy
@@ -200,6 +203,80 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
   );
 }
 
+/** Nhãn đời thường cho chế độ chấm điểm của engine (backend trả key kỹ thuật). */
+const SCORING_LABEL: Record<string, string> = {
+  legacy: "luân phiên",
+  member: "theo điểm bận",
+  fairness: "cân bằng lịch sử",
+  member_fairness: "điểm bận + cân bằng lịch sử",
+};
+
+/**
+ * Gom entry theo ĐƠN VỊ.
+ *
+ * ⚠️ Bắt buộc: backend chấm điểm VÀ đánh `rank` theo TỪNG đơn vị. Manager có
+ * scope gồm đơn vị con, admin mặc định toàn tổ chức ⇒ trộn phẳng sẽ hiện nhiều
+ * dòng cùng rank #1 và so sánh sai ngữ cảnh (điểm bận chỉ so được trong cùng
+ * một đơn vị vì phụ thuộc khả năng nhận / trọng số của pool đó).
+ */
+function groupByUnit(entries: OfficerDistributionEntry[]) {
+  const map = new Map<
+    string,
+    {
+      key: string;
+      unitId: number | null;
+      unitName: string | null;
+      scoringMode: string | null;
+      entries: OfficerDistributionEntry[];
+    }
+  >();
+  for (const e of entries) {
+    const key = String(e.unit_id ?? "none");
+    let g = map.get(key);
+    if (!g) {
+      g = {
+        key,
+        unitId: e.unit_id ?? null,
+        unitName: e.unit_name ?? null,
+        scoringMode: e.scoring_mode ?? null,
+        entries: [],
+      };
+      map.set(key, g);
+    }
+    g.entries.push(e);
+  }
+  return Array.from(map.values());
+}
+
+/** Danh sách trong MỘT đơn vị: nhóm đang nhận trước, nhóm ngoài luồng sau. */
+function EntryList({ entries }: { entries: OfficerDistributionEntry[] }) {
+  const eligible = entries.filter((e) => e.eligible_for_assignment);
+  const others = entries.filter((e) => !e.eligible_for_assignment);
+
+  return (
+    <>
+      <div className="divide-y">
+        {eligible.map((e) => (
+          <OfficerRow key={e.user_id} e={e} />
+        ))}
+      </div>
+
+      {others.length > 0 && (
+        <div className="mt-2 border-t pt-2">
+          <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Đang không nhận lead
+          </p>
+          <div className="divide-y">
+            {others.map((e) => (
+              <OfficerRow key={e.user_id} e={e} />
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function LegendSwatch({
   className,
   label,
@@ -281,28 +358,41 @@ export function OfficerDistributionPanel({
               <span />
             </div>
 
-            <div className="divide-y">
-              {data.entries
-                .filter((e) => e.eligible_for_assignment)
-                .map((e) => (
-                  <OfficerRow key={e.user_id} e={e} />
-                ))}
-            </div>
-
-            {data.entries.some((e) => !e.eligible_for_assignment) && (
-              <div className="mt-3 border-t pt-2">
-                <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Đang không nhận lead
-                </p>
-                <div className="divide-y">
-                  {data.entries
-                    .filter((e) => !e.eligible_for_assignment)
-                    .map((e) => (
-                      <OfficerRow key={e.user_id} e={e} />
-                    ))}
-                </div>
-              </div>
-            )}
+            {(() => {
+              const groups = groupByUnit(data.entries);
+              const multiUnit = groups.length > 1;
+              return (
+                <>
+                  {multiUnit && (
+                    <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+                      Phạm vi gồm {groups.length} đơn vị — điểm bận và thứ hạng
+                      tính <b>riêng trong từng đơn vị</b>, không so chéo được.
+                    </p>
+                  )}
+                  {groups.map((g) => (
+                    <div key={g.key} className={multiUnit ? "mt-4 first:mt-0" : undefined}>
+                      {multiUnit && (
+                        <div className="flex flex-wrap items-baseline gap-x-2 border-b px-1 pb-1">
+                          <span className="text-sm font-semibold">
+                            {g.unitName ??
+                              (g.unitId != null
+                                ? `Đơn vị #${g.unitId}`
+                                : "Chưa gán đơn vị")}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {g.entries.length} người
+                            {g.scoringMode
+                              ? ` · cách xếp: ${SCORING_LABEL[g.scoringMode] ?? g.scoringMode}`
+                              : ""}
+                          </span>
+                        </div>
+                      )}
+                      <EntryList entries={g.entries} />
+                    </div>
+                  ))}
+                </>
+              );
+            })()}
           </TooltipProvider>
         )}
       </CardContent>

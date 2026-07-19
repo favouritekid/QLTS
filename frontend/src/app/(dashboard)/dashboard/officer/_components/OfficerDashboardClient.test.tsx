@@ -559,4 +559,16 @@ describe("OfficerDashboardClient", () => {
     expect(distributionProps.officerId).toBeUndefined();
     expect("unitId" in distributionProps).toBe(true);
   });
+
+  it("ẨN OfficerDistributionPanel khi drill-down một officer cụ thể", async () => {
+    // Bảng điểm bận chỉ có nghĩa khi SO SÁNH nhiều người cùng đơn vị. Khi
+    // drill-down, panel không biết đơn vị của người được chọn (admin không
+    // chọn unit ⇒ backend mặc định toàn tổ chức) nên sẽ hiện sai ngữ cảnh.
+    setUrlSearch("?scope=organization&unit=42&officer=7");
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId("smart-header")).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("distribution-panel")).not.toBeInTheDocument();
+  });
 });
