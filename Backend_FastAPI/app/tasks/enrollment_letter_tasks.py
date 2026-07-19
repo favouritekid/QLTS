@@ -153,19 +153,44 @@ def cleanup_enrollment_letter_files_task(self):
         scrubbed = 0
 
         async with task_db_session() as db:
-            letters = (
-                await db.execute(select(EnrollmentLetter))
+            # HAI truy vấn tách bạch thay vì nạp cả bảng dưới dạng ORM. Bảng
+            # này chỉ TĂNG (row ở lại vĩnh viễn làm dấu vết phát hành), nên
+            # `select(EnrollmentLetter)` trần sẽ hydrate mọi row từng phát —
+            # kèm giải mã cột JSONB data_snapshot — chỉ để dựng một set đường
+            # dẫn. Chi phí tăng tuyến tính mãi mãi cho một job chạy hằng đêm.
+            #
+            # (1) known_paths: chỉ cần CỘT file_path, không dựng ORM object,
+            #     không đụng JSONB.
+            known_paths = {
+                p
+                for (p,) in (
+                    await db.execute(select(EnrollmentLetter.file_path))
+                ).all()
+                if p
+            }
+            # (2) phần việc thật: chỉ các row ĐÃ HẾT HẠN (dùng đúng index
+            #     ix_enrollment_letter_expires_at), kích thước theo số row hết
+            #     hạn chứ không theo toàn bảng.
+            expired = (
+                await db.execute(
+                    select(EnrollmentLetter).where(
+                        EnrollmentLetter.expires_at.isnot(None),
+                        # `<=` khớp với gate ở get_letter_for_download: đúng
+                        # thời khắc hết hạn thì API đã ngừng phục vụ, nên
+                        # cleanup cũng phải coi row đó là hết hạn — để `<` thì
+                        # có một khoảnh khắc file còn trên đĩa mà không ai tải
+                        # được, và metric "expired_files" đếm hụt.
+                        EnrollmentLetter.expires_at <= now,
+                    )
+                )
             ).scalars().all()
-            for letter in letters:
+            for letter in expired:
                 if letter.file_path:
-                    known_paths.add(letter.file_path)
-                if letter.expires_at is not None and letter.expires_at < now:
-                    if letter.file_path:
-                        to_delete.append(letter.file_path)
-                    snap = letter.data_snapshot or {}
-                    if not snap.get("_purged"):
-                        letter.data_snapshot = _scrub_snapshot(snap)
-                        scrubbed += 1
+                    to_delete.append(letter.file_path)
+                snap = letter.data_snapshot or {}
+                if not snap.get("_purged"):
+                    letter.data_snapshot = _scrub_snapshot(snap)
+                    scrubbed += 1
             deleted = await to_thread.run_sync(_delete_files, to_delete)
             await db.commit()
 

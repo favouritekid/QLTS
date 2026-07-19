@@ -451,3 +451,96 @@ async def test_build_letter_data_rejects_dropped_profile(
         profile = await session.get(models.AdmissionProfile, profile_id)
         with pytest.raises(BusinessRuleViolation):
             await build_letter_data(session, profile)
+
+
+# --------------------------------------------------------------------------- #
+# Vòng đời nhiều bản: bản hiện hành · thu hồi theo trạng thái hồ sơ
+# --------------------------------------------------------------------------- #
+
+
+async def test_reissue_marks_previous_letters_superseded_and_syncs_expiry(
+    client: AsyncClient, officer_token_headers: dict,
+    seed_lead_dependencies: dict, officer_user_in_db: dict,
+):
+    """Phát bản mới ⇒ bản trước thành 'đã thay thế' VÀ được kéo dài hạn lưu trữ
+    bằng bản mới.
+
+    Hạn tính riêng từng bản nghĩa là bản 1 — bản nhiều khả năng ĐÃ TRAO TAY —
+    hết hạn và bị xoá PII trước bản 2 chưa ai cầm; lúc tranh chấp thì bằng
+    chứng còn sống lại là bản sai.
+    """
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"sup{uuid.uuid4().hex[:9]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    body = {
+        "enrollment_start_date": "2026-07-28",
+        "enrollment_end_date": "2026-08-05",
+    }
+    url = f"/api/admissions/{profile_id}/enrollment-letter"
+    first = await client.post(url, json=body, headers=officer_token_headers)
+    assert first.status_code == 200
+    second = await client.post(url, json=body, headers=officer_token_headers)
+    assert second.status_code == 200
+
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(models.EnrollmentLetter)
+                .where(models.EnrollmentLetter.profile_id == profile_id)
+                .order_by(models.EnrollmentLetter.id)
+            )
+        ).scalars().all()
+
+    assert len(rows) == 2
+    older, newer = rows
+    assert older.superseded_at is not None, "bản cũ phải được đánh dấu đã thay thế"
+    assert newer.superseded_at is None, "bản mới nhất là bản hiện hành"
+    # Cả nhóm hết hạn cùng lúc theo bản mới nhất.
+    assert older.expires_at == newer.expires_at
+
+
+async def test_download_blocked_after_profile_leaves_eligible_state(
+    client: AsyncClient, officer_token_headers: dict,
+    seed_lead_dependencies: dict, officer_user_in_db: dict,
+):
+    """Hồ sơ rút/thôi học SAU khi đã phát ⇒ giấy không tải lại được nữa.
+
+    Không luồng workflow nào đụng bảng enrollment_letter, nên nếu chỉ kiểm row
+    thì giấy 'Đã trúng tuyển' của thí sinh đã rút vẫn phục vụ suốt thời hạn lưu
+    trữ. Gate đặt ở thời điểm tải nên tự đúng lại nếu hồ sơ được khôi phục.
+    """
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"rvk{uuid.uuid4().hex[:9]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    issued = await client.post(
+        f"/api/admissions/{profile_id}/enrollment-letter",
+        json={
+            "enrollment_start_date": "2026-07-28",
+            "enrollment_end_date": "2026-08-05",
+        },
+        headers=officer_token_headers,
+    )
+    assert issued.status_code == 200
+    letter_id = int(issued.headers["x-enrollment-letter-id"])
+    dl_url = (
+        f"/api/admissions/{profile_id}/enrollment-letter/{letter_id}/download"
+    )
+
+    ok = await client.get(dl_url, headers=officer_token_headers)
+    assert ok.status_code == 200  # còn hợp lệ thì tải được
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            profile = await session.get(models.AdmissionProfile, profile_id)
+            profile.status = "withdrawn"
+
+    blocked = await client.get(dl_url, headers=officer_token_headers)
+    assert blocked.status_code == 404  # 404 chứ không phải 403: không lộ tồn tại

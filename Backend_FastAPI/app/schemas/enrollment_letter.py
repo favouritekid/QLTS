@@ -37,3 +37,7 @@ class EnrollmentLetterResponse(BaseModel):
     generated_at: datetime
     file_size: int
     expires_at: Optional[datetime]
+    # NULL = bản hiện hành. FE dùng để phân biệt "bản đang có hiệu lực" với
+    # "bản đã bị thay thế" — N bản đều có chữ ký nên không đánh dấu thì không
+    # ai biết bản nào là bản đã trao cho thí sinh.
+    superseded_at: Optional[datetime]

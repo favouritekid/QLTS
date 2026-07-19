@@ -799,8 +799,9 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
     # Content-Disposition → let cross-origin JS read the download filename;
     # X-Enrollment-Letter-Id → the issued letter id returned by the PDF POST.
-    # (Without these, dev FE at localhost:8000 falls back to a generic filename
-    # and cannot read the letter id from the response.)
+    # (Without these, the dev FE at localhost:3000 calling the backend at
+    # localhost:8000 cross-origin falls back to a generic filename and cannot
+    # read the letter id from the response.)
     expose_headers=["Set-Cookie", "Content-Disposition", "X-Enrollment-Letter-Id"],
 )
 

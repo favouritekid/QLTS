@@ -26,7 +26,7 @@ from uuid import uuid4
 
 import structlog
 from anyio import to_thread
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app import models
@@ -361,9 +361,8 @@ async def issue_enrollment_letter(
             "Hãy tải lại trang và kiểm tra trạng thái hồ sơ."
         )
 
-    expires_at = datetime.now(timezone.utc) + timedelta(
-        days=settings.ENROLLMENT_LETTER_RETENTION_DAYS
-    )
+    _now = datetime.now(timezone.utc)
+    expires_at = _now + timedelta(days=settings.ENROLLMENT_LETTER_RETENTION_DAYS)
     letter = models.EnrollmentLetter(
         profile_id=profile.id,
         enrollment_start_date=start_date,
@@ -378,6 +377,23 @@ async def issue_enrollment_letter(
     db.add(letter)
     try:
         await db.flush()
+        # Bản vừa phát trở thành BẢN HIỆN HÀNH; mọi bản trước của cùng hồ sơ
+        # đóng dấu "đã thay thế" và ĐƯỢC KÉO DÀI hạn lưu trữ bằng bản mới.
+        #
+        # Vì sao đồng bộ expires_at: hạn tính riêng từng bản kể từ lúc phát,
+        # nên bản 1 — bản nhiều khả năng ĐÃ TRAO TAY thí sinh — hết hạn và bị
+        # xoá PII TRƯỚC bản 2 mà chưa ai cầm. Khi có tranh chấp "giấy tôi cầm
+        # ghi gì", bằng chứng còn sống lại là bản sai. Cho cả nhóm chết cùng
+        # lúc theo bản mới nhất.
+        await db.execute(
+            update(models.EnrollmentLetter)
+            .where(
+                models.EnrollmentLetter.profile_id == profile.id,
+                models.EnrollmentLetter.id != letter.id,
+                models.EnrollmentLetter.superseded_at.is_(None),
+            )
+            .values(superseded_at=_now, expires_at=expires_at)
+        )
     except Exception:
         # Flush failed → the PDF we just wrote would orphan on disk with no
         # row referencing it. Delete it before propagating. (A router commit
@@ -466,6 +482,33 @@ async def get_letter_for_download(
         or not os.path.exists(letter.file_path)
         or (letter.expires_at is not None and letter.expires_at <= now)
     ):
+        raise ResourceNotFoundError(
+            detail=f"Enrollment letter {letter_id} not found"
+        )
+
+    # THU HỒI THEO TRẠNG THÁI HIỆN TẠI của hồ sơ. Không luồng nào (rút hồ sơ /
+    # từ chối / thôi học / rollback về nháp) đụng tới bảng enrollment_letter,
+    # nên nếu chỉ kiểm row thì giấy "Đã trúng tuyển" của một thí sinh đã rút hồ
+    # sơ vẫn tải về được suốt cả thời hạn lưu trữ. Kiểm tại thời điểm tải là
+    # cách rẻ nhất mà luôn đúng: không cần cột revoked_at, không cần hook vào
+    # mọi luồng workflow, và tự đúng lại nếu hồ sơ được khôi phục.
+    profile_state = (
+        await db.execute(
+            select(
+                models.AdmissionProfile.status,
+                models.AdmissionProfile.is_dropped,
+            ).where(models.AdmissionProfile.id == profile_id)
+        )
+    ).first()
+    if profile_state is None or not is_enrollment_letter_eligible(
+        SimpleNamespace(status=profile_state[0], is_dropped=profile_state[1])
+    ):
+        log.info(
+            "enrollment_letter.download_blocked_ineligible_profile",
+            letter_id=letter_id,
+            profile_id=profile_id,
+            status=None if profile_state is None else profile_state[0],
+        )
         raise ResourceNotFoundError(
             detail=f"Enrollment letter {letter_id} not found"
         )

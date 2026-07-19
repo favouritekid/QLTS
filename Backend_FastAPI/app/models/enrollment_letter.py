@@ -106,6 +106,11 @@ class EnrollmentLetter(Base):
         server_default=func.now(),
         comment="Thời điểm phát giấy",
     )
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Bị bản phát sau thay thế lúc nào; NULL = bản hiện hành",
+    )
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

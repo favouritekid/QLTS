@@ -20,6 +20,8 @@ export const enrollmentLetterSummarySchema = z.object({
   file_size: z.number(),
   /** Hết hạn lưu trữ; null = không đặt hạn. */
   expires_at: z.string().nullable(),
+  /** null = BẢN HIỆN HÀNH; có giá trị = đã bị bản phát sau thay thế. */
+  superseded_at: z.string().nullable(),
 })
 
 export const enrollmentLetterListSchema = z.array(enrollmentLetterSummarySchema)

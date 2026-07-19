@@ -138,14 +138,28 @@ export function EnrollmentLetterButton({ profile }: Props) {
                 <p className="text-muted-foreground mb-2 text-sm font-medium">
                   Đã phát {issued.length} bản — tải lại thay vì xuất bản mới:
                 </p>
+                {/* Phát bản mới KHÔNG xoá bản cũ (lịch sử có phiên bản), nên
+                    phải nói rõ bản nào còn hiệu lực: các bản đều có chữ ký,
+                    không đánh dấu thì không ai biết bản nào đã trao thí sinh. */}
                 <ul className="max-h-40 space-y-1 overflow-y-auto">
                   {issued.map((letter) => (
                     <li
                       key={letter.id}
                       className="flex items-center justify-between gap-2 text-sm"
                     >
-                      <span className="text-muted-foreground truncate">
-                        {formatIssuedAt(letter.generated_at)}
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="text-muted-foreground truncate">
+                          {formatIssuedAt(letter.generated_at)}
+                        </span>
+                        {letter.superseded_at ? (
+                          <span className="text-muted-foreground/70 shrink-0 text-xs">
+                            đã thay thế
+                          </span>
+                        ) : (
+                          <span className="text-primary shrink-0 text-xs font-medium">
+                            bản hiện hành
+                          </span>
+                        )}
                       </span>
                       <Button
                         type="button"

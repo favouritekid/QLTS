@@ -138,6 +138,7 @@ describe("EnrollmentLetterButton — tải lại bản đã phát", () => {
       generated_at: "2026-07-19T07:19:00Z",
       file_size: 253000,
       expires_at: "2026-10-17T07:19:00Z",
+      superseded_at: null,
     },
   ]
 

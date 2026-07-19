@@ -60,7 +60,12 @@ def _letter_filename(profile_id: int, letter_id: int) -> str:
     "/{profile_id}/enrollment-letter",
     summary="Phát Giấy báo nhập học (official issuance, trả PDF)",
 )
-@limiter.limit(RateLimits.DATA_EXPORT)
+# DATA_WRITE (200/h) chứ không phải DATA_EXPORT (20/h): DATA_EXPORT là tier cho
+# export workbook hàng loạt (1 request = N nghìn dòng), còn đây là hành động ghi
+# LẺ trên MỘT hồ sơ. Lưu ý slowapi ở repo này dùng key_style="url", nên bucket
+# là (IP, path-đã-thay-id) — tức trần áp cho TỪNG hồ sơ, không phải cho cả
+# phòng tuyển sinh; officer phát cho nhiều hồ sơ khác nhau không đụng trần.
+@limiter.limit(RateLimits.DATA_WRITE)
 async def issue_enrollment_letter(
     request: Request,
     payload: EnrollmentLetterIssueRequest,
@@ -111,7 +116,10 @@ async def issue_enrollment_letter(
     "/{profile_id}/enrollment-letter/{letter_id}/download",
     summary="Tải lại Giấy báo nhập học đã phát",
 )
-@limiter.limit(RateLimits.DATA_EXPORT)
+# Tải lại một file đã có = thao tác ĐỌC, không phải export. Để ở DATA_EXPORT
+# khiến chính đường phục hồi (thay cho việc phát bản mới) bị bó chặt hơn cả
+# đường phát hành.
+@limiter.limit(RateLimits.DATA_READ)
 async def download_enrollment_letter(
     request: Request,
     letter_id: int,
