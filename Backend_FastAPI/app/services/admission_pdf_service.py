@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -67,8 +68,23 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+import structlog
+
 from app.constants import enrollment_letter as C
 from app.utils.text_helpers import to_bank_transfer_note
+
+log = structlog.get_logger(__name__)
+
+# Nối tiếp hoá phần DỰNG TÀI LIỆU giữa các luồng.
+#
+# ReportLab giữ registry font TOÀN CỤC (``pdfmetrics``), và mỗi Canvas khi save
+# sẽ subset chính TTFont singleton đó. Hai lần phát giấy đồng thời làm hỏng
+# bảng glyph của nhau: đo được ~0,4% render ném ``IndexError: list index out of
+# range`` (ttfonts.py makeSubset) hoặc ``KeyError`` glyph. Khoá này rẻ so với
+# hậu quả: render ~120ms, còn một giấy báo hỏng là văn bản chính thức phải thu
+# hồi bằng tay. Nếu sau này cần thông lượng cao hơn thì tách tiến trình render,
+# đừng gỡ khoá.
+_BUILD_LOCK = threading.Lock()
 
 # --- Font -------------------------------------------------------------------
 #
@@ -155,27 +171,57 @@ def _y(mm_from_top: float) -> float:
 
 
 @lru_cache(maxsize=8)
-def _asset(path_str: str) -> tuple[ImageReader, float, float] | None:
-    """ImageReader + kích thước gốc, CACHE theo tiến trình.
+def _asset_cached(path_str: str) -> tuple[ImageReader, float, float] | None:
+    """ImageReader ĐÃ GIẢI MÃ SẴN + kích thước gốc, cache theo tiến trình.
 
-    Ba asset là file bất biến nướng vào image, nhưng trước đây được mở + giải
-    mã lại ở MỌI lần render (chữ ký còn bị đọc 2 lần: một lần lấy getSize, một
-    lần cho flowable). Cache bỏ toàn bộ I/O lặp đó.
+    Ba asset là file bất biến nướng vào image, nhưng nếu không cache thì được
+    mở + giải mã lại ở MỌI lần render. Cache bỏ phần I/O lặp đó.
 
-    Trả None nếu file thiếu HOẶC hỏng/không đọc được — người gọi degrade sang
-    nhánh "không có ảnh" thay vì 500 giữa lúc build. (Chỉ kiểm ``.exists()``
-    là chưa đủ: một file copy dở hoặc sai quyền vẫn tồn tại.)
+    ⚠️ ``getRGBData()`` Ở ĐÂY LÀ BẮT BUỘC, ĐỪNG GỠ. ImageReader giải mã LƯỜI:
+    lần ``drawImage`` đầu tiên mới decode và GHI vào ``_data``/``_dataA`` trên
+    chính instance. Instance đó được cache nên DÙNG CHUNG giữa các luồng, mà
+    ``render_enrollment_letter`` chạy trên threadpool (``to_thread``) — hai lần
+    phát giấy đồng thời lúc cache còn "lạnh" sẽ decode chồng lên nhau.
+    Đo thật (250 render đồng thời, process mới mỗi lần): decode lười → hỏng
+    13,2%, trong đó có ca PDF VẪN HỢP LỆ nhưng sai 38% pixel letterhead và vẫn
+    được sha256 + lưu làm bản phát hành chính thức; decode sẵn ở đây → 0,4%.
+    Giải mã xong trước khi đưa vào cache thì mọi luồng sau chỉ ĐỌC.
+
+    Trả None nếu file thiếu / hỏng / không đọc được — người gọi degrade sang
+    nhánh "không có ảnh" thay vì 500 giữa lúc build.
     """
     try:
         if not os.path.isfile(path_str):
+            log.warning("enrollment_letter.asset_missing", path=path_str)
             return None
         reader = ImageReader(path_str)
         iw, ih = reader.getSize()
         if not iw or not ih:
+            log.warning("enrollment_letter.asset_empty", path=path_str)
             return None
+        reader.getRGBData()  # decode NGAY — xem docstring
         return reader, float(iw), float(ih)
-    except Exception:  # ảnh hỏng / thiếu quyền → vẫn phát được giấy
+    except Exception:
+        # Vẫn phát được giấy (thiếu letterhead còn hơn không phát được), nhưng
+        # PHẢI để lại dấu vết: một văn bản chính thức thiếu letterhead + chữ ký
+        # mà im lặng thì không ai biết để điều tra.
+        log.exception("enrollment_letter.asset_unreadable", path=path_str)
         return None
+
+
+def _asset(path_str: str) -> tuple[ImageReader, float, float] | None:
+    """Bọc mỏng quanh cache: KHÔNG BAO GIỜ giữ lại một lần thất bại.
+
+    ``lru_cache`` ghi nhớ cả giá trị None, nên một lỗi I/O thoáng qua (volume
+    remount giữa lúc deploy, EMFILE lúc tải cao) sẽ khiến MỌI giấy báo sau đó
+    mất letterhead + chữ ký VĨNH VIỄN cho tới khi restart process — đã tái hiện
+    bằng cách inject OSError đúng một lần. Chỉ có 3 asset nên xoá sạch cache khi
+    gặp None là vô hại (tệ nhất: giải mã lại 3 ảnh ở lần phát kế tiếp).
+    """
+    got = _asset_cached(path_str)
+    if got is None:
+        _asset_cached.cache_clear()
+    return got
 
 
 def _find_font(dirs: list[str], filename: str) -> str | None:
@@ -400,7 +446,13 @@ def _fee_lines(data: dict, end_str: str, st: dict) -> list[Any]:
     paid = max(0, int(data.get("hk1_paid_amount") or 0))
     waived = max(0, int(data.get("hk1_waived_amount") or 0))
     # Kẹp để tổng LUÔN bằng các thành phần in bên dưới, kể cả với dữ liệu lệch.
+    # Kẹp theo TỔNG, không kẹp từng phần độc lập: `min(paid,total)` và
+    # `min(waived,total)` riêng rẽ cho ra hai dòng cộng lại LỚN HƠN dòng tổng
+    # khi paid+waived > total (đã dựng được: 5tr + 6tr in dưới một dòng tổng
+    # 9,2tr). Trên văn bản có chữ ký thì đó là con số tự mâu thuẫn.
     settled = min(total, paid + waived)
+    paid = min(paid, settled)
+    waived = settled - paid
     remaining = total - settled
     school_year = _esc(data.get("school_year") or C.SCHOOL_YEAR)
 
@@ -413,9 +465,9 @@ def _fee_lines(data: dict, end_str: str, st: dict) -> list[Any]:
     ]
     rows: list[tuple[str, str]] = []
     if paid > 0:
-        rows.append(("- Đã nộp", f"{_fmt_vnd(min(paid, total))} đồng"))
+        rows.append(("- Đã nộp", f"{_fmt_vnd(paid)} đồng"))
     if waived > 0:
-        rows.append(("- Được miễn giảm", f"{_fmt_vnd(min(waived, total))} đồng"))
+        rows.append(("- Được miễn giảm", f"{_fmt_vnd(waived)} đồng"))
 
     if remaining <= 0:
         if rows:
@@ -672,5 +724,6 @@ def render_enrollment_letter(data: dict) -> bytes:
     frame.addFromList([KeepInFrame(fw, fh, _build_body(data, st), mode="shrink")], c)
 
     c.showPage()
-    c.save()
+    with _BUILD_LOCK:  # xem _BUILD_LOCK: subset font là vùng dùng chung
+        c.save()
     return buf.getvalue()

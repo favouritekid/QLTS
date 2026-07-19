@@ -25,6 +25,7 @@ ngành, học phí, năm học, mức đợt 1, tài khoản ngân hàng, ngư�
 
 from datetime import date, datetime
 from sqlalchemy import (
+    Index,
     Integer,
     BigInteger,
     String,
@@ -32,6 +33,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -43,6 +45,18 @@ class EnrollmentLetter(Base):
     """Official admission-letter issuance record (one row per issue)."""
 
     __tablename__ = "enrollment_letter"
+    __table_args__ = (
+        # Partial index PHẢI khai ở model, không chỉ trong migration: repo dùng
+        # `alembic revision --autogenerate`, và index chỉ tồn tại trong migration
+        # sẽ bị lần autogenerate kế tiếp sinh lệnh DROP (rất dễ lọt review vì
+        # lẫn trong drift). Test DB cũng dựng bằng create_all() nên không có
+        # index này nếu model không khai.
+        Index(
+            "ix_enrollment_letter_current",
+            "profile_id",
+            postgresql_where=text("superseded_at IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
 

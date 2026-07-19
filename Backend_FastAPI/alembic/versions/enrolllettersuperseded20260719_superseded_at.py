@@ -40,12 +40,17 @@ def upgrade() -> None:
     # Dữ liệu CŨ: mỗi hồ sơ giữ bản mới nhất làm hiện hành, các bản trước đó
     # đánh dấu đã thay thế theo đúng ngữ nghĩa mới (nếu không, mọi bản cũ sẽ
     # hiện ra như thể đều còn hiệu lực).
+    #
+    # MIN chứ không phải MAX: bản #1 bị bản #2 thay thế, nên mốc phải là lúc
+    # phát #2 — đúng ngữ nghĩa runtime (đóng dấu _now của lần phát KẾ TIẾP).
+    # MAX gộp mọi bản sau thành một mốc duy nhất; đo trên dev: lệch 23 giờ và
+    # 8 bản cũ nhận cùng một timestamp của bản mới nhất.
     op.execute(
         """
         UPDATE enrollment_letter el
         SET superseded_at = newer.generated_at
         FROM (
-            SELECT e1.id AS old_id, MAX(e2.generated_at) AS generated_at
+            SELECT e1.id AS old_id, MIN(e2.generated_at) AS generated_at
             FROM enrollment_letter e1
             JOIN enrollment_letter e2
               ON e2.profile_id = e1.profile_id

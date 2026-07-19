@@ -50,23 +50,52 @@ def test_sweep_orphan_pdfs_missing_dir_is_noop():
     assert _sweep_orphan_pdfs("/nonexistent/dir/xyz", known_paths=set()) == 0
 
 
-def test_sweep_orphan_pdfs_bails_when_nothing_matches_the_db(tmp_path):
-    """CHỐT AN TOÀN: quét ra file nhưng KHÔNG khớp lấy một đường dẫn nào trong
-    DB ⇒ nghi lệch cấu hình (ops đổi ENROLLMENT_LETTER_STORAGE_DIR rồi copy
-    file sang, mọi row vẫn trỏ chỗ cũ), KHÔNG phải cả thư mục đều mồ côi.
-    Không có chốt này thì lượt beat kế tiếp xoá sạch giấy báo chính thức."""
-    live = tmp_path / "letter-1.pdf"
-    live.write_bytes(b"%PDF-1.4 that")
-    old = time.time() - _ORPHAN_MAX_AGE_SECONDS - 60
-    os.utime(live, (old, old))
+def test_sweep_orphan_pdfs_bails_when_db_files_live_elsewhere(tmp_path):
+    """CHỐT AN TOÀN: quét ra file không khớp DB, NHƯNG file mà DB tham chiếu
+    đang sống ở MOUNT KHÁC ⇒ nghi lệch ENROLLMENT_LETTER_STORAGE_DIR (ops đổi
+    thư mục rồi copy sang, mọi row vẫn trỏ chỗ cũ). Không có chốt này thì lượt
+    beat kế tiếp xoá sạch giấy báo chính thức."""
+    other_mount = tmp_path / "mount_cu"
+    other_mount.mkdir()
+    db_file = other_mount / "letter-1.pdf"
+    db_file.write_bytes(b"%PDF-1.4 ban that dang song o mount cu")
 
-    # DB trỏ một mount HOÀN TOÀN khác → 0 path khớp.
-    removed = _sweep_orphan_pdfs(
-        str(tmp_path), known_paths={"/mnt/cu/letters/1/abc.pdf"}
-    )
+    scan_dir = tmp_path / "mount_moi"
+    scan_dir.mkdir()
+    stray = scan_dir / "letter-2.pdf"
+    stray.write_bytes(b"%PDF-1.4 that")
+    old = time.time() - _ORPHAN_MAX_AGE_SECONDS - 60
+    os.utime(stray, (old, old))
+
+    removed = _sweep_orphan_pdfs(str(scan_dir), known_paths={str(db_file)})
 
     assert removed == 0
-    assert live.exists(), "file đang sống bị xoá vì lệch cấu hình"
+    assert stray.exists(), "bỏ qua lượt quét khi nghi lệch cấu hình"
+
+
+def test_sweep_orphan_pdfs_still_works_after_retention_deleted_everything(
+    tmp_path,
+):
+    """Sau retention: row còn giữ file_path nhưng file đã bị chính task này
+    xoá ⇒ KHÔNG path nào khớp được. Đó là trạng thái HỢP LỆ, không phải lệch
+    cấu hình — sweep phải tiếp tục chạy, nếu không nó tự tắt vĩnh viễn suốt mọi
+    giai đoạn trái mùa tuyển sinh và orphan thật không bao giờ được dọn."""
+    orphan = tmp_path / "orphan.pdf"
+    orphan.write_bytes(b"%PDF-1.4 leftover")
+    old = time.time() - _ORPHAN_MAX_AGE_SECONDS - 60
+    os.utime(orphan, (old, old))
+
+    # DB trỏ các file ĐÃ BỊ XOÁ (không tồn tại ở bất kỳ đâu).
+    removed = _sweep_orphan_pdfs(
+        str(tmp_path),
+        known_paths={
+            str(tmp_path / "da-xoa-1.pdf"),
+            str(tmp_path / "da-xoa-2.pdf"),
+        },
+    )
+
+    assert removed == 1
+    assert not orphan.exists()
 
 
 def test_sweep_orphan_pdfs_matches_across_path_spellings(tmp_path):

@@ -544,3 +544,145 @@ async def test_download_blocked_after_profile_leaves_eligible_state(
 
     blocked = await client.get(dl_url, headers=officer_token_headers)
     assert blocked.status_code == 404  # 404 chứ không phải 403: không lộ tồn tại
+
+
+async def test_major_resolved_from_choice_not_fee_snapshot(
+    seed_lead_dependencies: dict, officer_user_in_db: dict,
+):
+    """Nhánh CHÍNH: ngành/trình độ/hệ đào tạo resolve từ NGUYỆN VỌNG.
+
+    Mọi test khác seed hồ sơ legacy (không choice-engine, không
+    offering_admission_config) nên `resolve_fee_academic_info` luôn ném
+    BadRequest và code rơi về snapshot Fee — tức query join
+    OfferingAcademicInfo→ProgramOffering→MajorProgram CHƯA TỪNG chạy trong test,
+    dù 339/350 hồ sơ prod đi đúng đường đó. Test này bắt buộc đi nhánh live.
+    """
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nv{uuid.uuid4().hex[:10]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    # Dựng chuỗi THẬT ProgramOffering → OfferingAcademicInfo cho đúng ngành của
+    # Fee, rồi trỏ hồ sơ vào academic_info đó ⇒ resolve đi nhánh live và join 3
+    # bảng thực sự chạy. Hệ đào tạo cố tình KHÁC mặc định để chứng minh giấy in
+    # theo dữ liệu chứ không theo hằng.
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            offering = models.ProgramOffering(
+                program_id=seed_lead_dependencies["major_program_id"],
+                offering_type="Liên thông",
+                is_active=True,
+            )
+            session.add(offering)
+            await session.flush()
+            ai = models.OfferingAcademicInfo(
+                offering_id=offering.id,
+                academic_year=2026,
+                is_published=True,
+            )
+            session.add(ai)
+            await session.flush()
+            ai_id = ai.id
+            profile = await session.get(models.AdmissionProfile, profile_id)
+            profile.applied_rules = {
+                **(profile.applied_rules or {}),
+                "academic_info_id": ai_id,
+            }
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        data = await build_letter_data(session, profile)
+
+    # Đến được đây nghĩa là join 3 bảng đã chạy và khớp với ngành của Fee
+    # (lệch nhau thì _resolve_admitted_major đã ném ValidationError).
+    assert data["major_name"]
+    assert data["degree_level"]
+    # Bằng chứng đi nhánh live: hệ đào tạo bằng đúng giá trị vừa seed, KHÔNG
+    # phải hằng mặc định "Chính quy".
+    assert data["offering_type"] == "Liên thông"
+
+
+async def test_letter_refuses_when_fee_has_no_major(
+    seed_lead_dependencies: dict, officer_user_in_db: dict,
+):
+    """Fee chưa gắn ngành ⇒ không đối chiếu được tiền↔ngành ⇒ KHÔNG phát giấy.
+
+    Bỏ chặn này thì giấy in ngành resolve được kèm số tiền của một Fee không rõ
+    tính theo ngành nào."""
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nomaj{uuid.uuid4().hex[:7]}",
+    )
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal("9200000"),
+                    final_amount=Decimal("9200000"),
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=None,      # <- chưa gắn ngành
+                    resolved_degree_level=None,
+                )
+            )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+    assert "ngành" in str(exc.value).lower()
+
+
+async def test_third_issue_extends_expiry_of_ALL_previous_letters(
+    client: AsyncClient, officer_token_headers: dict,
+    seed_lead_dependencies: dict, officer_user_in_db: dict,
+):
+    """Phát lần THỨ BA: bản ĐẦU TIÊN cũng phải được gia hạn.
+
+    Bản trước lọc `superseded_at IS NULL` nên chỉ chạm bản ngay trước — bản #1
+    giữ hạn cũ và bị xoá file + scrub PII sớm hơn, dù nó mới là bản nhiều khả
+    năng đã trao tay thí sinh. Test 2-bản cũ không bắt được ca này."""
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"x3{uuid.uuid4().hex[:10]}",
+    )
+    await _seed_hk1_fee(profile_id, seed_lead_dependencies["major_program_id"])
+
+    body = {
+        "enrollment_start_date": "2026-07-28",
+        "enrollment_end_date": "2026-08-05",
+    }
+    url = f"/api/admissions/{profile_id}/enrollment-letter"
+    for _ in range(3):
+        resp = await client.post(url, json=body, headers=officer_token_headers)
+        assert resp.status_code == 200, resp.text
+
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(models.EnrollmentLetter)
+                .where(models.EnrollmentLetter.profile_id == profile_id)
+                .order_by(models.EnrollmentLetter.id)
+            )
+        ).scalars().all()
+
+    assert len(rows) == 3
+    first, second, third = rows
+    assert third.superseded_at is None
+    assert first.superseded_at is not None and second.superseded_at is not None
+    # Điểm mấu chốt: CẢ BA cùng hạn, kể cả bản đầu.
+    assert first.expires_at == third.expires_at
+    assert second.expires_at == third.expires_at

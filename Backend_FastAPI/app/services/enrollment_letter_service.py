@@ -88,29 +88,47 @@ async def _resolve_admitted_major(db, profile, fee):
     ĐỐI CHIẾU với ngành mà tiền đã tính theo; lệch nhau thì KHÔNG phát giấy, vì
     một tờ giấy ghi ngành A kèm học phí của ngành B là văn bản tự mâu thuẫn.
 
-    Trả về ``(major_name, degree_level)``. Ném ``ValidationError`` với lý do đọc
-    được nếu không xác định được ngành hoặc phát hiện lệch.
+    Trả về ``(major_name, degree_level, offering_type|None)``. Ném
+    ``ValidationError`` với lý do đọc được nếu không xác định được ngành, Fee
+    chưa gắn ngành, hoặc hai nguồn lệch nhau.
     """
-    from sqlalchemy import select as _select
-
     from app.services.fee_calculation_service import resolve_fee_academic_info
     from app.utils.exceptions import BadRequest
 
     # --- Nguồn 1 (ưu tiên): nguyện vọng ---
-    live: tuple[int, str, str | None] | None = None
+    live = None
     try:
         academic_info = await resolve_fee_academic_info(db, profile)
-    except BadRequest:
+    except BadRequest as exc:
         # Hồ sơ legacy thiếu offering_admission_config / applied_rules, hoặc
-        # multi-NV chưa công bố: KHÔNG chặn phát giấy ở đây — còn snapshot trên
-        # Fee (nguồn 2) là ngành mà TIỀN thực sự đã tính theo.
+        # multi-NV chưa công bố kết quả: KHÔNG chặn ngay ở đây — còn snapshot
+        # trên Fee (nguồn 2) là ngành mà TIỀN thực sự đã tính theo.
+        #
+        # PHẢI LOG: resolve_fee_academic_info ném BadRequest ở đúng những ca nó
+        # cố ý FAIL-CLOSED ("≥2 NV chưa công bố", "nhiều hơn 1 NV trúng tuyển" =
+        # dữ liệu lỗi). Nuốt im lặng nghĩa là ta phát giấy "Đã trúng tuyển ngành
+        # X" theo snapshot cũ cho một hồ sơ mà hệ thống vừa nói là chưa xác định
+        # được ngành — không dấu vết nào để hậu kiểm.
         academic_info = None
+        log.warning(
+            "enrollment_letter.major_resolve_fell_back_to_fee_snapshot",
+            profile_id=getattr(profile, "id", None),
+            reason=str(exc),
+        )
 
     if academic_info is not None:
         row = (
             await db.execute(
-                _select(models.MajorProgram.id, models.MajorProgram.name,
-                        models.MajorProgram.degree_level)
+                select(
+                    models.MajorProgram.id,
+                    models.MajorProgram.name,
+                    models.MajorProgram.degree_level,
+                    # Hệ đào tạo nằm ngay trong chuỗi join này — trước đây bị
+                    # hard-code hằng "Chính quy" với lý do hoãn sang v2, khiến
+                    # thí sinh hệ Liên thông / Vừa làm vừa học nhận giấy chính
+                    # thức ghi sai hệ.
+                    models.ProgramOffering.offering_type,
+                )
                 .select_from(models.OfferingAcademicInfo)
                 .join(
                     models.ProgramOffering,
@@ -125,12 +143,12 @@ async def _resolve_admitted_major(db, profile, fee):
             )
         ).first()
         if row is not None and row[1]:
-            live = (row[0], row[1], row[2])
+            live = row
 
     # --- Nguồn 2 (đối chứng / dự phòng): snapshot đã đóng băng trên Fee ---
     snap_major = fee.resolved_major if fee is not None else None
     snap = (
-        (snap_major.id, snap_major.name, fee.resolved_degree_level)
+        (snap_major.id, snap_major.name, fee.resolved_degree_level, None)
         if snap_major and snap_major.name
         else None
     )
@@ -142,18 +160,29 @@ async def _resolve_admitted_major(db, profile, fee):
             "Hãy tính lại học phí trước khi phát giấy."
         )
 
+    # Fee CÓ nhưng chưa gắn ngành ⇒ không đối chiếu được tiền↔ngành. Đây từng
+    # là lỗi "thiếu dữ liệu" chặn cứng; bỏ đi thì giấy in ngành resolve được
+    # kèm số tiền của một Fee KHÔNG BIẾT tính theo ngành nào — đúng thứ hàm này
+    # tồn tại để chặn. Giữ fail-closed.
+    if snap is None:
+        raise ValidationError(
+            "Không thể tạo giấy báo nhập học — khoản học phí chưa gắn ngành nên "
+            "không đối chiếu được với nguyện vọng trúng tuyển. Hãy tính lại học "
+            "phí trước khi phát giấy."
+        )
+
     # Cả hai cùng có nhưng LỆCH ⇒ tiền và ngành đang nói hai chuyện khác nhau.
     # Một tờ giấy ghi ngành A kèm học phí của ngành B là văn bản tự mâu thuẫn,
     # nên fail-closed thay vì chọn bừa một bên.
-    if live and snap and live[0] != snap[0]:
+    if live and live[0] != snap[0]:
         raise ValidationError(
             f"Không thể tạo giấy báo nhập học — nguyện vọng trúng tuyển là "
             f"'{live[1]}' nhưng học phí đang tính theo ngành '{snap[1]}'. "
             f"Hãy tính lại học phí cho đúng ngành trước khi phát giấy."
         )
 
-    _, major_name, degree_level = live or snap
-    return major_name, degree_level
+    chosen = live or snap
+    return chosen[1], chosen[2], chosen[3]
 
 
 def _school_year_label(fee) -> str:
@@ -212,7 +241,26 @@ async def build_letter_data(db, profile) -> dict:
     # phí đã tính theo (xem ``_resolve_admitted_major``). Chạy SAU khối
     # ``missing`` vì nó cần fee, và nó tự ném ValidationError với lý do riêng
     # thay vì gộp vào danh sách "thiếu dữ liệu".
-    major_name, degree_level = await _resolve_admitted_major(db, profile, fee)
+    major_name, degree_level, offering_type = await _resolve_admitted_major(
+        db, profile, fee
+    )
+    if not degree_level:
+        # Trình độ KHÔNG được để trống: dữ liệu thật có ngành trùng tên giữa
+        # Cao đẳng và Trung cấp, nên "Đã trúng tuyển ngành: Kế toán" một mình
+        # là câu chưa xác định. Thà không phát còn hơn phát một tờ giấy mơ hồ.
+        raise ValidationError(
+            "Không thể tạo giấy báo nhập học — chưa xác định được TRÌNH ĐỘ của "
+            "ngành trúng tuyển. Hãy tính lại học phí trước khi phát giấy."
+        )
+
+    # Số ĐỢT 1 thực sự in trên giấy = phần bị kẹp theo số còn phải nộp, không
+    # phải hằng FIRST_INSTALLMENT. Snapshot phải ghi ĐÚNG SỐ ĐÃ IN, nếu không
+    # nó nói dối chính tờ giấy nó mô tả.
+    _total = max(0, int(round(fee.final_amount or 0)))
+    _paid = max(0, int(round(fee.paid_amount or 0)))
+    _waived = max(0, int(round(fee.waived_amount or 0)))
+    _remaining = max(0, _total - min(_total, _paid + _waived))
+    _first_installment = min(_remaining, C.FIRST_INSTALLMENT)
 
     return {
         "full_name": full_name,
@@ -224,20 +272,20 @@ async def build_letter_data(db, profile) -> dict:
         # "Đã trúng tuyển ngành: Kế toán" một mình là câu chưa xác định.
         "major_name": major_name,
         "degree_level": degree_level,
-        # MVP: offering_type is not snapshotted on Fee; live-resolving the
-        # academic_info → offering chain is deferred (v2). Almost all offerings
-        # are "Chính quy" and the user accepted a literal fallback.
-        "offering_type": C.DEFAULT_OFFERING_TYPE,
+        # Hệ đào tạo lấy từ chính ProgramOffering của nguyện vọng (cùng query
+        # với ngành). Chỉ rơi về hằng khi phải dùng snapshot Fee — snapshot
+        # không lưu hệ đào tạo.
+        "offering_type": offering_type or C.DEFAULT_OFFERING_TYPE,
         # round (not truncate) so a hypothetical fractional discount never
         # under-states the charge on the official letter; VND fees are whole.
-        "hk1_fee_amount": int(round(fee.final_amount)),
+        "hk1_fee_amount": _total,
         # ĐÃ NỘP / ĐƯỢC MIỄN đi kèm để giấy in đúng số CÒN PHẢI NỘP. Luồng
         # prepay (giữ chỗ) cho phép đóng HK1 khi hồ sơ còn `submitted`, nên một
         # thí sinh đã trả trước rất dễ được duyệt rồi nhận giấy — in
         # `final_amount` gộp là đòi lại tiền họ đã đóng, trên văn bản có chữ ký
         # Hiệu trưởng. (Fee đã miễn toàn phần cũng vào đây thay vì bị đòi đủ.)
-        "hk1_paid_amount": int(round(fee.paid_amount or 0)),
-        "hk1_waived_amount": int(round(fee.waived_amount or 0)),
+        "hk1_paid_amount": _paid,
+        "hk1_waived_amount": _waived,
         "fee_id": fee.id,
         # Nhãn năm học DẪN XUẤT từ chính Fee đang render (quy ước dùng khắp
         # repo: fees.py / invoices.py), KHÔNG lấy hằng process-wide — nếu không
@@ -246,7 +294,7 @@ async def build_letter_data(db, profile) -> dict:
         # Literal ĐÃ IN lên giấy được chụp lại cùng: đây là official record,
         # mà mọi hằng dưới đây đều có thể đổi giữa các mùa tuyển sinh. Không
         # lưu thì sau retention không còn gì đối chiếu "giấy đã nói gì".
-        "first_installment": C.FIRST_INSTALLMENT,
+        "first_installment": _first_installment,
         "bank_account_number": C.BANK_ACCOUNT_NUMBER,
         "bank_account_name": C.BANK_ACCOUNT_NAME,
         "bank_name": C.BANK_NAME,
@@ -260,7 +308,20 @@ def _write_pdf_atomic(content: bytes, final_path: str) -> tuple[str, int]:
     """Write ``content`` atomically (staging → fsync → os.replace). Returns
     (sha256_hex, size). SYNC/blocking → call via ``to_thread.run_sync``."""
     sha = hashlib.sha256(content).hexdigest()
-    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    # 0o700 / 0o600: PDF chứa họ tên + ngày sinh + địa chỉ + điện thoại + học
+    # phí. Mode mặc định cho ra 0o755/0o644, tức mọi uid khác đọc được thẳng
+    # trên volume (volume này còn mount vào cả celery-worker và beat) — vòng
+    # qua toàn bộ CasbinAuth + IDOR + audit ở tầng API mà không để lại dấu vết.
+    _dir = os.path.dirname(final_path)
+    os.makedirs(_dir, mode=0o700, exist_ok=True)
+    # ``mode=`` chỉ áp cho thư mục MỚI tạo — hồ sơ đã từng phát giấy sẽ giữ
+    # nguyên 0o755 cũ, nên phải siết lại tường minh. Best-effort: quyền thư mục
+    # không được phép chặn việc phát giấy.
+    try:
+        if (os.stat(_dir).st_mode & 0o777) != 0o700:
+            os.chmod(_dir, 0o700)
+    except OSError:
+        pass
     staging = os.path.join(
         os.path.dirname(final_path), f"{STAGING_PREFIX}{uuid4().hex[:12]}.pdf"
     )
@@ -269,6 +330,7 @@ def _write_pdf_atomic(content: bytes, final_path: str) -> tuple[str, int]:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
+        os.chmod(staging, 0o600)  # trước os.replace: file cuối kế thừa mode này
         os.replace(staging, final_path)
     except Exception:
         if os.path.exists(staging):
@@ -361,6 +423,32 @@ async def issue_enrollment_letter(
             "Hãy tải lại trang và kiểm tra trạng thái hồ sơ."
         )
 
+    # ...và kiểm lại cả SỐ TIỀN. Cửa sổ render (~350ms, dài hơn trên volume
+    # mạng) không giữ khoá, mà ``calculate_fee`` khoá cùng row hồ sơ nên TRƯỚC
+    # đây nó bị xếp hàng sau ta. Nay kế toán có thể huỷ Fee + tính lại ngay
+    # giữa lúc ta đang render, và giấy sẽ mang số tiền của một Fee đã cancelled
+    # với ``data_snapshot.fee_id`` trỏ vào đó. Chỉ kiểm status là bỏ sót đúng
+    # thứ tờ giấy nói ra.
+    fee_now = await _get_active_hk1_tuition_fee(db, profile.id)
+    if (
+        fee_now is None
+        or fee_now.id != data.get("fee_id")
+        or int(round(fee_now.final_amount or 0)) != data.get("hk1_fee_amount")
+        or int(round(fee_now.paid_amount or 0)) != data.get("hk1_paid_amount")
+        or int(round(fee_now.waived_amount or 0)) != data.get("hk1_waived_amount")
+    ):
+        await to_thread.run_sync(_best_effort_delete, final_path)
+        log.warning(
+            "enrollment_letter.fee_changed_during_render",
+            profile_id=profile.id,
+            snapshot_fee_id=data.get("fee_id"),
+            current_fee_id=getattr(fee_now, "id", None),
+        )
+        raise BusinessRuleViolation(
+            "Học phí của hồ sơ vừa thay đổi trong lúc tạo giấy báo — không phát "
+            "hành để tránh in sai số tiền. Hãy thử lại."
+        )
+
     _now = datetime.now(timezone.utc)
     expires_at = _now + timedelta(days=settings.ENROLLMENT_LETTER_RETENTION_DAYS)
     letter = models.EnrollmentLetter(
@@ -385,6 +473,7 @@ async def issue_enrollment_letter(
         # xoá PII TRƯỚC bản 2 mà chưa ai cầm. Khi có tranh chấp "giấy tôi cầm
         # ghi gì", bằng chứng còn sống lại là bản sai. Cho cả nhóm chết cùng
         # lúc theo bản mới nhất.
+        # (a) Đánh dấu "đã thay thế": CHỈ bản đang hiện hành.
         await db.execute(
             update(models.EnrollmentLetter)
             .where(
@@ -392,7 +481,21 @@ async def issue_enrollment_letter(
                 models.EnrollmentLetter.id != letter.id,
                 models.EnrollmentLetter.superseded_at.is_(None),
             )
-            .values(superseded_at=_now, expires_at=expires_at)
+            .values(superseded_at=_now)
+        )
+        # (b) Gia hạn lưu trữ: MỌI bản của hồ sơ, KHÔNG lọc superseded_at.
+        # Lọc theo `superseded_at IS NULL` (như bản trước) chỉ chạm đúng bản
+        # ngay trước, nên từ lần phát thứ BA trở đi bản đầu tiên giữ hạn cũ và
+        # chết sớm hơn — đo trên dev: lệch 24 giờ. Bản đầu chính là bản nhiều
+        # khả năng đã trao tay thí sinh, tức bằng chứng bị huỷ trước lại đúng là
+        # bản đang tranh chấp.
+        await db.execute(
+            update(models.EnrollmentLetter)
+            .where(
+                models.EnrollmentLetter.profile_id == profile.id,
+                models.EnrollmentLetter.id != letter.id,
+            )
+            .values(expires_at=expires_at)
         )
     except Exception:
         # Flush failed → the PDF we just wrote would orphan on disk with no

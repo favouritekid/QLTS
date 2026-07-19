@@ -110,10 +110,18 @@ def _sweep_orphan_pdfs(base_dir: str, known_paths: set) -> int:
                 continue
             candidates.append(path)
 
-    if candidates and matched == 0 and known:
+    # Chỉ nghi lệch cấu hình khi CÓ known path còn TỒN TẠI THẬT trên đĩa mà
+    # không nằm trong cây đang quét. Điều kiện cũ (`matched == 0 and known`) còn
+    # đúng cả trong trạng thái hoàn toàn hợp lệ: sau retention, file đã bị chính
+    # task này xoá nhưng row vẫn giữ file_path, nên không path nào khớp được và
+    # sweep TỰ TẮT vĩnh viễn — orphan thật không bao giờ được dọn, kèm cảnh báo
+    # sai mỗi đêm (đã tái hiện).
+    known_alive_elsewhere = any(os.path.isfile(p) for p in known)
+    if candidates and matched == 0 and known_alive_elsewhere:
         log.warning(
             "cleanup_enrollment_letter: BỎ QUA quét mồ côi — %s file .pdf dưới "
-            "%s nhưng KHÔNG file nào khớp %s đường dẫn trong DB. Nghi lệch "
+            "%s không khớp đường dẫn nào trong DB, NHƯNG có file được DB tham "
+            "chiếu đang sống ở nơi khác (%s đường dẫn). Nghi lệch "
             "ENROLLMENT_LETTER_STORAGE_DIR; kiểm tra trước khi để job xoá.",
             len(candidates),
             base_dir,

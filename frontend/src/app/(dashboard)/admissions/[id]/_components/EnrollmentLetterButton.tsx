@@ -69,6 +69,11 @@ export function EnrollmentLetterButton({ profile }: Props) {
   const canSubmit =
     Boolean(startDate) && Boolean(endDate) && !rangeInvalid && !mutation.isPending
   const issued = letters.data ?? []
+  // Lỗi tải danh sách PHẢI hiện ra. `data ?? []` một mình biến một lỗi parse
+  // Zod (contract drift — đúng ca schema tồn tại để bắt) thành "chưa phát bản
+  // nào", và officer sẽ bấm "Xuất PDF" phát thêm một bản CHÍNH THỨC thay vì
+  // tải lại — đúng hành vi trùng lặp mà khối này sinh ra để tránh.
+  const listFailed = letters.isError
 
   // Đóng dialog GIỮ NGUYÊN 2 ngày đã nhập: officer thường mở ra xem lại danh
   // sách rồi đóng, gõ lại ngày mỗi lần là phiền vô ích. Chỉ xoá sau khi phát
@@ -133,6 +138,18 @@ export function EnrollmentLetterButton({ profile }: Props) {
               </p>
             )}
 
+            {listFailed && (
+              <div
+                className="border-destructive/40 bg-destructive/5 rounded-md border p-2.5"
+                role="alert"
+              >
+                <p className="text-destructive text-sm">
+                  Không tải được danh sách giấy đã phát. Hãy đóng và mở lại
+                  trước khi xuất bản mới — tránh phát trùng một giấy đã có.
+                </p>
+              </div>
+            )}
+
             {issued.length > 0 && (
               <div className="border-t pt-3">
                 <p className="text-muted-foreground mb-2 text-sm font-medium">
@@ -187,7 +204,12 @@ export function EnrollmentLetterButton({ profile }: Props) {
             >
               Đóng
             </Button>
-            <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit}
+              variant={listFailed ? "secondary" : "default"}
+            >
               {mutation.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
               )}
