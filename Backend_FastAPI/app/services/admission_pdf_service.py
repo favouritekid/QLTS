@@ -463,6 +463,25 @@ def _money_rows(rows: list[tuple[str, str]], st: dict) -> Table:
     return t
 
 
+def _officer_contact(data: dict) -> str:
+    """Phần " — Cán bộ phụ trách: Tên (SĐT)" nối sau hotline chung.
+
+    Hotline trường ĐƯỢC GIỮ (quyết định 20-07): officer nghỉ phép / chuyển việc
+    thì thí sinh vẫn còn một đường dây gọi được.
+
+    Thiếu SĐT thì chỉ in TÊN, không in ngoặc rỗng — tại thời điểm làm tính năng
+    có 168/355 hồ sơ mà officer chưa khai số trong hệ thống, và một tờ giấy
+    chính thức ghi "Cán bộ phụ trách: Nguyễn Văn A ()" đọc như lỗi phần mềm.
+    Không officer ⇒ không in gì thêm, dòng hotline vẫn đứng vững một mình.
+    """
+    name = _esc((data.get("officer_name") or "").strip())
+    if not name:
+        return "."
+    phone = _esc((data.get("officer_phone") or "").strip())
+    tail = f" ({phone})" if phone else ""
+    return f" — <b>Cán bộ phụ trách:</b> {name}{tail}."
+
+
 def _fee_lines(data: dict, st: dict) -> list[Any]:
     """Khối học phí — in MỨC CHUẨN của bảng thu Nhà trường.
 
@@ -561,12 +580,21 @@ def _build_body(data: dict, st: dict) -> list[Any]:
             st,
         ),
         Paragraph(f"Địa chỉ thường trú: {address}", st["body"]),
+        # Ngành đứng RIÊNG một dòng, trình độ + hệ gộp dòng dưới.
+        #
+        # Trước đây ngành dùng chung dòng với trình độ (60% bề rộng), nên tên
+        # dài như "Công nghệ thông tin (ứng dụng phần mềm)" bị đẩy xuống dòng
+        # thứ hai của ô trái và lệch hẳn khỏi lưới. Nới cột chỉ đẩy ngưỡng đi
+        # chứ không bỏ được — tên ngành là dữ liệu, dài bao nhiêu không kiểm
+        # soát được. Cho ngành nguyên một dòng thì bố cục ổn định với MỌI độ
+        # dài, và TỔNG SỐ DÒNG KHÔNG ĐỔI (trước: ngành+trình độ / hệ = 2 dòng;
+        # nay: ngành / trình độ+hệ = 2 dòng) nên không ăn thêm chỗ.
+        Paragraph(f"Đã trúng tuyển ngành: <b>{major}</b>", st["body"]),
         _two_col(
-            f"Đã trúng tuyển ngành: <b>{major}</b>",
             (f"Trình độ: <b>{degree}</b>" if degree else ""),
+            f"Hệ đào tạo: {offering}",
             st,
         ),
-        Paragraph(f"Hệ đào tạo: {offering}", st["body"]),
         Spacer(1, 1.2 * mm),
         Paragraph(
             "Để hoàn tất thủ tục nhập học, đề nghị thí sinh có mặt tại trường "
@@ -578,13 +606,16 @@ def _build_body(data: dict, st: dict) -> list[Any]:
             f"<b>{end_str}</b>.",
             st["indent"],
         ),
+        # Địa chỉ chảy TIẾP dòng địa điểm, không xuống dòng riêng: <br/> +
+        # thụt đầu dòng cũ tách nó thành một dòng lơ lửng không có nhãn.
         Paragraph(
-            f"<b>- Địa điểm:</b> {C.SCHOOL_NAME_TITLE}.<br/>"
-            f"&nbsp;&nbsp;&nbsp;{C.LOCATION_ADDRESS}",
+            f"<b>- Địa điểm:</b> {C.SCHOOL_NAME_TITLE}, {C.LOCATION_ADDRESS}",
             st["indent"],
         ),
         Paragraph(
-            f"<b>- Điện thoại hỗ trợ:</b> {C.SUPPORT_PHONE}.", st["indent"]
+            f"<b>- Điện thoại hỗ trợ:</b> {C.SUPPORT_PHONE}"
+            f"{_officer_contact(data)}",
+            st["indent"],
         ),
         Spacer(1, 1.2 * mm),
         Paragraph("Khi đến trường thí sinh vui lòng mang theo:", st["body"]),
@@ -615,9 +646,14 @@ def _build_body(data: dict, st: dict) -> list[Any]:
     # Nội dung CK: ngân hàng bỏ dấu + giới hạn độ dài, nên in đúng dạng
     # ASCII/rút gọn mà thí sinh sẽ gõ, thay vì tiếng Việt có dấu. Kết quả chỉ
     # gồm [a-zA-Z0-9 ] → an toàn XML theo cấu tạo.
+    # Nội dung CK mang MÃ HỒ SƠ, không phải số điện thoại: kế toán đối soát sao
+    # kê cần tra ngược ra đúng hồ sơ, mà số điện thoại có thể trùng giữa các
+    # thí sinh (anh em dùng chung số) và không tra được trong danh mục hồ sơ.
+    # Tiền tố "HS" để con số không bị đọc nhầm thành số khác trên sao kê.
+    profile_code = data.get("profile_code") or ""
     bank_note = _esc(
         to_bank_transfer_note(
-            f"{data.get('full_name') or ''} {data.get('phone') or ''} "
+            f"{data.get('full_name') or ''} {profile_code} "
             "nop hoc phi ky I",
             max_len=90,
         )

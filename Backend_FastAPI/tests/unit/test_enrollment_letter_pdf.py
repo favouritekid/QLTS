@@ -56,6 +56,9 @@ def _base_data(**overrides):
         enrollment_start_date=datetime.date(2026, 7, 28),
         enrollment_end_date=datetime.date(2026, 8, 5),
         phone="0906123456",
+        officer_name="Trần Thị Tư Vấn",
+        officer_phone="0912345678",
+        profile_code="HS334",
     )
     d.update(overrides)
     return d
@@ -160,18 +163,80 @@ def test_degree_level_not_duplicated():
     assert "Cao đẳng Cao đẳng" not in text
 
 
-def test_bank_transfer_note_is_ascii_sanitized():
-    """The bank-transfer memo must be ASCII (diacritics stripped) so it matches
-    what a bank's Nội-dung field accepts — while the display name keeps its
-    accents."""
-    text = _text(
+def test_bank_transfer_note_carries_profile_code_not_phone():
+    """Nội dung CK mang MÃ HỒ SƠ, không phải số điện thoại.
+
+    Kế toán đối soát sao kê phải tra ngược ra đúng hồ sơ; số điện thoại có thể
+    trùng giữa các thí sinh (anh em dùng chung số) và không tra được trong danh
+    mục hồ sơ. Vẫn phải ASCII vì ô Nội dung của ngân hàng không nhận dấu.
+    """
+    text = _flat(
         pdf.render_enrollment_letter(
-            _base_data(full_name="Phạm Thái Hà", phone="0906123456")
+            _base_data(
+                full_name="Phạm Thái Hà", phone="0906123456", profile_code="HS407"
+            )
         )
     )
-    assert "nop hoc phi ky I" in text  # ASCII memo tail
-    assert "Pham Thai Ha 0906123456" in text  # diacritics stripped in the memo
-    assert "Phạm Thái Hà" in text  # display line still has accents
+    assert "nop hoc phi ky I" in text  # đuôi ASCII
+    assert "Pham Thai Ha HS407 nop hoc phi ky I" in text  # đã bỏ dấu + có mã
+    assert "0906123456" not in text, "số điện thoại thí sinh không được vào nội dung CK"
+    assert "Phạm Thái Hà" in text  # dòng hiển thị vẫn giữ dấu
+
+
+def test_support_line_keeps_hotline_and_adds_officer():
+    """Dòng hỗ trợ giữ hotline chung VÀ thêm cán bộ phụ trách.
+
+    Bỏ hotline thì officer nghỉ phép / chuyển việc là thí sinh mất đường dây.
+    """
+    text = _flat(pdf.render_enrollment_letter(_base_data()))
+    assert "0906 513 555" in text  # hotline chung
+    assert "Cán bộ phụ trách: Trần Thị Tư Vấn (0912345678)" in text
+
+
+def test_officer_without_phone_prints_name_only():
+    """Officer chưa khai SĐT ⇒ in mỗi TÊN, không để ngoặc rỗng.
+
+    Lúc làm tính năng có 168/355 hồ sơ rơi vào ca này; một văn bản chính thức
+    ghi 'Cán bộ phụ trách: Nguyễn Văn A ()' đọc như lỗi phần mềm.
+    """
+    text = _flat(pdf.render_enrollment_letter(_base_data(officer_phone="")))
+    assert "Cán bộ phụ trách: Trần Thị Tư Vấn" in text
+    assert "()" not in text
+
+
+def test_no_officer_leaves_the_hotline_standing_alone():
+    """Không có officer ⇒ dòng hotline vẫn đứng vững, không có đuôi lơ lửng."""
+    text = _flat(
+        pdf.render_enrollment_letter(_base_data(officer_name="", officer_phone=""))
+    )
+    assert "0906 513 555" in text
+    assert "Cán bộ phụ trách" not in text
+
+
+def test_location_address_stays_on_the_location_line():
+    """Địa chỉ chảy tiếp dòng "Địa điểm", không rơi xuống dòng riêng không nhãn."""
+    text = _flat(pdf.render_enrollment_letter(_base_data()))
+    assert "Địa điểm: Trường Cao đẳng Bách khoa Tây Nguyên, Số 02 Lý Nhân Tông" in text
+
+
+def test_long_major_name_does_not_share_its_line():
+    """Tên ngành dài phải có nguyên một dòng.
+
+    Dùng chung dòng với trình độ thì "Công nghệ thông tin (ứng dụng phần mềm)"
+    tràn sang dòng thứ hai của ô trái và lệch khỏi lưới. Trình độ + hệ đào tạo
+    xuống gộp một dòng nên tổng số dòng không đổi.
+    """
+    text = _flat(
+        pdf.render_enrollment_letter(
+            _base_data(
+                major_name="Công nghệ thông tin (ứng dụng phần mềm)",
+                degree_level="Trung cấp",
+            )
+        )
+    )
+    # Ngành đứng liền mạch, KHÔNG bị "Trình độ:" chen vào giữa.
+    assert "ngành: Công nghệ thông tin (ứng dụng phần mềm)" in text
+    assert "Trình độ: Trung cấp" in text and "Hệ đào tạo: Chính quy" in text
 
 
 def test_two_installments_print_their_own_due_dates():
