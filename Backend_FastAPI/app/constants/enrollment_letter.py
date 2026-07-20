@@ -23,7 +23,7 @@ SCHOOL_NAME = "TRƯỜNG CAO ĐẲNG BÁCH KHOA TÂY NGUYÊN"
 # Title-case form used inside body prose ("Trường ... trân trọng thông báo:").
 SCHOOL_NAME_TITLE = "Trường Cao đẳng Bách khoa Tây Nguyên"
 SCHOOL_CODE = "TPC"
-SCHOOL_ADDRESS = "02 Lý Nhân Tông, Khối 8, Phường Tân An, Tỉnh Đắk Lắk"
+SCHOOL_ADDRESS = "02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk"
 SCHOOL_PHONE = "(0262) 8551 558 - 0906 513 555"
 # Header shows the bare domain; the footer bar shows the full URL.
 SCHOOL_WEBSITE = "tnpc.edu.vn"
@@ -31,7 +31,7 @@ FOOTER_WEBSITE = "https://tnpc.edu.vn"
 
 # Enrollment location + support line shown in the body ("Địa điểm" / "Điện
 # thoại hỗ trợ").
-LOCATION_ADDRESS = "Số 02 Lý Nhân Tông, Khối 8, Phường Tân An, Tỉnh Đắk Lắk."
+LOCATION_ADDRESS = "Số 02 Lý Nhân Tông, Phường Tân An, Tỉnh Đắk Lắk."
 SUPPORT_PHONE = "0906 513 555"
 
 # School year label for the fee heading ("Học phí học kỳ I năm học ...").

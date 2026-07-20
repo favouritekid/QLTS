@@ -211,6 +211,30 @@ async def _resolve_admitted_major(db, profile, fee):
     return chosen[1], chosen[2], chosen[3], chosen[4]
 
 
+async def _resolve_officer(db, profile) -> tuple[str, str]:
+    """(tên, số điện thoại) officer đang phụ trách — cho dòng "Điện thoại hỗ
+    trợ" trên giấy.
+
+    Đi qua ``lead.assigned_officer_id`` chứ không qua trường denormalize
+    ``assigned_officer_name``: trường đó chỉ được populate ở tầng response, nên
+    rỗng khi service chạy độc lập (Celery, script).
+
+    KHÔNG chặn phát giấy khi thiếu — đây là thông tin liên hệ THÊM và hotline
+    chung vẫn được in. Trả chuỗi rỗng để renderer tự bỏ phần đó.
+    """
+    row = (
+        await db.execute(
+            select(models.User.full_name, models.User.phone_number)
+            .select_from(models.Lead)
+            .join(models.User, models.User.id == models.Lead.assigned_officer_id)
+            .where(models.Lead.id == profile.lead_id)
+        )
+    ).first()
+    if row is None:
+        return "", ""
+    return (row[0] or "").strip(), (row[1] or "").strip()
+
+
 def _vnd(amount) -> str:
     """9200000 → "9.200.000". Dấu chấm phân nhóm như cách viết tiền của VN —
     ``f"{n:,}"`` cho ra "9,200,000", đọc như số kiểu Anh ngay trong một thông
@@ -378,6 +402,7 @@ async def build_letter_data(db, profile) -> dict:
     schedule = _resolve_tuition_schedule(
         major_code, major_name, degree_level, fee, _total
     )
+    officer_name, officer_phone = await _resolve_officer(db, profile)
 
     return {
         "full_name": full_name,
@@ -431,6 +456,16 @@ async def build_letter_data(db, profile) -> dict:
         "signatory_title": C.SIGNATORY_TITLE,
         "signatory_name": C.SIGNATORY_NAME,
         "phone": (profile.phone or "").strip(),
+        # Cán bộ phụ trách in kèm hotline chung. Chụp vào snapshot vì officer
+        # có thể đổi sau khi giấy đã trao tay — bản in nói ai thì hồ sơ phải
+        # còn ghi đúng người đó.
+        "officer_name": officer_name,
+        "officer_phone": officer_phone,
+        # Mã hồ sơ dùng cho nội dung chuyển khoản. Đây là số định danh hồ sơ mà
+        # giao diện hiển thị dạng "#334" và finance tra ngược qua
+        # ``admission_profile_id``; tiền tố "HS" chỉ để con số không bị đọc
+        # nhầm trên sao kê ngân hàng.
+        "profile_code": f"HS{profile.id}",
     }
 
 

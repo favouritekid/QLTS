@@ -96,7 +96,8 @@ class EnrollmentLetter(Base):
     # second_installment · first_installment_due · second_installment_due ·
     # required_documents · early_enrollment_bonus · benefits · closing_note ·
     # bank_account_number · bank_account_name · bank_name · signatory_title ·
-    # signatory_name. Sau retention còn thêm ``_purged``.
+    # signatory_name · officer_name · officer_phone · profile_code.
+    # Sau retention còn thêm ``_purged``.
     data_snapshot: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
