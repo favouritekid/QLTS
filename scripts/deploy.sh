@@ -191,13 +191,29 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
 log "Step 5/8: Backing up database..."
 mkdir -p "$BACKUP_DIR"
 
+# Review 2026-07-20: ba sửa đổi, cùng một gốc — bản backup này là đường
+# rollback DUY NHẤT của Step 6 nên nó phải hoặc dùng được, hoặc biến mất
+# hẳn; tuyệt đối không được tồn tại ở dạng "có file nhưng vô dụng".
+#   1. Bỏ ``2>/dev/null``: trước đây lý do pg_dump chết bị nuốt sạch, vận
+#      hành chỉ thấy "may be first deploy" — câu chẩn đoán sai hướng.
+#   2. ``--clean --if-exists``: dump cũ KHÔNG có DROP nên khi Step 6 phát
+#      lại lên DB còn nguyên object thì mọi câu lệnh lỗi "already exists".
+#      Tức đường rollback trước đây KHÔNG THỂ khôi phục kể cả với file dump
+#      hoàn hảo. Có DROP thì replay mới thực sự đưa DB về trạng thái cũ.
+#   3. Xoá xác file khi dump fail: phép chuyển hướng ``>`` tạo file NGAY CẢ
+#      khi pg_dump chết, để lại file 0 byte. Cổng ``[ -s ]`` ở Step 6 đã
+#      chặn được, nhưng dọn luôn cho khỏi ai nhặt nhầm sau này.
 if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
-    docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
+    if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
+        --clean --if-exists \
         -U "${POSTGRES_USER:-qlts}" \
         "${POSTGRES_DB:-qlts_production}" \
-        > "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" 2>/dev/null \
-        && log "Database backup saved: pre_deploy_${TIMESTAMP}.sql" \
-        || warn "Database backup failed (may be first deploy)"
+        > "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"; then
+        log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
+    else
+        rm -f "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
+        warn "Database backup FAILED — deploy này sẽ KHÔNG có đường rollback tự động"
+    fi
 else
     warn "PostgreSQL not running, skipping backup (first deploy?)"
 fi
@@ -228,12 +244,26 @@ else
         && log "Migrations completed successfully" \
         || {
             warn "Migration failed! Rolling back..."
-            if [ -f "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
-                docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
+            # Review 2026-07-20: cổng này trước đây NÓI DỐI theo hai cách.
+            #   1. ``[ -f ]`` chỉ hỏi "file có tồn tại", mà Step 5 tạo file
+            #      kể cả khi pg_dump chết ⇒ luôn TRUE ⇒ phát lại 0 byte.
+            #      Nay ``[ -s ]`` đòi file KHÁC RỖNG.
+            #   2. psql không có ``ON_ERROR_STOP=1`` nên chạy tiếp qua mọi
+            #      lỗi rồi thoát 0 ⇒ dòng "Database restored" in ra vô điều
+            #      kiện, kể cả khi không một câu lệnh nào chạy được. Nay
+            #      psql dừng ở lỗi đầu tiên và ta CHỈ báo đã khôi phục khi
+            #      psql thực sự thành công.
+            # Trạng thái tệ nhất (migration hỏng VÀ restore hỏng) giờ được
+            # nói thẳng kèm đường dẫn file, thay vì bị che bằng lời trấn an.
+            if [ -s "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
+                if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
+                    -v ON_ERROR_STOP=1 \
                     -U "${POSTGRES_USER:-qlts}" \
                     "${POSTGRES_DB:-qlts_production}" \
-                    < "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
-                error "Migration failed. Database restored from backup."
+                    < "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"; then
+                    error "Migration failed. Database restored from backup."
+                fi
+                error "Migration failed AND restore FAILED. DB có thể đang ở trạng thái LAI (schema nửa cũ nửa mới). KHÔNG deploy tiếp. Khôi phục tay từ: $BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
             fi
             error "Migration failed. No backup available to restore."
         }
