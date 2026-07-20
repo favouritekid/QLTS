@@ -3310,6 +3310,157 @@ async def _populate_priority_evidence_projections(
         profile.priority_evidence_documents = []
 
 
+_CHOICE_EAGER_PATHS_CACHE: Optional[tuple[tuple[str, ...], ...]] = None
+
+
+def _choice_eager_paths() -> tuple[tuple[str, ...], ...]:
+    """The relationship legs the guard must verify, DERIVED from the canonical
+    loader rather than hand-copied.
+
+    Each leg is a path of relationship keys rooted at an
+    ``AdmissionProfileChoice`` (the leading ``choices`` hop is dropped). It is
+    read straight out of ``admission_repository._choices_eager_load_options()``
+    — the same options every GET path and ``reload_profile_with_lead`` splat —
+    so the guard and that loader CANNOT drift: there is one source, not a
+    literal table to keep in sync by hand. Today this yields:
+        admission_path → academic_info → offering → program
+        admission_path → admission_method
+        admission_path → admission_round
+        admission_path → criteria
+        path_subject_group_config → subject_group → subject_mappings → subject
+        scores → subject
+
+    ``AdmissionProfileChoiceResponse._compute_display_fields`` getattr-walks
+    the same relations at serialization, so an incomplete graph 500s there too
+    — this is the graph that keeps that safe.
+
+    The reload path uses ``list_by_profile(eager=True)`` (a DIFFERENT loader);
+    it must remain a superset of this contract or a repaired profile would
+    still trip the guard. ``test_guard_matches_repository_eager_contract``
+    pins that agreement. Cached module-side (loader options are static);
+    imported lazily to avoid a repository→service import cycle at module load.
+    """
+    global _CHOICE_EAGER_PATHS_CACHE
+    if _CHOICE_EAGER_PATHS_CACHE is None:
+        from sqlalchemy.orm import RelationshipProperty
+
+        from app.repositories.admission_repository import (
+            _choices_eager_load_options,
+        )
+        legs: list[tuple[str, ...]] = []
+        for opt in _choices_eager_load_options():
+            keys = tuple(
+                p.key for p in opt.path
+                if isinstance(p, RelationshipProperty)
+            )
+            # keys[0] is the leading ``AdmissionProfile.choices`` hop.
+            if len(keys) > 1:
+                legs.append(keys[1:])
+        if not legs:
+            # Deriving nothing would make the guard a no-op (reports every
+            # graph complete → the MissingGreenlet 500 returns silently). A
+            # loader that loads no nested legs is a wiring break, not a valid
+            # empty contract — fail loudly at first use rather than ship a
+            # dead guard.
+            raise RuntimeError(
+                "_choices_eager_load_options() yielded no nested choice "
+                "relationship legs — the eager-graph guard would be a no-op. "
+                "Check the loader options in admission_repository."
+            )
+        _CHOICE_EAGER_PATHS_CACHE = tuple(legs)
+    return _CHOICE_EAGER_PATHS_CACHE
+
+
+def _relation_path_incomplete(obj: Any, path: tuple[str, ...]) -> bool:
+    """True when any hop of ``path`` starting at ``obj`` is not loaded.
+
+    Never touches a lazy attribute: each hop consults ``inspect(obj).unloaded``
+    and descends through ``__dict__`` only. Collections are walked element-wise
+    (an ``InstrumentedList`` is a ``list``). A relationship that is
+    loaded-and-None (nullable FK) is COMPLETE — stop descending, do not reload.
+    """
+    import sqlalchemy as _sa
+
+    if obj is None or not path:
+        return False
+    if isinstance(obj, (list, tuple)):
+        return any(_relation_path_incomplete(o, path) for o in obj)
+
+    state = _sa.inspect(obj, raiseerr=False)
+    # ``state is None`` → plain object; a mapped CLASS yields a ``Mapper``,
+    # which has no ``.unloaded``. Neither can lazy-load, so treat as complete
+    # rather than letting ``NoInspectionAvailable``/``AttributeError`` turn
+    # this guard — whose job is to PREVENT 500s — into one.
+    if state is None or not hasattr(state, "unloaded"):
+        return False
+
+    attr, rest = path[0], path[1:]
+    if attr in state.unloaded:
+        return True
+    if attr not in obj.__dict__:
+        # Reported "loaded" (not in ``unloaded``) yet physically ABSENT from
+        # ``__dict__``. ``unloaded`` is ``set(manager) - committed_state -
+        # dict``, so a key parked in ``committed_state`` alone lands here —
+        # e.g. a backref append onto an unloaded collection
+        # (``choice.profile = profile``) fires ``_modified_event`` and stores
+        # the item in ``state._pending_mutations`` without materialising the
+        # collection. Reading ``__dict__.get()`` would yield None and the walk
+        # would call the leg COMPLETE, disarming the guard. Fail CLOSED.
+        return True
+    return _relation_path_incomplete(obj.__dict__[attr], rest)
+
+
+def _choices_eager_graph_incomplete(profile: models.AdmissionProfile) -> bool:
+    """True when ``profile.choices`` is missing ANY leg of
+    ``_choice_eager_paths()``.
+
+    Why not just ``"choices" in inspect(profile).unloaded``: a caller may have
+    already loaded ``choices`` SHALLOW, which marks the top-level relationship
+    as loaded and makes that check pass while the nested graph the sync
+    response code walks is still lazy. Live example — withdraw STEP 2 cancels
+    an unpaid HK1 tuition fee, ``fee_calculation_service.cancel_fee`` →
+    ``_get_profile`` does a bare ``selectinload(AdmissionProfile.choices)``
+    (fee_calculation_service.py:1519), the profile lands in the identity map
+    with shallow choices, and ``_resolve_allowed_subjects`` →
+    ``group.subject_mappings`` then fires IO from sync code → MissingGreenlet
+    (500, whole withdraw rolled back).
+
+    Scope note: "complete" here means "safe for the consumers that read the
+    repository contract" — NOT "every relationship any consumer might want".
+    ``program.degree_level_ref`` and ``offering.offering_type_config`` are
+    deliberately outside it (the eligibility gate loads its own richer chain).
+
+    Deliberately does NOT special-case expired/detached instances. An earlier
+    draft returned True for them; both cases were wrong:
+      * expired — redundant: an expired instance already reports ``choices``
+        in ``unloaded``, so the check below handles it.
+      * ``session is None`` (transient/detached) — harmful: returning True
+        sends the caller INTO the reload, and a transient profile has
+        ``id is None``, so ``list_by_profile(None)`` matches nothing and
+        ``set_committed_value`` then overwrites a perfectly good in-memory
+        collection with ``[]``. The overwrite is the consequence of reloading,
+        so the fix is to not force the reload here — fall through instead.
+    """
+    import sqlalchemy as _sa
+
+    _state = _sa.inspect(profile, raiseerr=False)
+    if _state is None or not hasattr(_state, "unloaded"):
+        return False
+    if "choices" in _state.unloaded or "choices" not in profile.__dict__:
+        # Second clause: same committed_state-without-__dict__ hole as in
+        # _relation_path_incomplete — an append through the ``profile``
+        # backref makes ``choices`` look loaded while it is physically absent.
+        return True
+
+    _choices = profile.__dict__["choices"] or []
+    _paths = _choice_eager_paths()
+    return any(
+        _relation_path_incomplete(_choice, _path)
+        for _choice in _choices
+        for _path in _paths
+    )
+
+
 async def _populate_response_fields(
     db: AsyncSession,
     profile: models.AdmissionProfile,
@@ -3361,16 +3512,32 @@ async def _populate_response_fields(
     # raises MissingGreenlet. Inject the eager-loaded list as a *committed*
     # value (does NOT mark the instance dirty, does NOT re-lazy) so EVERY
     # mutation response (approve/reject/override/submit/v2 helpers) is covered
-    # without touching each dependency. Skip when already loaded (GET paths
-    # eager-load via _choices_eager_load_options).
+    # without touching each dependency. Skip when the FULL graph is already
+    # loaded (GET paths eager-load via _choices_eager_load_options).
+    #
+    # 2026-07-20 — the guard used to test only ``"choices" in unloaded``, which
+    # a SHALLOW pre-load silently satisfied while the nested graph stayed lazy
+    # (withdraw + cancel_fee on unpaid HK1 tuition → MissingGreenlet 500).
+    # _choices_eager_graph_incomplete walks the whole repository contract, so
+    # any present or future shallow loader is repaired here instead of blowing
+    # up in sync response code or at schema serialization.
     if getattr(profile, "uses_choice_engine", False):
-        import sqlalchemy as _sa
         from sqlalchemy.orm.attributes import set_committed_value
 
-        if "choices" in _sa.inspect(profile).unloaded:
+        if _choices_eager_graph_incomplete(profile):
             from app.repositories.admission_profile_choice_repository import (
                 AdmissionProfileChoiceRepository,
             )
+            # ⚠️ CONTRACT: this helper must be called AFTER db.flush() (see the
+            # "Mutation response contract" in Backend_FastAPI/CLAUDE.md). The
+            # session is autoflush=False (database.py), so list_by_profile
+            # reads only what has been flushed, and set_committed_value then
+            # REPLACES the in-memory collection wholesale. If a future caller
+            # adds/removes a choice and reaches this chokepoint WITHOUT
+            # flushing, that choice is dropped from the response object (the
+            # row is still in session.new and the DB stays correct, but the
+            # returned NV list is short). Every caller flushes today; keep it
+            # that way, or flush here before reloading.
             _fresh_choices = await AdmissionProfileChoiceRepository(
                 db
             ).list_by_profile(profile.id)

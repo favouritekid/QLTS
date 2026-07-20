@@ -841,6 +841,26 @@ async def _fees_of(profile_id: int) -> list[models.Fee]:
         return list(rows.scalars().all())
 
 
+async def _tuition_invoice_id_of(profile_id: int) -> int:
+    """Invoice id of the profile's tuition fee — lets a test collect a SECOND
+    instalment on the same invoice (multi-payment refund coverage)."""
+    async with AsyncSessionLocal() as session:
+        row = await session.execute(
+            select(models.Invoice.id)
+            .join(models.Fee, models.Fee.id == models.Invoice.fee_id)
+            .where(
+                models.Fee.admission_profile_id == profile_id,
+                models.Fee.fee_type == "tuition",
+            )
+            .order_by(models.Invoice.id)
+        )
+        invoice_id = row.scalars().first()
+        assert invoice_id is not None, (
+            f"profile {profile_id} has no tuition invoice"
+        )
+        return invoice_id
+
+
 async def _invoice_statuses_of(profile_id: int) -> list[str]:
     """Statuses of every invoice hanging off a profile's fees."""
     async with AsyncSessionLocal() as session:
@@ -1376,3 +1396,197 @@ class TestWithdrawalPendingFlow:
             json={"reason": "Rút lần hai", "version": body2["version"]},
         )
         assert r2.status_code == 400, r2.text
+
+    async def test_two_collected_payments_need_both_refunds_to_settle(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """A student who paid tuition in TWO instalments gets TWO refund
+        requests — refunds are per-PAYMENT, never merged.
+
+        The dangerous property this pins: processing only the FIRST refund
+        leaves the profile silently parked in ``withdrawal_pending`` with NO
+        error anywhere — the operator's only signal that work remains is that
+        the status did not flip. If a future change let the profile settle on
+        a non-final refund, money would stay unreturned on a ``withdrawn``
+        profile; if it never settled on the last one, the profile would be
+        stuck forever. Both directions are asserted below.
+
+        Verified against real data shapes during the 2026-07-20 dry run (two
+        live profiles carry exactly this 2-payment shape).
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        await _ensure_consultation_status(
+            "sts08", "Tu choi tu van", "stg07", "#CC0000"
+        )
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id,
+            officer_user_in_db["id"],
+        )
+
+        # SECOND instalment on the same tuition invoice.
+        second = Decimal("500000")
+        invoice_id = await _tuition_invoice_id_of(pid)
+        await _record_and_verify_payment(
+            client, accountant, manager, invoice_id, second
+        )
+
+        body = await _get(client, officer, pid)
+        res = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=officer,
+            json={"reason": "Rút hồ sơ, đã đóng 2 lần", "version": body["version"]},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "withdrawal_pending", res.json()
+
+        pending = await client.get(
+            "/api/refunds", params={"status": "pending"}, headers=manager
+        )
+        assert pending.status_code == 200, pending.text
+        mine = [
+            r for r in pending.json()["items"]
+            if f"#{pid}" in (r.get("reason") or "")
+        ]
+        assert len(mine) == 2, (
+            f"one refund per collected payment expected, got {len(mine)}: {mine}"
+        )
+        assert {Decimal(r["amount"]) for r in mine} == {PREPAY, second}, mine
+
+        for r in mine:
+            appr = await client.post(
+                f"/api/refunds/{r['id']}/approve", headers=manager
+            )
+            assert appr.status_code == 200, appr.text
+
+        # --- Process ONLY the first refund -------------------------------
+        first_id = mine[0]["id"]
+        proc1 = await client.post(
+            f"/api/refunds/{first_id}/process",
+            json={"refund_id": first_id, "refund_reference": "BANK-REF-1of2"},
+            headers=accountant,
+        )
+        assert proc1.status_code == 200, proc1.text
+
+        midway = await _get(client, manager, pid)
+        assert midway["status"] == "withdrawal_pending", (
+            "profile MUST stay parked while a refund is still outstanding — "
+            f"settling here would strand unreturned money; got {midway['status']}"
+        )
+        assert await _lead_status_of(pid) != "sts08", (
+            "lead must not advance to sts08 before the final refund"
+        )
+
+        # --- Process the LAST refund → self-settle ------------------------
+        last_id = mine[1]["id"]
+        proc2 = await client.post(
+            f"/api/refunds/{last_id}/process",
+            json={"refund_id": last_id, "refund_reference": "BANK-REF-2of2"},
+            headers=accountant,
+        )
+        assert proc2.status_code == 200, proc2.text
+
+        after = await _get(client, manager, pid)
+        assert after["status"] == "withdrawn", (
+            f"last refund must trigger the finalize hook; got {after['status']} "
+            "— a profile stuck in withdrawal_pending with everything refunded "
+            "is the silent-failure mode this test exists for"
+        )
+        assert after["has_unrefunded_payment"] is False, after
+        assert await _lead_status_of(pid) == "sts08"
+
+        leftover = [
+            (f.id, f.fee_type, f.status)
+            for f in await _fees_of(pid)
+            if f.fee_type != "application" and f.status != "cancelled"
+        ]
+        assert not leftover, f"non-application fee left payable: {leftover}"
+
+    async def test_cannot_reject_single_refund_while_withdrawal_pending(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        manager_user_in_db: dict,
+        accountant_user_in_db: dict,
+        admin_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """Rejecting ONE withdrawal-sourced refund of a profile parked in
+        ``withdrawal_pending`` must be refused (400).
+
+        Allowing it would strand the profile forever: the finalize gate waits
+        for the unrefunded balance to reach zero, and a rejected strand never
+        contributes. The supported escape is cancel-withdrawal, which rejects
+        every withdrawal refund atomically and reverts to draft — asserted
+        here as the working alternative so the guard cannot be "fixed" by
+        simply removing it.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        officer = await _auth(client, officer_user_in_db)
+        manager = await _auth(client, manager_user_in_db)
+        accountant = await _auth(client, accountant_user_in_db)
+        admin = await _auth(client, admin_user_in_db)
+        await _ensure_consultation_status(
+            "sts08", "Tu choi tu van", "stg07", "#CC0000"
+        )
+
+        pid = await _submit_and_prepay(
+            client, officer, manager, accountant, unit_id,
+            officer_user_in_db["id"],
+        )
+
+        body = await _get(client, officer, pid)
+        res = await client.post(
+            f"{ADMISSIONS}/{pid}/withdraw",
+            headers=officer,
+            json={"reason": "Rút hồ sơ để thử từ chối lẻ", "version": body["version"]},
+        )
+        assert res.status_code == 200, res.text
+        assert res.json()["status"] == "withdrawal_pending", res.json()
+
+        pending = await client.get(
+            "/api/refunds", params={"status": "pending"}, headers=manager
+        )
+        mine = [
+            r for r in pending.json()["items"]
+            if f"#{pid}" in (r.get("reason") or "")
+        ]
+        assert len(mine) == 1, mine
+        refund_id = mine[0]["id"]
+
+        rej = await client.post(
+            f"/api/refunds/{refund_id}/reject",
+            json={"rejection_reason": "Quản lý không đồng ý hoàn"},
+            headers=manager,
+        )
+        assert rej.status_code == 400, (
+            f"single-reject on a withdrawal_pending profile must be blocked; "
+            f"got {rej.status_code}: {rej.text}"
+        )
+
+        still = await _get(client, manager, pid)
+        assert still["status"] == "withdrawal_pending", still
+        refund_row = await _refund_by_id(refund_id)
+        assert refund_row.status == RefundStatusEnum.pending.value, (
+            "a blocked reject must not have mutated the refund"
+        )
+
+        # The supported way out: cancel-withdrawal (admin) rejects the whole
+        # bundle and reverts to draft — money stays with the school.
+        cancel = await client.post(
+            f"{ADMISSIONS}/{pid}/cancel-withdrawal",
+            json={"reason": "Thí sinh đổi ý, hủy quy trình rút"},
+            headers=admin,
+        )
+        assert cancel.status_code == 200, cancel.text
+        assert cancel.json()["status"] == "draft", cancel.json()
+        refund_row = await _refund_by_id(refund_id)
+        assert refund_row.status == RefundStatusEnum.rejected.value, refund_row
