@@ -319,3 +319,11 @@ smoke-*.png
 # officer/lead activity reports — query exports chứa PII (tên, lead counts,
 # timestamps). KHÔNG commit; canonical metric = KPI dashboard.
 Documents/reports/officer_*.csv
+
+# nginx runtime config SINH RA bởi deploy.sh Step 3 (`envsubst` từ
+# nginx/conf.d/default.conf.template với ${DOMAIN} + ${NGINX_ADMISSION_FROZEN}).
+# Chỉ .template là nguồn sự thật. Trước đây file sinh ra này KHÔNG được ignore
+# nên `git status` trên prod LUÔN bẩn — khiến người vận hành quen mắt bỏ qua
+# trạng thái bẩn, và 5 thay đổi tay khác nằm đó nhiều tháng không ai thấy
+# (audit 2026-07-20).
+nginx/conf.d/default.conf

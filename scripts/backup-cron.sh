@@ -26,7 +26,14 @@ echo "[$(date)] Starting database backup..."
 
 # Dump database
 BACKUP_FILE="$BACKUP_DIR/qlts_${TIMESTAMP}.sql.gz"
-docker compose exec -T postgres pg_dump \
+# ``-f docker-compose.yml`` BẮT BUỘC (review 2026-07-20): không có nó thì
+# docker compose tự nạp thêm ``docker-compose.override.yml`` — file ĐƯỢC
+# TRACK trong repo và khai ``env_file: ./Backend_FastAPI/.env``, mà file env
+# đó bị gitignore. Trên VPS dựng lại từ repo, override có mặt còn env thì
+# không ⇒ compose thoát 1 với "env file not found" ⇒ set -e giết script ⇒
+# KHÔNG có backup nào, cả local lẫn offsite. Prod hiện thoát nạn chỉ vì
+# override đã bị xoá tay. 11 lời gọi compose khác trong repo đều có -f.
+docker compose -f docker-compose.yml exec -T postgres pg_dump \
     -U "${POSTGRES_USER:-qlts}" \
     "${POSTGRES_DB:-qlts_production}" \
     | gzip > "$BACKUP_FILE"
