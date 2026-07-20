@@ -198,8 +198,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # owning-officer scope check).
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/graduation-proof", "action": "POST"},
         # Giấy báo nhập học (official PDF issuance) — officer phát cho hồ sơ
-        # mình phụ trách; manager/admin kế thừa. Gate trạng thái post-decision
-        # + IDOR 3-tier + fail-missing ở get_admission_for_user_read + service.
+        # mình phụ trách; manager/admin kế thừa. Gate trạng thái mở tới
+        # `submitted` trở đi (KHÔNG còn post-decision — user chốt 19-07, xem
+        # is_enrollment_letter_eligible) + IDOR 3-tier + fail-missing ở
+        # get_admission_for_user_read + service.
         # Accountant có deny riêng trong ACCOUNTANT_TEMPLATE (inherits officer).
         {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter/{lid}/download", "action": "GET"},

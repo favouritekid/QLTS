@@ -123,6 +123,7 @@ async def _seed_letter(
     expires_at,
     content: bytes = b"%PDF-1.4 seeded test letter",
     sha256: str | None = None,
+    data_snapshot: dict | None = None,
 ) -> int:
     """Seed an EnrollmentLetter row + its file on disk directly (skips issuance)
     so download-side gates (expiry / integrity / filename) can be exercised."""
@@ -137,7 +138,9 @@ async def _seed_letter(
                 profile_id=profile_id,
                 enrollment_start_date=date(2026, 7, 28),
                 enrollment_end_date=date(2026, 8, 5),
-                data_snapshot={"full_name": "Seed"},
+                data_snapshot=(
+                    {"full_name": "Seed"} if data_snapshot is None else data_snapshot
+                ),
                 file_path=path,
                 sha256=sha256 or hashlib.sha256(content).hexdigest(),
                 file_size=len(content),
@@ -449,6 +452,55 @@ async def test_build_letter_data_binds_major_degree_and_real_fee(
     assert data["signatory_name"]
 
 
+async def test_purged_letter_is_not_revived_by_a_later_issuance(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Phát bản mới KHÔNG được hồi sinh bản đã bị retention purge.
+
+    Câu UPDATE đồng bộ hạn lưu trữ trước đây đẩy ``expires_at`` cho MỌI bản cũ,
+    kể cả bản mà cleanup đã xoá file + scrub PII. Row đó sống lại với hạn tương
+    lai trong khi file đã biến mất: danh sách hiện nút "Tải lại", officer bấm
+    vào và nhận 404. Ngòi nổ 90 ngày — không ai gặp cho tới hết retention đầu
+    tiên.
+    """
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"purge{uuid.uuid4().hex[:7]}",
+    )
+    from types import SimpleNamespace
+
+    from app.services.enrollment_letter_service import issue_enrollment_letter
+
+    old_expiry = datetime.now(timezone.utc) - timedelta(days=1)
+    purged_id = await _seed_letter(
+        profile_id,
+        expires_at=old_expiry,
+        data_snapshot={"_purged": True, "major_name": "Công nghệ ô tô"},
+    )
+    await _seed_hk1_fee(profile_id)
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        await issue_enrollment_letter(
+            session,
+            profile,
+            date(2026, 7, 28),
+            date(2026, 8, 5),
+            SimpleNamespace(id=officer_user_in_db["id"]),
+        )
+        await session.commit()
+
+    async with AsyncSessionLocal() as session:
+        purged = await session.get(models.EnrollmentLetter, purged_id)
+        assert purged.expires_at == old_expiry, (
+            "bản đã purge bị đẩy hạn — row sống lại nhưng file đã bị xoá"
+        )
+        assert purged.is_downloadable is False
+        assert purged.is_purged is True
+
+
 async def test_active_fee_lookup_sees_amount_committed_by_another_session(
     seed_lead_dependencies: dict,
     officer_user_in_db: dict,
@@ -669,7 +721,9 @@ async def test_build_letter_data_rejects_amount_drift_from_schedule(
             await build_letter_data(session, profile)
 
     msg = str(exc.value)
-    assert "9,900,000" in msg and "9,200,000" in msg
+    # Tiền viết theo lối Việt (dấu chấm), không phải "9,900,000" kiểu Anh —
+    # officer phải đối chiếu con số này với màn Học phí.
+    assert "9.900.000" in msg and "9.200.000" in msg
 
 
 async def test_build_letter_data_rejects_profile_without_fee(

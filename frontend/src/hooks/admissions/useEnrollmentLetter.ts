@@ -31,9 +31,13 @@ export function useIssueEnrollmentLetter(profileId: number) {
   const queryClient = useQueryClient()
   return useMutation<EnrollmentLetterBlob, AxiosError, IssueEnrollmentLetterInput>({
     mutationFn: (input) => issueEnrollmentLetter(profileId, input),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       saveAndToast(result, "Đã xuất giấy báo nhập học")
-      queryClient.invalidateQueries({
+      // AWAIT: không await thì mutation báo "xong" trong khi danh sách bản đã
+      // phát còn đang là dữ liệu cũ — officer mở lại dialog, không thấy bản
+      // vừa phát, và bấm "Xuất PDF" thêm lần nữa. Mỗi lần bấm = một bản CHÍNH
+      // THỨC mới, không khử trùng lặp.
+      await queryClient.invalidateQueries({
         queryKey: enrollmentLetterKeys.list(profileId),
       })
     },

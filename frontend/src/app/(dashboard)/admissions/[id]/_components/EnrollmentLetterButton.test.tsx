@@ -139,6 +139,7 @@ describe("EnrollmentLetterButton — tải lại bản đã phát", () => {
       file_size: 253000,
       expires_at: "2026-10-17T07:19:00Z",
       superseded_at: null,
+      is_downloadable: true,
     },
   ]
 
@@ -165,5 +166,76 @@ describe("EnrollmentLetterButton — tải lại bản đã phát", () => {
   it("không hiện khối tải lại khi chưa phát bản nào", async () => {
     await openDialog()
     expect(screen.queryByRole("button", { name: /Tải lại/ })).toBeNull()
+  })
+
+  it("khoá nút + gắn nhãn khi backend nói bản đó hết hạn lưu trữ", async () => {
+    // Hết hạn lưu trữ = file đã bị retention xoá. Nút vẫn bấm được thì officer
+    // chỉ nhận 404; và FE KHÔNG được tự so `expires_at` để đoán (đồng hồ máy
+    // officer có thể lệch) — cờ `is_downloadable` là câu trả lời của backend.
+    hoisted.listEnrollmentLetters.mockResolvedValue([
+      { ...ISSUED[0], is_downloadable: false },
+    ])
+
+    await openDialog()
+
+    const reload = await screen.findByRole("button", { name: /Tải lại/ })
+    expect(reload).toBeDisabled()
+    expect(screen.getByText(/đã hết hạn lưu trữ/)).toBeInTheDocument()
+
+    fireEvent.click(reload)
+    expect(hoisted.downloadEnrollmentLetter).not.toHaveBeenCalled()
+  })
+
+  it("phân biệt bản hiện hành với bản đã thay thế", async () => {
+    // N bản đều mang chữ ký Hiệu trưởng; không đánh dấu thì officer không biết
+    // bản nào đã trao cho thí sinh.
+    hoisted.listEnrollmentLetters.mockResolvedValue([
+      { ...ISSUED[0], id: 8, superseded_at: null },
+      { ...ISSUED[0], id: 7, superseded_at: "2026-07-20T07:19:00Z" },
+    ])
+
+    await openDialog()
+
+    expect(await screen.findByText("bản hiện hành")).toBeInTheDocument()
+    expect(screen.getByText("đã thay thế")).toBeInTheDocument()
+  })
+
+  it("chỉ khoá ĐÚNG hàng đang tải, không khoá cả danh sách", async () => {
+    // Khoá tất cả làm một lần tải chậm đọc như hỏng chức năng.
+    hoisted.listEnrollmentLetters.mockResolvedValue([
+      { ...ISSUED[0], id: 8 },
+      { ...ISSUED[0], id: 7 },
+    ])
+    let resolveDownload: (v: unknown) => void = () => {}
+    hoisted.downloadEnrollmentLetter.mockReturnValue(
+      new Promise((r) => {
+        resolveDownload = r
+      }),
+    )
+
+    await openDialog()
+    const buttons = await screen.findAllByRole("button", { name: /Tải lại/ })
+    fireEvent.click(buttons[0])
+
+    await waitFor(() => expect(screen.getByText(/Đang tải…/)).toBeInTheDocument())
+    // Hàng còn lại vẫn bấm được.
+    const stillEnabled = screen
+      .getAllByRole("button", { name: /Tải lại/ })
+      .filter((b) => !b.hasAttribute("disabled"))
+    expect(stillEnabled.length).toBeGreaterThan(0)
+
+    resolveDownload({ blob: new Blob(["%PDF"]), filename: "x.pdf" })
+  })
+
+  it("hiện lỗi khi không tải được danh sách, thay vì im lặng coi như chưa phát", async () => {
+    // `data ?? []` một mình biến lỗi parse Zod thành "chưa phát bản nào" và
+    // officer sẽ phát thêm một bản CHÍNH THỨC thay vì tải lại.
+    hoisted.listEnrollmentLetters.mockRejectedValue(new Error("boom"))
+
+    await openDialog()
+
+    expect(
+      await screen.findByText(/Không tải được danh sách giấy đã phát/),
+    ).toBeInTheDocument()
   })
 })

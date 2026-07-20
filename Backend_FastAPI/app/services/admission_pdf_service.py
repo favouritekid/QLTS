@@ -45,7 +45,6 @@ import io
 import os
 import threading
 from datetime import date, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape as _xml_escape
@@ -140,6 +139,9 @@ _HEADER_IMG = _ASSET_DIR / "header.png"
 _FOOTER_IMG = _ASSET_DIR / "footer.png"
 _SIGNATURE_IMG = _ASSET_DIR / "signature.png"
 
+# Cache asset theo tiến trình — CHỈ chứa lần nạp thành công (xem ``_asset``).
+_ASSET_CACHE: dict[str, tuple[ImageReader, float, float]] = {}
+
 # --- Palette ----------------------------------------------------------------
 # Mực đen tuyệt đối (#000) rất gắt khi in laser; #1A1A1A đọc dịu hơn mà vẫn đủ
 # tương phản khi photocopy.
@@ -170,22 +172,26 @@ def _y(mm_from_top: float) -> float:
     return _PAGE_H - mm_from_top * mm
 
 
-@lru_cache(maxsize=8)
-def _asset_cached(path_str: str) -> tuple[ImageReader, float, float] | None:
-    """ImageReader ĐÃ GIẢI MÃ SẴN + kích thước gốc, cache theo tiến trình.
-
-    Ba asset là file bất biến nướng vào image, nhưng nếu không cache thì được
-    mở + giải mã lại ở MỌI lần render. Cache bỏ phần I/O lặp đó.
+def _load_asset(path_str: str) -> tuple[ImageReader, float, float] | None:
+    """Đọc + GIẢI MÃ SẴN một asset. Không cache (xem ``_asset``).
 
     ⚠️ ``getRGBData()`` Ở ĐÂY LÀ BẮT BUỘC, ĐỪNG GỠ. ImageReader giải mã LƯỜI:
-    lần ``drawImage`` đầu tiên mới decode và GHI vào ``_data``/``_dataA`` trên
-    chính instance. Instance đó được cache nên DÙNG CHUNG giữa các luồng, mà
+    lần ``drawImage`` đầu tiên mới decode và GHI vào ``_data`` trên chính
+    instance. Instance đó được cache nên DÙNG CHUNG giữa các luồng, mà
     ``render_enrollment_letter`` chạy trên threadpool (``to_thread``) — hai lần
     phát giấy đồng thời lúc cache còn "lạnh" sẽ decode chồng lên nhau.
     Đo thật (250 render đồng thời, process mới mỗi lần): decode lười → hỏng
     13,2%, trong đó có ca PDF VẪN HỢP LỆ nhưng sai 38% pixel letterhead và vẫn
     được sha256 + lưu làm bản phát hành chính thức; decode sẵn ở đây → 0,4%.
     Giải mã xong trước khi đưa vào cache thì mọi luồng sau chỉ ĐỌC.
+
+    ⚠️ PHẠM VI của lớp bảo vệ đó: ``getRGBData()`` chỉ nạp sẵn ``_data``. Với
+    ảnh CÓ KÊNH ALPHA, ``drawImage(mask="auto")`` còn dựng thêm ``_dataA`` —
+    một ImageReader RIÊNG, dựng LƯỜI ở lần vẽ đầu, tức đúng cái race này quay
+    lại. Hiện an toàn vì cả ba asset đều truecolor không alpha (đã đọc IHDR:
+    color-type 2). Nhưng thay ``signature.png`` bằng bản nền trong suốt — việc
+    rất tự nhiên với chữ ký scan — là mở lại lỗ 13,2% mà không có gì báo. Nếu
+    cần alpha thì phải nạp sẵn cả ``_dataA`` ở đây (hoặc bỏ ``mask="auto"``).
 
     Trả None nếu file thiếu / hỏng / không đọc được — người gọi degrade sang
     nhánh "không có ảnh" thay vì 500 giữa lúc build.
@@ -210,18 +216,31 @@ def _asset_cached(path_str: str) -> tuple[ImageReader, float, float] | None:
 
 
 def _asset(path_str: str) -> tuple[ImageReader, float, float] | None:
-    """Bọc mỏng quanh cache: KHÔNG BAO GIỜ giữ lại một lần thất bại.
+    """Asset đã giải mã, cache theo tiến trình — CHỈ ghi nhớ lần THÀNH CÔNG.
 
-    ``lru_cache`` ghi nhớ cả giá trị None, nên một lỗi I/O thoáng qua (volume
-    remount giữa lúc deploy, EMFILE lúc tải cao) sẽ khiến MỌI giấy báo sau đó
-    mất letterhead + chữ ký VĨNH VIỄN cho tới khi restart process — đã tái hiện
-    bằng cách inject OSError đúng một lần. Chỉ có 3 asset nên xoá sạch cache khi
-    gặp None là vô hại (tệ nhất: giải mã lại 3 ảnh ở lần phát kế tiếp).
+    Ba asset là file bất biến nướng vào image; không cache thì chúng bị mở +
+    giải mã lại ở mọi lần render (header.png 207KB).
+
+    Vì sao là dict tự quản chứ không phải ``lru_cache``: lru_cache ghi nhớ CẢ
+    giá trị None. Một lỗi I/O thoáng qua (volume remount lúc deploy, EMFILE lúc
+    tải cao) sẽ khiến MỌI giấy báo sau đó mất letterhead + chữ ký VĨNH VIỄN cho
+    tới khi restart — đã tái hiện bằng cách inject OSError đúng một lần. Bản vá
+    trước chữa bằng ``cache_clear()`` khi gặp None, nhưng thế là đổi bệnh: một
+    asset hỏng DAI DẲNG (ca hay xảy ra nhất — quên copy file khi đổi volume)
+    làm mỗi lần render thổi bay hai asset LÀNH, biến lỗi tĩnh thành decode lặp
+    + log lặp trên từng tờ giấy. Chỉ-ghi-khi-thành-công thì không nhớ thất bại
+    mà cũng không đụng vào entry lành.
+
+    Không cần khoá: gán vào dict là thao tác nguyên tử dưới GIL, và hai luồng
+    cùng nạp một asset chỉ tốn thêm một lần decode rồi ghi cùng giá trị.
     """
-    got = _asset_cached(path_str)
-    if got is None:
-        _asset_cached.cache_clear()
-    return got
+    got = _ASSET_CACHE.get(path_str)
+    if got is not None:
+        return got
+    loaded = _load_asset(path_str)
+    if loaded is not None:
+        _ASSET_CACHE[path_str] = loaded
+    return loaded
 
 
 def _find_font(dirs: list[str], filename: str) -> str | None:
@@ -238,10 +257,29 @@ def _resolve_fonts() -> dict[str, Any]:
     Idempotent: đã bind rồi thì trả lại ngay. Raise ``RuntimeError`` với thông
     điệp hành động được nếu không stack nào có mặt, để một image thiếu font
     fail ồn ào thay vì âm thầm in tofu (□) cho mọi chữ tiếng Việt.
+
+    ⚠️ Phần BIND chạy dưới ``_BUILD_LOCK`` — cùng khoá bảo vệ ``c.save()``, chứ
+    không phải một khoá riêng. ``registered`` được chụp MỘT LẦN ở đầu, nên hai
+    render đồng thời ĐẦU TIÊN của một tiến trình cùng thấy "chưa đăng ký" và
+    cùng gọi ``registerFont`` vào registry TOÀN CỤC của ReportLab. Hàm đó ghi
+    đè chứ không bỏ qua, nên luồng thứ hai thay TTFont singleton ngay dưới chân
+    luồng thứ nhất đang subset — đúng triệu chứng hỏng font mà ``_BUILD_LOCK``
+    sinh ra để diệt. Giá phải trả: một lần tuần tự hoá mỗi tiến trình (lần bind
+    đầu), sau đó nhánh nhanh phía trên trả về không cần khoá.
     """
-    global _active_fonts
     if _active_fonts is not None:
         return _active_fonts
+    with _BUILD_LOCK:
+        # Kiểm lại BÊN TRONG khoá: luồng xếp hàng phía sau có thể đã bind xong.
+        if _active_fonts is not None:
+            return _active_fonts
+        return _bind_font_stack()
+
+
+def _bind_font_stack() -> dict[str, Any]:
+    """Bind stack đầu tiên có đủ regular+bold. Chỉ gọi khi đang giữ
+    ``_BUILD_LOCK`` (xem ``_resolve_fonts``)."""
+    global _active_fonts
 
     registered = set(pdfmetrics.getRegisteredFontNames())
     for stack in _FONT_STACKS:

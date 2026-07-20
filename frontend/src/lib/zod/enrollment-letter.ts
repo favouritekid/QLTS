@@ -22,6 +22,13 @@ export const enrollmentLetterSummarySchema = z.object({
   expires_at: z.string().nullable(),
   /** null = BẢN HIỆN HÀNH; có giá trị = đã bị bản phát sau thay thế. */
   superseded_at: z.string().nullable(),
+  /**
+   * Còn tải lại được không — BACKEND quyết định, client KHÔNG tự so ngày.
+   * `expires_at` một mình không đủ: bản đã bị retention xoá file vẫn có thể
+   * mang hạn tương lai, và so ngày ở client còn sai khi đồng hồ máy officer
+   * lệch. Nút "Tải lại" bật/tắt theo đúng cờ này.
+   */
+  is_downloadable: z.boolean(),
 })
 
 export const enrollmentLetterListSchema = z.array(enrollmentLetterSummarySchema)

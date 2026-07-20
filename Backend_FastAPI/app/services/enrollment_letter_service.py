@@ -211,6 +211,13 @@ async def _resolve_admitted_major(db, profile, fee):
     return chosen[1], chosen[2], chosen[3], chosen[4]
 
 
+def _vnd(amount) -> str:
+    """9200000 → "9.200.000". Dấu chấm phân nhóm như cách viết tiền của VN —
+    ``f"{n:,}"`` cho ra "9,200,000", đọc như số kiểu Anh ngay trong một thông
+    báo tiếng Việt mà officer phải đối chiếu với màn Học phí."""
+    return f"{int(amount):,}".replace(",", ".")
+
+
 def _resolve_tuition_schedule(
     major_code, major_name, degree_level, fee, total: int
 ) -> dict:
@@ -266,8 +273,8 @@ def _resolve_tuition_schedule(
         # tay đó. Lệch ở đây là việc của người, không phải việc của một nút bấm.
         raise ValidationError(
             f"Không thể tạo giấy báo nhập học — học phí kỳ I của hồ sơ là "
-            f"{total:,.0f} đồng nhưng bảng thu ngành '{major_name}' ghi "
-            f"{row['hk1']:,.0f} đồng. Nếu hồ sơ này được giảm/chỉnh học phí "
+            f"{_vnd(total)} đồng nhưng bảng thu ngành '{major_name}' ghi "
+            f"{_vnd(row['hk1'])} đồng. Nếu hồ sơ này được giảm/chỉnh học phí "
             f"riêng thì giấy báo (in theo bảng thu chung) không phản ánh đúng số "
             f"phải nộp — hãy liên hệ kế toán để đối chiếu. ĐỪNG bấm tính lại học "
             f"phí: thao tác đó xoá khoản chỉnh tay."
@@ -403,6 +410,16 @@ async def build_letter_data(db, profile) -> dict:
         # Bảng thu có thể được sửa cho mùa sau, nên các mức đợt + hạn nộp phải
         # nằm trong snapshot chứ không tra lại lúc đọc.
         "required_documents": required_documents,
+        # LỜI HỨA VẬT CHẤT phải nằm trong snapshot, không chỉ phần tiền: giấy
+        # hứa ba lô + áo thun + hỗ trợ học lái xe A1 + 3 tháng ký túc xá, dưới
+        # chữ ký Hiệu trưởng. Mùa sau đổi quà, retention xoá PDF — không lưu ở
+        # đây thì khi thí sinh cầm giấy tới đòi, không còn gì đối chiếu "giấy
+        # đã hứa những gì". Cùng lý do đã áp cho ngân hàng/người ký.
+        "early_enrollment_bonus": C.EARLY_ENROLLMENT_BONUS.format(
+            due=C.INSTALLMENT_1_DUE.strftime("%d/%m/%Y")
+        ),
+        "benefits": list(C.BENEFITS),
+        "closing_note": C.CLOSING_NOTE,
         "tuition_discount_percent": schedule["discount_percent"],
         "first_installment": schedule["first"],
         "second_installment": schedule["second"],
@@ -427,14 +444,19 @@ def _write_pdf_atomic(content: bytes, final_path: str) -> tuple[str, int]:
     # qua toàn bộ CasbinAuth + IDOR + audit ở tầng API mà không để lại dấu vết.
     _dir = os.path.dirname(final_path)
     os.makedirs(_dir, mode=0o700, exist_ok=True)
-    # ``mode=`` chỉ áp cho thư mục MỚI tạo — hồ sơ đã từng phát giấy sẽ giữ
-    # nguyên 0o755 cũ, nên phải siết lại tường minh. Best-effort: quyền thư mục
-    # không được phép chặn việc phát giấy.
-    try:
-        if (os.stat(_dir).st_mode & 0o777) != 0o700:
-            os.chmod(_dir, 0o700)
-    except OSError:
-        pass
+    # ``mode=`` của makedirs chỉ áp cho thư mục LÁ, và chỉ khi nó vừa được tạo:
+    # các thư mục TRUNG GIAN (<STORAGE_DIR> lần đầu chạy) ra đời với 0o755, còn
+    # thư mục lá của hồ sơ đã từng phát giấy thì giữ nguyên mode cũ. Phải siết
+    # tường minh cả hai — 0o755 trên volume dùng chung (mount vào cả
+    # celery-worker lẫn beat) cho uid khác `ls` được, tức đọc ra profile id nào
+    # đã được phát giấy báo trúng tuyển. Best-effort: quyền thư mục không được
+    # phép chặn việc phát giấy.
+    for _d in (settings.ENROLLMENT_LETTER_STORAGE_DIR, _dir):
+        try:
+            if (os.stat(_d).st_mode & 0o777) != 0o700:
+                os.chmod(_d, 0o700)
+        except OSError:
+            pass
     staging = os.path.join(
         os.path.dirname(final_path), f"{STAGING_PREFIX}{uuid4().hex[:12]}.pdf"
     )
@@ -605,11 +627,16 @@ async def issue_enrollment_letter(
         # chết sớm hơn — đo trên dev: lệch 24 giờ. Bản đầu chính là bản nhiều
         # khả năng đã trao tay thí sinh, tức bằng chứng bị huỷ trước lại đúng là
         # bản đang tranh chấp.
+        # ...TRỪ những bản đã bị retention xoá file + scrub PII. Đẩy hạn cho
+        # chúng làm sống lại một row tự mâu thuẫn: "còn hạn tới 90 ngày nữa"
+        # trong khi file đã biến mất và snapshot đã mất PII. Officer nhìn danh
+        # sách tưởng tải lại được, bấm vào thì 404.
         await db.execute(
             update(models.EnrollmentLetter)
             .where(
                 models.EnrollmentLetter.profile_id == profile.id,
                 models.EnrollmentLetter.id != letter.id,
+                models.EnrollmentLetter.data_snapshot["_purged"].astext.is_(None),
             )
             .values(expires_at=expires_at)
         )
@@ -691,15 +718,16 @@ async def get_letter_for_download(
     the router commits before streaming the file.
     """
     letter = await get_letter_record(db, profile_id, letter_id)
-    now = datetime.now(timezone.utc)
-    # 404 (no existence leak) for: not this profile's · file purged · past
-    # retention (expires_at). Mirrors the SMS export "expired → not served" gate
-    # so an expired official document is never downloadable even if the daily
-    # cleanup task has not yet removed the file.
+    # 404 (no existence leak) for: not this profile's · hết hạn / đã purge
+    # (``is_downloadable`` — CÙNG thuộc tính danh sách dùng để bật/tắt nút, nên
+    # nút và cổng không thể nói hai chuyện khác nhau) · file không còn trên đĩa.
+    # Mirrors the SMS export "expired → not served" gate so an expired official
+    # document is never downloadable even if the daily cleanup task has not yet
+    # removed the file.
     if (
         letter is None
+        or not letter.is_downloadable
         or not os.path.exists(letter.file_path)
-        or (letter.expires_at is not None and letter.expires_at <= now)
     ):
         raise ResourceNotFoundError(
             detail=f"Enrollment letter {letter_id} not found"

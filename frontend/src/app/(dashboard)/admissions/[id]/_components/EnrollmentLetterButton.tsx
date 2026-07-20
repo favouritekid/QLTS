@@ -130,10 +130,14 @@ export function EnrollmentLetterButton({ profile }: Props) {
                 min={startDate || undefined}
                 onChange={(e) => setEndDate(e.target.value)}
                 aria-invalid={rangeInvalid}
+                // Nối ô nhập với thông báo lỗi: `aria-invalid` một mình chỉ
+                // báo "có lỗi" mà không đọc được lỗi GÌ, nên người dùng trình
+                // đọc màn hình nghe "không hợp lệ" rồi tự đoán.
+                aria-describedby={rangeInvalid ? "el-date-error" : undefined}
               />
             </div>
             {rangeInvalid && (
-              <p className="text-destructive text-sm" role="alert">
+              <p id="el-date-error" className="text-destructive text-sm" role="alert">
                 Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu.
               </p>
             )}
@@ -148,6 +152,15 @@ export function EnrollmentLetterButton({ profile }: Props) {
                   trước khi xuất bản mới — tránh phát trùng một giấy đã có.
                 </p>
               </div>
+            )}
+
+            {letters.isPending && open && !listFailed && (
+              // Không có trạng thái đang tải thì khoảng trống này đọc như "chưa
+              // phát bản nào" — officer bấm Xuất PDF và sinh thêm một bản chính
+              // thức trong khi bản cũ đang trên đường về.
+              <p className="text-muted-foreground text-sm" aria-live="polite">
+                Đang tải danh sách bản đã phát…
+              </p>
             )}
 
             {issued.length > 0 && (
@@ -177,17 +190,41 @@ export function EnrollmentLetterButton({ profile }: Props) {
                             bản hiện hành
                           </span>
                         )}
+                        {!letter.is_downloadable && (
+                          <span className="text-muted-foreground/70 shrink-0 text-xs">
+                            đã hết hạn lưu trữ
+                          </span>
+                        )}
                       </span>
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
                         className="h-7 shrink-0 gap-1.5"
-                        disabled={download.isPending}
+                        // Khoá theo ĐÚNG hàng đang tải, không khoá cả danh
+                        // sách: một lần tải chậm làm mọi nút chết theo, đọc
+                        // như hỏng chức năng. Hàng hết hạn lưu trữ thì khoá
+                        // hẳn — bấm vào chỉ nhận 404.
+                        disabled={
+                          !letter.is_downloadable ||
+                          (download.isPending && download.variables === letter.id)
+                        }
+                        aria-busy={
+                          download.isPending && download.variables === letter.id
+                        }
                         onClick={() => download.mutate(letter.id)}
                       >
-                        <Download className="h-3.5 w-3.5" aria-hidden="true" />
-                        Tải lại
+                        {download.isPending && download.variables === letter.id ? (
+                          <Loader2
+                            className="h-3.5 w-3.5 animate-spin"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        {download.isPending && download.variables === letter.id
+                          ? "Đang tải…"
+                          : "Tải lại"}
                       </Button>
                     </li>
                   ))}
@@ -209,11 +246,16 @@ export function EnrollmentLetterButton({ profile }: Props) {
               onClick={handleSubmit}
               disabled={!canSubmit}
               variant={listFailed ? "secondary" : "default"}
+              // Trạng thái đang phát phải ĐỌC ĐƯỢC, không chỉ nhìn thấy: spinner
+              // là hình ảnh thuần (aria-hidden) nên với trình đọc màn hình nút
+              // không đổi gì cả và người dùng dễ bấm lại — mỗi lần bấm là một
+              // bản chính thức mới.
+              aria-busy={mutation.isPending}
             >
               {mutation.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
               )}
-              Xuất PDF
+              {mutation.isPending ? "Đang xuất…" : "Xuất PDF"}
             </Button>
           </DialogFooter>
         </DialogContent>

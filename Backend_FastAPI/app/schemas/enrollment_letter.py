@@ -41,3 +41,8 @@ class EnrollmentLetterResponse(BaseModel):
     # "bản đã bị thay thế" — N bản đều có chữ ký nên không đánh dấu thì không
     # ai biết bản nào là bản đã trao cho thí sinh.
     superseded_at: Optional[datetime]
+    # Còn tải lại được không. BE trả lời sẵn để FE KHÔNG phải tự so ngày:
+    # so ngày ở client vừa trái Thin Client vừa sai khi đồng hồ máy officer
+    # lệch, mà bản đã bị retention xoá file thì `expires_at` cũng không đủ để
+    # suy ra (row vẫn còn hạn nhưng file đã biến mất).
+    is_downloadable: bool

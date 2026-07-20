@@ -23,7 +23,7 @@ ngành, học phí, năm học, mức đợt 1, tài khoản ngân hàng, ngư�
 Đừng viết code giả định snapshot luôn còn đủ trường.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from sqlalchemy import (
     Index,
     Integer,
@@ -81,8 +81,13 @@ class EnrollmentLetter(Base):
     )
 
     # --- Reproducibility snapshot of the exact data rendered onto the PDF ---
-    # Keys (minimal): full_name, dob, permanent_address, major_name,
-    # degree_level, offering_type, hk1_fee_amount, fee_id.
+    # Keys: full_name · dob · permanent_address · phone · major_name ·
+    # major_code · degree_level · offering_type · school_year · fee_id ·
+    # hk1_fee_amount · tuition_discount_percent · first_installment ·
+    # second_installment · first_installment_due · second_installment_due ·
+    # required_documents · early_enrollment_bonus · benefits · closing_note ·
+    # bank_account_number · bank_account_name · bank_name · signatory_title ·
+    # signatory_name. Sau retention còn thêm ``_purged``.
     data_snapshot: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
@@ -146,6 +151,34 @@ class EnrollmentLetter(Base):
         "User",
         foreign_keys=[generated_by_id],
     )
+
+    @property
+    def is_purged(self) -> bool:
+        """File đã bị retention xoá + snapshot đã scrub PII.
+
+        Cờ nằm trong ``data_snapshot`` (do task cleanup đặt), không có cột
+        riêng — đủ để trả lời "row này còn file không" mà không cần migration.
+        """
+        return bool((self.data_snapshot or {}).get("_purged"))
+
+    @property
+    def is_downloadable(self) -> bool:
+        """Bản này còn tải lại được không — BE trả lời, FE không tự suy.
+
+        Vì sao là thuộc tính của model chứ không tính trong service: cùng một
+        câu hỏi được hỏi ở HAI nơi (danh sách để bật/tắt nút, và cổng download
+        để chặn), và trước đây hai nơi đó trả lời khác nhau — danh sách render
+        nút cho MỌI row vô điều kiện trong khi cổng download trả 404. Một chỗ
+        duy nhất định nghĩa thì không lệch được nữa.
+
+        Không kiểm sự tồn tại của file trên đĩa ở đây (I/O trong property của
+        model là bẫy N+1); cổng download vẫn kiểm thêm ``os.path.exists``.
+        """
+        if self.is_purged:
+            return False
+        if self.expires_at is not None:
+            return self.expires_at > datetime.now(timezone.utc)
+        return True
 
     def __repr__(self) -> str:
         return (

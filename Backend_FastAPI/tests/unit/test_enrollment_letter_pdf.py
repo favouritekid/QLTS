@@ -77,6 +77,26 @@ def _flat(pdf_bytes: bytes) -> str:
     return " ".join(_text(pdf_bytes).split())
 
 
+def _min_effective_font_size(pdf_bytes: bytes) -> float:
+    """Cỡ chữ NHỎ NHẤT thực sự xuất hiện trên trang, tính cả phép co.
+
+    ``KeepInFrame(mode="shrink")`` không đổi lệnh ``Tf`` mà co bằng ma trận
+    biến đổi, nên phải nhân cỡ khai báo với hệ số scale của tm/cm mới ra cỡ
+    người đọc nhìn thấy.
+    """
+    got: list[float] = []
+
+    def visit(text, cm, tm, font_dict, font_size):  # noqa: ANN001
+        if text and text.strip():
+            got.append(abs(font_size) * abs(tm[3] or 1) * abs(cm[3] or 1))
+
+    pypdf.PdfReader(io.BytesIO(pdf_bytes)).pages[0].extract_text(
+        visitor_text=visit
+    )
+    assert got, "không đọc được chữ nào trên trang"
+    return min(got)
+
+
 def _page_count(pdf_bytes: bytes) -> int:
     """Đếm trang bằng pypdf, KHÔNG bằng pdftotext: pdftotext chèn form-feed giả
     và báo 2 trang cho một PDF một trang."""
@@ -258,7 +278,23 @@ def test_letter_never_shows_what_the_candidate_already_paid():
         assert banned not in text, f"giấy còn in '{banned}'"
 
 
-# --- Layout: MỘT trang ------------------------------------------------------
+# --- Layout: đọc được + đủ nội dung -----------------------------------------
+
+# Sàn co cho phép, đo TUYỆT ĐỐI so với cỡ chữ KHAI BÁO trong code
+# (``_BASE_PT`` × scale của font stack đang bind).
+#
+# ⚠️ ĐỪNG đổi về so với "bản dữ liệu chuẩn": bản đầu của test này làm vậy và
+# KHÔNG QUA nổi đối chứng âm — thu vùng thả từ 192.9mm xuống 120mm thì mọi
+# kịch bản co theo, tỉ lệ giữa chúng không đổi, test vẫn xanh. Neo vào hằng
+# khai báo mới bắt được "cả tờ giấy đang bị co".
+#
+# Số đo thật 20-07 (hệ số co = cỡ hiệu dụng / cỡ khai báo):
+#   dữ liệu chuẩn 0.901 · Trung cấp 0.901 · ngành ưu đãi 0.917 ·
+#   _LONGEST (tệ nhất hệ thống sinh được) 0.843
+# Nên sàn 0.85 là QUÁ CHẶT — nó đỏ ngay với dữ liệu hợp lệ. 0.80 ≈ 9,6pt,
+# vẫn đọc tốt trên giấy in, mà còn đủ chặt để bắt một khối nội dung thêm quá
+# tay (nhồi địa chỉ dài gấp 20 lần đã tụt xuống 0.79).
+_MIN_SHRINK_RATIO = 0.80
 
 
 @pytest.mark.parametrize(
@@ -279,10 +315,39 @@ def test_letter_never_shows_what_the_candidate_already_paid():
         ),
     ],
 )
-def test_letter_fits_one_page(overrides, label):
-    """Giấy báo phải nằm gọn MỘT trang. Tràn sang trang 2 nghĩa là thí sinh
-    cầm về thêm một tờ gần trắng và phần 'Quyền lợi' lạc khỏi tờ có chữ ký."""
+def test_letter_stays_readable_and_complete(overrides, label):
+    """Giấy phải VỪA đọc được VỪA đủ nội dung.
+
+    ⚠️ Test trước ở đây chỉ assert ``page_count == 1`` — một TAUTOLOGY:
+    ``KeepInFrame(mode="shrink")`` bảo đảm cơ học rằng nội dung không bao giờ
+    tràn khỏi vùng thả, nên số trang luôn bằng 1 bất kể code đúng hay sai. Nó
+    xanh cả khi chữ đã co còn 4pt. (Đã đo: nhồi địa chỉ dài gấp 400 lần vẫn ra
+    đúng 1 trang, cỡ chữ tụt từ 10,8pt xuống 4,1pt.)
+
+    Hai rủi ro THẬT mà shrink tạo ra, và đây là hai assertion tương ứng:
+
+    1. Chữ co tới mức khó đọc. So với cỡ chữ KHAI BÁO trong code (``_BASE_PT``
+       × scale của stack đang bind) — không so với một kịch bản khác, vì mọi
+       kịch bản co cùng nhau khi vùng thả bị thu hẹp.
+    2. Nội dung bị cắt. Shrink hiện CO TIẾP chứ không bỏ khối (đã kiểm bằng
+       thực nghiệm), nhưng đổi sang ``mode="truncate"`` hoặc bỏ KeepInFrame là
+       mất phần đuôi mà số trang vẫn 1 — nên vẫn phải khoá.
+    """
     out = pdf.render_enrollment_letter(_base_data(**overrides))
+
+    # Cỡ khai báo, lấy từ chính code — độc lập font stack (Liberation 1.0 hay
+    # DejaVu fallback 0.88) nên không đỏ giả trên image thiếu font.
+    declared = pdf._BASE_PT * pdf._resolve_fonts()["scale"]
+    ratio = _min_effective_font_size(out) / declared
+    assert ratio >= _MIN_SHRINK_RATIO, (
+        f"chữ co còn {ratio:.1%} cỡ khai báo với {label} — dưới sàn "
+        f"{_MIN_SHRINK_RATIO:.0%}, giấy chính thức bắt đầu khó đọc"
+    )
+
+    # Cụm chữ CUỐI thân bài: còn nó nghĩa là không có gì bị cắt mất phía dưới.
+    assert "nop hoc phi ky I" in _flat(out), f"mất phần đuôi thân bài với {label}"
+
+    # Số trang vẫn kiểm, nhưng chỉ như hệ quả cơ học — KHÔNG phải bảo chứng.
     assert _page_count(out) == 1, f"tràn trang với {label}"
 
 
@@ -347,10 +412,15 @@ def test_tuition_schedule_is_internally_consistent():
             )
 
 
-def test_every_active_major_code_is_in_the_schedule():
-    """Mã ngành trong bảng thu phải đúng dạng mã ngành thật (7 chữ số, 6=Cao
-    đẳng / 5=Trung cấp). Bắt lỗi gõ mã — mã sai không tra được thì hồ sơ ngành
-    đó bị CHẶN phát giấy, và lỗi chỉ lộ ra khi officer bấm nút."""
+def test_schedule_keys_look_like_real_major_codes():
+    """Mã ngành trong bảng thu phải đúng DẠNG mã thật (7 chữ số, 6=Cao đẳng /
+    5=Trung cấp).
+
+    Chỉ kiểm định dạng — KHÔNG đối chiếu với danh mục ngành trong DB (tên cũ
+    'every_active_major_code_is_in_the_schedule' hứa điều đó nhưng thân test
+    không làm; đối chiếu thật cần DB nên nằm ở tầng API). Vẫn đáng giữ: mã gõ
+    sai không tra được dòng nào và CHẶN sạch hồ sơ ngành đó, lỗi chỉ lộ khi
+    officer bấm nút."""
     from app.constants import enrollment_letter as consts
 
     for code in consts.TUITION_SCHEDULE:
