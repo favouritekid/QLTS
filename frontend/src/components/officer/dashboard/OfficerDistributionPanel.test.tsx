@@ -221,6 +221,37 @@ describe("OfficerDistributionPanel", () => {
     expect(screen.getByText(/cách xếp: luân phiên/)).toBeInTheDocument();
   });
 
+  it("hai đơn vị TRÙNG TÊN vẫn phân biệt được (prod có thật)", () => {
+    // Admin nhìn toàn tổ chức sẽ thấy hai khối "Phòng Tuyển Sinh" giống hệt
+    // nhau; điểm bận chỉ so được trong cùng một đơn vị nên phải tách bạch.
+    const sameName = {
+      ...PEER,
+      user_id: 88,
+      full_name: "Trần Thị Cẩm",
+      unit_id: 20,
+      unit_name: "Phòng Tuyển sinh", // trùng tên với unit 14
+    };
+    mockPanel([ME, sameName]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.getByText("Phòng Tuyển sinh #14")).toBeInTheDocument();
+    expect(screen.getByText("Phòng Tuyển sinh #20")).toBeInTheDocument();
+  });
+
+  it("tên đơn vị KHÔNG mang số id khi không trùng", () => {
+    const other = {
+      ...PEER,
+      user_id: 77,
+      unit_id: 15,
+      unit_name: "Phòng Đào tạo",
+    };
+    mockPanel([ME, other]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.getByText("Phòng Tuyển sinh")).toBeInTheDocument();
+    expect(screen.queryByText(/Phòng Tuyển sinh #/)).not.toBeInTheDocument();
+  });
+
   it("KHÔNG hiện header đơn vị khi chỉ có một đơn vị", () => {
     mockPanel([ME, PEER]);
     render(<OfficerDistributionPanel />);

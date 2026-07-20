@@ -613,6 +613,27 @@ function groupByUnit(entries: OfficerDistributionEntry[]) {
   return Array.from(map.values());
 }
 
+/**
+ * Tên hiển thị của một nhóm đơn vị.
+ *
+ * ⚠️ Prod CÓ hai đơn vị khác id nhưng TRÙNG TÊN ("Phòng Tuyển Sinh"). Với admin
+ * (phạm vi toàn tổ chức) chúng nằm cạnh nhau thành hai khối giống hệt nhau —
+ * người xem không biết khối nào là đơn vị nào, mà điểm bận thì chỉ so được
+ * trong CÙNG một đơn vị. Chỉ gắn thêm id khi thật sự trùng, để trường hợp
+ * thường không phải mang một con số kỹ thuật vô ích.
+ */
+function unitLabel(
+  g: { unitId: number | null; unitName: string | null },
+  duplicated: boolean
+) {
+  if (g.unitName == null) {
+    return g.unitId != null ? `Đơn vị #${g.unitId}` : "Chưa gán đơn vị";
+  }
+  return duplicated && g.unitId != null
+    ? `${g.unitName} #${g.unitId}`
+    : g.unitName;
+}
+
 /** Danh sách trong MỘT đơn vị: nhóm đang nhận trước, nhóm ngoài luồng sau. */
 function EntryList({ entries }: { entries: OfficerDistributionEntry[] }) {
   const eligible = entries.filter((e) => e.eligible_for_assignment);
@@ -732,7 +753,9 @@ export function OfficerDistributionPanel({
                 <span className="absolute left-[80%] -translate-x-1/2 font-semibold text-error-500">
                   80%
                 </span>
-                <span className="absolute right-0">100%</span>
+                {/* KHÔNG in nhãn "100%": ở bề ngang điện thoại nó đè lên nhãn
+                    80% (mốc quan trọng nhất — ngưỡng tạm dừng). Mép phải thanh
+                    đã có viền, hết trục là 100% không cần nói. */}
               </span>
               <span />
             </div>
@@ -740,6 +763,11 @@ export function OfficerDistributionPanel({
             {(() => {
               const groups = groupByUnit(entries);
               const multiUnit = groups.length > 1;
+              const nameSeen = new Map<string, number>();
+              for (const g of groups) {
+                if (g.unitName == null) continue;
+                nameSeen.set(g.unitName, (nameSeen.get(g.unitName) ?? 0) + 1);
+              }
               return (
                 <>
                   {multiUnit ? (
@@ -777,10 +805,11 @@ export function OfficerDistributionPanel({
                       {multiUnit && (
                         <div className="flex flex-wrap items-baseline gap-x-2 border-b px-1 pb-1">
                           <span className="text-sm font-semibold">
-                            {g.unitName ??
-                              (g.unitId != null
-                                ? `Đơn vị #${g.unitId}`
-                                : "Chưa gán đơn vị")}
+                            {unitLabel(
+                              g,
+                              g.unitName != null &&
+                                (nameSeen.get(g.unitName) ?? 0) > 1
+                            )}
                           </span>
                           <span className="text-[11px] text-muted-foreground">
                             {g.entries.length} người
