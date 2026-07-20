@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mockUseOfficerDistribution = vi.fn();
 vi.mock("@/hooks/officer/useOfficerDistribution", () => ({
@@ -93,7 +93,8 @@ describe("OfficerDistributionPanel", () => {
 
     expect(screen.getByText("Hiền")).toBeInTheDocument();
     expect(screen.getByText("Kiên")).toBeInTheDocument();
-    expect(screen.getByText("14.2")).toBeInTheDocument();
+    // 14.2 in ở CẢ thẻ "của bạn" lẫn hàng danh sách — hai vai trò khác nhau
+    expect(screen.getAllByText("14.2").length).toBeGreaterThan(0);
     expect(screen.getByText("23")).toBeInTheDocument();
     expect(screen.getByText("BẠN")).toBeInTheDocument();
   });
@@ -106,13 +107,51 @@ describe("OfficerDistributionPanel", () => {
     expect(screen.getByText("Quốc Duy")).toBeInTheDocument();
   });
 
-  it("KHÔNG lộ lời khuyên khi tooltip chưa mở", () => {
+  it("lời khuyên của MÌNH đọc được NGAY, không phải bấm", () => {
+    // Đây là lý do tồn tại của thẻ "Việc của bạn": `boost` là thứ duy nhất
+    // officer hành động được, chôn nó trong popover = gần như không ai đọc.
     mockPanel([ME, PEER]);
     render(<OfficerDistributionPanel />);
 
+    expect(screen.getByText("Việc của bạn")).toBeInTheDocument();
+    expect(screen.getByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")).toBeInTheDocument();
+  });
+
+  it("🔒 thẻ 'của bạn' KHÔNG hiện với người xem không có dòng nào của mình", () => {
+    // Admin/manager: mọi entry đều is_current_user=false. Kể cả khi backend lỡ
+    // rò `boost` của officer, mặt bảng phải câm.
+    mockPanel([{ ...PEER, boost: "RÒ RỈ KHÔNG ĐƯỢC HIỆN" }]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.queryByText("Việc của bạn")).not.toBeInTheDocument();
+    expect(screen.queryByText("RÒ RỈ KHÔNG ĐƯỢC HIỆN")).not.toBeInTheDocument();
+    // ...và tiêu đề không xưng "bạn" với người không nằm trong bảng
     expect(
-      screen.queryByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")
-    ).not.toBeInTheDocument();
+      screen.getByText("Vì sao hệ thống chia lead cho từng người")
+    ).toBeInTheDocument();
+  });
+
+  it("xưng 'bạn' chỉ khi người xem thật sự có dòng trong bảng", () => {
+    mockPanel([ME, PEER]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.getByText("Vì sao bạn được chia lead")).toBeInTheDocument();
+  });
+
+  it("thẻ 'của bạn' nói rõ thứ hạng, nhưng im khi đơn vị xếp luân phiên", () => {
+    // `legacy` xếp theo lượt chứ không đọc điểm bận ⇒ in thứ hạng là nói sai
+    // cơ chế phân phối.
+    mockPanel([ME, PEER]);
+    const first = render(<OfficerDistributionPanel />);
+    expect(screen.getByText(/Đang xếp thứ/)).toBeInTheDocument();
+    first.unmount();
+
+    mockPanel([
+      { ...ME, scoring_mode: "legacy" },
+      { ...PEER, scoring_mode: "legacy" },
+    ]);
+    render(<OfficerDistributionPanel />);
+    expect(screen.queryByText(/Đang xếp thứ/)).not.toBeInTheDocument();
   });
 
   // Nội dung tooltip test TRỰC TIẾP: Radix chỉ render nó vào portal khi mở, mà
@@ -122,7 +161,7 @@ describe("OfficerDistributionPanel", () => {
     render(<EntryDetails e={ME} />);
 
     expect(screen.getByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")).toBeInTheDocument();
-    expect(screen.getByText(/Dành riêng cho bạn/)).toBeInTheDocument();
+    expect(screen.getByText(/chỉ bạn thấy/)).toBeInTheDocument();
     // phép tính hiện bằng số thật (không phải FE tự tính)
     expect(
       screen.getByText(/Điểm bận = 114 ÷ \(400×2\) ×100 = 14\.2/)
@@ -143,7 +182,7 @@ describe("OfficerDistributionPanel", () => {
     expect(
       screen.queryByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")
     ).not.toBeInTheDocument();
-    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/chỉ bạn thấy/)).not.toBeInTheDocument();
   });
 
   it("🔒 FAIL-CLOSED: peer lỡ có boost vẫn KHÔNG được lộ", () => {
@@ -153,7 +192,7 @@ describe("OfficerDistributionPanel", () => {
     render(<EntryDetails e={leaky} />);
 
     expect(screen.queryByText("RÒ RỈ KHÔNG ĐƯỢC HIỆN")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/chỉ bạn thấy/)).not.toBeInTheDocument();
     // nhưng phần công khai vẫn render bình thường
     expect(
       screen.getByText("Tải chủ yếu là lead hệ thống chia.")
@@ -191,14 +230,50 @@ describe("OfficerDistributionPanel", () => {
   });
 
   it("thanh đo dựng đúng 3 đoạn từ số backend (không tự tính lại)", () => {
-    mockPanel([ME]);
+    mockPanel([PEER]); // peer ⇒ đúng MỘT thanh (không có thẻ "của bạn")
     const { container } = render(<OfficerDistributionPanel />);
 
     // sys = eff_util_pct; weight = real_util - eff_util; skip = fill - real_util
-    const widths = Array.from(
-      container.querySelectorAll<HTMLElement>("span.h-full")
+    const widthOf = (seg: string) =>
+      container.querySelector<HTMLElement>(`[data-seg="${seg}"]`)?.style.width;
+    expect(widthOf("sys")).toBe("23%");
+    expect(widthOf("weight")).toBe("5.5%");
+    expect(widthOf("skip")).toBe("33.5%");
+    // vạch mốc so ngưỡng đặt theo overload_gate_pct, KHÔNG theo fill_pct
+    expect(container.querySelector<HTMLElement>('[data-seg="gate"]')?.style.left).toBe(
+      "37%"
+    );
+  });
+
+  it("thẻ 'của bạn' và hàng danh sách vẽ CÙNG một thanh", () => {
+    // Hai chỗ cùng đọc `segmentsOf` ⇒ không thể lệch nhau; nếu sau này ai tách
+    // logic ra hai nơi, test này đỏ.
+    mockPanel([ME]);
+    const { container } = render(<OfficerDistributionPanel />);
+
+    const sys = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-seg="sys"]')
     ).map((el) => el.style.width);
-    expect(widths).toEqual(["14.2%", "14.3%", "33.5%"]);
+    expect(sys).toHaveLength(2); // thẻ + hàng
+    expect(new Set(sys)).toEqual(new Set(["14.2%"]));
+  });
+
+  it("mỗi con số trong bảng chi tiết đeo đúng màu của đoạn sinh ra nó", () => {
+    // Đây là cầu nối bar ↔ số: không có nó người xem phải tự dò.
+    const { container } = render(<EntryDetails e={ME} />);
+
+    const swatch = (seg: string) =>
+      container.querySelector<HTMLElement>(`[data-swatch="${seg}"]`);
+    // "không tính" = đoạn xanh lá, "hệ thống tính"/"điểm bận" = đoạn chàm,
+    // "ưu tiên kỳ cựu" = đoạn xanh dương nhạt
+    expect(swatch("skip")?.className).toContain("bg-success-500");
+    expect(swatch("sys")?.className).toContain("bg-primary");
+    expect(swatch("weight")?.className).toContain("bg-info-500");
+  });
+
+  it("KHÔNG hiện dòng 'ưu tiên kỳ cựu' khi trọng số = 1", () => {
+    const { container } = render(<EntryDetails e={{ ...ME, weight: 1 }} />);
+    expect(container.querySelector('[data-swatch="weight"]')).toBeNull();
   });
 
   it("hiện skeleton khi đang tải và thông báo khi lỗi", () => {
@@ -243,9 +318,9 @@ describe("OfficerDistributionPanel", () => {
     mockPanel([ME]);
     render(<OfficerDistributionPanel />);
 
-    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/chỉ bạn thấy/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Hiền/ }));
-    expect(await screen.findByText(/Dành riêng cho bạn/)).toBeInTheDocument();
+    expect(await screen.findByText(/chỉ bạn thấy/)).toBeInTheDocument();
   });
 
   it("một đơn vị vẫn nói rõ cách xếp (legacy không được hiện điểm bận trơ)", () => {
@@ -263,5 +338,108 @@ describe("OfficerDistributionPanel", () => {
     render(<OfficerDistributionPanel />);
     expect(screen.getByText(/Cách xếp của đơn vị/)).toBeInTheDocument();
     expect(screen.getByText(/xếp theo lượt/)).toBeInTheDocument();
+  });
+});
+
+// =============================================================================
+// Hai đường mở bảng chi tiết. Rê chuột là lớp tăng tiến cho máy để bàn; nó
+// KHÔNG được lấy mất hành vi bấm-để-giữ, vì bảng dài và người đọc phải rời
+// chuột được. jsdom không có `matchMedia` nên phải mock để bật nhánh này.
+// =============================================================================
+describe("OfficerDistributionPanel — rê chuột vs bấm ghim", () => {
+  const DIAG = "Tải chủ yếu là lead hệ thống chia.";
+
+  beforeEach(() => {
+    mockUseOfficerDistribution.mockReset();
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: true, // giả lập máy có chuột thật
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    // Trả jsdom về trạng thái không-hover để không rò sang file test khác.
+    delete (window as unknown as Record<string, unknown>).matchMedia;
+  });
+
+  const settle = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  it("rê vào thì mở, rê ra thì đóng", async () => {
+    mockPanel([PEER]);
+    render(<OfficerDistributionPanel />);
+    const row = screen.getByRole("button", { name: /Kiên/ });
+
+    fireEvent.pointerEnter(row, { pointerType: "mouse" });
+    await settle(300);
+    expect(screen.getByText(DIAG)).toBeInTheDocument();
+
+    fireEvent.pointerLeave(row, { pointerType: "mouse" });
+    await settle(300);
+    expect(screen.queryByText(DIAG)).not.toBeInTheDocument();
+  });
+
+  it("BẤM là ghim: rê chuột ra vẫn đọc tiếp được", async () => {
+    mockPanel([PEER]);
+    render(<OfficerDistributionPanel />);
+    const row = screen.getByRole("button", { name: /Kiên/ });
+
+    fireEvent.click(row);
+    await settle(0);
+    expect(screen.getByText(DIAG)).toBeInTheDocument();
+
+    fireEvent.pointerLeave(row, { pointerType: "mouse" });
+    await settle(600);
+    expect(screen.getByText(DIAG)).toBeInTheDocument();
+  });
+
+  it("máy KHÔNG có chuột: rê không mở, mà chạm thì vẫn mở và giữ", async () => {
+    // Chốt chặn thật cho điện thoại là media query, không phải `pointerType`
+    // (jsdom không truyền được trường đó nên đừng test bằng nó). Trên cảm ứng
+    // pointerEnter bắn kèm cú chạm rồi pointerLeave ngay khi nhấc ngón — nếu
+    // nhánh rê chuột ăn cặp sự kiện này thì bảng vừa mở đã tự đóng.
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: false, // không hover, không con trỏ tinh
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+
+    mockPanel([PEER]);
+    render(<OfficerDistributionPanel />);
+    const row = screen.getByRole("button", { name: /Kiên/ });
+
+    fireEvent.pointerEnter(row);
+    await settle(300);
+    expect(screen.queryByText(DIAG)).not.toBeInTheDocument();
+
+    fireEvent.click(row); // cú chạm thật sự
+    await settle(0);
+    fireEvent.pointerLeave(row);
+    await settle(600);
+    expect(screen.getByText(DIAG)).toBeInTheDocument();
   });
 });
