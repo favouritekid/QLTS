@@ -600,23 +600,27 @@ async def issue_enrollment_letter(
         generated_by_id=current_user.id if current_user else None,
         expires_at=expires_at,
     )
-    db.add(letter)
     try:
-        await db.flush()
-        # Bản vừa phát trở thành BẢN HIỆN HÀNH; mọi bản trước của cùng hồ sơ
-        # đóng dấu "đã thay thế" và ĐƯỢC KÉO DÀI hạn lưu trữ bằng bản mới.
+        # ⚠️ THỨ TỰ QUAN TRỌNG: đóng dấu bản cũ TRƯỚC, chèn bản mới SAU.
+        #
+        # Bản trước làm ngược lại (flush bản mới rồi mới UPDATE), nên trong
+        # khoảnh khắc giữa hai bước hồ sơ có HAI row ``superseded_at IS NULL``.
+        # Không ai thấy vì cùng một transaction — cho tới khi index
+        # ``ix_enrollment_letter_current`` thành UNIQUE thì chính bước flush đó
+        # ném IntegrityError và không hồ sơ nào phát được bản thứ hai. Index chỉ
+        # phơi ra thứ tự vốn đã sai, không tạo ra lỗi mới.
         #
         # Vì sao đồng bộ expires_at: hạn tính riêng từng bản kể từ lúc phát,
         # nên bản 1 — bản nhiều khả năng ĐÃ TRAO TAY thí sinh — hết hạn và bị
         # xoá PII TRƯỚC bản 2 mà chưa ai cầm. Khi có tranh chấp "giấy tôi cầm
         # ghi gì", bằng chứng còn sống lại là bản sai. Cho cả nhóm chết cùng
         # lúc theo bản mới nhất.
-        # (a) Đánh dấu "đã thay thế": CHỈ bản đang hiện hành.
+        # (a) Đánh dấu "đã thay thế": CHỈ bản đang hiện hành. Không cần loại
+        # trừ bản mới — nó chưa tồn tại ở thời điểm này.
         await db.execute(
             update(models.EnrollmentLetter)
             .where(
                 models.EnrollmentLetter.profile_id == profile.id,
-                models.EnrollmentLetter.id != letter.id,
                 models.EnrollmentLetter.superseded_at.is_(None),
             )
             .values(superseded_at=_now)
@@ -635,11 +639,14 @@ async def issue_enrollment_letter(
             update(models.EnrollmentLetter)
             .where(
                 models.EnrollmentLetter.profile_id == profile.id,
-                models.EnrollmentLetter.id != letter.id,
                 models.EnrollmentLetter.data_snapshot["_purged"].astext.is_(None),
             )
             .values(expires_at=expires_at)
         )
+        # Bản mới chèn SAU cùng: lúc này không còn row nào của hồ sơ mang
+        # superseded_at NULL, nên nó vào đúng vị trí "bản hiện hành" duy nhất.
+        db.add(letter)
+        await db.flush()
     except Exception:
         # Flush failed → the PDF we just wrote would orphan on disk with no
         # row referencing it. Delete it before propagating. (A router commit

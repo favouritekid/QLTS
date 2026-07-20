@@ -452,6 +452,62 @@ async def test_build_letter_data_binds_major_degree_and_real_fee(
     assert data["signatory_name"]
 
 
+async def test_db_refuses_two_current_letters_for_one_profile(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """DB tự canh bất biến "mỗi hồ sơ ĐÚNG MỘT bản hiện hành".
+
+    Trước đây bất biến này chỉ do application giữ (câu UPDATE đóng dấu
+    superseded_at chạy cùng transaction với INSERT bản mới), nên mọi writer đi
+    vòng qua hàm đó — bulk-issue, script phát lại, migration backfill, hai
+    request đồng thời — đều phá được. Hậu quả không phải lỗi kỹ thuật mà là hai
+    tờ giấy cùng mang chữ ký Hiệu trưởng, cùng được hệ thống gọi là "bản hiện
+    hành", với số tiền có thể khác nhau.
+
+    Test đi THẲNG vào DB, cố ý bỏ qua service — đó chính là kịch bản cần chặn.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"uniq{uuid.uuid4().hex[:8]}",
+    )
+    await _seed_letter(profile_id, expires_at=None)  # bản hiện hành thứ nhất
+
+    with pytest.raises(IntegrityError):
+        await _seed_letter(profile_id, expires_at=None)  # thứ hai → phải chặn
+
+
+async def test_reissue_is_still_allowed_after_superseding(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """...nhưng index UNIQUE KHÔNG được chặn việc phát lại.
+
+    Đây là mặt kia của cùng một đồng xu: đánh rơi mệnh đề ``WHERE superseded_at
+    IS NULL`` thì index thành unique trên toàn bộ profile_id và mỗi hồ sơ chỉ
+    phát được ĐÚNG MỘT giấy suốt đời. (Bản nháp đầu của migration đã đánh rơi
+    đúng mệnh đề đó.)
+    """
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"reis{uuid.uuid4().hex[:8]}",
+    )
+    first_id = await _seed_letter(profile_id, expires_at=None)
+
+    # Đóng dấu bản cũ rồi phát bản mới — đúng trình tự service làm.
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            old = await session.get(models.EnrollmentLetter, first_id)
+            old.superseded_at = datetime.now(timezone.utc)
+
+    second_id = await _seed_letter(profile_id, expires_at=None)
+    assert second_id != first_id
+
+
 async def test_purged_letter_is_not_revived_by_a_later_issuance(
     seed_lead_dependencies: dict,
     officer_user_in_db: dict,

@@ -51,9 +51,18 @@ class EnrollmentLetter(Base):
         # sẽ bị lần autogenerate kế tiếp sinh lệnh DROP (rất dễ lọt review vì
         # lẫn trong drift). Test DB cũng dựng bằng create_all() nên không có
         # index này nếu model không khai.
+        # UNIQUE, không chỉ là index tra cứu: "mỗi hồ sơ có ĐÚNG MỘT bản hiện
+        # hành" là bất biến mà cả docstring migration lẫn UI đều tuyên bố, mà
+        # trước đây chỉ do app giữ (câu UPDATE đóng dấu superseded_at chạy trong
+        # cùng transaction với INSERT bản mới). Bất kỳ writer nào đi vòng qua
+        # đường đó — bulk-issue, script phát lại, migration backfill, hai
+        # request đồng thời — đều phá được, và hậu quả là hai tờ giấy cùng mang
+        # nhãn "bản hiện hành" với số tiền có thể khác nhau. DB tự canh thì
+        # miễn phí và không thể lách.
         Index(
             "ix_enrollment_letter_current",
             "profile_id",
+            unique=True,
             postgresql_where=text("superseded_at IS NULL"),
         ),
     )
