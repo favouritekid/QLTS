@@ -265,6 +265,12 @@ services:
   # --- Certbot (SSL Certificate Management) ---
   certbot:
     image: certbot/certbot
+    # Không có restart policy thì certbot KHÔNG dậy lại sau reboot VPS /
+    # docker daemon restart => vòng lặp `certbot renew` 12h chết âm thầm và
+    # chứng chỉ hết hạn mà không ai biết (nginx vẫn phục vụ cert cũ tới lúc
+    # hết hạn). Dòng này đã được sửa TAY trên prod từ 2026-07-15 nhưng chưa
+    # từng commit — đưa vào repo để prod và repo không còn lệch.
+    restart: unless-stopped
     profiles:
       - production
     volumes:
