@@ -197,6 +197,15 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # deny row (same as paper-submitted — finance never reaches the
         # owning-officer scope check).
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/graduation-proof", "action": "POST"},
+        # Giấy báo nhập học (official PDF issuance) — officer phát cho hồ sơ
+        # mình phụ trách; manager/admin kế thừa. Gate trạng thái mở tới
+        # `submitted` trở đi (KHÔNG còn post-decision — user chốt 19-07, xem
+        # is_enrollment_letter_eligible) + IDOR 3-tier + fail-missing ở
+        # get_admission_for_user_read + service.
+        # Accountant có deny riêng trong ACCOUNTANT_TEMPLATE (inherits officer).
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter/{lid}/download", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letters", "action": "GET"},
         # BR3 (2026-06-09) — officer tự RESET tài liệu hồ sơ mình phụ trách khi
         # ở draft/rejected/revision_requested (gỡ submission để sửa). Route gate
         # cho officer chạm tới; service DocumentActionPolicy narrows owner +
@@ -522,6 +531,12 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # staff have no business need + separation-of-duties. Mirror the
         # /stats /status-counts denies above (accountant inherits officer).
         {"subject": "{role}", "object": "/api/admissions/pending-diploma", "action": "GET",  "eft": "deny"},
+        # Giấy báo nhập học — accountant DENY (mirror officer ALLOW). Giấy chứa
+        # PII thí sinh + là hành động admission (phát/tải/liệt kê); tài chính
+        # không phát giấy trúng tuyển. Inherits officer → cần deny tường minh.
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter", "action": "POST", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letter/{lid}/download", "action": "GET", "eft": "deny"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/enrollment-letters", "action": "GET", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads",                     "action": "GET",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads",                     "action": "POST", "eft": "deny"},
         {"subject": "{role}", "object": "/api/leads/{id}",                "action": "GET",  "eft": "deny"},

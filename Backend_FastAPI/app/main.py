@@ -53,6 +53,7 @@ from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow
     admissions_magic_link,  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link consume (4 actions)
     admissions_v2,  # ✅ #184 Phase 3 PR-3C Sub-3.3: multi-NV choice-engine endpoints (publish-result T6)
+    enrollment_letters,  # ✅ Giấy báo nhập học PDF (official issuance)
     auth,
     collaborators,  # ✅ CTV SYSTEM: Collaborator management + CTV self-service
     commissions,  # ✅ CTV PHASE 2: Commission management
@@ -796,7 +797,12 @@ fastapi_app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Set-Cookie"],
+    # Content-Disposition → let cross-origin JS read the download filename;
+    # X-Enrollment-Letter-Id → the issued letter id returned by the PDF POST.
+    # (Without these, the dev FE at localhost:3000 calling the backend at
+    # localhost:8000 cross-origin falls back to a generic filename and cannot
+    # read the letter id from the response.)
+    expose_headers=["Set-Cookie", "Content-Disposition", "X-Enrollment-Letter-Id"],
 )
 
 
@@ -891,6 +897,7 @@ fastapi_app.include_router(commissions.policy_router, prefix="/api")  # ✅ CTV 
 fastapi_app.include_router(commissions.record_router, prefix="/api")  # ✅ CTV P2: Commission records (Admin)
 fastapi_app.include_router(commissions.ctv_commission_router, prefix="/api")  # ✅ CTV P2: CTV commission view
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ Admission Profile workflow
+fastapi_app.include_router(enrollment_letters.router, prefix="/api")  # ✅ Giấy báo nhập học PDF (official issuance)
 fastapi_app.include_router(admissions_magic_link.router)  # ✅ PR-CO-2-BE / PR-3E: multi-action magic-link (router declares /api/v2/admissions/magic-link prefix)
 fastapi_app.include_router(admissions_v2.router)  # ✅ #184 Phase 3 PR-3C: multi-NV choice-engine v2 (router declares /api/v2 prefix)
 fastapi_app.include_router(admin_backfill.router)  # ✅ #184 Phase 3 PR-3D-B BE-2: admin backfill exception queue (router declares /api/v2/admin prefix)

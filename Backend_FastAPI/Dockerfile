@@ -22,10 +22,21 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 FROM python:3.12-slim
 
 # Runtime dependencies
+# fonts-liberation + fonts-dejavu-core: chỉ là các file .ttf (~3MB) phủ đủ
+# Unicode tiếng Việt cho ReportLab render "Giấy báo nhập học". KHÔNG phải thư
+# viện render native (không kéo theo GTK/Cairo) — khác hẳn WeasyPrint đã bị loại
+# ở P0-6.
+#   - fonts-liberation → Liberation Serif, metric-tương thích Times New Roman:
+#     đây là font CHÍNH của giấy báo, để bản PDF khớp mẫu Word hành chính đang
+#     phát hành. ReportLab registerFont từ
+#     /usr/share/fonts/truetype/liberation/LiberationSerif-*.ttf.
+#   - fonts-dejavu-core → FALLBACK nếu Liberation vắng mặt (renderer tự dò).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     libmagic1 \
+    fonts-liberation \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user
@@ -52,6 +63,7 @@ RUN mkdir -p /app/uploads \
     /app/geoip \
     /app/logs \
     /app/private_exports/sms \
+    /app/private_exports/letters \
     && chown -R appuser:appuser /app/uploads \
     /app/app/static/uploads \
     /app/geoip \

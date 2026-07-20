@@ -6,6 +6,8 @@
  * Render TỐI THIỂU theo BE permission flags:
  *   - Navigation: Quay lại / Tiếp tục (step 1-7) / Save / Kiểm tra toàn bộ (step 8)
  *   - Outbound communication: 4 send_* buttons (mutex per state)
+ *   - Document export: Xuất giấy báo nhập học (self-gates on
+ *     `issue_enrollment_letter`; hồ sơ đã nộp trở đi)
  *
  * KHÔNG còn:
  *   - Decision actions (Submit/Resubmit/Approve/Reject/RequestRevision/
@@ -26,6 +28,7 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { SendConfirmationButton } from "./SendConfirmationButton"
 import { SendMagicLinkButton } from "./SendMagicLinkButton"
 import { WithdrawActionButton } from "./WithdrawActionButton"
+import { EnrollmentLetterButton } from "./EnrollmentLetterButton"
 
 interface AdmissionActionsProps {
   profile: AdmissionProfileResponse
@@ -125,6 +128,14 @@ export function AdmissionActions({
               version={profile.version ?? 0}
               mode="cancel"
             />
+          )}
+          {/* Official "Giấy báo nhập học" PDF (hồ sơ đã nộp trở đi).
+              Parent-gate ĐỒNG NHẤT với mọi nút khác trong thanh: component
+              cũng tự gate bên trong, nhưng render vô điều kiện thì nó vẫn
+              mount và gọi useQuery/useMutation kể cả khi nút bị ẩn — đó là
+              lý do AdmissionActions.test.tsx phải mock nó. */}
+          {can('issue_enrollment_letter') && (
+            <EnrollmentLetterButton profile={profile} />
           )}
         </div>
       </div>

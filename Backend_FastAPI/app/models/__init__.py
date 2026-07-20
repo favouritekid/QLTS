@@ -48,6 +48,8 @@ from .admission_profile_choice import (
 from .admission_backfill_exception import AdmissionBackfillException
 from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
+# Official "Giấy báo nhập học" issuance record (phát từ `submitted` trở đi).
+from .enrollment_letter import EnrollmentLetter
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -214,6 +216,7 @@ __all__ = [
     "AdmissionSurveyFeedback",
     "Student",
     "StudentDocument",
+    "EnrollmentLetter",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
