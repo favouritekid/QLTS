@@ -20,14 +20,20 @@ chỉ ``WHERE NOT EXISTS`` — vì row đã tồn tại với eft sai/NULL sẽ 
 qua mà policy vẫn hỏng.
 
 Revision ID: distpanelcasbin20260719
-Revises: consultacctdeny20260716
+Revises: elcurrentunique20260720
 Create Date: 2026-07-19
+
+⚠️ down_revision đổi từ ``consultacctdeny20260716`` sang ``elcurrentunique20260720``
+khi rebase lên main sau khi PR #486 (Giấy báo nhập học) merge: nhánh đó cũng phân
+nhánh từ ``consultacctdeny20260716``, để nguyên sẽ thành HAI HEAD và
+``alembic upgrade head`` (chạy trong entrypoint mỗi lần container khởi động) sẽ
+lỗi ambiguous ⇒ deploy hỏng.
 """
 from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "distpanelcasbin20260719"
-down_revision = "consultacctdeny20260716"
+down_revision = "elcurrentunique20260720"
 branch_labels = None
 depends_on = None
 
