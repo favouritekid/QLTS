@@ -399,7 +399,12 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
         the current matcher (existing `/api/leads/{id}` GET/PUT denies
         already cover these via collision), but locks intent if matcher
         is ever tightened.
-      - Total NOW: 42 deny rows.
+      - Bảng "điểm bận" (2026-07-19) added 1 deny row on
+        /api/officer/distribution-panel (migration
+        `distpanelcasbin20260719`).
+      - Total NOW: 54 deny rows. (Con số này từng ghi 42 trong khi tập
+        thật đã là 53 — các wave sau không cập nhật docstring. Đã đếm
+        lại theo `expected` bên dưới.)
     """
     db_url = os.environ["DATABASE_URL"]
     enforcer, engine = await _seed_test_db_and_load_enforcer(db_url)
@@ -502,6 +507,12 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             # lead name/phone (PII); accountant kế thừa officer allow → deny
             # (separation-of-duties). Migration `apptacctdeny20260713`.
             ("/api/leads/my/appointments",                         "GET"),
+            # Bảng "điểm bận" (2026-07-19) — GET /api/officer/distribution-panel
+            # trả tải + tên officer toàn đơn vị (workload/eff_util/tự-tuyển);
+            # accountant kế thừa officer allow → deny (separation-of-duties:
+            # finance không giám sát năng suất nhân sự). Migration
+            # `distpanelcasbin20260719`.
+            ("/api/officer/distribution-panel",                    "GET"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "
