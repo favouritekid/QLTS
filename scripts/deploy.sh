@@ -255,6 +255,14 @@ else
             #      psql thực sự thành công.
             # Trạng thái tệ nhất (migration hỏng VÀ restore hỏng) giờ được
             # nói thẳng kèm đường dẫn file, thay vì bị che bằng lời trấn an.
+            #
+            # ⚠️ GIỚI HẠN ĐÃ ĐO (diễn tập 2026-07-20, postgres 16.13):
+            # dump chỉ DROP những object nó BIẾT, tức những gì tồn tại lúc
+            # chụp ở Step 5. Bảng/kiểu do migration hỏng tạo ra SAU đó sẽ
+            # SỐNG SÓT qua restore. Dữ liệu, cột, index và alembic_version
+            # đều về đúng bản cũ (đã kiểm), nhưng "restored" KHÔNG đồng
+            # nghĩa "sạch như chưa từng deploy" — kiểm object thừa bằng
+            # ``\dt`` trước khi deploy lại.
             if [ -s "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
                 if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
                     -v ON_ERROR_STOP=1 \
